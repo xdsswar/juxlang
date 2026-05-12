@@ -1816,6 +1816,270 @@ fn imports_separate_from_top_level_items() {
 }
 
 // ---------------------------------------------------------------------------
+// Operator overloading (§O.2) — class member declarations
+// ---------------------------------------------------------------------------
+
+/// Helper: pull the first class declaration out of a CompilationUnit.
+fn first_class(unit: &juxc_ast::CompilationUnit) -> &juxc_ast::ClassDecl {
+    for item in &unit.items {
+        if let TopLevelDecl::Class(class) = item {
+            return class;
+        }
+    }
+    panic!("no top-level class in unit");
+}
+
+/// `public bool operator==(Path other) { ... }` parses into an
+/// OperatorDecl in `class.operators` with kind Eq and one parameter.
+#[test]
+fn operator_eq_parses_with_one_param() {
+    let ast = parse_clean(
+        r#"
+        public class Path {
+            public bool operator==(Path other) { return true; }
+        }
+        "#,
+    );
+    let class = first_class(&ast);
+    assert!(class.methods.is_empty(), "operator should not land in methods");
+    assert_eq!(class.operators.len(), 1);
+    let op = &class.operators[0];
+    assert_eq!(op.kind, juxc_ast::OperatorKind::Eq);
+    assert_eq!(op.params.len(), 1);
+    assert_eq!(op.params[0].name.text, "other");
+}
+
+/// `operator<=>` parses as the Cmp three-way comparison kind.
+#[test]
+fn operator_cmp_parses() {
+    let ast = parse_clean(
+        r#"
+        public class Path {
+            public int operator<=>(Path other) { return 0; }
+        }
+        "#,
+    );
+    let op = &first_class(&ast).operators[0];
+    assert_eq!(op.kind, juxc_ast::OperatorKind::Cmp);
+}
+
+/// `operator hash()` and `operator string()` parse as the bareword
+/// operator kinds with zero parameters.
+#[test]
+fn operator_hash_and_string_parse_as_barewords() {
+    let ast = parse_clean(
+        r#"
+        public class Path {
+            public int operator hash() { return 0; }
+            public String operator string() { return "x"; }
+        }
+        "#,
+    );
+    let ops = &first_class(&ast).operators;
+    assert_eq!(ops.len(), 2);
+    assert_eq!(ops[0].kind, juxc_ast::OperatorKind::Hash);
+    assert!(ops[0].params.is_empty());
+    assert_eq!(ops[1].kind, juxc_ast::OperatorKind::ToString);
+    assert!(ops[1].params.is_empty());
+}
+
+/// `operator[]` (indexed read) and `operator[]=` (indexed write) parse
+/// as distinct OperatorKind values.
+#[test]
+fn operator_index_and_index_set_parse() {
+    let ast = parse_clean(
+        r#"
+        public class Vec {
+            public int operator[](int i) { return 0; }
+            public void operator[]=(int i, int v) { }
+        }
+        "#,
+    );
+    let ops = &first_class(&ast).operators;
+    assert_eq!(ops.len(), 2);
+    assert_eq!(ops[0].kind, juxc_ast::OperatorKind::Index);
+    assert_eq!(ops[0].params.len(), 1);
+    assert_eq!(ops[1].kind, juxc_ast::OperatorKind::IndexSet);
+    assert_eq!(ops[1].params.len(), 2);
+}
+
+/// `operator()` (callable) parses with arbitrary param arity — the
+/// parser just records what the user wrote; tycheck decides what's
+/// valid.
+#[test]
+fn operator_call_parses() {
+    let ast = parse_clean(
+        r#"
+        public class Func {
+            public int operator()(int x, int y) { return x; }
+        }
+        "#,
+    );
+    let op = &first_class(&ast).operators[0];
+    assert_eq!(op.kind, juxc_ast::OperatorKind::Call);
+    assert_eq!(op.params.len(), 2);
+}
+
+/// Each punctuator-operator (`+`, `-`, `*`, etc.) round-trips into the
+/// matching OperatorKind. One representative test pinning the full
+/// mapping for arithmetic + bitwise + shift + range.
+#[test]
+fn punctuator_operators_round_trip() {
+    let ast = parse_clean(
+        r#"
+        public class M {
+            public int operator+(int o) { return 0; }
+            public int operator-(int o) { return 0; }
+            public int operator*(int o) { return 0; }
+            public int operator/(int o) { return 0; }
+            public int operator%(int o) { return 0; }
+            public int operator&(int o) { return 0; }
+            public int operator|(int o) { return 0; }
+            public int operator^(int o) { return 0; }
+            public int operator~() { return 0; }
+            public int operator<<(int o) { return 0; }
+            public int operator>>(int o) { return 0; }
+            public int operator..(int o) { return 0; }
+            public int operator..=(int o) { return 0; }
+        }
+        "#,
+    );
+    let kinds: Vec<_> = first_class(&ast)
+        .operators
+        .iter()
+        .map(|o| o.kind)
+        .collect();
+    use juxc_ast::OperatorKind::*;
+    assert_eq!(
+        kinds,
+        vec![Plus, Minus, Mul, Div, Rem, BitAnd, BitOr, BitXor, BitNot, Shl, Shr, Range,
+             RangeInclusive],
+    );
+}
+
+/// Class with mixed methods + operators preserves both lists
+/// independently; operators don't leak into the methods slot.
+#[test]
+fn class_with_method_and_operator_preserves_both_lists() {
+    let ast = parse_clean(
+        r#"
+        public class Path {
+            public String value;
+            public Path(String v) { this.value = v; }
+            public String describe() { return this.value; }
+            public bool operator==(Path other) { return true; }
+        }
+        "#,
+    );
+    let class = first_class(&ast);
+    assert_eq!(class.fields.len(), 1);
+    assert_eq!(class.constructors.len(), 1);
+    assert_eq!(class.methods.len(), 1);
+    assert_eq!(class.methods[0].name.text, "describe");
+    assert_eq!(class.operators.len(), 1);
+    assert_eq!(class.operators[0].kind, juxc_ast::OperatorKind::Eq);
+}
+
+/// Unknown operator symbol (e.g. `operator !`) emits E0200 and the
+/// parser recovers without consuming the rest of the class body
+/// catastrophically.
+#[test]
+fn unknown_operator_symbol_is_diagnostic() {
+    let (_ast, n) = parse_with_errors(
+        r#"
+        public class Path {
+            public bool operator!(Path other) { return true; }
+        }
+        "#,
+    );
+    assert!(n >= 1, "expected at least one diagnostic, got {n}");
+}
+
+/// `operator <op>(...) = delete;` parses with `is_deleted = true` and
+/// no body. Per §O.3.4 the user opts out of auto-derivation for that
+/// operator on records / structs / enums.
+#[test]
+fn operator_delete_form_round_trips() {
+    let ast = parse_clean(
+        r#"
+        public class C {
+            public String operator string() = delete;
+        }
+        "#,
+    );
+    let op = &first_class(&ast).operators[0];
+    assert_eq!(op.kind, juxc_ast::OperatorKind::ToString);
+    assert!(op.is_deleted, "expected is_deleted = true");
+    assert!(op.body.is_none(), "deleted operator must have no body");
+}
+
+/// `operator <op>(...) { body }` (the normal form) parses with
+/// `is_deleted = false` and a present body — the existing happy path.
+#[test]
+fn operator_with_body_has_is_deleted_false() {
+    let ast = parse_clean(
+        r#"
+        public class C {
+            public bool operator==(C other) { return true; }
+        }
+        "#,
+    );
+    let op = &first_class(&ast).operators[0];
+    assert!(!op.is_deleted);
+    assert!(op.body.is_some());
+}
+
+/// Records can host operator declarations in their body. Each entry
+/// lands in `record.operators`; the header components stay in
+/// `record.components` as before.
+#[test]
+fn record_body_holds_operator_decls() {
+    let ast = parse_clean(
+        r#"
+        public record Money(int cents) {
+            public String operator string() {
+                return "$";
+            }
+        }
+        "#,
+    );
+    for item in &ast.items {
+        if let TopLevelDecl::Record(r) = item {
+            assert_eq!(r.components.len(), 1);
+            assert_eq!(r.operators.len(), 1);
+            assert_eq!(r.operators[0].kind, juxc_ast::OperatorKind::ToString);
+            assert!(!r.operators[0].is_deleted);
+            return;
+        }
+    }
+    panic!("no record decl in unit");
+}
+
+/// `record Foo(...) { operator string() = delete; }` is the canonical
+/// §O.3.4 example — record body carries a single `= delete;` operator.
+#[test]
+fn record_with_operator_delete_parses() {
+    let ast = parse_clean(
+        r#"
+        public record OpaqueToken(String secret) {
+            public String operator string() = delete;
+        }
+        "#,
+    );
+    for item in &ast.items {
+        if let TopLevelDecl::Record(r) = item {
+            assert_eq!(r.operators.len(), 1);
+            let op = &r.operators[0];
+            assert_eq!(op.kind, juxc_ast::OperatorKind::ToString);
+            assert!(op.is_deleted);
+            assert!(op.body.is_none());
+            return;
+        }
+    }
+    panic!("no record decl in unit");
+}
+
+// ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 

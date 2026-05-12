@@ -69,6 +69,32 @@ pub enum Code {
     /// receiver's class (walking the inheritance chain), or `new T(...)`
     /// where no class/record `T` is in scope.
     E0413_UnresolvedMethod,
+
+    // ---- Operators / Auto-derivation (E0900–E0999) ----
+    /// E0930 — Conflicting operator declarations. Per
+    /// `JUX-OPERATORS-ADDENDUM.md` §O.2.1, defining BOTH `operator<=>`
+    /// AND any individual ordering operator (`<`, `<=`, `>`, `>=`) on
+    /// the same type is a conflict — pick one form, not both. The
+    /// spec's diagnostics table also lists this code for "auto-derive
+    /// cannot satisfy required interface" (§O.5.1); both share the
+    /// same E0930 slot and are distinguished by the diagnostic
+    /// message.
+    E0930_OperatorConflict,
+    /// E0931 — `operator==` defined without `operator hash`. Per
+    /// `JUX-OPERATORS-ADDENDUM.md` §O.2.7 and `JUX-LANG-V1.md` §7.14,
+    /// a class/record/enum that defines structural equality must also
+    /// define a consistent `hash` — otherwise the type behaves
+    /// inconsistently as a `Map`/`Set` key. Emitting this code makes
+    /// the pairing rule a build-time error rather than a runtime
+    /// surprise.
+    E0931_EqWithoutHash,
+    /// E0935 — Call to a `delete`d operator. Per
+    /// `JUX-OPERATORS-ADDENDUM.md` §O.3.4, a record/struct/enum can
+    /// suppress an auto-derived operator with `operator <op>(...) = delete;`.
+    /// Using the operator at a call site after deletion fires this
+    /// diagnostic — most commonly seen as `print($"$myToken")` after
+    /// `OpaqueToken` deleted `operator string`.
+    E0935_DeletedOperator,
 }
 
 impl Code {
@@ -92,6 +118,9 @@ impl Code {
             Code::E0411_WrongArgCount            => "E0411",
             Code::E0412_UnresolvedField          => "E0412",
             Code::E0413_UnresolvedMethod         => "E0413",
+            Code::E0930_OperatorConflict         => "E0930",
+            Code::E0931_EqWithoutHash            => "E0931",
+            Code::E0935_DeletedOperator          => "E0935",
         }
     }
 }

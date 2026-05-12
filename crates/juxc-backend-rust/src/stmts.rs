@@ -43,6 +43,15 @@ impl RustEmitter {
                 if let Some(e) = value {
                     self.w.push(' ');
                     self.emit_expr(e);
+                    // `return "literal";` inside a `String`-returning
+                    // fn needs `.to_string()` so the `&str` from the
+                    // literal lands as the owned `String` Rust expects.
+                    // The tail-position helper covers the trailing-
+                    // return case; this mid-body path uses the same
+                    // predicate.
+                    if self.return_wants_string_coercion(e) {
+                        self.w.push_str(".to_string()");
+                    }
                 }
                 self.w.push_str(";\n");
             }

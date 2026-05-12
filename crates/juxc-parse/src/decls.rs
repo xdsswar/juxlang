@@ -376,22 +376,61 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // Optional body — Turn 1 accepts but expects emptiness.
+        // Optional body — operator overrides only (no methods,
+        // constructors, or fields beyond the header). Records use
+        // their body primarily to override auto-derived behavior
+        // (custom `operator string`, `= delete;` suppression per
+        // §O.3.4).
+        let mut operators = Vec::new();
         if self.eat(&TokenKind::LBrace) {
-            if !self.at(&TokenKind::RBrace) && !self.at_eof() {
-                // The user wrote `record Foo(…) { … methods … }` — record
-                // bodies aren't implemented yet. Emit a diagnostic and
-                // skip to the closing brace so parsing keeps going.
-                let here = self.peek_span();
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        code::Code::E0200_UnexpectedToken,
-                        "record bodies with methods aren't supported yet — leave the body empty",
+            while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+                let member_vis = self.parse_visibility();
+                // Reuse the class-member operator-lookahead: after
+                // visibility + modifiers + return type, the next
+                // token must be `operator`. Anything else is rejected
+                // as "record bodies only support operators in Turn 1".
+                let is_operator = {
+                    let mut i = self.pos;
+                    while matches!(
+                        self.tokens.get(i).map(|t| &t.kind),
+                        Some(TokenKind::Kw(Keyword::Abstract))
+                            | Some(TokenKind::Kw(Keyword::Static))
+                            | Some(TokenKind::Kw(Keyword::Final))
+                            | Some(TokenKind::Kw(Keyword::Const))
+                            | Some(TokenKind::Kw(Keyword::Async))
+                            | Some(TokenKind::Kw(Keyword::Native))
+                            | Some(TokenKind::Kw(Keyword::Unsafe)),
+                    ) {
+                        i += 1;
+                    }
+                    let after_type = match self.tokens.get(i).map(|t| &t.kind) {
+                        Some(TokenKind::Kw(Keyword::Void)) => Some(i + 1),
+                        Some(TokenKind::Ident(_)) => Some(i + 1),
+                        _ => None,
+                    };
+                    matches!(
+                        after_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind)),
+                        Some(TokenKind::Kw(Keyword::Operator)),
                     )
-                    .with_span(here),
-                );
-                while !self.at(&TokenKind::RBrace) && !self.at_eof() {
-                    self.advance();
+                };
+                if is_operator {
+                    if let Some(op) = self.parse_operator_decl(member_vis) {
+                        operators.push(op);
+                    }
+                } else {
+                    let here = self.peek_span();
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "record bodies only support `operator` declarations \
+                             (methods and fields aren't supported yet)",
+                        )
+                        .with_span(here),
+                    );
+                    // Recovery: skip past the next `}` or to EOF.
+                    while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+                        self.advance();
+                    }
                 }
             }
             self.expect(&TokenKind::RBrace, "'}' to close record body");
@@ -403,6 +442,7 @@ impl<'a> Parser<'a> {
             name,
             generic_params,
             components,
+            operators,
             span: start.join(end),
         })
     }
@@ -427,20 +467,66 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // Tolerate `;` after the variant list (introduces the method
-        // section per §7.7.1). For Turn 1 we accept and discard any
-        // subsequent tokens until the closing `}`.
+        // Optional operator section after `;` per §7.7.1 — operator
+        // overrides (and `= delete;` suppression per §O.3.4). Enums
+        // rarely need this since the spec's variant-order semantics
+        // cover most cases, but `operator string() = delete;` for
+        // security-sensitive enums is a real use case.
+        let mut operators = Vec::new();
         if self.eat(&TokenKind::Semicolon) {
             while !self.at(&TokenKind::RBrace) && !self.at_eof() {
-                // Skip method/etc. tokens silently — recognized as
-                // unimplemented. A future turn parses methods here.
-                self.advance();
+                let member_vis = self.parse_visibility();
+                // Reuse the class/record member-lookahead: after
+                // visibility + modifiers + return type, expect
+                // `operator`. Anything else is rejected.
+                let is_operator = {
+                    let mut i = self.pos;
+                    while matches!(
+                        self.tokens.get(i).map(|t| &t.kind),
+                        Some(TokenKind::Kw(Keyword::Abstract))
+                            | Some(TokenKind::Kw(Keyword::Static))
+                            | Some(TokenKind::Kw(Keyword::Final))
+                            | Some(TokenKind::Kw(Keyword::Const))
+                            | Some(TokenKind::Kw(Keyword::Async))
+                            | Some(TokenKind::Kw(Keyword::Native))
+                            | Some(TokenKind::Kw(Keyword::Unsafe)),
+                    ) {
+                        i += 1;
+                    }
+                    let after_type = match self.tokens.get(i).map(|t| &t.kind) {
+                        Some(TokenKind::Kw(Keyword::Void)) => Some(i + 1),
+                        Some(TokenKind::Ident(_)) => Some(i + 1),
+                        _ => None,
+                    };
+                    matches!(
+                        after_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind)),
+                        Some(TokenKind::Kw(Keyword::Operator)),
+                    )
+                };
+                if is_operator {
+                    if let Some(op) = self.parse_operator_decl(member_vis) {
+                        operators.push(op);
+                    }
+                } else {
+                    let here = self.peek_span();
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "enum bodies only support `operator` declarations after the `;` \
+                             terminator (methods aren't supported yet)",
+                        )
+                        .with_span(here),
+                    );
+                    while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+                        self.advance();
+                    }
+                }
             }
         }
 
         self.expect(&TokenKind::RBrace, "'}' to close enum body");
         let end = self.last_consumed_span();
-        Some(EnumDecl { visibility, name, variants, span: start.join(end) })
+        Some(EnumDecl { visibility, name, variants, operators, span: start.join(end) })
     }
 
     /// Parse one enum variant: `Name` or `Name(Type [name], …)`.
@@ -553,8 +639,11 @@ impl<'a> Parser<'a> {
     ///   tokens map directly, and the bareword forms `hash` / `string`
     ///   appear as `Ident` tokens.
     /// - `throws` clauses aren't parsed yet (same as `parse_fn_decl`).
-    /// - `= delete;` suppression (§O.3.4) isn't parsed yet — operator
-    ///   decls always have a body in this turn.
+    /// - **`= delete;` form** per §O.3.4 — after the parameter list, if
+    ///   the next token is `=`, expect `delete ;` and set
+    ///   `is_deleted = true` with `body = None`. Useful for records to
+    ///   suppress auto-derived operators (`operator string() = delete;`
+    ///   hides a security-sensitive field from default formatting).
     pub(crate) fn parse_operator_decl(&mut self, visibility: Visibility) -> Option<OperatorDecl> {
         let start = self.peek_span();
 
@@ -570,8 +659,28 @@ impl<'a> Parser<'a> {
         let params = self.parse_param_list();
         self.expect(&TokenKind::RParen, "')' to close operator parameter list");
 
-        // Body — required in this turn (no `= delete;` form yet).
-        let body = Some(self.parse_block());
+        // `= delete;` form per §O.3.4. The `delete` token isn't a
+        // reserved keyword (it's only meaningful in this position), so
+        // we match it as an Ident with exact text. The trailing `;`
+        // closes the declaration.
+        let (body, is_deleted) = if self.eat(&TokenKind::Eq) {
+            let delete_ok = matches!(self.peek(), TokenKind::Ident(s) if s == "delete");
+            if !delete_ok {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        "expected `delete;` after `=` in operator declaration",
+                    )
+                    .with_span(self.peek_span()),
+                );
+            } else {
+                self.advance(); // consume `delete`
+            }
+            self.expect(&TokenKind::Semicolon, "';' after `= delete`");
+            (None, true)
+        } else {
+            (Some(self.parse_block()), false)
+        };
 
         let end = self.last_consumed_span();
         Some(OperatorDecl {
@@ -580,6 +689,7 @@ impl<'a> Parser<'a> {
             params,
             return_type,
             body,
+            is_deleted,
             span: start.join(end),
         })
     }

@@ -75,8 +75,9 @@
 use std::collections::HashMap;
 
 use juxc_ast::{
-    Block, CallExpr, ClassDecl, CompilationUnit, ConstructorDecl, ElseBranch, Expr, FieldExpr,
-    FnDecl, NewObjectExpr, RecordDecl, ReturnType, Stmt, SwitchBody, TopLevelDecl, TypeParam,
+    BinaryOp, Block, CallExpr, ClassDecl, CompilationUnit, ConstructorDecl, ElseBranch, Expr,
+    FieldExpr, FnDecl, InterpSegment, NewObjectExpr, OperatorDecl, OperatorKind, RecordDecl,
+    ReturnType, Stmt, SwitchBody, TopLevelDecl, TypeParam, UnaryOp,
 };
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_source::Span;
@@ -196,12 +197,29 @@ impl<'a> Checker<'a> {
                 TopLevelDecl::Function(fn_decl) => self.check_function(fn_decl),
                 TopLevelDecl::Class(class) => self.check_class(class),
                 TopLevelDecl::Record(record) => self.check_record(record),
-                // Enums / interfaces have no member bodies to walk in
-                // Phase 1 — enums are value-only and interface methods
-                // are signature-only (body: None).
-                TopLevelDecl::Enum(_) | TopLevelDecl::Interface(_) => {}
+                TopLevelDecl::Enum(enum_decl) => self.check_enum(enum_decl),
+                // Interfaces carry only signatures (body: None) — no
+                // bodies to walk.
+                TopLevelDecl::Interface(_) => {}
             }
         }
+    }
+
+    /// Walk an enum's operator bodies. Same scope shape as records:
+    /// `this` is the enum's type, operator params are declared into
+    /// the body's scope. Deleted operators have no body and are
+    /// skipped inside `check_operator`.
+    fn check_enum(&mut self, enum_decl: &juxc_ast::EnumDecl) {
+        let name = enum_decl.name.text.clone();
+        self.env.set_class(&name);
+        let this_ty = Ty::User {
+            name: name.clone(),
+            generic_args: Vec::new(),
+        };
+        for op in &enum_decl.operators {
+            self.check_operator(op, &this_ty);
+        }
+        self.env.clear_class();
     }
 
     // ------------------------------------------------------------------
@@ -259,6 +277,9 @@ impl<'a> Checker<'a> {
         for method in &class.methods {
             self.check_method(method, &this_ty);
         }
+        for op in &class.operators {
+            self.check_operator(op, &this_ty);
+        }
 
         self.env.clear_generic_params();
         self.env.clear_class();
@@ -312,12 +333,100 @@ impl<'a> Checker<'a> {
         self.env.pop_scope();
     }
 
-    /// Records carry no bodies of their own to walk — the canonical
-    /// constructor is synthesized — but we still call this method for
-    /// symmetry/future extensibility.
-    fn check_record(&mut self, _record: &RecordDecl) {
-        // Nothing to walk yet. When records grow methods / compact
-        // constructors, route to check_method / check_constructor.
+    /// If `receiver_ty` is a user class/record AND the matching
+    /// operator on that type is marked `= delete;` (§O.3.4), emit
+    /// `E0935_DeletedOperator` anchored at `span`. No-op otherwise.
+    ///
+    /// Inherited deletion isn't traced — only the receiver's own
+    /// class/record is consulted. That matches the rest of operator
+    /// resolution in tycheck today (Phase E substitution only fires
+    /// on the receiver's own class) and keeps the diagnostic precise.
+    fn check_op_not_deleted(&mut self, receiver_ty: &Ty, kind: OperatorKind, span: Span) {
+        let Ty::User { name, .. } = receiver_ty else { return };
+        let deleted = self
+            .symbols
+            .classes
+            .get(name)
+            .and_then(|c| c.operators.get(&kind))
+            .map(|op| op.is_deleted)
+            .unwrap_or(false)
+            || self
+                .symbols
+                .records
+                .get(name)
+                .and_then(|r| r.operators.get(&kind))
+                .map(|op| op.is_deleted)
+                .unwrap_or(false)
+            || self
+                .symbols
+                .enums
+                .get(name)
+                .and_then(|e| e.operators.get(&kind))
+                .map(|op| op.is_deleted)
+                .unwrap_or(false);
+        if deleted {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0935_DeletedOperator,
+                    format!(
+                        "operator `{}` is deleted on type `{}`",
+                        operator_kind_user_spelling(kind),
+                        name,
+                    ),
+                )
+                .with_span(span),
+            );
+        }
+    }
+
+    /// Walk an operator-overload body. Same scope shape as
+    /// [`Self::check_method`]: push a fresh scope, declare `this` with
+    /// the class's `Ty::User` shape, declare each formal param, set
+    /// `current_return` from the operator's declared return type, walk
+    /// the body, then tear it back down.
+    ///
+    /// Per `JUX-OPERATORS-ADDENDUM.md` §O.2 operators have no
+    /// modifiers, no method-level generics, and (today) always have a
+    /// body — so the bookkeeping is simpler than `check_method`.
+    fn check_operator(&mut self, op: &OperatorDecl, this_ty: &Ty) {
+        let Some(body) = &op.body else { return };
+        self.env.push_scope();
+        self.env.declare("this", this_ty.clone());
+        for param in &op.params {
+            let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
+            self.env.declare(&param.name.text, ty);
+        }
+        let saved = self.current_return.take();
+        self.current_return = Some(return_type_to_ty(&op.return_type, &self.env, self.symbols));
+        self.check_block(body);
+        self.current_return = saved;
+        self.env.pop_scope();
+    }
+
+    /// Walk a record's operator bodies. Records compose their value
+    /// type from the header components; the only walkable code lives
+    /// in operator overrides (§O.3.4 customizations like a custom
+    /// `operator string`). `= delete;` operators have no body and are
+    /// skipped.
+    fn check_record(&mut self, record: &RecordDecl) {
+        let name = record.name.text.clone();
+        self.env.set_class(&name);
+        for tp in &record.generic_params {
+            self.env.add_generic_param(&tp.name.text);
+        }
+        let this_ty = Ty::User {
+            name: name.clone(),
+            generic_args: record
+                .generic_params
+                .iter()
+                .map(|tp| Ty::Param(tp.name.text.clone()))
+                .collect(),
+        };
+        for op in &record.operators {
+            self.check_operator(op, &this_ty);
+        }
+        self.env.clear_generic_params();
+        self.env.clear_class();
     }
 
     // ------------------------------------------------------------------
@@ -579,20 +688,54 @@ impl<'a> Checker<'a> {
                 self.check_expr(&r.end);
             }
 
-            Expr::Unary(u) => self.check_expr(&u.operand),
+            Expr::Unary(u) => {
+                self.check_expr(&u.operand);
+                // §O.3.4 — unary operator on a user type whose
+                // matching operator was deleted with `= delete;`.
+                if let Some(kind) = op_kind_for_unary(u.op) {
+                    let receiver_ty = infer_expr(&u.operand, &self.env, self.symbols);
+                    self.check_op_not_deleted(&receiver_ty, kind, u.span);
+                }
+            }
 
             Expr::Binary(b) => {
                 self.check_expr(&b.left);
                 self.check_expr(&b.right);
+                // §O.3.4 — binary operator on a user type whose
+                // matching operator was deleted with `= delete;`.
+                // The receiver is the LHS; that's what determines
+                // dispatch per §O.2.6.
+                if let Some(kind) = op_kind_for_binary(b.op) {
+                    let receiver_ty = infer_expr(&b.left, &self.env, self.symbols);
+                    self.check_op_not_deleted(&receiver_ty, kind, b.span);
+                }
             }
 
             Expr::SizeOf(s) => self.check_expr(&s.operand),
 
             Expr::InterpString(s) => {
-                use juxc_ast::InterpSegment;
                 for seg in &s.segments {
-                    if let InterpSegment::Expr(e) = seg {
-                        self.check_expr(e);
+                    match seg {
+                        InterpSegment::Expr(e) => {
+                            self.check_expr(e);
+                            // `$"${x}"` interpolates via `operator
+                            // string` (which lowers to Display). When
+                            // the type's `string` was deleted, that
+                            // dispatch isn't available — flag here so
+                            // the user gets a Jux diagnostic instead
+                            // of a downstream rustc error.
+                            let ty = infer_expr(e, &self.env, self.symbols);
+                            self.check_op_not_deleted(&ty, OperatorKind::ToString, s.span);
+                        }
+                        InterpSegment::Bare(ident) => {
+                            // `$"$x"` — `x` is a single identifier;
+                            // its type is whatever `env` has for it.
+                            // Same dispatch through `operator string`.
+                            if let Some(ty) = self.env.lookup(&ident.text).cloned() {
+                                self.check_op_not_deleted(&ty, OperatorKind::ToString, s.span);
+                            }
+                        }
+                        InterpSegment::Literal(_) => {}
                     }
                 }
             }
@@ -1070,6 +1213,75 @@ fn return_type_to_ty(rt: &ReturnType, env: &TypeEnv, symbols: &SymbolTable) -> T
 /// position — exactly `bool` or `Unknown` (suppression).
 fn is_boolish(ty: &Ty) -> bool {
     ty.is_unknown() || ty.is_bool()
+}
+
+/// Map a [`BinaryOp`] to the [`OperatorKind`] whose deletion would
+/// suppress this op. `None` for ops that aren't user-overloadable
+/// (logical `&&` / `||`) or that auto-derive from another operator
+/// at the Rust level (`!=` derives from `==`, the four ordering ops
+/// auto-derive from `<=>`). Phase-1 simplification: only the
+/// "primary" operator is checked — if the user deleted `==` but the
+/// program writes `a != b`, the deletion goes uncaught here. A future
+/// pass can chase the auto-derive graph.
+fn op_kind_for_binary(op: BinaryOp) -> Option<OperatorKind> {
+    Some(match op {
+        BinaryOp::Eq => OperatorKind::Eq,
+        BinaryOp::Add => OperatorKind::Plus,
+        BinaryOp::Sub => OperatorKind::Minus,
+        BinaryOp::Mul => OperatorKind::Mul,
+        BinaryOp::Div => OperatorKind::Div,
+        BinaryOp::Rem => OperatorKind::Rem,
+        BinaryOp::BitAnd => OperatorKind::BitAnd,
+        BinaryOp::BitOr => OperatorKind::BitOr,
+        BinaryOp::BitXor => OperatorKind::BitXor,
+        BinaryOp::Shl => OperatorKind::Shl,
+        BinaryOp::Shr => OperatorKind::Shr,
+        // !=, comparison, &&, || — skipped (see fn doc).
+        _ => return None,
+    })
+}
+
+/// Map a [`UnaryOp`] to the [`OperatorKind`] whose deletion would
+/// suppress this op. `!x` (logical NOT) isn't overloadable per spec
+/// §O.2.5.
+fn op_kind_for_unary(op: UnaryOp) -> Option<OperatorKind> {
+    Some(match op {
+        UnaryOp::Neg => OperatorKind::Minus,
+        UnaryOp::BitNot => OperatorKind::BitNot,
+        UnaryOp::Not => return None,
+    })
+}
+
+/// Human-readable spelling of an [`OperatorKind`] for diagnostics.
+/// Matches the form the user would have written (`==`, `<=>`, `hash`,
+/// `string`, …). Mirrors the same helper in `symbol_table.rs`.
+fn operator_kind_user_spelling(kind: OperatorKind) -> &'static str {
+    match kind {
+        OperatorKind::Eq => "==",
+        OperatorKind::Cmp => "<=>",
+        OperatorKind::Lt => "<",
+        OperatorKind::Le => "<=",
+        OperatorKind::Gt => ">",
+        OperatorKind::Ge => ">=",
+        OperatorKind::Hash => "hash",
+        OperatorKind::ToString => "string",
+        OperatorKind::Plus => "+",
+        OperatorKind::Minus => "-",
+        OperatorKind::Mul => "*",
+        OperatorKind::Div => "/",
+        OperatorKind::Rem => "%",
+        OperatorKind::BitAnd => "&",
+        OperatorKind::BitOr => "|",
+        OperatorKind::BitXor => "^",
+        OperatorKind::BitNot => "~",
+        OperatorKind::Shl => "<<",
+        OperatorKind::Shr => ">>",
+        OperatorKind::Index => "[]",
+        OperatorKind::IndexSet => "[]=",
+        OperatorKind::Call => "()",
+        OperatorKind::Range => "..",
+        OperatorKind::RangeInclusive => "..=",
+    }
 }
 
 /// Reach into an expression for its span, mirroring the parser's
@@ -1563,5 +1775,191 @@ mod tests {
             "#,
         );
         assert!(d.is_empty(), "{d:?}");
+    }
+
+    // ----------------------------------------------------------------
+    // Operator body checks (§O.2)
+    // ----------------------------------------------------------------
+
+    /// A well-formed `operator==` body type-checks cleanly: `this` and
+    /// the formal parameter are in scope, the return type matches.
+    /// Also defines the paired `operator hash` — without it the §O.2.7
+    /// pairing rule would fire `E0931`.
+    #[test]
+    fn operator_eq_body_typechecks_cleanly() {
+        let d = run(
+            r#"
+            public class Path {
+                public String value;
+                public Path(String v) { this.value = v; }
+                public bool operator==(Path other) {
+                    return true;
+                }
+                public int operator hash() {
+                    return 0;
+                }
+            }
+            "#,
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    /// Returning the wrong type from an operator body fires E0410 via
+    /// the same path methods use — the operator walker sets
+    /// `current_return` to the declared return type before walking.
+    #[test]
+    fn operator_return_type_mismatch_emits_e0410() {
+        let d = run(
+            r#"
+            public class Path {
+                public bool operator==(Path other) {
+                    return 42;
+                }
+            }
+            "#,
+        );
+        assert!(has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
+    }
+
+    /// Calling a method with the wrong-typed argument from inside an
+    /// operator body still fires the standard E0410 path — proves the
+    /// arg-type check path is reachable from within an operator body.
+    #[test]
+    fn operator_body_call_arg_mismatch_emits_e0410() {
+        let d = run(
+            r#"
+            public class Path {
+                public String value;
+                public Path(String v) { this.value = v; }
+                public void greet(String name) {}
+                public bool operator==(Path other) {
+                    this.greet(42);
+                    return true;
+                }
+            }
+            "#,
+        );
+        assert!(has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
+    }
+
+    /// `operator hash()` is zero-arg and its body type-checks cleanly
+    /// when the return type matches.
+    #[test]
+    fn operator_hash_body_typechecks_cleanly() {
+        let d = run(
+            r#"
+            public class Path {
+                public int operator hash() {
+                    return 1;
+                }
+            }
+            "#,
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // ----------------------------------------------------------------
+    // E0935 — use-of-deleted-operator (§O.3.4)
+    // ----------------------------------------------------------------
+
+    /// `$"$t"` on a record whose `operator string()` is deleted fires
+    /// E0935 at the interp-string site.
+    #[test]
+    fn interp_string_on_deleted_string_op_emits_e0935() {
+        let d = run(
+            r#"
+            public record OpaqueToken(int secret) {
+                public String operator string() = delete;
+            }
+            public void main() {
+                var t = new OpaqueToken(42);
+                print($"$t");
+            }
+            "#,
+        );
+        assert!(has(&d, code::Code::E0935_DeletedOperator), "{d:?}");
+    }
+
+    /// `a + b` where `a`'s class deleted `operator+` fires E0935.
+    #[test]
+    fn arithmetic_on_deleted_op_emits_e0935() {
+        let d = run(
+            r#"
+            public class M {
+                public int x;
+                public M(int x) { this.x = x; }
+                public M operator+(M other) = delete;
+            }
+            public void main() {
+                var a = new M(1);
+                var b = new M(2);
+                var c = a + b;
+            }
+            "#,
+        );
+        assert!(has(&d, code::Code::E0935_DeletedOperator), "{d:?}");
+    }
+
+    /// `-x` where `x`'s class deleted unary `operator-` fires E0935.
+    #[test]
+    fn unary_minus_on_deleted_op_emits_e0935() {
+        let d = run(
+            r#"
+            public class N {
+                public int x;
+                public N(int x) { this.x = x; }
+                public N operator-() = delete;
+            }
+            public void main() {
+                var v = new N(1);
+                var w = -v;
+            }
+            "#,
+        );
+        assert!(has(&d, code::Code::E0935_DeletedOperator), "{d:?}");
+    }
+
+    /// Primitives + non-deleted classes don't fire E0935. Pins that the
+    /// check is gated on receiver class + deletion flag.
+    #[test]
+    fn no_e0935_for_primitives_or_undeleted() {
+        let d = run(
+            r#"
+            public class M {
+                public int x;
+                public M(int x) { this.x = x; }
+                public bool operator==(M other) { return true; }
+            }
+            public void main() {
+                var a = 1 + 2;
+                var b = new M(1);
+                var c = new M(2);
+                var eq = b == c;
+            }
+            "#,
+        );
+        assert!(
+            !d.iter().any(|d| d.code == code::Code::E0935_DeletedOperator),
+            "should not emit E0935: {d:?}",
+        );
+    }
+
+    /// `$"$x"` where x is a primitive (int, String, etc.) doesn't fire
+    /// E0935 — primitives don't have an operator-string declaration.
+    #[test]
+    fn no_e0935_for_primitive_in_interp() {
+        let d = run(
+            r#"
+            public void main() {
+                var x = 42;
+                var s = "hi";
+                print($"x=$x, s=$s");
+            }
+            "#,
+        );
+        assert!(
+            !d.iter().any(|d| d.code == code::Code::E0935_DeletedOperator),
+            "should not emit E0935 for primitive: {d:?}",
+        );
     }
 }

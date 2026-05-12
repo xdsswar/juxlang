@@ -298,20 +298,51 @@ impl Resolver {
         match item {
             TopLevelDecl::Function(fn_decl) => self.visit_fn_decl(fn_decl),
             TopLevelDecl::Class(class_decl) => self.visit_class_decl(class_decl),
-            // Enum declarations have no expressions to resolve at this
-            // milestone — variants reference primitive/String types
-            // only, which aren't in the symbol table. When methods on
-            // enums land they'll need a `visit_enum_decl` like the
-            // class one.
-            TopLevelDecl::Enum(_) => {}
-            // Records similarly carry no expressions in the Turn-1
-            // header-only form. Body methods (when added) will need
-            // a visit pass equivalent to `visit_class_decl`.
-            TopLevelDecl::Record(_) => {}
+            // Enum declarations may carry operator-override bodies in
+            // their body (§O.3.4 customization on the auto-derives).
+            // Variant payloads themselves reference type names only,
+            // which type-position resolution handles separately.
+            TopLevelDecl::Enum(enum_decl) => self.visit_enum_decl(enum_decl),
+            // Records carry operator-overload bodies (§O.3.4) — walk
+            // them so typos and unresolved names inside surface as
+            // E0301. Header components themselves don't reference
+            // anything resolvable until type-position resolution lands.
+            TopLevelDecl::Record(record_decl) => self.visit_record_decl(record_decl),
             // Interfaces carry method signatures only — no bodies to
             // walk in Turn 1. Default methods (when added) will need
             // a visit pass.
             TopLevelDecl::Interface(_) => {}
+        }
+    }
+
+    /// Walk a record's operator-override bodies. `this` is the
+    /// implicit receiver inside each body, matching how class operator
+    /// bodies are walked. `= delete;` operators have no body to walk
+    /// and are skipped silently.
+    fn visit_record_decl(&mut self, record_decl: &juxc_ast::RecordDecl) {
+        for op in &record_decl.operators {
+            let Some(body) = &op.body else { continue };
+            self.push_scope();
+            self.declare("this");
+            for param in &op.params {
+                self.declare(&param.name.text);
+            }
+            self.visit_block(body);
+            self.pop_scope();
+        }
+    }
+
+    /// Same shape as [`Self::visit_record_decl`] but for enums.
+    fn visit_enum_decl(&mut self, enum_decl: &juxc_ast::EnumDecl) {
+        for op in &enum_decl.operators {
+            let Some(body) = &op.body else { continue };
+            self.push_scope();
+            self.declare("this");
+            for param in &op.params {
+                self.declare(&param.name.text);
+            }
+            self.visit_block(body);
+            self.pop_scope();
         }
     }
 
@@ -349,6 +380,22 @@ impl Resolver {
                 self.declare(&param.name.text);
             }
             if let Some(body) = &method.body {
+                self.visit_block(body);
+            }
+            self.pop_scope();
+        }
+        // Operator overloads (§O.2). Same scope shape as methods —
+        // `this` is the implicit receiver and the formal params are
+        // declared into the body's scope. Without this walk, typos
+        // inside an operator body would slip through silently because
+        // the resolver wouldn't see references at all.
+        for op in &class_decl.operators {
+            self.push_scope();
+            self.declare("this");
+            for param in &op.params {
+                self.declare(&param.name.text);
+            }
+            if let Some(body) = &op.body {
                 self.visit_block(body);
             }
             self.pop_scope();
@@ -924,5 +971,79 @@ mod tests {
             }
         "#;
         assert_eq!(resolve_count(src), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // Operator overloads (§O.2) — resolver walk
+    // ------------------------------------------------------------------
+
+    /// An operator body that references its parameter and a known
+    /// top-level name resolves cleanly. Pins the happy path: `this`
+    /// and the formal param both land in the operator-body scope.
+    #[test]
+    fn operator_body_resolves_this_and_params() {
+        let src = r#"
+            public class Path {
+                public String value;
+                public Path(String v) { this.value = v; }
+                public bool operator==(Path other) {
+                    print(this.value);
+                    print(other.value);
+                    return true;
+                }
+            }
+        "#;
+        assert_eq!(resolve_count(src), 0);
+    }
+
+    /// A typo inside an operator body emits E0301 — same as a typo in
+    /// any method body. Before the resolver walked operators, this
+    /// would slip through.
+    #[test]
+    fn operator_body_typo_emits_e0301() {
+        let src = r#"
+            public class Path {
+                public bool operator==(Path other) {
+                    return wibble == other;
+                }
+            }
+        "#;
+        // One E0301: `wibble` isn't bound anywhere.
+        assert_eq!(resolve_count(src), 1);
+    }
+
+    /// Operator parameters introduce names visible inside the body —
+    /// and only inside the body. A reference to the param name from
+    /// outside the operator (e.g., from a sibling method) fails to
+    /// resolve.
+    #[test]
+    fn operator_param_is_scoped_to_body() {
+        let src = r#"
+            public class Path {
+                public bool operator==(Path other) {
+                    return true;
+                }
+                public void leak() {
+                    print(other);
+                }
+            }
+        "#;
+        // One E0301: `other` is the operator's parameter and is NOT
+        // visible inside `leak`'s body.
+        assert_eq!(resolve_count(src), 1);
+    }
+
+    /// `operator hash()` and `operator string()` (zero-param operators)
+    /// also get their bodies walked.
+    #[test]
+    fn zero_param_operators_walk_body() {
+        let src = r#"
+            public class Path {
+                public int operator hash() {
+                    return wibble;
+                }
+            }
+        "#;
+        assert_eq!(resolve_count(src), 1);
     }
 }

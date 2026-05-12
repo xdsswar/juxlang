@@ -1,0 +1,48 @@
+// Operator-overload smoke for §O.2.3 (arithmetic) + §O.2.2 (hash).
+//
+// `a + b` on a user class with `operator+` lowers through the backend's
+// clone-injection rewrite to `a.__op_add(b.clone())` — preserves both
+// operands. The Rust `impl Add for Money` is still generated but the
+// call site bypasses it for the more ergonomic inherent-method form.
+
+public class Money {
+    public int cents;
+
+    public Money(int cents) {
+        this.cents = cents;
+    }
+
+    public Money operator+(Money other) {
+        return new Money(this.cents + other.cents);
+    }
+
+    public Money operator-(Money other) {
+        return new Money(this.cents - other.cents);
+    }
+
+    public bool operator==(Money other) {
+        return this.cents == other.cents;
+    }
+
+    public int operator hash() {
+        return this.cents;
+    }
+
+    public String operator string() {
+        return $"$${this.cents}";
+    }
+}
+
+public void main() {
+    var a = new Money(150);
+    var b = new Money(50);
+    // a and b are both still usable after each arithmetic op — the
+    // backend's clone-injection rewrite makes `a + b` preserve both.
+    var sum = a + b;
+    
+    var diff = a - b;
+    print($"sum=$sum");
+    print($"diff=$diff");
+    print(a == b);
+    print(a == a);
+}

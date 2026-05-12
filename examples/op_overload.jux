@@ -1,0 +1,39 @@
+// Operator-overload smoke test — exercises §O.2 backend lowering.
+// `operator==` becomes `impl PartialEq for Path`; `operator string`
+// becomes `impl Display for Path`. Both delegate to private `__op_*`
+// inherent methods that carry the user's body verbatim.
+//
+// `operator==` is paired with `operator hash` per spec §O.2.7 — the
+// compiler emits `E0931` if you skip the hash. The hash body here is
+// intentionally trivial (zero); a real impl would mix in `this.value`.
+
+public class Path {
+    public String value;
+
+    public Path(String v) {
+        this.value = v;
+    }
+
+    public bool operator==(Path other) {
+        return this.value == other.value;
+    }
+
+    public int operator hash() {
+        return 0;
+    }
+
+    public String operator string() {
+        return this.value;
+    }
+}
+
+public void main() {
+    var a = new Path("hello");
+    var b = new Path("hello");
+    var c = new Path("world");
+    // PartialEq dispatch goes through our `operator==` body.
+    print(a == b);
+    print(a == c);
+    // Display dispatch goes through our `operator string` body.
+    print($"a=$a, c=$c");
+}

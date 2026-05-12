@@ -1,0 +1,40 @@
+// Operator-overload smoke for §O.2.1's `<=>` → Rust PartialOrd.
+//
+// Defining `operator<=>` auto-derives `<`, `<=`, `>`, `>=` per spec.
+// Backend bridges through `__op_cmp` + `impl PartialOrd` whose
+// `partial_cmp` body converts the user's int return into Ordering.
+//
+// Since `operator==` isn't separately defined, the backend also
+// synthesizes a PartialEq that bridges through `__op_cmp` — Rust
+// requires PartialEq for PartialOrd to compile.
+
+public class V {
+    public int x;
+
+    public V(int x) {
+        this.x = x;
+    }
+
+    // Standard three-way: negative if less, zero if equal,
+    // positive if greater.
+    public int operator<=>(V other) {
+        return this.x - other.x;
+    }
+
+    public String operator string() {
+        return $"V(${this.x})";
+    }
+}
+
+public void main() {
+    var a = new V(1);
+    var b = new V(2);
+    var c = new V(1);
+
+    print($"a<b: ${a < b}");
+    print($"a<=c: ${a <= c}");
+    print($"b>a: ${b > a}");
+    print($"a>=c: ${a >= c}");
+    print($"a==c: ${a == c}");
+    print($"a==b: ${a == b}");
+}

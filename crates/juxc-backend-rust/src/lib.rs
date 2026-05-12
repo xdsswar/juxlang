@@ -37,7 +37,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use juxc_ast::{CompilationUnit, ImportDecl, ImportSpec, QualifiedName, TopLevelDecl};
+use juxc_ast::{CompilationUnit, ImportDecl, ImportSpec, QualifiedName, ReturnType, TopLevelDecl};
 use juxc_source::Span;
 use juxc_tycheck::{SymbolTable, Ty};
 
@@ -173,6 +173,14 @@ struct RustEmitter {
     /// suppresses the `.clone()` insertion in `emit_field` so we don't
     /// produce nonsense like `self.name.clone() = "x";`.
     emitting_lvalue: bool,
+    /// Declared return type of the function / method / operator body
+    /// currently being emitted. `None` outside any function body and
+    /// inside constructor bodies (constructors return `Self`).
+    /// Drives the return-position string-literal coercion: a `return
+    /// "literal";` inside a `String`-returning fn lowers to
+    /// `return "literal".to_string();` so the `&str` → owned `String`
+    /// gap doesn't surface as an E0308 at rustc time.
+    pub(crate) current_return_type: Option<ReturnType>,
     /// Tycheck's symbol table (Phase G). Cloned rather than borrowed
     /// to keep `RustEmitter` lifetime-parameter-free — the table is
     /// built once per compilation unit and held immutably during
@@ -228,6 +236,7 @@ impl RustEmitter {
             this_alias: None,
             user_mut_methods: HashSet::new(),
             emitting_lvalue: false,
+            current_return_type: None,
             symbols: symbols.clone(),
             expr_types,
         }

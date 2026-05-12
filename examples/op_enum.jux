@@ -1,0 +1,29 @@
+// Operator overrides on enums (§O.3.4). Most enums don't need
+// custom operators — the variant-order auto-derives cover natural
+// cases — but security-sensitive enums can suppress the auto-Display
+// with `operator string() = delete;`, same pattern records use.
+//
+// `Color` keeps the auto-derives plus an override of `operator string`
+// that customizes the format. `Secret` deletes `operator string` so
+// it can't leak via `print` or `$"..."` interpolation.
+
+public enum Color {
+    Red,
+    Green,
+    Blue;
+
+    public String operator string() {
+        return "Color::user";
+    }
+}
+
+public enum Secret {
+    Hidden;
+
+    public String operator string() = delete;
+}
+
+public void main() {
+    var c = Color.Red;
+    print($"c=$c");
+}

@@ -84,6 +84,13 @@ pub struct RecordDecl {
     /// Header components in source order — each becomes a struct
     /// field and a canonical-constructor parameter.
     pub components: Vec<RecordComponent>,
+    /// Operator-override declarations inside the record body, in
+    /// source order. Each entry can be a real override (custom body)
+    /// or a `= delete;` suppression per §O.3.4 — `is_deleted` on the
+    /// [`OperatorDecl`] distinguishes the two. Records currently
+    /// support only operators in their body (no methods, no extra
+    /// constructors). Empty when the record body is empty or absent.
+    pub operators: Vec<OperatorDecl>,
     /// Span covering the whole `record … { … }` declaration.
     pub span: Span,
 }
@@ -121,6 +128,14 @@ pub struct EnumDecl {
     /// Variant declarations in source order. Order determines auto-
     /// derived ordinal values when those land.
     pub variants: Vec<EnumVariant>,
+    /// Operator-override declarations on the enum body, in source
+    /// order. Like records (§O.3.4), each entry can be a real override
+    /// or a `= delete;` suppression. Empty when the user wrote no
+    /// operator section after the variant list. Enums rarely need
+    /// custom operators (the natural variant-order semantics cover
+    /// most cases) but `= delete;` for `operator string` is the same
+    /// security-sensitive use case records have.
+    pub operators: Vec<OperatorDecl>,
     /// Span covering the whole `enum Name { … }` declaration.
     pub span: Span,
 }
@@ -209,14 +224,16 @@ pub struct ClassDecl {
 }
 
 /// `operator-decl` per `JUX-OPERATORS-ADDENDUM.md` §O.2 — an operator
-/// override on a class (later: records and enums too via §O.3.4 delete
-/// / customization).
+/// override on a class or record (records use it primarily to suppress
+/// auto-derived behavior via the `= delete;` form per §O.3.4).
 ///
-/// Shape: `[visibility] [returnType] operator <op>(params) { body }`.
-/// Return type is parsed and stored as the user wrote it, even though
-/// the spec fixes it for many operators (`bool` for `==`, `int` for
-/// `<=>` and `hash`, `String` for `string`). A future tycheck pass
-/// will validate the return type matches the operator.
+/// Shape: `[visibility] [returnType] operator <op>(params) { body }`,
+/// or `[visibility] [returnType] operator <op>(params) = delete;` for
+/// the suppression form. Return type is parsed and stored as the user
+/// wrote it, even though the spec fixes it for many operators (`bool`
+/// for `==`, `int` for `<=>` and `hash`, `String` for `string`). A
+/// future tycheck pass will validate the return type matches the
+/// operator.
 #[derive(Debug, Clone)]
 pub struct OperatorDecl {
     /// Member visibility — defaults to package-private when the user
@@ -230,9 +247,16 @@ pub struct OperatorDecl {
     pub params: Vec<Param>,
     /// Declared return type. Stored exactly as written.
     pub return_type: ReturnType,
-    /// Method body. None for `= delete;` suppression form (§O.3.4) —
-    /// not parsed yet, so today this is always Some.
+    /// Method body. `None` when `is_deleted` is true (§O.3.4 form).
     pub body: Option<Block>,
+    /// True when this declaration is a `= delete;` suppression rather
+    /// than a real override. Per §O.3.4, `= delete;` on a record/struct/
+    /// enum's operator turns off the auto-derivation for that operator
+    /// — useful for security-sensitive types where the default would
+    /// be misleading. Always `false` for class operators in practice;
+    /// the parser doesn't restrict it but classes don't have auto-
+    /// derives to suppress.
+    pub is_deleted: bool,
     /// Span covering the whole declaration.
     pub span: Span,
 }

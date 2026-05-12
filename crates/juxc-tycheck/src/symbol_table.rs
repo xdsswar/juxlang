@@ -23,8 +23,8 @@
 use std::collections::HashMap;
 
 use juxc_ast::{
-    ClassDecl, CompilationUnit, EnumDecl, FieldDecl, FnDecl, InterfaceDecl, RecordDecl,
-    ReturnType, TopLevelDecl, TypeParam, TypeRef, Visibility,
+    ClassDecl, CompilationUnit, EnumDecl, FieldDecl, FnDecl, InterfaceDecl, OperatorDecl,
+    OperatorKind, RecordDecl, ReturnType, TopLevelDecl, TypeParam, TypeRef, Visibility,
 };
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_source::Span;
@@ -164,6 +164,14 @@ pub struct ClassSig {
     /// Methods indexed by name. Overloads aren't supported yet — a
     /// duplicate emits `E0402`.
     pub methods: HashMap<String, MethodSig>,
+    /// Operator overload declarations per `JUX-OPERATORS-ADDENDUM.md`
+    /// §O.2, indexed by [`OperatorKind`]. Each operator appears at
+    /// most once today — a class with two `operator+` declarations
+    /// emits `E0402`. Arity-based overloading (binary vs unary `+`)
+    /// would need keying by `(kind, arity)`; spec §O.2.3 calls out
+    /// "Binary or unary" but doesn't say a single class can declare
+    /// both at once, so we keep the simpler keying for now.
+    pub operators: HashMap<OperatorKind, OperatorSig>,
     /// Span of the whole class declaration.
     pub span: Span,
 }
@@ -193,6 +201,34 @@ pub struct MethodSig {
     /// Declared return type (or `void`).
     pub return_type: ReturnType,
     /// Span of the method declaration.
+    pub span: Span,
+}
+
+/// Signature of one operator overload declared on a class or record
+/// (`JUX-OPERATORS-ADDENDUM.md` §O.2 / §O.3.4). Carries the same shape
+/// as [`MethodSig`] minus the name (the name is implicit in
+/// [`OperatorKind`]) and the abstract flag, plus an `is_deleted` flag
+/// that distinguishes the `= delete;` suppression form.
+#[derive(Debug, Clone)]
+pub struct OperatorSig {
+    /// Operator visibility — most operators are `public` but the parser
+    /// preserves whatever the user wrote.
+    pub visibility: Visibility,
+    /// Which operator. Together with the declaring class identity,
+    /// this is the dispatch key for §O.2.6 resolution.
+    pub kind: OperatorKind,
+    /// Formal parameters in declaration order.
+    pub params: Vec<ParamSig>,
+    /// Declared return type. Tycheck will eventually validate this
+    /// against the spec's fixed return-type table (e.g. `bool` for
+    /// `==`, `int` for `hash`).
+    pub return_type: ReturnType,
+    /// True when the declaration is `operator <op>(...) = delete;`
+    /// (§O.3.4). Records use this to suppress auto-derived behavior;
+    /// the backend skips emission for deleted operators and tycheck
+    /// will (in a future turn) reject use sites with E0935.
+    pub is_deleted: bool,
+    /// Span of the operator declaration.
     pub span: Span,
 }
 
@@ -229,6 +265,11 @@ pub struct RecordSig {
     /// Header components in declaration order — each becomes a public
     /// field AND a canonical-constructor parameter.
     pub components: Vec<RecordComponentSig>,
+    /// Operator-override declarations on the record body, indexed by
+    /// kind. Mirrors [`ClassSig::operators`]; the value carries the
+    /// `is_deleted` flag so the backend can distinguish a real
+    /// override from a §O.3.4 suppression.
+    pub operators: HashMap<OperatorKind, OperatorSig>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -253,6 +294,11 @@ pub struct EnumSig {
     pub visibility: Visibility,
     /// Variants indexed by name. Duplicate variant names emit `E0403`.
     pub variants: HashMap<String, VariantSig>,
+    /// Operator-override declarations on the enum body, indexed by
+    /// kind. Same shape as [`ClassSig::operators`] /
+    /// [`RecordSig::operators`]. Most enums won't have any — natural
+    /// variant-order semantics cover the common cases.
+    pub operators: HashMap<OperatorKind, OperatorSig>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -411,6 +457,31 @@ fn insert_class(
         methods.insert(method.name.text.clone(), method_sig(method));
     }
 
+    // Operators — same E0402 treatment for duplicates, keyed by kind.
+    let mut operators: HashMap<OperatorKind, OperatorSig> = HashMap::new();
+    for op in &class_decl.operators {
+        if operators.contains_key(&op.kind) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0402_DuplicateMethod,
+                    format!(
+                        "operator `{}` is declared more than once in class `{}`",
+                        operator_kind_display(op.kind),
+                        class_decl.name.text,
+                    ),
+                )
+                .with_span(op.span),
+            );
+            continue;
+        }
+        operators.insert(op.kind, operator_sig(op));
+    }
+    // §O.2.7 pairing: `operator==` requires `operator hash`.
+    let class_ops: Vec<&juxc_ast::OperatorDecl> = class_decl.operators.iter().collect();
+    check_eq_hash_pairing(&class_ops, "class", &class_decl.name.text, diagnostics);
+    // §O.2.1: `<=>` conflicts with individual `<`/`<=`/`>`/`>=`.
+    check_cmp_individual_conflict(&class_ops, "class", &class_decl.name.text, diagnostics);
+
     table.classes.insert(
         class_decl.name.text.clone(),
         ClassSig {
@@ -422,6 +493,7 @@ fn insert_class(
             fields,
             constructors,
             methods,
+            operators,
             span: class_decl.span,
         },
     );
@@ -435,6 +507,31 @@ fn insert_record(
     if !ensure_top_level_unique(table, &record_decl.name.text, record_decl.span, diagnostics) {
         return;
     }
+    // Operators on records — same E0402-on-duplicate treatment as on
+    // classes. `= delete;` declarations land here too; the
+    // `is_deleted` flag carries through from the AST.
+    let mut operators: HashMap<OperatorKind, OperatorSig> = HashMap::new();
+    for op in &record_decl.operators {
+        if operators.contains_key(&op.kind) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0402_DuplicateMethod,
+                    format!(
+                        "operator `{}` is declared more than once in record `{}`",
+                        operator_kind_display(op.kind),
+                        record_decl.name.text,
+                    ),
+                )
+                .with_span(op.span),
+            );
+            continue;
+        }
+        operators.insert(op.kind, operator_sig(op));
+    }
+    // §O.2.7 pairing on records too — same rule, same message shape.
+    let record_ops: Vec<&juxc_ast::OperatorDecl> = record_decl.operators.iter().collect();
+    check_eq_hash_pairing(&record_ops, "record", &record_decl.name.text, diagnostics);
+    check_cmp_individual_conflict(&record_ops, "record", &record_decl.name.text, diagnostics);
     table.records.insert(
         record_decl.name.text.clone(),
         RecordSig {
@@ -449,6 +546,7 @@ fn insert_record(
                     ty: c.ty.clone(),
                 })
                 .collect(),
+            operators,
             span: record_decl.span,
         },
     );
@@ -485,11 +583,34 @@ fn insert_enum(
             },
         );
     }
+    let mut operators: HashMap<OperatorKind, OperatorSig> = HashMap::new();
+    for op in &enum_decl.operators {
+        if operators.contains_key(&op.kind) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0402_DuplicateMethod,
+                    format!(
+                        "operator `{}` is declared more than once in enum `{}`",
+                        operator_kind_display(op.kind),
+                        enum_decl.name.text,
+                    ),
+                )
+                .with_span(op.span),
+            );
+            continue;
+        }
+        operators.insert(op.kind, operator_sig(op));
+    }
+    // §O.2.7 pairing on enums too.
+    let enum_ops: Vec<&juxc_ast::OperatorDecl> = enum_decl.operators.iter().collect();
+    check_eq_hash_pairing(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
+    check_cmp_individual_conflict(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
     table.enums.insert(
         enum_decl.name.text.clone(),
         EnumSig {
             visibility: enum_decl.visibility,
             variants,
+            operators,
             span: enum_decl.span,
         },
     );
@@ -579,11 +700,147 @@ fn method_sig(method: &FnDecl) -> MethodSig {
     }
 }
 
+/// Lower an [`OperatorDecl`] into the symbol-table's [`OperatorSig`]
+/// shape. Mirrors [`method_sig`].
+fn operator_sig(op: &OperatorDecl) -> OperatorSig {
+    OperatorSig {
+        visibility: op.visibility,
+        kind: op.kind,
+        params: op.params.iter().map(param_sig).collect(),
+        return_type: op.return_type.clone(),
+        is_deleted: op.is_deleted,
+        span: op.span,
+    }
+}
+
+/// Human-readable spelling of an [`OperatorKind`] suitable for embedding
+/// in a diagnostic message. Matches the source-level spelling the user
+/// would have written (`==`, `<=>`, `hash`, `string`, etc.).
+fn operator_kind_display(kind: OperatorKind) -> &'static str {
+    match kind {
+        OperatorKind::Eq => "==",
+        OperatorKind::Cmp => "<=>",
+        OperatorKind::Lt => "<",
+        OperatorKind::Le => "<=",
+        OperatorKind::Gt => ">",
+        OperatorKind::Ge => ">=",
+        OperatorKind::Hash => "hash",
+        OperatorKind::ToString => "string",
+        OperatorKind::Plus => "+",
+        OperatorKind::Minus => "-",
+        OperatorKind::Mul => "*",
+        OperatorKind::Div => "/",
+        OperatorKind::Rem => "%",
+        OperatorKind::BitAnd => "&",
+        OperatorKind::BitOr => "|",
+        OperatorKind::BitXor => "^",
+        OperatorKind::BitNot => "~",
+        OperatorKind::Shl => "<<",
+        OperatorKind::Shr => ">>",
+        OperatorKind::Index => "[]",
+        OperatorKind::IndexSet => "[]=",
+        OperatorKind::Call => "()",
+        OperatorKind::Range => "..",
+        OperatorKind::RangeInclusive => "..=",
+    }
+}
+
 fn param_sig(p: &juxc_ast::Param) -> ParamSig {
     ParamSig {
         name: p.name.text.clone(),
         ty: p.ty.clone(),
     }
+}
+
+/// Enforce the `<=>` / individual-ordering conflict rule per
+/// `JUX-OPERATORS-ADDENDUM.md` §O.2.1: defining BOTH `operator<=>` AND
+/// any of the individual `<`/`<=`/`>`/`>=` operators on the same type
+/// is a conflict — pick one form, not both. Emits `E0930` anchored at
+/// each redundant individual-ordering decl when `<=>` is also present.
+///
+/// "Defines" excludes `= delete;` (deletion isn't definition). So a
+/// type that deletes `<=>` and defines `<`/etc. is fine, and vice
+/// versa.
+fn check_cmp_individual_conflict(
+    operators: &[&juxc_ast::OperatorDecl],
+    kind_label: &str,
+    decl_name: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let active_cmp = operators
+        .iter()
+        .any(|o| o.kind == OperatorKind::Cmp && !o.is_deleted);
+    if !active_cmp {
+        return;
+    }
+    for op in operators {
+        let is_individual = matches!(
+            op.kind,
+            OperatorKind::Lt | OperatorKind::Le | OperatorKind::Gt | OperatorKind::Ge,
+        );
+        if !is_individual || op.is_deleted {
+            continue;
+        }
+        diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0930_OperatorConflict,
+                format!(
+                    "{kind_label} `{decl_name}` defines both `operator<=>` and \
+                     `operator{}` — pick one form, not both",
+                    operator_kind_display(op.kind),
+                ),
+            )
+            .with_span(op.span)
+            .with_help(
+                "delete this individual operator or remove the `<=>` declaration; \
+                 `<=>` auto-derives `<`, `<=`, `>`, `>=` from sign",
+            ),
+        );
+    }
+}
+
+/// Enforce the `==` / `hash` pairing rule per `JUX-OPERATORS-ADDENDUM.md`
+/// §O.2.7: if a class/record/enum defines `operator==`, it must also
+/// define `operator hash`. Emits `E0931_EqWithoutHash` anchored at the
+/// `operator==` declaration when the rule is violated.
+///
+/// "Defines" here means present AND not `= delete;` — a deletion is the
+/// user opting out, not a definition. So a class with `operator==(...)
+/// { ... }` and `operator hash() = delete;` is still a rule violation
+/// (the user signaled structural equality but turned off hashing).
+///
+/// `kind_label` shapes the diagnostic message — `"class"` / `"record"`
+/// / `"enum"`. `decl_name` is the declaring type's name.
+fn check_eq_hash_pairing(
+    operators: &[&juxc_ast::OperatorDecl],
+    kind_label: &str,
+    decl_name: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let active_eq = operators
+        .iter()
+        .find(|o| o.kind == OperatorKind::Eq && !o.is_deleted);
+    let Some(eq) = active_eq else { return };
+    let active_hash = operators
+        .iter()
+        .any(|o| o.kind == OperatorKind::Hash && !o.is_deleted);
+    if active_hash {
+        return;
+    }
+    diagnostics.push(
+        Diagnostic::error(
+            code::Code::E0931_EqWithoutHash,
+            format!(
+                "{kind_label} `{decl_name}` defines `operator==` but no `operator hash`; \
+                 structural equality requires consistent hashing",
+            ),
+        )
+        .with_span(eq.span)
+        .with_help(
+            "add `public int operator hash() { ... }` so the type can serve as a \
+             `HashMap`/`HashSet` key with consistent semantics",
+        ),
+    );
 }
 
 // ============================================================================
@@ -749,6 +1006,41 @@ mod tests {
         assert_eq!(diags[0].code, code::Code::E0400_DuplicateDeclaration);
     }
 
+    /// Operator declarations land in `ClassSig::operators` indexed by
+    /// kind. Methods are unaffected.
+    #[test]
+    fn class_operator_is_indexed_by_kind() {
+        let (table, diags) = build_table(
+            r#"
+            public class Path {
+                public bool operator==(Path other) { return true; }
+                public int operator hash() { return 0; }
+            }
+            "#,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        let class = table.classes.get("Path").expect("Path in table");
+        assert_eq!(class.operators.len(), 2);
+        assert!(class.operators.contains_key(&OperatorKind::Eq));
+        assert!(class.operators.contains_key(&OperatorKind::Hash));
+        assert!(class.methods.is_empty(), "operators should not leak into methods");
+    }
+
+    /// Two `operator+` declarations in the same class → E0402.
+    #[test]
+    fn duplicate_operator_emits_e0402() {
+        let (_table, diags) = build_table(
+            r#"
+            public class M {
+                public int operator+(int o) { return 0; }
+                public int operator+(int o) { return 0; }
+            }
+            "#,
+        );
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, code::Code::E0402_DuplicateMethod);
+    }
+
     /// Phase E.1 — `lookup_method` finds a method on the queried class
     /// directly and returns the queried name as the declaring class.
     #[test]
@@ -813,5 +1105,270 @@ mod tests {
             .lookup_field("B", "age")
             .expect("B inherits age from A");
         assert_eq!(declaring, "A");
+    }
+
+    // ----------------------------------------------------------------
+    // E0931 — `==` / `hash` pairing rule (§O.2.7)
+    // ----------------------------------------------------------------
+
+    /// A class with `operator==` but no `operator hash` fires E0931.
+    #[test]
+    fn class_eq_without_hash_emits_e0931() {
+        let (_table, diags) = build_table(
+            r#"
+            public class P {
+                public int x;
+                public P(int x) { this.x = x; }
+                public bool operator==(P other) { return true; }
+            }
+            "#,
+        );
+        assert!(diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash), "{diags:?}");
+    }
+
+    /// A class with both `operator==` AND `operator hash` is fine.
+    #[test]
+    fn class_eq_with_hash_is_ok() {
+        let (_table, diags) = build_table(
+            r#"
+            public class P {
+                public int x;
+                public P(int x) { this.x = x; }
+                public bool operator==(P other) { return true; }
+                public int operator hash() { return 0; }
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash),
+            "{diags:?}",
+        );
+    }
+
+    /// `operator==` + `operator hash() = delete;` still fires E0931 —
+    /// deletion isn't definition. The user signaled "structural eq
+    /// without consistent hash," which §O.2.7 forbids.
+    #[test]
+    fn class_eq_with_deleted_hash_emits_e0931() {
+        let (_table, diags) = build_table(
+            r#"
+            public class P {
+                public int x;
+                public P(int x) { this.x = x; }
+                public bool operator==(P other) { return true; }
+                public int operator hash() = delete;
+            }
+            "#,
+        );
+        assert!(diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash), "{diags:?}");
+    }
+
+    /// `operator==(...) = delete;` is not a definition, so no E0931
+    /// even when there's no `operator hash`. The user opted out of
+    /// equality entirely.
+    #[test]
+    fn class_deleted_eq_does_not_emit_e0931() {
+        let (_table, diags) = build_table(
+            r#"
+            public class P {
+                public int x;
+                public P(int x) { this.x = x; }
+                public bool operator==(P other) = delete;
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash),
+            "{diags:?}",
+        );
+    }
+
+    /// Same rule applies to records.
+    #[test]
+    fn record_eq_without_hash_emits_e0931() {
+        let (_table, diags) = build_table(
+            r#"
+            public record R(int x) {
+                public bool operator==(R other) { return true; }
+            }
+            "#,
+        );
+        assert!(diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash), "{diags:?}");
+    }
+
+    /// And to enums.
+    #[test]
+    fn enum_eq_without_hash_emits_e0931() {
+        let (_table, diags) = build_table(
+            r#"
+            public enum E {
+                A, B;
+                public bool operator==(E other) { return true; }
+            }
+            "#,
+        );
+        assert!(diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash), "{diags:?}");
+    }
+
+    /// `operator hash` alone (no `operator==`) is fine — the spec
+    /// rule is one-directional. The user could want hashing via
+    /// identity equality.
+    #[test]
+    fn hash_without_eq_is_ok() {
+        let (_table, diags) = build_table(
+            r#"
+            public class P {
+                public int x;
+                public P(int x) { this.x = x; }
+                public int operator hash() { return 0; }
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash),
+            "{diags:?}",
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // E0930 — `<=>` vs individual ordering ops (§O.2.1)
+    // ----------------------------------------------------------------
+
+    /// Defining both `operator<=>` and `operator<` fires E0930 on the
+    /// individual decl (the redundant one — spec says `<=>` is the
+    /// preferred form).
+    #[test]
+    fn cmp_with_lt_emits_e0930() {
+        let (_table, diags) = build_table(
+            r#"
+            public class V {
+                public int x;
+                public V(int x) { this.x = x; }
+                public int operator<=>(V other) { return 0; }
+                public bool operator<(V other) { return false; }
+            }
+            "#,
+        );
+        assert!(diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict), "{diags:?}");
+    }
+
+    /// `<=>` paired with multiple individual ops — emit one E0930 per
+    /// redundant individual op.
+    #[test]
+    fn cmp_with_all_four_individuals_emits_four_e0930() {
+        let (_table, diags) = build_table(
+            r#"
+            public class V {
+                public int x;
+                public V(int x) { this.x = x; }
+                public int operator<=>(V other) { return 0; }
+                public bool operator<(V other) { return false; }
+                public bool operator<=(V other) { return false; }
+                public bool operator>(V other) { return false; }
+                public bool operator>=(V other) { return false; }
+            }
+            "#,
+        );
+        let count = diags
+            .iter()
+            .filter(|d| d.code == code::Code::E0930_OperatorConflict)
+            .count();
+        assert_eq!(count, 4, "expected one E0930 per individual op: {diags:?}");
+    }
+
+    /// `<=>` alone (no individuals) is fine — the natural form.
+    #[test]
+    fn cmp_alone_is_ok() {
+        let (_table, diags) = build_table(
+            r#"
+            public class V {
+                public int x;
+                public V(int x) { this.x = x; }
+                public int operator<=>(V other) { return 0; }
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict),
+            "{diags:?}",
+        );
+    }
+
+    /// Individual ops alone (no `<=>`) is also fine — the user opted
+    /// into the four-operator form. (Whether the four are partial is
+    /// a separate spec rule, not E0930.)
+    #[test]
+    fn individuals_alone_are_ok() {
+        let (_table, diags) = build_table(
+            r#"
+            public class V {
+                public int x;
+                public V(int x) { this.x = x; }
+                public bool operator<(V other) { return false; }
+                public bool operator<=(V other) { return false; }
+                public bool operator>(V other) { return false; }
+                public bool operator>=(V other) { return false; }
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict),
+            "{diags:?}",
+        );
+    }
+
+    /// `<=>` deleted + individual `<` defined — no conflict. Deletion
+    /// isn't definition.
+    #[test]
+    fn deleted_cmp_with_lt_is_ok() {
+        let (_table, diags) = build_table(
+            r#"
+            public class V {
+                public int x;
+                public V(int x) { this.x = x; }
+                public int operator<=>(V other) = delete;
+                public bool operator<(V other) { return false; }
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict),
+            "{diags:?}",
+        );
+    }
+
+    /// `<=>` defined + `operator<` deleted — also no conflict.
+    /// Deleting the individual op is the user opting out of the
+    /// override even though the spec auto-derives them.
+    #[test]
+    fn cmp_with_deleted_lt_is_ok() {
+        let (_table, diags) = build_table(
+            r#"
+            public class V {
+                public int x;
+                public V(int x) { this.x = x; }
+                public int operator<=>(V other) { return 0; }
+                public bool operator<(V other) = delete;
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict),
+            "{diags:?}",
+        );
+    }
+
+    /// Same rule applies to records.
+    #[test]
+    fn record_cmp_with_lt_emits_e0930() {
+        let (_table, diags) = build_table(
+            r#"
+            public record R(int x) {
+                public int operator<=>(R other) { return 0; }
+                public bool operator<(R other) { return false; }
+            }
+            "#,
+        );
+        assert!(diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict), "{diags:?}");
     }
 }

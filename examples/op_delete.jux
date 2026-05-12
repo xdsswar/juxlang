@@ -1,0 +1,33 @@
+// `= delete;` suppression smoke per §O.3.4.
+//
+// `OpaqueToken` is a security-sensitive record: we want the value to
+// still compare structurally (auto-PartialEq) but we explicitly want
+// the default `operator string` to NOT leak the secret into logs.
+// `operator string() = delete;` suppresses the synthesized Display
+// impl. Trying to format the token with `$"$t"` would now be a
+// rustc-level "trait `Display` not implemented" error — we avoid that
+// by not using the operator at all in the smoke test.
+//
+// `Money` carries a user override of `operator string` plus other
+// derives intact — shows that user overrides on records work just
+// like on classes.
+
+public record OpaqueToken(int secret) {
+    public String operator string() = delete;
+}
+
+public record Money(int cents) {
+    public String operator string() {
+        return $"$${this.cents}";
+    }
+}
+
+public void main() {
+    var t = new OpaqueToken(42);
+    var m = new Money(150);
+    // OpaqueToken: equality still works (auto-derived PartialEq).
+    var t2 = new OpaqueToken(42);
+    print(t == t2);
+    // Money: user's operator string body runs.
+    print($"m=$m");
+}

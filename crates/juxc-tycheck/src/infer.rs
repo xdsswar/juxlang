@@ -35,7 +35,7 @@
 use juxc_ast::{
     BinaryExpr, BinaryOp, Block, CallExpr, CastExpr, ElseBranch, Expr, FieldExpr,
     FloatKind, FloatLit, IndexExpr, IntKind, IntLit, Literal, NewArrayExpr, NewArrayLitExpr,
-    NewObjectExpr, ReturnType, Stmt, SwitchBody, UnaryExpr, UnaryOp,
+    NewObjectExpr, OperatorKind, ReturnType, Stmt, SwitchBody, UnaryExpr, UnaryOp,
 };
 
 use crate::env::TypeEnv;
@@ -382,10 +382,29 @@ fn infer_cast(c: &CastExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
 /// - `!x` → bool (Jux's `!` is logical-NOT only on booleans).
 /// - `-x`, `~x` → same type as operand.
 fn infer_unary(u: &UnaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    // Operator-dispatch first — if the operand is a user type whose
+    // matching operator is defined (and not deleted), the operator's
+    // declared return type wins over the built-in bucket rule.
+    let operand_ty = infer_expr(&u.operand, env, symbols);
+    if let Some(kind) = unary_op_to_kind(u.op) {
+        if let Some(ret) = lookup_user_operator_return_type(&operand_ty, kind, env, symbols) {
+            return ret;
+        }
+    }
     match u.op {
         UnaryOp::Not => Ty::Primitive(Primitive::Bool),
-        UnaryOp::Neg | UnaryOp::BitNot => infer_expr(&u.operand, env, symbols),
+        UnaryOp::Neg | UnaryOp::BitNot => operand_ty,
     }
+}
+
+/// Map a [`UnaryOp`] to its overloadable [`OperatorKind`], if any.
+/// `!x` isn't overridable per spec §O.2.5.
+fn unary_op_to_kind(op: UnaryOp) -> Option<OperatorKind> {
+    Some(match op {
+        UnaryOp::Neg => OperatorKind::Minus,
+        UnaryOp::BitNot => OperatorKind::BitNot,
+        UnaryOp::Not => return None,
+    })
 }
 
 /// Binary operators bucket into three result-type groups:
@@ -396,6 +415,18 @@ fn infer_unary(u: &UnaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
 /// The arithmetic rule is intentionally simple; a proper common-type
 /// rule (promoting `int + long` to `long`, etc.) lands in Phase D.
 fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    // Operator-dispatch first — if the LHS is a user type whose
+    // matching operator is defined, the operator's declared return
+    // type takes precedence over the built-in bucket rule. Comparison
+    // ops (`==`, `<`, etc.) almost always return bool either way, so
+    // this mostly matters for arithmetic/bitwise/shift where a class
+    // could declare a return type different from its LHS type.
+    let left_ty = infer_expr(&b.left, env, symbols);
+    if let Some(kind) = binary_op_to_kind(b.op) {
+        if let Some(ret) = lookup_user_operator_return_type(&left_ty, kind, env, symbols) {
+            return ret;
+        }
+    }
     match b.op {
         BinaryOp::Eq
         | BinaryOp::NotEq
@@ -416,8 +447,78 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         | BinaryOp::BitXor
         | BinaryOp::BitAnd
         | BinaryOp::Shl
-        | BinaryOp::Shr => infer_expr(&b.left, env, symbols),
+        | BinaryOp::Shr => left_ty,
     }
+}
+
+/// Map a [`BinaryOp`] to the [`OperatorKind`] that would override it,
+/// if any. Returns `None` for ops that aren't user-overridable
+/// (`&&`/`||`) or that auto-derive from another op (`!=` from `==`,
+/// the four orderings from `<=>`). Phase-1 simplification: only the
+/// primary form is dispatched — a user with only `<=>` declared
+/// won't see operator-dispatch on `<`/`<=`/`>`/`>=` at the tycheck
+/// level (the Rust trait layer covers that via PartialOrd's default
+/// methods).
+fn binary_op_to_kind(op: BinaryOp) -> Option<OperatorKind> {
+    Some(match op {
+        BinaryOp::Eq => OperatorKind::Eq,
+        BinaryOp::Add => OperatorKind::Plus,
+        BinaryOp::Sub => OperatorKind::Minus,
+        BinaryOp::Mul => OperatorKind::Mul,
+        BinaryOp::Div => OperatorKind::Div,
+        BinaryOp::Rem => OperatorKind::Rem,
+        BinaryOp::BitAnd => OperatorKind::BitAnd,
+        BinaryOp::BitOr => OperatorKind::BitOr,
+        BinaryOp::BitXor => OperatorKind::BitXor,
+        BinaryOp::Shl => OperatorKind::Shl,
+        BinaryOp::Shr => OperatorKind::Shr,
+        _ => return None,
+    })
+}
+
+/// If `receiver_ty` is a user class/record/enum AND has a non-deleted
+/// declaration of `kind`, return its lowered declared return type.
+/// Consults all three host kinds.
+///
+/// Substitution-aware: a class's `operator+(...) -> T` lowered against
+/// `receiver_ty = Ty::User { generic_args: [Int] }` returns `Int`
+/// rather than `Ty::Param("T")`. Mirrors the substitution Phase E
+/// already does for method calls.
+fn lookup_user_operator_return_type(
+    receiver_ty: &Ty,
+    kind: OperatorKind,
+    _env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Option<Ty> {
+    let Ty::User { name, generic_args } = receiver_ty else { return None };
+
+    // Class lookup first; then records; then enums.
+    if let Some(class) = symbols.classes.get(name) {
+        if let Some(op) = class.operators.get(&kind) {
+            if !op.is_deleted {
+                let raw = return_type_in_class(&op.return_type, name, symbols);
+                return Some(substitute(&raw, &class.generic_params, generic_args));
+            }
+        }
+    }
+    if let Some(record) = symbols.records.get(name) {
+        if let Some(op) = record.operators.get(&kind) {
+            if !op.is_deleted {
+                let raw = return_type_in_class(&op.return_type, name, symbols);
+                return Some(substitute(&raw, &record.generic_params, generic_args));
+            }
+        }
+    }
+    if let Some(enum_sig) = symbols.enums.get(name) {
+        if let Some(op) = enum_sig.operators.get(&kind) {
+            if !op.is_deleted {
+                // Enums don't carry generic params in the AST yet, so
+                // no substitution applies.
+                return Some(return_type_in_class(&op.return_type, name, symbols));
+            }
+        }
+    }
+    None
 }
 
 // ============================================================================
@@ -981,6 +1082,111 @@ mod tests {
         let mut env = TypeEnv::new();
         infer_block(block, &mut env, &table);
         assert_eq!(env.lookup("v"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// Operator-dispatch: `a + b` on a class whose `operator+` returns
+    /// the class type produces that user type, not a primitive
+    /// fallback. Substitution-aware: the user-declared `T` return
+    /// gets substituted through the receiver's generic args.
+    #[test]
+    fn binary_plus_uses_operator_return_type() {
+        let (table, unit) = build_table(
+            r#"
+            public class Money {
+                public int cents;
+                public Money(int cents) { this.cents = cents; }
+                public Money operator+(Money other) { return new Money(0); }
+            }
+            public void main() {
+                var a = new Money(10);
+                var b = new Money(20);
+                var c = a + b;
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        match env.lookup("c") {
+            Some(Ty::User { name, .. }) => assert_eq!(name, "Money"),
+            other => panic!("expected User(\"Money\"), got {other:?}"),
+        }
+    }
+
+    /// Operator-dispatch with a custom return type: `operator+(Foo)
+    /// -> Bar` returns `Bar`, not `Foo` (the LHS type the built-in
+    /// fallback would pick).
+    #[test]
+    fn binary_plus_returns_user_declared_type() {
+        let (table, unit) = build_table(
+            r#"
+            public class Bar {
+                public Bar() {}
+            }
+            public class Foo {
+                public Foo() {}
+                public Bar operator+(Foo other) { return new Bar(); }
+            }
+            public void main() {
+                var a = new Foo();
+                var b = new Foo();
+                var c = a + b;
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        match env.lookup("c") {
+            Some(Ty::User { name, .. }) => assert_eq!(name, "Bar"),
+            other => panic!("expected User(\"Bar\"), got {other:?}"),
+        }
+    }
+
+    /// Deleted operator falls through to the built-in path — for a
+    /// deleted `operator+`, `infer_binary` returns the LHS type the
+    /// built-in rule would give. (At the use-site this gets flagged
+    /// by E0935 in check_expr — see `check::tests`.)
+    #[test]
+    fn deleted_operator_falls_through_to_built_in() {
+        let (table, unit) = build_table(
+            r#"
+            public class M {
+                public int x;
+                public M(int x) { this.x = x; }
+                public M operator+(M other) = delete;
+            }
+            public void main() {
+                var a = new M(1);
+                var b = new M(2);
+                var c = a + b;
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        // Built-in fallback for `+` is the LHS type.
+        match env.lookup("c") {
+            Some(Ty::User { name, .. }) => assert_eq!(name, "M"),
+            other => panic!("expected User(\"M\"), got {other:?}"),
+        }
+    }
+
+    /// Primitive `+` still goes through the built-in path — no
+    /// operator dispatch when the LHS isn't a user type.
+    #[test]
+    fn primitive_plus_unchanged() {
+        let (table, unit) = build_table(
+            r#"
+            public void main() {
+                var x = 1 + 2;
+            }
+            "#,
+        );
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        assert_eq!(infer_expr(init, &env, &table), Ty::Primitive(Primitive::Int));
     }
 
     /// Phase E.2 — a raw-type receiver (`new Box(...)` with no

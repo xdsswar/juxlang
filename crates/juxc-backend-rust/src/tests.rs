@@ -2272,3 +2272,795 @@ fn generic_record_skips_display_for_now() {
         "should skip Display for generic record: {rust}",
     );
 }
+
+// ============================================================================
+// Operator overloading — backend lowering (§O.2)
+// ============================================================================
+
+/// `operator==` emits a `__op_eq` inherent method whose body matches
+/// the user's, plus an `impl PartialEq` block that delegates to it.
+#[test]
+fn operator_eq_emits_inherent_method_and_partial_eq_impl() {
+    let rust = emit(
+        r#"
+        public class Path {
+            public String value;
+            public Path(String v) { this.value = v; }
+            public bool operator==(Path other) { return true; }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains("pub fn __op_eq(&self, other: Path) -> bool"),
+        "missing inherent op method: {rust}",
+    );
+    assert!(
+        rust.contains("impl PartialEq for Path {"),
+        "missing PartialEq impl: {rust}",
+    );
+    assert!(
+        rust.contains("self.__op_eq(other.clone())"),
+        "PartialEq impl should delegate: {rust}",
+    );
+}
+
+/// `operator string()` emits a `__op_string` inherent method plus an
+/// `impl Display` block that calls `f.write_str(&self.__op_string())`.
+#[test]
+fn operator_string_emits_inherent_method_and_display_impl() {
+    let rust = emit(
+        r#"
+        public class Path {
+            public String value;
+            public Path(String v) { this.value = v; }
+            public String operator string() { return this.value; }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains("pub fn __op_string(&self) -> String"),
+        "missing inherent op method: {rust}",
+    );
+    assert!(
+        rust.contains("impl std::fmt::Display for Path {"),
+        "missing Display impl: {rust}",
+    );
+    assert!(
+        rust.contains("f.write_str(&self.__op_string())"),
+        "Display impl should delegate: {rust}",
+    );
+}
+
+/// Operators without a Rust-trait wrapper today (e.g. `operator[]`,
+/// `operator()`) still emit the inherent `__op_<kind>` method.
+/// Tycheck sees the signature; only the trait-side dispatch is
+/// missing. Pinned here so when those wrappers DO land, the test
+/// failing tells us to extend the table.
+#[test]
+fn unmapped_operator_emits_inherent_method_only() {
+    let rust = emit(
+        r#"
+        public class M {
+            public int operator[](int i) { return 0; }
+            public int operator()(int x) { return 0; }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains("pub fn __op_index(&self, i: isize) -> isize"),
+        "missing inherent op_index: {rust}",
+    );
+    assert!(
+        rust.contains("pub fn __op_call(&self, x: isize) -> isize"),
+        "missing inherent op_call: {rust}",
+    );
+    // No `impl Index` / `impl Fn` — wrappers deferred. (`Fn*` is
+    // nightly-only for user impls; `Index` returns a reference which
+    // needs body-translation work.)
+    assert!(
+        !rust.contains("impl std::ops::Index"),
+        "should NOT emit Index impl yet: {rust}",
+    );
+    assert!(
+        !rust.contains("impl Fn"),
+        "should NOT emit Fn impl yet: {rust}",
+    );
+}
+
+/// Generic classes skip operator trait impls (bound propagation isn't
+/// wired yet) but still emit the inherent `__op_*` methods.
+#[test]
+fn generic_class_skips_operator_trait_impl() {
+    let rust = emit(
+        r#"
+        public class Box<T> {
+            public T value;
+            public Box(T value) { this.value = value; }
+            public bool operator==(Box<T> other) { return true; }
+        }
+        public void main() {}
+        "#,
+    );
+    // Inherent method stays.
+    assert!(
+        rust.contains("pub fn __op_eq"),
+        "missing inherent __op_eq on generic class: {rust}",
+    );
+    // No PartialEq impl — generic-class trait impls deferred.
+    assert!(
+        !rust.contains("impl PartialEq for Box"),
+        "should NOT emit PartialEq impl for generic class yet: {rust}",
+    );
+}
+
+/// A class with NO operator declarations gets neither `__op_*` methods
+/// nor trait impls — emission is gated entirely on the AST list.
+#[test]
+fn class_without_operators_emits_no_op_method() {
+    let rust = emit(
+        r#"
+        public class Plain {
+            public int x;
+            public Plain(int x) { this.x = x; }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(!rust.contains("__op_"), "unexpected __op_* method: {rust}");
+    assert!(!rust.contains("impl PartialEq for Plain"), "got: {rust}");
+    assert!(!rust.contains("impl std::fmt::Display for Plain"), "got: {rust}");
+}
+
+/// `operator hash()` emits `__op_hash` + `impl Hash` that writes the
+/// returned isize into the Hasher.
+#[test]
+fn operator_hash_emits_hash_impl_via_writer() {
+    let rust = emit(
+        r#"
+        public class Path {
+            public int x;
+            public Path(int x) { this.x = x; }
+            public int operator hash() { return this.x; }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains("pub fn __op_hash(&self) -> isize"),
+        "missing inherent __op_hash: {rust}",
+    );
+    assert!(
+        rust.contains("impl std::hash::Hash for Path"),
+        "missing Hash impl: {rust}",
+    );
+    assert!(
+        rust.contains("std::hash::Hasher::write_isize(state, self.__op_hash())"),
+        "Hash impl should write into Hasher: {rust}",
+    );
+}
+
+/// `operator==` together with `operator hash` triggers the `impl Eq`
+/// marker emission per spec §O.2.7.
+#[test]
+fn eq_marker_emitted_when_eq_and_hash_paired() {
+    let rust = emit(
+        r#"
+        public class Path {
+            public int x;
+            public Path(int x) { this.x = x; }
+            public bool operator==(Path other) { return true; }
+            public int operator hash() { return this.x; }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("impl PartialEq for Path"), "missing PartialEq: {rust}");
+    assert!(rust.contains("impl Eq for Path {}"), "missing Eq marker: {rust}");
+    assert!(rust.contains("impl std::hash::Hash for Path"), "missing Hash: {rust}");
+}
+
+/// `operator==` alone (no `operator hash`) — emit PartialEq but NOT
+/// the Eq marker (Eq without Hash is a useless intermediate state and
+/// would fail tycheck per §O.2.7 once that's wired).
+#[test]
+fn eq_marker_not_emitted_for_eq_alone() {
+    let rust = emit(
+        r#"
+        public class Path {
+            public int x;
+            public Path(int x) { this.x = x; }
+            public bool operator==(Path other) { return true; }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("impl PartialEq for Path"), "missing PartialEq: {rust}");
+    assert!(!rust.contains("impl Eq for Path"), "Eq marker should NOT be emitted: {rust}");
+}
+
+/// `operator+` (binary, 1 param) emits `impl std::ops::Add` with
+/// Output = user-declared return type, body delegates to `__op_add`.
+#[test]
+fn operator_plus_binary_emits_add_impl() {
+    let rust = emit(
+        r#"
+        public class Money {
+            public int cents;
+            public Money(int cents) { this.cents = cents; }
+            public Money operator+(Money other) { return new Money(0); }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains("pub fn __op_add(&self, other: Money) -> Money"),
+        "missing inherent __op_add: {rust}",
+    );
+    assert!(
+        rust.contains("impl std::ops::Add for Money"),
+        "missing Add impl: {rust}",
+    );
+    assert!(
+        rust.contains("type Output = Money;"),
+        "Output type should match return: {rust}",
+    );
+    assert!(
+        rust.contains("fn add(self, rhs: Money) -> Self::Output"),
+        "wrong wrapper signature: {rust}",
+    );
+    assert!(
+        rust.contains("self.__op_add(rhs)"),
+        "wrapper should delegate: {rust}",
+    );
+}
+
+/// `operator-` arity 1 → `impl Sub`; arity 0 → `impl Neg`. Same
+/// inherent name (`__op_sub`) for both — the arity decides the
+/// trait, not the synthetic method's name.
+#[test]
+fn operator_minus_arity_dispatches_between_sub_and_neg() {
+    let rust_binary = emit(
+        r#"
+        public class M {
+            public int x;
+            public M(int x) { this.x = x; }
+            public M operator-(M other) { return new M(0); }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(rust_binary.contains("impl std::ops::Sub for M"), "binary - → Sub: {rust_binary}");
+    assert!(!rust_binary.contains("impl std::ops::Neg"), "should not be Neg: {rust_binary}");
+
+    let rust_unary = emit(
+        r#"
+        public class M {
+            public int x;
+            public M(int x) { this.x = x; }
+            public M operator-() { return new M(0); }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(rust_unary.contains("impl std::ops::Neg for M"), "unary - → Neg: {rust_unary}");
+    assert!(rust_unary.contains("fn neg(self) -> Self::Output"), "neg sig: {rust_unary}");
+    assert!(rust_unary.contains("self.__op_sub()"), "neg should call __op_sub: {rust_unary}");
+}
+
+/// `operator~` (always unary) → `impl Not`. Maps to inherent `__op_not`.
+#[test]
+fn operator_bitnot_emits_not_impl() {
+    let rust = emit(
+        r#"
+        public class B {
+            public int x;
+            public B(int x) { this.x = x; }
+            public B operator~() { return new B(0); }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("pub fn __op_not(&self) -> B"), "missing __op_not: {rust}");
+    assert!(rust.contains("impl std::ops::Not for B"), "missing Not impl: {rust}");
+    assert!(rust.contains("fn not(self) -> Self::Output"), "wrong sig: {rust}");
+    assert!(rust.contains("self.__op_not()"), "wrapper delegates: {rust}");
+}
+
+/// `a + b` on a class with `operator+` rewrites the call site to
+/// `a.__op_add(b.clone())` — the backend's clone-injection pass.
+/// This lets `a` and `b` survive the operation (Rust's `Add::add`
+/// consumes operands; the rewrite autorefs LHS and clones RHS).
+#[test]
+fn arithmetic_op_call_site_rewrites_to_clone_injected_form() {
+    let rust = emit(
+        r#"
+        public class M {
+            public int x;
+            public M(int x) { this.x = x; }
+            public M operator+(M other) { return new M(0); }
+        }
+        public void main() {
+            var a = new M(1);
+            var b = new M(2);
+            var c = a + b;
+        }
+        "#,
+    );
+    assert!(
+        rust.contains("a.__op_add(b.clone())"),
+        "missing clone-injection rewrite: {rust}",
+    );
+    // The bare `a + b` form should NOT appear in main — it was rewritten.
+    assert!(
+        !rust.contains("a + b"),
+        "raw `+` form should be rewritten: {rust}",
+    );
+}
+
+/// Primitive `+` is never rewritten — `1 + 2` stays `1 + 2`.
+/// Same for binary ops on user types that DON'T declare the operator.
+#[test]
+fn primitive_arithmetic_is_not_rewritten() {
+    let rust = emit(
+        r#"
+        public void main() {
+            var x = 1 + 2;
+            print(x);
+        }
+        "#,
+    );
+    assert!(rust.contains("let x = 1 + 2"), "primitive `+` must stay: {rust}");
+    assert!(!rust.contains("__op_add"), "no class op rewrite on primitives: {rust}");
+}
+
+/// Class without the relevant operator doesn't rewrite. `a + b` would
+/// fail to type-check or fall through to Rust's default — either way
+/// the backend doesn't synthesize a `__op_add` call that doesn't exist.
+#[test]
+fn class_without_operator_is_not_rewritten() {
+    let rust = emit(
+        r#"
+        public class Bag {
+            public int v;
+            public Bag(int v) { this.v = v; }
+        }
+        public void main() {
+            var a = new Bag(1);
+            print(a.v);
+        }
+        "#,
+    );
+    assert!(!rust.contains("__op_add"), "no rewrite without operator decl: {rust}");
+}
+
+/// `a == b` on a class with `operator==` does NOT get the clone-
+/// injection rewrite — PartialEq's `eq(&self, &Self)` already takes
+/// references, no consumption to fix. The standard `a == b` emission
+/// stays.
+#[test]
+fn equality_op_is_not_rewritten() {
+    let rust = emit(
+        r#"
+        public class P {
+            public int x;
+            public P(int x) { this.x = x; }
+            public bool operator==(P other) { return true; }
+        }
+        public void main() {
+            var a = new P(1);
+            var b = new P(2);
+            print(a == b);
+        }
+        "#,
+    );
+    // Operand-preserving rewrite would emit `a.__op_eq(b.clone())`;
+    // but the user code keeps the bare `==` form (Rust's PartialEq
+    // takes references — nothing is consumed).
+    assert!(rust.contains("a == b"), "expected bare `==` emission: {rust}");
+    assert!(
+        !rust.contains("a.__op_eq(b.clone())"),
+        "should NOT rewrite ==: {rust}",
+    );
+}
+
+/// `operator<=>` emits `__op_cmp` and an `impl PartialOrd` whose
+/// `partial_cmp` body converts the user's int return into Ordering
+/// via isize's own Ord (`.cmp(&0)` → Less/Equal/Greater).
+#[test]
+fn operator_cmp_emits_partial_ord_impl() {
+    let rust = emit(
+        r#"
+        public class V {
+            public int x;
+            public V(int x) { this.x = x; }
+            public int operator<=>(V other) { return 0; }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains("pub fn __op_cmp(&self, other: V) -> isize"),
+        "missing inherent __op_cmp: {rust}",
+    );
+    assert!(
+        rust.contains("impl PartialOrd for V {"),
+        "missing PartialOrd impl: {rust}",
+    );
+    assert!(
+        rust.contains("fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering>"),
+        "wrong partial_cmp signature: {rust}",
+    );
+    assert!(
+        rust.contains("Some(self.__op_cmp(other.clone()).cmp(&0))"),
+        "missing isize→Ordering bridge: {rust}",
+    );
+}
+
+/// `<=>` without `==` synthesizes a PartialEq that bridges through
+/// `__op_cmp` — Rust's `PartialOrd: PartialEq` constraint requires
+/// PartialEq to exist before we can emit the PartialOrd impl.
+#[test]
+fn cmp_without_eq_synthesizes_partial_eq() {
+    let rust = emit(
+        r#"
+        public class V {
+            public int x;
+            public V(int x) { this.x = x; }
+            public int operator<=>(V other) { return 0; }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains("impl PartialEq for V {"),
+        "missing synthesized PartialEq: {rust}",
+    );
+    assert!(
+        rust.contains("self.__op_cmp(other.clone()) == 0"),
+        "synthesized PartialEq should bridge through cmp: {rust}",
+    );
+}
+
+// ============================================================================
+// `= delete;` suppression (§O.3.4) on records
+// ============================================================================
+
+/// `operator string() = delete;` on a record suppresses the
+/// synthesized Display impl — security-sensitive types can opt out of
+/// default formatting. The struct + `new` are still emitted.
+#[test]
+fn record_string_delete_suppresses_display_impl() {
+    let rust = emit(
+        r#"
+        public record OpaqueToken(int secret) {
+            public String operator string() = delete;
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("pub struct OpaqueToken"), "struct still emitted: {rust}");
+    assert!(rust.contains("pub fn new(secret: isize)"), "ctor still emitted: {rust}");
+    assert!(
+        !rust.contains("impl std::fmt::Display for OpaqueToken"),
+        "Display impl should be suppressed by `= delete;`: {rust}",
+    );
+}
+
+/// `operator==(...) = delete;` drops `PartialEq` from the record's
+/// derive line — and with it `Eq`, since `Eq: PartialEq`.
+#[test]
+fn record_eq_delete_drops_partial_eq_from_derive() {
+    let rust = emit(
+        r#"
+        public record Unequal(int x) {
+            public bool operator==(Unequal other) = delete;
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains("#[derive(Debug, Clone, Copy)]"),
+        "expected baseline derives minus PartialEq, got: {rust}",
+    );
+    // Should NOT see Display impl for Unequal either way (PartialEq
+    // doesn't affect Display) — but pin the derive shape exactly.
+    assert!(!rust.contains("PartialEq"), "PartialEq should be gone: {rust}");
+    assert!(!rust.contains(", Eq"), "Eq should be gone: {rust}");
+}
+
+/// `operator hash() = delete;` drops `Hash` from the derive line —
+/// the record can no longer serve as a HashMap key. `Eq` stays
+/// because it's independent of Hash (Eq is the reflexivity marker;
+/// HashMap keys need both Eq AND Hash, so dropping Hash is
+/// sufficient to opt out).
+#[test]
+fn record_hash_delete_drops_hash_from_derive() {
+    let rust = emit(
+        r#"
+        public record NoHash(int x) {
+            public int operator hash() = delete;
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(!rust.contains(", Hash"), "Hash should be gone: {rust}");
+    // PartialEq + Eq stay (just Hash is dropped). Copy stays since
+    // the field is int.
+    assert!(rust.contains("PartialEq"), "PartialEq stays: {rust}");
+    assert!(rust.contains(", Eq"), "Eq stays: {rust}");
+}
+
+/// A non-deleted operator override on a record emits the inherent
+/// `__op_*` method AND the trait wrapper, mirroring class behavior.
+#[test]
+fn record_operator_override_emits_inherent_and_trait_impl() {
+    let rust = emit(
+        r#"
+        public record Money(int cents) {
+            public String operator string() {
+                return "x";
+            }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains("pub fn __op_string(&self) -> String"),
+        "missing inherent __op_string: {rust}",
+    );
+    assert!(
+        rust.contains("impl std::fmt::Display for Money"),
+        "missing user Display impl: {rust}",
+    );
+    assert!(
+        rust.contains("f.write_str(&self.__op_string())"),
+        "Display should delegate to user override: {rust}",
+    );
+}
+
+/// Enum with `operator string() = delete;` suppresses the auto-
+/// Display impl — same suppression behavior records get. The enum
+/// itself still emits (struct + derives intact).
+#[test]
+fn enum_string_delete_suppresses_display_impl() {
+    let rust = emit(
+        r#"
+        public enum Secret {
+            Hidden;
+            public String operator string() = delete;
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("pub enum Secret"), "enum still emitted: {rust}");
+    assert!(
+        !rust.contains("impl std::fmt::Display for Secret"),
+        "Display should be suppressed by `= delete;`: {rust}",
+    );
+}
+
+// ============================================================================
+// Return-position String coercion
+// ============================================================================
+
+/// `return "literal";` in a `String`-returning function picks up
+/// `.to_string()` at tail position. Without the coercion this would
+/// be `&str` (from the literal) where `String` is required and rustc
+/// would emit E0308.
+#[test]
+fn tail_string_literal_return_picks_up_to_string() {
+    let rust = emit(
+        r#"
+        public String greet() { return "hi"; }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains(r#""hi".to_string()"#),
+        "expected `.to_string()` coercion at tail: {rust}",
+    );
+}
+
+/// Same coercion applies to an interior `return "lit";` — the
+/// non-tail return path also injects `.to_string()`.
+#[test]
+fn non_tail_string_literal_return_picks_up_to_string() {
+    let rust = emit(
+        r#"
+        public String pick(bool flag) {
+            if (flag) { return "yes"; }
+            return "no";
+        }
+        public void main() {}
+        "#,
+    );
+    // Both early and trailing return get coerced.
+    assert!(
+        rust.contains(r#"return "yes".to_string();"#),
+        "early return should coerce: {rust}",
+    );
+    assert!(
+        rust.contains(r#""no".to_string()"#),
+        "tail return should coerce: {rust}",
+    );
+}
+
+/// Void function returning nothing → no coercion (no return type).
+#[test]
+fn void_return_does_not_inject_coercion() {
+    let rust = emit(
+        r#"
+        public void shout() { print("hi"); }
+        public void main() {}
+        "#,
+    );
+    // The literal inside `print(...)` is NOT a return position, so
+    // it must stay as `&str`. (`println!` accepts it directly.)
+    assert!(!rust.contains(".to_string()"), "no spurious coercion: {rust}");
+}
+
+/// Non-String return types don't trigger the coercion either —
+/// only `String` returns get the bridge.
+#[test]
+fn int_return_does_not_inject_coercion() {
+    let rust = emit(
+        r#"
+        public int answer() { return 42; }
+        public void main() {}
+        "#,
+    );
+    assert!(!rust.contains(".to_string()"), "no spurious coercion: {rust}");
+}
+
+/// String operator on a class returning a bare literal picks up the
+/// coercion through the same `current_return_type` plumbing.
+#[test]
+fn operator_string_literal_return_picks_up_to_string() {
+    let rust = emit(
+        r#"
+        public class P {
+            public int x;
+            public P(int x) { this.x = x; }
+            public String operator string() { return "P"; }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains(r#""P".to_string()"#),
+        "operator body literal should coerce: {rust}",
+    );
+}
+
+/// Enum with a custom `operator string` override emits the user's
+/// Display (delegating to `__op_string`) and suppresses the auto
+/// variant-name Display. Inherent method lands in `impl Enum { ... }`.
+#[test]
+fn enum_operator_string_override_emits_inherent_and_user_display() {
+    let rust = emit(
+        r#"
+        public enum Color {
+            Red, Green;
+            public String operator string() {
+                return $"custom";
+            }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains("impl Color {"),
+        "expected inherent impl block: {rust}",
+    );
+    assert!(
+        rust.contains("pub fn __op_string(&self) -> String"),
+        "expected __op_string method: {rust}",
+    );
+    assert!(
+        rust.contains("f.write_str(&self.__op_string())"),
+        "Display should delegate through user override: {rust}",
+    );
+    // Variant-name Display should be replaced — there's no
+    // `match self { Color::Red => write!(f, "Red"), ... }`.
+    assert!(
+        !rust.contains("Color::Red => write!"),
+        "auto-Display match should NOT appear: {rust}",
+    );
+}
+
+/// User-overridden `operator string` on a record SUPPRESSES the
+/// auto-Display impl — the user's impl is the only Display in scope
+/// (otherwise Rust would see two conflicting impls).
+#[test]
+fn record_operator_string_override_suppresses_auto_display() {
+    let rust = emit(
+        r#"
+        public record M(int x) {
+            public String operator string() { return "x"; }
+        }
+        public void main() {}
+        "#,
+    );
+    // Exactly one Display impl — the user's. There's no separate
+    // "M(x: 0)" auto-format helper.
+    let count = rust.matches("impl std::fmt::Display for M").count();
+    assert_eq!(count, 1, "expected exactly one Display impl: {rust}");
+    assert!(
+        !rust.contains("write!(f, \"M(x:"),
+        "auto Display format should NOT appear: {rust}",
+    );
+}
+
+/// When the user defined BOTH `operator<=>` AND `operator==`, the
+/// user's own PartialEq impl (delegating to `__op_eq`) is used — we
+/// do NOT also emit the synthesized cmp-based PartialEq.
+#[test]
+fn cmp_with_eq_does_not_synthesize_partial_eq() {
+    let rust = emit(
+        r#"
+        public class V {
+            public int x;
+            public V(int x) { this.x = x; }
+            public int operator<=>(V other) { return 0; }
+            public bool operator==(V other) { return true; }
+        }
+        public void main() {}
+        "#,
+    );
+    // The user's PartialEq is present and delegates through __op_eq.
+    assert!(rust.contains("impl PartialEq for V {"), "user PartialEq missing: {rust}");
+    assert!(rust.contains("self.__op_eq(other.clone())"), "user delegation missing: {rust}");
+    // The synthesized cmp-based form is NOT emitted.
+    assert!(
+        !rust.contains("self.__op_cmp(other.clone()) == 0"),
+        "should NOT emit synthesized PartialEq when user defined ==: {rust}",
+    );
+    // PartialOrd is still emitted.
+    assert!(rust.contains("impl PartialOrd for V {"), "PartialOrd missing: {rust}");
+}
+
+/// The full binary arithmetic family — `*`, `/`, `%` — all map to
+/// their matching `std::ops::*` traits. Bitwise binary ops
+/// (`&`/`|`/`^`) and shifts (`<<`/`>>`) follow the same pattern.
+#[test]
+fn arithmetic_bitwise_shift_family_all_emit_traits() {
+    let rust = emit(
+        r#"
+        public class N {
+            public int x;
+            public N(int x) { this.x = x; }
+            public N operator*(N o) { return new N(0); }
+            public N operator/(N o) { return new N(0); }
+            public N operator%(N o) { return new N(0); }
+            public N operator&(N o) { return new N(0); }
+            public N operator|(N o) { return new N(0); }
+            public N operator^(N o) { return new N(0); }
+            public N operator<<(N o) { return new N(0); }
+            public N operator>>(N o) { return new N(0); }
+        }
+        public void main() {}
+        "#,
+    );
+    for (trait_path, method) in [
+        ("std::ops::Mul",    "mul"),
+        ("std::ops::Div",    "div"),
+        ("std::ops::Rem",    "rem"),
+        ("std::ops::BitAnd", "bitand"),
+        ("std::ops::BitOr",  "bitor"),
+        ("std::ops::BitXor", "bitxor"),
+        ("std::ops::Shl",    "shl"),
+        ("std::ops::Shr",    "shr"),
+    ] {
+        assert!(
+            rust.contains(&format!("impl {trait_path} for N")),
+            "missing {trait_path} impl: {rust}",
+        );
+        assert!(
+            rust.contains(&format!("fn {method}(self, rhs: N)")),
+            "missing {method} signature: {rust}",
+        );
+    }
+}
