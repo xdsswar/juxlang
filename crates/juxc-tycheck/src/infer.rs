@@ -35,12 +35,15 @@
 use juxc_ast::{
     BinaryExpr, BinaryOp, Block, CallExpr, CastExpr, ElseBranch, Expr, FieldExpr,
     FloatKind, FloatLit, IndexExpr, IntKind, IntLit, Literal, NewArrayExpr, NewArrayLitExpr,
-    NewObjectExpr, OperatorKind, ReturnType, Stmt, SwitchBody, UnaryExpr, UnaryOp,
+    NewObjectExpr, OperatorKind, ReturnType, Stmt, SwitchBody, TypeRef, UnaryExpr, UnaryOp,
 };
 
 use crate::env::TypeEnv;
-use crate::symbol_table::SymbolTable;
-use crate::ty::{lower_member_type, substitute, ty_from_ref, ArrayKind, Primitive, Ty};
+use crate::symbol_table::{MethodSig, SymbolTable};
+use crate::ty::{
+    infer_generic_args, lower_member_type, substitute, substitute_via_inference, ty_from_ref,
+    ArrayKind, Primitive, Ty,
+};
 
 // ============================================================================
 // Expression inference
@@ -255,7 +258,41 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         Expr::Path(qn) if qn.segments.len() == 1 => {
             let name = &qn.segments[0].text;
             if let Some(fn_sig) = symbols.functions.get(name) {
-                return return_type_to_ty(&fn_sig.return_type, env, symbols);
+                // Generic inference (spec §T.4): when the callee is
+                // generic and the call site didn't write explicit
+                // `<…>`, try to recover the type args from the
+                // argument types. Only the bare-param-name shape is
+                // handled — see `infer_generic_args` for the rules.
+                if fn_sig.generic_params.is_empty() {
+                    return return_type_to_ty(&fn_sig.return_type, env, symbols);
+                }
+                // Lower the return type in a scratch env that has the
+                // function's own generic params in scope — otherwise a
+                // bare `T` return type lowers to `Ty::Unknown` in the
+                // caller's env and substitution has nothing to grab.
+                let base = return_type_to_ty_in_fn_scope(
+                    &fn_sig.return_type,
+                    &fn_sig.generic_params,
+                    env,
+                    symbols,
+                );
+                let param_tys: Vec<&TypeRef> =
+                    fn_sig.params.iter().map(|p| &p.ty).collect();
+                let arg_tys: Vec<Ty> = c
+                    .args
+                    .iter()
+                    .map(|a| infer_expr(a, env, symbols))
+                    .collect();
+                let inferred = infer_generic_args(
+                    &fn_sig.generic_params,
+                    &param_tys,
+                    &arg_tys,
+                );
+                return substitute_via_inference(
+                    &base,
+                    &fn_sig.generic_params,
+                    &inferred,
+                );
             }
             Ty::Unknown
         }
@@ -278,12 +315,23 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     // Only substitute when the method comes from the
                     // receiver's own class — see `infer_field` for why
                     // cross-extends substitution is deferred.
-                    if declaring_class == name {
+                    let after_class = if declaring_class == name {
                         if let Some(class) = symbols.classes.get(name) {
-                            return substitute(&raw, &class.generic_params, generic_args);
+                            substitute(&raw, &class.generic_params, generic_args)
+                        } else {
+                            raw
                         }
-                    }
-                    return raw;
+                    } else {
+                        raw
+                    };
+                    return method_infer_return(
+                        &after_class,
+                        method,
+                        declaring_class,
+                        &c.args,
+                        env,
+                        symbols,
+                    );
                 }
                 // Record methods — records can declare methods per
                 // grammar §A.2.4. No inheritance chain (records don't
@@ -296,7 +344,16 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                             name,
                             symbols,
                         );
-                        return substitute(&raw, &record.generic_params, generic_args);
+                        let after_class =
+                            substitute(&raw, &record.generic_params, generic_args);
+                        return method_infer_return(
+                            &after_class,
+                            method,
+                            name,
+                            &c.args,
+                            env,
+                            symbols,
+                        );
                     }
                 }
                 // Interface methods. No chain (interfaces don't extend
@@ -309,7 +366,16 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                             name,
                             symbols,
                         );
-                        return substitute(&raw, &iface.generic_params, generic_args);
+                        let after_class =
+                            substitute(&raw, &iface.generic_params, generic_args);
+                        return method_infer_return(
+                            &after_class,
+                            method,
+                            name,
+                            &c.args,
+                            env,
+                            symbols,
+                        );
                     }
                 }
             }
@@ -319,6 +385,28 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     }
 }
 
+/// Apply method-level generic inference (spec §T.4) to a return type
+/// that has already had the receiver's class-level generics
+/// substituted. The method's own generic params come from
+/// `method.generic_params`; we only fire on the bare-param-name shape
+/// in [`infer_generic_args`].
+fn method_infer_return(
+    after_class: &Ty,
+    method: &MethodSig,
+    _declaring_owner: &str,
+    args: &[Expr],
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Ty {
+    if method.generic_params.is_empty() {
+        return after_class.clone();
+    }
+    let param_tys: Vec<&TypeRef> = method.params.iter().map(|p| &p.ty).collect();
+    let arg_tys: Vec<Ty> = args.iter().map(|a| infer_expr(a, env, symbols)).collect();
+    let inferred = infer_generic_args(&method.generic_params, &param_tys, &arg_tys);
+    substitute_via_inference(after_class, &method.generic_params, &inferred)
+}
+
 /// Lower a [`ReturnType`] into a [`Ty`]. `void` → [`Ty::Void`]; the
 /// `async T` form unwraps to `T` for now (we don't have a `Future<T>`
 /// wrapper type yet).
@@ -326,6 +414,27 @@ fn return_type_to_ty(rt: &ReturnType, env: &TypeEnv, symbols: &SymbolTable) -> T
     match rt {
         ReturnType::Void => Ty::Void,
         ReturnType::Type(t) | ReturnType::AsyncType(t) => ty_from_ref(t, env, symbols),
+    }
+}
+
+/// Like [`return_type_to_ty`] but extends the caller's env with the
+/// callee function's generic params before lowering. Without this, a
+/// bare `T` return type on `T identity<T>(T x)` lowers to
+/// [`Ty::Unknown`] in the caller's env — there's no class to lower
+/// against, so we have to seed the scratch env explicitly.
+fn return_type_to_ty_in_fn_scope(
+    rt: &ReturnType,
+    fn_generics: &[juxc_ast::TypeParam],
+    _caller_env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Ty {
+    let mut scratch = TypeEnv::new();
+    for tp in fn_generics {
+        scratch.add_generic_param(&tp.name.text);
+    }
+    match rt {
+        ReturnType::Void => Ty::Void,
+        ReturnType::Type(t) | ReturnType::AsyncType(t) => ty_from_ref(t, &scratch, symbols),
     }
 }
 
@@ -356,12 +465,71 @@ fn infer_new_object(n: &NewObjectExpr, env: &TypeEnv, symbols: &SymbolTable) -> 
         .last()
         .map(|s| s.text.clone())
         .unwrap_or_default();
-    let generic_args = n
-        .generic_args
-        .iter()
-        .map(|g| ty_from_ref(g, env, symbols))
-        .collect();
+    // Explicit `<...>` on the `new` site wins: `new Box<int>(42)`
+    // skips inference entirely.
+    if !n.generic_args.is_empty() {
+        let generic_args = n
+            .generic_args
+            .iter()
+            .map(|g| ty_from_ref(g, env, symbols))
+            .collect();
+        return Ty::User { name, generic_args };
+    }
+    // Bare-form inference (spec §T.4): when the class/record has
+    // generic params but the user didn't write them, infer from the
+    // constructor arg types.
+    let generic_args = infer_ctor_generic_args(&name, &n.args, env, symbols);
     Ty::User { name, generic_args }
+}
+
+/// Infer a class or record's generic-arg list from the constructor
+/// call's actual arg types. Returns an empty vec when the named type
+/// isn't generic (or isn't known), so callers can still build a
+/// `Ty::User` with the raw shape Phase 1 already accepts.
+fn infer_ctor_generic_args(
+    name: &str,
+    args: &[Expr],
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Vec<Ty> {
+    // Classes: use the first constructor's params as the "shape" to
+    // infer against. Phase 1 doesn't support constructor overloads,
+    // so this is unambiguous when it resolves.
+    if let Some(class) = symbols.classes.get(name) {
+        if class.generic_params.is_empty() {
+            return Vec::new();
+        }
+        let Some(ctor) = class.constructors.first() else {
+            // No constructor at all — synthesized default takes zero
+            // args, so there's nothing to unify on. Leave generics
+            // unbound; downstream the wildcard rule in `compatible`
+            // keeps things quiet.
+            return Vec::new();
+        };
+        let param_tys: Vec<&TypeRef> = ctor.params.iter().map(|p| &p.ty).collect();
+        let arg_tys: Vec<Ty> = args.iter().map(|a| infer_expr(a, env, symbols)).collect();
+        let inferred = infer_generic_args(&class.generic_params, &param_tys, &arg_tys);
+        return class
+            .generic_params
+            .iter()
+            .map(|p| inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown))
+            .collect();
+    }
+    // Records: header components ARE the canonical constructor.
+    if let Some(record) = symbols.records.get(name) {
+        if record.generic_params.is_empty() {
+            return Vec::new();
+        }
+        let param_tys: Vec<&TypeRef> = record.components.iter().map(|c| &c.ty).collect();
+        let arg_tys: Vec<Ty> = args.iter().map(|a| infer_expr(a, env, symbols)).collect();
+        let inferred = infer_generic_args(&record.generic_params, &param_tys, &arg_tys);
+        return record
+            .generic_params
+            .iter()
+            .map(|p| inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown))
+            .collect();
+    }
+    Vec::new()
 }
 
 /// `new T[size]` → fixed-size array of `T`.
@@ -1224,6 +1392,168 @@ mod tests {
         match env.lookup("v") {
             Some(Ty::Param(name)) => assert_eq!(name, "T"),
             other => panic!("expected Ty::Param(\"T\"), got {other:?}"),
+        }
+    }
+
+    // ============================================================================
+    // Generic inference at call sites — spec §T.4
+    // ============================================================================
+
+    /// `identity(42)` should infer `T = int` and report the call's
+    /// type as `int` rather than `Ty::Param("T")`.
+    #[test]
+    fn generic_fn_inferred_from_single_arg() {
+        let (table, unit) = build_table(
+            r#"
+            public T identity<T>(T x) { return x; }
+            public void main() { var v = identity(42); }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("v"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// `pair_eq(1, "x")` — int vs String conflict on the same T.
+    /// Phase 1 inference gives up cleanly: the return type stays
+    /// `Ty::Param("T")`, which the `compatible` wildcard rule then
+    /// keeps quiet at downstream use-sites. Phase D will refine
+    /// this into an E04xx diagnostic at the call site once we have
+    /// a join-lattice over Ty.
+    #[test]
+    fn generic_fn_conflicting_args_falls_back() {
+        let (table, unit) = build_table(
+            r#"
+            public T pair_eq<T>(T a, T b) { return a; }
+            public void main() { var v = pair_eq(1, "x"); }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        match env.lookup("v") {
+            Some(Ty::Param(name)) => assert_eq!(name, "T"),
+            other => panic!("expected Ty::Param(\"T\") on conflict, got {other:?}"),
+        }
+    }
+
+    /// Non-generic functions are unaffected: the inference fast-path
+    /// returns the raw lowered type.
+    #[test]
+    fn non_generic_fn_unaffected_by_inference() {
+        let (table, unit) = build_table(
+            r#"
+            public int square(int x) { return x * x; }
+            public void main() { var v = square(7); }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("v"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    // Method-level generic inference (e.g. `class P { U pick<U>(U u) }`)
+    // is wired in `append_method_generic_inference` in check.rs and in
+    // `method_infer_return` here, but the class-member parser lookahead
+    // doesn't yet recognize `name<T>(` as a method shape, so we can't
+    // construct a syntactic test for it without first extending the
+    // parser. That extension is queued behind the `class A<T>` work.
+
+    /// `new Box(42)` should infer `Box<int>` from the constructor arg.
+    #[test]
+    fn generic_class_inferred_from_ctor_arg() {
+        let (table, unit) = build_table(
+            r#"
+            public class Box<T> {
+                public T value;
+                public Box(T v) { this.value = v; }
+            }
+            public void main() { var b = new Box(42); }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        match env.lookup("b") {
+            Some(Ty::User { name, generic_args }) => {
+                assert_eq!(name, "Box");
+                assert_eq!(generic_args, &vec![Ty::Primitive(Primitive::Int)]);
+            }
+            other => panic!("expected Ty::User Box<int>, got {other:?}"),
+        }
+    }
+
+    /// Explicit turbofish overrides inference: `new Box<String>(42)`
+    /// keeps the `String` arg (any rustc mismatch is caught downstream).
+    #[test]
+    fn explicit_turbofish_overrides_inference() {
+        let (table, unit) = build_table(
+            r#"
+            public class Box<T> {
+                public T value;
+                public Box(T v) { this.value = v; }
+            }
+            public void main() { var b = new Box<String>(42); }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        match env.lookup("b") {
+            Some(Ty::User { name, generic_args }) => {
+                assert_eq!(name, "Box");
+                assert_eq!(generic_args, &vec![Ty::String]);
+            }
+            other => panic!("expected Ty::User Box<String>, got {other:?}"),
+        }
+    }
+
+    /// Records: `new Pair(1, "a")` against `record Pair<A, B>(A a, B b)`
+    /// should infer `Pair<int, String>`.
+    #[test]
+    fn generic_record_inferred_from_components() {
+        let (table, unit) = build_table(
+            r#"
+            public record Pair<A, B>(A a, B b) {}
+            public void main() { var p = new Pair(1, "a"); }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        match env.lookup("p") {
+            Some(Ty::User { name, generic_args }) => {
+                assert_eq!(name, "Pair");
+                assert_eq!(
+                    generic_args,
+                    &vec![Ty::Primitive(Primitive::Int), Ty::String],
+                );
+            }
+            other => panic!("expected Ty::User Pair<int, String>, got {other:?}"),
+        }
+    }
+
+    /// Non-generic classes are unaffected — `new Plain()` still yields
+    /// a zero-arg `Ty::User`.
+    #[test]
+    fn non_generic_class_ctor_unaffected() {
+        let (table, unit) = build_table(
+            r#"
+            public class Plain { public int x = 0; }
+            public void main() { var p = new Plain(); }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        match env.lookup("p") {
+            Some(Ty::User { name, generic_args }) => {
+                assert_eq!(name, "Plain");
+                assert!(generic_args.is_empty());
+            }
+            other => panic!("expected Ty::User Plain<>, got {other:?}"),
         }
     }
 }

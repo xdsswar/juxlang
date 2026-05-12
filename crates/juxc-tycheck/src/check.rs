@@ -77,7 +77,7 @@ use std::collections::HashMap;
 use juxc_ast::{
     BinaryOp, Block, CallExpr, ClassDecl, CompilationUnit, ConstructorDecl, ElseBranch, Expr,
     FieldExpr, FnDecl, InterpSegment, NewObjectExpr, OperatorDecl, OperatorKind, RecordDecl,
-    ReturnType, Stmt, SwitchBody, TopLevelDecl, TypeParam, UnaryOp,
+    ReturnType, Stmt, SwitchBody, TopLevelDecl, TypeParam, TypeRef, UnaryOp,
 };
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_source::Span;
@@ -85,7 +85,9 @@ use juxc_source::Span;
 use crate::env::TypeEnv;
 use crate::infer::{infer_block, infer_expr};
 use crate::symbol_table::{ParamSig, SymbolTable};
-use crate::ty::{lower_member_type, substitute, ty_from_ref, Primitive, Ty};
+use crate::ty::{
+    infer_generic_args, lower_member_type, substitute, ty_from_ref, Primitive, Ty,
+};
 
 // ============================================================================
 // Built-in allowlists
@@ -850,14 +852,49 @@ impl<'a> Checker<'a> {
                 }
                 if let Some(fn_sig) = self.symbols.functions.get(name) {
                     let params = fn_sig.params.clone();
-                    // Top-level functions take no per-call receiver
-                    // substitution. Function-level generics would feed
-                    // through here, but the parser's `<...>` turbofish
-                    // syntax for free functions isn't wired up to the
-                    // checker yet. `declaring_class = None` because the
-                    // params lower against the caller's env, not a
-                    // member-owning type.
-                    self.check_call_args(name, &params, &c.args, c.span, None, &[], &[]);
+                    let generic_params = fn_sig.generic_params.clone();
+                    // Generic inference at the call site (spec §T.4):
+                    // when the callee declares `<T>` and the user
+                    // didn't write an explicit turbofish, recover the
+                    // type args from the argument types so that
+                    // per-arg checks below can substitute through the
+                    // expected types.
+                    let (subst_params, subst_args): (Vec<TypeParam>, Vec<Ty>) =
+                        if generic_params.is_empty() {
+                            (Vec::new(), Vec::new())
+                        } else {
+                            let param_tys: Vec<&TypeRef> =
+                                params.iter().map(|p| &p.ty).collect();
+                            let arg_tys: Vec<Ty> = c
+                                .args
+                                .iter()
+                                .map(|a| infer_expr(a, &self.env, self.symbols))
+                                .collect();
+                            let inferred = infer_generic_args(
+                                &generic_params,
+                                &param_tys,
+                                &arg_tys,
+                            );
+                            let args: Vec<Ty> = generic_params
+                                .iter()
+                                .map(|p| {
+                                    inferred
+                                        .get(&p.name.text)
+                                        .cloned()
+                                        .unwrap_or(Ty::Unknown)
+                                })
+                                .collect();
+                            (generic_params, args)
+                        };
+                    self.check_call_args(
+                        name,
+                        &params,
+                        &c.args,
+                        c.span,
+                        None,
+                        &subst_params,
+                        &subst_args,
+                    );
                     return;
                 }
                 // Unknown bare callee — walk args silently. The
@@ -908,12 +945,13 @@ impl<'a> Checker<'a> {
                     self.symbols.lookup_method(&name, method_name)
                 {
                     let params = method.params.clone();
+                    let method_generic_params = method.generic_params.clone();
                     let owner_on_receiver = declaring_class == name;
                     // Clone the declaring-class name into an owned
                     // String so it outlives the immutable borrow on
                     // `self.symbols` we'd otherwise need.
                     let owner_name = declaring_class.to_string();
-                    let subst_params: Vec<TypeParam> = if owner_on_receiver {
+                    let mut subst_params: Vec<TypeParam> = if owner_on_receiver {
                         self.symbols
                             .classes
                             .get(&name)
@@ -922,11 +960,19 @@ impl<'a> Checker<'a> {
                     } else {
                         Vec::new()
                     };
-                    let subst_args: Vec<Ty> = if owner_on_receiver {
+                    let mut subst_args: Vec<Ty> = if owner_on_receiver {
                         generic_args
                     } else {
                         Vec::new()
                     };
+                    // Method-level generic inference (spec §T.4).
+                    self.append_method_generic_inference(
+                        &method_generic_params,
+                        &params,
+                        &c.args,
+                        &mut subst_params,
+                        &mut subst_args,
+                    );
                     self.check_call_args(
                         method_name,
                         &params,
@@ -945,7 +991,16 @@ impl<'a> Checker<'a> {
                 if let Some(iface) = self.symbols.interfaces.get(&name) {
                     if let Some(method) = iface.methods.get(method_name) {
                         let params = method.params.clone();
-                        let subst_params = iface.generic_params.clone();
+                        let method_generic_params = method.generic_params.clone();
+                        let mut subst_params = iface.generic_params.clone();
+                        let mut subst_args = generic_args.clone();
+                        self.append_method_generic_inference(
+                            &method_generic_params,
+                            &params,
+                            &c.args,
+                            &mut subst_params,
+                            &mut subst_args,
+                        );
                         self.check_call_args(
                             method_name,
                             &params,
@@ -953,7 +1008,7 @@ impl<'a> Checker<'a> {
                             c.span,
                             Some(&name),
                             &subst_params,
-                            &generic_args,
+                            &subst_args,
                         );
                         return;
                     }
@@ -965,7 +1020,16 @@ impl<'a> Checker<'a> {
                 if let Some(record) = self.symbols.records.get(&name) {
                     if let Some(method) = record.methods.get(method_name) {
                         let params = method.params.clone();
-                        let subst_params = record.generic_params.clone();
+                        let method_generic_params = method.generic_params.clone();
+                        let mut subst_params = record.generic_params.clone();
+                        let mut subst_args = generic_args.clone();
+                        self.append_method_generic_inference(
+                            &method_generic_params,
+                            &params,
+                            &c.args,
+                            &mut subst_params,
+                            &mut subst_args,
+                        );
                         self.check_call_args(
                             method_name,
                             &params,
@@ -973,7 +1037,7 @@ impl<'a> Checker<'a> {
                             c.span,
                             Some(&name),
                             &subst_params,
-                            &generic_args,
+                            &subst_args,
                         );
                         return;
                     }
@@ -1020,8 +1084,9 @@ impl<'a> Checker<'a> {
         };
 
         // Lower the explicit generic args (if any) into `Ty`s. Empty
-        // when the user wrote the bare `new Box(...)` form.
-        let generic_args: Vec<Ty> = n
+        // when the user wrote the bare `new Box(...)` form — in that
+        // case we'll try inference (spec §T.4) below.
+        let explicit_generic_args: Vec<Ty> = n
             .generic_args
             .iter()
             .map(|g| ty_from_ref(g, &self.env, self.symbols))
@@ -1036,6 +1101,12 @@ impl<'a> Checker<'a> {
                 .map(|c| c.params.clone())
                 .unwrap_or_default();
             let subst_params = class.generic_params.clone();
+            let subst_args = self.resolve_ctor_generic_args(
+                &subst_params,
+                &explicit_generic_args,
+                &params,
+                &n.args,
+            );
             self.check_call_args(
                 &class_name,
                 &params,
@@ -1043,7 +1114,7 @@ impl<'a> Checker<'a> {
                 n.span,
                 Some(&class_name),
                 &subst_params,
-                &generic_args,
+                &subst_args,
             );
             return;
         }
@@ -1058,6 +1129,12 @@ impl<'a> Checker<'a> {
                 })
                 .collect();
             let subst_params = record.generic_params.clone();
+            let subst_args = self.resolve_ctor_generic_args(
+                &subst_params,
+                &explicit_generic_args,
+                &params,
+                &n.args,
+            );
             self.check_call_args(
                 &class_name,
                 &params,
@@ -1065,7 +1142,7 @@ impl<'a> Checker<'a> {
                 n.span,
                 Some(&class_name),
                 &subst_params,
-                &generic_args,
+                &subst_args,
             );
             return;
         }
@@ -1161,6 +1238,71 @@ impl<'a> Checker<'a> {
     /// function calls, calls on non-generic receivers, calls whose
     /// receiver is a raw type).
     #[allow(clippy::too_many_arguments)]
+    /// Resolve the final substitution-arg list for a `new Foo(...)` /
+    /// `new MyRecord(...)` site. Explicit `<...>` always wins; when
+    /// the user wrote the bare form and the type is generic, infer
+    /// from the constructor's parameter types vs the actual arg types
+    /// (spec §T.4). Returns an empty vec when the type isn't generic
+    /// — `substitute` short-circuits on a 0-length params list, so an
+    /// empty subst_args is the natural pass-through.
+    fn resolve_ctor_generic_args(
+        &self,
+        generic_params: &[TypeParam],
+        explicit_args: &[Ty],
+        ctor_params: &[ParamSig],
+        call_args: &[Expr],
+    ) -> Vec<Ty> {
+        if !explicit_args.is_empty() {
+            return explicit_args.to_vec();
+        }
+        if generic_params.is_empty() {
+            return Vec::new();
+        }
+        let param_tys: Vec<&TypeRef> = ctor_params.iter().map(|p| &p.ty).collect();
+        let arg_tys: Vec<Ty> = call_args
+            .iter()
+            .map(|a| infer_expr(a, &self.env, self.symbols))
+            .collect();
+        let inferred = infer_generic_args(generic_params, &param_tys, &arg_tys);
+        generic_params
+            .iter()
+            .map(|p| inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown))
+            .collect()
+    }
+
+    /// Append method-level generic inference (spec §T.4) onto an
+    /// existing `(subst_params, subst_args)` pair. The class/record/
+    /// interface generics are already filled in by the caller; this
+    /// extends the substitution table with the method's own generic
+    /// params, inferring concrete arguments from the call's actual
+    /// arg types. Only the bare-param-name shape is handled — see
+    /// [`infer_generic_args`].
+    fn append_method_generic_inference(
+        &self,
+        method_generic_params: &[TypeParam],
+        method_params: &[ParamSig],
+        call_args: &[Expr],
+        subst_params: &mut Vec<TypeParam>,
+        subst_args: &mut Vec<Ty>,
+    ) {
+        if method_generic_params.is_empty() {
+            return;
+        }
+        let param_tys: Vec<&TypeRef> = method_params.iter().map(|p| &p.ty).collect();
+        let arg_tys: Vec<Ty> = call_args
+            .iter()
+            .map(|a| infer_expr(a, &self.env, self.symbols))
+            .collect();
+        let inferred =
+            infer_generic_args(method_generic_params, &param_tys, &arg_tys);
+        for p in method_generic_params {
+            subst_args.push(
+                inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown),
+            );
+        }
+        subst_params.extend(method_generic_params.iter().cloned());
+    }
+
     fn check_call_args(
         &mut self,
         callee_name: &str,

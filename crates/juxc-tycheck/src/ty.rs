@@ -546,6 +546,112 @@ mod tests {
     }
 }
 
+// ============================================================================
+// Generic-parameter inference at call sites (Phase G — spec §T.4)
+// ============================================================================
+
+/// Infer generic type arguments at a call site from the declared
+/// parameter types and the inferred argument types.
+///
+/// Phase-1 scope per `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.2 (steps 1
+/// and 4 only — no return-type constraint, no bound constraint
+/// propagation, no LUB/join):
+///
+/// 1. For each (declared-param-type, arg-type) pair, if the declared
+///    type is a **bare** mention of a generic parameter (`T x` where
+///    `T` is in `generic_params`), record `T → arg_ty`.
+/// 2. If the same `T` is constrained by multiple args, they must
+///    agree exactly — otherwise inference gives up and returns an
+///    empty result (caller falls back to whatever it does for
+///    unsolved generics today, which is "leave `Ty::Param("T")` in
+///    place and let the wildcard rule keep things quiet").
+///
+/// **NOT yet handled** (spec describes these but they need real
+/// constraint solving):
+///
+/// - Nested generic patterns: `T list(List<T> xs)` doesn't infer `T`
+///   from a `List<int>` argument. Today this leaves `T` unsolved.
+/// - Return-type-driven inference: `T identity(T x); long y =
+///   identity(42)` doesn't push `long` back through `T`.
+/// - Bound-driven inference: `<T extends Animal>` constraints don't
+///   participate in solving.
+/// - Subtype joins ("least upper bound"): when two args are different
+///   classes in the same hierarchy, inference gives up rather than
+///   pick their LUB.
+///
+/// Returns a `(name → Ty)` map. Empty map means inference produced no
+/// useful info (no generic params, all params nonsensical, or a
+/// conflict was found). Callers should treat an empty result as "use
+/// the unsubstituted signature."
+pub fn infer_generic_args(
+    generic_params: &[TypeParam],
+    param_tys: &[&TypeRef],
+    arg_tys: &[Ty],
+) -> std::collections::HashMap<String, Ty> {
+    let mut inferred: std::collections::HashMap<String, Ty> =
+        std::collections::HashMap::new();
+    if generic_params.is_empty() {
+        return inferred;
+    }
+    let param_names: std::collections::HashSet<&str> = generic_params
+        .iter()
+        .map(|p| p.name.text.as_str())
+        .collect();
+    for (declared, arg) in param_tys.iter().zip(arg_tys.iter()) {
+        // Only the bare-name shape: `T x` where the declared type is
+        // a single-segment path naming a generic param.
+        if declared.array_shape.is_some()
+            || declared.nullable
+            || !declared.generic_args.is_empty()
+            || declared.name.segments.len() != 1
+        {
+            continue;
+        }
+        let name = declared.name.segments[0].text.as_str();
+        if !param_names.contains(name) {
+            continue;
+        }
+        // Skip `Unknown` arguments — they tell us nothing about T.
+        // Leaving T unresolved is better than locking it to Unknown.
+        if arg.is_unknown() {
+            continue;
+        }
+        if let Some(existing) = inferred.get(name) {
+            if existing != arg {
+                // Conflict — multiple args want different types for
+                // the same T. Give up entirely.
+                return std::collections::HashMap::new();
+            }
+        } else {
+            inferred.insert(name.to_string(), arg.clone());
+        }
+    }
+    inferred
+}
+
+/// Convenience wrapper around [`substitute`] that takes the
+/// inference map produced by [`infer_generic_args`] instead of the
+/// positional `params` + `args` slices.
+///
+/// For each generic param in declaration order, the map either has
+/// an entry (use the inferred type) or doesn't (substitute with
+/// `Ty::Unknown` so the param vanishes from the substituted result
+/// — equivalent to "we couldn't solve this T").
+pub fn substitute_via_inference(
+    ty: &Ty,
+    generic_params: &[TypeParam],
+    inferred: &std::collections::HashMap<String, Ty>,
+) -> Ty {
+    if generic_params.is_empty() || inferred.is_empty() {
+        return ty.clone();
+    }
+    let args: Vec<Ty> = generic_params
+        .iter()
+        .map(|p| inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown))
+        .collect();
+    substitute(ty, generic_params, &args)
+}
+
 /// Map a bare primitive name onto its [`Primitive`] tag. Returns `None`
 /// for any other identifier — including `"String"`, which lives in its
 /// own [`Ty::String`] variant. Mirrors the comprehensive primitive list
