@@ -269,7 +269,8 @@ impl RustEmitter {
             else {
                 continue;
             };
-            let Some(actual) = parent_ty.generic_args.get(idx) else {
+            let Some(actual) = parent_ty.generic_args.get(idx).and_then(|g| g.as_type())
+            else {
                 continue;
             };
             if is_jux_string_type_ref(actual) {

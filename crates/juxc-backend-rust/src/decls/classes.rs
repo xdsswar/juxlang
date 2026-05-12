@@ -203,11 +203,19 @@ impl RustEmitter {
         // direct `c.method()` calls still hit the inherent path.
         self.emit_class_trait_impls(class_decl);
 
-        // Marker trait — `pub trait <Name>Kind: Clone {}` — and impls
-        // for this class plus every ancestor in the chain. Lets
-        // `<T extends ClassName>` bounds work for type restriction
-        // (the bound rewriter in `emit_generic_params_with_clone_bound`
+        // Marker trait — `pub trait <Name>Kind {}` — and impls for
+        // this class plus every ancestor in the chain. Lets `<T
+        // extends ClassName>` bounds work for type restriction (the
+        // bound rewriter in `emit_generic_params_with_clone_bound`
         // routes class-name bounds through `<Name>Kind`).
+        //
+        // **No `Clone` supertrait.** Generic bounds add `+ Clone`
+        // separately at every use site, so the marker trait stays
+        // dyn-compatible — `Box<dyn AnimalKind>` would otherwise
+        // hit Rust's "Self: Sized" restriction on Clone and refuse
+        // to be a trait object. Storage-position wildcards
+        // (`List<? extends Animal>` as a local/field/return) rely
+        // on this.
         self.emit_class_marker_trait(class_decl);
     }
 
@@ -220,12 +228,15 @@ impl RustEmitter {
     /// interface that re-declares them.
     pub(crate) fn emit_class_marker_trait(&mut self, class_decl: &juxc_ast::ClassDecl) {
         // (Migrated to Writer indent-aware API)
-        // pub trait <Name>Kind: Clone {}
+        // pub trait <Name>Kind {} — no `Clone` supertrait so the
+        // trait is dyn-compatible. Generic bounds add `+ Clone`
+        // explicitly at use sites via
+        // `emit_generic_params_with_clone_bound`.
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("trait ");
         self.w.push_str(&class_decl.name.text);
-        self.w.push_str("Kind: Clone {}\n");
+        self.w.push_str("Kind {}\n");
         // impl<T: Clone, …> <Name>Kind for <Name><T, …> {}
         //
         // The class's own generic params (with their full bound list)
@@ -415,24 +426,47 @@ impl RustEmitter {
             .map(|b| body_writes_to_this(b))
             .unwrap_or(false);
 
+        // Wildcard-lift pre-pass (same rule as `emit_fn_decl`):
+        // promote each `? extends T` / `? super T` / `?` in a param
+        // type to a synthetic `__Wn` generic on this method with the
+        // matching bound.
+        let mut lifter = crate::analysis::WildcardLifter::new();
+        let lifted_param_tys: Vec<juxc_ast::TypeRef> = method
+            .params
+            .iter()
+            .map(|p| {
+                if crate::analysis::type_ref_has_wildcard(&p.ty) {
+                    lifter.rewrite_type_ref(&p.ty)
+                } else {
+                    p.ty.clone()
+                }
+            })
+            .collect();
+        let mut combined_method_generics = method.generic_params.clone();
+        combined_method_generics.extend(lifter.new_params.iter().cloned());
+
         self.w.indent_inc();
         self.w.emit_indent();
         self.emit_visibility(method.visibility);
         self.w.push_str("fn ");
         self.w.push_str(&method.name.text);
-        // Method's own generic parameters (rare but supported).
-        self.emit_generic_params(&method.generic_params);
+        // Method's own generic parameters plus any synthetic wildcards.
+        if combined_method_generics.is_empty() {
+            self.emit_generic_params(&method.generic_params);
+        } else {
+            self.emit_generic_params_with_clone_bound(&combined_method_generics);
+        }
         self.w.push('(');
         if needs_mut_self {
             self.w.push_str("&mut self");
         } else {
             self.w.push_str("&self");
         }
-        for param in &method.params {
+        for (i, param) in method.params.iter().enumerate() {
             self.w.push_str(", ");
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
-            self.emit_type_as_rust(&param.ty);
+            self.emit_type_as_rust(&lifted_param_tys[i]);
         }
         self.w.push(')');
         match &method.return_type {

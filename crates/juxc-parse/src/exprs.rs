@@ -453,8 +453,11 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 // Optional explicit generic-args list — `new Box<int>(42)`.
-                // Type position, so `<` is unambiguous.
-                let generic_args = self.parse_generic_args();
+                // Type position, so `<` is unambiguous. Wildcards
+                // (`new Box<? extends T>()`) aren't legal in `new`
+                // expressions; `parse_generic_args_concrete` flags
+                // them as E0200 and drops them from the result.
+                let generic_args = self.parse_generic_args_concrete();
 
                 // Class-instantiation form — `new Foo(args)` or
                 // `new Foo<T1,T2>(args)`.

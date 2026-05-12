@@ -1,0 +1,11 @@
+// Application unit — imports `Greeter` from the sibling library
+// unit (different package) and calls it from `main()`.
+
+package app.main;
+
+import com.lib.Greeter;
+
+public void main() {
+    var g = new Greeter("multifile");
+    print(g.hello());
+}

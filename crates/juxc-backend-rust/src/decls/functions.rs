@@ -22,10 +22,47 @@ impl RustEmitter {
         // Caller is at level 0 — top-level functions sit at depth 0,
         // body at depth 1.
         // `fn name<T, U>(params) -> return {`
+        // Wildcard-lift pre-pass: any `? extends T` / `? super T` /
+        // `?` in a param position becomes a fresh `__Wn` generic on
+        // this function with the matching bound. Phase-1 PECS
+        // lowering — mirrors Java's compile-time wildcard erasure.
+        let mut lifter = crate::analysis::WildcardLifter::new();
+        let lifted_param_tys: Vec<juxc_ast::TypeRef> = fn_decl
+            .params
+            .iter()
+            .map(|p| {
+                if crate::analysis::type_ref_has_wildcard(&p.ty) {
+                    lifter.rewrite_type_ref(&p.ty)
+                } else {
+                    p.ty.clone()
+                }
+            })
+            .collect();
+        let mut combined_generics = fn_decl.generic_params.clone();
+        combined_generics.extend(lifter.new_params.iter().cloned());
+
         self.w.emit_indent();
+        // When the compilation unit is wrapped in `pub mod a::b::…`,
+        // user-declared visibility on top-level functions becomes
+        // load-bearing — the crate-root `fn main()` shim needs to
+        // reach `a::b::main`, so the inner `main` must be `pub`.
+        // At crate root (no package) we keep the historical
+        // "drop visibility, emit a private `fn`" behavior so the
+        // existing test corpus stays green.
+        if !self.symbols.package.is_empty() {
+            self.emit_visibility(fn_decl.visibility);
+        }
         self.w.push_str("fn ");
         self.w.push_str(&fn_decl.name.text);
-        self.emit_generic_params(&fn_decl.generic_params);
+        // Use the combined generics list so synthetic params land on
+        // the signature. `<__W0: AnimalKind + Clone, …>` is emitted
+        // through the same bound-aware helper used for user params,
+        // so class bounds get the marker-trait rewrite consistently.
+        if combined_generics.is_empty() {
+            self.emit_generic_params(&fn_decl.generic_params);
+        } else {
+            self.emit_generic_params_with_clone_bound(&combined_generics);
+        }
         self.w.push('(');
         for (i, param) in fn_decl.params.iter().enumerate() {
             if i > 0 {
@@ -33,7 +70,7 @@ impl RustEmitter {
             }
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
-            self.emit_type_as_rust(&param.ty);
+            self.emit_type_as_rust(&lifted_param_tys[i]);
         }
         self.w.push(')');
 

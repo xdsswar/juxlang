@@ -1,0 +1,45 @@
+// Intersection bounds: `T extends SomeClass & SomeInterface`.
+// The parser accepts Java's `&`-separated bound list (spec §A.2.4).
+// Each bound is lowered as a Rust trait bound; for a Jux class
+// (which is a struct in Rust) the bound is rewritten to that
+// class's marker trait `<Name>Kind`, which the class itself and
+// all its subclasses implement. Interfaces lower to traits
+// directly, so they appear as-is.
+
+public interface Speaks {
+    public String voice();
+}
+
+public class Animal {
+    public String name;
+    public Animal(String name) {
+        this.name = name;
+    }
+}
+
+public class Dog extends Animal implements Speaks {
+    public Dog(String name) {
+        super(name);
+    }
+    public String voice() {
+        return $"Woof from ${this.name}";
+    }
+}
+
+// Only types that are BOTH an Animal AND implement Speaks may
+// instantiate this container. Dog satisfies both.
+public class Holder<T extends Animal & Speaks> {
+    public T pet;
+    public Holder(T pet) {
+        this.pet = pet;
+    }
+    public String describe() {
+        return this.pet.voice();
+    }
+}
+
+public void main() {
+    var d = new Dog("Rex");
+    var h = new Holder<Dog>(d);
+    print(h.describe());
+}

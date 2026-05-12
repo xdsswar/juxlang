@@ -1,0 +1,36 @@
+// Sealed class hierarchy — Java-style closed inheritance.
+//
+// `sealed class Shape permits Circle, Square` restricts the
+// subclasses to exactly the named two. Adding a third (e.g.
+// `class Triangle extends Shape`) at the bottom would fire
+// E0422_SealedClassNotPermitted at tycheck.
+//
+// `final class Frozen` similarly forbids any subclass — adding
+// `class Sub extends Frozen` would fire E0420_FinalClassExtended.
+
+public sealed class Shape permits Circle, Square {
+    public String describe() {
+        return "a shape";
+    }
+}
+
+public class Circle extends Shape {
+    public int radius;
+    public Circle(int radius) {
+        this.radius = radius;
+    }
+}
+
+public class Square extends Shape {
+    public int side;
+    public Square(int side) {
+        this.side = side;
+    }
+}
+
+public void main() {
+    var c = new Circle(5);
+    var s = new Square(3);
+    print($"circle radius=${c.radius}, ${c.describe()}");
+    print($"square side=${s.side}, ${s.describe()}");
+}

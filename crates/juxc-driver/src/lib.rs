@@ -49,6 +49,66 @@ pub struct CompileResult {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Compile a workspace of one-or-more source files together.
+///
+/// Each file is lexed, parsed, and resolved independently, then the
+/// per-unit symbol tables are merged into a single workspace
+/// SymbolTable that all units share for tycheck. The backend emits a
+/// single Rust crate containing every unit's lowered output —
+/// cross-file `import`s and package-private access checks resolve
+/// against the merged view.
+///
+/// `sources` must be non-empty. Passing exactly one source produces
+/// the same result as the legacy [`compile`] entry point.
+pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    if sources.is_empty() {
+        return Ok(CompileResult { crate_: None, diagnostics });
+    }
+
+    // Phase 1+2 per source — lex and parse independently.
+    let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
+    for source in &sources {
+        let lex_result = juxc_lex::lex(source);
+        diagnostics.extend(lex_result.diagnostics);
+        let parsed = juxc_parse::parse(&lex_result.tokens);
+        diagnostics.extend(parsed.diagnostics);
+        // Resolver runs per-unit; cross-file name resolution happens
+        // through the merged symbol table during tycheck.
+        let resolved = juxc_resolve::resolve(&parsed.ast);
+        diagnostics.extend(resolved.diagnostics);
+        units.push(parsed.ast);
+    }
+
+    // Phase 6+ — tycheck against the merged workspace. We build one
+    // SymbolTable that contains every class/record/enum/interface/
+    // function from every unit, then run the per-expression type
+    // walker against each unit using that shared table.
+    let typed = juxc_tycheck::typecheck_workspace(&units);
+    diagnostics.extend(typed.diagnostics);
+
+    let has_errors = diagnostics
+        .iter()
+        .any(|d| matches!(d.severity, Severity::Error));
+
+    let crate_ = if has_errors {
+        None
+    } else {
+        // Backend: emit one Rust crate with each unit's output
+        // wrapped in its package modules. The first source file's
+        // path drives source-map markers for the `main` unit; the
+        // others get their own markers via per-unit source refs.
+        Some(juxc_backend_rust::lower_workspace(
+            &units,
+            &typed.symbols,
+            &typed.expr_types,
+            &sources,
+        ))
+    };
+
+    Ok(CompileResult { crate_, diagnostics })
+}
+
 /// Compile a single source file through every phase that's currently
 /// wired up. Returns a [`CompileResult`].
 ///

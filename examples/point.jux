@@ -11,8 +11,11 @@
 //   - String interpolation inside print to render coordinates.
 
 public class Point {
-    private int x;
-    private int y;
+    // Public fields here so the demo can read coordinates from
+    // outside the class. The encapsulation example (private + getter)
+    // lives in `examples/encapsulation.jux`.
+    public int x;
+    public int y;
 
     public Point(int x, int y) {
         this.x = x;

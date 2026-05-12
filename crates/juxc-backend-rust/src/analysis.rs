@@ -7,8 +7,10 @@
 use std::collections::HashSet;
 
 use juxc_ast::{
-    Block, CompilationUnit, ElseBranch, Expr, Literal, Stmt, TopLevelDecl,
+    Block, CompilationUnit, ElseBranch, Expr, GenericArg, Ident, Literal, QualifiedName, Stmt,
+    TopLevelDecl, TypeParam, TypeRef, WildcardBound,
 };
+use juxc_source::Span;
 
 /// Walk a function body and collect every name that appears as the
 /// target of an [`AssignStmt`].
@@ -571,4 +573,110 @@ pub(crate) fn is_jux_string_type_ref(ty: &juxc_ast::TypeRef) -> bool {
 /// letter-led identifiers.
 pub(crate) fn starts_with_uppercase(name: &str) -> bool {
     name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+}
+
+// ============================================================================
+// Wildcard generic-arg lifting — backend Phase 1 strategy for PECS
+// ============================================================================
+
+/// State threaded through [`lift_wildcards_in_type_ref`] across the
+/// params of a single function/method. Each wildcard encountered is
+/// replaced by a fresh synthetic type-param name (`__W0`, `__W1`, …)
+/// and its bound is recorded so the caller can extend the
+/// declaration-site generic-params list.
+///
+/// Phase-1 lowering rule: a wildcard in a parameter-position type
+/// reads as `<__Wn: Bound + Clone>` on the enclosing function. Mimics
+/// what Java itself does after type erasure — Java's `void
+/// f(List<? extends Animal> xs)` and Rust's
+/// `fn f<__W: AnimalKind + Clone>(xs: List<__W>)` are isomorphic.
+///
+/// Wildcards in storage positions (locals, fields, return types) are
+/// not lifted here — tycheck flags those with a placeholder
+/// diagnostic until a proper `Box<dyn>`-erasure strategy lands.
+pub(crate) struct WildcardLifter {
+    /// Synthetic TypeParams produced during the rewrite, in
+    /// declaration order. Caller concatenates them after the
+    /// function's own generic params.
+    pub new_params: Vec<TypeParam>,
+    /// Counter for the next `__Wn` name. Bumped on each fresh
+    /// wildcard regardless of bound shape.
+    next: usize,
+}
+
+impl WildcardLifter {
+    pub(crate) fn new() -> Self {
+        Self {
+            new_params: Vec::new(),
+            next: 0,
+        }
+    }
+
+    /// Recursively walk `ty`, replacing each `GenericArg::Wildcard`
+    /// with a freshly-named `GenericArg::Type` referencing a
+    /// synthetic param. Returns the rewritten `TypeRef` (cloning
+    /// only the spine — concrete subterms are kept by reference via
+    /// `clone()`).
+    pub(crate) fn rewrite_type_ref(&mut self, ty: &TypeRef) -> TypeRef {
+        let generic_args = ty
+            .generic_args
+            .iter()
+            .map(|arg| match arg {
+                GenericArg::Type(inner) => GenericArg::Type(self.rewrite_type_ref(inner)),
+                GenericArg::Wildcard(w) => GenericArg::Type(self.synthesize(&w.bound)),
+            })
+            .collect();
+        TypeRef {
+            name: ty.name.clone(),
+            generic_args,
+            nullable: ty.nullable,
+            array_shape: ty.array_shape.clone(),
+            span: ty.span,
+        }
+    }
+
+    /// Mint a fresh `__Wn` TypeParam with the wildcard's bound and
+    /// return a TypeRef pointing at it. `? super B` collapses to the
+    /// same shape as `? extends B` here — Rust generics can't
+    /// express "supertype of B" directly, and Phase 1 treats the
+    /// bound as a marker constraint either way. (Tycheck still
+    /// enforces the variance distinction via PECS in `compatible`.)
+    fn synthesize(&mut self, bound: &Option<WildcardBound>) -> TypeRef {
+        let name = format!("__W{}", self.next);
+        self.next += 1;
+        let bounds: Vec<TypeRef> = match bound {
+            None => Vec::new(),
+            Some(WildcardBound::Extends(b)) => vec![b.clone()],
+            Some(WildcardBound::Super(b)) => vec![b.clone()],
+        };
+        let ident = Ident {
+            text: name.clone(),
+            span: Span::DUMMY,
+        };
+        self.new_params.push(TypeParam {
+            name: ident.clone(),
+            bounds,
+            span: Span::DUMMY,
+        });
+        TypeRef {
+            name: QualifiedName {
+                segments: vec![ident],
+                span: Span::DUMMY,
+            },
+            generic_args: Vec::new(),
+            nullable: false,
+            array_shape: None,
+            span: Span::DUMMY,
+        }
+    }
+}
+
+/// True iff `ty` contains a wildcard anywhere in its generic-arg
+/// tree. Cheap guard so call sites can skip the rewrite allocation
+/// for the overwhelmingly-common no-wildcards case.
+pub(crate) fn type_ref_has_wildcard(ty: &TypeRef) -> bool {
+    ty.generic_args.iter().any(|arg| match arg {
+        GenericArg::Type(inner) => type_ref_has_wildcard(inner),
+        GenericArg::Wildcard(_) => true,
+    })
 }

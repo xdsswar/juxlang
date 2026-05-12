@@ -14,8 +14,11 @@
 //     methods can return them and interpolation can format them.
 
 public class User {
-    private String name;
-    private int age;
+    // Public fields so the demo can format them from outside the
+    // class. See `examples/encapsulation.jux` for the private-field +
+    // getter idiom.
+    public String name;
+    public int age;
 
     public User(String name, int age) {
         this.name = name;

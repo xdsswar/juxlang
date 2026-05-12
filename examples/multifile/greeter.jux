@@ -1,0 +1,14 @@
+// Library unit — defines a `Greeter` class in the `com.lib` package.
+// Consumed by the sibling `app.jux` via `import com.lib.Greeter;`.
+
+package com.lib;
+
+public class Greeter {
+    public String name;
+    public Greeter(String name) {
+        this.name = name;
+    }
+    public String hello() {
+        return $"Hello, ${this.name}!";
+    }
+}

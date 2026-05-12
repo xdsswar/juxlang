@@ -1,0 +1,37 @@
+// Encapsulation — Java-style 4-visibility access control.
+//
+// Phase-1 rules (enforced by tycheck as E0414 / E0415 / E0416):
+//   - public    : everyone.
+//   - protected : same class + transitive subclasses.
+//   - private   : same class only.
+//   - (default) : same package (Phase 1 = same compilation unit; the
+//                 check is a no-op until multi-unit packaging lands).
+//
+// This example shows the working pattern: private fields, public
+// methods that read them. Top-level code reaches the data through
+// the getter, never the field.
+
+public class Account {
+    // `private` — `main` cannot read or assign `balance` directly.
+    private int balance;
+
+    public Account(int starting) {
+        this.balance = starting;
+    }
+
+    // Public accessor — the conventional way to expose private state.
+    public int getBalance() {
+        return this.balance;
+    }
+
+    public void deposit(int amount) {
+        this.balance = this.balance + amount;
+    }
+}
+
+public void main() {
+    var a = new Account(100);
+    a.deposit(50);
+    print($"balance = ${a.getBalance()}");
+    // Direct `a.balance` here would fire E0414_PrivateAccess.
+}

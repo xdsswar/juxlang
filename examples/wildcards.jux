@@ -1,0 +1,46 @@
+// Bounded wildcards — Java PECS semantics.
+//
+// Two lowering paths in the backend:
+//
+//   1. PARAM position (`void f(List<? extends Animal> xs)`) lifts the
+//      wildcard to a synthetic generic on the enclosing function:
+//        fn f<__W0: AnimalKind + Clone>(xs: List<__W0>) { … }
+//      Caller can pass List<Dog>, List<Cat>, … — any subtype works.
+//
+//   2. STORAGE position (`List<? extends Animal> xs = …` as a local,
+//      field, or return) erases to a trait object:
+//        let xs: List<Box<dyn AnimalKind>> = …;
+//      The marker trait carries no `Clone` supertrait so it's
+//      dyn-compatible; bounds at use sites add `+ Clone` separately.
+//
+// Phase-1 caveat: wildcard-typed values are PASS-THROUGH only —
+// field/method access through the bound needs an accessor-trait
+// layer that lands in a later pass.
+
+public class Animal {
+    public String name;
+    public Animal(String name) {
+        this.name = name;
+    }
+}
+
+public class Dog extends Animal {
+    public Dog(String name) { super(name); }
+}
+
+public class List<T> {
+    public T head;
+    public List(T head) {
+        this.head = head;
+    }
+}
+
+// Param-position wildcard — function-generic lift.
+public void describe(List<? extends Animal> xs) {
+    print("got a list of animals");
+}
+
+public void main() {
+    var dogs = new List<Dog>(new Dog("Rex"));
+    describe(dogs);
+}

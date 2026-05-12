@@ -34,12 +34,25 @@ pub struct TypeEnv {
     scopes: Vec<HashMap<String, Ty>>,
     /// Name of the class whose method body we're currently inside —
     /// `None` at top level, `Some("Foo")` while walking `class Foo`'s
-    /// method bodies. Drives `Expr::This` inference.
+    /// method bodies. Drives `Expr::This` inference. Stored as the
+    /// **fully-qualified name** so cross-package lookups work; e.g.
+    /// `Some("a.lib.Foo")` for a class in package `a.lib`.
     pub current_class: Option<String>,
     /// Generic-parameter names currently in scope. Includes the
     /// surrounding class/record's params **and** the current method's
     /// params (if any). Cleared between methods.
     pub generic_params: HashSet<String>,
+    /// Dotted package path of the unit currently being checked —
+    /// e.g. `["a", "lib"]` for `package a.lib;`. Empty for the
+    /// crate-root (no-package) case. Drives the bare-name → FQN
+    /// resolution rule "look in the current package first".
+    pub current_package: Vec<String>,
+    /// Bare-name → FQN map built from the unit's `package` and
+    /// `import` declarations. Populated once at the start of each
+    /// unit's tycheck and consulted by `ty_from_ref` when a single-
+    /// segment type reference is encountered. Empty when no package
+    /// or imports apply (top-level single-unit builds).
+    pub unqualified: HashMap<String, String>,
 }
 
 impl TypeEnv {
@@ -50,6 +63,8 @@ impl TypeEnv {
             scopes: vec![HashMap::new()],
             current_class: None,
             generic_params: HashSet::new(),
+            current_package: Vec::new(),
+            unqualified: HashMap::new(),
         }
     }
 

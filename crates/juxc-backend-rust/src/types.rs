@@ -124,16 +124,70 @@ impl RustEmitter {
     }
 
     /// Lower a type that appears as a generic argument (e.g. the
-    /// `String` inside `Container<String>`). The only difference
-    /// from [`Self::emit_type_as_rust`] is the `String` case, which
-    /// gets the owned `String` lowering — `&str` won't work as a
-    /// generic-arg slot without an explicit lifetime.
-    pub(crate) fn emit_generic_arg_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
-        if is_jux_string_type(ty) {
-            self.w.push_str("String");
-            return;
+    /// `String` inside `Container<String>`). Differs from
+    /// [`Self::emit_type_as_rust`] in two cases:
+    ///
+    /// 1. **Jux `String` → owned Rust `String`** — `&str` won't work
+    ///    as a generic-arg slot without an explicit lifetime.
+    /// 2. **Wildcards (`?`, `? extends T`, `? super T`)** — Phase 1
+    ///    erases the wildcard to its bound's marker trait via a
+    ///    `Box<dyn Trait>` shape in storage position. Unbounded `?`
+    ///    falls back to `Box<dyn std::any::Any>`. This is a
+    ///    placeholder strategy; the function-generic lift for
+    ///    parameter positions is wired in a later phase.
+    pub(crate) fn emit_generic_arg_type_as_rust(&mut self, arg: &juxc_ast::GenericArg) {
+        match arg {
+            juxc_ast::GenericArg::Type(ty) => {
+                if is_jux_string_type(ty) {
+                    self.w.push_str("String");
+                    return;
+                }
+                self.emit_type_as_rust(ty);
+            }
+            juxc_ast::GenericArg::Wildcard(w) => {
+                self.emit_wildcard_arg_placeholder(w);
+            }
         }
-        self.emit_type_as_rust(ty);
+    }
+
+    /// Emit a Rust type for a wildcard generic arg in storage
+    /// position (field, local, return). Strategy: trait-object
+    /// erasure via `std::rc::Rc<dyn Bound>`.
+    ///
+    /// **Why `Rc` and not `Box`?** Our class wrappers `#[derive(Clone)]`,
+    /// and `Box<dyn Trait>` doesn't implement Clone (the inner
+    /// `dyn` is `?Sized`). `Rc<dyn Trait>` is always Clone — the
+    /// refcount bumps without touching the value. That matches the
+    /// shape `class-representation-addendum.md` already lists as
+    /// the "shared-ownership" wrapper. Phase 1 stays single-threaded
+    /// so `Rc` is the right pick; multi-threaded code would want
+    /// `Arc` (deferred — needs a thread-safety flag on the type).
+    ///
+    /// **Why not `Self: Sized` errors?** The marker trait `<Name>Kind`
+    /// no longer has `Clone` as a supertrait, so `dyn AnimalKind` is
+    /// dyn-compatible. The user-side `<T: AnimalKind + Clone>`
+    /// bounds at use sites still pull `Clone` in explicitly.
+    fn emit_wildcard_arg_placeholder(&mut self, w: &juxc_ast::WildcardArg) {
+        match &w.bound {
+            None => self.w.push_str("std::rc::Rc<dyn std::any::Any>"),
+            Some(juxc_ast::WildcardBound::Extends(bound)) => {
+                self.w.push_str("std::rc::Rc<dyn ");
+                self.emit_bound_type(bound);
+                self.w.push('>');
+            }
+            Some(juxc_ast::WildcardBound::Super(bound)) => {
+                // `? super T` accepts T and any supertype. In the
+                // erased Rust form we can't express "supertype of T"
+                // directly; fall back to the same shape as
+                // `? extends T` since the marker-trait of T covers T
+                // and itself. A precise contravariance-aware
+                // lowering would need a separate signature-rewrite
+                // pass — out of scope for Phase 1.
+                self.w.push_str("std::rc::Rc<dyn ");
+                self.emit_bound_type(bound);
+                self.w.push('>');
+            }
+        }
     }
 
     /// Emit a generic-parameter list as a declaration site — `<T, U>`.

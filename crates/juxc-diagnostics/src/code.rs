@@ -69,6 +69,29 @@ pub enum Code {
     /// receiver's class (walking the inheritance chain), or `new T(...)`
     /// where no class/record `T` is in scope.
     E0413_UnresolvedMethod,
+    /// E0414 — Access to a `private` member from outside the
+    /// declaring class. Fires on field reads/writes, method calls,
+    /// and `new T(...)` against a private constructor.
+    E0414_PrivateAccess,
+    /// E0415 — Access to a `protected` member from outside the
+    /// declaring class's extends-chain. Subclasses (transitive) of
+    /// the declaring class may use the member; unrelated code can't.
+    E0415_ProtectedAccess,
+    /// E0416 — Access to a package-private (default-visibility) or
+    /// `internal` member from outside the declaring class's package
+    /// (Phase 1 packages = compilation units). Mirrors Java's
+    /// default visibility scoped to the same package.
+    E0416_PackagePrivateAccess,
+    /// E0420 — `class C extends F` where `F` is declared `final`.
+    /// Final classes cannot be subclassed.
+    E0420_FinalClassExtended,
+    /// E0421 — Subclass declares a method that shadows a `final`
+    /// method on the parent. Final methods cannot be overridden.
+    E0421_FinalMethodOverridden,
+    /// E0422 — `class C extends S` where `S` is `sealed` and `C`
+    /// isn't in `S`'s `permits` list. Sealed classes restrict
+    /// inheritance to the explicitly named subclasses.
+    E0422_SealedClassNotPermitted,
 
     // ---- Operators / Auto-derivation (E0900–E0999) ----
     /// E0930 — Conflicting operator declarations. Per
@@ -118,6 +141,12 @@ impl Code {
             Code::E0411_WrongArgCount            => "E0411",
             Code::E0412_UnresolvedField          => "E0412",
             Code::E0413_UnresolvedMethod         => "E0413",
+            Code::E0414_PrivateAccess            => "E0414",
+            Code::E0415_ProtectedAccess          => "E0415",
+            Code::E0416_PackagePrivateAccess     => "E0416",
+            Code::E0420_FinalClassExtended       => "E0420",
+            Code::E0421_FinalMethodOverridden    => "E0421",
+            Code::E0422_SealedClassNotPermitted  => "E0422",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",

@@ -28,6 +28,8 @@ impl<'a> Parser<'a> {
         &mut self,
         visibility: Visibility,
         is_abstract: bool,
+        is_final: bool,
+        is_sealed: bool,
     ) -> Option<ClassDecl> {
         let start = self.peek_span();
         self.expect_kw(Keyword::Class, "expected `class` keyword");
@@ -47,6 +49,21 @@ impl<'a> Parser<'a> {
         // Backend lowers each interface into a delegating
         // `impl I for Class` block.
         let implements = self.parse_implements_clause();
+        // Optional `permits Foo, Bar, …` clause — only meaningful on
+        // a sealed class. Parsed unconditionally so a `permits` on a
+        // non-sealed class can be flagged with a diagnostic.
+        let permits = self.parse_permits_clause();
+        if !is_sealed && !permits.is_empty() {
+            // Permits without sealed — fold into the same diagnostic
+            // surface so the user sees one tidy message.
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "`permits` clause is only valid on a `sealed` class",
+                )
+                .with_span(name.span),
+            );
+        }
         self.expect(&TokenKind::LBrace, "'{' to start class body");
 
         let mut fields = Vec::new();
@@ -206,6 +223,9 @@ impl<'a> Parser<'a> {
         Some(ClassDecl {
             visibility,
             is_abstract,
+            is_final,
+            is_sealed,
+            permits,
             name,
             generic_params,
             extends,
@@ -216,6 +236,25 @@ impl<'a> Parser<'a> {
             operators,
             span: start.join(end),
         })
+    }
+
+    /// Parse an optional `permits Foo, Bar, …` clause. Returns an
+    /// empty vec when `permits` isn't the next token. Each entry is
+    /// the bare class identifier — generic args aren't accepted in
+    /// the permits position (you list the kind, not an instantiation).
+    pub(crate) fn parse_permits_clause(&mut self) -> Vec<juxc_ast::Ident> {
+        if !self.eat_kw(Keyword::Permits) {
+            return Vec::new();
+        }
+        let mut names = Vec::new();
+        loop {
+            let Some(name) = self.parse_ident() else { break };
+            names.push(name);
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        names
     }
 
     /// Parse an optional `implements Type, Type, …` clause. Returns an

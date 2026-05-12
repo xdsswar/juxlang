@@ -196,6 +196,17 @@ pub struct ClassDecl {
     /// methods are concretized by subclasses. Phase-1 abstract-method
     /// bodies lower to `unimplemented!()` stubs.
     pub is_abstract: bool,
+    /// True when the class is declared `final` — no class may extend
+    /// it. Tycheck enforces with `E0420_FinalClassExtended`.
+    pub is_final: bool,
+    /// True when the class is declared `sealed`. A sealed class
+    /// restricts its subclasses to the explicit `permits` list. Any
+    /// extender outside the list fires `E0422_SealedClassNotPermitted`.
+    pub is_sealed: bool,
+    /// Names of the classes that may extend this class — populated
+    /// only when `is_sealed` is true. Each entry is the bare class
+    /// name from the `permits` clause.
+    pub permits: Vec<Ident>,
     /// The class name (used as the type and as the constructor's name).
     pub name: Ident,
     /// Type parameters in declaration order, e.g. the `T, K, V` in

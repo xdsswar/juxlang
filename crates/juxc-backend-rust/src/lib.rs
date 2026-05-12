@@ -157,6 +157,39 @@ pub fn lower_with_source(
     e.finish()
 }
 
+/// Multi-unit variant of [`lower_with_source`]. Emits a single
+/// `RustCrate` whose `src/main.rs` concatenates every unit's
+/// lowering. Each unit is wrapped in its own `package` module tree
+/// (or emitted flat if it has no `package` decl), and the crate-root
+/// `fn main()` shim is emitted once — against whichever unit
+/// declares `main()`. Multiple `main()` definitions are a build
+/// error that tycheck catches via `E0400_DuplicateDeclaration`.
+///
+/// `sources` is parallel to `units` (same length); each entry is
+/// the original `SourceFile` for its unit, used to anchor source-map
+/// markers per-unit. Pass an empty `sources` slice to suppress
+/// marker emission entirely.
+pub fn lower_workspace(
+    units: &[CompilationUnit],
+    symbols: &SymbolTable,
+    expr_types: &HashMap<Span, Ty>,
+    sources: &[SourceFile],
+) -> RustCrate {
+    let mut e = RustEmitter::new(symbols, expr_types.clone());
+    e.workspace_mode = true;
+    for (i, unit) in units.iter().enumerate() {
+        e.source = sources.get(i).cloned();
+        e.emit_compilation_unit(unit);
+    }
+    // Emit one crate-root `fn main()` shim if any unit declared a
+    // packaged `main()`. Without this step the shim would either be
+    // missing (when no unit declared main inside a package) or
+    // duplicated (when emit_compilation_unit emits one per unit).
+    e.source = None;
+    e.emit_workspace_main_shim(units);
+    e.finish()
+}
+
 // ============================================================================
 // Emitter
 // ============================================================================
@@ -247,6 +280,14 @@ struct RustEmitter {
     /// heuristic behavior so existing programs still emit identical
     /// Rust.
     expr_types: HashMap<Span, Ty>,
+    /// When `true`, the emitter is producing a multi-unit workspace
+    /// crate. `emit_compilation_unit` skips its own crate-root
+    /// `fn main()` shim in this mode — the workspace driver
+    /// (`lower_workspace`) emits exactly one shim at the end, after
+    /// every unit has been laid down. Single-unit emitters
+    /// (`lower_with_source`, `lower`, etc.) leave this `false` so
+    /// existing behavior is preserved unchanged.
+    workspace_mode: bool,
 }
 
 impl RustEmitter {
@@ -273,6 +314,7 @@ impl RustEmitter {
             source: None,
             symbols: symbols.clone(),
             expr_types,
+            workspace_mode: false,
         }
     }
 
@@ -317,13 +359,119 @@ impl RustEmitter {
         // Mutation analysis in `main` (and elsewhere) consults this set
         // so that calling `p.shift(…)` correctly promotes `p` to `let mut`.
         self.user_mut_methods = collect_user_mut_methods(unit);
-        // The package declaration is still ignored — emitting one
-        // generated Rust file per `package com.x.y` would require a
-        // module-tree layout. Today the emitted crate is a flat single
-        // binary; the package name shows up only in diagnostics.
-        self.emit_imports(&unit.imports);
+
+        // Each unit is wrapped in its OWN package's module path —
+        // read from the unit's parsed `package foo.bar;` declaration
+        // rather than the workspace-level table. In multi-unit mode
+        // the workspace table's `package` is only the FIRST unit's
+        // (kept as a back-compat marker), so consulting `unit.package`
+        // is the source of truth for per-unit emission.
+        let package: Vec<String> = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
+            .unwrap_or_default();
+        let has_main = unit.items.iter().any(|item| {
+            matches!(item, TopLevelDecl::Function(fn_decl) if fn_decl.name.text == "main")
+        });
+
+        if package.is_empty() {
+            // No package — emit flat at crate root, same as before.
+            self.emit_imports(&unit.imports, /*inside_package_mod=*/ false);
+            for item in &unit.items {
+                self.emit_top_level_decl(item);
+            }
+            return;
+        }
+
+        // `package a.b;` → wrap everything in `pub mod a { pub mod b
+        // { … } }`. Imports stay inside the innermost module so
+        // their `use` statements are scoped where the body lives.
+        for seg in &package {
+            self.w.emit_indent();
+            self.w.push_str("pub mod ");
+            self.w.push_str(seg);
+            self.w.push_str(" {\n");
+            self.w.indent_inc();
+        }
+        // Inside a `mod`, plain `use foo::bar;` resolves relative to
+        // the current module, not the crate root. Flip the rewrite
+        // so `import com.lib.Greeter;` becomes `use crate::com::lib::Greeter;`
+        // — that anchors at the crate root and matches the `pub mod`
+        // structure the workspace emits per-unit.
+        self.emit_imports(&unit.imports, /*inside_package_mod=*/ true);
         for item in &unit.items {
             self.emit_top_level_decl(item);
+        }
+        for _ in &package {
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+
+        // Rust's binary entry point lives at the crate root. When the
+        // user's `void main()` got buried inside the module tree, emit
+        // a shim at top-level that forwards into it. Without this, the
+        // emitted crate compiles as a library and `--run` has nothing
+        // to launch.
+        //
+        // Workspace mode defers shim emission to `lower_workspace`
+        // (which picks one main across every unit), so this branch
+        // only runs in the single-unit path.
+        if has_main && !self.workspace_mode {
+            self.w.newline();
+            self.w.line("fn main() {");
+            self.w.indent_inc();
+            self.w.emit_indent();
+            let path = package.join("::");
+            self.w.push_str(&path);
+            self.w.push_str("::main();\n");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+    }
+
+    /// Emit a single crate-root `fn main()` shim that delegates into
+    /// whichever unit declared `void main()` (and lives inside a
+    /// `package`).
+    ///
+    /// - Zero units with a packaged `main()` → nothing emitted; the
+    ///   caller is presumably building a library, or the main lives
+    ///   at the crate root and doesn't need a shim.
+    /// - Exactly one packaged `main()` → emit
+    ///   `fn main() { path::to::main(); }`.
+    /// - Multiple `main()`s — tycheck's `E0400_DuplicateDeclaration`
+    ///   already fired during symbol-table merging, so the backend
+    ///   path here is unreachable for clean compiles. Emit a shim
+    ///   for the first occurrence anyway so partially-erroring
+    ///   builds still produce SOMETHING valid.
+    pub(crate) fn emit_workspace_main_shim(&mut self, units: &[CompilationUnit]) {
+        for unit in units {
+            let has_main = unit.items.iter().any(|item| {
+                matches!(item, TopLevelDecl::Function(fn_decl) if fn_decl.name.text == "main")
+            });
+            if !has_main {
+                continue;
+            }
+            let pkg: Vec<&str> = unit
+                .package
+                .as_ref()
+                .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect())
+                .unwrap_or_default();
+            if pkg.is_empty() {
+                // Unit's `main()` is already at the crate root —
+                // nothing to forward through, the user's `fn main()`
+                // emission IS the binary entry point.
+                return;
+            }
+            self.w.newline();
+            self.w.line("fn main() {");
+            self.w.indent_inc();
+            self.w.emit_indent();
+            self.w.push_str(&pkg.join("::"));
+            self.w.push_str("::main();\n");
+            self.w.indent_dec();
+            self.w.line("}");
+            return;
         }
     }
 
@@ -349,10 +497,10 @@ impl RustEmitter {
     /// - **Wildcard + alias** (parser already rejected) — the alias is
     ///   dropped; emit just the wildcard form so the result is at least
     ///   valid Rust.
-    fn emit_imports(&mut self, imports: &[ImportDecl]) {
+    fn emit_imports(&mut self, imports: &[ImportDecl], inside_package_mod: bool) {
         let mut emitted_any = false;
         for import in imports {
-            if let Some(line) = render_use(&import.spec) {
+            if let Some(line) = render_use(&import.spec, inside_package_mod) {
                 self.w.line(&line);
                 emitted_any = true;
             }
@@ -404,19 +552,23 @@ impl RustEmitter {
 /// Pure, side-effect-free, no emitter state read or written; this is
 /// why it lives as a free function next to [`cargo_toml_for`] rather
 /// than as a method on `RustEmitter`.
-fn render_use(spec: &ImportSpec) -> Option<String> {
+fn render_use(spec: &ImportSpec, inside_package_mod: bool) -> Option<String> {
+    // When the emitted `use` lands inside a `pub mod a::b { … }`
+    // wrapper, an unqualified `use com::lib::Greeter;` would resolve
+    // relative to `a::b` rather than the crate root. Prefix
+    // `crate::` so the path always anchors at the root regardless
+    // of how deep the surrounding module nesting is. Flat emission
+    // (no package decl) keeps the bare path — that matches the
+    // historical single-file behavior the existing test corpus
+    // expects.
+    let root = if inside_package_mod { "crate::" } else { "" };
     match spec {
         ImportSpec::Path { name, wildcard, alias } => {
             let path = render_qualified(name)?;
-            let mut out = format!("use {path}");
+            let mut out = format!("use {root}{path}");
             if *wildcard {
-                // Wildcard + alias was a parser shape error; if we got
-                // here anyway, drop the alias and emit just the `*`
-                // form. Better invalid-input recovery than emitting
-                // `use foo::* as Bar;` which is not valid Rust.
                 out.push_str("::*");
             } else if let Some(a) = alias {
-                // `use com::example::Foo as Bar;`.
                 out.push_str(&format!(" as {}", a.text));
             }
             out.push(';');
@@ -424,8 +576,6 @@ fn render_use(spec: &ImportSpec) -> Option<String> {
         }
         ImportSpec::Items { prefix, items } => {
             if items.is_empty() {
-                // Empty group is a parser-recovery shape — produce no
-                // `use ::{};` since that would be invalid Rust.
                 return None;
             }
             let path = render_qualified(prefix)?;
@@ -437,7 +587,7 @@ fn render_use(spec: &ImportSpec) -> Option<String> {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            Some(format!("use {path}::{{{body}}};"))
+            Some(format!("use {root}{path}::{{{body}}};"))
         }
     }
 }

@@ -1,0 +1,31 @@
+// Package declaration → Rust module mapping.
+//
+// `package com.example.demo;` lowers to:
+//   pub mod com { pub mod example { pub mod demo {
+//       // class / fn declarations
+//   }}}
+//
+// And because Rust's binary entry point lives at the crate root, the
+// backend emits a top-level shim:
+//   fn main() { com::example::demo::main(); }
+//
+// Phase-1 caveat: still a single-file compilation. The package name
+// shapes the emitted Rust but doesn't yet partition the build —
+// E0416 package-private access checks always pass within one unit.
+
+package com.example.demo;
+
+public class Greeter {
+    public String name;
+    public Greeter(String name) {
+        this.name = name;
+    }
+    public String hello() {
+        return $"Hello, ${this.name}!";
+    }
+}
+
+public void main() {
+    var g = new Greeter("Jux");
+    print(g.hello());
+}

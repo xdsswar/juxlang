@@ -75,6 +75,14 @@ pub enum Ty {
     /// `T` inside a `class Box<T> { … }`. Distinct from `User { name: "T", … }`
     /// because the param has no signature in the symbol table.
     Param(String),
+    /// Bounded wildcard generic argument — `?`, `? extends T`,
+    /// `? super T`. Only valid inside the `generic_args` of a
+    /// [`Ty::User`] (or transitively inside a nested wildcard's bound).
+    /// PECS variance is enforced by [`crate::check::compatible`]:
+    /// `List<Dog>` matches `List<? extends Animal>` (producer →
+    /// covariant), `List<Animal>` matches `List<? super Dog>`
+    /// (consumer → contravariant).
+    Wildcard(Wildcard),
     /// The unit/return-nothing type. Methods declared `void` return
     /// this. Expressions are never `Void` — that's reserved for
     /// statement-context constructs.
@@ -82,6 +90,19 @@ pub enum Ty {
     /// Inference failed for this position. Phase D may flag this; Phase
     /// C is silent.
     Unknown,
+}
+
+/// Inferred shape of a bounded wildcard. The boxed `Ty` is the
+/// declared bound (a concrete type, a generic param, or another
+/// user type — never another wildcard).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Wildcard {
+    /// `?` — no bound.
+    Unbounded,
+    /// `? extends T` — accepts T and any subtype of T.
+    Extends(Box<Ty>),
+    /// `? super T` — accepts T and any supertype of T.
+    Super(Box<Ty>),
 }
 
 /// Primitive scalar types per `JUX-LANG-V1.md` §5.1.
@@ -224,6 +245,11 @@ impl fmt::Display for Ty {
                 Ok(())
             }
             Ty::Param(name) => f.write_str(name),
+            Ty::Wildcard(w) => match w {
+                Wildcard::Unbounded => f.write_str("?"),
+                Wildcard::Extends(b) => write!(f, "? extends {b}"),
+                Wildcard::Super(b) => write!(f, "? super {b}"),
+            },
             Ty::Void => f.write_str("void"),
             Ty::Unknown => f.write_str("<unknown>"),
         }
@@ -314,26 +340,65 @@ pub fn ty_from_ref(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         }
     }
 
-    // 5. User-defined type — single-segment name that resolves to a
-    //    class/record/enum/interface in the symbol table. Recursively
-    //    lower the generic args.
+    // 5. User-defined type — single-segment name. Two paths:
+    //    (a) the bare name resolves through the unit's resolver
+    //        (`env.unqualified`) to an FQN; we use that FQN.
+    //    (b) failing the resolver, the bare name itself is a key
+    //        (no-package classes) — `is_type_name` still passes.
     if t.name.segments.len() == 1 {
-        let name = &t.name.segments[0].text;
-        if symbols.is_type_name(name) {
+        let bare = &t.name.segments[0].text;
+        if let Some(fqn) = env.unqualified.get(bare) {
+            if symbols.is_type_name(fqn) {
+                let generic_args = t
+                    .generic_args
+                    .iter()
+                    .map(|g| lower_generic_arg(g, env, symbols))
+                    .collect();
+                return Ty::User {
+                    name: fqn.clone(),
+                    generic_args,
+                };
+            }
+        }
+        if symbols.is_type_name(bare) {
             let generic_args = t
                 .generic_args
                 .iter()
-                .map(|g| ty_from_ref(g, env, symbols))
+                .map(|g| lower_generic_arg(g, env, symbols))
                 .collect();
             return Ty::User {
-                name: name.clone(),
+                name: bare.clone(),
                 generic_args,
             };
         }
     }
 
-    // 6. Fallthrough — multi-segment paths, unknown bare names, etc.
-    //    Stay silent and let Phase D handle the diagnostics.
+    // 5b. Multi-segment qualified name — the user wrote
+    //     `com.lib.Foo` directly. Join the segments with `.` and
+    //     look up by FQN.
+    if t.name.segments.len() > 1 {
+        let fqn: String = t
+            .name
+            .segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+        if symbols.is_type_name(&fqn) {
+            let generic_args = t
+                .generic_args
+                .iter()
+                .map(|g| lower_generic_arg(g, env, symbols))
+                .collect();
+            return Ty::User {
+                name: fqn,
+                generic_args,
+            };
+        }
+    }
+
+    // 6. Fallthrough — unknown names, etc. Stay silent and let
+    //    Phase D handle the diagnostics.
     Ty::Unknown
 }
 
@@ -427,6 +492,15 @@ fn substitute_inner(ty: &Ty, params: &[TypeParam], args: &[Ty]) -> Ty {
                 .iter()
                 .map(|a| substitute_inner(a, params, args))
                 .collect(),
+        },
+        Ty::Wildcard(w) => match w {
+            Wildcard::Unbounded => ty.clone(),
+            Wildcard::Extends(bound) => Ty::Wildcard(Wildcard::Extends(Box::new(
+                substitute_inner(bound, params, args),
+            ))),
+            Wildcard::Super(bound) => Ty::Wildcard(Wildcard::Super(Box::new(
+                substitute_inner(bound, params, args),
+            ))),
         },
         Ty::Primitive(_) | Ty::String | Ty::Void | Ty::Unknown => ty.clone(),
     }
@@ -652,6 +726,190 @@ pub fn substitute_via_inference(
     substitute(ty, generic_params, &args)
 }
 
+/// Lower a [`juxc_ast::GenericArg`] to a [`Ty`]. Concrete types
+/// delegate to [`ty_from_ref`]; wildcards become [`Ty::Wildcard`]
+/// variants with their bound (if any) recursively lowered.
+pub fn lower_generic_arg(
+    arg: &juxc_ast::GenericArg,
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Ty {
+    match arg {
+        juxc_ast::GenericArg::Type(t) => ty_from_ref(t, env, symbols),
+        juxc_ast::GenericArg::Wildcard(w) => match &w.bound {
+            None => Ty::Wildcard(Wildcard::Unbounded),
+            Some(juxc_ast::WildcardBound::Extends(b)) => {
+                Ty::Wildcard(Wildcard::Extends(Box::new(ty_from_ref(b, env, symbols))))
+            }
+            Some(juxc_ast::WildcardBound::Super(b)) => {
+                Ty::Wildcard(Wildcard::Super(Box::new(ty_from_ref(b, env, symbols))))
+            }
+        },
+    }
+}
+
+/// Structural subtype check used by PECS variance in
+/// [`crate::check::compatible`].
+///
+/// Returns `true` when `child` is assignable to a slot of type
+/// `parent`. The relation is reflexive (every type is a subtype of
+/// itself) and walks the class-extends chain — `Dog` is a subtype of
+/// `Animal` iff `Dog`'s extends-chain eventually reaches `Animal`.
+///
+/// Phase 1 keeps the rule narrow:
+/// - User-types use class-extends walking; generic args are checked
+///   pairwise via this same relation (invariant inside `User`).
+/// - Primitives and `String` are equal-only.
+/// - `Param` and `Unknown` are wildcards on both sides (matches the
+///   permissive behavior of [`crate::check::compatible`]).
+///
+/// Wildcards are NOT handled here — they live in
+/// [`crate::check::compatible`] which calls `is_subtype` to resolve
+/// the bound side.
+pub fn is_subtype(child: &Ty, parent: &Ty, symbols: &SymbolTable) -> bool {
+    // Wildcard escape hatches mirroring `compatible`.
+    if matches!(child, Ty::Unknown | Ty::Param(_))
+        || matches!(parent, Ty::Unknown | Ty::Param(_))
+    {
+        return true;
+    }
+    if child == parent {
+        return true;
+    }
+    match (child, parent) {
+        (
+            Ty::User { name: cn, generic_args: ca },
+            Ty::User { name: pn, generic_args: pa },
+        ) => {
+            // Same name — recurse pairwise on generic args.
+            if cn == pn {
+                if ca.is_empty() || pa.is_empty() {
+                    return true;
+                }
+                if ca.len() != pa.len() {
+                    return false;
+                }
+                return ca
+                    .iter()
+                    .zip(pa.iter())
+                    .all(|(x, y)| is_subtype(x, y, symbols));
+            }
+            // Different names — walk the class-extends chain on the
+            // child side. Each hop substitutes through the
+            // extends-clause's generic args (composed) until we
+            // either hit the parent or run out of chain.
+            walk_extends_to(cn, ca, pn, symbols).map_or(false, |composed_args| {
+                if pa.is_empty() {
+                    return true;
+                }
+                if composed_args.len() != pa.len() {
+                    return false;
+                }
+                composed_args
+                    .iter()
+                    .zip(pa.iter())
+                    .all(|(x, y)| is_subtype(x, y, symbols))
+            })
+        }
+        (
+            Ty::Array { element: e1, kind: k1 },
+            Ty::Array { element: e2, kind: k2 },
+        ) => k1 == k2 && is_subtype(e1, e2, symbols),
+        _ => false,
+    }
+}
+
+/// True iff `child`'s class-extends chain (transitively) reaches
+/// `ancestor`. Used by [`crate::check`] for `protected` visibility
+/// — a subclass can access a protected member of any ancestor.
+///
+/// Unlike [`walk_extends_to`], this variant doesn't compute generic
+/// args along the way; it only answers the yes/no chain question.
+pub fn walk_extends_reaches(
+    child: &str,
+    ancestor: &str,
+    symbols: &SymbolTable,
+) -> bool {
+    if child == ancestor {
+        return true;
+    }
+    let mut current = symbols.classes.get(child);
+    let mut depth = 0usize;
+    while let Some(class) = current {
+        if depth > 64 {
+            return false;
+        }
+        let Some(extends) = class.extends.as_ref() else {
+            return false;
+        };
+        let Some(parent) = extends.name.segments.last() else {
+            return false;
+        };
+        let parent_name = parent.text.as_str();
+        if parent_name == ancestor {
+            return true;
+        }
+        current = symbols.classes.get(parent_name);
+        depth += 1;
+    }
+    false
+}
+
+/// Walk `child_name<child_args>`'s extends chain looking for
+/// `target_name`. Returns `Some(args_at_target)` when found — the
+/// args are the target's own generic-arg list, composed by
+/// substituting the running extends-clause args at each hop. Returns
+/// `None` when the chain breaks or the target isn't an ancestor.
+///
+/// Used by [`is_subtype`] to resolve User-vs-User subtype checks.
+/// Distinct from [`compose_extends_substitution`], which returns the
+/// (params, args) pair needed for member-type substitution.
+fn walk_extends_to(
+    child_name: &str,
+    child_args: &[Ty],
+    target_name: &str,
+    symbols: &SymbolTable,
+) -> Option<Vec<Ty>> {
+    if child_name == target_name {
+        return Some(child_args.to_vec());
+    }
+    let mut current_name = child_name.to_string();
+    let mut current_class = symbols.classes.get(&current_name)?;
+    let mut current_params: Vec<TypeParam> = current_class.generic_params.clone();
+    let mut current_args: Vec<Ty> = child_args.to_vec();
+    let mut depth = 0usize;
+    loop {
+        if depth > 64 {
+            return None;
+        }
+        let extends = current_class.extends.as_ref()?;
+        let parent_name = extends.name.segments.last()?.text.clone();
+        // Compose: lower extends generic args in the child's scope,
+        // then substitute through the running params/args.
+        let raw_parent_args: Vec<Ty> = extends
+            .generic_args
+            .iter()
+            .map(|g| match g.as_type() {
+                Some(inner) => lower_member_type(inner, &current_name, symbols),
+                None => Ty::Unknown,
+            })
+            .collect();
+        let parent_args_final: Vec<Ty> = raw_parent_args
+            .iter()
+            .map(|a| substitute(a, &current_params, &current_args))
+            .collect();
+        if parent_name == target_name {
+            return Some(parent_args_final);
+        }
+        let parent_class = symbols.classes.get(&parent_name)?;
+        current_name = parent_name;
+        current_class = parent_class;
+        current_params = parent_class.generic_params.clone();
+        current_args = parent_args_final;
+        depth += 1;
+    }
+}
+
 /// Compose the substitution table needed to interpret a member
 /// declared in `declaring_class` when accessed through a receiver of
 /// `receiver_name<receiver_args>`.
@@ -695,7 +953,10 @@ pub fn compose_extends_substitution(
         let raw_parent_args: Vec<Ty> = extends
             .generic_args
             .iter()
-            .map(|g| lower_member_type(g, &current_name, symbols))
+            .map(|g| match g.as_type() {
+                Some(inner) => lower_member_type(inner, &current_name, symbols),
+                None => Ty::Unknown,
+            })
             .collect();
         // Compose with the running substitution so `Param("U")`
         // collapses to whatever the receiver bound U to.

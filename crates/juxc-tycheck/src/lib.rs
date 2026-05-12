@@ -83,26 +83,46 @@ impl TypeCheckResult {
 /// Type-check a compilation unit. Always returns a [`TypeCheckResult`];
 /// never panics.
 pub fn typecheck(unit: &CompilationUnit) -> TypeCheckResult {
+    typecheck_workspace(std::slice::from_ref(unit))
+}
+
+/// Multi-unit variant of [`typecheck`]. Every unit contributes its
+/// top-level declarations to one shared [`SymbolTable`], then each
+/// unit is walked against that merged view so cross-file references
+/// resolve.
+///
+/// Diagnostics from every unit are concatenated in input order. The
+/// returned `symbols` is the merged workspace table; the
+/// `expr_types` map is the union of every unit's inferred-expression
+/// types (keyed by span, so cross-unit overlap is impossible).
+///
+/// Phase-1 simplification: classes/records/enums/interfaces/functions
+/// share one flat namespace across the workspace. A duplicate name in
+/// two units fires `E0400_DuplicateDeclaration` against the second
+/// occurrence.
+pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     let mut tc = TypeChecker::new();
-    // Phase A — build the symbol table first so any subsequent checks
-    // can consult it. Duplicate-declaration diagnostics emit here.
-    let symbols = symbol_table::build(unit, &mut tc.diagnostics);
-    // Milestone-1 main-signature check stays.
-    tc.check_unit(unit);
-    // Phase D/F — statement type checking + type-mismatch diagnostics.
-    // Walks every function/method/constructor body, emits E0410-E0413
-    // for return/assign/argument/call/field/method mismatches. Also
-    // records the inferred type of every expression it visits into
-    // `expr_types`, keyed by the expression's source span — Phase H
-    // wired the backend to consume that map instead of its own
-    // heuristic pre-passes over field names.
-    let mut checker = check::Checker::new(&symbols, &mut tc.diagnostics);
-    checker.check_unit(unit);
-    let expr_types = checker.into_expr_types();
+    let symbols = symbol_table::build_workspace(units, &mut tc.diagnostics);
+    for unit in units {
+        tc.check_unit(unit);
+    }
+    let mut all_expr_types = std::collections::HashMap::new();
+    for (idx, unit) in units.iter().enumerate() {
+        let mut checker = check::Checker::new(&symbols, &mut tc.diagnostics);
+        // Seed the checker's TypeEnv with the per-unit context built
+        // during workspace symbol-table construction. This is how
+        // `ty_from_ref` knows that a bare `Greeter` in app.jux maps
+        // to `com.lib.Greeter` (or whatever the import resolved to).
+        if let Some(ctx) = symbols.units.get(idx) {
+            checker.seed_unit_context(&ctx.package, &ctx.unqualified);
+        }
+        checker.check_unit(unit);
+        all_expr_types.extend(checker.into_expr_types());
+    }
     TypeCheckResult {
         diagnostics: tc.diagnostics,
         symbols,
-        expr_types,
+        expr_types: all_expr_types,
     }
 }
 

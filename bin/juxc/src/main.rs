@@ -27,11 +27,16 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(name = "juxc", version, about = "The Jux compiler")]
 struct Cli {
-    /// The `.jux` source file to compile.
-    input: PathBuf,
+    /// One or more `.jux` source files, OR a single directory that's
+    /// walked recursively for `.jux` files. Multiple sources are
+    /// compiled together as one workspace — cross-file `import`s
+    /// resolve, and package-private visibility is enforced across
+    /// the unit boundary.
+    #[arg(required = true, num_args = 1..)]
+    inputs: Vec<PathBuf>,
 
     /// Directory to write the emitted Rust crate into. Defaults to
-    /// `target/.rust-build/` next to the input file's parent.
+    /// `target/.rust-build/` next to the first input file's parent.
     #[arg(long)]
     emit_dir: Option<PathBuf>,
 
@@ -54,11 +59,22 @@ fn main() -> Result<ExitCode> {
 /// exit code (from the user's emitted binary), `Ok(None)` for ordinary
 /// success, and `Err` for fatal driver failures.
 fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
-    // Load and compile the input file through every implemented phase.
-    let contents = std::fs::read_to_string(&cli.input)
-        .with_context(|| format!("reading {}", cli.input.display()))?;
-    let source = juxc_source::SourceFile::new(cli.input.clone(), contents);
-    let result = juxc_driver::compile(source)?;
+    // Resolve the input list into a flat set of `.jux` file paths.
+    // A single directory expands into every `.jux` inside it
+    // (recursive), so users can point `juxc` at a project root.
+    let files = collect_input_files(&cli.inputs)?;
+    if files.is_empty() {
+        anyhow::bail!("no `.jux` source files found in the given inputs");
+    }
+
+    // Load every file's contents.
+    let mut sources: Vec<juxc_source::SourceFile> = Vec::with_capacity(files.len());
+    for path in &files {
+        let contents = std::fs::read_to_string(path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        sources.push(juxc_source::SourceFile::new(path.clone(), contents));
+    }
+    let result = juxc_driver::compile_workspace(sources)?;
 
     // Surface diagnostics. We print to stderr so stdout stays clean
     // (important when --run forwards the user program's output).
@@ -88,9 +104,13 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
         return Ok(None);
     }
 
-    // Decide where to write the emitted crate. Default: `target/.rust-build/`
-    // next to the input file's containing directory.
-    let emit_dir = cli.emit_dir.unwrap_or_else(|| default_emit_dir(&cli.input));
+    // Decide where to write the emitted crate. Default:
+    // `target/.rust-build/` next to the FIRST input file's
+    // containing directory. (Multi-file workspaces still share a
+    // single emit target — there's only ever one output crate.)
+    let emit_dir = cli
+        .emit_dir
+        .unwrap_or_else(|| default_emit_dir(&files[0]));
 
     let artifact = juxc_driver::build(&crate_, &emit_dir)?;
     eprintln!("juxc: built {}", artifact.binary_path.display());
@@ -107,6 +127,63 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
     }
 
     Ok(None)
+}
+
+/// Flatten the user's input list into a deduplicated, sorted vector
+/// of concrete `.jux` file paths.
+///
+/// - A path naming a `.jux` file is added as-is.
+/// - A directory is walked recursively; every `.jux` file inside is
+///   collected. Hidden directories (starting with `.`) are skipped so
+///   `target/`-style trees don't sneak in.
+/// - Any other shape is an error — we don't try to second-guess what
+///   the user typed.
+///
+/// Sort order is path-lexicographic, which keeps diagnostic and
+/// emission ordering reproducible across runs.
+fn collect_input_files(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for path in inputs {
+        if path.is_file() {
+            out.push(path.clone());
+            continue;
+        }
+        if path.is_dir() {
+            walk_dir_for_jux(path, &mut out)?;
+            continue;
+        }
+        anyhow::bail!("input `{}` is not a file or directory", path.display());
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// Recursive directory walk used by [`collect_input_files`]. Visits
+/// every entry in `dir`; descends into subdirectories whose names
+/// don't start with `.` (skipping `target`, `.git`, etc.).
+fn walk_dir_for_jux(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir)
+        .with_context(|| format!("reading directory {}", dir.display()))?
+    {
+        let entry = entry.with_context(|| format!("reading {}", dir.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("file type for {}", path.display()))?;
+        if file_type.is_dir() {
+            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.starts_with('.') || name == "target" {
+                continue;
+            }
+            walk_dir_for_jux(&path, out)?;
+        } else if file_type.is_file() {
+            if path.extension().and_then(|s| s.to_str()) == Some("jux") {
+                out.push(path);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Default emit directory: `<input parent>/target/.rust-build/`.

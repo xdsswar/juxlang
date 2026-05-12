@@ -43,17 +43,49 @@ use juxc_source::Span;
 /// type checking — clone or borrow.
 #[derive(Debug, Default, Clone)]
 pub struct SymbolTable {
-    /// Top-level classes indexed by name.
+    /// Dotted path from the FIRST unit's `package foo.bar;` line, or
+    /// empty when no package was given. Carried into the backend so
+    /// single-file emission still wraps in a matching module
+    /// hierarchy. Multi-unit emission reads the per-unit package
+    /// directly from each `CompilationUnit`.
+    pub package: Vec<String>,
+    /// Top-level classes indexed by **fully-qualified name** —
+    /// `package.dot.path.ClassName` (or bare `ClassName` when the
+    /// class has no package). Bare-name references in user source
+    /// are resolved to an FQN via the per-unit
+    /// [`UnitContext::unqualified`] map before lookup.
     pub classes: HashMap<String, ClassSig>,
-    /// Top-level records indexed by name.
+    /// Top-level records indexed by FQN. Same shape as `classes`.
     pub records: HashMap<String, RecordSig>,
-    /// Top-level enums indexed by name.
+    /// Top-level enums indexed by FQN. Same shape as `classes`.
     pub enums: HashMap<String, EnumSig>,
-    /// Top-level interfaces indexed by name.
+    /// Top-level interfaces indexed by FQN. Same shape as `classes`.
     pub interfaces: HashMap<String, InterfaceSig>,
-    /// Top-level functions (outside any class) indexed by name.
+    /// Top-level functions (outside any class) indexed by FQN.
     /// Overloads aren't supported yet — a duplicate emits `E0400`.
     pub functions: HashMap<String, FunctionSig>,
+    /// One entry per input unit (parallel to the `units` slice
+    /// `build_workspace` received). Each entry carries the unit's
+    /// package and its bare-name → FQN map (the closure of the
+    /// `package` declaration plus every `import` line). Tycheck
+    /// reads from here to seed `TypeEnv` at the start of each
+    /// per-unit check. Single-unit builds always have a single
+    /// entry at index `0`.
+    pub units: Vec<UnitContext>,
+}
+
+/// Per-unit name-resolution context built once during
+/// [`build_workspace`].
+#[derive(Debug, Default, Clone)]
+pub struct UnitContext {
+    /// Dotted package path declared at the top of the file.
+    pub package: Vec<String>,
+    /// Bare-name → FQN map seeded from the unit's `package` and
+    /// `import` declarations. `ty_from_ref` consults this when it
+    /// encounters a single-segment type reference. Names that
+    /// aren't in the map fall through to other resolution rules
+    /// (primitives, `String`, generic params, etc.).
+    pub unqualified: HashMap<String, String>,
 }
 
 impl SymbolTable {
@@ -147,8 +179,22 @@ impl SymbolTable {
 pub struct ClassSig {
     /// Source visibility (`public`, `private`, etc.).
     pub visibility: Visibility,
+    /// Dotted path of the package this class lives in (empty when the
+    /// declaring unit had no `package foo.bar;` line). Used by
+    /// `check_visibility` to decide E0416 cross-package
+    /// package-private access.
+    pub package: Vec<String>,
     /// True when the class is declared `abstract`.
     pub is_abstract: bool,
+    /// True when the class is declared `final` — no other class may
+    /// extend it. Enforced by `check_final_and_sealed_extends`.
+    pub is_final: bool,
+    /// True when the class is declared `sealed`. Sealed classes
+    /// restrict their subclasses to the explicit `permits` list.
+    pub is_sealed: bool,
+    /// Subclass names listed in the `permits` clause (only meaningful
+    /// when `is_sealed`).
+    pub permits: Vec<String>,
     /// Generic parameters in declaration order, e.g. `<T, U>`.
     pub generic_params: Vec<TypeParam>,
     /// Parent type, if `extends Parent` was given.
@@ -194,6 +240,9 @@ pub struct MethodSig {
     pub visibility: Visibility,
     /// Whether the method is declared `abstract` (no body).
     pub is_abstract: bool,
+    /// Whether the method is declared `final` (no overriding by
+    /// subclasses). Enforced by `check_final_method_overrides`.
+    pub is_final: bool,
     /// Method-level generic parameters, if any.
     pub generic_params: Vec<TypeParam>,
     /// Formal parameters in declaration order.
@@ -361,23 +410,342 @@ pub struct FunctionSig {
 /// Always returns a table — even on error — so downstream phases can
 /// keep running on the surviving subset.
 pub fn build(unit: &CompilationUnit, diagnostics: &mut Vec<Diagnostic>) -> SymbolTable {
+    build_workspace(std::slice::from_ref(unit), diagnostics)
+}
+
+/// Multi-unit variant of [`build`] — feed every unit's top-level
+/// declarations into a single workspace [`SymbolTable`]. Duplicate
+/// names across files fire `E0400_DuplicateDeclaration` against the
+/// second occurrence, same as in-file duplicates do.
+///
+/// Each unit's `package` declaration is recorded on the per-unit
+/// metadata side: the workspace table itself uses the FIRST unit's
+/// package as its top-level marker (back-compat with single-file
+/// builds). Per-class package tracking lands when we add a
+/// `package_path` field on `ClassSig` etc. — for now Phase 1
+/// inherits the flat namespace.
+pub fn build_workspace(
+    units: &[CompilationUnit],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> SymbolTable {
     let mut table = SymbolTable::default();
-    for item in &unit.items {
-        match item {
-            TopLevelDecl::Class(class_decl) => insert_class(&mut table, class_decl, diagnostics),
-            TopLevelDecl::Record(record_decl) => {
-                insert_record(&mut table, record_decl, diagnostics);
+    // Capture the first unit's package as the workspace marker so
+    // the backend's module-wrapping path keeps working unchanged for
+    // single-file workspaces. Multi-file workspaces with distinct
+    // packages per unit will need the per-class plumbing in step
+    // (this is the seam we extend in the next pass).
+    if let Some(first) = units.first() {
+        if let Some(pkg) = &first.package {
+            table.package = pkg
+                .name
+                .segments
+                .iter()
+                .map(|s| s.text.clone())
+                .collect();
+        }
+    }
+    for unit in units {
+        // Per-unit package — stamped onto every class/record/etc.
+        // inserted from this unit so the visibility check can
+        // compare packages across units later.
+        let unit_pkg: Vec<String> = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
+            .unwrap_or_default();
+        for item in &unit.items {
+            insert_top_level(&mut table, item, &unit_pkg, diagnostics);
+        }
+    }
+    // Second pass: build per-unit name-resolution contexts now that
+    // every class/record/etc. is registered under its FQN. The
+    // contexts capture: (a) same-package siblings reachable by bare
+    // name, and (b) every `import com.foo.Bar;` (or
+    // `import com.foo.*;`) mapping bare names to their declared FQN.
+    table.units = build_unit_contexts(units, &table);
+    // Cross-class rule passes that need every class registered first:
+    // final/sealed extends and final-method override checks.
+    check_final_and_sealed_extends(&table, diagnostics);
+    check_final_method_overrides(&table, diagnostics);
+    table
+}
+
+/// Insert one top-level item into the table. Factored out of
+/// [`build_workspace`] so the per-unit loop stays terse.
+/// Compose a fully-qualified name. `make_fqn(["a", "lib"], "Foo")`
+/// → `"a.lib.Foo"`. Empty package → bare name unchanged
+/// (`make_fqn([], "Foo")` → `"Foo"`) so top-level no-package
+/// declarations keep their pre-FQN spelling.
+pub(crate) fn make_fqn(package: &[String], bare: &str) -> String {
+    if package.is_empty() {
+        return bare.to_string();
+    }
+    let mut out = package.join(".");
+    out.push('.');
+    out.push_str(bare);
+    out
+}
+
+/// Strip the trailing identifier off an FQN. `"a.lib.Foo"` → `"Foo"`,
+/// `"Foo"` (no package) → `"Foo"`.
+pub(crate) fn fqn_bare(fqn: &str) -> &str {
+    match fqn.rsplit_once('.') {
+        Some((_, bare)) => bare,
+        None => fqn,
+    }
+}
+
+/// Strip the trailing identifier off an FQN and return the package
+/// prefix. `"a.lib.Foo"` → `Some("a.lib")`, `"Foo"` → `None`.
+pub(crate) fn fqn_package(fqn: &str) -> Option<&str> {
+    fqn.rsplit_once('.').map(|(pkg, _)| pkg)
+}
+
+/// Compute the per-unit name-resolution contexts after every
+/// top-level declaration is registered in `table`. One context per
+/// input unit, parallel to the `units` slice.
+///
+/// For each unit, the resolver map is seeded from:
+/// 1. Same-package siblings — every FQN whose package portion
+///    matches the unit's own package contributes
+///    `bare -> fqn`.
+/// 2. Each `import com.foo.Bar;` adds `Bar -> com.foo.Bar` (or
+///    `import com.foo.Bar as X;` → `X -> com.foo.Bar`).
+/// 3. Wildcard imports `import com.foo.*;` expand to one entry per
+///    sibling in the workspace's `com.foo.*` namespace.
+/// 4. Grouped imports `import com.foo.{A, B as C};` expand to the
+///    obvious mapping.
+fn build_unit_contexts(
+    units: &[juxc_ast::CompilationUnit],
+    table: &SymbolTable,
+) -> Vec<UnitContext> {
+    let all_fqns: Vec<&String> = table
+        .classes
+        .keys()
+        .chain(table.records.keys())
+        .chain(table.enums.keys())
+        .chain(table.interfaces.keys())
+        .chain(table.functions.keys())
+        .collect();
+    units
+        .iter()
+        .map(|unit| {
+            let pkg: Vec<String> = unit
+                .package
+                .as_ref()
+                .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
+                .unwrap_or_default();
+            let pkg_str = pkg.join(".");
+            let mut unqualified: HashMap<String, String> = HashMap::new();
+
+            // Same-package siblings reachable by bare name.
+            for fqn in &all_fqns {
+                let entry_pkg = fqn_package(fqn).unwrap_or("");
+                if entry_pkg == pkg_str {
+                    unqualified.insert(fqn_bare(fqn).to_string(), (*fqn).clone());
+                }
             }
-            TopLevelDecl::Enum(enum_decl) => insert_enum(&mut table, enum_decl, diagnostics),
-            TopLevelDecl::Interface(interface_decl) => {
-                insert_interface(&mut table, interface_decl, diagnostics);
+
+            // Imports.
+            for import in &unit.imports {
+                seed_unqualified_from_import(&mut unqualified, &import.spec, &all_fqns);
             }
-            TopLevelDecl::Function(fn_decl) => {
-                insert_function(&mut table, fn_decl, diagnostics);
+
+            UnitContext { package: pkg, unqualified }
+        })
+        .collect()
+}
+
+/// Apply a single `import …;` declaration to the bare→FQN map.
+fn seed_unqualified_from_import(
+    out: &mut HashMap<String, String>,
+    spec: &juxc_ast::ImportSpec,
+    all_fqns: &[&String],
+) {
+    use juxc_ast::ImportSpec;
+    match spec {
+        ImportSpec::Path { name, wildcard: false, alias } => {
+            let fqn_segs: Vec<&str> = name.segments.iter().map(|s| s.text.as_str()).collect();
+            if fqn_segs.is_empty() {
+                return;
+            }
+            let bare = alias
+                .as_ref()
+                .map(|a| a.text.clone())
+                .unwrap_or_else(|| fqn_segs.last().unwrap().to_string());
+            let fqn = fqn_segs.join(".");
+            out.insert(bare, fqn);
+        }
+        ImportSpec::Path { name, wildcard: true, .. } => {
+            // `import a.b.*;` — every FQN under `a.b.` (single segment
+            // remaining) joins the unqualified set.
+            let prefix = name
+                .segments
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            let pat = format!("{prefix}.");
+            for fqn in all_fqns {
+                if let Some(rest) = fqn.strip_prefix(&pat) {
+                    if !rest.contains('.') {
+                        out.insert(rest.to_string(), (*fqn).clone());
+                    }
+                }
+            }
+        }
+        ImportSpec::Items { prefix, items } => {
+            let prefix_str = prefix
+                .segments
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            for item in items {
+                let bare = item
+                    .alias
+                    .as_ref()
+                    .map(|a| a.text.clone())
+                    .unwrap_or_else(|| item.name.text.clone());
+                let fqn = if prefix_str.is_empty() {
+                    item.name.text.clone()
+                } else {
+                    format!("{prefix_str}.{}", item.name.text)
+                };
+                out.insert(bare, fqn);
             }
         }
     }
-    table
+}
+
+fn insert_top_level(
+    table: &mut SymbolTable,
+    item: &TopLevelDecl,
+    package: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    // Every top-level kind is keyed by FQN. Records / enums /
+    // interfaces / free functions don't yet carry a per-decl
+    // `package` field on their Sig structs, but they ARE namespaced
+    // by FQN in the table, so two `record Foo`s in different
+    // packages coexist without firing E0400.
+    match item {
+        TopLevelDecl::Class(class_decl) => {
+            insert_class(table, class_decl, package, diagnostics);
+        }
+        TopLevelDecl::Record(record_decl) => {
+            insert_record(table, record_decl, package, diagnostics);
+        }
+        TopLevelDecl::Enum(enum_decl) => {
+            insert_enum(table, enum_decl, package, diagnostics);
+        }
+        TopLevelDecl::Interface(interface_decl) => {
+            insert_interface(table, interface_decl, package, diagnostics);
+        }
+        TopLevelDecl::Function(fn_decl) => {
+            insert_function(table, fn_decl, package, diagnostics);
+        }
+    }
+}
+
+
+/// Verify every class with an `extends` clause respects its parent's
+/// `final` and `sealed` declarations. Emits:
+///
+/// - **E0420** when the parent is `final` (no subclassing allowed).
+/// - **E0422** when the parent is `sealed` and this child isn't in
+///   the parent's `permits` list.
+///
+/// Runs after every class has been inserted, so the lookups can rely
+/// on a populated `symbols.classes`.
+fn check_final_and_sealed_extends(
+    table: &SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (child_name, child) in &table.classes {
+        let Some(extends) = child.extends.as_ref() else {
+            continue;
+        };
+        let Some(parent_seg) = extends.name.segments.last() else {
+            continue;
+        };
+        let parent_name = parent_seg.text.as_str();
+        let Some(parent) = table.classes.get(parent_name) else {
+            // Unknown parent — resolver E0301 covers this; don't
+            // double-up.
+            continue;
+        };
+        if parent.is_final {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0420_FinalClassExtended,
+                    format!(
+                        "class `{child_name}` cannot extend `{parent_name}` because `{parent_name}` is declared `final`",
+                    ),
+                )
+                .with_span(extends.span),
+            );
+        }
+        if parent.is_sealed {
+            if !parent.permits.iter().any(|n| n == child_name) {
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0422_SealedClassNotPermitted,
+                        format!(
+                            "class `{child_name}` is not permitted to extend `{parent_name}` (not listed in its `permits` clause)",
+                        ),
+                    )
+                    .with_span(extends.span),
+                );
+            }
+        }
+    }
+}
+
+/// Verify that no subclass redeclares a method that the parent
+/// marked `final`. Walks each class's `methods` map and, for each
+/// method that shadows one further up the extends chain, fires
+/// **E0421** if the ancestor's signature had the `final` modifier.
+fn check_final_method_overrides(
+    table: &SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (child_name, child) in &table.classes {
+        for (method_name, child_method) in &child.methods {
+            // Walk up the extends chain from the IMMEDIATE parent —
+            // skip self.
+            let mut cursor = child.extends.as_ref().and_then(|t| {
+                t.name.segments.last().map(|s| s.text.as_str())
+            });
+            let mut depth = 0usize;
+            while let Some(ancestor_name) = cursor {
+                if depth > 64 {
+                    break;
+                }
+                let Some(ancestor) = table.classes.get(ancestor_name) else {
+                    break;
+                };
+                if let Some(ancestor_method) = ancestor.methods.get(method_name) {
+                    if ancestor_method.is_final {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0421_FinalMethodOverridden,
+                                format!(
+                                    "method `{method_name}` on `{child_name}` cannot override `{ancestor_name}::{method_name}` because the parent declares it `final`",
+                                ),
+                            )
+                            .with_span(child_method.span),
+                        );
+                        break;
+                    }
+                }
+                cursor = ancestor.extends.as_ref().and_then(|t| {
+                    t.name.segments.last().map(|s| s.text.as_str())
+                });
+                depth += 1;
+            }
+        }
+    }
 }
 
 /// Reject the second declaration of a top-level name with a single
@@ -406,9 +774,11 @@ fn ensure_top_level_unique(
 fn insert_class(
     table: &mut SymbolTable,
     class_decl: &ClassDecl,
+    package: &[String],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if !ensure_top_level_unique(table, &class_decl.name.text, class_decl.span, diagnostics) {
+    let fqn = make_fqn(package, &class_decl.name.text);
+    if !ensure_top_level_unique(table, &fqn, class_decl.span, diagnostics) {
         return;
     }
 
@@ -499,10 +869,18 @@ fn insert_class(
     );
 
     table.classes.insert(
-        class_decl.name.text.clone(),
+        fqn,
         ClassSig {
             visibility: class_decl.visibility,
+            package: package.to_vec(),
             is_abstract: class_decl.is_abstract,
+            is_final: class_decl.is_final,
+            is_sealed: class_decl.is_sealed,
+            permits: class_decl
+                .permits
+                .iter()
+                .map(|n| n.text.clone())
+                .collect(),
             generic_params: class_decl.generic_params.clone(),
             extends: class_decl.extends.clone(),
             implements: class_decl.implements.clone(),
@@ -518,9 +896,11 @@ fn insert_class(
 fn insert_record(
     table: &mut SymbolTable,
     record_decl: &RecordDecl,
+    package: &[String],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if !ensure_top_level_unique(table, &record_decl.name.text, record_decl.span, diagnostics) {
+    let fqn = make_fqn(package, &record_decl.name.text);
+    if !ensure_top_level_unique(table, &fqn, record_decl.span, diagnostics) {
         return;
     }
     // Operators on records — same E0402-on-duplicate treatment as on
@@ -574,7 +954,7 @@ fn insert_record(
         methods.insert(method.name.text.clone(), method_sig(method));
     }
     table.records.insert(
-        record_decl.name.text.clone(),
+        fqn,
         RecordSig {
             visibility: record_decl.visibility,
             generic_params: record_decl.generic_params.clone(),
@@ -597,9 +977,11 @@ fn insert_record(
 fn insert_enum(
     table: &mut SymbolTable,
     enum_decl: &EnumDecl,
+    package: &[String],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if !ensure_top_level_unique(table, &enum_decl.name.text, enum_decl.span, diagnostics) {
+    let fqn = make_fqn(package, &enum_decl.name.text);
+    if !ensure_top_level_unique(table, &fqn, enum_decl.span, diagnostics) {
         return;
     }
     let mut variants = HashMap::new();
@@ -655,7 +1037,7 @@ fn insert_enum(
         diagnostics,
     );
     table.enums.insert(
-        enum_decl.name.text.clone(),
+        fqn,
         EnumSig {
             visibility: enum_decl.visibility,
             variants,
@@ -668,11 +1050,13 @@ fn insert_enum(
 fn insert_interface(
     table: &mut SymbolTable,
     interface_decl: &InterfaceDecl,
+    package: &[String],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let fqn = make_fqn(package, &interface_decl.name.text);
     if !ensure_top_level_unique(
         table,
-        &interface_decl.name.text,
+        &fqn,
         interface_decl.span,
         diagnostics,
     ) {
@@ -696,7 +1080,7 @@ fn insert_interface(
         methods.insert(method.name.text.clone(), method_sig(method));
     }
     table.interfaces.insert(
-        interface_decl.name.text.clone(),
+        fqn,
         InterfaceSig {
             visibility: interface_decl.visibility,
             generic_params: interface_decl.generic_params.clone(),
@@ -709,13 +1093,22 @@ fn insert_interface(
 fn insert_function(
     table: &mut SymbolTable,
     fn_decl: &FnDecl,
+    package: &[String],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if !ensure_top_level_unique(table, &fn_decl.name.text, fn_decl.span, diagnostics) {
+    // `main()` always lives at the crate root for entry-point
+    // discovery, regardless of the unit's package — there can be
+    // only one. Other free functions are FQN'd like everything else.
+    let fqn = if fn_decl.name.text == "main" {
+        "main".to_string()
+    } else {
+        make_fqn(package, &fn_decl.name.text)
+    };
+    if !ensure_top_level_unique(table, &fqn, fn_decl.span, diagnostics) {
         return;
     }
     table.functions.insert(
-        fn_decl.name.text.clone(),
+        fqn,
         FunctionSig {
             visibility: fn_decl.visibility,
             generic_params: fn_decl.generic_params.clone(),
@@ -742,6 +1135,10 @@ fn method_sig(method: &FnDecl) -> MethodSig {
     MethodSig {
         visibility: method.visibility,
         is_abstract: method.body.is_none(),
+        is_final: method
+            .modifiers
+            .iter()
+            .any(|m| matches!(m, juxc_ast::FnModifier::Final)),
         generic_params: method.generic_params.clone(),
         params: method.params.iter().map(param_sig).collect(),
         return_type: method.return_type.clone(),
@@ -915,6 +1312,24 @@ fn render_return_type(rt: &ReturnType) -> String {
     }
 }
 
+/// Render a single generic-arg slot for diagnostic display —
+/// concrete types delegate to [`render_type_ref`]; wildcards
+/// render as `?`, `? extends T`, or `? super T`.
+fn render_generic_arg(arg: &juxc_ast::GenericArg) -> String {
+    match arg {
+        juxc_ast::GenericArg::Type(t) => render_type_ref(t),
+        juxc_ast::GenericArg::Wildcard(w) => match &w.bound {
+            None => "?".to_string(),
+            Some(juxc_ast::WildcardBound::Extends(t)) => {
+                format!("? extends {}", render_type_ref(t))
+            }
+            Some(juxc_ast::WildcardBound::Super(t)) => {
+                format!("? super {}", render_type_ref(t))
+            }
+        },
+    }
+}
+
 fn render_type_ref(t: &TypeRef) -> String {
     let mut out: String = t
         .name
@@ -925,7 +1340,7 @@ fn render_type_ref(t: &TypeRef) -> String {
         .join(".");
     if !t.generic_args.is_empty() {
         out.push('<');
-        let parts: Vec<String> = t.generic_args.iter().map(render_type_ref).collect();
+        let parts: Vec<String> = t.generic_args.iter().map(render_generic_arg).collect();
         out.push_str(&parts.join(", "));
         out.push('>');
     }
@@ -1928,5 +2343,167 @@ mod tests {
             "#,
         );
         assert!(diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict), "{diags:?}");
+    }
+
+    // ----------------------------------------------------------------
+    // final / sealed / permits (Step 6 — encapsulation)
+    // ----------------------------------------------------------------
+
+    /// `final class F {} ; class C extends F {}` → E0420.
+    #[test]
+    fn extending_final_class_emits_e0420() {
+        let (_table, diags) = build_table(
+            r#"
+            public final class Animal {}
+            public class Dog extends Animal {}
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0420_FinalClassExtended),
+            "expected E0420, got: {diags:?}",
+        );
+    }
+
+    /// Final method on parent + same name on child → E0421.
+    #[test]
+    fn overriding_final_method_emits_e0421() {
+        let (_table, diags) = build_table(
+            r#"
+            public class Animal {
+                public final String speak() { return ""; }
+            }
+            public class Dog extends Animal {
+                public String speak() { return "woof"; }
+            }
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0421_FinalMethodOverridden),
+            "expected E0421, got: {diags:?}",
+        );
+    }
+
+    /// Sealed class — extender NOT in permits list → E0422.
+    #[test]
+    fn sealed_class_not_permitted_emits_e0422() {
+        let (_table, diags) = build_table(
+            r#"
+            public sealed class Shape permits Circle {}
+            public class Circle extends Shape {}
+            public class Square extends Shape {}
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0422_SealedClassNotPermitted),
+            "expected E0422 for `Square`, got: {diags:?}",
+        );
+    }
+
+    /// Sealed class — extender IS in permits list → no diagnostic.
+    #[test]
+    fn sealed_class_permitted_subclass_is_ok() {
+        let (_table, diags) = build_table(
+            r#"
+            public sealed class Shape permits Circle, Square {}
+            public class Circle extends Shape {}
+            public class Square extends Shape {}
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0422_SealedClassNotPermitted),
+            "permitted subclasses should be OK: {diags:?}",
+        );
+    }
+
+    /// Non-final, non-sealed parent — any class can extend.
+    #[test]
+    fn ordinary_extends_remains_unaffected() {
+        let (_table, diags) = build_table(
+            r#"
+            public class Animal {}
+            public class Dog extends Animal {}
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| {
+                matches!(
+                    d.code,
+                    code::Code::E0420_FinalClassExtended
+                        | code::Code::E0422_SealedClassNotPermitted
+                )
+            }),
+            "ordinary inheritance should not fire E0420/E0422: {diags:?}",
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // Workspace symbol table (multi-file compilation)
+    // ----------------------------------------------------------------
+
+    /// Helper — lex+parse multiple sources and feed them through
+    /// `build_workspace`. Returns the merged table and the
+    /// concatenated diagnostics in unit order.
+    fn build_workspace_table(srcs: &[&str]) -> (SymbolTable, Vec<Diagnostic>) {
+        let mut units: Vec<juxc_ast::CompilationUnit> = Vec::new();
+        for src in srcs {
+            let sf = SourceFile::new("test.jux", *src);
+            let lex_result = lex(&sf);
+            assert!(lex_result.diagnostics.is_empty());
+            let parse_result = parse(&lex_result.tokens);
+            assert!(parse_result.diagnostics.is_empty());
+            units.push(parse_result.ast);
+        }
+        let mut diags = Vec::new();
+        let table = build_workspace(&units, &mut diags);
+        (table, diags)
+    }
+
+    /// Two units with classes in different packages — both end up in
+    /// the merged table; no duplicate diagnostic.
+    #[test]
+    fn workspace_merges_classes_from_two_units() {
+        let (table, diags) = build_workspace_table(&[
+            "package a.lib;\npublic class Foo {}",
+            "package b.app;\npublic class Bar {}",
+        ]);
+        assert!(table.classes.contains_key("Foo"));
+        assert!(table.classes.contains_key("Bar"));
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
+            "no duplicates expected: {diags:?}",
+        );
+    }
+
+    /// Two units defining the same class name fire E0400 against the
+    /// second occurrence (workspace-wide uniqueness).
+    #[test]
+    fn workspace_duplicate_class_name_emits_e0400() {
+        let (_table, diags) = build_workspace_table(&[
+            "package a.lib;\npublic class Foo {}",
+            "package b.app;\npublic class Foo {}",
+        ]);
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
+            "expected cross-file E0400: {diags:?}",
+        );
+    }
+
+    /// Each class records its own package on `ClassSig::package`,
+    /// stamped from its declaring unit's `package foo.bar;` line.
+    /// This is the input the cross-package `E0416` check consumes.
+    #[test]
+    fn workspace_class_records_its_unit_package() {
+        let (table, _diags) = build_workspace_table(&[
+            "package a.lib;\npublic class Foo {}",
+            "package b.app;\npublic class Bar {}",
+        ]);
+        assert_eq!(
+            table.classes["Foo"].package,
+            vec!["a".to_string(), "lib".to_string()],
+        );
+        assert_eq!(
+            table.classes["Bar"].package,
+            vec!["b".to_string(), "app".to_string()],
+        );
     }
 }

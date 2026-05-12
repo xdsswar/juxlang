@@ -1438,7 +1438,10 @@ fn type_position_generic_args_fill_generic_args_vec() {
     let ty = v.ty.as_ref().expect("typed local has type");
     assert_eq!(ty.name.segments[0].text, "Box");
     assert_eq!(ty.generic_args.len(), 1);
-    assert_eq!(ty.generic_args[0].name.segments[0].text, "int");
+    let inner = ty.generic_args[0]
+        .as_type()
+        .expect("first arg is concrete type");
+    assert_eq!(inner.name.segments[0].text, "int");
 }
 
 /// Explicit-generic construction: `new Box<int>(42)` fills the
@@ -1455,6 +1458,76 @@ fn new_object_expr_captures_explicit_generic_args() {
     assert_eq!(n.generic_args.len(), 1);
     assert_eq!(n.generic_args[0].name.segments[0].text, "int");
     assert_eq!(n.args.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Bounded wildcards (§A.2.4 PECS) — `?`, `? extends T`, `? super T`
+// ---------------------------------------------------------------------------
+
+/// `List<?>` parses as a single wildcard arg with no bound.
+#[test]
+fn unbounded_wildcard_parses() {
+    use juxc_ast::GenericArg;
+    let ast = parse_clean("public void main() { List<?> xs = null; print(xs); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let ty = v.ty.as_ref().expect("typed local has type");
+    assert_eq!(ty.generic_args.len(), 1);
+    match &ty.generic_args[0] {
+        GenericArg::Wildcard(w) => assert!(w.bound.is_none()),
+        other => panic!("expected unbounded wildcard, got {other:?}"),
+    }
+}
+
+/// `List<? extends Animal>` parses as a wildcard with an `Extends` bound.
+#[test]
+fn extends_wildcard_parses() {
+    use juxc_ast::{GenericArg, WildcardBound};
+    let ast = parse_clean(
+        "public void main() { List<? extends Animal> xs = null; print(xs); }",
+    );
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let ty = v.ty.as_ref().expect("typed local has type");
+    match &ty.generic_args[0] {
+        GenericArg::Wildcard(w) => match &w.bound {
+            Some(WildcardBound::Extends(t)) => {
+                assert_eq!(t.name.segments[0].text, "Animal");
+            }
+            other => panic!("expected `? extends Animal`, got {other:?}"),
+        },
+        other => panic!("expected wildcard, got {other:?}"),
+    }
+}
+
+/// `List<? super Dog>` parses as a wildcard with a `Super` bound.
+#[test]
+fn super_wildcard_parses() {
+    use juxc_ast::{GenericArg, WildcardBound};
+    let ast = parse_clean(
+        "public void main() { List<? super Dog> xs = null; print(xs); }",
+    );
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let ty = v.ty.as_ref().expect("typed local has type");
+    match &ty.generic_args[0] {
+        GenericArg::Wildcard(w) => match &w.bound {
+            Some(WildcardBound::Super(t)) => {
+                assert_eq!(t.name.segments[0].text, "Dog");
+            }
+            other => panic!("expected `? super Dog`, got {other:?}"),
+        },
+        other => panic!("expected wildcard, got {other:?}"),
+    }
+}
+
+/// Wildcards in `new Foo<? extends T>(...)` are rejected as E0200.
+#[test]
+fn wildcard_in_new_expr_is_rejected() {
+    let (_ast, n) = parse_with_errors(
+        "public void main() { var b = new Box<? extends Animal>(); print(b); }",
+    );
+    assert!(n >= 1, "expected at least one parse diagnostic");
 }
 
 // ---------------------------------------------------------------------------

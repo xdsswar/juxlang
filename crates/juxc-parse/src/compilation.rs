@@ -279,23 +279,62 @@ impl<'a> Parser<'a> {
         // `mem::discriminant`, which doesn't distinguish keywords inside
         // the `Kw(_)` variant.
         //
-        // `abstract` and `class` can appear in either order at top-level
-        // — `public abstract class Foo` and `abstract public class Foo`
-        // both parse. We allow the modifier here and propagate to
-        // `parse_class_decl`.
-        let is_abstract_top = self.eat_kw(Keyword::Abstract);
-        if self.at_kw(Keyword::Class) {
-            let class_decl = self.parse_class_decl(visibility, is_abstract_top)?;
-            return Some(TopLevelDecl::Class(class_decl));
+        // `abstract` / `final` / `sealed` and `class` can appear in
+        // any order at top-level. We eat any prefix combination and
+        // propagate to `parse_class_decl`. `final` and `sealed` are
+        // mutually exclusive (a class can't be both — final means
+        // no subclasses, sealed means a restricted set); we report
+        // that as E0200 below.
+        let mut is_abstract_top = false;
+        let mut is_final_top = false;
+        let mut is_sealed_top = false;
+        loop {
+            if self.eat_kw(Keyword::Abstract) {
+                is_abstract_top = true;
+            } else if self.eat_kw(Keyword::Final) {
+                is_final_top = true;
+            } else if self.eat_kw(Keyword::Sealed) {
+                is_sealed_top = true;
+            } else {
+                break;
+            }
         }
-        if is_abstract_top {
-            // `abstract` was consumed but no `class` followed — surface
-            // the diagnostic now so the user gets a clear error rather
-            // than a downstream "expected return type" shape.
+        if is_final_top && is_sealed_top {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0200_UnexpectedToken,
-                    "`abstract` modifier is only valid on `class` declarations",
+                    "`final` and `sealed` are mutually exclusive on the same class",
+                )
+                .with_span(self.peek_span()),
+            );
+        }
+        if is_abstract_top && is_final_top {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "`abstract` and `final` cannot be combined — abstract classes need subclasses",
+                )
+                .with_span(self.peek_span()),
+            );
+        }
+        if self.at_kw(Keyword::Class) {
+            let class_decl = self.parse_class_decl(
+                visibility,
+                is_abstract_top,
+                is_final_top,
+                is_sealed_top,
+            )?;
+            return Some(TopLevelDecl::Class(class_decl));
+        }
+        if is_abstract_top || is_final_top || is_sealed_top {
+            // A class modifier was consumed but no `class` followed —
+            // surface the diagnostic now so the user gets a clear
+            // error rather than a downstream "expected return type"
+            // shape.
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "`abstract` / `final` / `sealed` modifiers are only valid on `class` declarations",
                 )
                 .with_span(self.peek_span()),
             );

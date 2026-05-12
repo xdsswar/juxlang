@@ -61,4 +61,4 @@ pub use stmts::{
     AssignStmt, Block, ElseBranch, ForEachStmt, IfStmt, Stmt,
     VarDecl, WhileStmt,
 };
-pub use types::{ArrayShape, TypeRef};
+pub use types::{ArrayShape, GenericArg, TypeRef, WildcardArg, WildcardBound};

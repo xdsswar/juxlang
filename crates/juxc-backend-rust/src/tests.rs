@@ -1403,7 +1403,7 @@ fn class_bound_uses_marker_trait_kind() {
         "#,
     );
     // Marker trait + impl emitted for Animal.
-    assert!(rust.contains("pub trait AnimalKind: Clone {}"), "marker decl: {rust}");
+    assert!(rust.contains("pub trait AnimalKind {}"), "marker decl: {rust}");
     assert!(rust.contains("impl AnimalKind for Animal {}"), "marker impl: {rust}");
     // The bound on Carrier uses AnimalKind, not Animal directly.
     assert!(
@@ -3195,4 +3195,71 @@ fn markers_appear_only_before_statements_and_decls() {
             );
         }
     }
+}
+
+// ============================================================================
+// Package → Rust module mapping (Step 7)
+// ============================================================================
+
+/// `package com.example;` wraps the unit in `pub mod com { pub mod
+/// example { … } }` and emits a crate-root `fn main()` shim that
+/// forwards into the inner `main`.
+#[test]
+fn package_decl_wraps_unit_in_modules() {
+    let rust = emit(
+        r#"
+        package com.example;
+        public void main() { print("hi"); }
+        "#,
+    );
+    assert!(rust.contains("pub mod com {"), "outer mod: {rust}");
+    assert!(rust.contains("pub mod example {"), "inner mod: {rust}");
+    assert!(
+        rust.contains("com::example::main();"),
+        "crate-root shim should forward: {rust}",
+    );
+}
+
+/// Inside a wrapped module, top-level functions are emitted with their
+/// declared visibility — `pub fn main()` so the shim can reach it.
+#[test]
+fn package_wrapped_main_is_pub() {
+    let rust = emit(
+        r#"
+        package com.demo;
+        public void main() { print("hello"); }
+        "#,
+    );
+    assert!(
+        rust.contains("pub fn main()"),
+        "main inside the module must be pub: {rust}",
+    );
+}
+
+/// Without a `package` decl, emission is flat at the crate root —
+/// the historical behavior. No `pub mod`, no shim.
+#[test]
+fn no_package_keeps_flat_emission() {
+    let rust = emit(r#"public void main() { print("hi"); }"#);
+    assert!(!rust.contains("pub mod"), "should be flat: {rust}");
+    assert!(rust.contains("fn main()"), "main at root: {rust}");
+}
+
+/// A multi-segment package nests one `pub mod` per segment.
+#[test]
+fn deep_package_path_nests_module_per_segment() {
+    let rust = emit(
+        r#"
+        package a.b.c.d;
+        public void main() {}
+        "#,
+    );
+    assert!(rust.contains("pub mod a {"), "missing `a`: {rust}");
+    assert!(rust.contains("pub mod b {"), "missing `b`: {rust}");
+    assert!(rust.contains("pub mod c {"), "missing `c`: {rust}");
+    assert!(rust.contains("pub mod d {"), "missing `d`: {rust}");
+    assert!(
+        rust.contains("a::b::c::d::main();"),
+        "crate-root shim path: {rust}",
+    );
 }

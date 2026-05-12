@@ -86,8 +86,8 @@ use crate::env::TypeEnv;
 use crate::infer::{infer_block, infer_expr};
 use crate::symbol_table::{ParamSig, SymbolTable};
 use crate::ty::{
-    compose_extends_substitution, infer_generic_args, lower_member_type, substitute, ty_from_ref,
-    Primitive, Ty,
+    compose_extends_substitution, infer_generic_args, is_subtype, lower_member_type, substitute,
+    ty_from_ref, Primitive, Ty,
 };
 
 // ============================================================================
@@ -195,6 +195,15 @@ impl<'a> Checker<'a> {
     /// directly; classes / records dispatch to `check_class` /
     /// `check_record` which handle members.
     pub(crate) fn check_unit(&mut self, unit: &CompilationUnit) {
+        // Record the unit's package onto the env so `set_class` can
+        // build the right FQN and `ty_from_ref` falls back to it
+        // when the unit's resolver doesn't carry an entry.
+        let pkg: Vec<String> = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
+            .unwrap_or_default();
+        self.env.current_package = pkg;
         for item in &unit.items {
             match item {
                 TopLevelDecl::Function(fn_decl) => self.check_function(fn_decl),
@@ -213,7 +222,10 @@ impl<'a> Checker<'a> {
     /// the body's scope. Deleted operators have no body and are
     /// skipped inside `check_operator`.
     fn check_enum(&mut self, enum_decl: &juxc_ast::EnumDecl) {
-        let name = enum_decl.name.text.clone();
+        let name = crate::symbol_table::make_fqn(
+            &self.env.current_package,
+            &enum_decl.name.text,
+        );
         self.env.set_class(&name);
         let this_ty = Ty::User {
             name: name.clone(),
@@ -257,7 +269,13 @@ impl<'a> Checker<'a> {
     /// binding), run the body checker, then tear it down. Abstract
     /// methods (body = None) are skipped.
     fn check_class(&mut self, class: &ClassDecl) {
-        let class_name = class.name.text.clone();
+        // Class context — FQN'd so the visibility / subtype walks
+        // that key on `env.current_class` find the right entry in
+        // the symbol table.
+        let class_name = crate::symbol_table::make_fqn(
+            &self.env.current_package,
+            &class.name.text,
+        );
         self.env.set_class(&class_name);
         // Register every generic param so `T` in declared types lowers
         // to `Ty::Param("T")` rather than `Unknown`.
@@ -412,7 +430,10 @@ impl<'a> Checker<'a> {
     /// `= delete;` operators have no body and are skipped inside
     /// [`Self::check_operator`].
     fn check_record(&mut self, record: &RecordDecl) {
-        let name = record.name.text.clone();
+        let name = crate::symbol_table::make_fqn(
+            &self.env.current_package,
+            &record.name.text,
+        );
         self.env.set_class(&name);
         for tp in &record.generic_params {
             self.env.add_generic_param(&tp.name.text);
@@ -464,7 +485,7 @@ impl<'a> Checker<'a> {
                 });
                 let final_ty = match (&declared, &inferred) {
                     (Some(d), Some(i)) => {
-                        if !compatible(d, i) {
+                        if !compatible(d, i, self.symbols) {
                             self.diagnostics.push(
                                 Diagnostic::error(
                                     code::Code::E0410_TypeMismatch,
@@ -491,7 +512,7 @@ impl<'a> Checker<'a> {
                 self.check_expr(&a.value);
                 let target_ty = infer_expr(&a.target, &self.env, self.symbols);
                 let value_ty = infer_expr(&a.value, &self.env, self.symbols);
-                if !compatible(&target_ty, &value_ty) {
+                if !compatible(&target_ty, &value_ty, self.symbols) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0410_TypeMismatch,
@@ -527,7 +548,7 @@ impl<'a> Checker<'a> {
                         self.check_expr(expr);
                         let found = infer_expr(expr, &self.env, self.symbols);
                         if let Some(exp) = &expected {
-                            if !compatible(exp, &found) {
+                            if !compatible(exp, &found, self.symbols) {
                                 self.diagnostics.push(
                                     Diagnostic::error(
                                         code::Code::E0410_TypeMismatch,
@@ -772,6 +793,96 @@ impl<'a> Checker<'a> {
     /// class/record AND the field name isn't found anywhere in the
     /// inheritance chain, emit **E0412**. Built-in receivers (arrays,
     /// strings) get an allowlist pass.
+    /// Enforce member-visibility rules (Phase 1 — Java-style 4
+    /// visibilities). Emits `E0414` / `E0415` / `E0416` when the
+    /// current accessor isn't allowed to touch a `private` /
+    /// `protected` / package-private member.
+    ///
+    /// - `Public` — always allowed.
+    /// - `Private` — only allowed when the accessor is inside the
+    ///   `declaring_class`'s body.
+    /// - `Protected` — allowed inside `declaring_class` and any
+    ///   transitive subclass (extends-chain walk).
+    /// - `Package` / `Internal` — Phase 1 collapses "package" to
+    ///   "same compilation unit", and we currently only support a
+    ///   single unit at a time, so this rule always passes today.
+    ///   The diagnostic exists so callers can rely on its
+    ///   activation once multi-unit `package foo.bar;` lands.
+    ///
+    /// `member_kind` is the human-readable phrase used in the
+    /// emitted diagnostic — `"field"`, `"method"`, or
+    /// `"constructor"`.
+    fn check_visibility(
+        &mut self,
+        vis: juxc_ast::Visibility,
+        declaring_class: &str,
+        member_name: &str,
+        member_kind: &str,
+        access_span: juxc_source::Span,
+    ) {
+        use juxc_ast::Visibility;
+        let accessor = self.env.current_class.as_deref();
+        let allowed_code = match vis {
+            Visibility::Public => return,
+            Visibility::Private => {
+                if accessor == Some(declaring_class) {
+                    return;
+                }
+                code::Code::E0414_PrivateAccess
+            }
+            Visibility::Protected => {
+                if accessor.map_or(false, |a| {
+                    a == declaring_class
+                        || crate::ty::walk_extends_reaches(a, declaring_class, self.symbols)
+                }) {
+                    return;
+                }
+                code::Code::E0415_ProtectedAccess
+            }
+            Visibility::Package | Visibility::Internal => {
+                // Compare the declaring class's package against the
+                // accessor's. Both come from `ClassSig::package`,
+                // which is stamped from each unit's `package foo.bar;`
+                // line during `build_workspace`. Same-package access
+                // (including the no-package "everything at crate
+                // root" case) is allowed.
+                let declaring_pkg: &[String] = self
+                    .symbols
+                    .classes
+                    .get(declaring_class)
+                    .map(|c| c.package.as_slice())
+                    .unwrap_or(&[]);
+                let accessor_pkg: &[String] = accessor
+                    .and_then(|name| self.symbols.classes.get(name))
+                    .map(|c| c.package.as_slice())
+                    .unwrap_or(&[]);
+                if declaring_pkg == accessor_pkg {
+                    return;
+                }
+                code::Code::E0416_PackagePrivateAccess
+            }
+        };
+        let visibility_word = match vis {
+            juxc_ast::Visibility::Private => "private",
+            juxc_ast::Visibility::Protected => "protected",
+            juxc_ast::Visibility::Package | juxc_ast::Visibility::Internal => "package-private",
+            juxc_ast::Visibility::Public => "public",
+        };
+        let context = match accessor {
+            Some(a) => format!("from `{a}`"),
+            None => "from top-level code".to_string(),
+        };
+        self.diagnostics.push(
+            Diagnostic::error(
+                allowed_code,
+                format!(
+                    "cannot access {visibility_word} {member_kind} `{member_name}` of `{declaring_class}` {context}",
+                ),
+            )
+            .with_span(access_span),
+        );
+    }
+
     fn check_field_access(&mut self, f: &FieldExpr) {
         let receiver_ty = infer_expr(&f.object, &self.env, self.symbols);
         let field_name = f.field.text.as_str();
@@ -792,12 +903,27 @@ impl<'a> Checker<'a> {
                 }
             }
             // User types: walk the inheritance chain looking for the
-            // field. Emit E0412 if not found anywhere.
+            // field. Emit E0412 if not found anywhere. When the field
+            // is found, verify visibility against the current
+            // accessor context.
             Ty::User { name, .. } => {
-                if self.symbols.lookup_field(name, field_name).is_some() {
+                if let Some((field, declaring_class)) =
+                    self.symbols.lookup_field(name, field_name)
+                {
+                    let vis = field.visibility;
+                    let declaring = declaring_class.to_string();
+                    self.check_visibility(
+                        vis,
+                        &declaring,
+                        field_name,
+                        "field",
+                        f.span,
+                    );
                     return;
                 }
-                // Records: check components directly.
+                // Records: check components directly. Record
+                // components are always public per the spec (records
+                // are simple data carriers), so no visibility check.
                 if let Some(record) = self.symbols.records.get(name) {
                     if record.components.iter().any(|c| c.name == field_name) {
                         return;
@@ -947,10 +1073,22 @@ impl<'a> Checker<'a> {
                 {
                     let params = method.params.clone();
                     let method_generic_params = method.generic_params.clone();
+                    let method_vis = method.visibility;
                     // Clone the declaring-class name into an owned
                     // String so it outlives the immutable borrow on
                     // `self.symbols` we'd otherwise need.
                     let owner_name = declaring_class.to_string();
+                    // Visibility check (E0414 / E0415 / E0416) —
+                    // run after cloning out the fields we need so
+                    // the symbol-table borrow ends before the
+                    // diagnostic-pushing helper grabs `&mut self`.
+                    self.check_visibility(
+                        method_vis,
+                        &owner_name,
+                        method_name,
+                        "method",
+                        c.span,
+                    );
                     let (mut subst_params, mut subst_args): (Vec<TypeParam>, Vec<Ty>) =
                         match compose_extends_substitution(
                             &name,
@@ -1096,7 +1234,22 @@ impl<'a> Checker<'a> {
                 .first()
                 .map(|c| c.params.clone())
                 .unwrap_or_default();
+            let ctor_vis = class
+                .constructors
+                .first()
+                .map(|c| c.visibility)
+                .unwrap_or(juxc_ast::Visibility::Public);
             let subst_params = class.generic_params.clone();
+            // Visibility check on the constructor itself (E0414 /
+            // E0415 / E0416). A synthetic default constructor on a
+            // class with no declared ctors is treated as `public`.
+            self.check_visibility(
+                ctor_vis,
+                &class_name,
+                "constructor",
+                "constructor",
+                n.span,
+            );
             let subst_args = self.resolve_ctor_generic_args(
                 &subst_params,
                 &explicit_generic_args,
@@ -1187,7 +1340,10 @@ impl<'a> Checker<'a> {
         let parent_generic_args: Vec<Ty> = extends
             .generic_args
             .iter()
-            .map(|g| ty_from_ref(g, &self.env, self.symbols))
+            .map(|g| match g.as_type() {
+                Some(t) => ty_from_ref(t, &self.env, self.symbols),
+                None => Ty::Unknown,
+            })
             .collect();
 
         let Some(parent) = self.symbols.classes.get(&parent_name) else { return };
@@ -1335,7 +1491,7 @@ impl<'a> Checker<'a> {
             };
             let expected = substitute(&expected_raw, subst_params, subst_args);
             let found = infer_expr(arg, &self.env, self.symbols);
-            if !compatible(&expected, &found) {
+            if !compatible(&expected, &found, self.symbols) {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0410_TypeMismatch,
@@ -1479,12 +1635,29 @@ fn expr_span(e: &Expr) -> Span {
 /// - Arrays compare element-wise + kind.
 /// - User types compare by name + pairwise generic-args.
 /// - Everything else: false.
-pub(crate) fn compatible(expected: &Ty, found: &Ty) -> bool {
-    // Wildcards.
+pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bool {
+    // Wildcards / suppression escape hatches.
     if expected.is_unknown() || found.is_unknown() {
         return true;
     }
     if matches!(expected, Ty::Param(_)) || matches!(found, Ty::Param(_)) {
+        return true;
+    }
+    // PECS variance — `expected` carries the wildcard, `found` is the
+    // concrete actual. `found` carrying a wildcard would mean a
+    // raw-type producer flowing into a slot that doesn't accept one;
+    // we accept it permissively for Phase 1 (raw-types are already a
+    // lenient escape hatch).
+    if let Ty::Wildcard(w) = expected {
+        return match w {
+            crate::ty::Wildcard::Unbounded => true,
+            crate::ty::Wildcard::Extends(bound) => is_subtype(found, bound, symbols),
+            crate::ty::Wildcard::Super(bound) => is_subtype(bound, found, symbols),
+        };
+    }
+    if matches!(found, Ty::Wildcard(_)) {
+        // Raw producer flowing into a non-wildcard slot — stay
+        // permissive. A future pass may tighten this with E04xx.
         return true;
     }
     // Exact match.
@@ -1517,7 +1690,7 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty) -> bool {
         (
             Ty::Array { element: e1, kind: k1 },
             Ty::Array { element: e2, kind: k2 },
-        ) => k1 == k2 && compatible(e1, e2),
+        ) => k1 == k2 && compatible(e1, e2, symbols),
         // User types — same name AND pairwise compatible generic args.
         (
             Ty::User { name: n1, generic_args: a1 },
@@ -1535,7 +1708,7 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty) -> bool {
             if a1.len() != a2.len() {
                 return false;
             }
-            a1.iter().zip(a2.iter()).all(|(x, y)| compatible(x, y))
+            a1.iter().zip(a2.iter()).all(|(x, y)| compatible(x, y, symbols))
         }
         _ => false,
     }
@@ -2120,6 +2293,242 @@ mod tests {
         assert!(
             !d.iter().any(|d| d.code == code::Code::E0935_DeletedOperator),
             "should not emit E0935 for primitive: {d:?}",
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // PECS variance — `compatible` with bounded wildcards
+    // ----------------------------------------------------------------
+
+    /// `List<Dog>` is assignable to `List<? extends Animal>` —
+    /// Dog is-a Animal, slot is covariant (producer).
+    #[test]
+    fn extends_wildcard_accepts_subtype() {
+        let d = run(
+            r#"
+            public class Animal {}
+            public class Dog extends Animal {}
+            public class List<T> {
+                public T head;
+            }
+            public void main() {
+                var dogs = new List<Dog>();
+                List<? extends Animal> animals = dogs;
+                print(animals);
+            }
+            "#,
+        );
+        assert!(
+            !d.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            "covariant assignment should be accepted: {d:?}",
+        );
+    }
+
+    /// `List<Cat>` is NOT assignable to `List<? extends Dog>` —
+    /// Cat isn't a Dog.
+    #[test]
+    fn extends_wildcard_rejects_non_subtype() {
+        let d = run(
+            r#"
+            public class Animal {}
+            public class Dog extends Animal {}
+            public class Cat extends Animal {}
+            public class List<T> {
+                public T head;
+            }
+            public void main() {
+                var cats = new List<Cat>();
+                List<? extends Dog> dogs = cats;
+                print(dogs);
+            }
+            "#,
+        );
+        assert!(
+            d.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            "List<Cat> shouldn't fit List<? extends Dog>: {d:?}",
+        );
+    }
+
+    /// `List<Animal>` is assignable to `List<? super Dog>` —
+    /// Animal is a supertype of Dog, slot is contravariant (consumer).
+    #[test]
+    fn super_wildcard_accepts_supertype() {
+        let d = run(
+            r#"
+            public class Animal {}
+            public class Dog extends Animal {}
+            public class List<T> {
+                public T head;
+            }
+            public void main() {
+                var animals = new List<Animal>();
+                List<? super Dog> dogs = animals;
+                print(dogs);
+            }
+            "#,
+        );
+        assert!(
+            !d.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            "contravariant assignment should be accepted: {d:?}",
+        );
+    }
+
+    /// `List<Cat>` is NOT assignable to `List<? super Dog>` —
+    /// Cat is not a supertype of Dog.
+    #[test]
+    fn super_wildcard_rejects_unrelated() {
+        let d = run(
+            r#"
+            public class Animal {}
+            public class Dog extends Animal {}
+            public class Cat extends Animal {}
+            public class List<T> {
+                public T head;
+            }
+            public void main() {
+                var cats = new List<Cat>();
+                List<? super Dog> sink = cats;
+                print(sink);
+            }
+            "#,
+        );
+        assert!(
+            d.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            "List<Cat> shouldn't fit List<? super Dog>: {d:?}",
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // Encapsulation — E0414 / E0415 access checks
+    // ----------------------------------------------------------------
+
+    /// Reading a private field from top-level code fires E0414.
+    #[test]
+    fn private_field_access_from_outside_emits_e0414() {
+        let d = run(
+            r#"
+            public class Account {
+                private int balance;
+                public Account(int n) { this.balance = n; }
+            }
+            public void main() {
+                var a = new Account(10);
+                print(a.balance);
+            }
+            "#,
+        );
+        assert!(
+            d.iter().any(|d| d.code == code::Code::E0414_PrivateAccess),
+            "expected E0414, got: {d:?}",
+        );
+    }
+
+    /// Reading a private field from inside the same class is OK.
+    #[test]
+    fn private_field_access_from_same_class_is_ok() {
+        let d = run(
+            r#"
+            public class Account {
+                private int balance;
+                public Account(int n) { this.balance = n; }
+                public int get() { return this.balance; }
+            }
+            public void main() {
+                var a = new Account(10);
+                print(a.get());
+            }
+            "#,
+        );
+        assert!(
+            !d.iter().any(|d| d.code == code::Code::E0414_PrivateAccess),
+            "should not emit E0414 for self-access: {d:?}",
+        );
+    }
+
+    /// Calling a protected method from an unrelated class fires E0415.
+    #[test]
+    fn protected_method_from_unrelated_class_emits_e0415() {
+        let d = run(
+            r#"
+            public class Base {
+                protected void secret() {}
+            }
+            public class Other {
+                public void touch(Base b) { b.secret(); }
+            }
+            public void main() {
+                var o = new Other();
+                o.touch(new Base());
+            }
+            "#,
+        );
+        assert!(
+            d.iter().any(|d| d.code == code::Code::E0415_ProtectedAccess),
+            "expected E0415, got: {d:?}",
+        );
+    }
+
+    /// Calling a protected method from a subclass is OK.
+    #[test]
+    fn protected_method_from_subclass_is_ok() {
+        let d = run(
+            r#"
+            public class Base {
+                protected void secret() {}
+            }
+            public class Sub extends Base {
+                public void touch() { this.secret(); }
+            }
+            public void main() {
+                var s = new Sub();
+                s.touch();
+            }
+            "#,
+        );
+        assert!(
+            !d.iter().any(|d| d.code == code::Code::E0415_ProtectedAccess),
+            "should not emit E0415 for subclass access: {d:?}",
+        );
+    }
+
+    /// `new Foo()` against a private constructor fires E0414.
+    #[test]
+    fn private_constructor_emits_e0414() {
+        let d = run(
+            r#"
+            public class Singleton {
+                private Singleton() {}
+            }
+            public void main() {
+                var s = new Singleton();
+                print(s);
+            }
+            "#,
+        );
+        assert!(
+            d.iter().any(|d| d.code == code::Code::E0414_PrivateAccess),
+            "expected E0414 on private ctor, got: {d:?}",
+        );
+    }
+
+    /// Unbounded `?` accepts anything in the slot.
+    #[test]
+    fn unbounded_wildcard_accepts_anything() {
+        let d = run(
+            r#"
+            public class List<T> {
+                public T head;
+            }
+            public void main() {
+                var ints = new List<int>();
+                List<?> any = ints;
+                print(any);
+            }
+            "#,
+        );
+        assert!(
+            !d.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            "List<?> should accept anything: {d:?}",
         );
     }
 }

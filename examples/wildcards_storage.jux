@@ -1,0 +1,45 @@
+// Storage-position wildcards exercise two backend lowerings:
+//
+//   1. Param position — function-generic lift to `<__W0: Bound + Clone>`.
+//   2. Storage position (field) — erasure to `Box<dyn BoundKind>`.
+//
+// The marker trait now has no `Clone` supertrait so `dyn AnimalKind`
+// is a valid trait object.
+
+public class Animal {
+    public String name;
+    public Animal(String name) { this.name = name; }
+}
+
+public class Dog extends Animal {
+    public Dog(String name) { super(name); }
+}
+
+public class Box1<T> {
+    public T item;
+    public Box1(T item) {
+        this.item = item;
+    }
+}
+
+// Field-position wildcard — `Holder.contents` is typed
+// `Box1<? extends Animal>` which lowers to `Box1<Box<dyn AnimalKind>>`.
+// This compiles because the marker trait is dyn-compatible.
+public class Holder {
+    public Box1<? extends Animal> contents;
+
+    public Holder(Box1<? extends Animal> contents) {
+        this.contents = contents;
+    }
+}
+
+// Param-position wildcard — function-generic lift.
+public void describe(Box1<? extends Animal> b) {
+    print("got a box of animals");
+}
+
+public void main() {
+    var b = new Box1<Dog>(new Dog("Rex"));
+    describe(b);
+    print("done");
+}
