@@ -2055,6 +2055,31 @@ fn record_body_holds_operator_decls() {
     panic!("no record decl in unit");
 }
 
+/// Records can declare methods alongside operators per grammar
+/// §A.2.4. Each method lands in `record.methods`; operators stay in
+/// `record.operators`. Header components live in `components`.
+#[test]
+fn record_body_holds_methods() {
+    let ast = parse_clean(
+        r#"
+        public record Money(int cents) {
+            public int doubled() { return this.cents * 2; }
+            public String operator string() { return "Money"; }
+        }
+        "#,
+    );
+    for item in &ast.items {
+        if let TopLevelDecl::Record(r) = item {
+            assert_eq!(r.components.len(), 1);
+            assert_eq!(r.methods.len(), 1, "method should land in record.methods");
+            assert_eq!(r.methods[0].name.text, "doubled");
+            assert_eq!(r.operators.len(), 1, "operator should stay in record.operators");
+            return;
+        }
+    }
+    panic!("no record decl in unit");
+}
+
 /// `record Foo(...) { operator string() = delete; }` is the canonical
 /// §O.3.4 example — record body carries a single `= delete;` operator.
 #[test]

@@ -87,10 +87,16 @@ pub struct RecordDecl {
     /// Operator-override declarations inside the record body, in
     /// source order. Each entry can be a real override (custom body)
     /// or a `= delete;` suppression per §O.3.4 — `is_deleted` on the
-    /// [`OperatorDecl`] distinguishes the two. Records currently
-    /// support only operators in their body (no methods, no extra
-    /// constructors). Empty when the record body is empty or absent.
+    /// [`OperatorDecl`] distinguishes the two. Empty when the record
+    /// body has no operator overrides.
     pub operators: Vec<OperatorDecl>,
+    /// Method declarations inside the record body, in source order.
+    /// Per grammar §A.2.4 records may contain function declarations
+    /// (Java-style record methods) but NOT additional instance fields
+    /// or extra constructors — the header components are the only
+    /// fields, and the canonical constructor is synthesized. Empty
+    /// when the body has no methods.
+    pub methods: Vec<FnDecl>,
     /// Span covering the whole `record … { … }` declaration.
     pub span: Span,
 }

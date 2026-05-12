@@ -1,0 +1,26 @@
+// Records with methods and operator overrides per grammar §A.2.4.
+// Records get the auto-derived value-type behavior (Eq/Hash/Display
+// when fields permit) AND can declare named methods that operate on
+// the header components.
+
+public record Money(int cents) {
+    public int doubled() {
+        return this.cents * 2;
+    }
+
+    public Money plus_cents(int extra) {
+        return new Money(this.cents + extra);
+    }
+
+    public String operator string() {
+        return $"$${this.cents}";
+    }
+}
+
+public void main() {
+    var m = new Money(150);
+    print($"m=$m");
+    print($"doubled=${m.doubled()}");
+    var bigger = m.plus_cents(50);
+    print($"bigger=$bigger");
+}

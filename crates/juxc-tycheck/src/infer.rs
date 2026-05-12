@@ -285,6 +285,20 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     }
                     return raw;
                 }
+                // Record methods — records can declare methods per
+                // grammar §A.2.4. No inheritance chain (records don't
+                // extend), but substitution applies for the record's
+                // own generic params.
+                if let Some(record) = symbols.records.get(name) {
+                    if let Some(method) = record.methods.get(method_name) {
+                        let raw = return_type_in_class(
+                            &method.return_type,
+                            name,
+                            symbols,
+                        );
+                        return substitute(&raw, &record.generic_params, generic_args);
+                    }
+                }
                 // Interface methods. No chain (interfaces don't extend
                 // classes), but substitution still applies for the
                 // interface's own generic params.

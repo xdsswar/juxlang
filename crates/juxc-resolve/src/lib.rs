@@ -315,9 +315,9 @@ impl Resolver {
         }
     }
 
-    /// Walk a record's operator-override bodies. `this` is the
-    /// implicit receiver inside each body, matching how class operator
-    /// bodies are walked. `= delete;` operators have no body to walk
+    /// Walk a record's body: operator overrides and methods. `this`
+    /// is the implicit receiver inside each body, matching how class
+    /// methods/operators are walked. Deleted operators have no body
     /// and are skipped silently.
     fn visit_record_decl(&mut self, record_decl: &juxc_ast::RecordDecl) {
         for op in &record_decl.operators {
@@ -328,6 +328,17 @@ impl Resolver {
                 self.declare(&param.name.text);
             }
             self.visit_block(body);
+            self.pop_scope();
+        }
+        for method in &record_decl.methods {
+            self.push_scope();
+            self.declare("this");
+            for param in &method.params {
+                self.declare(&param.name.text);
+            }
+            if let Some(body) = &method.body {
+                self.visit_block(body);
+            }
             self.pop_scope();
         }
     }

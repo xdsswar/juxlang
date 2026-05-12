@@ -403,11 +403,11 @@ impl<'a> Checker<'a> {
         self.env.pop_scope();
     }
 
-    /// Walk a record's operator bodies. Records compose their value
-    /// type from the header components; the only walkable code lives
-    /// in operator overrides (§O.3.4 customizations like a custom
-    /// `operator string`). `= delete;` operators have no body and are
-    /// skipped.
+    /// Walk a record's body — operator overrides plus methods. Same
+    /// scope shape as classes: `this` is the record's `Ty::User`,
+    /// operator/method params are declared into the body's scope.
+    /// `= delete;` operators have no body and are skipped inside
+    /// [`Self::check_operator`].
     fn check_record(&mut self, record: &RecordDecl) {
         let name = record.name.text.clone();
         self.env.set_class(&name);
@@ -424,6 +424,9 @@ impl<'a> Checker<'a> {
         };
         for op in &record.operators {
             self.check_operator(op, &this_ty);
+        }
+        for method in &record.methods {
+            self.check_method(method, &this_ty);
         }
         self.env.clear_generic_params();
         self.env.clear_class();
@@ -955,7 +958,26 @@ impl<'a> Checker<'a> {
                         return;
                     }
                 }
-                // Records: no methods in Turn 1.
+                // Records can declare methods (per grammar §A.2.4).
+                // Same lookup shape as interfaces — records have no
+                // inheritance chain, so substitution applies for the
+                // record's own generic params.
+                if let Some(record) = self.symbols.records.get(&name) {
+                    if let Some(method) = record.methods.get(method_name) {
+                        let params = method.params.clone();
+                        let subst_params = record.generic_params.clone();
+                        self.check_call_args(
+                            method_name,
+                            &params,
+                            &c.args,
+                            c.span,
+                            Some(&name),
+                            &subst_params,
+                            &generic_args,
+                        );
+                        return;
+                    }
+                }
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0413_UnresolvedMethod,

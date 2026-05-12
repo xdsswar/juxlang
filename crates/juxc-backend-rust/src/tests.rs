@@ -2812,6 +2812,33 @@ fn record_hash_delete_drops_hash_from_derive() {
     assert!(rust.contains(", Eq"), "Eq stays: {rust}");
 }
 
+/// Records can declare methods (per grammar §A.2.4). They land in
+/// the same `impl Record { ... }` block as the canonical
+/// `pub fn new`, alongside any operator overrides.
+#[test]
+fn record_method_emits_in_inherent_impl_block() {
+    let rust = emit(
+        r#"
+        public record Money(int cents) {
+            public int doubled() { return this.cents * 2; }
+        }
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains("pub fn new(cents: isize)"),
+        "canonical ctor still emitted: {rust}",
+    );
+    assert!(
+        rust.contains("pub fn doubled(&self) -> isize"),
+        "method emitted on record: {rust}",
+    );
+    // Sanity: doubled is inside `impl Money`, not a free function.
+    let impl_idx = rust.find("impl Money {").expect("impl block present");
+    let doubled_idx = rust.find("pub fn doubled").expect("doubled present");
+    assert!(impl_idx < doubled_idx, "method must follow impl header: {rust}");
+}
+
 /// A non-deleted operator override on a record emits the inherent
 /// `__op_*` method AND the trait wrapper, mirroring class behavior.
 #[test]

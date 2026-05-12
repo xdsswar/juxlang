@@ -35,6 +35,8 @@ use juxc_backend_rust::{RustCrate, CRATE_NAME};
 use juxc_diagnostics::{Diagnostic, Severity};
 use juxc_source::SourceFile;
 
+mod source_map;
+
 /// Top-level compile result.
 ///
 /// On success, `crate_` is populated and ready to hand to [`build`].
@@ -164,8 +166,23 @@ pub fn build(crate_: &RustCrate, crate_dir: &Path) -> Result<BuildArtifact> {
         .with_context(|| format!("invoking `cargo build` in {}", crate_dir.display()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // Rewrite emitted-Rust file/line anchors back to original
+        // `.jux` locations using the `// JUX:` markers the backend
+        // sprinkles into the emission. When markers are absent
+        // (caller used `lower_with_types` directly, e.g. tests) the
+        // stderr passes through unchanged. The primary emitted file
+        // is `src/main.rs`; locate it in the source list and use its
+        // contents to build the lookup table.
+        let main_rs = crate_
+            .sources
+            .iter()
+            .find(|(p, _)| p == "src/main.rs")
+            .map(|(_, c)| c.as_str())
+            .unwrap_or("");
+        let map = source_map::MarkerMap::from_emitted_source(main_rs);
+        let rewritten = source_map::rewrite_rustc_output(&stderr, &map);
         anyhow::bail!(
-            "`cargo build` failed for the emitted Rust crate (this is a juxc bug):\n{stderr}",
+            "`cargo build` failed for the emitted Rust crate (this is a juxc bug):\n{rewritten}",
         );
     }
 

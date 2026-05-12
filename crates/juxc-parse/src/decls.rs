@@ -376,60 +376,69 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // Optional body — operator overrides only (no methods,
-        // constructors, or fields beyond the header). Records use
-        // their body primarily to override auto-derived behavior
-        // (custom `operator string`, `= delete;` suppression per
-        // §O.3.4).
+        // Optional body — operator overrides and methods (per
+        // grammar §A.2.4: `record-body = '{' ( function-decl |
+        // static-init-block )* '}'`). The static-init-block form
+        // isn't parsed yet. Records don't allow additional instance
+        // fields or extra constructors — the header components are
+        // the only fields, and the canonical constructor is
+        // synthesized.
         let mut operators = Vec::new();
+        let mut methods = Vec::new();
         if self.eat(&TokenKind::LBrace) {
             while !self.at(&TokenKind::RBrace) && !self.at_eof() {
                 let member_vis = self.parse_visibility();
-                // Reuse the class-member operator-lookahead: after
-                // visibility + modifiers + return type, the next
-                // token must be `operator`. Anything else is rejected
-                // as "record bodies only support operators in Turn 1".
-                let is_operator = {
-                    let mut i = self.pos;
-                    while matches!(
-                        self.tokens.get(i).map(|t| &t.kind),
-                        Some(TokenKind::Kw(Keyword::Abstract))
-                            | Some(TokenKind::Kw(Keyword::Static))
-                            | Some(TokenKind::Kw(Keyword::Final))
-                            | Some(TokenKind::Kw(Keyword::Const))
-                            | Some(TokenKind::Kw(Keyword::Async))
-                            | Some(TokenKind::Kw(Keyword::Native))
-                            | Some(TokenKind::Kw(Keyword::Unsafe)),
-                    ) {
-                        i += 1;
-                    }
-                    let after_type = match self.tokens.get(i).map(|t| &t.kind) {
-                        Some(TokenKind::Kw(Keyword::Void)) => Some(i + 1),
-                        Some(TokenKind::Ident(_)) => Some(i + 1),
-                        _ => None,
-                    };
-                    matches!(
-                        after_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind)),
-                        Some(TokenKind::Kw(Keyword::Operator)),
-                    )
+                // Member-shape lookahead: walk past modifiers and
+                // the return type, then check whether the next
+                // token is `operator` (→ operator decl) or an
+                // identifier (→ method decl). Anything else is a
+                // shape error.
+                let mut i = self.pos;
+                while matches!(
+                    self.tokens.get(i).map(|t| &t.kind),
+                    Some(TokenKind::Kw(Keyword::Abstract))
+                        | Some(TokenKind::Kw(Keyword::Static))
+                        | Some(TokenKind::Kw(Keyword::Final))
+                        | Some(TokenKind::Kw(Keyword::Const))
+                        | Some(TokenKind::Kw(Keyword::Async))
+                        | Some(TokenKind::Kw(Keyword::Native))
+                        | Some(TokenKind::Kw(Keyword::Unsafe)),
+                ) {
+                    i += 1;
+                }
+                let after_type = match self.tokens.get(i).map(|t| &t.kind) {
+                    Some(TokenKind::Kw(Keyword::Void)) => Some(i + 1),
+                    Some(TokenKind::Ident(_)) => Some(i + 1),
+                    _ => None,
                 };
-                if is_operator {
-                    if let Some(op) = self.parse_operator_decl(member_vis) {
-                        operators.push(op);
+                let next_kind = after_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind));
+                match next_kind {
+                    Some(TokenKind::Kw(Keyword::Operator)) => {
+                        if let Some(op) = self.parse_operator_decl(member_vis) {
+                            operators.push(op);
+                        }
                     }
-                } else {
-                    let here = self.peek_span();
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::Code::E0200_UnexpectedToken,
-                            "record bodies only support `operator` declarations \
-                             (methods and fields aren't supported yet)",
-                        )
-                        .with_span(here),
-                    );
-                    // Recovery: skip past the next `}` or to EOF.
-                    while !self.at(&TokenKind::RBrace) && !self.at_eof() {
-                        self.advance();
+                    Some(TokenKind::Ident(_)) => {
+                        // Method shape: `[modifiers] returnType
+                        // methodName(params) { ... }`. Reuses the
+                        // class fn-decl parser unchanged.
+                        if let Some(m) = self.parse_fn_decl(member_vis) {
+                            methods.push(m);
+                        }
+                    }
+                    _ => {
+                        let here = self.peek_span();
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0200_UnexpectedToken,
+                                "record bodies support operator overrides and methods only \
+                                 (fields and constructors are class-exclusive)",
+                            )
+                            .with_span(here),
+                        );
+                        while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+                            self.advance();
+                        }
                     }
                 }
             }
@@ -443,6 +452,7 @@ impl<'a> Parser<'a> {
             generic_params,
             components,
             operators,
+            methods,
             span: start.join(end),
         })
     }

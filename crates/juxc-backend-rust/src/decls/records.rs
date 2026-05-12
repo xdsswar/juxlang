@@ -115,11 +115,17 @@ impl RustEmitter {
         self.w.indent_dec();
         self.w.line("}");
         // Depth 1 — inside the `impl Name { ... }` block. Emit
-        // inherent operator methods here. `emit_operator_as_method`
-        // skips deleted operators on its own (no inherent method for
-        // a `= delete;` declaration).
+        // inherent operator methods, then user-declared methods.
+        // `emit_operator_as_method` skips deleted operators (no
+        // inherent method for a `= delete;` declaration).
         for op in &record_decl.operators {
             self.emit_operator_as_method(op);
+        }
+        // Records can declare methods (per grammar §A.2.4). They
+        // share the same emission path as class methods — `emit_method`
+        // is host-agnostic.
+        for method in &record_decl.methods {
+            self.emit_method(method);
         }
         // Close the `impl Name { ... }` block.
         self.w.indent_dec();

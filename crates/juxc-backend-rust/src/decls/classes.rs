@@ -141,7 +141,7 @@ impl RustEmitter {
             self.emit_synthetic_default_constructor(class_decl);
         }
         for method in &class_decl.methods {
-            self.emit_method(class_decl, method);
+            self.emit_method(method);
         }
         // Operator overloads (§O.2) land as **inherent** methods with
         // synthetic names (`__op_eq`, `__op_string`, …). Trait impls
@@ -390,10 +390,12 @@ impl RustEmitter {
     }
 
     /// Emit one instance method as an inherent function inside the
-    /// class's `impl` block. Caller (`emit_class_decl`) has the writer
-    /// positioned at level 0; the method signature sits at depth 1
-    /// inside the `impl`, and the body at depth 2.
-    pub(crate) fn emit_method(&mut self, _class_decl: &juxc_ast::ClassDecl, method: &FnDecl) {
+    /// class's `impl` block. Caller (`emit_class_decl` or
+    /// `emit_record_decl`) has the writer positioned at level 0; the
+    /// method signature sits at depth 1 inside the `impl`, and the
+    /// body at depth 2. Method emission is host-agnostic — the same
+    /// shape works for classes and records.
+    pub(crate) fn emit_method(&mut self, method: &FnDecl) {
         // (Migrated to Writer indent-aware API)
         // Caller (`emit_class_decl`) is at level 0; method signature
         // sits at depth 1 (inside the `impl` block), body at depth 2.

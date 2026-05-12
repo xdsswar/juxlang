@@ -270,6 +270,12 @@ pub struct RecordSig {
     /// `is_deleted` flag so the backend can distinguish a real
     /// override from a §O.3.4 suppression.
     pub operators: HashMap<OperatorKind, OperatorSig>,
+    /// Methods declared in the record body, indexed by name. Mirrors
+    /// [`ClassSig::methods`]. Records can declare methods (per
+    /// grammar §A.2.4) but not additional fields or constructors —
+    /// the header components are the only fields and the canonical
+    /// `new(...)` is synthesized. Duplicate names emit `E0402`.
+    pub methods: HashMap<String, MethodSig>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -481,6 +487,16 @@ fn insert_class(
     check_eq_hash_pairing(&class_ops, "class", &class_decl.name.text, diagnostics);
     // §O.2.1: `<=>` conflicts with individual `<`/`<=`/`>`/`>=`.
     check_cmp_individual_conflict(&class_ops, "class", &class_decl.name.text, diagnostics);
+    // §O.2.1/§O.2.2: fixed return types for ==, <=>, hash, string, etc.
+    check_operator_return_types(&class_ops, "class", &class_decl.name.text, diagnostics);
+    // §O.2.1: individual ordering operators (<, <=, >, >=) must be
+    // declared as a complete set or not at all.
+    check_individual_ordering_completeness(
+        &class_ops,
+        "class",
+        &class_decl.name.text,
+        diagnostics,
+    );
 
     table.classes.insert(
         class_decl.name.text.clone(),
@@ -532,6 +548,31 @@ fn insert_record(
     let record_ops: Vec<&juxc_ast::OperatorDecl> = record_decl.operators.iter().collect();
     check_eq_hash_pairing(&record_ops, "record", &record_decl.name.text, diagnostics);
     check_cmp_individual_conflict(&record_ops, "record", &record_decl.name.text, diagnostics);
+    check_operator_return_types(&record_ops, "record", &record_decl.name.text, diagnostics);
+    check_individual_ordering_completeness(
+        &record_ops,
+        "record",
+        &record_decl.name.text,
+        diagnostics,
+    );
+    // Method dedup (same E0402 treatment as classes).
+    let mut methods: HashMap<String, MethodSig> = HashMap::new();
+    for method in &record_decl.methods {
+        if methods.contains_key(&method.name.text) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0402_DuplicateMethod,
+                    format!(
+                        "method `{}` is declared more than once in record `{}`",
+                        method.name.text, record_decl.name.text,
+                    ),
+                )
+                .with_span(method.span),
+            );
+            continue;
+        }
+        methods.insert(method.name.text.clone(), method_sig(method));
+    }
     table.records.insert(
         record_decl.name.text.clone(),
         RecordSig {
@@ -547,6 +588,7 @@ fn insert_record(
                 })
                 .collect(),
             operators,
+            methods,
             span: record_decl.span,
         },
     );
@@ -605,6 +647,13 @@ fn insert_enum(
     let enum_ops: Vec<&juxc_ast::OperatorDecl> = enum_decl.operators.iter().collect();
     check_eq_hash_pairing(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
     check_cmp_individual_conflict(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
+    check_operator_return_types(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
+    check_individual_ordering_completeness(
+        &enum_ops,
+        "enum",
+        &enum_decl.name.text,
+        diagnostics,
+    );
     table.enums.insert(
         enum_decl.name.text.clone(),
         EnumSig {
@@ -750,6 +799,213 @@ fn param_sig(p: &juxc_ast::Param) -> ParamSig {
         name: p.name.text.clone(),
         ty: p.ty.clone(),
     }
+}
+
+/// Enforce the spec's fixed return types for operators that have them
+/// (`JUX-OPERATORS-ADDENDUM.md` §O.2.1 + §O.2.2). Operators whose
+/// signature shape is user-defined (arithmetic, bitwise, shift,
+/// indexing, call, range) get no signature check at this stage —
+/// rustc catches mismatches downstream.
+///
+/// | Operator                                | Required return |
+/// |-----------------------------------------|------------------|
+/// | `==`, `<`, `<=`, `>`, `>=`              | `bool`           |
+/// | `<=>`, `hash`                           | `int`            |
+/// | `string`                                | `String`         |
+///
+/// Deleted operators (`= delete;`) skip the check — they declare a
+/// signature only to opt out of the auto-derive, not to provide an
+/// override.
+///
+/// Emits `E0410_TypeMismatch` anchored at the operator's declaration
+/// span when the declared return type doesn't match the required one.
+fn check_operator_return_types(
+    operators: &[&juxc_ast::OperatorDecl],
+    kind_label: &str,
+    decl_name: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for op in operators {
+        if op.is_deleted {
+            continue;
+        }
+        let Some(expected) = required_return_type_for_operator(op.kind) else {
+            // Operator has no fixed return type per spec — skip.
+            continue;
+        };
+        if return_type_matches_primitive(&op.return_type, expected) {
+            continue;
+        }
+        let actual_str = render_return_type(&op.return_type);
+        diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0410_TypeMismatch,
+                format!(
+                    "operator `{}` on {kind_label} `{decl_name}` must return `{expected}`, \
+                     found `{actual_str}`",
+                    operator_kind_display(op.kind),
+                ),
+            )
+            .with_span(op.span)
+            .with_help(&format!(
+                "the spec fixes this operator's return type; change the signature to \
+                 `{expected} operator {}(...)`",
+                operator_kind_display(op.kind),
+            )),
+        );
+    }
+}
+
+/// Per spec §O.2.1 / §O.2.2, the fixed return-type name for each
+/// operator kind whose return shape is constrained. Returns `None`
+/// for operators whose return type is user-defined (arithmetic
+/// family, indexing, call, range).
+fn required_return_type_for_operator(kind: OperatorKind) -> Option<&'static str> {
+    match kind {
+        OperatorKind::Eq
+        | OperatorKind::Lt
+        | OperatorKind::Le
+        | OperatorKind::Gt
+        | OperatorKind::Ge => Some("bool"),
+        OperatorKind::Cmp | OperatorKind::Hash => Some("int"),
+        OperatorKind::ToString => Some("String"),
+        // Free-form return types — no signature check.
+        OperatorKind::Plus
+        | OperatorKind::Minus
+        | OperatorKind::Mul
+        | OperatorKind::Div
+        | OperatorKind::Rem
+        | OperatorKind::BitAnd
+        | OperatorKind::BitOr
+        | OperatorKind::BitXor
+        | OperatorKind::BitNot
+        | OperatorKind::Shl
+        | OperatorKind::Shr
+        | OperatorKind::Index
+        | OperatorKind::IndexSet
+        | OperatorKind::Call
+        | OperatorKind::Range
+        | OperatorKind::RangeInclusive => None,
+    }
+}
+
+/// True iff `rt` is `ReturnType::Type(t)` where `t` is exactly the
+/// single-segment primitive / String type named `expected`. No
+/// nullable, no array, no generic args — those would all be a
+/// mismatch.
+fn return_type_matches_primitive(rt: &ReturnType, expected: &str) -> bool {
+    let ReturnType::Type(t) = rt else { return false };
+    t.array_shape.is_none()
+        && !t.nullable
+        && t.generic_args.is_empty()
+        && t.name.segments.len() == 1
+        && t.name.segments[0].text == expected
+}
+
+/// Render a `ReturnType` for inclusion in a diagnostic message.
+/// Picks a flavored string for the user-visible spelling (e.g.
+/// `"void"` / `"bool"` / `"async T"`). Wrappers (arrays, nullables,
+/// generic args) get a best-effort approximation that's still
+/// human-readable.
+fn render_return_type(rt: &ReturnType) -> String {
+    match rt {
+        ReturnType::Void => "void".to_string(),
+        ReturnType::AsyncType(t) => format!("async {}", render_type_ref(t)),
+        ReturnType::Type(t) => render_type_ref(t),
+    }
+}
+
+fn render_type_ref(t: &TypeRef) -> String {
+    let mut out: String = t
+        .name
+        .segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(".");
+    if !t.generic_args.is_empty() {
+        out.push('<');
+        let parts: Vec<String> = t.generic_args.iter().map(render_type_ref).collect();
+        out.push_str(&parts.join(", "));
+        out.push('>');
+    }
+    if t.nullable {
+        out.push('?');
+    }
+    if t.array_shape.is_some() {
+        out.push_str("[]");
+    }
+    out
+}
+
+/// Enforce the completeness rule for individual ordering operators
+/// per `JUX-OPERATORS-ADDENDUM.md` §O.2.1: "individual `operator<`
+/// etc. — must define all four; no partial sets". A type that
+/// declares ANY of `<`, `<=`, `>`, `>=` must declare ALL four.
+///
+/// Deletions count as opt-out, not as a declaration — a type with
+/// `operator< = delete;` and nothing else has zero defined individuals
+/// and stays silent. A type with three defined and one deleted has
+/// three defined → fires for the missing one (the deletion doesn't
+/// satisfy completeness).
+///
+/// Emits one `E0930_OperatorConflict` per missing operator, anchored
+/// at the FIRST defined individual operator's span (since the missing
+/// ones have no span to anchor at).
+fn check_individual_ordering_completeness(
+    operators: &[&juxc_ast::OperatorDecl],
+    kind_label: &str,
+    decl_name: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    const ORDERING: [OperatorKind; 4] = [
+        OperatorKind::Lt,
+        OperatorKind::Le,
+        OperatorKind::Gt,
+        OperatorKind::Ge,
+    ];
+    // Find each defined-individual; the first one's span anchors the
+    // diagnostic when others are missing.
+    let defined: Vec<&juxc_ast::OperatorDecl> = operators
+        .iter()
+        .copied()
+        .filter(|o| ORDERING.contains(&o.kind) && !o.is_deleted)
+        .collect();
+    if defined.is_empty() {
+        return;
+    }
+    let anchor_span = defined[0].span;
+    let missing: Vec<&'static str> = ORDERING
+        .iter()
+        .filter(|kind| {
+            !operators
+                .iter()
+                .any(|o| o.kind == **kind && !o.is_deleted)
+        })
+        .map(|kind| operator_kind_display(*kind))
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    let missing_list = missing
+        .iter()
+        .map(|s| format!("`operator{s}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    diagnostics.push(
+        Diagnostic::error(
+            code::Code::E0930_OperatorConflict,
+            format!(
+                "{kind_label} `{decl_name}` declares some individual ordering operators \
+                 but not all four — missing {missing_list}",
+            ),
+        )
+        .with_span(anchor_span)
+        .with_help(
+            "either define all four of `operator<`, `operator<=`, `operator>`, `operator>=`, \
+             or replace them with a single `operator<=>` that auto-derives the four",
+        ),
+    );
 }
 
 /// Enforce the `<=>` / individual-ordering conflict rule per
@@ -1317,10 +1573,12 @@ mod tests {
         );
     }
 
-    /// `<=>` deleted + individual `<` defined — no conflict. Deletion
-    /// isn't definition.
+    /// `<=>` deleted + complete individual set defined — no conflict.
+    /// Deletion isn't definition, so the user has switched to the
+    /// four-operator form. All four must come together (per the
+    /// partial-set rule below).
     #[test]
-    fn deleted_cmp_with_lt_is_ok() {
+    fn deleted_cmp_with_individuals_is_ok() {
         let (_table, diags) = build_table(
             r#"
             public class V {
@@ -1328,6 +1586,9 @@ mod tests {
                 public V(int x) { this.x = x; }
                 public int operator<=>(V other) = delete;
                 public bool operator<(V other) { return false; }
+                public bool operator<=(V other) { return false; }
+                public bool operator>(V other) { return false; }
+                public bool operator>=(V other) { return false; }
             }
             "#,
         );
@@ -1356,6 +1617,303 @@ mod tests {
             !diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict),
             "{diags:?}",
         );
+    }
+
+    // ----------------------------------------------------------------
+    // Operator return-type signature validation (§O.2.1, §O.2.2)
+    // ----------------------------------------------------------------
+
+    /// `String operator==` violates spec §O.2.1's "returns bool" rule
+    /// — fires E0410 at signature-validation time. Catches the bug
+    /// cleanly instead of letting rustc complain about a trait impl
+    /// mismatch later.
+    #[test]
+    fn operator_eq_wrong_return_emits_e0410() {
+        let (_table, diags) = build_table(
+            r#"
+            public class P {
+                public int x;
+                public P(int x) { this.x = x; }
+                public String operator==(P other) { return "x"; }
+                public int operator hash() { return 0; }
+            }
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            "{diags:?}",
+        );
+    }
+
+    /// `operator<=>` must return `int`; declaring it as `bool` fires
+    /// E0410.
+    #[test]
+    fn operator_cmp_wrong_return_emits_e0410() {
+        let (_table, diags) = build_table(
+            r#"
+            public class V {
+                public int x;
+                public V(int x) { this.x = x; }
+                public bool operator<=>(V other) { return false; }
+            }
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            "{diags:?}",
+        );
+    }
+
+    /// `operator hash` must return `int`; declaring it as `String`
+    /// fires E0410.
+    #[test]
+    fn operator_hash_wrong_return_emits_e0410() {
+        let (_table, diags) = build_table(
+            r#"
+            public class P {
+                public int x;
+                public P(int x) { this.x = x; }
+                public String operator hash() { return "x"; }
+            }
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            "{diags:?}",
+        );
+    }
+
+    /// `operator string` must return `String`; declaring it as `int`
+    /// fires E0410.
+    #[test]
+    fn operator_string_wrong_return_emits_e0410() {
+        let (_table, diags) = build_table(
+            r#"
+            public class P {
+                public int x;
+                public P(int x) { this.x = x; }
+                public int operator string() { return 0; }
+            }
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            "{diags:?}",
+        );
+    }
+
+    /// Correct-signature operators are not flagged.
+    #[test]
+    fn correct_operator_signatures_are_silent() {
+        let (_table, diags) = build_table(
+            r#"
+            public class P {
+                public int x;
+                public P(int x) { this.x = x; }
+                public bool operator==(P other) { return true; }
+                public int operator hash() { return 0; }
+                public String operator string() { return "x"; }
+                public int operator<=>(P other) { return 0; }
+            }
+            "#,
+        );
+        // Only the signature-related E0410s would fire — there should
+        // be none. (Body-checks may fire other E0410s but we're
+        // counting only signature-rule violations here, which would
+        // anchor at the operator span. For this test we just check
+        // that no E0410 with the operator-return phrasing appears.)
+        let any_op_e0410 = diags.iter().any(|d| {
+            d.code == code::Code::E0410_TypeMismatch
+                && d.message.contains("must return")
+        });
+        assert!(!any_op_e0410, "{diags:?}");
+    }
+
+    /// `= delete;` operators are exempt from the return-type rule —
+    /// the user is opting out, not providing a real signature.
+    #[test]
+    fn deleted_operator_skips_return_type_check() {
+        let (_table, diags) = build_table(
+            r#"
+            public class P {
+                public int x;
+                public P(int x) { this.x = x; }
+                public String operator==(P other) = delete;
+            }
+            "#,
+        );
+        let any_op_e0410 = diags.iter().any(|d| {
+            d.code == code::Code::E0410_TypeMismatch
+                && d.message.contains("must return")
+        });
+        assert!(!any_op_e0410, "deletion should bypass rule: {diags:?}");
+    }
+
+    // ----------------------------------------------------------------
+    // Partial individual-ordering set (§O.2.1)
+    // ----------------------------------------------------------------
+
+    /// Declaring only `operator<` fires E0930 listing the missing
+    /// three: `<=`, `>`, `>=`. Spec §O.2.1 says "must define all
+    /// four; no partial sets."
+    #[test]
+    fn lt_alone_emits_e0930_listing_missing_three() {
+        let (_table, diags) = build_table(
+            r#"
+            public class V {
+                public int x;
+                public V(int x) { this.x = x; }
+                public bool operator<(V other) { return false; }
+            }
+            "#,
+        );
+        let hit = diags.iter().find(|d| {
+            d.code == code::Code::E0930_OperatorConflict
+                && d.message.contains("partial set") || d.message.contains("not all four")
+        });
+        assert!(hit.is_some(), "{diags:?}");
+        let msg = &hit.unwrap().message;
+        assert!(msg.contains("`operator<=`"), "missing <= in message: {msg}");
+        assert!(msg.contains("`operator>`"), "missing > in message: {msg}");
+        assert!(msg.contains("`operator>=`"), "missing >= in message: {msg}");
+    }
+
+    /// Three out of four → E0930 lists the one missing.
+    #[test]
+    fn three_individuals_missing_one_emits_e0930() {
+        let (_table, diags) = build_table(
+            r#"
+            public class V {
+                public int x;
+                public V(int x) { this.x = x; }
+                public bool operator<(V other) { return false; }
+                public bool operator<=(V other) { return false; }
+                public bool operator>(V other) { return false; }
+            }
+            "#,
+        );
+        let hit = diags.iter().find(|d| {
+            d.code == code::Code::E0930_OperatorConflict
+                && d.message.contains("not all four")
+        });
+        assert!(hit.is_some(), "{diags:?}");
+        let msg = &hit.unwrap().message;
+        assert!(msg.contains("`operator>=`"), "should list >=: {msg}");
+        assert!(!msg.contains("`operator<`"), "shouldn't list <: {msg}");
+    }
+
+    /// All four declared → silent.
+    #[test]
+    fn all_four_individuals_is_ok() {
+        let (_table, diags) = build_table(
+            r#"
+            public class V {
+                public int x;
+                public V(int x) { this.x = x; }
+                public bool operator<(V other) { return false; }
+                public bool operator<=(V other) { return false; }
+                public bool operator>(V other) { return false; }
+                public bool operator>=(V other) { return false; }
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| {
+                d.code == code::Code::E0930_OperatorConflict
+                    && d.message.contains("not all four")
+            }),
+            "{diags:?}",
+        );
+    }
+
+    /// Three defined + one deleted → still a partial-set violation.
+    /// Deletion is opt-out, not a declaration that satisfies the
+    /// rule.
+    #[test]
+    fn three_defined_plus_one_deleted_still_partial() {
+        let (_table, diags) = build_table(
+            r#"
+            public class V {
+                public int x;
+                public V(int x) { this.x = x; }
+                public bool operator<(V other) { return false; }
+                public bool operator<=(V other) { return false; }
+                public bool operator>(V other) { return false; }
+                public bool operator>=(V other) = delete;
+            }
+            "#,
+        );
+        let hit = diags.iter().find(|d| {
+            d.code == code::Code::E0930_OperatorConflict
+                && d.message.contains("not all four")
+        });
+        assert!(hit.is_some(), "{diags:?}");
+        assert!(
+            hit.unwrap().message.contains("`operator>=`"),
+            "should call out >=: {hit:?}",
+        );
+    }
+
+    /// All four deleted → no diagnostic. The user has explicitly
+    /// opted out of every individual; the rule has nothing to enforce.
+    #[test]
+    fn all_four_deleted_is_silent() {
+        let (_table, diags) = build_table(
+            r#"
+            public class V {
+                public int x;
+                public V(int x) { this.x = x; }
+                public bool operator<(V other) = delete;
+                public bool operator<=(V other) = delete;
+                public bool operator>(V other) = delete;
+                public bool operator>=(V other) = delete;
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| {
+                d.code == code::Code::E0930_OperatorConflict
+                    && d.message.contains("not all four")
+            }),
+            "{diags:?}",
+        );
+    }
+
+    /// Same rule applies to records.
+    #[test]
+    fn record_lt_alone_emits_e0930() {
+        let (_table, diags) = build_table(
+            r#"
+            public record R(int x) {
+                public bool operator<(R other) { return false; }
+            }
+            "#,
+        );
+        let hit = diags.iter().any(|d| {
+            d.code == code::Code::E0930_OperatorConflict
+                && d.message.contains("not all four")
+        });
+        assert!(hit, "{diags:?}");
+    }
+
+    /// Arithmetic-family operators have no spec-fixed return type;
+    /// the user can declare any type. No E0410 fires here.
+    #[test]
+    fn arithmetic_operator_return_is_free() {
+        let (_table, diags) = build_table(
+            r#"
+            public class M {
+                public int x;
+                public M(int x) { this.x = x; }
+                public String operator+(M other) { return "x"; }
+            }
+            "#,
+        );
+        let any_op_e0410 = diags.iter().any(|d| {
+            d.code == code::Code::E0410_TypeMismatch
+                && d.message.contains("must return")
+        });
+        assert!(!any_op_e0410, "arithmetic ops have free return: {diags:?}");
     }
 
     /// Same rule applies to records.
