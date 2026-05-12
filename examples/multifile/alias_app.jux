@@ -1,0 +1,19 @@
+// Consumer of `alias.lib`'s aliases — exercises the per-alias
+// unit-context fix: even though the consumer never imports
+// `IntBox` or `Pair` directly, the aliases expand correctly
+// because their declaring unit's context is what tycheck uses to
+// resolve the target.
+
+package alias.app;
+
+import alias.lib.BoxedInt;
+import alias.lib.IntPair;
+
+public void main() {
+    var b = new BoxedInt(7);
+    print(b.get());
+
+    var p = new IntPair(1, 2);
+    print(p.first);
+    print(p.second);
+}

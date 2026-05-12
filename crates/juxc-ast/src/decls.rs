@@ -40,6 +40,41 @@ pub enum TopLevelDecl {
     /// looks like an alias on use, expands to its target type) and
     /// emitted as a Rust `pub type Name<...>? = ...;`.
     TypeAlias(TypeAliasDecl),
+    /// A top-level constant — `const Type NAME = expr;` (or the
+    /// `final` synonym per grammar §A.2.2). Resolves to a Rust
+    /// `pub const NAME: T = …;`. Evaluated at compile time
+    /// — the initializer must be a const-expression today,
+    /// which Phase 1 broadly approximates as "any literal /
+    /// arithmetic on literals."
+    Const(ConstDecl),
+}
+
+/// `const-decl` per grammar §A.2.2:
+/// ```text
+/// const-decl = ('const' | 'final') type identifier '=' expression ';'
+/// ```
+///
+/// `const` and `final` are synonyms in this position — the AST
+/// records which spelling the user wrote so error messages can
+/// echo it, but downstream semantics treat them identically.
+#[derive(Debug, Clone)]
+pub struct ConstDecl {
+    /// Source visibility.
+    pub visibility: Visibility,
+    /// `true` if the user wrote `final`; `false` if they wrote
+    /// `const`. The two are synonymous everywhere else.
+    pub used_final_keyword: bool,
+    /// Declared type — required (no inference for top-level
+    /// constants, matching the spec's grammar).
+    pub ty: TypeRef,
+    /// Constant's identifier — UPPER_SNAKE_CASE conventionally,
+    /// not enforced by the parser.
+    pub name: Ident,
+    /// Initializer expression. Today any expression parses; a
+    /// future const-expr pass tightens this.
+    pub value: Expr,
+    /// Span of the whole declaration.
+    pub span: Span,
 }
 
 /// `type-alias` per grammar §A.2.4:

@@ -1,0 +1,13 @@
+// Top-level constants per spec §A.2.2:
+//   const-decl = ('const' | 'final') type identifier '=' expression ';'
+//
+// `const` and `final` are synonyms at top-level; pick whichever
+// reads better at the site. Both lower to a Rust `pub const`.
+
+public const int MAX_USERS = 100;
+public final String GREETING = "Hello";
+
+public void main() {
+    print(MAX_USERS);
+    print(GREETING);
+}

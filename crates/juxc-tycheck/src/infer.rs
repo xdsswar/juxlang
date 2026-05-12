@@ -519,21 +519,26 @@ fn resolve_class_name(
     };
     // Follow type aliases — `new Alias(args)` should land on the
     // underlying class. Walks at most a small chain (capped at 16)
-    // to avoid runaway expansion on malformed aliases. Only chases
-    // an alias whose target is a single-name reference to a class;
-    // anything more elaborate keeps the alias's own FQN.
+    // to avoid runaway expansion on malformed aliases. Bare-name
+    // resolution inside the alias's target uses the **declaring
+    // unit's** context — important when the alias lives in a
+    // different package than the call site (the call site never
+    // imported the target name, only the alias).
     let mut cursor = fqn;
     for _ in 0..16 {
         let Some(alias) = symbols.aliases.get(&cursor) else {
             return cursor;
         };
-        // Pull the bare class name out of the target TypeRef and
-        // map it back through `is_type_name`. Multi-segment targets
-        // already are FQN-shaped.
+        let alias_ctx = alias
+            .unit_index
+            .and_then(|idx| symbols.units.get(idx));
         let target_fqn = if alias.target.name.segments.len() == 1 {
             let bare = &alias.target.name.segments[0].text;
-            env.unqualified
-                .get(bare)
+            // Prefer the alias's declaring unit's resolver, fall
+            // back to the caller's (legacy single-file path).
+            alias_ctx
+                .and_then(|ctx| ctx.unqualified.get(bare))
+                .or_else(|| env.unqualified.get(bare))
                 .cloned()
                 .unwrap_or_else(|| bare.clone())
         } else {

@@ -238,6 +238,35 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a top-level constant declaration per grammar §A.2.2:
+    /// ```text
+    /// const-decl = ('const' | 'final') type identifier '=' expression ';'
+    /// ```
+    /// Caller has already consumed the visibility token and the
+    /// `const` / `final` keyword. `used_final_keyword` records which
+    /// spelling the user wrote so error messages echo it back.
+    pub(crate) fn parse_const_decl(
+        &mut self,
+        visibility: Visibility,
+        used_final_keyword: bool,
+    ) -> Option<juxc_ast::ConstDecl> {
+        let start = self.peek_span();
+        let ty = self.parse_type_ref()?;
+        let name = self.parse_ident()?;
+        self.expect(&TokenKind::Eq, "'=' in const declaration");
+        let value = self.parse_expr()?;
+        self.expect(&TokenKind::Semicolon, "';' after const declaration");
+        let end = self.last_consumed_span();
+        Some(juxc_ast::ConstDecl {
+            visibility,
+            used_final_keyword,
+            ty,
+            name,
+            value,
+            span: start.join(end),
+        })
+    }
+
     /// Parse a `type Name<...>? = TypeRef;` declaration per grammar
     /// §A.2.4. Caller has already eaten the visibility token and
     /// confirmed the next token is `type`.

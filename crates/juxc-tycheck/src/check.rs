@@ -229,6 +229,28 @@ impl<'a> Checker<'a> {
                 // Type aliases — nothing body-shaped to check; the
                 // target is validated when expanded at use sites.
                 TopLevelDecl::TypeAlias(_) => {}
+                // Top-level constants — verify the initializer's
+                // inferred type fits the declared type. Emits
+                // `E0410_TypeMismatch` on a mismatch. The
+                // resolver already walked the initializer for
+                // name-resolution errors.
+                TopLevelDecl::Const(c) => {
+                    let expected = ty_from_ref(&c.ty, &self.env, self.symbols);
+                    let found = self.infer_and_record(&c.value);
+                    self.check_expr(&c.value);
+                    if !compatible(&expected, &found, self.symbols) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0410_TypeMismatch,
+                                format!(
+                                    "constant `{}`: expected {}, found {}",
+                                    c.name.text, expected, found,
+                                ),
+                            )
+                            .with_span(expr_span(&c.value)),
+                        );
+                    }
+                }
             }
         }
     }

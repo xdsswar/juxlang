@@ -266,6 +266,12 @@ impl Resolver {
                     // level it's just another top-level name.
                     self.user_names.insert(alias.name.text.clone());
                 }
+                TopLevelDecl::Const(c) => {
+                    // Constants are visible as bare identifiers in
+                    // expression position (`var n = PI;`), so the
+                    // resolver registers their name like any other.
+                    self.user_names.insert(c.name.text.clone());
+                }
             }
         }
     }
@@ -322,6 +328,9 @@ impl Resolver {
             // Type aliases — target is a TypeRef; type-position
             // resolution belongs to tycheck. Nothing to walk here.
             TopLevelDecl::TypeAlias(_) => {}
+            // Top-level constants — walk the initializer so
+            // unresolved names inside it surface as E0301.
+            TopLevelDecl::Const(c) => self.visit_expr(&c.value),
         }
     }
 

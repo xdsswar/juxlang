@@ -92,6 +92,15 @@ pub enum Code {
     /// isn't in `S`'s `permits` list. Sealed classes restrict
     /// inheritance to the explicitly named subclasses.
     E0422_SealedClassNotPermitted,
+    /// E0423 — `class C extends X` where `X` names something other
+    /// than a class (e.g. an interface, record, enum, or type
+    /// alias). Per Jux's inheritance rule a class can only extend
+    /// another non-final class.
+    E0423_ExtendsNotAClass,
+    /// E0424 — `class C implements X` where `X` names something
+    /// other than an interface. `implements` requires interface
+    /// names.
+    E0424_ImplementsNotAnInterface,
 
     // ---- Operators / Auto-derivation (E0900–E0999) ----
     /// E0930 — Conflicting operator declarations. Per
@@ -147,6 +156,8 @@ impl Code {
             Code::E0420_FinalClassExtended       => "E0420",
             Code::E0421_FinalMethodOverridden    => "E0421",
             Code::E0422_SealedClassNotPermitted  => "E0422",
+            Code::E0423_ExtendsNotAClass         => "E0423",
+            Code::E0424_ImplementsNotAnInterface => "E0424",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",

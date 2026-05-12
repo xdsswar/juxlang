@@ -69,6 +69,10 @@ pub struct SymbolTable {
     /// before further inference — `Ty::User` never holds an alias
     /// name once `ty_from_ref` is done.
     pub aliases: HashMap<String, TypeAliasSig>,
+    /// Top-level constants (`const T NAME = expr;`) indexed by FQN.
+    /// Only the declared type is recorded — the initializer is
+    /// only walked once by tycheck and lowered by the backend.
+    pub consts: HashMap<String, ConstSig>,
     /// One entry per input unit (parallel to the `units` slice
     /// `build_workspace` received). Each entry carries the unit's
     /// package and its bare-name → FQN map (the closure of the
@@ -429,6 +433,18 @@ pub struct FunctionSig {
     pub span: Span,
 }
 
+/// Signature of a top-level constant. Spec §A.2.2.
+#[derive(Debug, Clone)]
+pub struct ConstSig {
+    /// Source visibility.
+    pub visibility: Visibility,
+    /// Declared type — the initializer must match (verified by
+    /// tycheck's `check::Checker::check_unit`).
+    pub ty: TypeRef,
+    /// Span of the whole declaration.
+    pub span: Span,
+}
+
 /// Signature of a top-level type alias. Spec §A.2.4.
 #[derive(Debug, Clone)]
 pub struct TypeAliasSig {
@@ -439,6 +455,13 @@ pub struct TypeAliasSig {
     pub generic_params: Vec<TypeParam>,
     /// Target type the alias resolves to.
     pub target: TypeRef,
+    /// Index of the unit that declared this alias, into
+    /// `SymbolTable::units`. Lets `expand_alias` lower the target
+    /// using the **declaring** unit's name-resolution context
+    /// rather than the caller's — important when the target
+    /// references types that aren't visible from the use site
+    /// without an explicit import.
+    pub unit_index: Option<usize>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -504,7 +527,7 @@ pub fn build_workspace(
             if let TopLevelDecl::Class(c) = item {
                 class_unit.insert(make_fqn(&unit_pkg, &c.name.text), unit_idx);
             }
-            insert_top_level(&mut table, item, &unit_pkg, diagnostics);
+            insert_top_level(&mut table, item, &unit_pkg, unit_idx, diagnostics);
         }
     }
     // Second pass: build per-unit name-resolution contexts now that
@@ -749,6 +772,7 @@ fn insert_top_level(
     table: &mut SymbolTable,
     item: &TopLevelDecl,
     package: &[String],
+    unit_idx: usize,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // Every top-level kind is keyed by FQN. Records / enums /
@@ -773,15 +797,41 @@ fn insert_top_level(
             insert_function(table, fn_decl, package, diagnostics);
         }
         TopLevelDecl::TypeAlias(alias) => {
-            insert_type_alias(table, alias, package, diagnostics);
+            insert_type_alias(table, alias, package, unit_idx, diagnostics);
+        }
+        TopLevelDecl::Const(c) => {
+            insert_const(table, c, package, diagnostics);
         }
     }
+}
+
+/// Register a top-level constant under its FQN. Same E0400-on-
+/// duplicate rule as the other top-level kinds.
+fn insert_const(
+    table: &mut SymbolTable,
+    decl: &juxc_ast::ConstDecl,
+    package: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let fqn = make_fqn(package, &decl.name.text);
+    if !ensure_top_level_unique(table, &fqn, decl.span, diagnostics) {
+        return;
+    }
+    table.consts.insert(
+        fqn,
+        ConstSig {
+            visibility: decl.visibility,
+            ty: decl.ty.clone(),
+            span: decl.span,
+        },
+    );
 }
 
 fn insert_type_alias(
     table: &mut SymbolTable,
     alias: &juxc_ast::TypeAliasDecl,
     package: &[String],
+    unit_idx: usize,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let fqn = make_fqn(package, &alias.name.text);
@@ -794,6 +844,7 @@ fn insert_type_alias(
             visibility: alias.visibility,
             generic_params: alias.generic_params.clone(),
             target: alias.target.clone(),
+            unit_index: Some(unit_idx),
             span: alias.span,
         },
     );
@@ -828,8 +879,34 @@ fn check_final_and_sealed_extends(
             },
         };
         let Some(parent) = table.classes.get(parent_name) else {
-            // Unknown parent — resolver E0301 covers this; don't
-            // double-up.
+            // Parent isn't a class. If it names a known
+            // non-class type (interface / record / enum / alias),
+            // fire E0423 — extends only takes classes.
+            if table.interfaces.contains_key(parent_name)
+                || table.records.contains_key(parent_name)
+                || table.enums.contains_key(parent_name)
+                || table.aliases.contains_key(parent_name)
+            {
+                let kind = if table.interfaces.contains_key(parent_name) {
+                    "an interface"
+                } else if table.records.contains_key(parent_name) {
+                    "a record"
+                } else if table.enums.contains_key(parent_name) {
+                    "an enum"
+                } else {
+                    "a type alias"
+                };
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0423_ExtendsNotAClass,
+                        format!(
+                            "class `{child_name}` cannot extend `{parent_name}` because it is {kind} (only classes are extensible)",
+                        ),
+                    )
+                    .with_span(extends.span),
+                );
+            }
+            // Else: unknown name — resolver E0301 covers it.
             continue;
         };
         if parent.is_final {
@@ -853,6 +930,65 @@ fn check_final_and_sealed_extends(
                         ),
                     )
                     .with_span(extends.span),
+                );
+            }
+        }
+    }
+    // Each `implements` entry must name an interface — `class C
+    // implements SomeClass` doesn't make sense (it would be a
+    // structural error since classes carry concrete impls, not
+    // open contracts). Fires E0424 against the offending entry.
+    for (child_name, child) in &table.classes {
+        for impl_ty in &child.implements {
+            let Some(seg) = impl_ty.name.segments.last() else {
+                continue;
+            };
+            let bare = seg.text.as_str();
+            // Try the unit's bare→FQN map indirectly: look across
+            // every interface/class/record/enum/alias for a
+            // matching bare name. Simple-name match is acceptable
+            // Phase-1; cross-package implements is unusual.
+            let key = if table.interfaces.contains_key(bare) {
+                bare.to_string()
+            } else {
+                // Search FQNs for a matching bare suffix.
+                table
+                    .interfaces
+                    .keys()
+                    .chain(table.classes.keys())
+                    .chain(table.records.keys())
+                    .chain(table.enums.keys())
+                    .chain(table.aliases.keys())
+                    .find(|fqn| fqn_bare(fqn) == bare)
+                    .cloned()
+                    .unwrap_or_else(|| bare.to_string())
+            };
+            if table.interfaces.contains_key(&key) {
+                continue; // valid implements
+            }
+            // Decide which non-interface kind it is (if any) for a
+            // precise diagnostic message; unknown names defer to
+            // the resolver.
+            let kind = if table.classes.contains_key(&key) {
+                Some("a class")
+            } else if table.records.contains_key(&key) {
+                Some("a record")
+            } else if table.enums.contains_key(&key) {
+                Some("an enum")
+            } else if table.aliases.contains_key(&key) {
+                Some("a type alias")
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0424_ImplementsNotAnInterface,
+                        format!(
+                            "class `{child_name}` cannot implement `{bare}` because it is {kind} (only interfaces appear in `implements`)",
+                        ),
+                    )
+                    .with_span(impl_ty.span),
                 );
             }
         }
@@ -924,7 +1060,10 @@ fn ensure_top_level_unique(
     span: Span,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> bool {
-    if table.is_type_name(name) || table.functions.contains_key(name) {
+    if table.is_type_name(name)
+        || table.functions.contains_key(name)
+        || table.consts.contains_key(name)
+    {
         diagnostics.push(
             Diagnostic::error(
                 code::Code::E0400_DuplicateDeclaration,
@@ -2729,6 +2868,101 @@ mod tests {
         assert!(diags.is_empty(), "no diagnostics expected: {diags:?}");
         assert!(table.aliases.contains_key("UserId"));
         assert!(table.is_type_name("UserId"));
+    }
+
+    // ----------------------------------------------------------------
+    // Inheritance shape — single non-final class + multi-interface
+    // ----------------------------------------------------------------
+
+    /// `class C extends Drawable` where Drawable is an interface
+    /// fires E0423.
+    #[test]
+    fn class_extending_interface_emits_e0423() {
+        let (_table, diags) = build_table(
+            r#"
+            public interface Drawable {}
+            public class Shape extends Drawable {}
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0423_ExtendsNotAClass),
+            "expected E0423: {diags:?}",
+        );
+    }
+
+    /// `class C implements SomeClass` fires E0424.
+    #[test]
+    fn class_implementing_class_emits_e0424() {
+        let (_table, diags) = build_table(
+            r#"
+            public class Base {}
+            public class Sub implements Base {}
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0424_ImplementsNotAnInterface),
+            "expected E0424: {diags:?}",
+        );
+    }
+
+    /// `class C implements I1, I2, I3` — multiple interfaces is
+    /// fine (the Java rule).
+    #[test]
+    fn class_implementing_multiple_interfaces_is_ok() {
+        let (_table, diags) = build_table(
+            r#"
+            public interface A {}
+            public interface B {}
+            public interface C {}
+            public class X implements A, B, C {}
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| matches!(
+                d.code,
+                code::Code::E0423_ExtendsNotAClass
+                    | code::Code::E0424_ImplementsNotAnInterface
+            )),
+            "expected no E0423/E0424: {diags:?}",
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // Top-level constants (§A.2.2)
+    // ----------------------------------------------------------------
+
+    /// `const int MAX = 100;` lands in `table.consts` with the
+    /// declared type recorded.
+    #[test]
+    fn top_level_const_is_indexed() {
+        let (table, diags) = build_table("public const int MAX = 100;");
+        assert!(diags.is_empty(), "no diagnostics: {diags:?}");
+        assert!(table.consts.contains_key("MAX"));
+    }
+
+    /// `final` is a synonym for `const` at the top-level constant
+    /// position — registered exactly the same way.
+    #[test]
+    fn top_level_final_is_alias_for_const() {
+        let (table, diags) = build_table("public final String NAME = \"x\";");
+        assert!(diags.is_empty(), "no diagnostics: {diags:?}");
+        assert!(table.consts.contains_key("NAME"));
+    }
+
+    /// Two `const` declarations with the same name in the same
+    /// package fire E0400.
+    #[test]
+    fn duplicate_const_emits_e0400() {
+        let (_table, diags) = build_table(
+            r#"
+            public const int X = 1;
+            public const int X = 2;
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
+            "expected E0400 for duplicate constant: {diags:?}",
+        );
     }
 
     /// A type alias name conflicting with a class name fires E0400.

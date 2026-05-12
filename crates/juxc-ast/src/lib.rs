@@ -44,7 +44,7 @@ mod types;
 pub use common::{Ident, QualifiedName, Visibility};
 pub use compilation::{CompilationUnit, ImportDecl, ImportItem, ImportSpec, PackageDecl};
 pub use decls::{
-    ClassDecl, ConstructorDecl, EnumDecl, EnumPayload, EnumVariant,
+    ClassDecl, ConstDecl, ConstructorDecl, EnumDecl, EnumPayload, EnumVariant,
     FieldDecl, FnDecl, FnModifier, InterfaceDecl, OperatorDecl,
     OperatorKind, Param, RecordComponent, RecordDecl, ReturnType,
     TopLevelDecl, TypeAliasDecl, TypeParam,

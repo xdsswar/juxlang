@@ -168,6 +168,10 @@ impl TypeChecker {
                 // syntactic TypeRef checked at use sites via
                 // alias expansion in `ty_from_ref`.
                 TopLevelDecl::TypeAlias(_) => {}
+                // Top-level constants — value-vs-type check lives
+                // in `check::Checker::check_unit` (it has the
+                // expression-inference machinery).
+                TopLevelDecl::Const(_) => {}
             }
         }
     }

@@ -273,6 +273,23 @@ impl<'a> Parser<'a> {
     pub(crate) fn parse_top_level_decl(&mut self) -> Option<TopLevelDecl> {
         // TODO: annotations (§A.2.3).
         let visibility = self.parse_visibility();
+
+        // `const NAME …;` is unambiguously a top-level constant —
+        // `const` is never a class modifier in Jux.
+        if self.eat_kw(Keyword::Const) {
+            let decl = self.parse_const_decl(visibility, /*used_final=*/ false)?;
+            return Some(TopLevelDecl::Const(decl));
+        }
+        // `final` is overloaded — it modifies a class (`final class
+        // X`) AND introduces a top-level constant (`final int X =
+        // 5;`). Disambiguate by peeking past `final`: if `class`
+        // appears (possibly after `abstract`/`sealed`) it's the
+        // class modifier path; otherwise it's a const decl.
+        if self.at_kw(Keyword::Final) && !looks_like_class_modifier_chain(self) {
+            self.advance(); // eat `final`
+            let decl = self.parse_const_decl(visibility, /*used_final=*/ true)?;
+            return Some(TopLevelDecl::Const(decl));
+        }
         // Top-level dispatch: `class` → class decl, `enum` → enum decl,
         // anything else routes to `parse_fn_decl`. Use `at_kw` (not
         // `at(&TokenKind::Kw(...))`) — the latter relies on
@@ -403,6 +420,29 @@ impl<'a> Parser<'a> {
                 ) => return,
                 _ => self.advance(),
             }
+        }
+    }
+}
+
+/// True iff the current token is `final` AND that `final` is acting
+/// as a class modifier rather than a constant introducer. We look
+/// past any combination of `final`/`abstract`/`sealed` and check
+/// whether `class` eventually follows.
+///
+/// Examples (cursor on the leading `final`):
+/// - `final class Foo {}`                  → true
+/// - `final abstract class Foo {}` (illegal but lookahead-true) → true
+/// - `final int X = 5;`                    → false (const decl)
+/// - `final Animal x = new Dog();`         → false (const decl)
+fn looks_like_class_modifier_chain<'a>(parser: &crate::Parser<'a>) -> bool {
+    let mut i = parser.pos;
+    loop {
+        match parser.tokens.get(i).map(|t| &t.kind) {
+            Some(TokenKind::Kw(Keyword::Final))
+            | Some(TokenKind::Kw(Keyword::Abstract))
+            | Some(TokenKind::Kw(Keyword::Sealed)) => i += 1,
+            Some(TokenKind::Kw(Keyword::Class)) => return true,
+            _ => return false,
         }
     }
 }

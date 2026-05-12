@@ -628,6 +628,7 @@ impl RustEmitter {
             TopLevelDecl::Record(d) => d.span,
             TopLevelDecl::Interface(d) => d.span,
             TopLevelDecl::TypeAlias(d) => d.span,
+            TopLevelDecl::Const(d) => d.span,
         };
         self.emit_source_marker(span);
         match item {
@@ -639,7 +640,27 @@ impl RustEmitter {
                 self.emit_interface_decl(interface_decl);
             }
             TopLevelDecl::TypeAlias(alias) => self.emit_type_alias_decl(alias),
+            TopLevelDecl::Const(c) => self.emit_const_decl(c),
         }
+    }
+
+    /// Emit a Jux `const T NAME = expr;` (or its `final` synonym)
+    /// as a Rust `pub const NAME: T = expr;`. Same visibility
+    /// rule as `emit_fn_decl` (honor declared visibility only
+    /// inside a `pub mod` wrapper).
+    pub(crate) fn emit_const_decl(&mut self, decl: &juxc_ast::ConstDecl) {
+        self.w.emit_indent();
+        if !self.symbols.package.is_empty() || self.workspace_mode {
+            self.emit_visibility(decl.visibility);
+        }
+        self.w.push_str("const ");
+        self.w.push_str(&decl.name.text);
+        self.w.push_str(": ");
+        self.emit_type_as_rust(&decl.ty);
+        self.w.push_str(" = ");
+        self.emit_expr(&decl.value);
+        self.w.push_str(";\n");
+        self.w.newline();
     }
 
     /// Emit a Jux `type Foo<...>? = TargetTy;` as a Rust

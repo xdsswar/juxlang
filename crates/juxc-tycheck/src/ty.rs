@@ -757,26 +757,64 @@ pub fn expand_alias(
     env: &TypeEnv,
     symbols: &SymbolTable,
 ) -> Option<Ty> {
-    let alias = symbols.aliases.get(fqn)?;
-    // Lower the alias's target in a scratch env with the alias's
-    // own generic params registered, so `T` inside the target reads
-    // as `Ty::Param("T")` rather than `Unknown`.
-    let mut scratch = TypeEnv::new();
-    scratch.current_package = env.current_package.clone();
-    scratch.unqualified = env.unqualified.clone();
-    for tp in &alias.generic_params {
-        scratch.add_generic_param(&tp.name.text);
-    }
-    let lowered_target = ty_from_ref(&alias.target, &scratch, symbols);
-    if alias.generic_params.is_empty() || use_site_args.is_empty() {
-        return Some(lowered_target);
-    }
-    // Substitute use-site args into the lowered target.
-    let lowered_args: Vec<Ty> = use_site_args
+    // Outer iteration handles alias-of-alias chains:
+    // `type A = B; type B = C; type C = int;` lets `A` resolve all
+    // the way to `int`. Capped at 16 to bound any malformed cycle
+    // the build pass missed.
+    let mut fqn_cursor = fqn.to_string();
+    let mut args_cursor: Vec<Ty> = use_site_args
         .iter()
         .map(|g| lower_generic_arg(g, env, symbols))
         .collect();
-    Some(substitute(&lowered_target, &alias.generic_params, &lowered_args))
+    for _ in 0..16 {
+        let alias = symbols.aliases.get(&fqn_cursor)?;
+        // Lower the alias's target in a scratch env seeded from
+        // the **declaring** unit's name-resolution context — same
+        // pattern we used for `extends_fqn` in
+        // `resolve_class_chain_fqns`. The alias's own generic
+        // params are added on top so `T` inside the target reads
+        // as `Ty::Param("T")`.
+        let mut scratch = TypeEnv::new();
+        if let Some(ctx) = alias
+            .unit_index
+            .and_then(|idx| symbols.units.get(idx))
+        {
+            scratch.current_package = ctx.package.clone();
+            scratch.unqualified = ctx.unqualified.clone();
+        } else {
+            // No recorded unit (legacy path / direct test builds) —
+            // fall back to the caller's env.
+            scratch.current_package = env.current_package.clone();
+            scratch.unqualified = env.unqualified.clone();
+        }
+        for tp in &alias.generic_params {
+            scratch.add_generic_param(&tp.name.text);
+        }
+        // Note: the target is lowered as a TypeRef *without* its
+        // alias being re-expanded mid-walk (`ty_from_ref` calls
+        // back into `expand_alias` only for top-level matches, so
+        // a target that itself references another alias produces
+        // a `Ty::User` we then peel below).
+        let lowered_target = ty_from_ref(&alias.target, &scratch, symbols);
+        let substituted = if alias.generic_params.is_empty() || args_cursor.is_empty() {
+            lowered_target
+        } else {
+            substitute(&lowered_target, &alias.generic_params, &args_cursor)
+        };
+        // If the result is `Ty::User(other_alias, args)`, drill
+        // through to the next alias and loop. Anything else (a
+        // class, primitive, etc.) is the final answer.
+        if let Ty::User { name: next_fqn, generic_args: next_args } = &substituted {
+            if symbols.aliases.contains_key(next_fqn) {
+                fqn_cursor = next_fqn.clone();
+                args_cursor = next_args.clone();
+                continue;
+            }
+        }
+        return Some(substituted);
+    }
+    // Cycle/over-deep — give up cleanly.
+    None
 }
 
 /// Lower a [`juxc_ast::GenericArg`] to a [`Ty`]. Concrete types
