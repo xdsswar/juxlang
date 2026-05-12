@@ -6,8 +6,10 @@
 use juxc_ast::{
     AssignStmt, Block, ElseBranch, Expr, ForEachStmt, IfStmt, Literal, Stmt, VarDecl, WhileStmt,
 };
+use juxc_source::Span;
 use juxc_tycheck::Ty;
 
+use crate::exprs::expr_span_of;
 use crate::RustEmitter;
 
 impl RustEmitter {
@@ -22,6 +24,12 @@ impl RustEmitter {
     /// for the statement text itself.
     pub(crate) fn emit_block_contents(&mut self, block: &Block) {
         for stmt in &block.statements {
+            // Per-statement source-map marker (only when `source` is
+            // attached on the emitter — see `lower_with_source`).
+            // Goes ahead of the leading indent so rustc errors on the
+            // emitted Rust can scan up to find the nearest `.jux`
+            // line/col.
+            self.emit_source_marker(stmt_span(stmt));
             self.w.emit_indent();
             self.emit_stmt(stmt);
         }
@@ -275,5 +283,29 @@ impl RustEmitter {
             }
         }
         self.w.push('\n');
+    }
+}
+
+/// Reach into a [`Stmt`] for its source span. Used by source-map
+/// marker emission. Several `Stmt` variants store their span on the
+/// inner payload (`IfStmt.span`, `VarDecl.span`, …); two (`Break`,
+/// `Continue`) carry a bare `Span`; `SuperCall` puts the span second
+/// in the tuple. For `Stmt::Expr` and `Stmt::Return(Some)` we forward
+/// to [`expr_span_of`] on the inner expression. `Stmt::Return(None)`
+/// has no expression span — falls back to `Span::DUMMY` so the
+/// marker emission skips it cleanly.
+pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
+    match stmt {
+        Stmt::Expr(e) => expr_span_of(e),
+        Stmt::Return(Some(e)) => expr_span_of(e),
+        Stmt::Return(None) => Span::DUMMY,
+        Stmt::VarDecl(v) => v.span,
+        Stmt::If(i) => i.span,
+        Stmt::While(w) => w.span,
+        Stmt::ForEach(f) => f.span,
+        Stmt::Assign(a) => a.span,
+        Stmt::Break(s) => *s,
+        Stmt::Continue(s) => *s,
+        Stmt::SuperCall(_, s) => *s,
     }
 }

@@ -88,10 +88,17 @@ pub fn compile(source: SourceFile) -> Result<CompileResult> {
         // type map (Phase H). The backend consults `expr_types` for
         // its String / generic-field coercion decisions instead of
         // running its own name-based heuristic pre-passes.
-        Some(juxc_backend_rust::lower_with_types(
+        // Pass the original `SourceFile` so the backend can emit
+        // `// JUX:file:line:col` markers throughout the generated
+        // Rust. Lets rustc errors on the emitted crate map back to
+        // the user's `.jux` source (audit Tier 2.2). Existing test
+        // suites that call `lower_with_types` directly stay
+        // marker-free, preserving their snapshot stability.
+        Some(juxc_backend_rust::lower_with_source(
             &parsed.ast,
             &typed.symbols,
             &typed.expr_types,
+            Some(&source),
         ))
     };
 

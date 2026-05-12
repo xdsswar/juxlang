@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use juxc_ast::{Block, Expr, FnDecl, ReturnType, Stmt};
 
 use crate::analysis::{collect_mutated_names, is_jux_string_type_ref, is_string_literal};
+use crate::stmts::stmt_span;
 use crate::RustEmitter;
 
 impl RustEmitter {
@@ -116,6 +117,10 @@ impl RustEmitter {
 
         let last_idx = body.statements.len().saturating_sub(1);
         for (i, stmt) in body.statements.iter().enumerate() {
+            // Source-map marker (no-op when `source` is None). Goes
+            // before the per-statement indent so rustc errors can
+            // scan up to find the nearest `.jux` line.
+            self.emit_source_marker(stmt_span(stmt));
             if elide_tail && i == last_idx {
                 self.emit_tail_stmt(stmt);
             } else {

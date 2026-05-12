@@ -38,7 +38,7 @@
 use std::collections::{HashMap, HashSet};
 
 use juxc_ast::{CompilationUnit, ImportDecl, ImportSpec, QualifiedName, ReturnType, TopLevelDecl};
-use juxc_source::Span;
+use juxc_source::{SourceFile, Span};
 use juxc_tycheck::{SymbolTable, Ty};
 
 mod analysis;
@@ -120,12 +120,39 @@ pub fn lower_with_symbols(unit: &CompilationUnit, symbols: &SymbolTable) -> Rust
 /// (`string_field_names`, `generic_field_names`, …) when deciding
 /// whether to emit auto-`.clone()` / `.to_string()` coercions on field
 /// reads, assignments, and enum variant construction.
+///
+/// No source-map markers are emitted on this path — callers that
+/// want `// JUX:file:line:col` markers in the generated Rust should
+/// use [`lower_with_source`]. Keeping this entry marker-free preserves
+/// snapshot stability for the existing backend test suite.
 pub fn lower_with_types(
     unit: &CompilationUnit,
     symbols: &SymbolTable,
     expr_types: &HashMap<Span, Ty>,
 ) -> RustCrate {
+    lower_with_source(unit, symbols, expr_types, None)
+}
+
+/// Like [`lower_with_types`] but also emits `// JUX:file:line:col`
+/// source-map markers throughout the generated Rust. When `source` is
+/// `Some(file)`, the emitter sprinkles markers before each top-level
+/// declaration, each method/operator/constructor signature, and each
+/// statement so rustc errors on the emitted Rust map back to source
+/// locations in the original `.jux` file. `None` falls back to plain
+/// emission identical to [`lower_with_types`].
+///
+/// This is the audit Tier 2.2 "source map" mechanism — crude (string
+/// comments, not real DWARF), but enough that a user can grep up from
+/// a rustc error line to the nearest marker and find the offending
+/// Jux site.
+pub fn lower_with_source(
+    unit: &CompilationUnit,
+    symbols: &SymbolTable,
+    expr_types: &HashMap<Span, Ty>,
+    source: Option<&SourceFile>,
+) -> RustCrate {
     let mut e = RustEmitter::new(symbols, expr_types.clone());
+    e.source = source.cloned();
     e.emit_compilation_unit(unit);
     e.finish()
 }
@@ -181,6 +208,12 @@ struct RustEmitter {
     /// `return "literal".to_string();` so the `&str` → owned `String`
     /// gap doesn't surface as an E0308 at rustc time.
     pub(crate) current_return_type: Option<ReturnType>,
+    /// Optional original [`SourceFile`] for emitting `// JUX:file:line:col`
+    /// source-map markers. `None` (the default) skips markers, keeping
+    /// the emitted Rust unchanged from the pre-markers shape — this is
+    /// what existing test snapshots rely on. The driver enables markers
+    /// by calling [`lower_with_source`] with `Some(source)`.
+    pub(crate) source: Option<SourceFile>,
     /// Tycheck's symbol table (Phase G). Cloned rather than borrowed
     /// to keep `RustEmitter` lifetime-parameter-free — the table is
     /// built once per compilation unit and held immutably during
@@ -237,9 +270,34 @@ impl RustEmitter {
             user_mut_methods: HashSet::new(),
             emitting_lvalue: false,
             current_return_type: None,
+            source: None,
             symbols: symbols.clone(),
             expr_types,
         }
+    }
+
+    /// If a source file is attached (i.e. emission was driven through
+    /// [`lower_with_source`]) AND `span` carries a real byte offset,
+    /// emit a `// JUX:filename:line:col` comment on its own line at
+    /// the current indent. No-op when `source` is `None` (the path
+    /// existing tests take) or when the span is [`Span::DUMMY`].
+    ///
+    /// Markers go on their own line so they don't interfere with
+    /// post-line rendering (e.g. inline expressions inside a complex
+    /// statement). A line-leading `//` is also harmless inside Rust
+    /// blocks at any indent level.
+    pub(crate) fn emit_source_marker(&mut self, span: Span) {
+        let Some(source) = &self.source else { return };
+        if span == Span::DUMMY {
+            return;
+        }
+        let (line, col) = source.line_col(span.start as usize);
+        let path = source.path().display().to_string();
+        // Strip any leading `./` or directory prefix isn't worth the
+        // complexity — keep the rendered path verbatim so users can
+        // grep for the exact string rustc would echo back.
+        let marker = format!("// JUX:{path}:{line}:{col}");
+        self.w.line(&marker);
     }
 
     /// Walk the AST and emit Rust source for each top-level item.
@@ -307,6 +365,18 @@ impl RustEmitter {
     }
 
     fn emit_top_level_decl(&mut self, item: &TopLevelDecl) {
+        // Source-map marker (when `source` is set) anchored at the
+        // declaration's start. Lets rustc diagnostics on the
+        // generated Rust scan upward to find the nearest `.jux`
+        // location for the offending decl.
+        let span = match item {
+            TopLevelDecl::Function(d) => d.span,
+            TopLevelDecl::Class(d) => d.span,
+            TopLevelDecl::Enum(d) => d.span,
+            TopLevelDecl::Record(d) => d.span,
+            TopLevelDecl::Interface(d) => d.span,
+        };
+        self.emit_source_marker(span);
         match item {
             TopLevelDecl::Function(fn_decl) => self.emit_fn_decl(fn_decl),
             TopLevelDecl::Class(class_decl) => self.emit_class_decl(class_decl),

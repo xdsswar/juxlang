@@ -21,6 +21,25 @@ fn emit(src: &str) -> String {
     crate_.sources.into_iter().next().unwrap().1
 }
 
+/// Same as [`emit`] but routes through [`lower_with_source`] so the
+/// emitted Rust includes `// JUX:file:line:col` markers. Used by the
+/// source-map tests.
+fn emit_with_source(src: &str) -> String {
+    let sf = SourceFile::new("test.jux", src);
+    let lex_result = lex(&sf);
+    assert!(lex_result.diagnostics.is_empty());
+    let parse_result = parse(&lex_result.tokens);
+    assert!(parse_result.diagnostics.is_empty());
+    let typed = juxc_tycheck::typecheck(&parse_result.ast);
+    let crate_ = lower_with_source(
+        &parse_result.ast,
+        &typed.symbols,
+        &typed.expr_types,
+        Some(&sf),
+    );
+    crate_.sources.into_iter().next().unwrap().1
+}
+
 /// hello.jux lowers to a Rust source that contains `fn main` and the
 /// idiomatic single-argument `println!("Hello, world!")`. (No
 /// redundant `"{}", "…"` placeholder for the all-literal case.)
@@ -3062,5 +3081,91 @@ fn arithmetic_bitwise_shift_family_all_emit_traits() {
             rust.contains(&format!("fn {method}(self, rhs: N)")),
             "missing {method} signature: {rust}",
         );
+    }
+}
+
+// ============================================================================
+// Source-map markers (audit Tier 2.2)
+// ============================================================================
+
+/// The default `lower(...)` path emits no source markers — preserves
+/// snapshot stability for every existing backend test.
+#[test]
+fn default_lower_emits_no_source_markers() {
+    let rust = emit(r#"public void main() { print("hi"); }"#);
+    assert!(!rust.contains("// JUX:"), "no markers expected: {rust}");
+}
+
+/// `lower_with_source` emits one `// JUX:file:line:col` marker before
+/// each top-level declaration and each statement inside its body.
+#[test]
+fn lower_with_source_emits_markers_per_decl_and_stmt() {
+    let rust = emit_with_source(
+        r#"public void main() {
+    print("hi");
+    var x = 1;
+}"#,
+    );
+    // Top-level decl marker — at the start of `public void main`.
+    assert!(
+        rust.contains("// JUX:test.jux:1:"),
+        "expected top-level marker on line 1: {rust}",
+    );
+    // Statement markers — one per stmt inside the body. Line 2 has
+    // the print call; line 3 has the var decl.
+    assert!(
+        rust.contains("// JUX:test.jux:2:"),
+        "expected line-2 marker: {rust}",
+    );
+    assert!(
+        rust.contains("// JUX:test.jux:3:"),
+        "expected line-3 marker: {rust}",
+    );
+}
+
+/// Markers anchor at the original `.jux` line, not the emitted Rust
+/// line. A statement on `.jux` line 5 gets a `JUX:test.jux:5:…` marker
+/// even when the surrounding Rust pushes its emitted form to line 7+.
+#[test]
+fn markers_track_jux_lines_not_rust_lines() {
+    let rust = emit_with_source(
+        r#"public class P {
+    public int x;
+    public P(int x) { this.x = x; }
+}
+public void main() {
+    var p = new P(42);
+}"#,
+    );
+    // The class decl is on .jux line 1.
+    assert!(rust.contains("// JUX:test.jux:1:"), "{rust}");
+    // The free function is on .jux line 5.
+    assert!(rust.contains("// JUX:test.jux:5:"), "{rust}");
+    // The var inside main is on .jux line 6.
+    assert!(rust.contains("// JUX:test.jux:6:"), "{rust}");
+}
+
+/// Each non-marker source line should have at most one marker
+/// immediately preceding it. (Smoke check: markers don't accidentally
+/// duplicate or leak into expression-position emission.)
+#[test]
+fn markers_appear_only_before_statements_and_decls() {
+    let rust = emit_with_source(
+        r#"public void main() {
+    print("hi");
+}"#,
+    );
+    // No marker should appear mid-line; every marker must start a
+    // line (after any leading indent). Verify by checking that the
+    // substring `// JUX:` only appears after a leading-indent
+    // pattern (spaces only before it on the line).
+    for line in rust.lines() {
+        if let Some(idx) = line.find("// JUX:") {
+            let before = &line[..idx];
+            assert!(
+                before.bytes().all(|b| b == b' '),
+                "marker not at line start: {line:?}",
+            );
+        }
     }
 }

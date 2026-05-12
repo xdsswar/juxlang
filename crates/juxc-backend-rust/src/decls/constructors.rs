@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use crate::analysis::{
     collect_mutated_names, extract_simple_ctor_inits, is_jux_string_type_ref, SimpleCtorInits,
 };
+use crate::stmts::stmt_span;
 use crate::RustEmitter;
 
 impl RustEmitter {
@@ -81,6 +82,7 @@ impl RustEmitter {
         collect_mutated_names(&ctor.body, &mut muts, &self.user_mut_methods);
         self.mutated_in_fn = muts;
         for stmt in &ctor.body.statements {
+            self.emit_source_marker(stmt_span(stmt));
             self.w.emit_indent();
             self.emit_stmt(stmt);
         }
