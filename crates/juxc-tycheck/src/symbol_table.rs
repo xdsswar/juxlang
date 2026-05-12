@@ -64,6 +64,11 @@ pub struct SymbolTable {
     /// Top-level functions (outside any class) indexed by FQN.
     /// Overloads aren't supported yet — a duplicate emits `E0400`.
     pub functions: HashMap<String, FunctionSig>,
+    /// Type aliases (`type Name<...>? = TypeRef;`) indexed by FQN.
+    /// Tycheck expands a reference to an alias into its target
+    /// before further inference — `Ty::User` never holds an alias
+    /// name once `ty_from_ref` is done.
+    pub aliases: HashMap<String, TypeAliasSig>,
     /// One entry per input unit (parallel to the `units` slice
     /// `build_workspace` received). Each entry carries the unit's
     /// package and its bare-name → FQN map (the closure of the
@@ -97,6 +102,7 @@ impl SymbolTable {
             || self.records.contains_key(name)
             || self.enums.contains_key(name)
             || self.interfaces.contains_key(name)
+            || self.aliases.contains_key(name)
     }
 
     /// Walk `class_name`'s `extends` chain looking for a method named
@@ -132,10 +138,19 @@ impl SymbolTable {
             if let Some(m) = class.methods.get(method_name) {
                 return Some((m, class_key.as_str()));
             }
+            // Hop to the resolved parent FQN (set during the
+            // `resolve_class_chain_fqns` finalize pass). Falling
+            // back to the bare last segment keeps no-package /
+            // single-unit programs working unchanged.
             cursor = class
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()));
+                .extends_fqn
+                .as_deref()
+                .or_else(|| {
+                    class
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+                });
             depth += 1;
         }
         None
@@ -160,10 +175,17 @@ impl SymbolTable {
             if let Some(field) = class.fields.get(field_name) {
                 return Some((field, class_key.as_str()));
             }
+            // Use the resolved parent FQN — see `lookup_method` for
+            // why the fallback to a bare last segment remains.
             cursor = class
-                .extends
-                .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()));
+                .extends_fqn
+                .as_deref()
+                .or_else(|| {
+                    class
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+                });
             depth += 1;
         }
         None
@@ -197,8 +219,17 @@ pub struct ClassSig {
     pub permits: Vec<String>,
     /// Generic parameters in declaration order, e.g. `<T, U>`.
     pub generic_params: Vec<TypeParam>,
-    /// Parent type, if `extends Parent` was given.
+    /// Parent type, if `extends Parent` was given. The TypeRef
+    /// preserves the user's source spelling (bare or qualified);
+    /// resolved-to-FQN form lives in `extends_fqn` for fast lookups.
     pub extends: Option<TypeRef>,
+    /// Fully-qualified name of the parent class. Resolved once at
+    /// build time using the declaring unit's bare→FQN map, so chain
+    /// walks (`lookup_field`, `lookup_method`,
+    /// `walk_extends_reaches`, …) can key directly into the
+    /// FQN-keyed `classes` table without re-resolving every hop.
+    /// `None` when this class has no `extends` clause.
+    pub extends_fqn: Option<String>,
     /// Interfaces declared in the `implements` clause.
     pub implements: Vec<TypeRef>,
     /// Fields indexed by name. Duplicate fields emit `E0401` during build
@@ -398,6 +429,20 @@ pub struct FunctionSig {
     pub span: Span,
 }
 
+/// Signature of a top-level type alias. Spec §A.2.4.
+#[derive(Debug, Clone)]
+pub struct TypeAliasSig {
+    /// Source visibility.
+    pub visibility: Visibility,
+    /// Generic parameters in declaration order. Empty for a bare
+    /// alias like `type StringList = List<String>;`.
+    pub generic_params: Vec<TypeParam>,
+    /// Target type the alias resolves to.
+    pub target: TypeRef,
+    /// Span of the whole declaration.
+    pub span: Span,
+}
+
 // ============================================================================
 // Build pass
 // ============================================================================
@@ -444,25 +489,33 @@ pub fn build_workspace(
                 .collect();
         }
     }
-    for unit in units {
-        // Per-unit package — stamped onto every class/record/etc.
-        // inserted from this unit so the visibility check can
-        // compare packages across units later.
+    // First pass: insert every top-level declaration under its FQN.
+    // Track which unit each class came from so the later
+    // `extends_fqn`/`implements_fqn` resolution knows which unit's
+    // import map to consult.
+    let mut class_unit: HashMap<String, usize> = HashMap::new();
+    for (unit_idx, unit) in units.iter().enumerate() {
         let unit_pkg: Vec<String> = unit
             .package
             .as_ref()
             .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
             .unwrap_or_default();
         for item in &unit.items {
+            if let TopLevelDecl::Class(c) = item {
+                class_unit.insert(make_fqn(&unit_pkg, &c.name.text), unit_idx);
+            }
             insert_top_level(&mut table, item, &unit_pkg, diagnostics);
         }
     }
     // Second pass: build per-unit name-resolution contexts now that
-    // every class/record/etc. is registered under its FQN. The
-    // contexts capture: (a) same-package siblings reachable by bare
-    // name, and (b) every `import com.foo.Bar;` (or
-    // `import com.foo.*;`) mapping bare names to their declared FQN.
+    // every class/record/etc. is registered under its FQN.
     table.units = build_unit_contexts(units, &table);
+    // Third pass: resolve every class's `extends` / `implements`
+    // TypeRefs into FQN strings using the declaring unit's
+    // bare→FQN map. Stored on `ClassSig::extends_fqn` so chain
+    // walks key directly into the FQN-indexed `classes` table
+    // without re-resolving on every hop.
+    resolve_class_chain_fqns(&mut table, &class_unit);
     // Cross-class rule passes that need every class registered first:
     // final/sealed extends and final-method override checks.
     check_final_and_sealed_extends(&table, diagnostics);
@@ -526,6 +579,7 @@ fn build_unit_contexts(
         .chain(table.enums.keys())
         .chain(table.interfaces.keys())
         .chain(table.functions.keys())
+        .chain(table.aliases.keys())
         .collect();
     units
         .iter()
@@ -554,6 +608,79 @@ fn build_unit_contexts(
             UnitContext { package: pkg, unqualified }
         })
         .collect()
+}
+
+/// After every class is registered and per-unit contexts are built,
+/// walk each class and stamp its `extends_fqn` (and, eventually,
+/// per-interface `implements_fqn`s) using the declaring unit's
+/// bare→FQN map. Resolution rule:
+///
+/// - Multi-segment `extends a.b.Foo` → take the dot-joined form
+///   verbatim if it names a known class; otherwise leave as `None`.
+/// - Single-segment `extends Foo` → consult the unit's context.
+/// - Unknown name → leave as `None`; downstream resolver/tycheck
+///   passes surface the diagnostic.
+fn resolve_class_chain_fqns(
+    table: &mut SymbolTable,
+    class_unit: &HashMap<String, usize>,
+) {
+    let fqns: Vec<String> = table.classes.keys().cloned().collect();
+    for fqn in fqns {
+        let Some(&unit_idx) = class_unit.get(&fqn) else {
+            continue;
+        };
+        let ctx = match table.units.get(unit_idx) {
+            Some(ctx) => ctx.clone(),
+            None => continue,
+        };
+        let Some(class) = table.classes.get(&fqn) else {
+            continue;
+        };
+        let extends_clone = class.extends.clone();
+        if let Some(extends) = extends_clone {
+            let resolved = resolve_type_ref_to_fqn(&extends, &ctx, table);
+            if let Some(class) = table.classes.get_mut(&fqn) {
+                class.extends_fqn = resolved;
+            }
+        }
+    }
+}
+
+/// Resolve a `TypeRef` against a unit context to a fully-qualified
+/// class name. Mirrors the bare/multi-segment branches in
+/// [`crate::ty::ty_from_ref`] but only returns the FQN string —
+/// callers downstream use it to key into `table.classes`.
+fn resolve_type_ref_to_fqn(
+    ty_ref: &TypeRef,
+    ctx: &UnitContext,
+    table: &SymbolTable,
+) -> Option<String> {
+    if ty_ref.name.segments.is_empty() {
+        return None;
+    }
+    if ty_ref.name.segments.len() == 1 {
+        let bare = &ty_ref.name.segments[0].text;
+        if let Some(fqn) = ctx.unqualified.get(bare) {
+            if table.classes.contains_key(fqn) {
+                return Some(fqn.clone());
+            }
+        }
+        if table.classes.contains_key(bare) {
+            return Some(bare.clone());
+        }
+        return None;
+    }
+    let joined: String = ty_ref
+        .name
+        .segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(".");
+    if table.classes.contains_key(&joined) {
+        return Some(joined);
+    }
+    None
 }
 
 /// Apply a single `import …;` declaration to the bare→FQN map.
@@ -645,7 +772,31 @@ fn insert_top_level(
         TopLevelDecl::Function(fn_decl) => {
             insert_function(table, fn_decl, package, diagnostics);
         }
+        TopLevelDecl::TypeAlias(alias) => {
+            insert_type_alias(table, alias, package, diagnostics);
+        }
     }
+}
+
+fn insert_type_alias(
+    table: &mut SymbolTable,
+    alias: &juxc_ast::TypeAliasDecl,
+    package: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let fqn = make_fqn(package, &alias.name.text);
+    if !ensure_top_level_unique(table, &fqn, alias.span, diagnostics) {
+        return;
+    }
+    table.aliases.insert(
+        fqn,
+        TypeAliasSig {
+            visibility: alias.visibility,
+            generic_params: alias.generic_params.clone(),
+            target: alias.target.clone(),
+            span: alias.span,
+        },
+    );
 }
 
 
@@ -666,10 +817,16 @@ fn check_final_and_sealed_extends(
         let Some(extends) = child.extends.as_ref() else {
             continue;
         };
-        let Some(parent_seg) = extends.name.segments.last() else {
-            continue;
+        // Prefer the resolved FQN; fall back to the bare last
+        // segment so single-unit / no-package builds still work
+        // before the FQN finalize pass populates `extends_fqn`.
+        let parent_name: &str = match child.extends_fqn.as_deref() {
+            Some(fqn) => fqn,
+            None => match extends.name.segments.last() {
+                Some(seg) => seg.text.as_str(),
+                None => continue,
+            },
         };
-        let parent_name = parent_seg.text.as_str();
         let Some(parent) = table.classes.get(parent_name) else {
             // Unknown parent — resolver E0301 covers this; don't
             // double-up.
@@ -713,10 +870,17 @@ fn check_final_method_overrides(
     for (child_name, child) in &table.classes {
         for (method_name, child_method) in &child.methods {
             // Walk up the extends chain from the IMMEDIATE parent —
-            // skip self.
-            let mut cursor = child.extends.as_ref().and_then(|t| {
-                t.name.segments.last().map(|s| s.text.as_str())
-            });
+            // skip self. Uses the resolved FQN where possible so
+            // cross-package final-method checks work.
+            let mut cursor: Option<&str> = child
+                .extends_fqn
+                .as_deref()
+                .or_else(|| {
+                    child
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+                });
             let mut depth = 0usize;
             while let Some(ancestor_name) = cursor {
                 if depth > 64 {
@@ -739,8 +903,11 @@ fn check_final_method_overrides(
                         break;
                     }
                 }
-                cursor = ancestor.extends.as_ref().and_then(|t| {
-                    t.name.segments.last().map(|s| s.text.as_str())
+                cursor = ancestor.extends_fqn.as_deref().or_else(|| {
+                    ancestor
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
                 });
                 depth += 1;
             }
@@ -883,6 +1050,9 @@ fn insert_class(
                 .collect(),
             generic_params: class_decl.generic_params.clone(),
             extends: class_decl.extends.clone(),
+            extends_fqn: None, // resolved in a finalize pass once
+                                // every class is registered and
+                                // the unit-context maps are built.
             implements: class_decl.implements.clone(),
             fields,
             constructors,
@@ -2459,38 +2629,53 @@ mod tests {
     }
 
     /// Two units with classes in different packages — both end up in
-    /// the merged table; no duplicate diagnostic.
+    /// the merged table keyed by FQN; no duplicate diagnostic.
     #[test]
     fn workspace_merges_classes_from_two_units() {
         let (table, diags) = build_workspace_table(&[
             "package a.lib;\npublic class Foo {}",
             "package b.app;\npublic class Bar {}",
         ]);
-        assert!(table.classes.contains_key("Foo"));
-        assert!(table.classes.contains_key("Bar"));
+        assert!(table.classes.contains_key("a.lib.Foo"));
+        assert!(table.classes.contains_key("b.app.Bar"));
         assert!(
             !diags.iter().any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
             "no duplicates expected: {diags:?}",
         );
     }
 
-    /// Two units defining the same class name fire E0400 against the
-    /// second occurrence (workspace-wide uniqueness).
+    /// Two units defining the **same FQN** fire E0400 against the
+    /// second occurrence. Same bare name in DIFFERENT packages is
+    /// fine — that's the whole point of FQN keys.
     #[test]
-    fn workspace_duplicate_class_name_emits_e0400() {
+    fn workspace_duplicate_fqn_emits_e0400() {
         let (_table, diags) = build_workspace_table(&[
             "package a.lib;\npublic class Foo {}",
-            "package b.app;\npublic class Foo {}",
+            "package a.lib;\npublic class Foo {}",
         ]);
         assert!(
             diags.iter().any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
-            "expected cross-file E0400: {diags:?}",
+            "same FQN twice should fire E0400: {diags:?}",
         );
     }
 
-    /// Each class records its own package on `ClassSig::package`,
-    /// stamped from its declaring unit's `package foo.bar;` line.
-    /// This is the input the cross-package `E0416` check consumes.
+    /// Same bare name in different packages — coexist with no E0400.
+    /// This is the cross-package namespacing payoff.
+    #[test]
+    fn workspace_same_bare_name_in_different_packages_is_ok() {
+        let (table, diags) = build_workspace_table(&[
+            "package a.lib;\npublic class Foo {}",
+            "package b.app;\npublic class Foo {}",
+        ]);
+        assert!(table.classes.contains_key("a.lib.Foo"));
+        assert!(table.classes.contains_key("b.app.Foo"));
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
+            "Foo in two packages should coexist: {diags:?}",
+        );
+    }
+
+    /// Each class records its own package on `ClassSig::package`.
     #[test]
     fn workspace_class_records_its_unit_package() {
         let (table, _diags) = build_workspace_table(&[
@@ -2498,12 +2683,66 @@ mod tests {
             "package b.app;\npublic class Bar {}",
         ]);
         assert_eq!(
-            table.classes["Foo"].package,
+            table.classes["a.lib.Foo"].package,
             vec!["a".to_string(), "lib".to_string()],
         );
         assert_eq!(
-            table.classes["Bar"].package,
+            table.classes["b.app.Bar"].package,
             vec!["b".to_string(), "app".to_string()],
+        );
+    }
+
+    /// `UnitContext::unqualified` carries the bare→FQN map for each
+    /// unit — same-package siblings plus every `import` line.
+    #[test]
+    fn workspace_unit_context_maps_imports_and_siblings() {
+        let (table, _diags) = build_workspace_table(&[
+            "package com.lib;\npublic class Greeter {}",
+            "package app.main;\nimport com.lib.Greeter;\npublic class App {}",
+        ]);
+        // Unit 1 (com.lib): only same-package sibling Greeter.
+        assert_eq!(
+            table.units[0].unqualified.get("Greeter"),
+            Some(&"com.lib.Greeter".to_string()),
+        );
+        // Unit 2 (app.main): App as same-package sibling, Greeter
+        // via import.
+        assert_eq!(
+            table.units[1].unqualified.get("App"),
+            Some(&"app.main.App".to_string()),
+        );
+        assert_eq!(
+            table.units[1].unqualified.get("Greeter"),
+            Some(&"com.lib.Greeter".to_string()),
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // Type aliases (§A.2.4)
+    // ----------------------------------------------------------------
+
+    /// Bare aliases land in `table.aliases` keyed by FQN and the
+    /// `is_type_name` check picks them up.
+    #[test]
+    fn type_alias_lands_in_table() {
+        let (table, diags) = build_table("public type UserId = int;");
+        assert!(diags.is_empty(), "no diagnostics expected: {diags:?}");
+        assert!(table.aliases.contains_key("UserId"));
+        assert!(table.is_type_name("UserId"));
+    }
+
+    /// A type alias name conflicting with a class name fires E0400.
+    #[test]
+    fn type_alias_duplicate_with_class_emits_e0400() {
+        let (_table, diags) = build_table(
+            r#"
+            public class Foo {}
+            public type Foo = int;
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
+            "expected E0400 for alias vs class name clash: {diags:?}",
         );
     }
 }

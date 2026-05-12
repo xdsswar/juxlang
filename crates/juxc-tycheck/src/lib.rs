@@ -164,6 +164,10 @@ impl TypeChecker {
                 // Interfaces neither — signatures only, no rules to
                 // check at this milestone.
                 TopLevelDecl::Interface(_) => {}
+                // Type aliases — no body to walk; the target is a
+                // syntactic TypeRef checked at use sites via
+                // alias expansion in `ty_from_ref`.
+                TopLevelDecl::TypeAlias(_) => {}
             }
         }
     }

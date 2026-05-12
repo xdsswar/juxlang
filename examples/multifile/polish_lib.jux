@@ -1,0 +1,9 @@
+// Probe file for multi-file polish — used by polish_app.jux.
+
+package poll.lib;
+
+public class Animal {
+    public String name;
+    public Animal(String name) { this.name = name; }
+    public String speak() { return $"Animal ${this.name}"; }
+}

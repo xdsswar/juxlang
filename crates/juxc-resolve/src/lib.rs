@@ -259,6 +259,13 @@ impl Resolver {
                     // through the symbol table.
                     self.user_names.insert(interface_decl.name.text.clone());
                 }
+                TopLevelDecl::TypeAlias(alias) => {
+                    // Register the alias name so references to it
+                    // resolve. Expansion to the target type happens
+                    // in tycheck's `ty_from_ref`, but at the resolver
+                    // level it's just another top-level name.
+                    self.user_names.insert(alias.name.text.clone());
+                }
             }
         }
     }
@@ -312,6 +319,9 @@ impl Resolver {
             // walk in Turn 1. Default methods (when added) will need
             // a visit pass.
             TopLevelDecl::Interface(_) => {}
+            // Type aliases — target is a TypeRef; type-position
+            // resolution belongs to tycheck. Nothing to walk here.
+            TopLevelDecl::TypeAlias(_) => {}
         }
     }
 

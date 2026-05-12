@@ -1,0 +1,28 @@
+// Polish probe — exercise the cross-package shapes that likely
+// need attention after the FQN refactor:
+//   1. `new poll.lib.Animal(…)` — qualified-name construction.
+//   2. `class Dog extends poll.lib.Animal` — qualified-name extends.
+//   3. `super(name)` reaching across packages.
+//   4. Bare `Animal` after import.
+
+package poll.app;
+
+import poll.lib.Animal;
+
+// Cross-package extends via the bare imported name.
+public class Dog extends Animal {
+    public Dog(String name) { super(name); }
+    public String speak() { return $"Woof, ${this.name}"; }
+}
+
+public void main() {
+    // Qualified-path construction.
+    var a = new poll.lib.Animal("Rex");
+    print(a.speak());
+    // Bare-name construction after import.
+    var b = new Animal("Spot");
+    print(b.speak());
+    // Subclass.
+    var d = new Dog("Fido");
+    print(d.speak());
+}

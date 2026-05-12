@@ -1,0 +1,14 @@
+// App that uses both Foos side-by-side, disambiguating with
+// `import … as Alias;`.
+
+package app.collide;
+
+import lib.first.Foo as FirstFoo;
+import lib.second.Foo as SecondFoo;
+
+public void main() {
+    var a = new FirstFoo();
+    var b = new SecondFoo();
+    print(a.label());
+    print(b.label());
+}

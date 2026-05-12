@@ -47,7 +47,7 @@ pub use decls::{
     ClassDecl, ConstructorDecl, EnumDecl, EnumPayload, EnumVariant,
     FieldDecl, FnDecl, FnModifier, InterfaceDecl, OperatorDecl,
     OperatorKind, Param, RecordComponent, RecordDecl, ReturnType,
-    TopLevelDecl, TypeParam,
+    TopLevelDecl, TypeAliasDecl, TypeParam,
 };
 pub use exprs::{
     BinaryExpr, BinaryOp, CallExpr, CastExpr, Expr, FieldExpr,

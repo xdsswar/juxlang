@@ -1,0 +1,14 @@
+// First Foo — lives in package `lib.first`.
+//
+// Demonstrates that the package-qualified namespace lets two
+// classes with the same bare name coexist when they're in
+// different packages. The `app.jux` companion file imports BOTH
+// versions and uses each by its imported alias / qualified name.
+
+package lib.first;
+
+public class Foo {
+    public String label() {
+        return "first";
+    }
+}

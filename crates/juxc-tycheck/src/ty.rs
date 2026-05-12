@@ -349,6 +349,10 @@ pub fn ty_from_ref(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         let bare = &t.name.segments[0].text;
         if let Some(fqn) = env.unqualified.get(bare) {
             if symbols.is_type_name(fqn) {
+                if let Some(expanded) = expand_alias(fqn, &t.generic_args, env, symbols)
+                {
+                    return expanded;
+                }
                 let generic_args = t
                     .generic_args
                     .iter()
@@ -361,6 +365,9 @@ pub fn ty_from_ref(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             }
         }
         if symbols.is_type_name(bare) {
+            if let Some(expanded) = expand_alias(bare, &t.generic_args, env, symbols) {
+                return expanded;
+            }
             let generic_args = t
                 .generic_args
                 .iter()
@@ -385,6 +392,9 @@ pub fn ty_from_ref(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             .collect::<Vec<_>>()
             .join(".");
         if symbols.is_type_name(&fqn) {
+            if let Some(expanded) = expand_alias(&fqn, &t.generic_args, env, symbols) {
+                return expanded;
+            }
             let generic_args = t
                 .generic_args
                 .iter()
@@ -726,6 +736,49 @@ pub fn substitute_via_inference(
     substitute(ty, generic_params, &args)
 }
 
+/// If `fqn` names a type alias, lower the alias's target into a
+/// concrete [`Ty`] and return it. Returns `None` when the FQN
+/// doesn't name an alias — the caller falls through to the
+/// `Ty::User` branch unchanged.
+///
+/// Generic aliases: when the alias declares `<A, B>` and the
+/// use-site supplies `<int, String>`, each `Ty::Param("A")` in the
+/// lowered target is rewritten to `Int` via [`substitute`].
+///
+/// Bare-name resolution inside the alias target uses the
+/// **declaring unit's** context — not the caller's. The current
+/// implementation approximates this by lowering through the
+/// caller's env and relying on the fact that aliases reference
+/// types that are also reachable from the caller (workspace flat
+/// lookup). A precise per-alias resolver is deferred.
+pub fn expand_alias(
+    fqn: &str,
+    use_site_args: &[juxc_ast::GenericArg],
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Option<Ty> {
+    let alias = symbols.aliases.get(fqn)?;
+    // Lower the alias's target in a scratch env with the alias's
+    // own generic params registered, so `T` inside the target reads
+    // as `Ty::Param("T")` rather than `Unknown`.
+    let mut scratch = TypeEnv::new();
+    scratch.current_package = env.current_package.clone();
+    scratch.unqualified = env.unqualified.clone();
+    for tp in &alias.generic_params {
+        scratch.add_generic_param(&tp.name.text);
+    }
+    let lowered_target = ty_from_ref(&alias.target, &scratch, symbols);
+    if alias.generic_params.is_empty() || use_site_args.is_empty() {
+        return Some(lowered_target);
+    }
+    // Substitute use-site args into the lowered target.
+    let lowered_args: Vec<Ty> = use_site_args
+        .iter()
+        .map(|g| lower_generic_arg(g, env, symbols))
+        .collect();
+    Some(substitute(&lowered_target, &alias.generic_params, &lowered_args))
+}
+
 /// Lower a [`juxc_ast::GenericArg`] to a [`Ty`]. Concrete types
 /// delegate to [`ty_from_ref`]; wildcards become [`Ty::Wildcard`]
 /// variants with their bound (if any) recursively lowered.
@@ -839,13 +892,20 @@ pub fn walk_extends_reaches(
         if depth > 64 {
             return false;
         }
-        let Some(extends) = class.extends.as_ref() else {
-            return false;
+        // Prefer the pre-resolved `extends_fqn` (set during
+        // `resolve_class_chain_fqns`); fall back to the bare last
+        // segment so no-package programs still chain.
+        let parent_name: &str = match class.extends_fqn.as_deref() {
+            Some(fqn) => fqn,
+            None => match class
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+            {
+                Some(s) => s,
+                None => return false,
+            },
         };
-        let Some(parent) = extends.name.segments.last() else {
-            return false;
-        };
-        let parent_name = parent.text.as_str();
         if parent_name == ancestor {
             return true;
         }
@@ -883,7 +943,12 @@ fn walk_extends_to(
             return None;
         }
         let extends = current_class.extends.as_ref()?;
-        let parent_name = extends.name.segments.last()?.text.clone();
+        // Prefer the pre-resolved FQN; fall back to the bare last
+        // segment when no FQN was recorded (no-package builds).
+        let parent_name: String = current_class
+            .extends_fqn
+            .clone()
+            .or_else(|| extends.name.segments.last().map(|s| s.text.clone()))?;
         // Compose: lower extends generic args in the child's scope,
         // then substitute through the running params/args.
         let raw_parent_args: Vec<Ty> = extends
@@ -947,7 +1012,12 @@ pub fn compose_extends_substitution(
             return None;
         }
         let extends = current_class.extends.as_ref()?;
-        let parent_name = extends.name.segments.last()?.text.clone();
+        // FQN-aware: prefer the pre-resolved parent name so the
+        // chain walk keys directly into the FQN-indexed table.
+        let parent_name: String = current_class
+            .extends_fqn
+            .clone()
+            .or_else(|| extends.name.segments.last().map(|s| s.text.clone()))?;
         // Lower the extends-clause's `<...>` args in the child's own
         // generic-param scope so a `Param("U")` reference resolves.
         let raw_parent_args: Vec<Ty> = extends

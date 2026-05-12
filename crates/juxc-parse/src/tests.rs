@@ -2194,3 +2194,36 @@ fn body_of(item: &TopLevelDecl) -> &juxc_ast::Block {
 fn body_of_fn(fn_decl: &FnDecl) -> &juxc_ast::Block {
     fn_decl.body.as_ref().expect("function body present")
 }
+
+// ---------------------------------------------------------------------------
+// Type aliases (§A.2.4 `type-alias`)
+// ---------------------------------------------------------------------------
+
+/// `type UserId = int;` parses into a `TypeAlias` top-level decl
+/// with the right name and target.
+#[test]
+fn bare_type_alias_parses() {
+    let ast = parse_clean("public type UserId = int;");
+    let TopLevelDecl::TypeAlias(alias) = &ast.items[0] else {
+        panic!("expected TypeAlias, got {:?}", ast.items[0]);
+    };
+    assert_eq!(alias.name.text, "UserId");
+    assert!(alias.generic_params.is_empty());
+    assert_eq!(alias.target.name.segments[0].text, "int");
+}
+
+/// `type Pair<A, B> = Tuple<A, B>;` carries its generic params and
+/// target.
+#[test]
+fn generic_type_alias_parses() {
+    let ast = parse_clean("public type Pair<A, B> = Tuple<A, B>;");
+    let TopLevelDecl::TypeAlias(alias) = &ast.items[0] else {
+        panic!("expected TypeAlias");
+    };
+    assert_eq!(alias.name.text, "Pair");
+    assert_eq!(alias.generic_params.len(), 2);
+    assert_eq!(alias.generic_params[0].name.text, "A");
+    assert_eq!(alias.generic_params[1].name.text, "B");
+    assert_eq!(alias.target.name.segments[0].text, "Tuple");
+    assert_eq!(alias.target.generic_args.len(), 2);
+}

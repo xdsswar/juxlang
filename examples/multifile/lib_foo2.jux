@@ -1,0 +1,11 @@
+// Second Foo — lives in package `lib.second`. Same bare name as
+// `lib.first.Foo`; they coexist thanks to the FQN-keyed symbol
+// table.
+
+package lib.second;
+
+public class Foo {
+    public String label() {
+        return "second";
+    }
+}

@@ -173,6 +173,19 @@ impl<'a> Checker<'a> {
         self.expr_types
     }
 
+    /// Seed the checker's [`TypeEnv`] with the per-unit
+    /// name-resolution context produced during workspace
+    /// symbol-table construction. Called once per unit by
+    /// `typecheck_workspace` before `check_unit`.
+    pub(crate) fn seed_unit_context(
+        &mut self,
+        package: &[String],
+        unqualified: &HashMap<String, String>,
+    ) {
+        self.env.current_package = package.to_vec();
+        self.env.unqualified = unqualified.clone();
+    }
+
     /// Infer the type of `expr` against the current env, then record it
     /// keyed by the expression's span. Returns the inferred type so
     /// existing call sites that used `infer_expr(...)` can drop in this
@@ -213,6 +226,9 @@ impl<'a> Checker<'a> {
                 // Interfaces carry only signatures (body: None) — no
                 // bodies to walk.
                 TopLevelDecl::Interface(_) => {}
+                // Type aliases — nothing body-shaped to check; the
+                // target is validated when expanded at use sites.
+                TopLevelDecl::TypeAlias(_) => {}
             }
         }
     }
@@ -1331,8 +1347,20 @@ impl<'a> Checker<'a> {
         let Some(child_name) = self.env.current_class.clone() else { return };
         let Some(child) = self.symbols.classes.get(&child_name) else { return };
         let Some(extends) = child.extends.as_ref() else { return };
-        let Some(parent_name_seg) = extends.name.segments.last() else { return };
-        let parent_name = parent_name_seg.text.clone();
+        // Prefer the resolved-at-build-time FQN so cross-package
+        // `super(...)` calls find the parent class. Fall back to
+        // the bare last segment for single-unit / no-package builds.
+        let parent_name: String = child
+            .extends_fqn
+            .clone()
+            .unwrap_or_else(|| {
+                extends
+                    .name
+                    .segments
+                    .last()
+                    .map(|s| s.text.clone())
+                    .unwrap_or_default()
+            });
 
         // Lower the extends-clause generic args. `extends Animal<int>`
         // gives us [Int]; `extends Animal` gives us []. Empty disables

@@ -42,6 +42,7 @@ use juxc_source::{SourceFile, Span};
 use juxc_tycheck::{SymbolTable, Ty};
 
 mod analysis;
+mod backend_fqn;
 mod decls;
 mod exprs;
 mod interp;
@@ -177,17 +178,52 @@ pub fn lower_workspace(
 ) -> RustCrate {
     let mut e = RustEmitter::new(symbols, expr_types.clone());
     e.workspace_mode = true;
+    // Build a package tree so sibling packages share their parent
+    // `pub mod` wrapper. Without this, two units in `lib.first` and
+    // `lib.second` would each emit their own top-level `pub mod lib`
+    // and Rust would reject the second as a redefinition.
+    let mut tree = PackageNode::default();
     for (i, unit) in units.iter().enumerate() {
-        e.source = sources.get(i).cloned();
-        e.emit_compilation_unit(unit);
+        let pkg: Vec<String> = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
+            .unwrap_or_default();
+        tree.insert(&pkg, i);
     }
-    // Emit one crate-root `fn main()` shim if any unit declared a
-    // packaged `main()`. Without this step the shim would either be
-    // missing (when no unit declared main inside a package) or
-    // duplicated (when emit_compilation_unit emits one per unit).
+    e.emit_package_tree(&tree, units, sources);
+    // One crate-root `fn main()` shim that delegates into whichever
+    // unit declared `void main()` inside a package.
     e.source = None;
     e.emit_workspace_main_shim(units);
     e.finish()
+}
+
+/// Internal node in the per-workspace package tree built by
+/// `lower_workspace`. Each node owns the bare path component for its
+/// level plus the indices (into the `units` slice) of every unit
+/// that lives at exactly this level. Children indexed by their
+/// next-segment name.
+#[derive(Default)]
+struct PackageNode {
+    /// Children keyed by their next-segment name. Iteration is
+    /// stable per the BTreeMap so emitted output is deterministic.
+    children: std::collections::BTreeMap<String, PackageNode>,
+    /// Unit indices whose package path ends at this node.
+    unit_indices: Vec<usize>,
+}
+
+impl PackageNode {
+    fn insert(&mut self, path: &[String], unit_idx: usize) {
+        if path.is_empty() {
+            self.unit_indices.push(unit_idx);
+            return;
+        }
+        self.children
+            .entry(path[0].clone())
+            .or_default()
+            .insert(&path[1..], unit_idx);
+    }
 }
 
 // ============================================================================
@@ -430,6 +466,74 @@ impl RustEmitter {
         }
     }
 
+    /// Emit the workspace's package tree. Each top-level child of
+    /// the root produces one `pub mod {name} { … }` block; nested
+    /// children recurse inside it. Units that live exactly at a
+    /// given level have their bodies inlined into that level's
+    /// scope.
+    ///
+    /// Root-level (no-package) units are emitted flat at the crate
+    /// root, matching the existing single-file behavior.
+    pub(crate) fn emit_package_tree(
+        &mut self,
+        tree: &PackageNode,
+        units: &[CompilationUnit],
+        sources: &[SourceFile],
+    ) {
+        // No-package units (the bare crate-root tier) first, so the
+        // overall ordering stays close to "input order modulo
+        // package grouping".
+        for &idx in &tree.unit_indices {
+            self.source = sources.get(idx).cloned();
+            self.emit_compilation_unit(&units[idx]);
+        }
+        // Then each top-level package, with its descendants nested.
+        for (name, child) in &tree.children {
+            self.w.emit_indent();
+            self.w.push_str("pub mod ");
+            self.w.push_str(name);
+            self.w.push_str(" {\n");
+            self.w.indent_inc();
+            self.emit_package_node_body(child, units, sources);
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+    }
+
+    /// Body of a single package node — emit every unit belonging to
+    /// this level (inlined, without its own package wrapper),
+    /// followed by recursive `pub mod` blocks for each child
+    /// sub-package.
+    fn emit_package_node_body(
+        &mut self,
+        node: &PackageNode,
+        units: &[CompilationUnit],
+        sources: &[SourceFile],
+    ) {
+        for &idx in &node.unit_indices {
+            let unit = &units[idx];
+            self.user_mut_methods = collect_user_mut_methods(unit);
+            self.source = sources.get(idx).cloned();
+            // Imports inside a packaged unit need `crate::`-rooted
+            // paths so they don't resolve relative to the current
+            // module nest.
+            self.emit_imports(&unit.imports, /*inside_package_mod=*/ true);
+            for item in &unit.items {
+                self.emit_top_level_decl(item);
+            }
+        }
+        for (name, child) in &node.children {
+            self.w.emit_indent();
+            self.w.push_str("pub mod ");
+            self.w.push_str(name);
+            self.w.push_str(" {\n");
+            self.w.indent_inc();
+            self.emit_package_node_body(child, units, sources);
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+    }
+
     /// Emit a single crate-root `fn main()` shim that delegates into
     /// whichever unit declared `void main()` (and lives inside a
     /// `package`).
@@ -523,6 +627,7 @@ impl RustEmitter {
             TopLevelDecl::Enum(d) => d.span,
             TopLevelDecl::Record(d) => d.span,
             TopLevelDecl::Interface(d) => d.span,
+            TopLevelDecl::TypeAlias(d) => d.span,
         };
         self.emit_source_marker(span);
         match item {
@@ -533,7 +638,28 @@ impl RustEmitter {
             TopLevelDecl::Interface(interface_decl) => {
                 self.emit_interface_decl(interface_decl);
             }
+            TopLevelDecl::TypeAlias(alias) => self.emit_type_alias_decl(alias),
         }
+    }
+
+    /// Emit a Jux `type Foo<...>? = TargetTy;` as a Rust
+    /// `pub type Foo<...>? = TargetTy;`. Visibility follows the
+    /// user's declared modifier (mirroring `emit_fn_decl`'s
+    /// inside-module-mod rule); the target lowers through the
+    /// normal type-emission path so primitive/generic/wildcard
+    /// shapes pick up their usual mappings.
+    pub(crate) fn emit_type_alias_decl(&mut self, alias: &juxc_ast::TypeAliasDecl) {
+        self.w.emit_indent();
+        if !self.symbols.package.is_empty() || self.workspace_mode {
+            self.emit_visibility(alias.visibility);
+        }
+        self.w.push_str("type ");
+        self.w.push_str(&alias.name.text);
+        self.emit_generic_params(&alias.generic_params);
+        self.w.push_str(" = ");
+        self.emit_type_as_rust(&alias.target);
+        self.w.push_str(";\n");
+        self.w.newline();
     }
 
     /// Wrap up: build the Cargo.toml and bundle with the emitted source.

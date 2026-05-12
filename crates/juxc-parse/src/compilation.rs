@@ -352,6 +352,10 @@ impl<'a> Parser<'a> {
             let interface_decl = self.parse_interface_decl(visibility)?;
             return Some(TopLevelDecl::Interface(interface_decl));
         }
+        if self.at_kw(Keyword::Type) {
+            let alias = self.parse_type_alias_decl(visibility)?;
+            return Some(TopLevelDecl::TypeAlias(alias));
+        }
         let fn_decl = self.parse_fn_decl(visibility)?;
         Some(TopLevelDecl::Function(fn_decl))
     }

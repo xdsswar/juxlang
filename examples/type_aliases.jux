@@ -1,0 +1,33 @@
+// Type aliases per spec §A.2.4:
+//   type-alias = 'type' identifier generic-params? '=' type ';'
+//
+// Aliases are transparent — tycheck expands them at use sites, and
+// the backend emits Rust `pub type … = …;` so the alias is visible
+// in error messages.
+
+// Bare alias: a shorter name for a primitive.
+public type UserId = int;
+
+// Generic alias: `Pair<A, B>` resolves to `Box1<A>` for the sake of
+// demonstrating substitution. (We'd alias to a real tuple once
+// records-with-records land.)
+public class Box1<T> {
+    public T value;
+    public Box1(T v) { this.value = v; }
+    public T get() { return this.value; }
+}
+
+public type Boxed<T> = Box1<T>;
+
+public void main() {
+    // `UserId` is `int` after tycheck expansion — no error from the
+    // call site even though `print` doesn't know about UserId.
+    var id = 42;
+    print(id);
+
+    // `Boxed<int>` expands to `Box1<int>`. Construction works
+    // through the alias because `resolve_class_name` follows the
+    // chain to the underlying class.
+    var b = new Boxed<int>(99);
+    print(b.get());
+}

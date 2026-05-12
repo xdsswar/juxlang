@@ -238,6 +238,30 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a `type Name<...>? = TypeRef;` declaration per grammar
+    /// §A.2.4. Caller has already eaten the visibility token and
+    /// confirmed the next token is `type`.
+    pub(crate) fn parse_type_alias_decl(
+        &mut self,
+        visibility: Visibility,
+    ) -> Option<juxc_ast::TypeAliasDecl> {
+        let start = self.peek_span();
+        self.expect_kw(Keyword::Type, "expected `type` keyword");
+        let name = self.parse_ident()?;
+        let generic_params = self.parse_generic_params();
+        self.expect(&TokenKind::Eq, "'=' in type-alias declaration");
+        let target = self.parse_type_ref()?;
+        self.expect(&TokenKind::Semicolon, "';' after type-alias declaration");
+        let end = self.last_consumed_span();
+        Some(juxc_ast::TypeAliasDecl {
+            visibility,
+            name,
+            generic_params,
+            target,
+            span: start.join(end),
+        })
+    }
+
     /// Parse an optional `permits Foo, Bar, …` clause. Returns an
     /// empty vec when `permits` isn't the next token. Each entry is
     /// the bare class identifier — generic args aren't accepted in

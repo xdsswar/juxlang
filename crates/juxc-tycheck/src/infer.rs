@@ -462,14 +462,12 @@ fn return_type_in_class(rt: &ReturnType, declaring_class: &str, symbols: &Symbol
 /// argument list yet — `new Box(42)` produces `Box<>` (empty args
 /// list) and Phase D / Rust will pick that up.
 fn infer_new_object(n: &NewObjectExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
-    // class_name is a QualifiedName — take the last segment as the
-    // bare class name. Multi-segment-import resolution lands later.
-    let name = n
-        .class_name
-        .segments
-        .last()
-        .map(|s| s.text.clone())
-        .unwrap_or_default();
+    // Resolve the class name to its FQN. Single-segment names go
+    // through `env.unqualified` (the same map `ty_from_ref` uses
+    // for type-position resolution). Multi-segment names are taken
+    // verbatim as a dot-joined FQN. Falls back to the bare name
+    // when neither resolves.
+    let name = resolve_class_name(&n.class_name, env, symbols);
     // Explicit `<...>` on the `new` site wins: `new Box<int>(42)`
     // skips inference entirely.
     if !n.generic_args.is_empty() {
@@ -485,6 +483,75 @@ fn infer_new_object(n: &NewObjectExpr, env: &TypeEnv, symbols: &SymbolTable) -> 
     // constructor arg types.
     let generic_args = infer_ctor_generic_args(&name, &n.args, env, symbols);
     Ty::User { name, generic_args }
+}
+
+/// Resolve a `new X(...)` or similar class-name reference to an FQN.
+/// Single-segment names consult `env.unqualified` (same-package
+/// siblings + imports). Multi-segment names are joined with `.` and
+/// taken as already-qualified. Falls back to the literal name when
+/// no entry resolves, matching the pre-FQN behavior for top-level
+/// no-package builds.
+fn resolve_class_name(
+    qn: &juxc_ast::QualifiedName,
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> String {
+    if qn.segments.is_empty() {
+        return String::new();
+    }
+    let fqn = if qn.segments.len() == 1 {
+        let bare = &qn.segments[0].text;
+        if let Some(fqn) = env.unqualified.get(bare) {
+            if symbols.is_type_name(fqn) {
+                fqn.clone()
+            } else {
+                bare.clone()
+            }
+        } else {
+            bare.clone()
+        }
+    } else {
+        qn.segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(".")
+    };
+    // Follow type aliases — `new Alias(args)` should land on the
+    // underlying class. Walks at most a small chain (capped at 16)
+    // to avoid runaway expansion on malformed aliases. Only chases
+    // an alias whose target is a single-name reference to a class;
+    // anything more elaborate keeps the alias's own FQN.
+    let mut cursor = fqn;
+    for _ in 0..16 {
+        let Some(alias) = symbols.aliases.get(&cursor) else {
+            return cursor;
+        };
+        // Pull the bare class name out of the target TypeRef and
+        // map it back through `is_type_name`. Multi-segment targets
+        // already are FQN-shaped.
+        let target_fqn = if alias.target.name.segments.len() == 1 {
+            let bare = &alias.target.name.segments[0].text;
+            env.unqualified
+                .get(bare)
+                .cloned()
+                .unwrap_or_else(|| bare.clone())
+        } else {
+            alias
+                .target
+                .name
+                .segments
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(".")
+        };
+        if !symbols.is_type_name(&target_fqn) {
+            return cursor;
+        }
+        cursor = target_fqn;
+    }
+    cursor
 }
 
 /// Infer a class or record's generic-arg list from the constructor

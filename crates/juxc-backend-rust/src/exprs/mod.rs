@@ -79,13 +79,22 @@ impl RustEmitter {
             }
             Expr::Switch(s) => self.emit_switch(s),
             Expr::NewObject(n) => {
-                // `new Foo(args)`        → `Foo::new(args)`.
-                // `new Foo<int>(args)`   → `Foo::<isize>::new(args)`
-                //                          (Rust turbofish — required
-                //                          on the type position before
-                //                          the method-call `::new`).
-                // The class path is single-segment in practice today
-                // but stays `path-joined` for forward compatibility.
+                // `new Foo(args)`              → `Foo::new(args)`.
+                // `new com.lib.Foo(args)`      → `crate::com::lib::Foo::new(args)`.
+                // `new Foo<int>(args)`         → `Foo::<isize>::new(args)`
+                //                                (Rust turbofish form).
+                //
+                // **`crate::` prefix on multi-segment names.** The
+                // path the user wrote is absolute from the crate
+                // root — `poll.lib.Animal` always means the class
+                // at `crate::poll::lib::Animal` regardless of how
+                // deep the surrounding `pub mod` nest is. Without
+                // the `crate::` prefix, Rust would try to resolve
+                // `poll::lib::…` relative to the enclosing module
+                // and fail. Single-segment names depend on the
+                // unit's `use` statements (or same-package
+                // visibility) for resolution, so they're emitted
+                // bare.
                 let path = n
                     .class_name
                     .segments
@@ -93,6 +102,9 @@ impl RustEmitter {
                     .map(|s| s.text.as_str())
                     .collect::<Vec<_>>()
                     .join("::");
+                if n.class_name.segments.len() > 1 {
+                    self.w.push_str("crate::");
+                }
                 self.w.push_str(&path);
                 if !n.generic_args.is_empty() {
                     self.w.push_str("::<");

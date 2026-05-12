@@ -35,6 +35,37 @@ pub enum TopLevelDecl {
     Record(RecordDecl),
     /// A top-level interface declaration. See [`InterfaceDecl`].
     Interface(InterfaceDecl),
+    /// A top-level type alias — `type Name<...>? = TypeRef;`. Per
+    /// grammar §A.2.4. Resolved transparently by tycheck (name
+    /// looks like an alias on use, expands to its target type) and
+    /// emitted as a Rust `pub type Name<...>? = ...;`.
+    TypeAlias(TypeAliasDecl),
+}
+
+/// `type-alias` per grammar §A.2.4:
+/// ```text
+/// type-alias = 'type' identifier generic-params? '=' type ';'
+/// ```
+///
+/// A type alias introduces a new name for an existing type. Phase-1
+/// semantics mirror Rust's `type X = Y;` — transparent at use sites
+/// (tycheck rewrites a reference to `X` into the underlying `Y`
+/// before further inference). Generic aliases (`type Pair<A, B> =
+/// Tuple<A, B>;`) are supported syntactically; expansion threads
+/// the alias's params through the substituted target.
+#[derive(Debug, Clone)]
+pub struct TypeAliasDecl {
+    /// Source visibility — `public` / `internal` / etc.
+    pub visibility: Visibility,
+    /// Alias name (PascalCase by convention, not enforced).
+    pub name: Ident,
+    /// Generic parameters in declaration order. Empty for a bare
+    /// alias `type StringList = List<String>;`.
+    pub generic_params: Vec<TypeParam>,
+    /// The target type the alias resolves to.
+    pub target: TypeRef,
+    /// Span of the whole `type … ;` declaration.
+    pub span: Span,
 }
 
 /// `interface-decl` per grammar §A.2.4.
