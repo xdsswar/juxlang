@@ -1,0 +1,13 @@
+[package]
+name = "juxc-parse"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Phase 2 — parser for the Jux compiler (per JUX-COMPILER-PIPELINE-ADDENDUM.md §C.2.2)."
+
+[dependencies]
+juxc-source      = { workspace = true }
+juxc-diagnostics = { workspace = true }
+juxc-lex         = { workspace = true }
+juxc-ast         = { workspace = true }

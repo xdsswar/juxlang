@@ -1,0 +1,18 @@
+[package]
+name = "jux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The Jux project tool. Reads jux.toml, resolves dependencies, dispatches juxc."
+
+[[bin]]
+name = "jux"
+path = "src/main.rs"
+
+[dependencies]
+juxc-driver      = { workspace = true }
+juxc-source      = { workspace = true }
+juxc-diagnostics = { workspace = true }
+anyhow           = { workspace = true }
+clap             = { workspace = true }

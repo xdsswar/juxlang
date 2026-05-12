@@ -1,0 +1,12 @@
+// Milestone-3 vehicle: user-defined function with a String parameter,
+// called from main. Exercises the param-emission and Jux String → Rust
+// &str mapping added in this pass.
+
+public void greet(String name) {
+    print(name);
+}
+
+public void main() {
+    greet("Alice");
+    greet("Bob");
+}

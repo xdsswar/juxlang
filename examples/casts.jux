@@ -1,0 +1,21 @@
+// Milestone-12 vehicle: `as` casts.
+//
+// Mixed-width arithmetic needs explicit widening: a 32-bit `int` plus a
+// 64-bit `long` requires casting one operand. The `as` operator does it
+// at the right precedence — tighter than every binary op, looser than
+// unary — so `n + count as long` reads naturally as `n + (count as long)`.
+
+public long widen(int x) {
+    return x as long;
+}
+
+public void main() {
+    var n = 5L;                          // long literal
+    var count = 7;                       // int (i32)
+
+    // Without the cast, `n + count` is a type mismatch (i64 vs i32).
+    var sum = n + (count as long);
+    print(sum);                          // 12
+
+    print(widen(42));                    // 42 (as i64)
+}

@@ -1,0 +1,15 @@
+// Milestone-10 vehicle: short-circuit logical operators.
+//
+// `inRange` uses `&&` to check both bounds in a single expression.
+// `main` calls it on three samples and prints each result. Bool values
+// print as "true" / "false" via Rust's Display impl.
+
+public bool inRange(i32 x, i32 low, i32 high) {
+    return x >= low && x <= high;
+}
+
+public void main() {
+    print(inRange(5, 1, 10));    // true:  1 <= 5 <= 10
+    print(inRange(15, 1, 10));   // false: 15 > 10
+    print(inRange(0, 1, 10));    // false: 0 < 1
+}

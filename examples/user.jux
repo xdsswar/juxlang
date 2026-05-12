@@ -1,0 +1,47 @@
+// String fields vehicle — Turn-2 class support.
+//
+// Adds owned-String class fields on top of the Turn-1 class scope.
+// Position-aware mapping in the backend lowers Jux's "String is a
+// value type" to Rust's owned/borrowed distinction:
+//
+//   - Class field of type `String`   → Rust `String`         (owned)
+//   - Constructor / method param of `String` → Rust `&str`   (borrow)
+//   - Method / function return of `String`   → Rust `String` (owned)
+//
+// Plus two auto-coercions to make the boundaries smooth:
+//   - `this.name = name;`  appends `.to_string()` on the RHS.
+//   - Reads of String fields auto-`.clone()` so `&self`-borrowed
+//     methods can return them and interpolation can format them.
+
+public class User {
+    private String name;
+    private int age;
+
+    public User(String name, int age) {
+        this.name = name;
+        this.age = age;
+    }
+
+    // Returns the user's name as an owned String — body reads a
+    // String field via `this.name`, which the backend auto-clones so
+    // the value outlives `&self`.
+    public String greeting() {
+        return $"Hello, ${this.name}!";
+    }
+
+    // Mutating method — body assigns to `this.age` so it lowers with
+    // `&mut self`. Calling `u.birthday()` from outside also promotes
+    // the receiver to `let mut u` via the user-mut-methods pre-pass.
+    public void birthday() {
+        this.age = this.age + 1;
+    }
+}
+
+public void main() {
+    var u = new User("Ada", 36);
+    print(u.greeting());
+    print($"name=${u.name}, age=${u.age}");
+
+    u.birthday();
+    print($"after birthday: age=${u.age}");
+}

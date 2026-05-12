@@ -1,0 +1,17 @@
+// Milestone-2 vehicle: var declarations, binary arithmetic, comparison,
+// and if/else. Exercises the additions made in the second language-coverage
+// pass.
+
+public void main() {
+    var x = 10;
+    var y = 20;
+    var sum = x + y;
+
+    if (sum > 25) {
+        print("big");
+    } else {
+        print("small");
+    }
+
+    print(sum);
+}

@@ -1,0 +1,18 @@
+// Pattern matching vehicle — statement-form `switch` on a unit-variant
+// enum, exercising unit-variant patterns + `default` arm + block body.
+
+public enum Color { Red, Green, Blue }
+
+public void describe(Color c) {
+    switch (c) {
+        case Color.Red   -> print("warm");
+        case Color.Green -> print("calm");
+        default          -> { print("cool"); print("(blue family)"); }
+    }
+}
+
+public void main() {
+    describe(Color.Red);
+    describe(Color.Green);
+    describe(Color.Blue);
+}

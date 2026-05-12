@@ -1,0 +1,689 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exceptions & Result Lowering — Jux</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="sidebar-brand" href="index.html">
+    <span class="sidebar-brand-mark">J</span>
+    <span>Jux</span>
+  </a>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Start Here</div>
+    <a href="index.html">Overview</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Foundation</div>
+    <a href="JUX-LANG-V1.html">Language V1 — Architecture & Design</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Core Specifications</div>
+    <a href="JUX-GRAMMAR-ADDENDUM.html">Formal Grammar</a>
+    <a href="JUX-SEMANTICS-ADDENDUM.html">Execution Semantics</a>
+    <a href="JUX-OPERATORS-ADDENDUM.html">Operators (Final)</a>
+    <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
+    <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
+    <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+    <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
+    <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Compiler &amp; Tooling</div>
+    <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
+    <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+    <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
+    <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
+    <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
+    <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Earlier Addenda</div>
+    <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
+    <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
+    <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
+  </div>
+  <div class="sidebar-footer">
+    Generated from spec markdown.<br>
+    Self-contained, offline-ready.
+  </div>
+</aside>
+
+  <main class="main">
+    <div class="content">
+      <div class="breadcrumb"><a href="index.html">← Jux Specification</a></div>
+      <div id="rendered"></div>
+    </div>
+  </main>
+</div>
+
+<script id="md-content" type="text/markdown">
+# Jux Spec Addendum — Exceptions, Unwinding, and Result Lowering
+
+**Status:** Proposed insertion. Specifies the exception class hierarchy, the formal semantics of `try`/`catch`/`finally`, the `throws E` ↔ `Result<T, E>` lowering, the unwinding model, and the boundary between exceptions and panics.
+
+**Insertion points:**
+- New §X.1 ("Exception Class Hierarchy")
+- New §X.2 ("`throw` and Throwable Types")
+- New §X.3 ("`try` / `catch` / `finally` Semantics")
+- New §X.4 ("`Result<T, E>` and `?`")
+- New §X.5 ("`throws` ↔ `Result` Lowering")
+- New §X.6 ("Unwinding Model")
+- New §X.7 ("Exceptions and Async")
+- New §X.8 ("Panics: When the Language Itself Throws")
+- Edits to JUX-LANG-V1 §7.11
+
+---
+
+## Design Philosophy (Non-Normative)
+
+Three commitments:
+
+1. **Checked exceptions for predictable, recoverable error conditions.** Like Java; less ceremony than Rust's `Result` for the common case. Caller must handle or declare.
+2. **`Result<T, E>` for the cases where exceptions don't fit.** Embedded code, real-time code, code that must run in `jux-core`. The compiler converts between the two views automatically; the same source compiles to either runtime form.
+3. **Panics for compiler-promised invariants.** Overflow in debug, null-deref of a non-nullable, array OOB, illegal cast — these are bugs, not error conditions. They use the panic system, not the exception system.
+
+The user-visible promise: **a Jux program never has "unspecified" or "implementation-defined" error behavior.** Either the program throws an exception you can catch, returns a `Result` you can match, or panics with a stack trace and a documented termination behavior.
+
+---
+
+## §X.1 — Exception Class Hierarchy
+
+The exception hierarchy lives in `core.exception` (Tier 0 — available in every profile, though the unwinding mechanism varies per profile).
+
+### X.1.1. Base Class
+
+```jux
+public class Exception {
+    public String message            { get; }
+    public Exception? cause          { get; }
+    public StackFrame[] stackTrace   { get; }
+    public Exception[] suppressed    { get; private set; }
+
+    public Exception(String message) {
+        this.message = message;
+        this.cause = null;
+        this.stackTrace = captureStackTrace();
+        this.suppressed = [];
+    }
+
+    public Exception(String message, Exception cause) {
+        this.message = message;
+        this.cause = cause;
+        this.stackTrace = captureStackTrace();
+        this.suppressed = [];
+    }
+
+    public final void addSuppressed(Exception e) {
+        // Used by try-with-finally when both throw.
+        suppressed = suppressed ++ [e];
+    }
+}
+```
+
+Stack trace capture happens at construction time (per `JUX-SEMANTICS-ADDENDUM.md` §S.7.3) — not at `throw`, not at `catch`. This matches Java and avoids the per-throw cost of capturing in code paths that catch and discard.
+
+### X.1.2. Standard Subclasses
+
+```jux
+// "Recoverable" errors — programmer is expected to catch and handle.
+public class RuntimeException extends Exception { ... }       -- usually NOT caught
+public class IOException extends Exception { ... }
+public class IllegalArgumentException extends Exception { ... }
+public class IllegalStateException extends Exception { ... }
+public class CancellationException extends Exception { ... }
+public class TimeoutException extends Exception { ... }
+
+// Compiler-emitted ("panic-class") exceptions.
+public final class NullPointerException extends RuntimeException { ... }
+public final class IndexOutOfBoundsException extends RuntimeException { ... }
+public final class ArithmeticException extends RuntimeException { ... }
+public final class ClassCastException extends RuntimeException { ... }
+public final class StackOverflowError extends RuntimeException { ... }
+public final class OutOfMemoryError extends RuntimeException { ... }
+public final class ConcurrentModificationException extends RuntimeException { ... }
+public final class ExceptionInInitializerError extends RuntimeException { ... }
+
+// Async-specific.
+public final class ExecutionException extends Exception { ... }     -- task failed
+public final class MultipleDropException extends RuntimeException { ... }   -- §S.5.3
+```
+
+### X.1.3. Checked vs Unchecked
+
+| Class                     | Must be declared in `throws`? |
+|---------------------------|-------------------------------|
+| `Exception` (direct)       | Yes                           |
+| `IOException` and other "checked" subclasses | Yes        |
+| `RuntimeException`         | **No** — unchecked           |
+| Subclasses of `RuntimeException` | **No** — unchecked      |
+
+This is the Java distinction. The rationale: `RuntimeException` and its descendants are typically panic-class events — bugs the programmer didn't anticipate. Forcing every function to declare `throws NullPointerException` everywhere would be useless noise. Per JUX-LANG-V1 §7.11.
+
+A function that wants to make an unchecked exception checked re-types it:
+
+```jux
+public int divide(int a, int b) throws ArithmeticException {
+    if (b == 0) throw new ArithmeticException("divide by zero");
+    return a / b;
+}
+```
+
+### X.1.4. User-Defined Exceptions
+
+Users define their own exception classes by extending `Exception` (for checked) or `RuntimeException` (for unchecked):
+
+```jux
+public final class ConfigError extends Exception {
+    public ConfigError(String message) { super(message); }
+    public ConfigError(String message, Exception cause) { super(message, cause); }
+}
+```
+
+A user-defined exception is checked iff it transitively extends `Exception` without going through `RuntimeException`. The compiler verifies the `throws` declarations of every function are consistent with the actual throw points.
+
+---
+
+## §X.2 — `throw` and Throwable Types
+
+### X.2.1. Throwable Type Constraint
+
+`throw expr` requires `expr` to be of type `Exception` or a subclass. This is enforced at phase 6 (type checking).
+
+```jux
+throw new ConfigError("bad host");           -- OK
+throw "string";                               -- E0710: throw requires Exception
+```
+
+### X.2.2. Re-throwing
+
+Inside a `catch` block, the caught exception can be re-thrown:
+
+```jux
+try {
+    risky();
+} catch (IOException e) {
+    log.error("failed", e);
+    throw e;                                  -- re-throw with original stack trace preserved
+}
+```
+
+Re-throw does not re-capture the stack trace.
+
+### X.2.3. Wrapping
+
+To wrap a lower-level exception in a higher-level one:
+
+```jux
+try {
+    risky();
+} catch (IOException e) {
+    throw new ConfigError("config load failed", e);   -- e becomes .cause
+}
+```
+
+The wrapped exception is preserved in `.cause`, accessible at the catch site.
+
+---
+
+## §X.3 — `try` / `catch` / `finally` Semantics
+
+### X.3.1. Syntax (Recap)
+
+Per `JUX-GRAMMAR-ADDENDUM.md` §A.2.8:
+
+```
+try-stmt          = 'try' block catch-clause* finally-clause?
+catch-clause      = 'catch' '(' type identifier ')' block
+finally-clause    = 'finally' block
+
+try-expr          = 'try' block catch-clause+               -- expression form, no finally
+```
+
+A `try` statement must have at least one `catch` or one `finally`. A `try` expression must have at least one `catch`.
+
+### X.3.2. Statement Semantics
+
+For `try B0 catch (E1 e1) B1 catch (E2 e2) B2 ... finally Bf`:
+
+1. Execute `B0`.
+2. If `B0` completes normally:
+   - Execute `Bf` (if present). The `try` statement completes normally if `Bf` does, or as `Bf` does (return, throw, etc.).
+3. If `B0` throws an exception `e`:
+   - For each catch clause in textual order:
+     - If `e` is an instance of `Eᵢ`, bind `eᵢ = e`, execute `Bᵢ`. The `try` statement completes as `Bᵢ` does (after running `Bf`).
+   - If no catch matches:
+     - Execute `Bf` (if present), then re-throw `e`.
+4. If `Bf` itself throws while propagating an earlier exception:
+   - Per `JUX-SEMANTICS-ADDENDUM.md` §S.5.3, the new exception is added to the original's `.suppressed` list. The original propagates.
+
+### X.3.3. Expression Semantics
+
+`try B0 catch (E1 e1) B1 catch (E2 e2) B2 ...` (no finally) is an expression that evaluates to:
+
+- The value of `B0` if it completes normally.
+- The value of `Bᵢ` if `B0` throws and `Bᵢ` matches.
+- Re-throws if no catch matches.
+
+The expression form has no `finally` because there's no value `finally` could produce. For cleanup with a value result, use the statement form with an explicit return.
+
+### X.3.4. Catch Order
+
+Catch clauses are tried in source order. If two catch types overlap (one is a subtype of the other), the more specific must come first. The compiler emits `E0720` ("unreachable catch — `IOException` is already caught by previous clause for `Exception`") if a later catch is unreachable.
+
+### X.3.5. `finally` and Control Flow
+
+`finally` runs in **all** completion paths of the try block (and any catch block):
+
+- Normal completion.
+- Exception thrown and caught.
+- Exception thrown and not caught (propagates after finally).
+- `return` from inside try or catch (finally runs before the return takes effect).
+- `break` / `continue` from inside try or catch (finally runs before the loop transition).
+
+If `finally` itself returns or throws, that overrides the original completion. The compiler emits `W0720` for `return` inside `finally` (a known footgun: it discards an in-flight exception).
+
+### X.3.6. Multi-Catch
+
+A single catch clause can list multiple types:
+
+```jux
+try {
+    risky();
+} catch (IOException | TimeoutException e) {
+    log.warn("network problem", e);
+}
+```
+
+The bound variable's type is the most specific common supertype of the listed types. Multi-catch types must be unrelated (no subtype relationship); otherwise the compiler emits `E0721`.
+
+### X.3.7. `try` and the Borrow Checker
+
+A value moved into a `try` block, if also referenced after the block, must not be in a "moved" state on any path. The borrow checker treats each `catch` clause as a separate join point. Per `JUX-COMPILER-PIPELINE-ADDENDUM.md` phases 11–13.
+
+---
+
+## §X.4 — `Result<T, E>` and `?`
+
+`Result<T, E>` lives in `core.result`:
+
+```jux
+public sealed enum Result<T, E> permits Ok, Err {
+    Ok(T value),
+    Err(E error);
+
+    public bool isOk() {
+        return switch (this) {
+            case Ok(_) -> true;
+            case Err(_) -> false;
+        };
+    }
+
+    public bool isErr() {
+        return !isOk();
+    }
+
+    public T unwrap() throws E {
+        return switch (this) {
+            case Ok(var v) -> v;
+            case Err(var e) -> throw e;
+        };
+    }
+
+    public T unwrapOr(T fallback) {
+        return switch (this) {
+            case Ok(var v) -> v;
+            case Err(_) -> fallback;
+        };
+    }
+
+    public Result<R, E> map<R>((T) -> R f) {
+        return switch (this) {
+            case Ok(var v) -> Result.ok(f(v));
+            case Err(var e) -> Result.err(e);
+        };
+    }
+
+    public Result<R, E> flatMap<R>((T) -> Result<R, E> f) {
+        return switch (this) {
+            case Ok(var v) -> f(v);
+            case Err(var e) -> Result.err(e);
+        };
+    }
+}
+```
+
+### X.4.1. The `?` Operator
+
+`expr?` (postfix, per `JUX-GRAMMAR-ADDENDUM.md` §A.4 level 19) propagates errors:
+
+- If `expr` is of type `Result<T, E>`:
+  - If `Ok(v)`, the expression evaluates to `v`.
+  - If `Err(e)`, the enclosing function returns `Err(e)` immediately.
+- If `expr` is of type `T?`:
+  - If non-null, the expression evaluates to the value.
+  - If null, the enclosing function returns null immediately (or returns `Err(NullValue)` if the enclosing return type is `Result`).
+
+The enclosing function's return type must be compatible with the propagation:
+
+- For `expr: Result<T, E>` propagation, the enclosing function's return type must be `Result<U, E>` for some `U`, **or** `throws E` (in which case `?` desugars to `try`/`catch`).
+- For `expr: T?` propagation, the enclosing function's return type must be `U?` for some `U`.
+
+Otherwise emit `E0730`.
+
+### X.4.2. Worked Examples
+
+```jux
+public Result<Config, ConfigError> loadConfig() {
+    var contents = readFile("config.txt")?;          -- short-circuit on Err
+    var parsed = parseConfig(contents)?;
+    return Result.ok(parsed);
+}
+
+public User? findUser(Map<String, User> users, String name) {
+    var user = users.get(name)?;                     -- short-circuit on null
+    return user.isActive ? user : null;
+}
+```
+
+### X.4.3. Auto-Conversion at the `?` Boundary
+
+`?` permits a small amount of error-type conversion:
+
+- If the propagated error type `E` is convertible (via `as`) to the enclosing function's error type `F`, the conversion happens automatically.
+- If a conversion isn't trivial, emit `E0731` and require an explicit map: `result.mapErr(e -> ...)?`.
+
+This lets users compose operations whose error types differ slightly (e.g., wrapping a low-level `IOError` into a higher-level `ConfigError`) without extra ceremony.
+
+---
+
+## §X.5 — `throws` ↔ `Result` Lowering
+
+A central feature of Jux: the **same source code** runs as exception-throwing code on `jux-full` and as `Result`-returning code on `jux-core`. The compiler does the conversion.
+
+### X.5.1. Per-Profile Mode
+
+| Profile         | Default exception mode | Override |
+|-----------------|------------------------|----------|
+| `jux-full`      | Exceptions             | None — `throws` always uses real exceptions. |
+| `jux-embedded`  | Exceptions if profile flag set, else `Result` | `[exceptions]` flag in `jux.toml` |
+| `jux-core`      | `Result`               | None — exceptions unavailable. |
+
+A function declared `throws E` compiles to:
+
+- **Exception mode:** native function with a `throws` table; `throw e` invokes the unwinder.
+- **Result mode:** function with return type `Result<OriginalReturnType, E>`; `throw e` becomes `return Result.err(e)`.
+
+### X.5.2. Lowering Rules
+
+The compiler rewrites the function in Result mode as follows:
+
+1. Return type `T` becomes `Result<T, E>` for each `E` in the `throws` clause; for multiple checked types, `E` is the least common supertype, or a synthesized union.
+2. `throw e` becomes `return Result.err(e)`.
+3. `try { B0 } catch (E1 e) { B1 } finally { Bf }` becomes:
+
+   ```jux
+   var __result = (() -> Result<T, never> { B0_with_throws_lowered_to_Err })();
+   var __caught = false;
+   T __value;
+   E __exn;
+   if (__result.isErr() && __result.unwrapErr() => E1) {
+       __exn = __result.unwrapErr() as E1;
+       __caught = true;
+       __value = B1_with_throws_lowered_to_Err_as_T;
+   } else if ... { ... }
+   else {
+       __value = __result.unwrap();        -- propagates if Err
+   }
+   Bf;
+   return Result.ok(__value);
+   ```
+
+   (Pseudo-code; the actual MIR avoids the closure.)
+4. `?` operator: in Result mode, lower as ordinary Result propagation. In exception mode, lower as inline if-throw.
+5. `throws` calls: in Result mode, every call to a `throws` function returns a Result; the caller propagates with `?` or matches.
+
+### X.5.3. Source Portability
+
+A function written in the natural `throws` style is unchanged across profiles. Library users compile against a single source; the lowering is per-build:
+
+```jux
+// Same source compiles for jux-full and jux-core:
+public Config readConfig(Path path) throws IOError, ParseError {
+    var contents = File.read(path);
+    return parseConfig(contents);
+}
+```
+
+In `jux-full`, callers use `try`/`catch`. In `jux-core`, callers use `?` and pattern-match.
+
+### X.5.4. Mixed-Style Calls
+
+A function returning `Result<T, E>` directly can be called from a `throws E` function:
+
+```jux
+public Config readConfig() throws ConfigError {
+    var data = parseExplicit().unwrap();           -- Result<T, ConfigError>.unwrap() throws E
+    return data;
+}
+```
+
+The reverse is also supported via `Result.from(() -> ...)`:
+
+```jux
+public Result<Config, ConfigError> readConfigSafe() {
+    return Result.from(() -> readConfig());        -- catches and packages
+}
+```
+
+The two styles compose freely.
+
+---
+
+## §X.6 — Unwinding Model
+
+### X.6.1. Per-Profile Unwinding
+
+| Profile         | Mechanism                          | Cost                        |
+|-----------------|-------------------------------------|-----------------------------|
+| `jux-full`      | DWARF-based table-driven unwinding (Unix) or SEH (Windows) | Zero cost in non-throwing path; cost paid on actual throws |
+| `jux-embedded`  | Same as `jux-full` if exceptions enabled; otherwise `Result` lowering | Variable |
+| `jux-core`      | No unwinding; `Result` lowering only | Zero |
+
+### X.6.2. Cleanup Tables
+
+The compiler emits per-function unwinding metadata:
+
+- For each program point that may throw or call into code that may throw, record the live drop set.
+- On unwind, the runtime walks the call stack, consulting these tables. For each frame, it runs the appropriate drops (in reverse construction order, per `JUX-SEMANTICS-ADDENDUM.md` §S.5.2).
+- When a frame's `catch` clause matches the in-flight exception's type, the unwind stops; control transfers to the catch block.
+
+The cleanup tables are emitted once per monomorphic function. For Phase 1 (Rust transpile), the Rust compiler handles this. For Phase 3, the Jux compiler emits the platform's standard format directly.
+
+### X.6.3. Drop During Unwind
+
+Drops that run during unwind follow the standard rules (`JUX-SEMANTICS-ADDENDUM.md` §S.5):
+
+- Reverse declaration order within each scope.
+- Subclass before superclass for class instances.
+- Aggregated if multiple drops throw (the original exception is the primary; subsequent ones become `.suppressed`).
+
+### X.6.4. Performance
+
+The "zero cost in non-throwing path" promise:
+
+- A function that does not contain a `try`/`catch` and does not call into one pays no per-call overhead.
+- Functions that may throw emit cleanup metadata but no inline checks; the metadata costs binary size, not runtime cycles.
+- Throws traverse the unwind tables — fast for short stacks, linear in stack depth for long ones. Unlike `Result` returns, throws do not incur per-call overhead in the common case.
+
+For latency-sensitive code, `Result` is more predictable; for the common case where errors are rare, exceptions are faster.
+
+### X.6.5. FFI and Unwinding
+
+Unwinding does **not** cross the FFI boundary safely. A `throw` that would unwind through a C function frame is undefined behavior in C and produces a panic-abort in Jux:
+
+- A Jux function called from C must not unwind past the FFI boundary. The compiler inserts a barrier: an exception that reaches the boundary is converted to a process abort with the exception's message.
+- A C function called from Jux that uses C++ exceptions or `setjmp`/`longjmp` is the user's responsibility; Jux's compiler does not detect this.
+
+Programmers crossing the FFI boundary in either direction should use `Result<T, E>` returns or out-parameters (per `JUX-MISSING-DEFS-ADDENDUM.md` §M.4) for error reporting. This is what the wrappers in `JUX-LAYOUT-ABI-ADDENDUM.md` §L.7.2 are for.
+
+---
+
+## §X.7 — Exceptions and Async
+
+### X.7.1. Throw Across `await`
+
+A `throw` inside an async function propagates through the suspended state machine:
+
+```jux
+public async User fetchUser(int id) {
+    var resp = await http.get($"/users/$id");        -- may throw IOException
+    if (!resp.isOk()) throw new NotFoundError(id);    -- direct throw
+    return parseUser(await resp.text());
+}
+```
+
+When awaited, the exception manifests at the `await` point in the awaiter:
+
+```jux
+public async void main() {
+    try {
+        var u = await fetchUser(42);
+    } catch (NotFoundError e) {
+        log.warn("user not found", e);
+    }
+}
+```
+
+The `try`/`catch` at the awaiter sees the exception thrown inside the awaitee, transparently across suspension.
+
+### X.7.2. Unawaited Spawned Tasks
+
+A task spawned via `spawn(...)` and never awaited that throws an exception triggers the runtime's **unhandled-rejection hook** (per JUX-LANG-V1 §10.1.8). Default behavior: log and abort the process; configurable via `Runtime.onUnhandledRejection`.
+
+The async-throws-Result lowering applies to spawned tasks too: in Result-mode profiles, a task that "throws" actually completes with `Result.err(e)`, and `await` extracts it (or short-circuits via `?`).
+
+### X.7.3. Cancellation as Exception
+
+`task.cancel()` causes the next `await` in the task to throw `CancellationException`. Cancellation **is** an exception in this design — it propagates the same way, runs `finally` blocks, runs drops, and so on. Per JUX-LANG-V1 §10.1.9.
+
+---
+
+## §X.8 — Panics: When the Language Itself Throws
+
+A **panic** is the runtime's response to a violated language invariant. Distinct from user-thrown exceptions:
+
+- **Exceptions** are programmer-modeled error conditions, declared in `throws` clauses, expected to be caught and handled.
+- **Panics** are bugs — null deref of a non-nullable, integer overflow in debug, array OOB, `.unwrap()` on `Err`, division by zero, exception in static initializer, exhausted const-eval limits, stack overflow.
+
+Per `JUX-SEMANTICS-ADDENDUM.md` §S.7, panics either:
+
+- Throw a `RuntimeException` subclass that can be caught (in `jux-full` and `jux-embedded` with exceptions enabled).
+- Call the panic handler and abort (in `jux-core` and exception-disabled profiles).
+
+### X.8.1. Catching Panics
+
+In profiles with exceptions, panic-class events are catchable as `RuntimeException`:
+
+```jux
+try {
+    riskyMath();
+} catch (ArithmeticException e) {
+    log.warn("math overflowed", e);
+} catch (RuntimeException e) {
+    log.error("internal error — should not have happened", e);
+}
+```
+
+But: catching `RuntimeException` is generally wrong. A panic indicates a bug; the right response is fix-the-bug, not catch-and-continue. The Jux conventions:
+
+- **Don't catch `RuntimeException` in production code.** Catching it masks bugs.
+- **Do catch panic-class events at the top of a request/task boundary.** A web server's request handler should catch any panic and return 500, rather than abort the whole process.
+- **Tests should let panics fail the test.** No catch-all.
+
+### X.8.2. Panic Hook for Diagnostics
+
+A program may install a panic hook that runs *before* the panic propagates (or aborts). This is useful for logging and crash-dump generation:
+
+```jux
+import core.panic.{set_panic_hook, PanicInfo};
+
+set_panic_hook((info: PanicInfo) -> {
+    crash_log.write("panic at " + info.location + ": " + info.message);
+    crash_log.flush();
+    -- continue to default behavior (throw or abort)
+});
+```
+
+The hook is called once per panic. It may not itself panic (the runtime aborts unconditionally if it does).
+
+### X.8.3. `RuntimeException` and `throws`
+
+Because `RuntimeException` and its subclasses are unchecked, they don't appear in `throws` declarations. The function `divide(int a, int b)` may panic-divide-by-zero without declaring it.
+
+A function that *does* want to declare a panic-class condition as part of its API uses a different exception class (`extends Exception`, not `RuntimeException`):
+
+```jux
+public class DivideByZeroError extends Exception {
+    public DivideByZeroError() { super("divide by zero"); }
+}
+
+public int safeDivide(int a, int b) throws DivideByZeroError {
+    if (b == 0) throw new DivideByZeroError();
+    return a / b;
+}
+```
+
+This is the function-author's choice: by re-typing the failure as a checked exception, they make it part of the contract that callers must handle.
+
+---
+
+## §X.9 — Edits to JUX-LANG-V1
+
+### Edit to JUX-LANG-V1 §7.11
+
+Replace §7.11 with:
+
+> Jux supports two error-handling styles in the same language:
+>
+> - **Checked exceptions** for the common case. A function declares `throws E` for each checked exception type it can throw. Callers must handle (with `try`/`catch`) or re-declare. See §X.1, §X.3.
+> - **`Result<T, E>`** for cases where exception unwinding is unsuitable (real-time code, `jux-core`, code that prefers explicit errors). The `?` operator propagates errors concisely. See §X.4.
+>
+> The two styles interoperate: the compiler can lower `throws E` to `Result<T, E>` automatically (per §X.5), so the same source compiles for both styles. The choice is a build-profile setting, not a source-level commitment.
+
+The remainder of §7.11 (specific class examples) is superseded by §X.1.
+
+---
+
+## Summary
+
+| Topic                          | Section | What was missing                                |
+|--------------------------------|---------|-------------------------------------------------|
+| Exception class hierarchy       | §X.1    | Every `throws` references undefined types       |
+| Checked vs unchecked split      | §X.1.3  | Java's distinction, applied                     |
+| `try`/`catch`/`finally` semantics | §X.3  | Formal completion-path rules                    |
+| `Result<T, E>` and `?`           | §X.4    | Used in examples, never specified               |
+| `throws ↔ Result` lowering        | §X.5    | Rule-level only; here's the algorithm           |
+| Unwinding model                 | §X.6    | DWARF/SEH, cleanup tables, drop-during-unwind  |
+| Async exception propagation     | §X.7    | Through awaits, unawaited tasks, cancellation   |
+| Panics                           | §X.8    | Distinguished from exceptions; catch policy    |
+
+With this addendum:
+
+- Every `throws E` clause in JUX-LANG-V1 examples now references a real type.
+- The "same source for full and core" promise has a mechanical lowering.
+- The unwinding cost model is documented (zero on the non-throwing path).
+- Panic vs exception is a clear, enforced boundary.
+
+---
+
+*End of exceptions/unwinding addendum. Subsequent work: the minimal `core` library that the compiler can lower to.*
+
+</script>
+<script src="parser.js"></script>
+</body>
+</html>

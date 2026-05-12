@@ -1,0 +1,19 @@
+// Milestone-13 vehicle: `sizeof` compile-time type queries.
+//
+// Demonstrates both forms per spec §5.9:
+//   - Type form: sizeof(int), sizeof(i32), etc.
+//   - Value form: sizeof(x) where x is a variable (camelCase rule).
+
+public void main() {
+    // Type form — primitives.
+    print(sizeof(byte));     // 1
+    print(sizeof(short));    // 2
+    print(sizeof(i32));      // 4 (width-explicit, always 32-bit)
+    print(sizeof(long));     // 8
+    print(sizeof(double));   // 8
+    print(sizeof(bool));     // 1
+
+    // Value form — `count` is a lowercase identifier, treated as a value.
+    var count = 5;
+    print(sizeof(count));    // 4 (size of i32, count's inferred type)
+}

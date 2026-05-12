@@ -1,0 +1,54 @@
+// Inheritance vehicle — Turn-1 inheritance (composition + Deref).
+//
+// Exercises:
+//   - `abstract class Animal { … abstract String speak(); … }`
+//   - Concrete subclass via `extends`.
+//   - `super(name)` in subclass constructor → parent's `new()`.
+//   - Inherited method `getName()` called on the subclass instance
+//     (auto-deref through `impl Deref for Dog { type Target = Animal }`).
+//   - Override — Dog's `speak()` shadows Animal's abstract stub via the
+//     subclass inherent impl. Calls through a `Dog` reference hit the
+//     override directly; Phase-1 polymorphism through an `Animal`
+//     reference is deferred (needs `Box<dyn Animal>`).
+
+public abstract class Animal {
+    private String name;
+
+    public Animal(String name) {
+        this.name = name;
+    }
+
+    public String getName() {
+        return this.name;
+    }
+
+    public abstract String speak();
+}
+
+public class Dog extends Animal {
+    public Dog(String name) {
+        super(name);
+    }
+
+    public String speak() {
+        return $"Woof!";
+    }
+}
+
+public class Cat extends Animal {
+    public Cat(String name) {
+        super(name);
+    }
+
+    public String speak() {
+        return $"Meow!";
+    }
+}
+
+public void main() {
+    var rex = new Dog("Rex");
+    var whiskers = new Cat("Whiskers");
+
+    print($"${rex.getName()} says ${rex.speak()}");
+    print($"${whiskers.getName()} says ${whiskers.speak()}");
+}

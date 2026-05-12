@@ -1,0 +1,428 @@
+# Jux Spec Addendum — Annotation System
+
+**Status:** Normative. Targets JUX-LANG-V1.md §3.6.
+**Sigil:** §A
+
+This addendum extends JUX-LANG-V1.md §3.6 with the full annotation system: user-defined annotations via the `annotation` keyword, targets and retention, parameter types and defaults, repeatable annotations, compile-time annotation processors, and the framework patterns the system is designed to enable.
+
+---
+
+## Design Philosophy (Non-Normative)
+
+Annotations are the connective tissue of the Java/Kotlin/C# ecosystem. Spring Boot, JAX-RS, Hibernate, ASP.NET Core, Ktor, FastAPI — all stand on declarative annotation programming. Jux commits to this model **with a cost discipline**: annotations cost nothing when reflection is disabled. Embedded code never pays for `@Cacheable`; server code can lean on it freely.
+
+Three properties make this work:
+
+1. **First-class declaration syntax.** The `annotation` keyword is a real type kind, not a comment convention.
+2. **Retention is a runtime/binary/source switch.** Source-retention annotations are stripped at compile time; binary-retention ones survive; runtime-retention ones are introspectable via reflection.
+3. **Reflection is opt-in.** Without `reflection = "annotations"` in `jux.toml`, runtime-retention annotations are still stripped — frameworks request the cost they want.
+
+---
+
+## §A.1 — Built-In Annotations (Summary)
+
+The annotations the compiler gives meaning to. Their full semantics live in their owning specs; this table is a cross-reference.
+
+| Annotation                            | Purpose                                                                | Specified in                              |
+|---------------------------------------|------------------------------------------------------------------------|-------------------------------------------|
+| `@Test`                               | Marks a function as a test case                                        | JUX-BUILD-SYSTEM-ADDENDUM (testing)       |
+| `@Derive(...)`                        | Auto-generates implementations (e.g., `@Derive(Equals, Hash)`)         | JUX-OPERATORS-ADDENDUM §O.3 / JUX-MISSING-DEFS §M.3 |
+| `@Deprecated`                         | Marks an API as deprecated                                             | JUX-LANG-V1.md §3.6                       |
+| `@Override`                           | Verifies a method overrides a parent method                            | JUX-LANG-V1.md §7.4                       |
+| `@Inline`, `@NoInline`                | Inlining hints                                                         | JUX-LANG-V1.md §3.6                       |
+| `@Align(N)`                           | Memory alignment                                                       | JUX-LAYOUT-ABI-ADDENDUM                   |
+| `@Repr(...)`                          | Memory layout (`packed`, `transparent`, `c`, ...)                      | JUX-LAYOUT-ABI-ADDENDUM                   |
+| `@Export`, `@Export(name = "...")`    | C-ABI export                                                           | JUX-LANG-V1.md §8.4                       |
+| `@Extern(lib = "...", header = "...")` | External C function binding                                           | JUX-LANG-V1.md §8.1                       |
+| `@Native(lib = "...")`                | Marks a module as containing native declarations                       | JUX-BUILD-SYSTEM-ADDENDUM §B.13           |
+| `@NativeModule`                       | Restricts where `@Extern` may appear                                   | JUX-BUILD-SYSTEM-ADDENDUM §B.13           |
+| `@Cfg(...)`                           | Conditional compilation                                                | JUX-LANG-V1.md §11                        |
+| `@Entry`, `@Entry(symbol = ...)`      | Program entry point                                                    | JUX-ENTRY-POINTS-ADDENDUM                 |
+| `@Register(address = ...)`            | Memory-mapped register (embedded)                                      | JUX-LANG-V1.md §16.3                      |
+| `@Interrupt(vector = ...)`            | Interrupt service routine (embedded)                                   | JUX-LANG-V1.md §16.4                      |
+| `@PluginInterface(version = N)`       | Marks an interface as a plugin contract                                | JUX-BUILD-SYSTEM-ADDENDUM                 |
+| `@Reflectable`                        | Opt-in reflection metadata                                             | JUX-MISSING-DEFS-ADDENDUM §M.11           |
+| `@AnnotationType`                     | Marks an interface as a user-defined annotation kind (legacy form)     | This addendum, §A.10                      |
+
+**Casing.** Per JUX-LANG-V1.md §3.6, annotation names and parameter names are **case-insensitive**. The compiler echoes back whatever spelling the user wrote; `juxc fmt` does not normalize.
+
+---
+
+## §A.2 — Declaring User-Defined Annotations
+
+The `annotation` keyword declares a new annotation type:
+
+```java
+@Target(METHOD)
+@Retention(RUNTIME)
+public annotation Cacheable {
+    int ttlSeconds() default 60;
+    String[] tags() default {};
+}
+```
+
+An `annotation` declaration has:
+
+- A **target** (one or more, see §A.3) — meta-annotation `@Target(...)`.
+- A **retention** (see §A.4) — meta-annotation `@Retention(...)`.
+- **Parameters** declared as method-style headers — each may carry a `default` value.
+
+Without an explicit `@Target`, an annotation may appear on any declaration kind. Without an explicit `@Retention`, retention defaults to `BINARY`.
+
+### A.2.1. Applying an Annotation
+
+```java
+public class UserService {
+    @Cacheable(ttlSeconds = 300, tags = {"user", "profile"})
+    public User loadUser(int id) {
+        return db.fetchUser(id);
+    }
+}
+```
+
+Parameter names use named-argument syntax. Parameters with defaults are optional. If every parameter has a default (or there are no parameters), the call site can be written bare: `@Cacheable` rather than `@Cacheable()`.
+
+---
+
+## §A.3 — Targets
+
+The `@Target` meta-annotation enumerates the declaration kinds the annotation may apply to:
+
+| Target           | Applies to                                                |
+|------------------|-----------------------------------------------------------|
+| `TYPE`           | Classes, interfaces, structs, records, enums              |
+| `METHOD`         | Methods and free functions                                |
+| `FIELD`          | Fields and properties                                     |
+| `PARAMETER`      | Function/method parameters                                |
+| `CONSTRUCTOR`    | Constructors                                              |
+| `LOCAL_VARIABLE` | Local variable declarations                               |
+| `MODULE`         | Module-level declarations                                 |
+| `ANNOTATION`     | Other annotations (meta-annotations)                      |
+
+Multiple targets are allowed:
+
+```java
+@Target(TYPE, METHOD)
+public annotation Loggable { }
+```
+
+Applying an annotation outside its declared target set is `E0470` (`annotation target mismatch`).
+
+---
+
+## §A.4 — Retention
+
+The `@Retention` meta-annotation declares when the annotation is available:
+
+| Retention | Available at                                                    |
+|-----------|-----------------------------------------------------------------|
+| `SOURCE`  | Compile time only (e.g., `@Deprecated` lint hints, `@Inline`)   |
+| `BINARY`  | Compiled into the binary metadata; not visible at runtime       |
+| `RUNTIME` | Visible at runtime via reflection (only when reflection enabled)|
+
+Default retention is `BINARY` when not specified.
+
+`RUNTIME`-retention annotations are stripped at compile time when the project sets `reflection = "none"` in `jux.toml`. Code that attempts to read them in that configuration fails to compile with `E0471` (`runtime annotation read requires reflection`).
+
+---
+
+## §A.5 — Parameter Types
+
+Annotation parameters are restricted to types the compiler can serialize into binary metadata:
+
+- Primitives (`int`, `long`, `double`, `bool`, `char`)
+- `String`
+- Other annotations
+- Arrays of any of the above
+- Enum values
+- Type references — `Type<T>` (compile-time type tokens; see §A.5.1)
+
+```java
+public enum HttpMethod { GET, POST, PUT, DELETE }
+
+@Target(METHOD)
+@Retention(RUNTIME)
+public annotation Route {
+    String path();
+    HttpMethod method() default GET;
+    String[] consumes() default {};
+    String[] produces() default {"application/json"};
+}
+```
+
+### A.5.1. Type References
+
+For annotations that need to refer to types (exception classes for `@Retry`, entity classes for `@Entity`, ...), the parameter type is `Type<T>` or `Type<? extends T>`:
+
+```java
+public annotation Retry {
+    int maxAttempts() default 3;
+    long delayMillis() default 1000;
+    Type<? extends Exception>[] retryOn() default {Exception};
+}
+```
+
+At the use site, types are referenced by bare name (no `.class` / `.type` suffix):
+
+```java
+@Retry(retryOn = {IOError, TimeoutException})
+public void networkCall() { }
+```
+
+---
+
+## §A.6 — Defaults and Optional Parameters
+
+Parameters with `default` values may be omitted at use sites:
+
+```java
+@Retry                                       // uses all defaults
+public void simpleCall() { }
+
+@Retry(maxAttempts = 5)                      // override one
+public void importantCall() { }
+```
+
+A parameter without a `default` is **required**; omitting it at the use site is `E0472` (`missing required annotation parameter`).
+
+---
+
+## §A.7 — Repeatable Annotations
+
+By default, an annotation may appear at most once per target. To allow multiple applications, mark the annotation `@Repeatable`:
+
+```java
+@Target(METHOD)
+@Retention(RUNTIME)
+@Repeatable
+public annotation Tag {
+    String value();
+}
+
+@Tag("user")
+@Tag("profile")
+@Tag("read")
+public User getProfile(int id) { ... }
+```
+
+Reflection returns repeatable annotations as `List<Tag>` rather than `Tag?`.
+
+Applying a non-`@Repeatable` annotation more than once is `E0473` (`annotation not repeatable`).
+
+---
+
+## §A.8 — Reading Annotations at Runtime
+
+With `reflection = "annotations"` or `reflection = "full"` in `jux.toml`, runtime annotations are accessible via the reflection API:
+
+```java
+import std.reflection.{getAnnotations, getMethods};
+
+public void processCacheable(Object instance) {
+    var clazz = instance.getClass();
+    for (var method : getMethods(clazz)) {
+        var cacheable = method.getAnnotation<Cacheable>();
+        if (cacheable != null) {
+            print($"${method.name} is cacheable for ${cacheable.ttlSeconds()}s");
+        }
+    }
+}
+```
+
+The reflection API surface is specified in `JUX-MISSING-DEFS-ADDENDUM.md` §M.11. Annotations are the primary motivator for the opt-in reflection system.
+
+### A.8.1. Reflection Modes and Cost
+
+| Mode in `jux.toml`             | What's accessible                              | Approximate per-class cost |
+|--------------------------------|------------------------------------------------|----------------------------|
+| `reflection = "none"`          | Nothing — runtime annotations stripped         | 0 bytes                    |
+| `reflection = "annotations"`   | Only annotation metadata                       | ~50–150 bytes              |
+| `reflection = "full"`          | Annotations + fields + methods + types         | ~200–500 bytes             |
+
+Embedded profiles default to `"none"`. Server profiles default to `"annotations"`. The default is configurable per project.
+
+---
+
+## §A.9 — Compile-Time Annotation Processors
+
+For frameworks that prefer compile-time code generation over runtime reflection — KSP-style, javax.annotation.processing-style — register a processor:
+
+```java
+@AnnotationProcessor
+public class RouteProcessor implements Processor {
+    public void process(ProcessingContext ctx, Set<Element> annotated) {
+        for (var element : annotated) {
+            if (element.hasAnnotation<Route>()) {
+                generateHandlerCode(ctx, element);
+            }
+        }
+    }
+}
+```
+
+Processors:
+
+- Run at build time, after type checking, before code generation.
+- Receive the set of elements carrying any of the annotations they declare interest in (`@RegisterProcessor(handles = {Route, Controller})`).
+- Can emit additional `.jux` source files into a generated-sources directory the compiler picks up automatically.
+- Cannot mutate existing source files — code generation is purely additive.
+
+Processors are the right answer for frameworks that want **zero runtime cost** for their declarative APIs. Spring-style apps that want runtime DI use the reflection path; Quarkus-style apps that want startup speed use the processor path. Both are first-class.
+
+---
+
+## §A.10 — Legacy Form: `@AnnotationType` on an Interface
+
+Prior to the `annotation` keyword, user-defined annotations were declared as interfaces tagged with `@AnnotationType`. That form is still accepted for backwards compatibility with early v0.x code:
+
+```java
+// Legacy form — equivalent to:  public annotation Cacheable { ... }
+@AnnotationType
+public interface Cacheable {
+    int ttlSeconds() default 60;
+}
+```
+
+The `annotation` keyword is the **canonical** form. `juxc fmt` rewrites `@AnnotationType` interfaces to `annotation` declarations on demand (`jux fmt --modernize`). New code should use `annotation`.
+
+---
+
+## §A.11 — Framework Patterns
+
+These examples illustrate what the annotation + reflection system enables. They are **not** part of `std` — they show the surface a third-party framework would expose.
+
+### A.11.1. HTTP Server (Spring-Boot / Ktor shape)
+
+```java
+import juxweb.{Server, Controller, Route, PathParam, Body, ResponseStatus};
+
+@Controller("/api/users")
+public class UserController {
+
+    @Route(path = "/{id}", method = GET)
+    public User getUser(@PathParam("id") int id) throws NotFoundException {
+        var user = userService.findById(id);
+        if (user == null) throw new NotFoundException();
+        return user;
+    }
+
+    @Route(path = "", method = POST)
+    @ResponseStatus(201)
+    public User createUser(@Body CreateUserRequest req) {
+        return userService.create(req);
+    }
+
+    @Route(path = "/{id}", method = DELETE)
+    @ResponseStatus(204)
+    public void deleteUser(@PathParam("id") int id) {
+        userService.delete(id);
+    }
+}
+
+public void main() {
+    new Server()
+        .scan("com.example.myapp")     // discovers all @Controller classes
+        .port(8080)
+        .start();
+}
+```
+
+The framework uses either reflection (at startup) or an annotation processor (at compile time) to discover `@Controller`-annotated classes, register their `@Route` methods, and wire up parameter binding.
+
+### A.11.2. Dependency Injection
+
+```java
+import juxdi.{Component, Inject, Configuration, Bean};
+
+@Component
+public class UserService {
+    @Inject private Database database;
+    @Inject private EmailService emailService;
+
+    public User findById(int id) {
+        return database.query("SELECT * FROM users WHERE id = ?", id);
+    }
+}
+
+@Configuration
+public class AppConfig {
+    @Bean
+    public Database database() {
+        return new PostgresDatabase("localhost:5432/myapp");
+    }
+
+    @Bean
+    public EmailService emailService(@Inject Database db) {
+        return new SmtpEmailService(db);
+    }
+}
+```
+
+### A.11.3. ORM Mapping
+
+```java
+import juxorm.{Entity, Id, Column, OneToMany, Table};
+
+@Entity
+@Table("users")
+public class User {
+    @Id
+    @Column("user_id")
+    private int id;
+
+    @Column("name")
+    private String name;
+
+    @Column("email", unique = true)
+    private String email;
+
+    @OneToMany(mappedBy = "user")
+    private List<Post> posts;
+}
+```
+
+The ORM uses reflection to map fields to columns, build SQL queries, and handle relationships.
+
+---
+
+## §A.12 — Validation Rules
+
+The compiler validates:
+
+- **Targets.** Applying an annotation outside its `@Target` set → `E0470`.
+- **Required parameters.** Omitting a parameter that has no `default` → `E0472`.
+- **Parameter types.** Passing the wrong type at a parameter site → `E0474` with the expected and actual type.
+- **Repeatability.** Applying a non-`@Repeatable` annotation more than once → `E0473`.
+- **Reflection access guard.** Reading a `RUNTIME`-retention annotation when `reflection = "none"` → `E0471`.
+- **Case-insensitive collisions.** Declaring two user annotations whose names differ only in case (`@MyTag` and `@mytag`) → `E0307` (per JUX-LANG-V1.md §3.6).
+
+---
+
+## §A.13 — Diagnostics Codes
+
+| Code  | Condition                                                                  |
+|-------|----------------------------------------------------------------------------|
+| `E0307` | Duplicate annotation name (case-insensitive collision)                   |
+| `E0470` | Annotation applied outside its `@Target` set                             |
+| `E0471` | Runtime annotation read requires reflection                              |
+| `E0472` | Missing required annotation parameter                                    |
+| `E0473` | Annotation is not `@Repeatable` but appears more than once               |
+| `E0474` | Wrong type for annotation parameter                                      |
+
+---
+
+## §A.14 — Summary
+
+Annotations in Jux are:
+
+- **First-class** via the `annotation` keyword.
+- **Targeted** via `@Target` (declaration-kind enforcement).
+- **Retained** at one of three levels via `@Retention` (source / binary / runtime).
+- **Parameterized** with typed parameters, defaults, and array forms.
+- **Repeatable** when explicitly marked.
+- **Free at runtime** when reflection is disabled — frameworks pay for what they request.
+- **Processable at compile time** via `@AnnotationProcessor`, for derive-style code generation without runtime cost.
+
+This positions Jux to host the same declarative-framework ecosystem that has made Java/Kotlin/C# successful for server-side and enterprise development — while preserving zero-cost-when-unused semantics for systems and embedded code that doesn't need them.
+
+*End of Annotations addendum.*

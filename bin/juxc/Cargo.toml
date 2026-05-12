@@ -1,0 +1,18 @@
+[package]
+name = "juxc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The Jux compiler. Operates on individual files or modules."
+
+[[bin]]
+name = "juxc"
+path = "src/main.rs"
+
+[dependencies]
+juxc-driver      = { workspace = true }
+juxc-source      = { workspace = true }
+juxc-diagnostics = { workspace = true }
+anyhow           = { workspace = true }
+clap             = { workspace = true }

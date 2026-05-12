@@ -1,0 +1,823 @@
+# Jux Spec Addendum — Compiler Pipeline
+
+**Status:** Proposed insertion. Replaces the bullet-point sketch in JUX-LANG-V1 §13 with a concrete compiler architecture: phases, IRs, where each language rule is enforced, and the Phase 1 lowering to Rust.
+
+**Insertion points:**
+- Replace JUX-LANG-V1 §13 with a reference to this addendum, retaining the timeline as §13.6.
+- New §C.1 ("Pipeline Overview")
+- New §C.2 ("Frontend: Lex, Parse, Resolve")
+- New §C.3 ("Type Checking and Inference")
+- New §C.4 ("HIR and Mid-Level Analyses")
+- New §C.5 ("Borrow Inference")
+- New §C.6 ("Lowering: Refcount, Drop, Move")
+- New §C.7 ("Async and Generator Lowering")
+- New §C.8 ("Monomorphization and DCE")
+- New §C.9 ("Phase 1: Lowering to Rust")
+- New §C.10 ("Diagnostics Architecture")
+- New §C.11 ("Build Orchestration")
+
+---
+
+## Design Philosophy (Non-Normative)
+
+The compiler is the language's contract with the world. Every guarantee in the spec — the borrow checker's promises, the "no UB outside `unsafe`" rule, the `await`-borrow rule, the deterministic drop order — has to be enforced *somewhere* in `juxc`. This addendum says where.
+
+Three architectural decisions structure the rest:
+
+1. **Two intermediate representations: HIR and MIR.** HIR (high-level IR) is a typed, name-resolved tree that closely mirrors the source. MIR (mid-level IR) is a control-flow graph in three-address form. Type checking, name resolution, and the borrow checker work on HIR; codegen, drop insertion, and async lowering work on MIR.
+2. **Borrow inference runs on MIR, after type checking, before monomorphization.** Borrow inference is fundamentally a flow-sensitive analysis; it needs the CFG. Running it before monomorphization keeps it polymorphic-aware, which is what produces the friendly errors that JUX-LANG-V1 advertises.
+3. **Phase 1 lowers MIR to Rust source.** Not Rust HIR, not Rust MIR — actual `.rs` text, fed to `rustc`. This gives Phase 1 a working compiler in 6–9 months instead of 3+ years, at the cost of slower compile times and a dependency on `rustc`. Phases 2–3 (per JUX-LANG-V1 §2.2) replace this with direct LLVM emission.
+
+All three decisions are stable across phases: HIR/MIR don't change between Phase 1 and Phase 3, just the backend that consumes MIR.
+
+---
+
+## §C.1 — Pipeline Overview
+
+```
+┌────────────────────────────────────────────────────────┐
+│  .jux source files                                     │
+└────────────────────────────────────────────────────────┘
+                  │
+            (1) lexer
+                  ↓
+┌────────────────────────────────────────────────────────┐
+│  Token stream                                          │
+└────────────────────────────────────────────────────────┘
+                  │
+            (2) parser
+                  ↓
+┌────────────────────────────────────────────────────────┐
+│  CST (concrete syntax tree, retains trivia)            │
+└────────────────────────────────────────────────────────┘
+                  │
+            (3) AST construction
+                  ↓
+┌────────────────────────────────────────────────────────┐
+│  AST (abstract syntax tree, no trivia)                 │
+└────────────────────────────────────────────────────────┘
+                  │
+            (4) name resolution + module linking
+            (5) @cfg evaluation (early)
+                  ↓
+┌────────────────────────────────────────────────────────┐
+│  HIR (typed, name-resolved tree)                       │
+└────────────────────────────────────────────────────────┘
+                  │
+            (6) type checking
+            (7) generic constraint solving / inference
+            (8) overload resolution
+            (9) smart-cast flow analysis
+                  ↓
+┌────────────────────────────────────────────────────────┐
+│  HIR (fully typed)                                     │
+└────────────────────────────────────────────────────────┘
+                  │
+            (9.5) early reachability analysis  ← prunes everything below
+                  ↓
+┌────────────────────────────────────────────────────────┐
+│  HIR (pruned to reachable set)                         │
+└────────────────────────────────────────────────────────┘
+                  │
+            (10) MIR construction (CFG, three-address)
+                  ↓
+┌────────────────────────────────────────────────────────┐
+│  MIR (control flow graph)                              │
+└────────────────────────────────────────────────────────┘
+                  │
+            (11) borrow inference                ← whole-program-aware
+            (12) move analysis
+            (13) drop insertion
+            (14) refcount insertion + elision
+            (15) async / generator lowering
+            (16) const evaluation
+                  ↓
+┌────────────────────────────────────────────────────────┐
+│  MIR (after lowering)                                  │
+└────────────────────────────────────────────────────────┘
+                  │
+            (17) monomorphization
+            (18) reachability analysis (for DCE)
+                  ↓
+┌────────────────────────────────────────────────────────┐
+│  Mono-MIR (one IR per concrete type instantiation)     │
+└────────────────────────────────────────────────────────┘
+                  │
+       Phase 1: emit Rust source ──► rustc ──► native binary
+       Phase 2: emit through rustc driver ──► native binary
+       Phase 3: emit LLVM IR ──► LLVM ──► native binary
+                  ↓
+┌────────────────────────────────────────────────────────┐
+│  Native binary (.exe / .so / .dylib / .elf)            │
+└────────────────────────────────────────────────────────┘
+```
+
+The phase numbering (1)–(18) is referenced throughout this addendum; "phase 11" always means borrow inference.
+
+### C.1.1. Phase Ordering Rationale
+
+The ordering is not arbitrary. Several decisions are forced:
+
+- **Type checking before MIR construction.** MIR construction requires knowing the type of every expression (so it can insert appropriate move/copy/borrow operations). Untyped MIR would be ambiguous.
+- **Borrow inference on MIR (not HIR or AST).** Borrow inference is flow-sensitive — it needs to know, at each program point, which references are live. Only a CFG gives that. AST/HIR-based borrow checking is feasible for a subset of cases but doesn't generalize to closures-escaping-loops, smart-casts-across-branches, or async-state-machine borrows.
+- **Borrow inference before monomorphization.** Borrow inference works on the polymorphic source, then the result is "transferred" to each instantiation. This means: one borrow analysis per source function, not one per instantiation. It also means borrow errors are reported in source-language terms, not in terms of the monomorphized instance.
+- **Drop insertion after move analysis.** The compiler can't know where to place `drop` calls until it knows where moves end a value's lifetime.
+- **Refcount insertion after drop insertion.** Drop calls become call sites for the destructor; refcount calls wrap around drops and around clones. Inserting them in the wrong order produces double-frees.
+- **Async lowering after refcount insertion.** Async state machines store live values across awaits; refcount-managed values need to be retained while suspended. Lowering before refcount insertion would be incorrect.
+- **Const evaluation in MIR, not HIR.** A `const fn` body has the same MIR as a non-const function, run by the compiler's constant interpreter on the MIR rather than at runtime by the LLVM backend.
+- **Monomorphization last.** This way every prior analysis runs once per generic source function, not once per instantiation. Combined with DCE (also after mono), this is what produces "ship only what you use."
+- **Early reachability (phase 9.5) before MIR construction.** The reachability pass prunes the call graph from entry points, marking only items the program can actually reach. Subsequent phases (MIR build, borrow check, lowering, monomorphization, codegen) operate only on the reachable set. This is the *source-level* tree-shaker: it saves rustc work, not just final-binary space. See §C.4.5 for the algorithm.
+
+### C.1.2. What Each Phase Owns
+
+| Phase | Owner module      | Reads             | Produces          | Errors emitted           |
+|-------|-------------------|-------------------|-------------------|--------------------------|
+| 1     | `juxc::lex`       | Source bytes      | Tokens            | E0100–E0199 (lexical)    |
+| 2     | `juxc::parse`     | Tokens            | CST               | E0200–E0299 (syntax)     |
+| 3     | `juxc::ast`       | CST               | AST               | none (mechanical)        |
+| 4     | `juxc::resolve`   | AST + modules     | Resolved AST      | E0300–E0399 (resolution) |
+| 5     | `juxc::cfg`       | AST               | Pruned AST        | E0150 (cfg syntax)       |
+| 6–9   | `juxc::tycheck`   | AST               | HIR               | E0400–E0499 (types)      |
+| 9.5   | `juxc::reach`     | HIR + entry pts   | Pruned HIR        | none                     |
+| 10    | `juxc::mir-build` | Pruned HIR        | MIR               | none                     |
+| 11    | `juxc::borrow`    | MIR               | MIR + annotations | E0500–E0599 (borrows)    |
+| 12–13 | `juxc::lower`     | MIR               | MIR               | E0600–E0699 (init/drop)  |
+| 14    | `juxc::refcount`  | MIR               | MIR               | none                     |
+| 15    | `juxc::async`     | MIR               | MIR               | E0700–E0799 (await/yield) |
+| 16    | `juxc::const-eval`| MIR               | MIR               | E0800–E0809 (const eval) |
+| 17    | `juxc::mono`      | MIR               | Mono-MIR          | none                     |
+| 18    | `juxc::dce`       | Mono-MIR          | Pruned Mono-MIR   | none                     |
+| 19+   | `juxc::backend-{rust,llvm}` | Mono-MIR | Object code  | E0900–E0999 (backend)    |
+
+The ranges of error codes correspond to the sub-ranges in `JUX-DIAGNOSTICS-ADDENDUM.md` (when written).
+
+---
+
+## §C.2 — Frontend: Lex, Parse, Resolve
+
+### C.2.1. Lexer (Phase 1)
+
+Token stream per `JUX-GRAMMAR-ADDENDUM.md` §A.1. Implementation notes:
+
+- **No raw-mode / cooked-mode distinction.** The lexer is a single state machine.
+- **Whitespace and comments are recorded** but emitted as out-of-band trivia, not as tokens. The CST keeps them; the AST drops them.
+- **Doc comments** (`/** ... */`) are emitted as a special trivia kind so phase 3 can attach them to the following declaration.
+- **The `>>` ambiguity.** Lex `>>` as one token always; the parser splits when balancing nested generic-arg lists (per `JUX-GRAMMAR-ADDENDUM.md` §A.1.6). One bit per token: `splittable: bool`.
+- **Source positions.** Every token carries `(byte_offset, byte_length)` into the original source. Span arithmetic (combining two spans) is a primitive operation downstream.
+
+### C.2.2. Parser (Phase 2)
+
+Recursive descent, hand-written. Generates CST (concrete syntax tree) — a tree that retains every token, including whitespace and punctuation. The CST is what `juxc fmt` operates on.
+
+- **Error recovery:** on a parse error inside a declaration body, skip to the next `;`, `}`, or top-level keyword (`class`, `interface`, `struct`, `record`, `enum`, `public`, `private`, `internal`, `protected`, `import`, `package`, `@`). Emit one error and continue.
+- **Generic-arg disambiguation:** try-parse `<T, U>` after a name; on failure (no balanced `>` before a non-generic continuation), backtrack to less-than. The try-parse is bounded — if it consumes more than 64 tokens without resolving, give up.
+- **CST nodes are immutable** once built. Subsequent transformations produce new trees. This makes incremental compilation tractable: a CST node not affected by an edit can be reused.
+
+### C.2.3. AST Construction (Phase 3)
+
+Mechanical drop of trivia and grouping of CST nodes into semantic AST nodes. Each AST node carries a back-reference to its CST node for source-location reporting.
+
+### C.2.4. Name Resolution and Module Linking (Phase 4)
+
+For each compilation unit:
+
+1. **Build the symbol table** for the file's top-level declarations.
+2. **Resolve imports.** For each `import` declaration, look up the named module (in the current crate, in declared dependencies, or in the standard library) and bind the names into local scope.
+3. **Resolve use sites.** Every `qualified-name` reference in the AST is resolved to a target declaration, or rejected with `E0301` ("name not found in scope").
+4. **Detect cycles.** A cycle in the import graph between modules is rejected (`E0302`) unless one of the modules is `@async-init`, in which case the cycle is permitted but resolved at runtime.
+
+Module-level resolution happens once per compilation; nested-scope resolution is deferred to type checking, since it depends on smart-cast and pattern-binding scopes.
+
+### C.2.5. `@cfg` Evaluation (Phase 5)
+
+`@cfg(...)` annotations are evaluated **early** — before type checking, so that excluded code is not subjected to type checking against APIs the current target lacks.
+
+- For each declaration with `@cfg(...)`: evaluate the predicate against the build target's facts. If false, drop the declaration entirely.
+- For `if cfg(...)` at expression/statement position: evaluate the predicate. If false, replace the entire `if cfg(...)` block with a no-op (statement form) or a placeholder of the result type (expression form). The dead branch is **not parsed for type errors**, but it **is parsed** — syntax must remain valid.
+- Two declarations sharing a name with mutually-exclusive `@cfg` are not a duplicate-name error: at most one survives.
+
+### C.2.6. Build Profile Application
+
+The build profile (`jux-full`, `jux-embedded`, `jux-core`) is one of the `@cfg` facts, but it also restricts what the compiler accepts:
+
+- `async`/`await` are forbidden in `jux-core` (rejected by phase 6 with `E0701`).
+- `throws` clauses lower to `Result<T, E>` in profiles without exceptions (phase 12).
+- Heap-allocating constructs (`new` for class types, `List`, `Map`) require an explicit allocator argument in `jux-core` (phase 6 type check).
+- `static { ... }` mutable state in single-threaded profiles emits `W0960` instead of `E0961` (per `JUX-MISSING-DEFS-ADDENDUM.md` §M.12.3).
+
+These checks live in dedicated profile-aware passes inside phase 6 and phase 12, gated by the active profile.
+
+---
+
+## §C.3 — Type Checking and Inference
+
+This is the largest phase by code size. It enforces the type rules from JUX-LANG-V1 §5, §7, the inheritance rules from §6.9, and the algorithms specified in `JUX-TYPE-SYSTEM-ADDENDUM.md`.
+
+### C.3.1. Type Checking (Phase 6)
+
+Standard bidirectional type checking with the following Jux-specific rules:
+
+- **Local-only inference.** `var x = expr` infers `x`'s type from `expr`. Function signatures (parameters, return types) are required.
+- **Numeric literal adaptation.** Untyped integer/float literals adapt to the surrounding expected type when in range (per `JUX-SEMANTICS-ADDENDUM.md` §S.2.6).
+- **Nullability tracking.** `T` and `T?` are distinct types; assignment from `T?` to `T` requires `!!`, `?:`, or a smart-cast.
+- **Move analysis (preliminary).** A coarse pass: identify where moves *could* happen (per JUX-LANG-V1 §6.4). Refined in phase 12.
+- **Smart-cast scopes.** After `if (x => Foo f)`, `f` is in scope as `Foo` in the then-branch. After `if (x != null)`, `x` is non-null in the then-branch. Algorithm in `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.6.
+
+### C.3.2. Generic Constraint Solving (Phase 7)
+
+When a generic call site doesn't supply explicit type arguments (`identity(42)` instead of `<int>identity(42)`), the compiler infers them by:
+
+1. **Collecting constraints.** Each argument's type produces a constraint on the type parameters: `arg_i : T_i_param`.
+2. **Adding bound constraints.** Each generic parameter's `extends` bound becomes a constraint.
+3. **Solving.** Unify the constraint set. If a unique solution exists, emit it. If multiple solutions exist (ambiguity), emit `E0410` listing the candidates. If no solution exists, emit `E0411` showing the failing constraint.
+
+The algorithm is local — it never looks beyond a single call expression's arguments to refine inference. This costs some inference power compared to Hindley-Milner but keeps error messages comprehensible.
+
+### C.3.3. Overload Resolution (Phase 8)
+
+When multiple declarations share a name in scope (overloaded methods, operator overloads), resolution picks the unique best match. Specified in detail in `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.3; summary:
+
+1. **Filter applicable.** A candidate is applicable if argument count matches (with defaults filled in) and each argument is assignable to the corresponding parameter.
+2. **Apply specificity ordering.** Among applicable candidates, prefer:
+   - Non-generic over generic.
+   - More specific types (e.g., `Dog` over `Animal`).
+   - No varargs over varargs.
+   - Originally-declared methods over default interface methods.
+3. **Emit ambiguity.** If two candidates tie on every criterion, emit `E0420` listing both.
+
+### C.3.4. HIR Construction
+
+After phases 6–9, the AST is replaced with HIR. HIR nodes carry:
+
+- A resolved type for every expression.
+- A resolved declaration for every name.
+- Smart-cast information (which name is narrowed to which type at which span).
+- An "implicit cast" wrapper around expressions that needed conversion (`int` to `long`, etc.).
+
+HIR is the IR consumed by the borrow checker's preliminary passes and by MIR construction.
+
+---
+
+## §C.4 — HIR and Mid-Level Analyses
+
+After type checking but before MIR construction, two HIR-level passes run:
+
+### C.4.1. Pattern Exhaustiveness (Phase 9, sub-pass)
+
+For each `switch` expression and each `switch` statement with no `default`, verify that every input value is covered by some case. Algorithm in `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.5; summary:
+
+- Sealed types: enumerate the closed set of permitted variants; check each is covered.
+- `bool`: check `true` and `false`.
+- Integer ranges and literal patterns: compute coverage by interval merging.
+- Or-patterns and guards: union of covered values, minus values guarded out.
+
+If incomplete, emit `E0430` listing a minimal uncovered example.
+
+### C.4.2. Default Method Conflict Detection (Phase 9, sub-pass)
+
+For each class C implementing interfaces I1, I2, ..., for each method m:
+
+- If only one interface supplies a default `m`, no conflict.
+- If multiple interfaces supply defaults but C overrides `m`, no conflict.
+- If multiple interfaces supply defaults and C does not override, emit `E0431`: "conflicting defaults — class must override".
+
+This is the diamond-problem rule from `JUX-MISSING-DEFS-ADDENDUM.md` §M.10 (or equivalently, the rule explained alongside default methods in JUX-LANG-V1 §7.4.3).
+
+### C.4.5. Early Reachability Analysis (Phase 9.5)
+
+After type checking and before MIR construction, the **reachability pass** prunes the typed HIR to only the items the program can actually reach. Subsequent phases (MIR construction, borrow check, lowering, monomorphization, codegen) operate only on the pruned set. This is the source-level tree-shaker — it saves rustc work, not just final-binary space.
+
+#### Inputs
+
+- The fully-typed HIR for the current package and all transitive dependencies.
+- The set of **entry points** for this build:
+  - For a binary build: `main`, every `@export` function/static, every `@interrupt` handler.
+  - For a library build: every `public` function/type/const exported by the module.
+  - For a test build: every `@Test` function in the test sources.
+  - Always: every `@Reflectable` type (per `JUX-MISSING-DEFS-ADDENDUM.md` §M.11.5; runtime reflection means we can't statically trace these).
+
+#### Algorithm
+
+Standard fixpoint mark-and-sweep:
+
+1. Initialize the **live set** with the entry points.
+2. For each item in the live set, walk its body and mark:
+   - Every function it calls (including operator overrides).
+   - Every type it constructs, takes by parameter, returns, or stores in a field.
+   - Every constant it reads.
+   - Every type whose `operator==`/`operator hash`/`operator string` it dispatches to.
+   - For virtual calls through a base type, every override reachable via the inheritance hierarchy (per the rule in `JUX-INHERITANCE-BORROW-ADDENDUM.md` §6.9.3 — sealed types give an exact set; non-`final` classes contribute every override linked into the program).
+   - For `@Reflectable` types, every field type and method signature (because reflection enumerates them).
+3. Repeat step 2 until the live set stops growing.
+4. Discard every HIR item not in the live set. Emit only the live items into MIR.
+
+#### Granularity
+
+Per-function and per-type. A file with 30 declared functions where only 4 are reachable: 4 enter MIR construction. The other 26 are dropped after type checking.
+
+#### What is *not* dropped
+
+- Items in the entry-point set, by definition.
+- Type metadata for `@Reflectable` types (their `Type<T>` constants are emitted; linker GC removes if unused at runtime).
+- `@cfg`-included items that survive phase 5 — they're subject to reachability like anything else.
+- Items reachable via virtual dispatch through non-`final` classes within the same module.
+
+#### What is dropped
+
+- Functions defined but never called (transitively from entry points).
+- Type declarations whose values are never constructed and that are never used as parameter/return/field types.
+- Constants that nothing reads.
+- Default-method bodies of interfaces nobody implements with reachable types.
+- Most of an imported package, when the user reaches only a small subset.
+
+#### Caching interaction
+
+The cache key for any post-9.5 phase output includes a hash of the reachable set. If a code change adds or removes reachability for a function (e.g., a new entry-point use), the cache invalidates only the affected items.
+
+#### Diagnostic implications
+
+By default, type errors in unreachable code do not block builds — those items are dropped before MIR. This is a feature: dead code with bugs doesn't gate development. For CI strictness, `juxc check --strict` skips reachability and type-checks every declared item; `juxc build --strict` does the same and additionally runs all subsequent phases on the full set.
+
+#### Rationale for placement
+
+Why phase 9.5 and not phase 18 (post-monomorphization)?
+
+- **Saves rustc work.** Items dropped here never become Rust source. The expensive double-parse cost of the lower-to-Rust strategy is paid only on reachable code.
+- **Saves earlier-phase work too.** MIR construction, borrow inference, and lowering are also bounded by the live set, which makes them faster.
+- **Cleaner errors in incremental dev.** A typo in unused code doesn't generate noise; the loop tightens.
+- **Still leaves linker-level GC** (phase 18) for the monomorphization residue — different concern, different scope.
+
+The two reachability passes (9.5 and 18) are complementary: 9.5 prunes the source-level call graph; 18 prunes the post-monomorphization dead instantiations.
+
+---
+
+## §C.5 — Borrow Inference
+
+The borrow checker is the language's central technical achievement and the most complex phase of the compiler. Specified in `JUX-LANG-V1 §6` and `§6.9` (inheritance interactions). This addendum specifies *how* the algorithm runs.
+
+### C.5.1. Where It Runs
+
+After MIR construction (phase 11). The CFG gives the borrow checker:
+
+- A list of basic blocks per function.
+- A successor relation (which block can flow to which).
+- A typed three-address representation where each operation is one of: load, store, move, copy, call, return, drop, retain, release.
+- Source-span links back to the original program for diagnostics.
+
+### C.5.2. Sketch of the Algorithm
+
+For each function (polymorphic over its generic parameters):
+
+1. **Compute the set of "places."** A place is a path into a value: a local variable, a field of a local, an array element. For class instances, the path is collapsed to the instance (per JUX-LANG-V1 §6.9.1, whole-object).
+
+2. **Compute liveness.** For each place at each program point, is the place live? Standard backward dataflow analysis.
+
+3. **Compute borrow regions.** For each `var x = &y` or `var x = y.field` or `func(y)` (where the call may borrow), record the borrow's start, mode (shared/exclusive), and end.
+
+4. **Check borrow conflicts.** At each program point, the active borrows must be compatible:
+   - Multiple shared borrows on the same place: OK.
+   - One exclusive borrow on the same place, with no others: OK.
+   - One exclusive + any other borrow on the same place: ERROR.
+   - One shared + a mutation through a different alias: ERROR.
+
+5. **Check borrow lifetimes.** A borrow's region must be contained within the lifetime of the borrowed-from value. If a borrow could outlive its source (e.g., escapes via return or storage in a longer-lived place), emit `E0501`.
+
+6. **Check the await rule.** Per JUX-LANG-V1 §10.1.6: at every `await` point, no exclusive borrow on observable state may be active. Implemented as a check on the active-borrow set at await program points. `AsyncMutex<T>` guards are tagged at lock-acquire as "unobservable" and exempted.
+
+### C.5.3. Class-Specific Rules
+
+Per JUX-LANG-V1 §6.9.1, borrows on class instances are whole-object, not field-level. Implementation:
+
+- When a load reads a field of a class instance, the borrow checker records a borrow of the *instance*, not the field.
+- When a store writes a field of a class instance, the borrow checker records an exclusive borrow of the *instance*.
+- This is uniform whether the class is `final` or extendable; the only thing that varies is mutation inference (next).
+
+### C.5.4. Mutation Inference for Virtual Calls
+
+Per JUX-LANG-V1 §6.9.3: a virtual call's mutation summary is the union over all reachable overrides. Implementation:
+
+1. **Per-method summary.** For each method body (including each override), compute "does this method assign to `this`-relative places?" — produces a `mutability` boolean per concrete method.
+2. **Per-virtual-call summary.** For each virtual call site, compute the set of possible runtime targets (using the static type of the receiver and the class hierarchy). The virtual mutability is the OR of the targets' summaries.
+3. **For sealed hierarchies:** the target set is closed and exact.
+4. **For non-`final` public classes:** the target set includes every override linked into the final binary, which may include subclasses from any consuming module (Java-style cross-module extensibility per `JUX-MISSING-DEFS-ADDENDUM.md` §M.12.2). The compiler performs whole-program reachability analysis after monomorphization to compute the actual set of reachable overrides.
+
+### C.5.5. What the Borrow Checker Outputs
+
+Annotated MIR. Each operation is tagged with:
+
+- The borrows it creates (start of region).
+- The borrows it ends (end of region).
+- The places it requires to be initialized.
+- For calls: the borrow mode of each parameter as inferred for that callee.
+
+Phases 12–14 consume this annotated MIR.
+
+### C.5.6. Diagnostics
+
+The borrow checker is the most-likely source of user-facing errors. Quality requirements:
+
+- **No mention of lifetimes.** Errors are framed as "cannot use `x` here because it's borrowed at line N" — never `'a outlives 'b`.
+- **Show the conflict spatially.** A multi-line snippet with the borrow start, the conflicting use, and a hint.
+- **Suggest a fix.** "Clone the result if you need to keep it across the mutation" (for `var x = list.get(0); list.add(...);`-type errors).
+- **Propose sealing.** When a borrow error stems from over-conservative virtual mutation widening on a non-`final` class, hint to seal the hierarchy.
+
+The diagnostic style is shown in JUX-LANG-V1 §6.7, §6.9.7, §10.1.6. Each diagnostic emitted by phase 11 should match that style.
+
+---
+
+## §C.6 — Lowering: Refcount, Drop, Move
+
+These three phases (12, 13, 14) transform an annotated MIR into a MIR that is ready for codegen. They are the language's runtime contract made concrete.
+
+### C.6.1. Move Analysis (Phase 12)
+
+The borrow checker's preliminary move analysis is refined here:
+
+- **Final moves.** A `move x` operator, a return of a local, or a store-into-a-longer-lived-location moves the value. After the move, the source binding is dead.
+- **Implicit moves.** When a value is passed to a function by value and is never used again on the source side, the compiler treats this as a move (no clone, no refcount). When in doubt, the compiler treats it as a copy/borrow.
+- **Conditional moves.** If a value is moved on one branch but not on another, the binding is dead from the join point onward unless restored on every path. The compiler emits `E0610` if a moved-from binding is later read.
+
+### C.6.2. Drop Insertion (Phase 13)
+
+For each value with a non-trivial drop (a class with refcount, a struct with a `drop` block, a struct with non-trivial fields, etc.), insert a `drop` operation at:
+
+- The end of its lifetime, if not moved.
+- The catch-or-rethrow boundary in `try`, for any value live at the throw point.
+- The unwind cleanup of every try-block that does not catch the exception.
+
+Drop-on-unwind is implemented as a separate "cleanup" CFG edge from each operation that may panic to a `drop-and-unwind` block. The cleanup blocks form a DAG; the codegen lowers them per the platform's unwinding mechanism (DWARF on Unix, SEH on Windows).
+
+### C.6.3. Refcount Insertion and Elision (Phase 14)
+
+For every class-typed assignment (`var x = y` where `y` is a class reference and `x` is a new binding), the naive lowering is:
+
+```
+retain(y)         -- bump y's refcount
+move y -> x       -- transfer ownership
+```
+
+The naive lowering is wasteful. The elision passes simplify:
+
+- **Move elision.** If `y` is dead after the assignment, the retain is unnecessary — skip both the retain and the corresponding release.
+- **Return-value optimization.** A function returning a freshly-constructed class instance does not retain on construction, the caller does not retain on receipt; the construction places the instance directly in the caller's slot.
+- **Argument optimization.** Borrowed arguments (the default for class params per JUX-LANG-V1 §6.2) require no retain at the call site.
+
+The result of phase 14 is a MIR where every retain and release is explicitly emitted as an instruction. Phase 15 (async) and the backend (phase 19+) consume it as-is.
+
+For `jux-embedded` and `jux-core` (refcount disabled per JUX-LANG-V1 §6.5), phase 14 is largely a no-op: all class references are owned, moves transfer ownership, and `SharedRef<T>` provides explicit retain-release wrapping where needed.
+
+### C.6.4. Volatile Access Preservation
+
+Loads and stores marked `volatile` (per `JUX-LAYOUT-ABI-ADDENDUM.md` §L.2 / `JUX-SEMANTICS-ADDENDUM.md` §S.6.3) carry a flag through MIR. The codegen backends must:
+
+- Emit one machine load per volatile read in source order.
+- Emit one machine store per volatile write in source order.
+- Not reorder volatile accesses past each other.
+- Not elide volatile accesses (no DCE on volatile loads/stores).
+
+In Phase 1 (Rust transpile), this lowers to Rust's `core::ptr::read_volatile` / `write_volatile`. In Phase 3 (LLVM direct), this lowers to LLVM `load volatile` / `store volatile`.
+
+---
+
+## §C.7 — Async and Generator Lowering
+
+`async` functions and generators (`yield`) both lower to state machines. Phase 15 performs the transformation.
+
+### C.7.1. Async Function Lowering
+
+An `async T` function compiles to a struct + a `poll` method:
+
+```
+generated for `async T fetchUser(int id) { var r = await http.get(...); return r.body; }`:
+
+struct FetchUser_State {
+    state: u8,                       // which suspension point
+    locals: ...,                     // each captured local across awaits
+    sub_future: ?HttpGet_State,      // the awaited sub-future, if suspended
+}
+
+fn fetchUser_poll(self: &mut FetchUser_State, ctx: &Context) -> Poll<T> {
+    loop {
+        match self.state {
+            0 => {
+                self.sub_future = http_get_init(...);
+                self.state = 1;
+            }
+            1 => {
+                match http_get_poll(self.sub_future.as_mut(), ctx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(r) => {
+                        self.locals.r = r;
+                        self.state = 2;
+                    }
+                }
+            }
+            2 => {
+                return Poll::Ready(self.locals.r.body);
+            }
+        }
+    }
+}
+```
+
+The transformation:
+
+1. Identify await points; assign each a state ID.
+2. Collect locals live across awaits; promote them to the state struct.
+3. Convert the function body into a state machine: each await becomes "store sub-future, return Pending; resume on next state".
+4. Generate `poll` and a public `Task<T>` constructor that wraps the state machine.
+
+This is the standard async lowering used by Rust, Swift, and TypeScript. The mechanical details are in the literature; the only Jux-specific note is that **the await borrow rule (§10.1.6)** is checked in phase 11 (borrow inference) before this lowering, so by the time we get here the program is known to be sound.
+
+### C.7.2. Generator Function Lowering
+
+Generators (per `JUX-MISSING-DEFS-ADDENDUM.md` §M.2) lower similarly. A generator returns `Iterator<T>`; the state machine's `next()` method advances to the next `yield`:
+
+```
+generated for `Iterator<int> first10Squares() { for (var i = 0; i < 10; i++) yield i*i; }`:
+
+struct First10Squares_State {
+    state: u8,
+    i: int,
+}
+
+fn first10Squares_next(self: &mut First10Squares_State) -> ?int {
+    loop {
+        match self.state {
+            0 => {
+                self.i = 0;
+                self.state = 1;
+            }
+            1 => {
+                if self.i >= 10 {
+                    self.state = 2;
+                    return null;
+                }
+                let result = self.i * self.i;
+                self.i += 1;
+                return result;
+            }
+            2 => return null,
+        }
+    }
+}
+```
+
+Async generators (returning `Stream<T>`) combine the two — the state machine's `next()` is itself async, suspending on awaits inside the generator body.
+
+### C.7.3. Cancellation Threading
+
+`Task.cancel()` (per JUX-LANG-V1 §10.1.9) is implemented by setting a flag on the task; the `poll` loop checks the flag at every await point and throws `CancellationException` if set. The borrow checker does not need to know about cancellation — it's a runtime-only concern.
+
+---
+
+## §C.8 — Monomorphization and DCE
+
+### C.8.1. Monomorphization (Phase 17)
+
+For each generic source function, generate one specialized version per concrete instantiation observed in the program:
+
+1. **Discover instantiations.** Walk the call graph from entry points. Each call to a generic function with concrete type args records that instantiation.
+2. **Substitute.** For each unique `(function, type_args)` pair, produce a copy of the function's MIR with type parameters replaced by their concrete types.
+3. **Recurse.** Substitution may reveal new instantiations (a generic function calling another generic function). Iterate until the set stabilizes.
+
+Each instantiation gets a stable mangled name (per `JUX-LAYOUT-ABI-ADDENDUM.md` §L.3). Identical instantiations across crates are deduplicated at link time.
+
+### C.8.2. Dead Code Elimination (Phase 18)
+
+After monomorphization, the program is a fixed set of instantiated functions and constants. DCE walks reachability from entry points (`main`, `@export` functions, `@interrupt` handlers) and marks reachable items.
+
+- **Conservative for virtual dispatch.** A virtual method call retains all overrides reachable from its static type — even if the runtime path can only reach some.
+- **Sealed hierarchies prune precisely.** A virtual call through a sealed type retains only the listed permitted subclasses' overrides.
+- **Dead constants** are dropped from the binary.
+
+The unmarked functions and constants are removed from the final binary. This is what makes the JUX-LANG-V1 §2.5 "ship only what you use" promise concrete.
+
+### C.8.3. Linker Section Strategy
+
+Each function and constant emits to its own linker section (`.text.<mangled-name>`, `.rodata.<mangled-name>`). The linker (with `-Wl,--gc-sections` on Unix, equivalent on Windows) walks live references and discards unreachable sections.
+
+Phase 1 inherits this from Rust (which already does it). Phase 3 emits the same convention via LLVM `function-sections` and `data-sections` flags.
+
+---
+
+## §C.9 — Phase 1: Lowering to Rust
+
+JUX-LANG-V1 §13.1 specifies "Lowering to Rust source code." This section gives the actual mapping.
+
+### C.9.1. Why Rust
+
+- **Free borrow check.** Rust's borrow checker is a final correctness gate on Jux's. If Jux's borrow inference accepts something Rust rejects, Jux has a bug.
+- **Free monomorphization.** Rust's generics compile to monomorphic code. Jux generics map to Rust generics 1:1.
+- **Free FFI.** Rust's `extern "C"` and `#[repr(C)]` give Jux's FFI surface a working implementation immediately.
+- **Free async.** Rust's async machinery (futures, executors via tokio) gives `async`/`await` a working implementation.
+
+### C.9.2. The Mapping Table
+
+| Jux                                       | Rust                                                       |
+|-------------------------------------------|------------------------------------------------------------|
+| `int`, `long`, `float`, `double`           | `i32`, `i64`, `f32`, `f64`                                 |
+| `byte`, `ubyte`, `short`, `ushort`         | `i8`, `u8`, `i16`, `u16`                                   |
+| `uint`, `ulong`                             | `u32`, `u64`                                               |
+| `char`                                      | `char` (Unicode scalar value, 32-bit)                      |
+| `bool`                                      | `bool`                                                     |
+| `String`                                    | `Arc<str>` (immutable, shared, refcounted)                 |
+| `T?`                                        | `Option<T>` for primitives; `Option<Arc<T>>` for classes; niche-optimized for class types |
+| `T*` (raw pointer)                          | `*mut T`                                                   |
+| `T[]`                                       | `Box<[T]>`                                                 |
+| `T[N]` (const-size)                         | `[T; N]`                                                   |
+| `(A, B)`                                    | `(A, B)`                                                   |
+| `(A, B) -> R`                               | `Box<dyn Fn(A, B) -> R>` for closures; `fn(A, B) -> R` for function pointers |
+| `() async -> R`                             | `Box<dyn Future<Output=R>>`                                |
+| Class `C { ... }`                           | `struct C { ... }` + `Arc`-wrapped instances + a vtable enum for virtual dispatch |
+| Interface `I { ... }`                       | `trait I { ... }` + `dyn I` for interface references       |
+| Struct `S { ... }`                          | `struct S { ... }` (`#[repr(Rust)]` by default; `#[repr(C)]` for `@layout(c)`) |
+| Record `R(...)`                             | `struct R { ... }` + auto-derived `PartialEq`, `Hash`, `Clone`, `Display` |
+| Sealed enum `E { case A; case B(int); }`    | `enum E { A, B(i32) }`                                     |
+| Sealed interface `I permits A, B`           | `enum I_Sealed { A(A), B(B) }` plus the trait              |
+| Generic `<T extends Trait>`                 | `<T: Trait>`                                               |
+| Bounded generic `<T extends A & B>`         | `<T: A + B>`                                               |
+| Const generic `<int N>`                     | `<const N: i32>`                                           |
+| `throws E`                                  | `Result<T, E>` return type                                 |
+| `try { } catch (E e) { }`                   | `match expr { Ok(v) => v, Err(e) => { ... } }`             |
+| `?` propagation                             | Rust's `?`                                                 |
+| `async fn`                                  | `async fn` (Phase 1 uses tokio)                            |
+| `await`                                     | `.await`                                                   |
+| `spawn(f)`                                  | `tokio::spawn(f)`                                          |
+| `Task<T>`                                   | `tokio::task::JoinHandle<T>`                               |
+| `Channel<T>`                                | `tokio::sync::mpsc::channel`                               |
+| `AsyncMutex<T>`                             | `tokio::sync::Mutex<T>`                                    |
+| `Mutex<T>`                                  | `std::sync::Mutex<T>` (or `parking_lot::Mutex<T>`)         |
+| `AtomicInt`                                 | `std::sync::atomic::AtomicI32`                             |
+| `Volatile<T>`                               | `core::sync::atomic::AtomicT` for thread-shared use; `core::ptr::read_volatile` wrapper for MMIO |
+| `unsafe { ... }`                            | `unsafe { ... }`                                           |
+| `@extern(lib = "x") native { ... }`         | `extern "C" { ... }` + `#[link(name = "x")]`               |
+| `@export`                                   | `#[no_mangle]` + `extern "C"` declaration                  |
+| `@layout(c)`                                | `#[repr(C)]`                                               |
+| `@align(N)`                                 | `#[repr(align(N))]`                                        |
+| `@cfg(os = "linux")`                        | `#[cfg(target_os = "linux")]`                              |
+| `drop { ... }`                              | `impl Drop for T { fn drop(&mut self) { ... } }`           |
+| `init { ... }`                              | inlined into every constructor body in declaration order   |
+| `yield expr`                                | Phase 1: explicit state-machine struct (no Rust `yield` is stable yet) |
+| `static { ... }`                            | `OnceLock::new()` + initializer closure                    |
+
+### C.9.3. Class Lowering Detail
+
+A Jux class `C extends P implements I1, I2` lowers to:
+
+1. A Rust `struct C` with the fields of `C` (and possibly inlined `P` fields, depending on layout decisions).
+2. A Rust `trait C_Vtable` with the virtual method signatures.
+3. An `Arc`-wrapped instance type `C_Ref = Arc<C_Inner>` where `C_Inner` holds the vtable pointer plus fields.
+4. `impl I1 for C_Ref { ... }` etc., one per implemented interface.
+5. A `drop` impl on `C_Inner` that runs the user's `drop { }` block.
+
+Sealed hierarchies additionally generate a Rust `enum` that lists the permitted subclasses, enabling exhaustive matching.
+
+### C.9.4. What Phase 1 Cannot Do
+
+A few Jux constructs don't have direct Rust equivalents:
+
+- **`yield` generators.** Rust's coroutine syntax is unstable. Phase 1 uses explicit hand-rolled state-machine structs, generated by the compiler. The user-visible behavior is identical.
+- **Top-level await in modules.** Rust modules can't suspend during initialization. Phase 1 implements `@async-init` modules via an explicit init function the runtime calls before exports become available; module-using code is rewritten to call the init function transparently.
+- **Inline assembly with custom constraints.** Rust's `asm!` macro covers most cases; targets requiring constraint syntax beyond Rust's are deferred to Phase 3.
+
+These are the only known cases. Each is documented with a workaround.
+
+### C.9.5. The Rust Project Generated
+
+Phase 1 emits a Cargo project per Jux module:
+
+```
+target/jux-build/
+├── jux-rt/                  # Jux runtime helper crate
+│   ├── Cargo.toml
+│   └── src/lib.rs
+├── <module>/
+│   ├── Cargo.toml           # generated from jux.toml
+│   └── src/
+│       └── lib.rs           # one big file, generated
+```
+
+`cargo build` produces the artifact. `juxc build` orchestrates the generation and the cargo invocation.
+
+---
+
+## §C.10 — Diagnostics Architecture
+
+### C.10.1. Error Codes
+
+Every diagnostic has a stable code in the format `E####` (errors), `W####` (warnings), or `H####` (hints). The four-digit number is allocated from the per-phase ranges in §C.1.2. Codes never change meaning across compiler versions; deprecating a check changes the code's status to "deprecated" but never reuses the number.
+
+### C.10.2. Diagnostic Format
+
+Every diagnostic emits:
+
+- **Code.** `E0501`.
+- **Severity.** Error, warning, hint.
+- **Message.** Human-readable, terse.
+- **Primary span.** The source location the diagnostic is "about."
+- **Secondary spans.** Related locations, each with its own message.
+- **Hint.** A suggested fix, possibly with a code action (replacement text + range).
+
+Output formats:
+
+- **Default (terminal).** Color-coded multi-line output matching the JUX-LANG-V1 examples.
+- **JSON (`--diagnostic-format=json`).** Machine-readable, for editors and CI.
+- **Compact (`--diagnostic-format=compact`).** One line per diagnostic, for parsing by older tooling.
+
+### C.10.3. Diagnostic Code Catalog
+
+A separate `JUX-DIAGNOSTICS-ADDENDUM.md` (deferred) catalogs every code with description and example. The codes scattered across this and prior addenda are placeholders; the catalog becomes authoritative.
+
+### C.10.4. Error Recovery
+
+The compiler's pipeline phases cooperate on error recovery:
+
+- **Phase 1–4.** Recover at semicolons, braces, top-level keywords. Continue parsing. Report each error once.
+- **Phase 6–9.** Continue type-checking after errors. Type-check what's checkable; emit errors for the rest. Use `error` as a placeholder type for nodes that failed to type-check.
+- **Phase 11.** A borrow error in one function does not stop borrow-checking of other functions.
+- **Phase 17–19.** First failure stops the build (these are mechanical phases; failure usually indicates a bug in earlier phases).
+
+The user sees as many real errors per compile as the compiler can confidently detect.
+
+---
+
+## §C.11 — Build Orchestration
+
+### C.11.1. The `juxc` Binary
+
+Single binary with subcommands:
+
+```
+juxc build              # build the current module
+juxc run                # build and run
+juxc test               # build with #[Test] discovery and run
+juxc check              # type-check only, no codegen
+juxc fmt                # format source
+juxc doc                # generate docs
+juxc bindgen ...        # generate bindings from C headers / Rust crates
+juxc lsp                # run the language server (stdio)
+```
+
+Each subcommand drives a portion of the pipeline:
+
+- `build`: phases 1–19 + link.
+- `run`: build then exec.
+- `test`: phases 1–19 with test-runner injection; produces a test binary.
+- `check`: phases 1–11 only. Skip codegen — fastest path.
+- `fmt`: phases 1–3 (CST) only; emit reformatted source.
+- `doc`: phases 1–9 + doc-comment extraction; skip codegen.
+
+### C.11.2. The `jux` Binary
+
+Project-level orchestration. Wraps `juxc` for multi-module workspaces, dependency resolution, and registry interaction. Specified separately in a future build-system addendum (per `JUX-GAPS-ROADMAP.md` §3.1).
+
+### C.11.3. Caching and Incremental Compilation
+
+Phase outputs are cacheable:
+
+- **Token streams** by file content hash.
+- **AST/HIR** by file content + the hashes of all imports.
+- **MIR** by HIR + monomorphization environment.
+- **Object files** by MIR + target.
+
+The compiler keeps an on-disk cache (`.jux-cache/`) keyed by these hashes. A clean rebuild costs full pipeline; an incremental rebuild only re-runs phases for files whose inputs changed.
+
+This is what makes `juxc check` fast enough for editor use.
+
+### C.11.4. Compiler-as-Library
+
+The compiler exposes its phases as a library API (per `JUX-GAPS-ROADMAP.md` §3.3), so:
+
+- **The LSP** (`juxc lsp`) reuses the same parser, type checker, and borrow checker.
+- **Editors** can fetch ASTs and types for hover, completion, go-to-definition.
+- **Formatters and linters** (third-party) build on the same CST/AST shape.
+
+The library API is stable across Jux compiler versions within a major release; it shifts at major-version boundaries.
+
+---
+
+## Implementation Sequence
+
+For an implementer building `juxc` from scratch, the recommended order:
+
+1. **Lexer + parser + CST.** Produces a syntax-tree formatter (`juxc fmt`) as a first deliverable.
+2. **AST + name resolution.** Now `juxc` can verify names and modules.
+3. **Type checker.** Now `juxc check` does real type checking.
+4. **HIR + MIR construction.** Now there's an IR to transform.
+5. **MIR-to-Rust backend.** Now `juxc build` produces a working binary, modulo borrow checking.
+6. **Borrow checker.** Now Jux's safety promises hold.
+7. **Drop + refcount + move analysis.** Now reference semantics are correct without leaking to Rust.
+8. **Async / generator lowering.** Now async actually compiles.
+9. **Monomorphization.** Now generics are real.
+10. **DCE.** Now binaries are small.
+11. **LSP.** Now editors work.
+12. **Phase 2 / Phase 3 backends.** Long-tail.
+
+Steps 1–10 are JUX-LANG-V1 §13.1 + §13.2. Step 11 is §13.3. Step 12 is §13.5.
+
+This addendum specifies every phase mentioned. Subsequent addenda specify the algorithms that run inside each phase.
+
+---
+
+*End of compiler-pipeline addendum. JUX-LANG-V1 §13 should refer to this for "what `juxc` does" and retain only the timeline.*

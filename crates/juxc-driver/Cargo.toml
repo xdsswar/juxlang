@@ -1,0 +1,18 @@
+[package]
+name = "juxc-driver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Glue that wires each pipeline phase together (per JUX-COMPILER-PIPELINE-ADDENDUM.md §C.11)."
+
+[dependencies]
+juxc-source       = { workspace = true }
+juxc-diagnostics  = { workspace = true }
+juxc-lex          = { workspace = true }
+juxc-ast          = { workspace = true }
+juxc-parse        = { workspace = true }
+juxc-resolve      = { workspace = true }
+juxc-tycheck      = { workspace = true }
+juxc-backend-rust = { workspace = true }
+anyhow            = { workspace = true }

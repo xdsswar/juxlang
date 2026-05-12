@@ -1,0 +1,44 @@
+// Class declaration vehicle — Turn-1 class support.
+//
+// Exercises:
+//   - `class Point { … }` top-level declaration.
+//   - Private int fields with default-zero initialization.
+//   - One constructor taking two ints, storing via `this.field`.
+//   - Instance method that READS fields (`&self` receiver).
+//   - Instance method that WRITES fields (`&mut self` via mutation analysis).
+//   - `new Point(x, y)` instantiation.
+//   - `p.field` and `p.method(args)` from outside the class.
+//   - String interpolation inside print to render coordinates.
+
+public class Point {
+    private int x;
+    private int y;
+
+    public Point(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+
+    // Read-only method — gets &self in the emitted Rust.
+    public int distanceSquared() {
+        return this.x * this.x + this.y * this.y;
+    }
+
+    // Mutating method — body assigns to this.x / this.y so the
+    // backend's body_writes_to_this walker promotes the receiver to
+    // &mut self automatically.
+    public void shift(int dx, int dy) {
+        this.x = this.x + dx;
+        this.y = this.y + dy;
+    }
+}
+
+public void main() {
+    var p = new Point(3, 4);
+    print($"p = (${p.x}, ${p.y})");
+    print($"distance^2 = ${p.distanceSquared()}");
+
+    p.shift(10, 20);
+    print($"after shift: (${p.x}, ${p.y})");
+    print($"distance^2 = ${p.distanceSquared()}");
+}

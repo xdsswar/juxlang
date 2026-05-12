@@ -1,0 +1,21 @@
+// Milestone-9 vehicle: string concatenation with `+` and platform-sized
+// `int`.
+//
+// `greet` accepts a `String name` and concatenates literal text around
+// it before printing. `main` calls it twice and also exercises `int`
+// (platform-sized) and `i32` (fixed-width 32-bit) side by side.
+
+public void greet(String name) {
+    print("hello, " + name + "!");
+}
+
+public void main() {
+    greet("Alice");
+    greet("Bob");
+
+    int platformNative = 42;     // i32 on 32-bit targets, i64 on 64-bit
+    i32 always32 = 7;             // always 32-bit, useful for FFI
+
+    print(platformNative);
+    print(always32);
+}

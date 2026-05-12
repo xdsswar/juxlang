@@ -1,0 +1,23 @@
+// Turn-3 array vehicle: bare initializer literal in typed-local RHS.
+//
+// The Java idiom `T[] xs = {a, b, c};` works in Jux thanks to the
+// parser dispatching on the LHS type: dynamic (`T[]`) lowers to
+// `vec![…]`, fixed (`T[N]`) lowers to a Rust array literal `[…]`.
+//
+// This file uses the dynamic form. See `colors.jux` for the fixed form.
+//
+// Exercises:
+//   - `String[] names = {…};` bare initializer for dynamic arrays.
+//   - `arr.length` on a dynamic array.
+//   - `arr[i]` index read.
+
+public void main() {
+    String[] names = {"Alice", "Bob", "Carol"};
+    print(names.length);
+
+    var i = 0;
+    while (i < names.length) {
+        print(names[i]);
+        i = i + 1;
+    }
+}

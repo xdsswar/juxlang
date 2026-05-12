@@ -1,0 +1,24 @@
+// Milestone-5 vehicle: function-with-return-value + compound assignment
+// + break.
+//
+// `sumUntil` sums 1..=limit using a `while (true)` loop terminated by
+// `break`, with a compound assignment to accumulate the total. The
+// function returns an int; main consumes that return value as an
+// argument to print.
+
+public int sumUntil(int limit) {
+    var total = 0;
+    var i = 1;
+    while (true) {
+        if (i > limit) {
+            break;
+        }
+        total += i;
+        i += 1;
+    }
+    return total;
+}
+
+public void main() {
+    print(sumUntil(5));
+}

@@ -1,0 +1,19 @@
+// Milestone-6 vehicle: unary minus.
+//
+// Exercises unary `-` in two distinct positions:
+//   1. As the argument to a function call:    abs(-7)
+//   2. Inside a return expression:            return -x;
+//
+// Plus an early-return inside `if` and a tail-elided final return.
+
+public int abs(int x) {
+    if (x < 0) {
+        return -x;
+    }
+    return x;
+}
+
+public void main() {
+    print(abs(-7));
+    print(abs(5));
+}

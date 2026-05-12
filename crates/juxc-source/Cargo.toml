@@ -1,0 +1,9 @@
+[package]
+name = "juxc-source"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Source-file storage, byte positions, and spans for the Jux compiler."
+
+[dependencies]

@@ -1,0 +1,465 @@
+# Jux Spec Addendum — Runtime Crate, Mangling, Coherence
+
+**Status:** Proposed insertion. Specifies (a) the **`jux-rt`** runtime crate that Phase 1 codegen targets, (b) the exact **symbol mangling** algorithm, and (c) **operator coherence** (orphan rules) that prevent multi-crate operator-overload conflicts.
+
+**Insertion points:**
+- New §R.1 ("`jux-rt`: The Runtime Crate")
+- New §R.2 ("Symbol Mangling Algorithm")
+- New §R.3 ("Operator Coherence (Orphan Rules)")
+
+---
+
+## Design Philosophy (Non-Normative)
+
+A native-compiled language is ultimately a contract: source code on one side, ABI on the other, and a runtime helper library bridging them. This addendum nails down those three concrete pieces.
+
+- **The runtime crate (`jux-rt`)** holds the small set of helper functions that user code never calls directly but the *codegen* always emits calls to. Refcount inc/dec, drop dispatch, panic invocation, async glue, FFI marshaling. Phase 1 implements `jux-rt` in Rust; Phase 3 reimplements it in Jux. Either way, the symbol table is fixed.
+- **Symbol mangling** is the bridge between the user-visible name `com.example.foo::Bar::method` and the linker-visible `_J0a1b2c..._method`. Without a documented algorithm, two compilations of the same source could produce link-incompatible binaries.
+- **Operator coherence** prevents the multi-crate equivalent of "two libraries both define `operator+(MyType, OtherType)` differently." Without coherence, the linker picks one arbitrarily and the program behaves nondeterministically.
+
+These three pieces are the contract that makes "ship-only-what-you-use" and "multi-crate FFI-stable" actually work.
+
+---
+
+## §R.1 — `jux-rt`: The Runtime Crate
+
+`jux-rt` is the small support crate that every Jux program implicitly links against. Phase 1 implements it in Rust, generated alongside user code. Phase 3 (direct LLVM) implements it as a Jux library compiled with bootstrap-mode tooling.
+
+User code **never** imports `jux-rt`. The compiler emits calls to its symbols transparently.
+
+### R.1.1. Why `jux-rt` Exists
+
+The compiler emits inline machine code for most operations. Some operations are too large or too platform-specific to inline at every site:
+
+- **Refcount operations.** Atomic increment/decrement with a small helper that handles the "drop when zero" branch.
+- **Drop dispatch for trait objects.** A virtual call through an interface reference that handles the type-erased object.
+- **Panic invocation.** Captures stack trace, calls panic hook, raises exception or aborts depending on profile.
+- **Exception unwinding scaffolding.** DWARF/SEH personality function bridge.
+- **Async runtime startup/shutdown.** Sets up the executor, runs `main`, drains the loop, exits cleanly.
+- **String operations the compiler refuses to inline.** UTF-8 validation, char iteration, etc.
+- **FFI argument marshaling helpers.** Convert Jux types to C-ABI form at the boundary.
+- **Allocator interface stubs.** Single indirection to the configured allocator.
+
+Centralizing these in `jux-rt` keeps user binaries small (one definition, many callers), keeps the compiler's emitter simple (one call instruction per concept), and lets the runtime evolve independently of compiler versions.
+
+### R.1.2. The Public Symbol Table
+
+Every symbol below is a stable part of `jux-rt`. The compiler emits calls to these symbols by exact name (with mangling per §R.2 disabled — these are extern-C symbols).
+
+#### Refcount
+
+```c
+void __jux_rt_retain(void* obj);
+void __jux_rt_release(void* obj);
+void __jux_rt_retain_weak(void* obj);
+void __jux_rt_release_weak(void* obj);
+void* __jux_rt_upgrade_weak(void* obj);                  // returns null if expired
+```
+
+Where `void* obj` points at the class instance's vtable slot. The vtable slot's first word is a pointer to a `Vtable` (per `JUX-LAYOUT-ABI-ADDENDUM.md` §L.2.2) whose `drop_fn` is invoked when the strong count reaches zero.
+
+#### Drop and Panic
+
+```c
+void __jux_rt_drop(void* obj);                           // dispatches to vtable drop_fn
+__attribute__((noreturn))
+void __jux_rt_panic(const char* msg, const char* file, uint32_t line);
+__attribute__((noreturn))
+void __jux_rt_panic_overflow(const char* file, uint32_t line);
+__attribute__((noreturn))
+void __jux_rt_panic_oob(int64_t index, int64_t length, const char* file, uint32_t line);
+__attribute__((noreturn))
+void __jux_rt_panic_null_deref(const char* file, uint32_t line);
+__attribute__((noreturn))
+void __jux_rt_panic_cast_failed(const char* from_type, const char* to_type,
+                                 const char* file, uint32_t line);
+__attribute__((noreturn))
+void __jux_rt_panic_init(void* exception);              // exception in static initializer
+```
+
+The panic family captures the call site, invokes the hook (per `JUX-CORE-LIB-ADDENDUM.md` §K.10), and either throws (in profiles with exceptions) or aborts.
+
+#### Exception Unwinding
+
+```c
+__attribute__((noreturn))
+void __jux_rt_throw(void* exception);
+void __jux_rt_personality(/* DWARF/SEH personality args */);
+```
+
+`__jux_rt_throw` initiates the unwind. `__jux_rt_personality` is the personality function referenced by every Jux function's unwind tables. The exact platform-specific signature differs between System V (Itanium ABI) and Windows (SEH).
+
+#### Async Runtime
+
+```c
+void* __jux_rt_async_runtime_init(void);                 // returns runtime handle
+void __jux_rt_async_runtime_shutdown(void* rt);
+void __jux_rt_async_spawn(void* rt, void* future);       // hands future to executor
+void __jux_rt_async_wake(void* waker);
+void* __jux_rt_async_block_on(void* rt, void* future);   // for blockingGet()
+```
+
+These wrap whatever async runtime Phase 1 chooses (tokio for Phase 1; a Jux-native executor for Phase 3). The compiler emits calls during `async`/`await` lowering.
+
+#### FFI Marshaling
+
+```c
+void* __jux_rt_string_to_cstring(void* string_obj);
+void* __jux_rt_cstring_to_string(const char* cstr);
+void __jux_rt_cstring_free(void* cstr);
+```
+
+Conversion helpers between Jux's UTF-8 `String` and C's null-terminated `char*`. The compiler emits these calls at FFI call sites (per `JUX-LAYOUT-ABI-ADDENDUM.md` §L.7).
+
+#### Allocator
+
+```c
+void* __jux_rt_alloc(size_t size, size_t align);
+void __jux_rt_dealloc(void* ptr, size_t size, size_t align);
+void* __jux_rt_realloc(void* ptr, size_t old_size, size_t new_size, size_t align);
+```
+
+Single indirection to the configured allocator. In `jux-full`, points at the system allocator. In `jux-embedded`, points at the user-configured allocator. In `jux-core`, the symbol is undefined — the linker fails if any code path calls it, which is the desired effect.
+
+#### Volatile MMIO
+
+```c
+uint8_t __jux_rt_volatile_load_u8(volatile uint8_t* addr);
+void __jux_rt_volatile_store_u8(volatile uint8_t* addr, uint8_t val);
+// ... similar for u16, u32, u64
+```
+
+Wrappers around the platform's volatile-load/store primitives. The compiler may inline these for known-volatile fields; the symbols exist for cases where indirection is needed (runtime-computed addresses).
+
+#### Atomics
+
+```c
+int32_t __jux_rt_atomic_load_i32(int32_t* addr, int32_t order);
+void __jux_rt_atomic_store_i32(int32_t* addr, int32_t val, int32_t order);
+int32_t __jux_rt_atomic_fetch_add_i32(int32_t* addr, int32_t val, int32_t order);
+// ... similar for i64, u32, u64, ptr
+```
+
+The `order` argument is the memory ordering enum from `JUX-CORE-LIB-ADDENDUM.md` §K.9 (`Relaxed`=0, `Acquire`=1, `Release`=2, `AcqRel`=3, `SeqCst`=4).
+
+The compiler may lower atomic ops directly to LLVM atomics in Phase 3; the runtime symbols exist for Phase 1 (where Rust-source emission goes through tokio's atomic abstractions).
+
+### R.1.3. `jux-rt` Per Profile
+
+| Profile         | `jux-rt` size (approx) | Notes                                       |
+|-----------------|-----------------------|---------------------------------------------|
+| `jux-full`      | ~150 KB                | Full unwinding, async runtime via tokio     |
+| `jux-embedded`  | ~30 KB                 | No tokio; lightweight executor; optional unwinding |
+| `jux-core`      | ~5 KB                  | No allocator, no async, no unwinding        |
+
+The `jux-rt` library is statically linked. Dead-code elimination drops unused symbols, so a hello-world `jux-core` program ends up with only the panic stub and what `printf` needs.
+
+### R.1.4. Implementation Path
+
+Phase 1: `jux-rt` is a Cargo crate auto-included in every project's generated build. Source lives in the compiler distribution. The user never edits it.
+
+Phase 3: `jux-rt` is rewritten in Jux itself, compiled by the bootstrap compiler with `-Zbootstrap-mode` to allow self-referential symbol emission. Same public interface; different implementation language.
+
+Maintenance: `jux-rt` is versioned alongside the compiler. Each compiler release ships its matching `jux-rt`. User binaries embed the version they were built against; mixed-version linking is rejected.
+
+---
+
+## §R.2 — Symbol Mangling Algorithm
+
+`JUX-LAYOUT-ABI-ADDENDUM.md` §L.3.1 sketched the format. This section gives the exact algorithm — the deterministic encoding of every Jux name into a linker-legal identifier.
+
+### R.2.1. Goals
+
+- **Determinism.** Same source + same compiler version → same mangled names.
+- **Reversibility.** Given a mangled name, a tool can recover the original Jux name. (`juxc demangle <symbol>`.)
+- **No collisions.** Distinct Jux items mangle to distinct names.
+- **Linker-legal.** Mangled names use only characters allowed in COFF/ELF/Mach-O symbol tables: `[A-Za-z0-9_$]`.
+- **Reasonable length.** Common cases produce names under 200 characters.
+
+### R.2.2. Top-Level Format
+
+```
+_J<version>_<crate-id>_<path>_<sig>_<disambiguator>
+```
+
+- `_J` — fixed prefix identifying Jux mangling.
+- `<version>` — single digit, the mangling-format version. Currently `0`.
+- `<crate-id>` — 16 hex characters, BLAKE3 hash of `(crate-name, crate-version, build-salt)` truncated to 64 bits.
+- `<path>` — the encoded path through modules and items.
+- `<sig>` — encoded function signature (parameter types and return type).
+- `<disambiguator>` — counter for shadowed/overloaded items in the same scope; usually `0`.
+
+All segments are joined by `_`. Internal `_` characters in identifiers are escaped (per §R.2.5).
+
+### R.2.3. Path Encoding
+
+A path like `com.example.foo::Bar::baz` encodes as:
+
+```
+N3com7example3foo3Bar3baz
+```
+
+- Each path segment is preceded by its byte-length in decimal.
+- Segments are concatenated with no separator (the length prefix unambiguously delimits them).
+- The leading `N` indicates "nested name" (multi-segment).
+- A non-nested name (a top-level item in a single-segment crate path) skips the `N` prefix.
+
+For nested types or methods inside a class:
+
+```jux
+class Outer<T> {
+    static class Inner {
+        fn helper(int x) -> int { ... }
+    }
+}
+```
+
+mangles to (roughly):
+
+```
+N5Outer<TYPE>5Inner6helper<sig>
+```
+
+where `<TYPE>` is the encoded `T` instantiation.
+
+### R.2.4. Type Encoding
+
+Each type encodes to a short tag plus content:
+
+| Type                    | Encoding             |
+|-------------------------|----------------------|
+| `bool`                  | `b`                  |
+| `byte`                  | `c`                  |
+| `ubyte`                 | `h`                  |
+| `short`                 | `s`                  |
+| `ushort`                | `t`                  |
+| `int`                   | `i`                  |
+| `uint`                  | `j`                  |
+| `long`                  | `x`                  |
+| `ulong`                 | `y`                  |
+| `float`                 | `f`                  |
+| `double`                | `d`                  |
+| `char`                  | `Dc`                 |
+| `void`                  | `v`                  |
+| `String`                | `S`                  |
+| `T?` (nullable)         | `O<T-encoding>`      |
+| `T*` (pointer)          | `P<T-encoding>`      |
+| `T[N]` (fixed array)    | `A<N>_<T-encoding>`  |
+| `T[]` (slice)           | `Sl<T-encoding>`     |
+| `(A, B)` (tuple)        | `T2<A><B>`           |
+| `(A, B, C)`             | `T3<A><B><C>`        |
+| `Foo<X, Y>` (named)     | `<path of Foo>I<X><Y>E` |
+| Function `(A) -> R`     | `F<A>R<R>E`          |
+| `() async -> R`         | `Fa_R<R>E`           |
+
+Non-type generic args:
+- Const integer `N` encodes as `Cn<value>`.
+- Const bool `true`/`false` as `Cb1`/`Cb0`.
+
+The `<path of Foo>` is the path-encoding from §R.2.3, recursively. So `List<int>` mangles as roughly `N4ListIiE`.
+
+### R.2.5. Identifier Escaping
+
+Identifiers may contain characters legal in Jux but not in linker symbols:
+
+- ASCII underscore `_` — used by the mangling itself; escape as `_u`.
+- ASCII dollar `$` — legal everywhere; pass through.
+- Non-ASCII characters — encode as `_u<hex>_`. Example: `é` → `_u00E9_`.
+
+Reserved keywords used as identifier-like names (in some grammar positions) are escaped as `_K<name>_`. Rare; defensive.
+
+### R.2.6. Worked Examples
+
+| Jux name | Mangled (illustrative) |
+|---|---|
+| `package com.example::main()` | `_J0_<crate-id>_N3com7example4mainFE_v_0` |
+| `package com.example::Foo::bar(int) -> String` | `_J0_<crate-id>_N3com7example3Foo3barFiES_0` |
+| `package com.example::List<int>::push(int)` | `_J0_<crate-id>_N3com7example4ListIiE4pushFiE_v_0` |
+| `RingBuffer<float, 4>::next()` | `_J0_<crate-id>_N10RingBufferIfCn4E4nextFE_Of_0` |
+
+Disambiguator increments when overloaded methods would otherwise collide:
+
+```jux
+fn log(int) -> void;     // disambiguator 0
+fn log(String) -> void;  // disambiguator 1
+```
+
+(The signature is already in the mangled name, so overloads with different signatures don't actually need disambiguators; the field is reserved for cases where a closure is generated with the same signature as a user function.)
+
+### R.2.7. Demangling
+
+`juxc demangle <symbol>` reverses the algorithm and prints a human-readable form:
+
+```
+$ juxc demangle '_J0_a1b2c3d4_N3com7example3Foo3barFiES_0'
+com.example::Foo::bar(int) -> String
+```
+
+The demangler is part of `juxc`'s public surface. Debuggers (gdb, lldb, WinDbg) can be configured to invoke it for stack-trace pretty-printing.
+
+### R.2.8. Stability
+
+The mangling format is **not** stable across Jux compiler versions. Rebuilding from source is required when changing compilers. This is intentional:
+
+- Internal Jux code never depends on specific mangled names; the compiler emits and consumes them in lockstep.
+- For FFI, `@export(name = "...")` overrides mangling entirely (per `JUX-LAYOUT-ABI-ADDENDUM.md` §L.3.2). Stable C-visible names are explicit, never accidental.
+- Future format versions bump the `<version>` digit; the runtime can detect mixed mangling versions and refuse to link.
+
+This is the same trade-off Rust accepts.
+
+---
+
+## §R.3 — Operator Coherence (Orphan Rules)
+
+When module A defines `operator+(Foo, Bar) -> Baz` and module B independently defines `operator+(Foo, Bar) -> Baz`, what does the linker do? Without rules, it picks one nondeterministically and the program's behavior depends on link order.
+
+This section adopts a tightened version of Rust's orphan rule for Jux's operator overloads.
+
+### R.3.1. The Coherence Rule
+
+**An operator overload `operator OP(L, R) -> T` may be defined only by:**
+
+1. **The module that owns `L`,** OR
+2. **The module that owns `R`,** OR
+3. **The module that owns `T` if it is a record/struct/enum** (relaxed for return-type-defining types — useful for builders).
+
+A module owns a type if the type is declared in that module.
+
+For unary operators `operator OP() -> T` defined as a method on type `Self`:
+
+- Always allowed (the type's own module is implicitly defining it).
+
+For free-function operator overloads:
+
+- Subject to the rule above.
+
+### R.3.2. Rationale
+
+If two unrelated modules could each define `operator+` for the same type pair, the resulting program would have undefined behavior at link time. Restricting the definition to "an owner of one of the operands" guarantees:
+
+- The owner module's tests cover the operator's behavior.
+- A new module added later cannot break existing semantics.
+- Ambiguity at the call site is impossible — only one definition can exist for any (L, R) pair.
+
+The rule is stricter than necessary in some cases (e.g., a third-party library can't ergonomically add `operator+(int, MyTime) -> MyTime` because it owns neither `int` nor `MyTime`). The escape hatch is in §R.3.4.
+
+### R.3.3. Detection
+
+The compiler enforces coherence at phase 17 (monomorphization) per `JUX-COMPILER-PIPELINE-ADDENDUM.md`:
+
+- For each operator overload encountered, identify the defining module and the operand types' owning modules.
+- If the defining module owns neither operand, emit `E0950` ("orphan operator overload").
+- If two modules both define the same operator with the same operand types and the same return type, emit `E0951` at the build's link step.
+
+```
+Error E0950: orphan operator overload
+  --> mylib/src/extensions.jux:14:5
+   |
+14 | public Vec3 operator+(double a, Vec3 b) {
+   |             ^^^^^^^^ neither `double` nor `Vec3` is owned by this module
+   |
+   `double` is a built-in primitive (owned by `core`).
+   `Vec3` is defined in module `external.math`.
+   
+Hint: define this operator in `external.math`, or use a wrapper struct.
+```
+
+### R.3.4. Newtype Escape Hatch
+
+When the orphan rule prevents a desired operator, wrap one of the operands in a **newtype** struct in your own module:
+
+```jux
+package my.lib;
+
+import external.math.Vec3;
+
+public struct Scaled(double scalar);
+
+public Vec3 operator*(Scaled s, Vec3 v) {                 -- OK: Scaled is in this module
+    return new Vec3(v.x * s.scalar, v.y * s.scalar, v.z * s.scalar);
+}
+
+var v = new Vec3(1.0, 2.0, 3.0);
+var doubled = new Scaled(2.0) * v;
+```
+
+Slight verbosity; full coherence guarantee. This is the same technique Rust users apply to its orphan rule.
+
+### R.3.5. Methods vs Free Functions
+
+A `member operator OP` declared on a class always meets the coherence rule (the class's module owns the operator). A class implementing a method-form operator on its own type cannot violate coherence.
+
+Free-function operator overloads (per JUX-LANG-V1 §7.14) are where coherence matters. These are useful when:
+
+- The left-hand operand is a primitive (you can't add a method to `int`).
+- Symmetric operations across two distinct types.
+- The operator should be defined alongside one of the operand types rather than buried in a method.
+
+For all of these, define the free function in a module that owns at least one operand type. The rule is mechanical; the compiler reports the violation with a clear hint.
+
+### R.3.6. Magic-Method Coherence
+
+Coherence also applies to the operator overrides `operator hash` and `operator string` when defined as free functions. Per `JUX-OPERATORS-ADDENDUM.md` §O.2, these are normally member methods (so coherence is automatic), but free-function forms exist (e.g., a user might define `operator string(SomeStruct)` for an external type).
+
+The rule: free-function `operator hash` / `operator string` (and any other operator override) may be defined only by the module that owns the type they apply to. Otherwise emit `E0952` ("orphan free-function operator definition"). The newtype escape hatch (§R.3.4) applies.
+
+### R.3.7. Generic Operator Coherence
+
+For a generic operator overload like `operator+<T>(Wrapper<T>, T) -> Wrapper<T>`:
+
+- The overload must be defined in the module that owns `Wrapper`. (`T` is generic, not specific to a module.)
+- This is allowed under the rule because `Wrapper<T>` is owned by the `Wrapper` module.
+
+For an operator overload over two generic types, the overload may be defined in the module that owns either generic type's *base*, even if both type parameters are unconstrained.
+
+### R.3.8. Standard-Library Reach
+
+Standard-library types (`core.*`, `std.*`) are special: their primitive types (`int`, `bool`, etc.) are universally available. Operator overloads where one operand is a primitive and the other is a user-defined type must be defined in the user-defined type's module. This means user code can write:
+
+```jux
+public Money operator*(int n, Money m) { ... }            -- OK: Money is owned here
+```
+
+but the same overload could not be written in an unrelated third module. The standard library does not "own" primitives in the orphan-rule sense; primitives are universally accessible but coherent operators on them follow the user-type-owner rule.
+
+---
+
+## §R.4 — Putting It Together
+
+A user-facing operation like `print($"$obj")` lowers to (Phase 1 illustrative):
+
+1. The compiler resolves `obj.operator string()` to the declared override on `obj`'s type, or to the auto-derived implementation for value types, or to the type-name-and-address default for classes (per `JUX-OPERATORS-ADDENDUM.md`).
+2. The mangler produces the method's name: `_J0_<crate>_N3foo3Bar8toStringFE_S_0`.
+3. The codegen emits a call to that mangled name.
+4. At link time, `_J0_<crate>_N3foo3Bar8toStringFE_S_0` resolves to the user-defined or compiler-derived implementation.
+
+A panic-class event lowers to:
+
+1. The compiler emits a call to the appropriate `__jux_rt_panic_*` runtime symbol with the call-site information.
+2. At link time, the symbol resolves to the `jux-rt` runtime crate's implementation.
+3. At run time, `jux-rt` invokes the configured panic hook, captures stack trace (where supported), and either throws (full/embedded with exceptions) or aborts (core).
+
+A multi-operand operator like `a + b` lowers to:
+
+1. Phase 8 resolves the operator to a specific declaration (member method, free function, or built-in).
+2. Phase 17 verifies coherence: if a free function, the defining module must own one of the operand types.
+3. The mangler produces a name for the operator (member methods mangle as `operator_plus`; free functions mangle by their declared name).
+4. The codegen emits a call to that mangled name.
+
+The three pieces — runtime symbols, mangling, coherence — together make multi-crate Jux programs link reliably and run deterministically.
+
+---
+
+## Summary
+
+| Topic                | Section | Closes                                                  |
+|----------------------|---------|---------------------------------------------------------|
+| `jux-rt` runtime    | §R.1    | "Phase 1 codegen target" gap                            |
+| Symbol mangling     | §R.2    | `JUX-LAYOUT-ABI-ADDENDUM.md` §L.3.1 (sketch → algorithm)|
+| Operator coherence  | §R.3    | "Multi-crate operator-overload conflicts" gap           |
+
+With this addendum, every codegen call site has a documented target symbol, every symbol has a deterministic name, and every operator overload has a single legal definition site.
+
+---
+
+*End of runtime/ABI addendum. Next: the master diagnostic catalog.*

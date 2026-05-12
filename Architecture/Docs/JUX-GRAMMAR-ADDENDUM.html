@@ -1,0 +1,981 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Formal Grammar — Jux</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="sidebar-brand" href="index.html">
+    <span class="sidebar-brand-mark">J</span>
+    <span>Jux</span>
+  </a>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Start Here</div>
+    <a href="index.html">Overview</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Foundation</div>
+    <a href="JUX-LANG-V1.html">Language V1 — Architecture & Design</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Core Specifications</div>
+    <a href="JUX-GRAMMAR-ADDENDUM.html">Formal Grammar</a>
+    <a href="JUX-SEMANTICS-ADDENDUM.html">Execution Semantics</a>
+    <a href="JUX-OPERATORS-ADDENDUM.html">Operators (Final)</a>
+    <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
+    <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
+    <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+    <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
+    <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Compiler &amp; Tooling</div>
+    <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
+    <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+    <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
+    <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
+    <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
+    <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Earlier Addenda</div>
+    <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
+    <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
+    <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
+  </div>
+  <div class="sidebar-footer">
+    Generated from spec markdown.<br>
+    Self-contained, offline-ready.
+  </div>
+</aside>
+
+  <main class="main">
+    <div class="content">
+      <div class="breadcrumb"><a href="index.html">← Jux Specification</a></div>
+      <div id="rendered"></div>
+    </div>
+  </main>
+</div>
+
+<script id="md-content" type="text/markdown">
+# Jux Spec Addendum — Formal Grammar
+
+**Status:** Proposed insertion. Replaces the absence of a formal grammar in JUX-LANG-V1. Provides a complete EBNF for lexical, syntactic, and pattern grammars, plus the operator precedence table that JUX-LANG-V1 §7.14 alludes to but never tabulates.
+
+**Insertion points:**
+- New Appendix A.1 ("Lexical Grammar")
+- New Appendix A.2 ("Syntactic Grammar")
+- New Appendix A.3 ("Pattern Grammar")
+- New Appendix A.4 ("Operator Precedence and Associativity")
+- Small clarifying edit to §3.4 (string literal escapes)
+
+The text below is written to drop directly into the existing dossier as appendices.
+
+---
+
+## Design Summary (Non-Normative)
+
+This grammar is what an implementer of `juxc` writes their parser against. Every construct shown anywhere in JUX-LANG-V1 §3–§16 is reducible to these productions. Where JUX-LANG-V1 shows a code example without spelling the grammar, this appendix supplies the missing rules.
+
+Conventions used in the productions:
+
+- `UPPERCASE` — terminal token class produced by the lexer (Appendix A.1).
+- `lowercase` — non-terminal in the syntactic grammar.
+- `'literal'` — a literal terminal (a keyword or punctuation glyph).
+- `?` — zero or one occurrence.
+- `*` — zero or more occurrences.
+- `+` — one or more occurrences.
+- `(...)` — grouping.
+- `|` — alternative.
+- `\` — escape inside character classes.
+- `..` — character range inside a character class.
+
+The grammar is **LALR(1) with one cosmetic ambiguity** at `<` after a name: the parser must decide whether `<` opens a generic-arg list or is the less-than operator. The resolution is the same as Java's: try the generic-arg parse; on failure, fall back to the operator. No lookahead beyond two tokens is required.
+
+---
+
+## Appendix A.1 — Lexical Grammar
+
+The lexer consumes UTF-8 source and produces a stream of tokens. Whitespace and comments are recognized but do not appear in the token stream consumed by the parser.
+
+### A.1.1. Source Characters
+
+```
+source-file       = utf8-bom? token*
+utf8-bom          = U+FEFF
+```
+
+A source file begins with an optional UTF-8 byte-order mark, followed by zero or more tokens. Tokens are separated by whitespace and/or comments; both are lexically significant only insofar as they terminate identifiers and keywords.
+
+### A.1.2. Whitespace and Comments
+
+```
+whitespace        = ( ' ' | '\t' | '\r' | '\n' | '\f' | '\v' )+
+
+line-comment      = '//' ( any-char-except-newline )* newline?
+block-comment     = '/*' ( any-char-except-end-marker )* '*/'
+doc-comment       = '/**' ( any-char-except-end-marker )* '*/'
+```
+
+Block comments do **not** nest. Doc comments (`/** ... */`) attach to the next non-comment, non-whitespace declaration and are surfaced to tooling. Doc comments in any other position are diagnostics-quality warnings (`W0001`) but legal.
+
+### A.1.3. Identifiers and Keywords
+
+```
+identifier        = id-start id-continue*
+id-start          = 'A'..'Z' | 'a'..'z' | '_'
+id-continue       = id-start | '0'..'9'
+
+keyword           = 'abstract' | 'annotation' | 'async' | 'await' | 'break'
+                  | 'case' | 'catch' | 'class' | 'const' | 'default' | 'do'
+                  | 'drop' | 'else' | 'enum' | 'extends' | 'final'
+                  | 'finally' | 'for' | 'if' | 'implements' | 'import'
+                  | 'init' | 'interface' | 'internal' | 'move' | 'native'
+                  | 'new' | 'package' | 'permits' | 'private'
+                  | 'protected' | 'public' | 'record' | 'return' | 'sealed'
+                  | 'static' | 'struct' | 'super' | 'switch'
+                  | 'this' | 'throw' | 'throws' | 'try' | 'type'
+                  | 'unsafe' | 'var' | 'void' | 'volatile' | 'when'
+                  | 'while' | 'yield'
+
+contextual-kw     = 'get' | 'set' | 'operator' | 'out' | 'step' | 'in'
+```
+
+Identifiers that match a keyword are tokenized as that keyword. **Contextual keywords** (`get`, `set`, `operator`, `out`, `step`, `in`) are *not* reserved at the lexical level and may appear as identifiers in non-conflicting positions; the parser disambiguates by context. This avoids breaking existing names if a future revision repurposes one of these words.
+
+Note: `instanceof` and `is` are **not** keywords in Jux. The type-test operator is the punctuation token `=>` (per §A.4 level 12). Reads as "is an instance of": `x => Dog` is "x is an instance of Dog".
+
+> **Edit to §3.2 of JUX-LANG-V1:** Add `unsafe`, `volatile`, `when` to the reserved keyword list. The keywords `init` and `yield` are reserved but their syntactic roles are specified in this addendum and in `JUX-MISSING-DEFS-ADDENDUM.md` respectively. The keyword `annotation` was added in the same pass as the annotation-system addendum — see `JUX-ANNOTATIONS-ADDENDUM.md` §A.2.
+
+### A.1.4. Numeric Literals
+
+```
+int-literal       = decimal-int | hex-int | binary-int | octal-int
+decimal-int       = digit ( digit | '_' )*
+hex-int           = '0x' hex-digit ( hex-digit | '_' )*
+binary-int        = '0b' bin-digit ( bin-digit | '_' )*
+octal-int         = '0o' oct-digit ( oct-digit | '_' )*
+int-suffix        = 'L' | 'u' | 'uL' | 'b' | 'ub' | 's' | 'us'
+
+float-literal     = decimal-int '.' decimal-int exponent? float-suffix?
+                  | decimal-int exponent float-suffix?
+                  | decimal-int float-suffix
+exponent          = ('e'|'E') ('+'|'-')? decimal-int
+float-suffix      = 'f' | 'd'
+
+digit             = '0'..'9'
+hex-digit         = digit | 'a'..'f' | 'A'..'F'
+bin-digit         = '0' | '1'
+oct-digit         = '0'..'7'
+```
+
+Integer suffixes select the literal's type: no suffix → `int`; `L` → `long`; `u` → `uint`; `uL` → `ulong`; `b`/`ub` → `byte`/`ubyte`; `s`/`us` → `short`/`ushort`. Float suffix `f` → `float`; `d` or absent on a literal containing `.` or `e` → `double`. A bare integer with no `.` and no exponent and no suffix is `int`.
+
+Underscores are visual separators only; they are stripped before evaluation. Two consecutive underscores are legal but discouraged. A leading or trailing underscore in the digit run is rejected (`E0102`).
+
+### A.1.5. Character and String Literals
+
+```
+char-literal      = "'" char-content "'"
+char-content      = printable-char-not-quote-or-backslash
+                  | escape-sequence
+
+string-literal    = '"' string-content* '"'
+                  | '"""' raw-string-content* '"""'
+interp-literal    = '$"'   ( string-content | interp-segment )* '"'
+                  | '$"""' ( raw-string-content | interp-segment )* '"""'
+
+string-content    = printable-char-not-quote-or-backslash
+                  | escape-sequence
+
+raw-string-content = any-char-except-triple-quote     -- escape sequences NOT processed
+
+interp-segment    = '$' identifier
+                  | '${' expression '}'
+
+escape-sequence   = '\' ( 'n' | 'r' | 't' | 'b' | 'f' | '0'
+                        | '\\' | '\'' | '"' | '$' )
+                  | '\x' hex-digit hex-digit
+                  | '\u{' hex-digit+ '}'
+```
+
+String literals are UTF-8 sequences of Unicode scalar values. Surrogate code points are rejected (`E0103`); use `\u{1F600}` to denote astral characters directly. Raw strings (`"""..."""`) suppress backslash escape processing but still permit `${...}` interpolation when prefixed with `$`. Adjacent string literals are **not** automatically concatenated — use `+` or interpolation.
+
+> **Edit to §3.4 of JUX-LANG-V1:** Replace the literals table footnote with the formal escape-sequence list above. The previous text only mentioned `\n` informally.
+
+### A.1.6. Punctuation and Operators
+
+```
+punct             = '(' | ')' | '[' | ']' | '{' | '}'
+                  | ',' | ';' | ':' | '::' | '.' | '..' | '..='
+                  | '?' | '?.' | '?:' | '@'
+                  | '->' | '=>'
+                  | '=' | '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|='
+                  | '^=' | '<<=' | '>>='
+                  | '+' | '-' | '*' | '/' | '%'
+                  | '==' | '!=' | '<' | '>' | '<=' | '>=' | '<=>'
+                  | '&&' | '||' | '!'
+                  | '&' | '|' | '^' | '~' | '<<' | '>>'
+                  | '...'                              -- variadic only
+```
+
+The token `>>` is produced as a single token by the lexer. The parser may split it into two `>` tokens when closing nested generic-arg lists (`List<List<T>>` ends with two `>` glyphs lexed as one `>>`). Splitting is permitted only at generic-list closing positions and is the only context-sensitive lex behavior in the grammar.
+
+The token `...` appears solely as the variadic-parameter marker (§A.2.4). It is **not** the spread or rest operator at expression level — Jux has no spread expression in v1.
+
+---
+
+## Appendix A.2 — Syntactic Grammar
+
+### A.2.1. Compilation Unit
+
+```
+compilation-unit  = package-decl? import-decl* top-level-decl*
+
+package-decl      = 'package' qualified-name ';'
+
+import-decl       = '@cfg' '(' cfg-pred ')' import-decl
+                  | 'import' import-spec ';'
+
+import-spec       = qualified-name ( '.' '*' )? ( 'as' identifier )?
+                  | qualified-name '.' '{' import-item ( ',' import-item )* '}'
+
+import-item       = identifier ( 'as' identifier )?
+
+qualified-name    = identifier ( '.' identifier )*
+```
+
+A compilation unit is one `.jux` file. Top-level statements (§7.15) are permitted only in the file that the module names as the entry point; in any other file they are a parse error (`E0150`).
+
+### A.2.2. Top-Level Declarations
+
+```
+top-level-decl    = annotation* visibility? top-level-decl-body
+                  | annotation* top-level-statement                 -- entry file only
+
+top-level-decl-body
+                  = type-decl
+                  | function-decl
+                  | const-decl
+                  | type-alias
+
+visibility        = 'public' | 'internal' | 'protected' | 'private'
+
+type-decl         = class-decl | interface-decl | struct-decl
+                  | record-decl | enum-decl
+
+const-decl        = ('const' | 'final') type identifier '=' expression ';'
+
+type-alias        = 'type' identifier generic-params? '=' type ';'
+```
+
+**`const` and `final` are synonyms** wherever they appear. Either keyword declares **non-reassignability** at the position it modifies. The compiler accepts either spelling and echoes whichever the user wrote in error messages.
+
+The semantics by position match Java/Kotlin/C# exactly:
+
+- On a **binding** (local, parameter, field): the binding cannot be reassigned. Mutating method calls through it are still permitted (the borrow checker handles aliasing internally; per JUX-LANG-V1 §6.3).
+- On a **class declaration**: the class cannot be extended. (Default — see §A.2.5.)
+- On a **method declaration**: the method cannot be overridden in subclasses. (Per JUX-LANG-V1 §7.4.1.)
+
+When the initializer of a `const`/`final` binding is a compile-time constant expression, the binding is additionally treated as a compile-time constant (eligible to appear in const-generic positions, `case` patterns, static field initializers of other types, etc.). Whether to enable compile-time evaluation is a property of the *expression*, not the keyword.
+
+### A.2.3. Annotations
+
+```
+annotation        = '@' qualified-name ( '(' annotation-args? ')' )?
+                  | '@' qualified-name '{' top-level-decl* '}'
+
+annotation-args   = annotation-arg ( ',' annotation-arg )*
+annotation-arg    = expression                            -- positional
+                  | identifier '=' expression              -- named
+```
+
+Block-form annotations (`@export { ... }` per §3.6) apply the annotation to every declaration inside the braces. They do not introduce a new scope.
+
+**Case-insensitive resolution.** The annotation's `qualified-name` is matched against declared annotations by lower-casing both sides before comparison. Same rule for annotation-arg parameter names. Per JUX-LANG-V1 §3.6: `@Override` ≡ `@override` ≡ `@OVERRIDE`. The lexer accepts the user's case verbatim; resolution (phase 4 per `JUX-COMPILER-PIPELINE-ADDENDUM.md`) normalizes for lookup. The compiler echoes the user-written spelling back in diagnostics and `juxc fmt` does not normalize casing.
+
+Two user annotations differing only in case are a duplicate-name error (`E0307`).
+
+### A.2.4. Function and Constructor Declarations
+
+```
+function-decl     = modifier* return-type identifier
+                    generic-params? '(' param-list? ')' throws-clause?
+                    function-body
+
+modifier          = 'static' | binding-immut | 'abstract' | 'async'
+                  | 'native' | 'unsafe' | 'override'
+                                                              -- binding-immut = 'final' or 'const' (synonyms);
+                                                              -- on a method this means the method cannot be overridden
+
+return-type       = 'void' | type | 'async' type
+
+param-list        = param ( ',' param )* ( ',' variadic-param )?
+                  | variadic-param
+
+param             = annotation* param-mode? type identifier ('=' expression)?
+param-mode        = binding-immut | 'out'                  -- 'final' or 'const' (synonyms), or 'out'
+variadic-param    = annotation* type '...' identifier
+
+throws-clause     = 'throws' qualified-name ( ',' qualified-name )*
+
+function-body     = block | '=' expression ';' | ';'   -- ; for abstract/native
+
+block             = '{' statement* '}'
+```
+
+The single-expression form `= expression ;` is shorthand for `{ return expression ; }`; permitted only on non-`void` functions whose body is one expression. `out` parameters are specified in `JUX-MISSING-DEFS-ADDENDUM.md`.
+
+A constructor is a function-decl whose name is the literal keyword `new`:
+
+```
+constructor-decl  = annotation* visibility? 'new'
+                    '(' param-list? ')' throws-clause?
+                    constructor-body
+
+constructor-body  = '{' constructor-call? statement* '}'
+constructor-call  = ( 'this' | 'super' ) '(' arg-list? ')' ';'
+```
+
+If present, `this(...)` or `super(...)` must be the first statement of the body (`E0210`). If absent, the parameterless `super()` is invoked implicitly when the parent has one; if the parent has none, the constructor must call an explicit `super(...)` form (`E0211`).
+
+The `init { ... }` block is specified in `JUX-MISSING-DEFS-ADDENDUM.md`.
+
+### A.2.5. Class, Interface, Struct, Record, Enum
+
+```
+class-decl        = class-modifier* 'class' identifier generic-params?
+                    ( 'extends' type )? ( 'implements' type-list )?
+                    permits-clause? class-body
+
+class-modifier    = visibility | 'abstract' | binding-immut
+                                                              -- binding-immut = 'final' or 'const' (synonyms);
+                                                              -- on a class this means non-extensible
+                                                              -- a class is extendable by default unless final/const
+                  | 'sealed' | 'static'
+
+permits-clause    = 'permits' qualified-name ( ',' qualified-name )*
+
+class-body        = '{' class-member* '}'
+class-member      = annotation* ( field-decl
+                                 | property-decl
+                                 | function-decl
+                                 | constructor-decl
+                                 | drop-decl
+                                 | init-block
+                                 | static-init-block
+                                 | type-decl                    -- nested
+                                 )
+
+field-decl        = field-modifier* type identifier
+                    ( '=' expression )? ';'
+field-modifier    = visibility | 'static' | binding-immut
+                  | 'volatile' | 'weak'
+
+binding-immut     = 'const' | 'final'                      -- synonyms; either declares the binding non-reassignable
+
+property-decl     = modifier* type identifier property-body? property-init? ';'?
+property-body     = '{' accessor-list '}'
+                  | '=>' expression                           -- expression-bodied read-only
+accessor-list     = accessor (accessor)*
+accessor          = visibility? accessor-kind accessor-body
+accessor-kind     = 'get' | 'set' | 'init'
+accessor-body     = ';'                                       -- auto: synthesize body
+                  | '=>' expression ';'                       -- expression-bodied
+                  | block                                      -- full body
+property-init     = '=' expression                            -- field-initializer
+
+drop-decl         = 'drop' block
+init-block        = 'init' block
+static-init-block = 'static' block
+
+interface-decl    = interface-mod* 'interface' identifier generic-params?
+                    ( 'extends' type-list )?
+                    permits-clause? interface-body
+interface-mod     = visibility | 'sealed'
+interface-body    = '{' interface-member* '}'
+interface-member  = annotation* ( interface-method
+                                | interface-const
+                                | interface-static-method
+                                | type-decl
+                                )
+interface-method  = ( 'default' | 'abstract' )? function-decl
+interface-const   = 'const' type identifier '=' expression ';'
+
+struct-decl       = visibility? 'struct' identifier generic-params? struct-body
+struct-body       = '{' ( field-decl | function-decl | drop-decl )* '}'
+
+record-decl       = visibility? 'record' identifier generic-params?
+                    '(' record-component-list? ')'
+                    ( 'implements' type-list )?
+                    record-body?
+record-component-list = record-component ( ',' record-component )*
+record-component  = annotation* type identifier
+record-body       = '{' ( function-decl | static-init-block )* '}'
+
+enum-decl         = visibility? 'enum' identifier generic-params?
+                    ( 'implements' type-list )?
+                    '{' enum-variant-list ( ';' enum-member* )? '}'
+enum-variant-list = enum-variant ( ',' enum-variant )* ','?
+enum-variant      = identifier ( '(' record-component-list ')' )?       -- payload variant
+                  | identifier '=' const-expr                              -- explicit discriminator (no payload)
+                  | identifier                                              -- bare variant
+enum-member       = function-decl | const-decl
+```
+
+Enum variants are **comma-separated** inside the body. The `case` keyword does **not** appear in enum declarations — it stays reserved for `switch` patterns. A semicolon separates the variant list from any methods/constants that follow; if the enum has no methods, the trailing semicolon is optional.
+
+`sealed` is permitted on `class` and `interface`. `permits` lists are required on sealed types unless every permitted subtype is declared in the same file (`E0220`).
+
+### A.2.6. Generics
+
+```
+generic-params    = '<' generic-param ( ',' generic-param )* '>'
+generic-param     = ( 'in' | 'out' )? identifier              -- declaration variance not in v1; reserved
+                  | identifier 'extends' type-bound
+                  | 'int' identifier                          -- const generic
+                  | type identifier                           -- typed const generic
+
+type-bound        = type ( '&' type )*
+
+generic-args      = '<' generic-arg ( ',' generic-arg )* '>'
+                  | '<' '>'                                   -- diamond
+generic-arg       = type | const-expr
+```
+
+Const-generic args admit any `const-expr` (a compile-time-constant integer expression). Bounds combine multiple types with `&`; `T extends A & B` requires `T` to be assignable to both.
+
+### A.2.7. Types
+
+```
+type              = nullable-type
+nullable-type     = simple-type '?'?
+simple-type       = qualified-name generic-args?              -- named
+                  | tuple-type
+                  | function-type
+                  | array-type
+                  | pointer-type                              -- unsafe contexts
+                  | 'void'
+
+tuple-type        = '(' ')'                                   -- unit; reserved
+                  | '(' type ',' type ( ',' type )* ')'
+
+function-type     = '(' type-list? ')' ( 'async' )? ( 'throws' type-list )?
+                    '->' type
+
+array-type        = type '[' ']'
+                  | type '[' const-expr ']'
+
+pointer-type      = type '*'
+
+type-list         = type ( ',' type )*
+```
+
+The unit tuple `()` is reserved syntax; v1 reserves it but grants it no current type meaning, to allow a future addition without a grammar break.
+
+The wildcard `?` in generic position (`List<? extends Animal>`) is *not* `nullable-type`; the parser disambiguates by whether `?` appears as the entire generic argument or after a `simple-type`:
+
+```
+generic-arg       = ... | wildcard
+wildcard          = '?' ( ( 'extends' | 'super' ) type )?
+```
+
+A simple-type followed by `?` is nullable; a bare `?` in a generic-arg slot is the wildcard. There is no overlap.
+
+### A.2.8. Statements
+
+```
+statement         = block
+                  | local-decl
+                  | expression-stmt
+                  | if-stmt
+                  | switch-stmt
+                  | while-stmt
+                  | do-while-stmt
+                  | for-stmt
+                  | for-each-stmt
+                  | for-await-stmt
+                  | break-stmt
+                  | continue-stmt
+                  | return-stmt
+                  | throw-stmt
+                  | try-stmt
+                  | unsafe-stmt
+                  | label-stmt
+                  | empty-stmt
+                  | annotation+ statement                          -- @cfg etc.
+
+local-decl        = ( 'var' | binding-immut 'var' | type | binding-immut type ) identifier
+                    ( '=' expression )? ';'
+                  | 'var' destructuring-pattern '=' expression ';'
+                  | binding-immut 'var' destructuring-pattern '=' expression ';'
+
+expression-stmt   = expression ';'
+
+if-stmt           = 'if' '(' expression ')' statement
+                    ( 'else' statement )?
+                  | 'if' 'cfg' '(' cfg-pred ')' block
+                    ( 'else' block )?                              -- compile-time
+
+switch-stmt       = 'switch' '(' expression ')' '{' switch-case+ '}'
+switch-case       = 'case' pattern guard? '->' switch-body
+                  | 'default' '->' switch-body
+switch-body       = expression ';'                      -- single-expression body
+                  | block                                -- multi-statement body
+guard             = 'when' expression
+
+while-stmt        = 'while' '(' expression ')' statement
+do-while-stmt     = 'do' statement 'while' '(' expression ')' ';'
+
+for-stmt          = 'for' '(' for-init? ';' expression? ';'
+                    for-update? ')' statement
+for-init          = local-decl-no-semi | expression-list
+for-update        = expression-list
+
+for-each-stmt     = 'for' '(' ( 'var' | type ) identifier ':' expression ')'
+                    statement
+for-await-stmt    = 'for' 'await' '(' ( 'var' | type ) identifier
+                    ':' expression ')' statement
+
+break-stmt        = 'break' identifier? ';'
+continue-stmt    = 'continue' identifier? ';'
+return-stmt       = 'return' expression? ';'
+throw-stmt        = 'throw' expression ';'
+
+try-stmt          = 'try' block catch-clause* finally-clause?
+catch-clause      = 'catch' '(' type identifier ')' block
+finally-clause    = 'finally' block
+
+unsafe-stmt       = 'unsafe' block
+
+label-stmt        = identifier ':' loop-or-block-stmt
+loop-or-block-stmt = while-stmt | do-while-stmt | for-stmt
+                   | for-each-stmt | for-await-stmt | block
+
+empty-stmt        = ';'
+```
+
+A `try` statement must have at least one `catch` or one `finally` (`E0240`). Bare `try { ... }` is a parse error.
+
+`break <label>` and `continue <label>` target the innermost enclosing labeled statement whose label matches; the labeled statement must be a loop or a block (`E0241`).
+
+### A.2.9. Expressions
+
+The expression grammar is given as a layered set of productions, each layer corresponding to one precedence level. Lower-numbered productions bind looser. Associativity is right-to-left for assignments and the conditional, left-to-right for everything else. Section A.4 tabulates the same information for human reference.
+
+```
+expression        = assignment
+
+assignment        = conditional ( assignment-op assignment )?
+assignment-op     = '=' | '+=' | '-=' | '*=' | '/=' | '%='
+                  | '&=' | '|=' | '^=' | '<<=' | '>>='
+
+conditional       = elvis-expr ( '?' expression ':' expression )?
+                  | switch-expr
+                  | if-expr
+                  | try-expr
+
+elvis-expr        = logic-or ( '?:' elvis-expr )?
+
+logic-or          = logic-and ( '||' logic-and )*
+logic-and         = bit-or ( '&&' bit-or )*
+
+bit-or            = bit-xor ( '|' bit-xor )*
+bit-xor           = bit-and ( '^' bit-and )*
+bit-and           = equality ( '&' equality )*
+
+equality          = comparison ( ('==' | '!=' | '===' | '!==') comparison )*
+comparison        = three-way ( ('<' | '<=' | '>' | '>=') three-way )*
+three-way         = type-test ( '<=>' type-test )?
+
+type-test         = range ( '=>' type pattern-binding? )?           -- "is an instance of"
+                  | range ( 'in' range )?                            -- containment
+pattern-binding   = identifier                                 -- smart-cast bind
+
+range             = shift ( ( '..' | '..=' ) shift )?
+                       ( 'step' shift )?
+
+shift             = additive ( ('<<' | '>>') additive )*
+additive          = multiplicative ( ('+' | '-') multiplicative )*
+multiplicative    = unary ( ('*' | '/' | '%') unary )*
+
+unary             = ('!' | '-' | '+' | '~' | 'move' | 'await') unary
+                  | '&' unary                                 -- address-of, unsafe-only
+                  | '*' unary                                 -- pointer dereference, unsafe-only
+                  | c-style-cast
+                  | postfix
+
+c-style-cast      = '(' type ')' unary                       -- Java/C-style: (int) x, (Foo) bar
+                                                              -- equivalent to `unary as type`
+                                                              -- see disambiguation below
+
+postfix           = primary postfix-op*
+postfix-op        = '.' identifier
+                  | '?.' identifier
+                  | '.' decimal-int                          -- tuple field
+                  | '(' arg-list? ')'                        -- call
+                  | '[' expression ']'                       -- index
+                  | '[' expression ']' '=' assignment        -- desugars to operator[]=
+                  | '?'                                      -- error propagation
+                  | '!!'                                     -- non-null assertion
+                  | generic-args                             -- explicit type args
+                  | 'as' type                                -- explicit cast
+
+primary           = literal
+                  | identifier
+                  | 'this'
+                  | 'super'
+                  | '(' expression ')'
+                  | tuple-literal
+                  | array-literal
+                  | new-expr
+                  | lambda
+                  | method-ref
+
+literal           = int-literal | float-literal | char-literal
+                  | string-literal | interp-literal
+                  | 'true' | 'false' | 'null'
+
+tuple-literal     = '(' expression ',' expression ( ',' expression )* ','? ')'
+
+array-literal     = 'new' type '[' expression ']'              -- runtime size
+                  | 'new' type '[' ']' '{' arg-list? '}'       -- inferred size
+
+new-expr          = 'new' qualified-name generic-args?
+                    '(' arg-list? ')'
+
+arg-list          = argument ( ',' argument )*
+argument          = expression                                 -- positional
+                  | identifier ':' expression                  -- named
+                  | 'out' expression                           -- out arg
+                  | 'move' expression                          -- explicit move
+
+lambda            = 'async'? '(' lambda-params? ')' '->' lambda-body
+                  | 'async'? identifier '->' lambda-body       -- single-param
+lambda-params     = lambda-param ( ',' lambda-param )*
+lambda-param      = type? identifier
+lambda-body       = expression | block
+
+method-ref        = qualified-name '::' identifier
+                  | qualified-name '::' 'new'
+
+switch-expr       = 'switch' '(' expression ')' '{' switch-case+ '}'   -- exhaustive
+if-expr           = 'if' '(' expression ')' expression
+                    'else' expression
+try-expr          = 'try' block catch-clause+
+```
+
+`switch-expr`, `if-expr`, and `try-expr` are expressions; they appear in any expression position. The statement-form `switch-stmt`, `if-stmt`, and `try-stmt` differ from the expression forms only in that the statement form is parsed when an entire statement is expected.
+
+**No fallthrough.** Switch cases use `->` arrow syntax only — the legacy C/Java `case X:` colon form with implicit fallthrough is **not** supported. Every case has its own self-contained body; no `break` is needed. This matches Java 14+'s arrow-switch model and eliminates the most common Java/C bug (forgotten `break`).
+
+```jux
+// Java 14+ / Jux arrow style:
+switch (status) {
+    case OK -> handleOk();
+    case NOT_FOUND -> handleNotFound();
+    case SERVER_ERROR, GATEWAY_TIMEOUT -> handleRetryable();
+    default -> handleUnknown();
+}
+
+// Multi-statement body via block:
+switch (event) {
+    case Click(var x, var y) -> {
+        log.info($"click at ($x, $y)");
+        registerHit(x, y);
+    }
+    case KeyPress(var k) -> log.info($"key $k");
+    default -> { /* nothing */ }
+}
+```
+
+`if-expr` requires an `else` branch (`E0260`); the statement form does not. `switch-expr` requires exhaustive coverage (`E0261`); the statement form does not.
+
+`try-expr` produces the value of its successfully-completing block, or the value of the catch clause that handled the exception. It has no `finally`.
+
+The unary operators `move` and `await` bind tighter than any binary operator. The chained postfix `expr?` (error propagation, §7.11) and `expr!!` (non-null assertion) bind tighter than any binary operator and tighter than `as` casts.
+
+### A.2.10. Cfg Predicates
+
+```
+cfg-pred          = cfg-leaf
+                  | 'all' '(' cfg-pred ( ',' cfg-pred )* ')'
+                  | 'any' '(' cfg-pred ( ',' cfg-pred )* ')'
+                  | 'not' '(' cfg-pred ')'
+
+cfg-leaf          = identifier '=' string-literal              -- e.g. os = "linux"
+                  | identifier                                  -- e.g. debug
+```
+
+The bare-identifier form is true iff the named flag is set; equivalent to `identifier = "true"`.
+
+### A.2.11. Operators (Overloads)
+
+```
+operator-decl     = function-decl-prefix 'operator' operator-token
+                    '(' param-list? ')' function-body
+function-decl-prefix = annotation* modifier* return-type      -- as in function-decl
+
+operator-token    = '+' | '-' | '*' | '/' | '%'
+                  | '==' | '<' | '<=>' | '<<' | '>>'
+                  | '&' | '|' | '^' | '~'
+                  | '[' ']' | '[' ']' '='
+                  | '(' ')'
+                  | '..' | '..='
+                  | 'in'
+```
+
+The lexer emits `[` `]` and `(` `)` as separate tokens; the parser reassembles them into `[]`, `[]=`, and `()` operator tokens only inside `operator-decl`.
+
+---
+
+## Appendix A.3 — Pattern Grammar
+
+Patterns appear in `switch` cases, `for` destructuring, type-test (`=>`) smart-casts, and local-variable destructuring.
+
+```
+pattern           = literal-pattern
+                  | wildcard-pattern
+                  | binding-pattern
+                  | type-pattern
+                  | tuple-pattern
+                  | record-pattern
+                  | enum-pattern
+                  | range-pattern
+                  | or-pattern
+
+literal-pattern   = literal                                   -- 42, "exit", null
+
+wildcard-pattern  = '_'
+
+binding-pattern   = ( 'var' | 'final' 'var' | type ) identifier
+                  | identifier                                 -- in tuple/record only
+
+type-pattern      = type identifier?                          -- Dog, Dog d
+                  | type '(' nested-pattern-list? ')'         -- record/enum cases
+
+tuple-pattern     = '(' pattern ( ',' pattern )+ ')'
+
+record-pattern    = qualified-name '(' nested-pattern-list? ')'
+
+enum-pattern      = qualified-name '(' nested-pattern-list? ')'    -- same shape as record
+
+nested-pattern-list = pattern ( ',' pattern )*
+
+range-pattern     = shift ( '..' | '..=' ) shift              -- 0..10, 'a'..='z'
+                  | shift '..'                                  -- 0..  (open)
+                  | '..' shift                                  -- ..10 (open)
+                  | '..=' shift                                  -- ..=10
+
+or-pattern        = pattern ( '|' pattern )+
+```
+
+Resolution rules:
+
+- Bindings introduced by `var`-bindings, type-patterns with name, or record/enum sub-patterns are visible in the case body and any guard.
+- Or-patterns require all alternatives to bind the same set of names with the same types (`E0270`).
+- A pattern is **irrefutable** if it always matches its scrutinee. Local-variable destructuring (`var (x, y) = ...`) requires an irrefutable pattern (`E0271`); switch cases admit refutable patterns.
+- Exhaustiveness checking (sealed types, ranges of integer types) follows the rules of JUX-LANG-V1 §7.5 and §6.9.7.
+
+```
+destructuring-pattern = tuple-pattern
+                      | record-pattern                          -- includes Point(x, y)
+                      | binding-pattern
+```
+
+---
+
+## Appendix A.4 — Operator Precedence and Associativity
+
+The table is from loosest binding (top) to tightest (bottom). Within each level, operators have the listed associativity. This subsumes, formalizes, and extends the precedence implied by JUX-LANG-V1 §7.14 and §7.16.
+
+| Lvl | Operators                                                        | Associativity | Form          | Notes                                                                       |
+|-----|------------------------------------------------------------------|---------------|---------------|-----------------------------------------------------------------------------|
+| 1   | `=`  `+=`  `-=`  `*=`  `/=`  `%=`  `&=`  `|=`  `^=`  `<<=`  `>>=` | right         | binary        | Compound forms desugar via the binary operator (§7.14, last paragraph).     |
+| 2   | `?` `:`                                                          | right         | ternary       | `c ? a : b`; `a` and `b` must have a common type.                           |
+| 3   | `?:`                                                             | right         | binary        | Elvis. `a ?: b` is `a` if non-null, else `b`.                               |
+| 4   | `||`                                                             | left          | binary        | Short-circuit. Not overloadable.                                            |
+| 5   | `&&`                                                             | left          | binary        | Short-circuit. Not overloadable.                                            |
+| 6   | `|`                                                              | left          | binary        | Bitwise OR.                                                                  |
+| 7   | `^`                                                              | left          | binary        | Bitwise XOR.                                                                 |
+| 8   | `&`                                                              | left          | binary        | Bitwise AND.                                                                 |
+| 9   | `==`  `!=`  `===`  `!==`                                         | left          | binary        | `===`/`!==` are reference identity; never overloadable (§7.14.3).            |
+| 10  | `<`  `<=`  `>`  `>=`                                             | left          | binary        | Either all four overloaded, or `<=>` derives them (§7.14.4).                |
+| 11  | `<=>`                                                            | none          | binary        | Three-way comparison. Returns int.                                           |
+| 12  | `=>`  `in`                                                       | none          | binary        | `=>` is the type-test operator ("is an instance of") per §7.12. `in` checks containment. |
+| 13  | `..`  `..=`  `step`                                              | none          | binary        | Range. `step` follows a range expression: `0..10 step 2`.                   |
+| 14  | `<<`  `>>`                                                       | left          | binary        | Shifts. `>>` is arithmetic on signed types, logical on unsigned.            |
+| 15  | `+`  `-`                                                         | left          | binary        | Addition / subtraction.                                                      |
+| 16  | `*`  `/`  `%`                                                    | left          | binary        | Multiplication / division / remainder.                                       |
+| 17  | `as`                                                             | left          | binary-keyword| Explicit cast: `e as T`. Must be a permitted cast (§A.5).                   |
+| 18  | `!`  unary `-`  unary `+`  `~`  `move`  `await`  prefix `&`  prefix `*` | right         | unary prefix  | Prefix unary operators. `&x` (address-of) and `*p` (deref) are unsafe-only.  |
+| 19  | `?` (postfix)  `!!`                                              | left          | unary postfix | Error propagation; non-null assertion.                                      |
+| 20  | `.`  `?.`  `.<int>`  `(args)`  `[index]`  `<TypeArgs>(args)` `::` | left          | postfix       | Member access, safe-nav, tuple-field, call, index, generic-call, method-ref.|
+
+A few notes:
+
+- Levels 1–3 are right-associative because they read more naturally that way; everything else is left-associative or non-associative.
+- Level 9 fuses equality and the strict-identity operators (`===`, `!==`) so they cannot be chained meaningfully (`a == b === c` is a parse-stage warning `W0301`, legal but reformatted by `juxc fmt`).
+- Level 10 is non-chaining at the type-checker level: `a < b < c` parses but is rejected (`E0301`) because the middle expression has type `bool` in a comparison position. `juxc` reports the same canonical error here as Java.
+- Level 12 (`=>` / `in`) is non-associative — chaining is a parse error.
+- Level 13's `step` modifier is part of the range expression, not a separate binary operator. It binds tighter than other operators on the right of a range.
+- Level 18's `move`, `await` are unary by grammar but their semantics (§6.4, §10.1.2) make them effectively keywords; their precedence is fixed by this table. `spawn` is **not** a keyword — it is a library function in `std.async` (per `JUX-MISSING-DEFS-ADDENDUM.md` §M.12.1) and follows ordinary call-expression precedence.
+- The cast operator `as` (level 17) was not in JUX-LANG-V1 prose but appears in type-test-related examples. It binds tighter than `+` so `1 + x as long` parses as `1 + (x as long)`.
+
+### A.4.1. Grammatical Ambiguities and Resolutions
+
+1. **`<` after an identifier.** Could be less-than or generic-arg start. Resolution: try generic-args; if the parse fails before consuming a closing `>` at the right balance, backtrack to less-than. Java's rule.
+2. **`>>` closing nested generics.** The lexer produces a single `>>` token. The parser may consume one `>` worth of it when the parser stack is inside a generic-arg list at the right balance. Outside generic-arg context, `>>` is the right-shift operator. No further context-sensitivity.
+3. **`(expr)` vs `(expr,)` (trailing comma).** A trailing comma in a parenthesized expression is a single-element tuple in some other languages. In Jux v1 it is reserved syntax (`E0302` "single-element tuples are not in v1; remove the trailing comma or convert to a record").
+4. **Lambda-vs-cast on `(T) -> e`.** `(int) -> x` could be a function-type appearing as a value or a lambda whose parameter has type `int`. In v1 only the lambda meaning is grammatical; function types appear only in type position.
+5. **`->` after a switch-case with an expression body.** `case X -> a + b -> c` — the second `->` is a parse error (`E0303`); a switch-case body that is itself a lambda must be parenthesized or written as a block. (Switch cases require `->` per §A.2.8 — there is no `:` form.)
+6. **`(Type) expr` cast vs parenthesized expression.** Both `(int) a` (Java/C cast) and `a as int` (postfix cast) are valid. The parser disambiguates `(...)` followed by a unary expression as follows:
+   - If the `...` parses as a complete *type* (a primitive name, a qualified-name optionally with generic-args, optionally with array/nullable suffix), AND the `(...)` is followed by a token that can start a unary expression (an identifier, literal, `-`, `!`, `~`, `(`, `new`, `this`, `super`, `move`, `await`), then it's a **cast expression**.
+   - Otherwise it's a parenthesized expression.
+   - Specifically: `(int)` followed by a name/literal/`(` is always a cast. `(x)` where `x` is just a name is a parenthesized expression unless `x` is unambiguously a type (a primitive, or known by name resolution).
+   - Ambiguity falls back to parenthesized expression with a warning suggesting the user prefer `as` for clarity (`W0304`).
+   - The cast form `(T) expr` and the operator form `expr as T` produce identical semantics. Pick whichever reads better at the call site.
+
+### A.4.2. Reserved-but-Unused Productions
+
+The grammar reserves space for the following without granting them current meaning:
+
+- The unit type `()` in type position.
+- Single-element tuples `(e,)` in expression position.
+- Variance modifiers `in`/`out` on generic-param declarations.
+- The `do-expression` form `do { ... }` evaluating to its last expression — reserved as a future feature; in v1, `do` only introduces the `do-while` loop.
+
+Adding meaning to any of these in a future edition does not break existing v1 code.
+
+---
+
+## Appendix A.5 — Casts and Conversions
+
+Two equivalent syntactic forms produce a cast:
+
+- **Postfix:** `expr as Type` — Jux/Rust/Kotlin style.
+- **Prefix:** `(Type) expr` — Java/C/C++/C# style.
+
+The two forms have **identical semantics** — the same conversion table applies, the same runtime checks fire, the same exceptions throw. Use whichever reads better at the call site. (Programmers from C/Java/C# typically gravitate to `(int) x`; programmers from Rust/Kotlin gravitate to `x as int`. Both are first-class.)
+
+The conversion table below uses `expr as T` form for brevity; everywhere it appears, `(T) expr` is equivalent.
+
+The `as` operator performs **checked or unchecked conversions** between types. Permitted:
+
+| From → To                                              | Form        | Runtime check |
+|--------------------------------------------------------|-------------|---------------|
+| Numeric ↔ Numeric (any pair of primitive numerics)     | unchecked   | none — wraps/truncates per §A.5.1 |
+| Class C → Class S where C extends S                    | implicit    | none — upcast |
+| Class S → Class C where C extends S                    | `as`        | typecheck; throws `ClassCastException` |
+| Interface I → Class C                                   | `as`        | typecheck     |
+| `T?` → `T`                                              | `as`        | null check; throws `NullPointerException` |
+| `T?` → `T!!`                                            | `!!`        | null check; throws `NullPointerException` |
+| `T` → `Object` *(if the language has an Object root)*   | implicit    | none          |
+| `int` → `char`, `char` → `int`                          | `as`        | none — bit-equivalent |
+| Pointer → Pointer (different element types)             | `as`        | unsafe; permitted only inside `unsafe` blocks |
+| Class instance → raw `T*`                               | `as`        | unsafe        |
+
+Conversions not in this table are rejected at compile time (`E0310`).
+
+The `=> T x` form is the **only** way to combine a type test with a binding. Plain `as` does not bind: `var d = a as Dog` either succeeds (and `d` is `Dog`) or throws.
+
+Examples:
+
+```jux
+if (a => Dog d) {                  // "if a is an instance of Dog, bind it as d"
+    d.bark();
+}
+
+if (shape => Circle) {             // type test without binding
+    print("it's a circle");
+}
+
+return value => MyError;           // bool result
+```
+
+### A.5.1. Numeric Conversion
+
+All numeric conversions via `as` are **unchecked** at the language level; runtime wrapping/truncation rules follow `JUX-SEMANTICS-ADDENDUM.md` §S.2. This matches Java's cast semantics on primitive types.
+
+`as` between `int` and `char` is bit-preserving; `as` between signed and unsigned of the same width is bit-preserving. Float-to-int truncates toward zero and saturates (does not produce undefined values for out-of-range floats).
+
+---
+
+## Worked Examples
+
+The following programs are diagnostic for parsers built against this grammar. Each one exercises a corner case that has historically tripped up Java-family parsers.
+
+### Generic ambiguity
+
+```jux
+var x = a < b > (c);
+```
+
+This parses as `a < b > (c)` — two comparisons — only after the parser tries and fails the generic interpretation. Failure happens at the second `>` because `(c)` is not a valid expression continuation after a name with generic-args (which would need a `(` argument list directly).
+
+### Switch as expression vs statement
+
+```jux
+public int classify(Animal a) {
+    var weight = switch (a) {
+        case Dog d -> d.weight();
+        case Cat c -> c.weight();
+        case Bird b -> b.weight();
+    };
+    return weight > 10 ? 1 : 0;
+}
+```
+
+The body of `classify` contains a switch-expression (RHS of `=`), terminated by `;`. The same source with `switch (a) { ... }` at statement position is a switch-statement; the only difference is the surrounding context. Both forms use the same `->` arrow syntax; there is no `:` fallthrough form.
+
+### Lambda binding precedence
+
+```jux
+var greet = (User u) -> "Hi " + u.name;     // body is "Hi " + u.name
+var pair  = (int x, int y) -> x + y;
+var safe  = (User u) -> { print(u.name); }; // block body
+```
+
+Lambdas are parsed greedily on the right: the body extends to the end of the enclosing expression, stopping at `,`, `)`, `]`, `}`, or `;`.
+
+### Range with step
+
+```jux
+for (var i : 10..0 step -1) { ... }
+for (var i : 0..=100 step 5) { ... }
+```
+
+`step` modifies the immediately preceding range expression. It is grammatical only on a range; `for (var i : 0 step 1)` is `E0303`.
+
+### Pattern with guard
+
+```jux
+switch (value) {
+    case Circle(var r) when r > 100 -> "huge circle";
+    case Circle(var r) when r > 10  -> "medium circle";
+    case Circle(var r)              -> "small circle";
+}
+```
+
+Guards are part of the case head; they bind in the same scope as the pattern's bindings. A guard expression must have type `bool` (`E0272`).
+
+---
+
+## Implementation Notes
+
+- The grammar is suitable for either a hand-written recursive-descent parser (the recommended Phase 1 approach, matching what `juxc` does for the rest of its work) or an LALR(1) generator with the standard `<`/`>` ambiguity resolution.
+- Error recovery: on a parse error inside a declaration or statement, recover at the next `;`, `}`, or top-level keyword. This produces a small number of cascading errors per genuine fault.
+- The `juxc` reference implementation should expose the parser as a library (per `JUX-GAPS-ROADMAP.md` §3.3), accepting source text and producing either a CST (concrete syntax tree, including whitespace and comments — for `juxc fmt`) or an AST (for the rest of the pipeline).
+
+---
+
+*End of grammar addendum. When this lands, JUX-LANG-V1.md §3, §5, §7, and §11 should reference the relevant appendices instead of relying on inline examples.*
+
+</script>
+<script src="parser.js"></script>
+</body>
+</html>

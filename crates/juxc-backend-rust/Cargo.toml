@@ -1,0 +1,17 @@
+[package]
+name = "juxc-backend-rust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Phase 19 — lowering Jux to Rust source (per JUX-COMPILER-PIPELINE-ADDENDUM.md §C.9)."
+
+[dependencies]
+juxc-source      = { workspace = true }
+juxc-diagnostics = { workspace = true }
+juxc-ast         = { workspace = true }
+juxc-tycheck     = { workspace = true }
+
+[dev-dependencies]
+juxc-lex   = { workspace = true }
+juxc-parse = { workspace = true }

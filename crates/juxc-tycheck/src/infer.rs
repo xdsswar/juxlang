@@ -1,0 +1,1009 @@
+//! Phase C of the type checker — **expression inference**.
+//!
+//! [`infer_expr`] walks one [`Expr`] bottom-up and returns its inferred
+//! [`Ty`]. [`infer_block`] walks a [`Block`] for its **side effects on
+//! the env** — declaring locals as it descends through statements so
+//! that subsequent expressions inside the block can be inferred against
+//! the correct local-binding types.
+//!
+//! ## Silent failure
+//!
+//! Phase C is the inference phase, not the diagnostic phase. **No
+//! diagnostics are emitted from this module.** When inference can't
+//! determine a type — unknown name, unsupported expression shape,
+//! field lookup on a non-class receiver — we return [`Ty::Unknown`]
+//! and let Phase D produce the user-facing error at the point where
+//! the type is actually needed.
+//!
+//! ## What the walker doesn't cover (yet)
+//!
+//! - **Arithmetic coercion** between operands of different numeric
+//!   widths. We currently return the left operand's type for any
+//!   arithmetic op; Phase D will introduce a real common-type rule.
+//! - **Multi-segment paths**. `foo.bar.baz` as an expression returns
+//!   `Unknown`. Once imports/qualified-name resolution lands this can
+//!   resolve module-level constants or static members.
+//! - **`Range` and `null` literals** — neither has a first-class type
+//!   in the v1 spec; they stay `Unknown`.
+//! - **Cross-extends generic substitution**. When `Dog extends
+//!   Animal<int>` and `Animal<T>` exposes `get() -> T`, calling
+//!   `d.get()` on a `Dog` still returns `Ty::Param("T")` rather than
+//!   `int`. Substitution only fires when the member is declared on the
+//!   receiver's own class — threading the extends-clause args needs a
+//!   distinct pass that builds the full inheritance substitution chain.
+
+use juxc_ast::{
+    BinaryExpr, BinaryOp, Block, CallExpr, CastExpr, ElseBranch, Expr, FieldExpr,
+    FloatKind, FloatLit, IndexExpr, IntKind, IntLit, Literal, NewArrayExpr, NewArrayLitExpr,
+    NewObjectExpr, ReturnType, Stmt, SwitchBody, UnaryExpr, UnaryOp,
+};
+
+use crate::env::TypeEnv;
+use crate::symbol_table::SymbolTable;
+use crate::ty::{lower_member_type, substitute, ty_from_ref, ArrayKind, Primitive, Ty};
+
+// ============================================================================
+// Expression inference
+// ============================================================================
+
+/// Infer the type of `expr` against `env` and `symbols`.
+///
+/// Returns [`Ty::Unknown`] for any expression the walker can't yet
+/// figure out — never panics, never emits diagnostics. See the module
+/// doc for the full coverage table.
+pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    match expr {
+        Expr::Literal(lit) => infer_literal(lit),
+        Expr::Path(qn) => {
+            // Single-segment path → look up as a local. Multi-segment
+            // paths could resolve to enum-variants or imported names,
+            // but neither is wired up yet — both yield Unknown.
+            if qn.segments.len() == 1 {
+                let name = &qn.segments[0].text;
+                if let Some(ty) = env.lookup(name) {
+                    return ty.clone();
+                }
+            }
+            Ty::Unknown
+        }
+        Expr::This(_) => infer_this(env),
+        Expr::Field(f) => infer_field(f, env, symbols),
+        Expr::Index(i) => infer_index(i, env, symbols),
+        Expr::Call(c) => infer_call(c, env, symbols),
+        Expr::NewObject(n) => infer_new_object(n, env, symbols),
+        Expr::NewArray(n) => infer_new_array(n, env, symbols),
+        Expr::NewArrayLit(n) => infer_new_array_lit(n, env, symbols),
+        Expr::Cast(c) => infer_cast(c, env, symbols),
+        Expr::Range(_) => Ty::Unknown,
+        Expr::Unary(u) => infer_unary(u, env, symbols),
+        Expr::Binary(b) => infer_binary(b, env, symbols),
+        Expr::SizeOf(_) => Ty::Primitive(Primitive::Int),
+        Expr::InterpString(_) => Ty::String,
+        Expr::Switch(s) => {
+            // The arm-unification work is Phase D's job. For now we
+            // pick the first arm's body type as a representative —
+            // good enough for downstream code that just wants *some*
+            // type to forward.
+            if let Some(first) = s.arms.first() {
+                match &first.body {
+                    SwitchBody::Expr(e) => infer_expr(e, env, symbols),
+                    SwitchBody::Block(_) => Ty::Void,
+                }
+            } else {
+                Ty::Unknown
+            }
+        }
+    }
+}
+
+/// Map a literal onto its Ty.
+///
+/// - **Int**: the suffix decides — `42L` → `long`, `42u` → `uint`, etc.
+///   Unsuffixed → `int`.
+/// - **Float**: `1.5f` → `float`, otherwise `double`.
+/// - **String**: always `Ty::String`.
+/// - **Bool**: `Ty::Primitive(Bool)`.
+/// - **Null**: `Unknown` — Jux doesn't have a first-class null type.
+fn infer_literal(lit: &Literal) -> Ty {
+    match lit {
+        Literal::Int(IntLit { kind, .. }) => Ty::Primitive(primitive_from_int_kind(*kind)),
+        Literal::Float(FloatLit { kind, .. }) => Ty::Primitive(primitive_from_float_kind(*kind)),
+        Literal::String(_) => Ty::String,
+        Literal::Bool(_) => Ty::Primitive(Primitive::Bool),
+        Literal::Null => Ty::Unknown,
+    }
+}
+
+/// Translate the lexer-supplied int-suffix into a [`Primitive`]. Used
+/// only by [`infer_literal`].
+fn primitive_from_int_kind(kind: Option<IntKind>) -> Primitive {
+    match kind {
+        None => Primitive::Int,
+        Some(IntKind::Byte) => Primitive::Byte,
+        Some(IntKind::UByte) => Primitive::Ubyte,
+        Some(IntKind::Short) => Primitive::Short,
+        Some(IntKind::UShort) => Primitive::Ushort,
+        Some(IntKind::UInt) => Primitive::Uint,
+        Some(IntKind::Long) => Primitive::Long,
+        Some(IntKind::ULong) => Primitive::Ulong,
+    }
+}
+
+/// Translate the lexer-supplied float-suffix into a [`Primitive`].
+fn primitive_from_float_kind(kind: Option<FloatKind>) -> Primitive {
+    match kind {
+        None => Primitive::Double,
+        Some(FloatKind::Float) => Primitive::Float,
+    }
+}
+
+/// `this` inside a class context lowers to `Ty::User { name: <class>, … }`
+/// with each in-scope generic parameter materialized as a
+/// [`Ty::Param`]. Outside a class context we return `Unknown` —
+/// the parser already rejects `this` outside a class, but we stay
+/// silent here per Phase C's no-diagnostics rule.
+///
+/// Generic-arg ordering note: the env stores generic params in a
+/// `HashSet`, which has no defined iteration order, so the args list
+/// we produce here is **unordered**. That's acceptable for Phase C —
+/// downstream code that cares about ordering (e.g. Phase D's
+/// signature unification) will need to read the params off the
+/// symbol table directly.
+fn infer_this(env: &TypeEnv) -> Ty {
+    match &env.current_class {
+        Some(name) => {
+            let generic_args = env
+                .generic_params
+                .iter()
+                .map(|p| Ty::Param(p.clone()))
+                .collect();
+            Ty::User {
+                name: name.clone(),
+                generic_args,
+            }
+        }
+        None => Ty::Unknown,
+    }
+}
+
+/// `object.field`. Three shapes are recognized:
+///
+/// 1. **`.length` on an array** — every array carries a `length` of
+///    type `int`. Special-cased before consulting the symbol table.
+/// 2. **Field on a user class** — walks the `extends` chain
+///    ([`SymbolTable::lookup_field`]) so a `Dog extends Animal` can read
+///    Animal's fields. When the field is declared on the receiver's own
+///    class AND the receiver carries concrete generic arguments, the
+///    field's type is **substituted** through the receiver's generic
+///    args before being returned: a `Box<int>` with `T value` reads as
+///    `int`, not `Ty::Param("T")`.
+/// 3. **Component on a record** — same idea, but records have no
+///    inheritance, so no chain walk. Substitution still applies when
+///    the record is generic and the receiver carries arguments.
+///
+/// Everything else (field on a primitive, field on an enum, etc.)
+/// returns `Unknown`.
+fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    let object_ty = infer_expr(&f.object, env, symbols);
+    let field_name = f.field.text.as_str();
+
+    // `.length` on any array → int.
+    if let Ty::Array { .. } = &object_ty {
+        if field_name == "length" {
+            return Ty::Primitive(Primitive::Int);
+        }
+    }
+
+    // Field on a user type.
+    if let Ty::User { name, generic_args } = &object_ty {
+        if let Some((field, declaring_class)) = symbols.lookup_field(name, field_name) {
+            // Lower in the declaring class's generic-param scope so a
+            // `T value;` field reads as `Ty::Param("T")` rather than
+            // `Unknown` when we're outside Box's body.
+            let raw = lower_member_type(&field.ty, declaring_class, symbols);
+            // Only substitute when the field is declared on the receiver's
+            // own class — substituting across an `extends` boundary would
+            // require threading the ancestor's `extends` generic args,
+            // which Phase E intentionally defers.
+            if declaring_class == name {
+                if let Some(class) = symbols.classes.get(name) {
+                    return substitute(&raw, &class.generic_params, generic_args);
+                }
+            }
+            return raw;
+        }
+        if let Some(record) = symbols.records.get(name) {
+            if let Some(component) = record.components.iter().find(|c| c.name == field_name) {
+                let raw = lower_member_type(&component.ty, name, symbols);
+                return substitute(&raw, &record.generic_params, generic_args);
+            }
+        }
+    }
+
+    Ty::Unknown
+}
+
+/// `array[index]` returns the array's element type, or Unknown when
+/// the LHS doesn't infer to an array.
+fn infer_index(i: &IndexExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    let array_ty = infer_expr(&i.array, env, symbols);
+    match array_ty {
+        Ty::Array { element, .. } => *element,
+        _ => Ty::Unknown,
+    }
+}
+
+/// `callee(args…)`. Two callee shapes are handled:
+///
+/// 1. **Bare single-segment path** — looks up a top-level function in
+///    `symbols.functions` and returns its declared return type.
+/// 2. **Field-on-receiver** — looks up a method via the
+///    [`SymbolTable::lookup_method`] inheritance walk (for classes) or
+///    by direct name (for interfaces). When the method is found on the
+///    receiver's own class and the receiver carries concrete generic
+///    arguments, the return type is substituted through them — a
+///    `Box<int>::get()` reads as `int` rather than `Ty::Param("T")`.
+///
+/// Anything else (call on a `Call` result, call on an `Index`, etc.)
+/// returns `Unknown`. Overload resolution (multiple methods sharing a
+/// name) lands in a later phase — the symbol-table builder still
+/// rejects duplicates with `E0402`, so today there's at most one
+/// candidate per name.
+fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    match c.callee.as_ref() {
+        // Top-level function — `helper(x)`.
+        Expr::Path(qn) if qn.segments.len() == 1 => {
+            let name = &qn.segments[0].text;
+            if let Some(fn_sig) = symbols.functions.get(name) {
+                return return_type_to_ty(&fn_sig.return_type, env, symbols);
+            }
+            Ty::Unknown
+        }
+        // Method call — `obj.method(args)`.
+        Expr::Field(field) => {
+            let receiver_ty = infer_expr(&field.object, env, symbols);
+            let method_name = field.field.text.as_str();
+            if let Ty::User { name, generic_args } = &receiver_ty {
+                // Walk the class extends-chain first.
+                if let Some((method, declaring_class)) =
+                    symbols.lookup_method(name, method_name)
+                {
+                    // Lower in the declaring class's generic scope so
+                    // `T get()` reads as `Param("T")`, not `Unknown`.
+                    let raw = return_type_in_class(
+                        &method.return_type,
+                        declaring_class,
+                        symbols,
+                    );
+                    // Only substitute when the method comes from the
+                    // receiver's own class — see `infer_field` for why
+                    // cross-extends substitution is deferred.
+                    if declaring_class == name {
+                        if let Some(class) = symbols.classes.get(name) {
+                            return substitute(&raw, &class.generic_params, generic_args);
+                        }
+                    }
+                    return raw;
+                }
+                // Interface methods. No chain (interfaces don't extend
+                // classes), but substitution still applies for the
+                // interface's own generic params.
+                if let Some(iface) = symbols.interfaces.get(name) {
+                    if let Some(method) = iface.methods.get(method_name) {
+                        let raw = return_type_in_class(
+                            &method.return_type,
+                            name,
+                            symbols,
+                        );
+                        return substitute(&raw, &iface.generic_params, generic_args);
+                    }
+                }
+            }
+            Ty::Unknown
+        }
+        _ => Ty::Unknown,
+    }
+}
+
+/// Lower a [`ReturnType`] into a [`Ty`]. `void` → [`Ty::Void`]; the
+/// `async T` form unwraps to `T` for now (we don't have a `Future<T>`
+/// wrapper type yet).
+fn return_type_to_ty(rt: &ReturnType, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    match rt {
+        ReturnType::Void => Ty::Void,
+        ReturnType::Type(t) | ReturnType::AsyncType(t) => ty_from_ref(t, env, symbols),
+    }
+}
+
+/// Same as [`return_type_to_ty`] but lowers in the **declaring** type's
+/// generic-param scope, via [`lower_member_type`]. Used when the
+/// caller's `env` doesn't carry the declaring class's params — e.g.
+/// when inferring `box.get()` from outside Box's body.
+fn return_type_in_class(rt: &ReturnType, declaring_class: &str, symbols: &SymbolTable) -> Ty {
+    match rt {
+        ReturnType::Void => Ty::Void,
+        ReturnType::Type(t) | ReturnType::AsyncType(t) => {
+            lower_member_type(t, declaring_class, symbols)
+        }
+    }
+}
+
+/// `new Foo(args)` / `new Box<int>(arg)` → [`Ty::User`] with the
+/// class's name and each explicit generic arg resolved via
+/// [`ty_from_ref`]. We don't infer generic args from the call's
+/// argument list yet — `new Box(42)` produces `Box<>` (empty args
+/// list) and Phase D / Rust will pick that up.
+fn infer_new_object(n: &NewObjectExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    // class_name is a QualifiedName — take the last segment as the
+    // bare class name. Multi-segment-import resolution lands later.
+    let name = n
+        .class_name
+        .segments
+        .last()
+        .map(|s| s.text.clone())
+        .unwrap_or_default();
+    let generic_args = n
+        .generic_args
+        .iter()
+        .map(|g| ty_from_ref(g, env, symbols))
+        .collect();
+    Ty::User { name, generic_args }
+}
+
+/// `new T[size]` → fixed-size array of `T`.
+fn infer_new_array(n: &NewArrayExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    Ty::Array {
+        element: Box::new(ty_from_ref(&n.element_type, env, symbols)),
+        kind: ArrayKind::Fixed,
+    }
+}
+
+/// `new T[]{…}` or `T[]{…}`. Picks Fixed vs Dynamic per the AST node's
+/// `fixed` flag — the parser stamps that based on the LHS context.
+fn infer_new_array_lit(n: &NewArrayLitExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    let kind = if n.fixed {
+        ArrayKind::Fixed
+    } else {
+        ArrayKind::Dynamic
+    };
+    Ty::Array {
+        element: Box::new(ty_from_ref(&n.element_type, env, symbols)),
+        kind,
+    }
+}
+
+/// `value as T` always evaluates to `T` regardless of `value`'s type
+/// — cast-validity is Phase D's job.
+fn infer_cast(c: &CastExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    ty_from_ref(&c.ty, env, symbols)
+}
+
+/// Unary operators:
+/// - `!x` → bool (Jux's `!` is logical-NOT only on booleans).
+/// - `-x`, `~x` → same type as operand.
+fn infer_unary(u: &UnaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    match u.op {
+        UnaryOp::Not => Ty::Primitive(Primitive::Bool),
+        UnaryOp::Neg | UnaryOp::BitNot => infer_expr(&u.operand, env, symbols),
+    }
+}
+
+/// Binary operators bucket into three result-type groups:
+/// - Comparison (`<`, `<=`, `>`, `>=`, `==`, `!=`) → `bool`.
+/// - Logical (`&&`, `||`) → `bool`.
+/// - Arithmetic / bitwise / shift → the **left** operand's type.
+///
+/// The arithmetic rule is intentionally simple; a proper common-type
+/// rule (promoting `int + long` to `long`, etc.) lands in Phase D.
+fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    match b.op {
+        BinaryOp::Eq
+        | BinaryOp::NotEq
+        | BinaryOp::Lt
+        | BinaryOp::Le
+        | BinaryOp::Gt
+        | BinaryOp::Ge
+        | BinaryOp::And
+        | BinaryOp::Or => Ty::Primitive(Primitive::Bool),
+        // Arithmetic, bitwise, shift — take the left operand's type.
+        // Phase D will promote when operands differ in width.
+        BinaryOp::Add
+        | BinaryOp::Sub
+        | BinaryOp::Mul
+        | BinaryOp::Div
+        | BinaryOp::Rem
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor
+        | BinaryOp::BitAnd
+        | BinaryOp::Shl
+        | BinaryOp::Shr => infer_expr(&b.left, env, symbols),
+    }
+}
+
+// ============================================================================
+// Block / statement walker
+// ============================================================================
+
+/// Walk `block`'s statements and **declare any locals they introduce
+/// into `env`**.
+///
+/// This is the side-effecting pass that lets Phase C infer expressions
+/// containing variable references — without it, every name lookup
+/// would miss.
+///
+/// The walker doesn't return a type. It calls [`infer_expr`] on
+/// embedded expressions purely for the **walk** (so future side-
+/// effecting variants of inference can hook in here without changing
+/// the public API). The returned `Ty` is discarded.
+pub fn infer_block(block: &Block, env: &mut TypeEnv, symbols: &SymbolTable) {
+    for stmt in &block.statements {
+        infer_stmt(stmt, env, symbols);
+    }
+}
+
+/// Per-statement walker. Pushes/pops scopes around nested blocks so
+/// loop-vars and pattern-bindings don't leak.
+fn infer_stmt(stmt: &Stmt, env: &mut TypeEnv, symbols: &SymbolTable) {
+    match stmt {
+        Stmt::VarDecl(v) => {
+            // Prefer the declared type when present; otherwise infer
+            // from the initializer.
+            let ty = if let Some(declared) = &v.ty {
+                ty_from_ref(declared, env, symbols)
+            } else if let Some(init) = &v.init {
+                infer_expr(init, env, symbols)
+            } else {
+                Ty::Unknown
+            };
+            env.declare(&v.name.text, ty);
+        }
+        Stmt::ForEach(f) => {
+            // The loop variable's type comes from the explicit
+            // annotation if present, else from the iter's element
+            // type. Then push a new scope (so the binding is
+            // loop-local) and walk the body.
+            let iter_ty = infer_expr(&f.iter, env, symbols);
+            let var_ty = if let Some(declared) = &f.var_type {
+                ty_from_ref(declared, env, symbols)
+            } else {
+                match iter_ty {
+                    Ty::Array { element, .. } => *element,
+                    // Range / non-array iter: stay Unknown until we
+                    // have a real iterator protocol.
+                    _ => Ty::Unknown,
+                }
+            };
+            env.push_scope();
+            env.declare(&f.var_name.text, var_ty);
+            infer_block(&f.body, env, symbols);
+            env.pop_scope();
+        }
+        Stmt::If(if_stmt) => {
+            // Evaluate the condition for its side effects (declares
+            // nothing today, but keeps the walker total).
+            let _ = infer_expr(&if_stmt.condition, env, symbols);
+            env.push_scope();
+            infer_block(&if_stmt.then_block, env, symbols);
+            env.pop_scope();
+            if let Some(else_branch) = &if_stmt.else_branch {
+                infer_else_branch(else_branch, env, symbols);
+            }
+        }
+        Stmt::While(w) => {
+            let _ = infer_expr(&w.condition, env, symbols);
+            env.push_scope();
+            infer_block(&w.body, env, symbols);
+            env.pop_scope();
+        }
+        Stmt::Expr(e) => {
+            let _ = infer_expr(e, env, symbols);
+        }
+        Stmt::Assign(a) => {
+            let _ = infer_expr(&a.target, env, symbols);
+            let _ = infer_expr(&a.value, env, symbols);
+        }
+        Stmt::Return(opt) => {
+            if let Some(e) = opt {
+                let _ = infer_expr(e, env, symbols);
+            }
+        }
+        Stmt::SuperCall(args, _) => {
+            for arg in args {
+                let _ = infer_expr(arg, env, symbols);
+            }
+        }
+        Stmt::Break(_) | Stmt::Continue(_) => {}
+    }
+}
+
+/// Recursive helper for `else if` chains. The terminal `else { … }`
+/// pushes its own scope; an `else if` recurses through [`infer_stmt`]
+/// machinery by handling the inline `IfStmt` directly.
+fn infer_else_branch(branch: &ElseBranch, env: &mut TypeEnv, symbols: &SymbolTable) {
+    match branch {
+        ElseBranch::If(if_stmt) => {
+            let _ = infer_expr(&if_stmt.condition, env, symbols);
+            env.push_scope();
+            infer_block(&if_stmt.then_block, env, symbols);
+            env.pop_scope();
+            if let Some(nested) = &if_stmt.else_branch {
+                infer_else_branch(nested, env, symbols);
+            }
+        }
+        ElseBranch::Block(block) => {
+            env.push_scope();
+            infer_block(block, env, symbols);
+            env.pop_scope();
+        }
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::symbol_table::build;
+    use juxc_ast::{CompilationUnit, FnDecl, TopLevelDecl};
+    use juxc_lex::lex;
+    use juxc_parse::parse;
+    use juxc_source::SourceFile;
+
+    /// Drive lex → parse → symbol-table build for the given source.
+    /// Returns the symbol table plus the parsed unit so tests can
+    /// reach into the AST for expressions.
+    fn build_table(src: &str) -> (SymbolTable, CompilationUnit) {
+        let sf = SourceFile::new("test.jux", src);
+        let lex_result = lex(&sf);
+        assert!(lex_result.diagnostics.is_empty(), "lex: {:?}", lex_result.diagnostics);
+        let parse_result = parse(&lex_result.tokens);
+        assert!(
+            parse_result.diagnostics.is_empty(),
+            "parse: {:?}",
+            parse_result.diagnostics,
+        );
+        let mut diags = Vec::new();
+        let table = build(&parse_result.ast, &mut diags);
+        assert!(diags.is_empty(), "symtab: {:?}", diags);
+        (table, parse_result.ast)
+    }
+
+    /// Helper: pull the first top-level function's body out of a unit.
+    fn first_fn_body(unit: &CompilationUnit) -> &Block {
+        for item in &unit.items {
+            if let TopLevelDecl::Function(FnDecl { body: Some(b), .. }) = item {
+                return b;
+            }
+        }
+        panic!("no top-level function with body");
+    }
+
+    /// Helper: pull a named top-level function's body out of a unit.
+    fn fn_body_by_name<'a>(unit: &'a CompilationUnit, name: &str) -> &'a Block {
+        for item in &unit.items {
+            if let TopLevelDecl::Function(fn_decl) = item {
+                if fn_decl.name.text == name {
+                    return fn_decl.body.as_ref().expect("fn has body");
+                }
+            }
+        }
+        panic!("no top-level function named `{name}`");
+    }
+
+    /// Helper: return the initializer expression of the first VarDecl
+    /// found in `block`.
+    fn first_var_init<'a>(block: &'a Block) -> &'a Expr {
+        for stmt in &block.statements {
+            if let Stmt::VarDecl(v) = stmt {
+                if let Some(init) = &v.init {
+                    return init;
+                }
+            }
+        }
+        panic!("no var-decl with initializer in block");
+    }
+
+    /// `42` → `Primitive::Int`.
+    #[test]
+    fn int_literal_is_int() {
+        let (table, unit) = build_table("public void main() { var x = 42; }");
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        assert_eq!(infer_expr(init, &env, &table), Ty::Primitive(Primitive::Int));
+    }
+
+    /// `1.5` → `Primitive::Double`.
+    #[test]
+    fn float_literal_is_double() {
+        let (table, unit) = build_table("public void main() { var x = 1.5; }");
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        assert_eq!(
+            infer_expr(init, &env, &table),
+            Ty::Primitive(Primitive::Double),
+        );
+    }
+
+    /// `"hi"` → `Ty::String`.
+    #[test]
+    fn string_literal_is_string() {
+        let (table, unit) = build_table(r#"public void main() { var x = "hi"; }"#);
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        assert_eq!(infer_expr(init, &env, &table), Ty::String);
+    }
+
+    /// `true` → `Primitive::Bool`.
+    #[test]
+    fn bool_literal_is_bool() {
+        let (table, unit) = build_table("public void main() { var x = true; }");
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        assert_eq!(
+            infer_expr(init, &env, &table),
+            Ty::Primitive(Primitive::Bool),
+        );
+    }
+
+    /// A var declared via the walker is resolvable by name.
+    #[test]
+    fn var_lookup_after_declaration() {
+        let (table, unit) = build_table(
+            r#"
+            public void main() {
+                var x = 42;
+                var y = x;
+            }
+            "#,
+        );
+        let block = first_fn_body(&unit);
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("x"), Some(&Ty::Primitive(Primitive::Int)));
+        assert_eq!(env.lookup("y"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// A name that was never declared → Unknown.
+    #[test]
+    fn unknown_var_is_unknown() {
+        use juxc_ast::QualifiedName;
+        let table = SymbolTable::default();
+        let env = TypeEnv::new();
+        // Build a synthetic Path expression by hand.
+        let qn = QualifiedName {
+            segments: vec![juxc_ast::Ident {
+                text: "nope".to_string(),
+                span: juxc_source::Span::DUMMY,
+            }],
+            span: juxc_source::Span::DUMMY,
+        };
+        assert!(infer_expr(&Expr::Path(qn), &env, &table).is_unknown());
+    }
+
+    /// `new MyClass()` → `Ty::User { name: "MyClass" }`.
+    #[test]
+    fn new_object_is_user_type() {
+        let (table, unit) = build_table(
+            r#"
+            public class MyClass {}
+            public void main() {
+                var x = new MyClass();
+            }
+            "#,
+        );
+        let block = first_fn_body(&unit);
+        let init = first_var_init(block);
+        let env = TypeEnv::new();
+        let ty = infer_expr(init, &env, &table);
+        match ty {
+            Ty::User { name, generic_args } => {
+                assert_eq!(name, "MyClass");
+                assert!(generic_args.is_empty());
+            }
+            other => panic!("expected User type, got {other:?}"),
+        }
+    }
+
+    /// `obj.x` where `x` is an `int` field → `Primitive::Int`.
+    #[test]
+    fn field_access_returns_field_type() {
+        let (table, unit) = build_table(
+            r#"
+            public class Point {
+                public int x;
+                public int y;
+            }
+            public void main() {
+                var p = new Point();
+                var v = p.x;
+            }
+            "#,
+        );
+        let block = first_fn_body(&unit);
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("v"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// `new int[]{1, 2, 3}` → `Array { element: Int, kind: Dynamic }`.
+    #[test]
+    fn array_literal_is_dynamic_array() {
+        let (table, unit) = build_table(
+            r#"
+            public void main() {
+                var xs = new int[]{1, 2, 3};
+            }
+            "#,
+        );
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        match infer_expr(init, &env, &table) {
+            Ty::Array { element, kind } => {
+                assert_eq!(*element, Ty::Primitive(Primitive::Int));
+                assert_eq!(kind, ArrayKind::Dynamic);
+            }
+            other => panic!("expected Array, got {other:?}"),
+        }
+    }
+
+    /// `arr[0]` → element type.
+    #[test]
+    fn index_into_array_returns_element() {
+        let (table, unit) = build_table(
+            r#"
+            public void main() {
+                var xs = new int[]{1, 2, 3};
+                var e = xs[0];
+            }
+            "#,
+        );
+        let block = first_fn_body(&unit);
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("e"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// `sizeof(int)` → `Primitive::Int`.
+    #[test]
+    fn sizeof_is_int() {
+        let (table, unit) = build_table(
+            r#"
+            public void main() {
+                var s = sizeof(int);
+            }
+            "#,
+        );
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        assert_eq!(infer_expr(init, &env, &table), Ty::Primitive(Primitive::Int));
+    }
+
+    /// `$"hi"` → `Ty::String`.
+    #[test]
+    fn interp_string_is_string() {
+        let (table, unit) = build_table(
+            r#"
+            public void main() {
+                var s = $"hi";
+            }
+            "#,
+        );
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        assert_eq!(infer_expr(init, &env, &table), Ty::String);
+    }
+
+    /// `this` inside a class context → `Ty::User { name: "Foo" }`.
+    #[test]
+    fn this_in_class_context() {
+        let table = SymbolTable::default();
+        let mut env = TypeEnv::new();
+        env.set_class("Foo");
+        let ty = infer_expr(&Expr::This(juxc_source::Span::DUMMY), &env, &table);
+        match ty {
+            Ty::User { name, .. } => assert_eq!(name, "Foo"),
+            other => panic!("expected User, got {other:?}"),
+        }
+    }
+
+    /// `1 < 2` → `Primitive::Bool`.
+    #[test]
+    fn binary_lt_is_bool() {
+        let (table, unit) = build_table(
+            r#"
+            public void main() {
+                var b = 1 < 2;
+            }
+            "#,
+        );
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        assert_eq!(
+            infer_expr(init, &env, &table),
+            Ty::Primitive(Primitive::Bool),
+        );
+    }
+
+    /// `1 + 2` → `Primitive::Int` (left's type).
+    #[test]
+    fn binary_add_returns_left_type() {
+        let (table, unit) = build_table(
+            r#"
+            public void main() {
+                var n = 1 + 2;
+            }
+            "#,
+        );
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        assert_eq!(
+            infer_expr(init, &env, &table),
+            Ty::Primitive(Primitive::Int),
+        );
+    }
+
+    /// `!true` → `Primitive::Bool`.
+    #[test]
+    fn unary_not_is_bool() {
+        let (table, unit) = build_table(
+            r#"
+            public void main() {
+                var b = !true;
+            }
+            "#,
+        );
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        assert_eq!(
+            infer_expr(init, &env, &table),
+            Ty::Primitive(Primitive::Bool),
+        );
+    }
+
+    /// A top-level function call returns the declared return type.
+    #[test]
+    fn call_returns_function_return_type() {
+        let (table, unit) = build_table(
+            r#"
+            public int helper() { return 1; }
+            public void main() {
+                var x = helper();
+            }
+            "#,
+        );
+        // Two top-level fns: pick `main`'s body directly so the var
+        // we want to test lives inside it.
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("x"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// Cast `value as long` → `Primitive::Long`.
+    #[test]
+    fn cast_returns_target_type() {
+        let (table, unit) = build_table(
+            r#"
+            public void main() {
+                var n = 1 as long;
+            }
+            "#,
+        );
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        assert_eq!(
+            infer_expr(init, &env, &table),
+            Ty::Primitive(Primitive::Long),
+        );
+    }
+
+    /// Phase E.1 — a method declared on a superclass is reachable from
+    /// the child receiver. `(new Dog()).getAge()` returns Animal's
+    /// declared return type, not Unknown.
+    #[test]
+    fn inherited_method_resolves_in_infer() {
+        let (table, unit) = build_table(
+            r#"
+            public class Animal {
+                public int getAge() { return 0; }
+            }
+            public class Dog extends Animal {}
+            public void main() {
+                var d = new Dog();
+                var n = d.getAge();
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("n"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// Phase E.1 — a field declared on a superclass is reachable from
+    /// the child receiver.
+    #[test]
+    fn inherited_field_resolves_in_infer() {
+        let (table, unit) = build_table(
+            r#"
+            public class Animal { public int age; }
+            public class Dog extends Animal {}
+            public void main() {
+                var d = new Dog();
+                var n = d.age;
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("n"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// Phase E.2 — field access on an instantiated generic class
+    /// substitutes the type parameter for the receiver's argument.
+    #[test]
+    fn generic_field_substitutes_through_receiver() {
+        let (table, unit) = build_table(
+            r#"
+            public class Box<T> { public T value; }
+            public void main() {
+                var b = new Box<int>();
+                var v = b.value;
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("v"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// Phase E.2 — method-return substitution through the receiver's
+    /// generic args. `Box<int>::get() -> T` returns int.
+    #[test]
+    fn generic_method_return_substitutes_through_receiver() {
+        let (table, unit) = build_table(
+            r#"
+            public class Box<T> {
+                public T value;
+                public T get() { return this.value; }
+            }
+            public void main() {
+                var b = new Box<int>();
+                var v = b.get();
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("v"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// Phase E.2 — a raw-type receiver (`new Box(...)` with no
+    /// turbofish) leaves substitution off, so the field type stays as
+    /// `Ty::Param("T")`. The wildcard rule in `compatible` then keeps
+    /// downstream checks quiet.
+    #[test]
+    fn raw_generic_receiver_leaves_param_in_place() {
+        let (table, unit) = build_table(
+            r#"
+            public class Box<T> { public T value; }
+            public void main() {
+                var b = new Box();
+                var v = b.value;
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        match env.lookup("v") {
+            Some(Ty::Param(name)) => assert_eq!(name, "T"),
+            other => panic!("expected Ty::Param(\"T\"), got {other:?}"),
+        }
+    }
+}

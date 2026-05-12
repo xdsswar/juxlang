@@ -1,0 +1,37 @@
+// Record vehicle — Turn-1 records (no body, no with(), no compact ctor).
+//
+// Records carry the auto-derived shape Jux/Java/Kotlin users expect:
+//   - A canonical constructor synthesized from the header.
+//   - Public component access (`v.x`).
+//   - Value equality through derived PartialEq.
+//
+// Exercises:
+//   - record Vector3(double x, double y, double z) {} declaration.
+//   - new Vector3(...) — canonical constructor call.
+//   - v.x / v.y / v.z field access through the existing emit_field path.
+//   - == comparison between record instances.
+
+public record Vector3(double x, double y, double z) {}
+
+public record Greeting(String name, int age) {}
+
+public void main() {
+    var v = new Vector3(1.0, 2.0, 3.0);
+    print($"v = (${v.x}, ${v.y}, ${v.z})");
+
+    // Value-equality: two Vector3s with the same components compare equal.
+    var u = new Vector3(1.0, 2.0, 3.0);
+    var w = new Vector3(1.0, 2.0, 9.9);
+    if (v == u) {
+        print("v == u");
+    }
+    if (v == w) {
+        print("v == w");
+    } else {
+        print("v != w");
+    }
+
+    // String component — owned, cloned on read so interpolation works.
+    var g = new Greeting("Ada", 36);
+    print($"name=${g.name}, age=${g.age}");
+}

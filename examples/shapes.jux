@@ -1,0 +1,57 @@
+// Interface vehicle — Turn-1 interfaces.
+//
+// `interface Shape` declares the area() contract. Circle and Square
+// implement it; each provides its own area() body. The backend emits:
+//   - `trait Shape { fn area(&self) -> f64; }`
+//   - inherent `impl Circle { … area() body … }`
+//   - delegating `impl Shape for Circle { fn area(&self) -> f64 { self.area() } }`
+//
+// Same shape for Square. Direct calls (`c.area()`) go through the
+// inherent path. Trait-bound calls (later, once <T extends Shape> lands)
+// will go through the trait.
+
+public interface Shape {
+    double area();
+    String name();
+}
+
+public class Circle implements Shape {
+    private double radius;
+
+    public Circle(double radius) {
+        this.radius = radius;
+    }
+
+    public double area() {
+        return 3.14159 * this.radius * this.radius;
+    }
+
+    public String name() {
+        // `return "Circle";` would give `&str`; the surrounding
+        // method returns `String`. Use interpolation to coerce.
+        return $"Circle";
+    }
+}
+
+public class Square implements Shape {
+    private double side;
+
+    public Square(double side) {
+        this.side = side;
+    }
+
+    public double area() {
+        return this.side * this.side;
+    }
+
+    public String name() {
+        return $"Square";
+    }
+}
+
+public void main() {
+    var c = new Circle(2.0);
+    var s = new Square(3.0);
+    print($"${c.name()} area = ${c.area()}");
+    print($"${s.name()} area = ${s.area()}");
+}

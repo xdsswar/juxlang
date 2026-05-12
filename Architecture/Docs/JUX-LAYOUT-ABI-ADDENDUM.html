@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Layout / ABI / unsafe — Jux</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="sidebar-brand" href="index.html">
+    <span class="sidebar-brand-mark">J</span>
+    <span>Jux</span>
+  </a>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Start Here</div>
+    <a href="index.html">Overview</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Foundation</div>
+    <a href="JUX-LANG-V1.html">Language V1 — Architecture & Design</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Core Specifications</div>
+    <a href="JUX-GRAMMAR-ADDENDUM.html">Formal Grammar</a>
+    <a href="JUX-SEMANTICS-ADDENDUM.html">Execution Semantics</a>
+    <a href="JUX-OPERATORS-ADDENDUM.html">Operators (Final)</a>
+    <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
+    <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
+    <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+    <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
+    <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Compiler &amp; Tooling</div>
+    <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
+    <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+    <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
+    <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
+    <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
+    <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Earlier Addenda</div>
+    <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
+    <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
+    <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
+  </div>
+  <div class="sidebar-footer">
+    Generated from spec markdown.<br>
+    Self-contained, offline-ready.
+  </div>
+</aside>
+
+  <main class="main">
+    <div class="content">
+      <div class="breadcrumb"><a href="index.html">← Jux Specification</a></div>
+      <div id="rendered"></div>
+    </div>
+  </main>
+</div>
+
+<script id="md-content" type="text/markdown">
+# Jux Spec Addendum — Memory Layout, ABI, and `unsafe { }`
+
+**Status:** Proposed insertion. Replaces JUX-LANG-V1's implicit treatment of layout, vtables, and FFI safety. Specifies the `unsafe { }` block — Jux's only sanctioned escape hatch into C/C++-style pointer manipulation.
+
+**Insertion points:**
+- New §L.1 ("Memory Layout")
+- New §L.2 ("Object and Vtable Structure")
+- New §L.3 ("Symbol Mangling and Linkage")
+- New §L.4 ("Calling Conventions and ABI")
+- New §L.5 ("The `unsafe { }` Block")
+- New §L.6 ("Raw Pointers")
+- New §L.7 ("FFI Through `unsafe`")
+- Edits to JUX-LANG-V1 §3.2 (add `unsafe`, `volatile` keywords), §5.5 (raw pointers require unsafe), §8 (FFI requires unsafe at the call site)
+
+The text below is written to drop directly into the dossier as a new chapter §L between §10 and §11.
+
+---
+
+## Design Philosophy (Non-Normative)
+
+The user-facing contract that makes Jux worth using:
+
+> **Outside `unsafe { }`, your program has no use-after-free, no double-free, no data races, no buffer overflows, no null-pointer crashes (without explicit `T?`), and no UB.**
+>
+> **Inside `unsafe { }`, you have C-grade pointers and FFI access. The compiler trusts you. You are responsible for not breaking the outside-`unsafe` promise.**
+
+This is exactly Rust's bargain. Jux follows it because it is the only proven design that lets a systems language be both safe by default and maximally fast where it matters.
+
+The two design choices in this addendum that make it feasible:
+
+1. **Layout is unspecified by default, and FFI types are explicitly marked `@layout(c)`.** This frees the compiler to optimize struct layout, pack enum tags into spare bits, and otherwise pull C++-grade tricks — except where the user has committed to a specific layout.
+
+2. **Raw pointers exist as a real type (`T*`), and they are useless outside `unsafe`.** Pointer arithmetic, dereferencing, and casts to/from integers are all `unsafe`. This makes the danger surface tiny and auditable — every memory-corruption bug in a Jux codebase has to live inside an `unsafe` block, by construction.
+
+---
+
+## §L.1 — Memory Layout
+
+### L.1.1. Default Layout for `struct`, `record`, `class`
+
+The default layout for any aggregate type is **unspecified**: the compiler may reorder fields, insert padding, choose alignment, and pack subobjects however it sees fit. The only guarantees are:
+
+- Field access (`s.field`) returns the correct value.
+- The size and alignment of any concrete monomorphization are stable for a given compiler version and target.
+- `sizeof(T)` and `alignof(T)` (when introduced — see §L.1.5) report the actual values.
+
+In practice, the Phase 1 backend (lowering to Rust) inherits Rust's `repr(Rust)` rules: fields may be reordered for size, padding is inserted to satisfy alignment, and the size is the smallest multiple of the alignment that fits the largest field offset. Phase 2/3 backends are free to choose differently.
+
+This default is the same as Rust's. It is *not* the same as Java (where `class` has identity but no exposed layout) and not the same as C (where struct field order is meaningful). It is the right default for code that does not cross the FFI boundary, because layout freedom enables real optimizations.
+
+### L.1.2. C-Compatible Layout: `@layout(c)`
+
+A type can opt into C-compatible layout by annotation:
+
+```jux
+@layout(c)
+public struct Point {
+    double x;
+    double y;
+}
+```
+
+Effects of `@layout(c)`:
+
+- Fields appear in declaration order.
+- Field offsets follow C rules: each field at the smallest offset that is a multiple of its alignment, with trailing padding to satisfy the struct's alignment.
+- Struct alignment is the maximum field alignment.
+- No reordering, no field-merging, no compiler-chosen tag placement.
+
+Permitted on `struct` and `record`. Not permitted on `class` (classes have a vtable and refcount header — see §L.2 — that defeats simple C interop) or `enum` (sum types are not directly representable in C; use `@layout(c) struct` with an explicit tag instead).
+
+A type marked `@layout(c)` may be passed across the FFI boundary by value or by pointer.
+
+### L.1.3. C-Compatible Enum: `@layout(c, repr = "i32")`
+
+For C enums (which are integer constants under the hood), use a regular Jux enum with no payloads and the `@layout(c, repr = "...")` annotation:
+
+```jux
+@layout(c, repr = "i32")
+public enum HttpStatus {
+    Ok = 200,
+    NotFound = 404,
+    ServerError = 500
+}
+```
+
+This produces a value that is bit-identical to a C `int` enum. The discriminator type is the named integer type. Without explicit values, the compiler assigns 0, 1, 2, ... in declaration order.
+
+Sum-type enums (with payloads) cannot use `@layout(c)`: there is no portable C representation of a tagged union. Cross the boundary via two `@layout(c)` types (a tag struct and a union) marshalled by hand.
+
+### L.1.4. Alignment Control: `@align(N)`
+
+The existing `@align(N)` annotation (per JUX-LANG-V1 §3.6) forces a type or field to be aligned to at least `N` bytes. `N` must be a power of two.
+
+```jux
+@align(64)
+public struct CacheLine {
+    long counter;
+    long _padding;
+}
+```
+
+`@align(N)` is permitted on a type declaration (forces every instance to that alignment) or on a field (forces that field's offset within its enclosing aggregate to that alignment). Aligning *up* — `@align(N)` where `N` exceeds the natural alignment — is permitted; aligning down is rejected (`E0710`).
+
+### L.1.5. Size and Alignment Introspection
+
+Inside `unsafe { }`, the compiler-built-in functions `sizeof<T>()` and `alignof<T>()` return the size and alignment of `T` for the current target, in bytes:
+
+```jux
+unsafe {
+    var n = sizeof<Point>();        // 16 on a typical 64-bit target
+    var a = alignof<long>();        // 8
+}
+```
+
+Outside `unsafe`, these are not available. The reasoning: a program that wants `sizeof` is almost certainly doing pointer arithmetic and should be in `unsafe` anyway.
+
+Generic instantiations have stable sizes — `sizeof<List<int>>()` produces a value, not an error. The borrow checker and type system do not depend on size queries.
+
+### L.1.6. Niche Optimization
+
+The compiler is permitted to **niche-optimize** types: if a type has unused bit patterns (e.g., a `class` reference cannot be 0; a `bool` can only be 0 or 1), the compiler may use those bit patterns to encode other information. This is how `T?` for a class type costs zero extra bytes — null is encoded as the all-zeros pointer.
+
+Niche optimization is unobservable to safe code (the `T?` pattern just works) but matters at the FFI boundary: a `T?` for a class is compatible with a C `T*` pointer where null is the C sentinel. For `T?` where `T` is a primitive, the layout is **two words** (a presence flag plus the value); explicit FFI wrappers must marshal accordingly.
+
+---
+
+## §L.2 — Object and Vtable Structure
+
+This section specifies what a `class` instance looks like in memory in Phase 1+. Programmers do not interact with this layout directly (it is reserved by the runtime); FFI users and debugger authors do.
+
+### L.2.1. Class Instance Layout
+
+A class instance in `jux-full` is laid out as:
+
+```
++---------------------------------------------------------------+
+| vtable pointer       (1 word)                                 |
++---------------------------------------------------------------+
+| strong refcount      (1 word, atomic in jux-full)             |
++---------------------------------------------------------------+
+| weak refcount        (1 word, atomic; absent if no weak refs) |
++---------------------------------------------------------------+
+| flags / niche bits   (1 word, may be merged with strong rc)   |
++---------------------------------------------------------------+
+| field 0                                                       |
+| field 1                                                       |
+| ...                                                           |
++---------------------------------------------------------------+
+```
+
+In `jux-embedded` and `jux-core` (refcounting off, per JUX-LANG-V1 §6.5), the refcount slots are absent. The header may collapse to just the vtable pointer.
+
+The compiler emits per-class metadata that documents the actual layout for each monomorphization. This metadata is the source of truth for the debugger. ABI stability is **not** promised across compiler versions — debugger and reflection consumers must read the metadata, not assume positions.
+
+### L.2.2. Vtable Structure
+
+A vtable is a per-class, statically-allocated structure containing:
+
+```
+struct Vtable {
+    drop_fn:       fn(this: *self) -> void;       // type-erased drop
+    type_id:       u64;                            // monomorphization-stable type ID
+    type_name:     *const u8;                      // for diagnostics; len-prefixed
+    superclass_vt: *const Vtable | null;           // chain for super calls and casts
+    interface_table: *const InterfaceTable;        // per-implemented-interface dispatch
+    method_0:      fn pointer;                     // virtual method slots in declaration order
+    method_1:      fn pointer;
+    ...
+}
+```
+
+Method slot order: the static type's methods first, in declaration order, followed by overridden methods from each superclass walked from the immediate parent up to the root. Overrides reuse the slot of the method they override.
+
+Sealed hierarchies (per JUX-LANG-V1 §7.5) can be optimized by the compiler into "switch on type-id" dispatch instead of indirect calls; this is a backend choice and not user-observable except via instrumentation.
+
+### L.2.3. Interface Dispatch
+
+Interfaces use a separate **interface dispatch table** per `(class, interface)` pair. The class's vtable contains a pointer to its interface-table (an array of pairs `(interface_id, method_table_pointer)`). Calling a method through an interface reference does:
+
+1. Dereference the receiver to get the vtable pointer.
+2. Search the interface-table for the matching `interface_id` (linear scan, since most classes implement few interfaces; for classes with >8 interfaces, the compiler emits a perfect hash).
+3. Indirect-call into the matched method table.
+
+This is the Microsoft-COM and Go-interface design, not the C++ multiple-inheritance design. It avoids object-pointer adjustment on upcasts and matches the "no multiple class inheritance" rule of JUX-LANG-V1 §7.4.
+
+### L.2.4. Enum Layout
+
+A no-payload enum is a single integer of the smallest type that fits the discriminator (or the explicit `@layout(c, repr = ...)` type if specified).
+
+A payload-carrying enum is a tagged union:
+
+```
++---------------------+
+| tag                 |
++---------------------+
+| union of payloads   |  -- size is the max of any case's payload size,
+|                     |     aligned to the max of any case's payload alignment
++---------------------+
+```
+
+The tag's natural size is `u8` for ≤256 cases, `u16` for ≤65536, etc. The compiler may niche-optimize: if a payload field has unused bit patterns (e.g., a class reference cannot be 0), the tag can be encoded into that field, eliminating the explicit tag word for some cases. This is what makes `enum HttpResult { Success, Error }` carrying class-typed payloads zero-overhead.
+
+User code does not observe niche-optimization: pattern matching, equality, and copy semantics work the same regardless. The layout is documented in per-monomorphization metadata for debuggers.
+
+### L.2.5. Tuple and Record Layout
+
+Tuples and records use the default aggregate layout (§L.1.1). Tuple field access by index (`pair.0`, `pair.1`) is compile-time-checked and resolves to the field at that index; ordering is left-to-right as written in the source. With `@layout(c)`, the in-memory order is the source order.
+
+---
+
+## §L.3 — Symbol Mangling and Linkage
+
+### L.3.1. Mangling Scheme
+
+Jux uses a documented but unstable name-mangling scheme. Symbols are encoded as:
+
+```
+_J<crate-id>_<module-path>_<item-name>_<generic-args>_<arity-and-types>
+```
+
+Rules:
+
+- `<crate-id>`: a 16-hex-character hash of the module's full name, version, and a per-build salt.
+- `<module-path>`: the module's package path with `.` replaced by `_`.
+- `<item-name>`: the item's identifier.
+- `<generic-args>`: a recursive encoding of the generic instantiation, empty if non-generic.
+- `<arity-and-types>`: a compact encoding of the function's parameter types.
+
+Length-prefix encoding handles arbitrary identifier characters; non-ASCII identifiers are encoded as `u<hex>`.
+
+The mangling is **not stable across compiler versions**. Programs that depend on a specific symbol name use `@export(name = "...")` to lock the C-visible name (per JUX-LANG-V1 §8.4).
+
+### L.3.2. Exports and Visibility
+
+`@export` on a free function (or static method) gives it C linkage with the unmangled name (or the explicit `name = "..."` override). Export is permitted only on functions whose signatures are FFI-compatible:
+
+- Parameter and return types must be primitive, `@layout(c)` aggregate, raw pointer, function pointer, or `CString`.
+- The function may not be generic (monomorphized exports require name disambiguation that defeats the whole point of `@export`).
+- The function may not throw; exceptions cannot cross the FFI boundary safely. Use `Result<T, E>` returned by value, or out-parameters for error info.
+
+A non-`@export` function is **not** part of any stable ABI. Other Jux modules link to it through the mangled name; that link is rebuilt every compile.
+
+### L.3.3. Static and Const Visibility
+
+`public const` items lower to read-only data with `@export`-equivalent linkage (no mangling) when explicitly marked `@export`; otherwise they are mangled and module-local. Mutable `static` items have a single global address per process and follow the same rules.
+
+---
+
+## §L.4 — Calling Conventions and ABI
+
+### L.4.1. Default Calling Convention
+
+Jux-to-Jux calls use the **platform's default calling convention** with one tightening: receivers and references are passed as raw pointers (target-natural-size word). The compiler is free to inline, register-pass, or otherwise optimize calls between Jux functions.
+
+For C-ABI calls (`@export` and `@extern`), the C calling convention of the target ABI applies:
+
+- **System V AMD64 (Linux, macOS, *BSD on x86_64):** SysV calling convention.
+- **Windows x86_64:** Microsoft x64 calling convention.
+- **AArch64 (Linux, macOS, Windows):** AAPCS64.
+- **ARMv7M, ARMv6M (microcontrollers):** AAPCS.
+- **AVR, RISC-V32, Xtensa:** the platform default for the chosen target triple.
+
+`@export(convention = "...")` overrides the default; permitted values are `"C"` (default), `"Stdcall"` (Windows), `"Fastcall"` (Windows), `"Vectorcall"` (Windows). Targets that do not support the requested convention reject the export at compile time.
+
+### L.4.2. Variadic Functions
+
+Calling a C variadic function (`int printf(const char* fmt, ...)`) requires the `@extern` declaration to use `...`:
+
+```jux
+@extern(lib = "c")
+unsafe native {
+    int printf(CString fmt, ...);
+}
+
+unsafe {
+    printf("hello %s\n", "world".toCString());
+}
+```
+
+Jux functions cannot be variadic in the C sense; the variadic feature in §A.2.4 (`String... messages`) packages arguments into an array, which is a different convention.
+
+### L.4.3. Struct Return ABI
+
+Aggregates returned by value follow the platform C ABI: small aggregates may be returned in registers, large ones via a hidden pointer parameter. The compiler chooses based on the platform rules; programmers do not need to be aware.
+
+Aggregates passed by value follow the same rules. To force pass-by-pointer (e.g., to avoid copying a large struct), wrap it in a class or pass a pointer explicitly inside `unsafe`.
+
+### L.4.4. Class Instance ABI
+
+Class references at the FFI boundary are raw pointers to the instance — i.e., pointers that point at the **vtable slot**, not at the first field. C code receiving such a pointer should treat it as opaque. To call a Jux class method from C, expose the operation as a `@export` free function that takes the pointer (the `*-sys` pattern, per JUX-LANG-V1 §8.4).
+
+---
+
+## §L.5 — The `unsafe { }` Block
+
+This is the core of the addendum. `unsafe { }` is the **only** place the safety promises of Jux are suspended. Inside it, the programmer takes on the C/C++ obligation to be correct; outside it, the compiler enforces correctness.
+
+### L.5.1. Syntax
+
+```
+unsafe-stmt       = 'unsafe' block
+unsafe-fn         = 'unsafe' function-decl                  -- whole function is unsafe
+unsafe-method     = 'unsafe' method-decl
+```
+
+`unsafe` is a reserved keyword (per `JUX-GRAMMAR-ADDENDUM.md` §A.1.3). It may appear:
+
+- As a statement: `unsafe { ... }` — a block whose body is an unsafe context.
+- As a modifier on a function or method declaration: `unsafe public void mmio_write(...)` — calling this function is itself an unsafe operation.
+
+`unsafe` may not appear on:
+
+- A class declaration (the class itself is not unsafe; specific methods may be).
+- A top-level non-function declaration.
+- An expression at non-block position.
+
+### L.5.2. What Is Permitted Only in `unsafe`
+
+The following operations are compile errors outside `unsafe { }` (`E0810`):
+
+1. **Dereferencing a raw pointer** (`*ptr`, `ptr[i]` if `ptr: T*`).
+2. **Pointer arithmetic** (`ptr + 1`, `ptr - other_ptr`).
+3. **Casting a raw pointer to a reference**, or vice versa (`ptr as Foo`, `someInstance as Foo*`).
+4. **Casting a pointer to an integer**, or vice versa (`ptr as ulong`, `0xDEAD_BEEFL as Foo*`).
+5. **Calling a function declared `unsafe`** (including `@extern` C functions; see §L.7).
+6. **Reading or writing a field declared `volatile`** outside its containing `@register` block.
+7. **Inline assembly** (`asm("...")`).
+8. **Accessing a `union` field** (when unions are added — reserved for future).
+9. **Using `sizeof<T>()`, `alignof<T>()`, `transmute<A, B>(value)`** (reinterpret cast).
+
+A function declared `unsafe public void f()` must be called from inside another `unsafe` context. The `unsafe` modifier propagates the obligation up.
+
+### L.5.3. What `unsafe` Does NOT Disable
+
+`unsafe { }` is a **narrow** escape hatch. It does not disable:
+
+- The borrow checker — borrows are still checked, even on raw pointers' targets.
+- Type checking — types are still enforced; pointer types are not implicitly compatible.
+- Exhaustiveness checking — `switch` exhaustiveness is still checked.
+- Initialization order — fields must still be definitely assigned (§S.4.5).
+- Drop order — destructors still run normally for owned values inside the block.
+- Generic constraints — bounds are still enforced.
+
+This is critical. Many C++ "unsafe" features are unsafe in many small ways simultaneously; Jux's `unsafe` enables a specific, enumerated set of operations and nothing else. A programmer reading `unsafe { ... }` knows exactly which guarantees are at risk.
+
+### L.5.4. Programmer Obligations Inside `unsafe`
+
+When you write `unsafe { ... }`, you take on responsibility for:
+
+1. **No use-after-free:** every dereferenced pointer must point at a live, valid object of the pointer's type.
+2. **No null-deref:** every dereferenced raw pointer must be non-null (raw pointers are nullable by design).
+3. **No data races:** if a pointer's target is shared across threads, atomics, locks, or some other discipline must coordinate access. The compiler does not check this for raw pointers.
+4. **No alignment violations:** dereferences must satisfy the target type's alignment.
+5. **No type punning except via `transmute`:** reinterpreting bytes through a pointer cast is permitted, but you must ensure the target type's invariants hold (for example, a `bool` you reconstruct via `transmute` must contain `0` or `1`, never `2`).
+6. **Initialized memory:** dereferencing a pointer to uninitialized memory is undefined behavior. The compiler emits debug-mode poison values to help catch this; release-mode behavior is "you get whatever was there."
+7. **No re-entry into safe code with broken invariants:** if you've temporarily broken the invariants of a Jux value (e.g., forged a `String` whose UTF-8 is invalid via raw bytes), you must restore them before the block exits or before any safe code can observe the value.
+
+These are exactly the obligations Rust's `unsafe` carries. The list is short and auditable.
+
+### L.5.5. Style Recommendations
+
+- **Make `unsafe` blocks small.** A block with one operation is easier to audit than a block wrapping a thousand-line function.
+- **Wrap `unsafe` operations in a safe interface.** Library authors use `unsafe` internally and expose a safe API. End users of the library never see `unsafe`.
+- **Document the safety justification.** Each `unsafe` block should have a comment explaining why the obligations of §L.5.4 are upheld:
+  ```jux
+  // SAFETY: `buf` was obtained from `allocate(len)` above; it is non-null,
+  // owned by this function, of size `len`, and not aliased.
+  unsafe {
+      buf[0] = 0;
+  }
+  ```
+- **Lint rule:** `juxc check` warns on any `unsafe` block lacking a `// SAFETY:` comment (`W0820`).
+
+---
+
+## §L.6 — Raw Pointers
+
+### L.6.1. The `T*` Type
+
+`T*` (per JUX-LANG-V1 §5.5) is a raw pointer to a value of type `T`. It is:
+
+- **A primitive type**, the same size as a target word (typically 8 bytes on 64-bit, 4 on 32-bit, 2 on AVR/MSP430).
+- **Nullable by default** — `T*` may hold null. (Distinguish from `T?` which is the safe nullable.)
+- **Copyable** without involving `T` — copying a `T*` is a plain bit copy, never invokes any user-defined copy logic, never affects a refcount.
+- **Not tracked by the borrow checker** in the way references are. A pointer can be held across an `await`, captured by a closure, etc., without restriction. The price of this flexibility is the `unsafe` requirement to dereference.
+
+The literal `null` is a value of type `T*` for any `T`, and is the only `T*` literal.
+
+### L.6.2. Operations on Raw Pointers
+
+Inside `unsafe { }`:
+
+```jux
+unsafe {
+    int x = 42;
+    int* p = &x;                // address-of: take a pointer to x
+
+    int v = *p;                 // dereference (read)
+    *p = 100;                   // dereference (write); now x == 100
+
+    int* q = p + 1;             // pointer arithmetic: advances by sizeof(int)
+    long diff = q - p;          // pointer subtraction: integer count of T-sized steps
+    int third = p[3];           // index — equivalent to *(p + 3)
+
+    ulong n = p as ulong;       // pointer-to-integer
+    int* p2 = n as int*;        // integer-to-pointer (you'd better be sure)
+    int* p3 = (int*) n;         // C-style cast also works (per A.5)
+
+    if (p == null) { ... }      // null compare
+    if (p == q) { ... }          // identity compare
+}
+```
+
+The unary operators inside `unsafe`:
+
+- **`&x`** — address-of. Produces a pointer of type `T*` where `x: T`. The operand must be a place (a local variable, a field, an array element). Identical in semantics to `x as T*` but reads more naturally for C/C++ programmers.
+- **`*p`** — pointer dereference. Reads through the pointer when used as an rvalue, or writes through it when used as the LHS of an assignment.
+- **`p[i]`** — equivalent to `*(p + i)`.
+- **`&array[i]`** — address-of an array element, equivalent to `(array as T*) + i`.
+- **`&someStruct.field`** — address of a field within a struct, when the struct supports field-level borrows (per JUX-LANG-V1 §6.9.1; classes do not, structs do).
+
+Outside `unsafe`, **none** of these operations compile. `&x`, `*p`, `p + 1`, `p[i]`, `p == null` — all gated behind `unsafe`. Pointers exist as a type even outside `unsafe` (you can pass them around, store them, return them), but they are *opaque values* until you enter an `unsafe` block.
+
+**`&` outside `unsafe`.** The compiler rejects any prefix `&` not inside an `unsafe` block (`E0807`). There is no implicit borrow-reference syntax in Jux — Jux uses inferred borrows (the borrow checker, per §6) rather than explicit `&` references. The `&` token is reserved exclusively for address-of inside `unsafe`.
+
+### L.6.3. Pointer-Reference Conversion
+
+To go from a Jux reference (e.g., a class instance) to a raw pointer, and back:
+
+```jux
+public final class Buffer {
+    private byte[] data;
+
+    public Buffer(int size) {
+        this.data = new byte[size];
+    }
+
+    public unsafe byte* dataPtr() {
+        // SAFETY: caller must not retain the pointer past `this`'s lifetime
+        // and must respect mutation rules.
+        return data as byte*;
+    }
+}
+
+unsafe {
+    var buf = new Buffer(1024);
+    var p = buf.dataPtr();
+    p[0] = 0xFF;
+    // SAFETY ends when `buf` drops at end of scope.
+}
+```
+
+The cast `data as byte*` (where `data: byte[]`) inside `unsafe` produces a pointer to the array's first element. The pointer is **valid** (in the sense of pointing at live memory) as long as the underlying array is live. The borrow checker does **not** enforce this; the programmer does.
+
+### L.6.4. Function Pointers
+
+`fn(int) -> int` is a function-pointer type. It is **not** the same as `(int) -> int` (which is a closure type that may capture state). Function pointers are:
+
+- Plain code addresses, no closure environment.
+- Convertible to `void*` and back inside `unsafe`.
+- The standard FFI mechanism for callbacks: a Jux function can be passed to C as a function pointer if it has no captured state and a C-compatible signature.
+
+```jux
+public unsafe int compare(byte* a, byte* b, ulong len) { ... }
+
+@extern(lib = "c")
+unsafe native {
+    void qsort(void* base, ulong nmemb, ulong size,
+               fn(void*, void*) -> int compare);
+}
+
+unsafe {
+    qsort(arr as void*, arr.length, sizeof<MyStruct>(), compare);
+}
+```
+
+Closures with captured state cannot be converted to function pointers; the compiler rejects this at compile time (`E0830`). The recommended pattern for C callbacks that need user data is the `(callback, void* userdata)` C convention, marshalling via `unsafe`.
+
+---
+
+## §L.7 — FFI Through `unsafe`
+
+This section refines JUX-LANG-V1 §8.
+
+### L.7.1. `unsafe native` Blocks
+
+A `native` block (per JUX-LANG-V1 §8.1) declaring foreign functions must be marked `unsafe` to make explicit that calls to its functions are unsafe operations:
+
+```jux
+@extern(lib = "sqlite3")
+unsafe native {
+    int sqlite3_open(CString path, out RawHandle* db);
+    int sqlite3_close(RawHandle* db);
+}
+```
+
+Each function declared in an `unsafe native` block is implicitly an `unsafe` function. Calling it requires an `unsafe { }` context. This is the change to JUX-LANG-V1 §8: the safe wrapper class is now mandatory for any FFI library that wants to expose a normal Jux API.
+
+### L.7.2. Safe Wrappers
+
+The recommended pattern is unchanged from JUX-LANG-V1 §8.1, but with `unsafe` made explicit:
+
+```jux
+public final class Database {
+    private RawHandle* handle;
+
+    public Database(String path) throws DbError {
+        RawHandle* h = null;
+        var rc = unsafe {
+            sqlite3_open(path.toCString(), out h)
+        };
+        if (rc != 0) {
+            throw new DbError("Failed to open: " + path);
+        }
+        this.handle = h;
+    }
+
+    public void execute(String sql) throws DbError {
+        var rc = unsafe {
+            sqlite3_exec(handle, sql.toCString(), null, null, out null)
+        };
+        if (rc != 0) throw new DbError("SQL error");
+    }
+
+    drop {
+        unsafe {
+            // SAFETY: `handle` is owned by this Database; we are the unique drop.
+            sqlite3_close(handle);
+        }
+    }
+}
+```
+
+Users of `Database` write entirely safe code. The `unsafe` boundary is contained to the wrapper.
+
+### L.7.3. Inline Assembly
+
+Inline assembly (per JUX-LANG-V1 §16.8) is an `unsafe` operation. It is permitted only in profiles that enable it (typically `jux-core` and `jux-embedded`).
+
+```jux
+public unsafe int read_sp() {
+    int sp;
+    asm("mov %0, sp" : "=r"(sp));
+    return sp;
+}
+
+unsafe {
+    var sp = read_sp();
+    print("stack pointer: 0x{}", sp.toHex());
+}
+```
+
+The `asm(...)` form uses GCC's extended-asm syntax: template, output operands, input operands, clobbers. Each is a comma-separated list. The full grammar of operand constraints is target-specific and not in scope here; targets document which constraints they accept.
+
+`asm` is forbidden in `jux-full` by default (a compile error suggests "this operation requires `jux-embedded` or `jux-core`"). Operating-system-level Jux code typically does not need inline asm; for atomic operations, use the atomics in `std.concurrent`.
+
+### L.7.4. `transmute` Built-in
+
+`transmute<A, B>(value: A): B` reinterprets the bits of `value` (of type `A`) as a `B`. It is permitted only inside `unsafe` and only when `sizeof<A>() == sizeof<B>()`. Mismatched sizes are a compile error (`E0840`).
+
+```jux
+unsafe {
+    float f = 1.5f;
+    uint bits = transmute<float, uint>(f);          // 0x3FC00000
+}
+```
+
+Most uses of `transmute` are wrong. Prefer typed conversions (the `as` operator, dedicated methods like `Float.toBits()`) when they exist. `transmute` is the last resort.
+
+### L.7.5. Volatile and Memory-Mapped I/O
+
+Memory-mapped registers (per JUX-LANG-V1 §16.3) declared with `@register(...)` are accessed through the `volatile` keyword. The compiler emits direct memory access without caching or reordering across other volatile accesses (per `JUX-SEMANTICS-ADDENDUM.md` §S.6.3).
+
+Reading or writing a `@register` field is itself **not** `unsafe` — the register address is established at declaration time and the type system tracks the field as `volatile T`. The `unsafe` requirement applies only when constructing such a register from a runtime address:
+
+```jux
+unsafe {
+    // Construct a Volatile<uint> at a runtime-computed address.
+    var reg = Volatile<uint>.atAddress(some_computed_addr);
+    reg.write(0xDEADBEEFu);
+}
+```
+
+For statically-known register addresses (the common case), the `@register(address = ...)` annotation makes the access type-safe.
+
+---
+
+## §L.8 — Worked Examples
+
+### L.8.1. A Safe Wrapper Around C `malloc`/`free`
+
+```jux
+@extern(lib = "c")
+unsafe native {
+    void* malloc(ulong size);
+    void free(void* p);
+    void memset(void* p, int byte, ulong n);
+}
+
+public final class RawBuffer {
+    private byte* ptr;
+    private ulong size;
+
+    public RawBuffer(ulong bytes) throws OutOfMemoryError {
+        // SAFETY: malloc returns null on failure; we check before using.
+        var p = unsafe { malloc(bytes) };
+        if (p == null) throw new OutOfMemoryError(bytes);
+        this.ptr = unsafe { p as byte* };
+        this.size = bytes;
+        // SAFETY: p is owned by this RawBuffer; size matches the malloc.
+        unsafe { memset(p, 0, bytes); }
+    }
+
+    public byte read(ulong offset) {
+        if (offset >= size) throw new IndexOutOfBoundsException(offset);
+        // SAFETY: bounds checked above; ptr is live for self's lifetime.
+        return unsafe { ptr[offset] };
+    }
+
+    public void write(ulong offset, byte value) {
+        if (offset >= size) throw new IndexOutOfBoundsException(offset);
+        // SAFETY: bounds checked above; ptr is live for self's lifetime.
+        unsafe { ptr[offset] = value; }
+    }
+
+    drop {
+        // SAFETY: ptr came from malloc; we own it; this is the unique drop.
+        unsafe { free(ptr as void*); }
+    }
+}
+```
+
+The user of `RawBuffer` writes only safe code. The `unsafe` blocks are short, each justified, and bracket the precise operations that escape the safety promise.
+
+### L.8.2. SIMD via FFI
+
+```jux
+@extern(lib = "c", header = "<immintrin.h>")
+unsafe native {
+    // x86 AVX2 intrinsics, exposed as C
+    @layout(c) struct __m256i;
+    __m256i _mm256_loadu_si256(__m256i* src);
+    __m256i _mm256_add_epi32(__m256i a, __m256i b);
+    void _mm256_storeu_si256(__m256i* dst, __m256i value);
+}
+
+@cfg(arch = "x86_64")
+public unsafe void add_i32x8(int* a, int* b, int* dst) {
+    // SAFETY: callers must ensure all three pointers are 32-byte aligned
+    // and point to at least 8 ints of valid memory.
+    var va = _mm256_loadu_si256(a as __m256i*);
+    var vb = _mm256_loadu_si256(b as __m256i*);
+    var vc = _mm256_add_epi32(va, vb);
+    _mm256_storeu_si256(dst as __m256i*, vc);
+}
+
+public void add_arrays(int[] a, int[] b, int[] dst) {
+    if (a.length != b.length || a.length != dst.length) {
+        throw new IllegalArgumentException("length mismatch");
+    }
+    var len = a.length;
+    var i = 0;
+    if cfg(arch = "x86_64") {
+        // SAFETY: arrays are pointer-aligned by the runtime; we process
+        //         8 lanes at a time, leaving a scalar tail.
+        while (i + 8 <= len) {
+            unsafe {
+                add_i32x8(
+                    (a as int*) + i,
+                    (b as int*) + i,
+                    (dst as int*) + i
+                );
+            }
+            i = i + 8;
+        }
+    }
+    while (i < len) {           // scalar tail
+        dst[i] = a[i] + b[i];
+        i = i + 1;
+    }
+}
+```
+
+`add_arrays` is fully safe. The SIMD acceleration is conditioned on the target arch; the scalar fallback handles the tail and serves non-x86 targets. The unsafe surface is one function — `add_i32x8` — wrapped behind a safe entry point.
+
+### L.8.3. Lock-Free Counter with Atomics
+
+```jux
+import std.concurrent.{AtomicLong, MemoryOrder};
+
+public final class Counter {
+    private AtomicLong value;
+
+    public Counter() {
+        this.value = new AtomicLong(0);
+    }
+
+    public long increment() {
+        return value.fetchAdd(1, MemoryOrder.AcqRel) + 1;
+    }
+
+    public long get() {
+        return value.load(MemoryOrder.Acquire);
+    }
+}
+```
+
+This is **not** `unsafe`. Atomics are safe by design — they have explicit memory orderings, well-defined per-operation semantics, and no pointer arithmetic. The atomic API is the recommended way to share mutable state across threads in Jux.
+
+---
+
+## §L.9 — Edits to Existing Sections
+
+### Edit to JUX-LANG-V1 §3.2 (Reserved keywords)
+
+Add `unsafe` and `volatile` to the reserved-keyword list. Both are full keywords, not contextual.
+
+### Edit to JUX-LANG-V1 §5.5 (Special types)
+
+Replace the row for `T*` to read:
+
+> `T*` — Raw pointer. Permitted everywhere as a value type, but every operation that examines or mutates the pointed-to memory requires an `unsafe { }` block. See §L.5–§L.7.
+
+### Edit to JUX-LANG-V1 §8 (FFI)
+
+The introduction to §8 should add: "All foreign function calls and raw-pointer operations are `unsafe`. Declarations in `native` blocks must include the `unsafe` modifier; callers must wrap the call in `unsafe { }` or be themselves `unsafe`. The recommended pattern is a thin safe wrapper class that contains the `unsafe` operations and exposes a safe public API."
+
+### Edit to JUX-LANG-V1 §16.8 (Inline assembly)
+
+Replace with: "Inline assembly is an `unsafe` operation, available only in profiles that enable it (`jux-core` and `jux-embedded`). See §L.7.3."
+
+---
+
+## Summary
+
+This addendum closes the FFI-and-low-level half of the spec:
+
+| Topic                       | Section | Purpose                                    |
+|-----------------------------|---------|--------------------------------------------|
+| Default layout               | §L.1.1  | Compiler may optimize aggregate layout     |
+| `@layout(c)`                 | §L.1.2  | Opt-in C-compatible layout for FFI         |
+| `@align(N)`                  | §L.1.4  | Force alignment                            |
+| `sizeof<T>` / `alignof<T>`   | §L.1.5  | Introspection inside `unsafe`              |
+| Niche optimization           | §L.1.6  | `T?` for class types is one word            |
+| Class layout                 | §L.2.1  | Vtable + refcount header                   |
+| Vtable structure             | §L.2.2  | Method slot order, super chain             |
+| Interface dispatch           | §L.2.3  | Per-class interface dispatch tables        |
+| Enum layout                  | §L.2.4  | Tagged unions, niche optimization          |
+| Symbol mangling              | §L.3.1  | Documented but unstable                    |
+| `@export` rules              | §L.3.2  | C linkage; FFI-compatible signatures only  |
+| Calling conventions          | §L.4    | Platform default; explicit override        |
+| **`unsafe { }`**             | §L.5    | The escape hatch                           |
+| Raw pointer ops              | §L.6    | Forbidden outside `unsafe`                 |
+| `transmute`                  | §L.7.4  | Last-resort bit reinterpretation           |
+| Inline asm                   | §L.7.3  | Profile-restricted, `unsafe`               |
+
+The bargain offered to the programmer: write Java-shaped code, get Rust-grade safety. When you genuinely need C-grade pointer access, write `unsafe { }`, accept the auditable burden of correctness, and the compiler stays out of your way.
+
+This is what makes Jux usable for the things Java cannot do (kernels, drivers, GC-free real-time code) and the things Rust does the hard way (because Jux's syntax is approachable while Rust's is not).
+
+---
+
+*End of layout/ABI/unsafe addendum. When this lands, JUX-LANG-V1.md §3.2, §5.5, §8, and §16.8 carry the small edits noted, and JUX-LANG-V1.md §19.5 ("ABI / unsafe boundaries") moves to the resolved-gaps list.*
+
+</script>
+<script src="parser.js"></script>
+</body>
+</html>

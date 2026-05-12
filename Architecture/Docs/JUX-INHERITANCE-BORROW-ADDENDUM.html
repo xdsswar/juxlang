@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inheritance × Borrow Inference — Jux</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="sidebar-brand" href="index.html">
+    <span class="sidebar-brand-mark">J</span>
+    <span>Jux</span>
+  </a>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Start Here</div>
+    <a href="index.html">Overview</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Foundation</div>
+    <a href="JUX-LANG-V1.html">Language V1 — Architecture & Design</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Core Specifications</div>
+    <a href="JUX-GRAMMAR-ADDENDUM.html">Formal Grammar</a>
+    <a href="JUX-SEMANTICS-ADDENDUM.html">Execution Semantics</a>
+    <a href="JUX-OPERATORS-ADDENDUM.html">Operators (Final)</a>
+    <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
+    <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
+    <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+    <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
+    <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Compiler &amp; Tooling</div>
+    <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
+    <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+    <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
+    <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
+    <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
+    <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Earlier Addenda</div>
+    <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
+    <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
+    <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
+  </div>
+  <div class="sidebar-footer">
+    Generated from spec markdown.<br>
+    Self-contained, offline-ready.
+  </div>
+</aside>
+
+  <main class="main">
+    <div class="content">
+      <div class="breadcrumb"><a href="index.html">← Jux Specification</a></div>
+      <div id="rendered"></div>
+    </div>
+  </main>
+</div>
+
+<script id="md-content" type="text/markdown">
+# Jux Spec Addendum — Inheritance × Borrow Inference
+
+**Status:** Proposed insertion. Replaces the silence in §6 and §7.4 on how the borrow checker treats class hierarchies.
+
+**Insertion points:**
+- New subsection §6.9 ("Borrowing Across Inheritance")
+- New subsection §7.4.1 ("Virtual Methods and Mutation Inference")
+- Small clarifying edit to §6.3
+- Small clarifying edit to §6.5
+
+The text below is written to drop directly into the existing dossier.
+
+---
+
+## Design Summary (Non-Normative)
+
+Jux already chose the decisions that make inheritance + borrow checking tractable. The remaining work is to write down what the borrow checker actually does at the boundaries.
+
+**The five existing decisions that carry the design:**
+
+1. **Refcounted class instances in `jux-full` (§6.5).** The borrow checker is not responsible for preventing use-after-free on class instances — the refcount is. Its job is narrower: prevent aliasing during mutation. This is Swift's *Law of Exclusivity*, not Rust's full borrow checker.
+2. **Mutation inferred per method (§6.3).** No `&mut self` / `&self` annotations on methods.
+3. **Classes are extendable by default; `final`/`const` opts out.** Java rule. Mark `final class C` (or `const class C`) when extension should be forbidden.
+4. **Value semantics live in `struct` (§5.2).** Field-level borrow tracking applies to structs, not to class instances.
+5. **Generics are invariant; variance is expressed at use sites with wildcards (§7.8).** Java's model. Soundness is already established.
+
+The two decisions this addendum adds:
+
+6. **Borrows on class instances are whole-object, not field-level.** Borrowing a field of a class instance borrows the instance.
+7. **Virtual mutation inference takes the union across all reachable overrides.** A virtual call site is treated as mutating if any override mutates.
+
+These two rules eliminate the upcast-while-borrowed problem, the virtual-dispatch-hides-fields problem, and the `super`-call problem in one stroke. Field-level borrowing is preserved where it pays off (structs) and dropped where it would force lifetime annotations (classes).
+
+---
+
+## §6.3 (edit) — Mutation Inference
+
+Add the following paragraph at the end of §6.3:
+
+> Mutation inference for **virtual methods** takes the union across all reachable overrides. If any override of a virtual method mutates `this`, every call to that method through a base-class reference is treated as mutating, regardless of which override actually runs at the call site. Sealed hierarchies (§7.5) tighten this — only permitted subclasses contribute to the union. For `final` classes, no override exists, so the per-method inference is exact. See §7.4.1.
+
+Rationale: inference must be sound under dynamic dispatch. The conservative union is the only choice that does not require annotations or whole-program analysis at every call site. Whole-program analysis is still used to *narrow* the union when the receiver type is known precisely (e.g., after `=>` smart-casts, §7.12).
+
+---
+
+## §6.5 (edit) — Reference Counting and Cycles
+
+Append to the end of §6.5:
+
+> **The borrow checker and refcounting are complementary.** Refcounting guarantees memory is valid for as long as any reference exists. The borrow checker guarantees that during any mutation, no other reference is reading or writing. The two together provide the same end-user invariants Rust gives — no use-after-free, no data races — without exposing lifetimes. In `jux-embedded` and `jux-core`, where refcounting is off, the borrow checker takes on the additional duty of preventing dangling references; this is why those profiles enforce single-ownership move semantics on classes (§6.5).
+
+---
+
+## §6.9 (new) — Borrowing Across Inheritance
+
+This section specifies how the borrow checker treats values whose static type is a class participating in a hierarchy. The rules are designed so that no upcast, no virtual dispatch, and no `super` call can produce a borrow-check failure that requires the user to think about inheritance.
+
+### 6.9.1. Class Borrows Are Whole-Object
+
+A reference to a class instance borrows the **whole object**, not individual fields. This is the central rule.
+
+```jux
+public class Animal {
+    protected String name;
+    protected int age;
+}
+
+public final class Dog extends Animal {
+    private List<String> tricks;
+}
+
+public void example(Dog d) {
+    var t = d.tricks;        // borrows the whole `d` (shared)
+    d.age = d.age + 1;       // ERROR: cannot mutate `d` while `t` borrows it
+}
+```
+
+For class instances, the borrow checker tracks borrows at object granularity. There is no concept of "borrowing only the `tricks` field" of a class. To hold an independent reference to a field, copy or clone the value out:
+
+```jux
+public void example(Dog d) {
+    var trickCount = d.tricks.size();   // copies the int out
+    d.age = d.age + 1;                  // OK: no live borrow on `d`
+}
+```
+
+This is stricter than Rust on classes and looser than Rust on structs. The trade-off is deliberate: classes participate in inheritance and dynamic dispatch, where field-level reasoning would force lifetime annotations to recover precision. Structs, which never participate in inheritance, retain Rust-style field-disjoint borrows.
+
+| Type kind | Borrow granularity | Field-level disjoint borrows |
+|-----------|-------------------|------------------------------|
+| `struct`  | per-field          | yes                          |
+| `record`  | per-field          | yes (read-only)              |
+| `class`   | whole-object       | no                           |
+| `enum`    | per-variant payload| yes (after match)            |
+
+### 6.9.2. Upcasting Preserves the Borrow
+
+Because borrows are whole-object, upcasting a borrowed reference does not change what is borrowed. The reference simply has a more general static type.
+
+```jux
+public void describe(Animal a) {
+    a.introduce();
+}
+
+public void example(Dog d) {
+    describe(d);                        // shared borrow of the whole object
+    d.age = d.age + 1;                  // ERROR while describe runs?  NO — describe returned
+}
+```
+
+Two consequences:
+
+- **No upcast-while-borrowed-subtype-field problem.** That problem only exists in field-level borrow systems. Whole-object borrowing eliminates it.
+- **Upcasting cannot strip a borrow.** Passing a `Dog` as `Animal` does not "convert" exclusive access into shared access, or vice versa. The mode is fixed by the call site, not by the static type.
+
+### 6.9.3. Virtual Dispatch and the Mutation Union
+
+A call through a virtual method is treated as mutating if **any** override of that method (in any subclass reachable from the static type of the receiver) mutates `this`. The mutation summary of a virtual method is the transitive union of:
+
+- The method body of the declaring class (if not abstract)
+- Every override in every subclass that is reachable from the receiver type
+
+For sealed types (§7.5), the set of reachable subclasses is closed and exact. For non-sealed extendable classes (the default), the set is open: the compiler must include all overrides linked into the program (whole-program analysis after monomorphization, §2.5).
+
+```jux
+public class Shape {
+    public void render() { ... }       // does not mutate
+}
+
+public final class AnimatedShape extends Shape {
+    private int frame;
+
+    @Override
+    public void render() {
+        frame = frame + 1;                  // mutates this
+        super.render();
+    }
+}
+
+public void redraw(Shape s) {
+    s.render();                             // treated as mutating: AnimatedShape::render mutates
+}
+```
+
+If this is too conservative for your use case, declare a more specific receiver type (the borrow checker uses the precise type) or mark the class `final` (no overrides exist). Sealed hierarchies give exact mutation summaries with no whole-program cost.
+
+### 6.9.4. `super` Calls
+
+A `super` call resolves statically to the named superclass method. Its mutation summary is exact — it is the inferred summary of the named method, not a virtual union.
+
+```jux
+public final class Dog extends Animal {
+    @Override
+    public void speak() {
+        super.introduce();          // exact: Animal::introduce, non-mutating
+        print("woof");
+    }
+}
+```
+
+Because `super` is statically resolved, it does not contribute to the virtual union of any method.
+
+### 6.9.5. `protected` Fields and Subclass Mutation
+
+Subclasses may read and write `protected` fields of their superclass. The borrow checker treats every such access as a borrow of the receiver, with the same whole-object rule as §6.9.1. A subclass cannot hold a borrow on `super.field` independent of `this`.
+
+```jux
+public class Animal {
+    protected int age;
+}
+
+public final class Dog extends Animal {
+    public void birthday() {
+        var current = age;          // shared borrow of `this`
+        age = current + 1;          // ERROR: cannot mutate `this` while `current` borrows it
+    }
+}
+```
+
+The fix is to copy the value out (it is an `int`, so this is a primitive copy with no cost) — exactly as in §6.9.1.
+
+### 6.9.6. Generics and Variance Across Inheritance
+
+Generic types are invariant in their type parameters (§7.8). Variance is expressed at use sites via wildcards:
+
+- `List<Dog>` is **not** assignable to `List<Animal>`. (The list could be mutated.)
+- `List<? extends Animal>` accepts `List<Dog>`. (Read-only with respect to `T`.)
+- `List<? super Dog>` accepts `List<Animal>`. (Write-only with respect to `T`.)
+
+The borrow checker treats wildcards as opaque: a `List<? extends Animal>` exposes only the read API, so its inferred mutation summary is the union of read-only methods. This composes with §6.9.3 cleanly because variance and mutability are decided independently.
+
+### 6.9.7. Sealed Hierarchies Give Exact Analysis
+
+Within a sealed hierarchy (§7.5), the compiler knows every subclass at compile time. This produces:
+
+- Exact virtual mutation summaries (no over-approximation)
+- Exhaustive pattern matching with full type narrowing
+- Devirtualization opportunities for the optimizer
+
+When borrow inference fails on a non-sealed (extendable) hierarchy, sealing it is often the cheapest fix. The error message points this out:
+
+```
+Error: cannot mutate `s` here
+  --> render.jux:18:5
+   |
+16 |     for (var s : shapes) {
+17 |         s.render();
+   |         --------- treated as mutating: at least one override of `Shape::render` mutates
+18 |         shapes.add(makeNewShape());
+   |         ^^^^^^ cannot mutate `shapes` while iteration borrows it
+   |
+Hint: if you control the Shape hierarchy, consider sealing it. Sealed hierarchies
+give exact mutation analysis. See §7.5.
+```
+
+### 6.9.8. Embedded and Bare-Metal Profiles
+
+In `jux-embedded` and `jux-core`, refcounting is off (§6.5). Class instances follow single-ownership move semantics. The whole-object borrow rule still applies — there is no field-level borrow into a class — and inheritance still works, but every reference to a class instance is either the unique owner or an exclusive/shared borrow of that owner. This is the most restrictive setting and produces the smallest code; it is also the setting that maps most directly to Rust's borrow model.
+
+A class hierarchy used in `jux-core` typically wants:
+
+- All non-leaf classes `final` (no virtual dispatch overhead)
+- Or a sealed hierarchy with virtual dispatch through a static vtable
+- Sharing expressed explicitly via `SharedRef<T>` (refcount on demand)
+
+### 6.9.9. Summary Table
+
+| Situation | Rule | Where enforced |
+|-----------|------|----------------|
+| Borrow a field of a class instance | Borrows the whole instance | §6.9.1 |
+| Borrow a field of a struct/record  | Borrows that field only    | §6.1, §6.9.1 |
+| Upcast a borrowed class reference  | Borrow mode is unchanged   | §6.9.2 |
+| Call a virtual method              | Mutating iff any reachable override mutates | §6.9.3 |
+| Call `super.method`                | Exact summary of named method | §6.9.4 |
+| Mutate a `protected` superclass field from a subclass | Treated as mutating `this` | §6.9.5 |
+| Pass `List<Dog>` where `List<Animal>` expected | Rejected (invariance) | §7.8 |
+| Pass `List<Dog>` where `List<? extends Animal>` expected | Accepted, read-only API | §7.8 |
+| Pattern match on a sealed type     | Exact narrowing, exhaustive | §7.5 |
+
+---
+
+## §7.4.1 (new) — Virtual Methods and Mutation Inference
+
+Insert after §7.4.
+
+A method participates in dynamic dispatch when:
+
+- It is declared `abstract` on a class or interface, or
+- It is declared on a non-`final` class as `public` or `protected` without `final`, or
+- It overrides such a method.
+
+Methods on `final`/`const` classes, and methods themselves marked `final`/`const`, are statically resolved and not virtual.
+
+Mutation is inferred per method body (§6.3). For virtual methods, the inferred mutability of a call site is the **union** of the mutabilities of every reachable override (§6.9.3). To make this analysis tractable and produce stable error messages:
+
+- **Prefer `final` classes.** Already the default in §7.4. A `final` class has exact mutation analysis at every call.
+- **Prefer sealed hierarchies for polymorphism.** A sealed hierarchy has a closed set of overrides, so the union is exact and stable across compilation units.
+- **Be deliberate about leaving classes extendable across modules.** A public non-`final` class accepts overrides defined in any module that imports it. The mutation union includes every override linked into the final binary, so adding a new subclass in a downstream module can change a base method's inferred mutability and trigger a borrow error in code that previously compiled. The compiler reports such transitions clearly:
+
+```
+Error: introducing `LoggingShape extends Shape` changes the mutability of `Shape::render`
+  --> logging_shape.jux:8:5
+   |
+ 8 |     @Override
+ 9 |     public void render() {
+10 |         lastRender = clock.now();    // mutates this
+   |         ^^^^^^^^^^ this override mutates; previous overrides did not
+   |
+Affected call sites:
+  render.jux:42:9 — `s.render()` where `s: Shape`
+    was: shared borrow
+    now: exclusive borrow
+    consequence: 3 lines below now fail to compile
+```
+
+This is the same class of breakage that Java introduced with non-final-by-default — but here the compiler catches it at the point of introduction, not as a runtime fragile-base-class bug. Sealing the base class prevents the issue entirely.
+
+### Worked Example
+
+```jux
+public sealed class Shape permits Circle, Square, AnimatedRectangle {
+    public void render() { /* default: non-mutating */ }
+}
+
+public final class Circle extends Shape {
+    private double radius;
+    @Override public void render() { /* non-mutating */ }
+}
+
+public final class Square extends Shape {
+    private double side;
+    @Override public void render() { /* non-mutating */ }
+}
+
+public final class AnimatedRectangle extends Shape {
+    private int frame;
+    @Override public void render() { frame = frame + 1; }   // mutates
+}
+
+// Mutation summary of Shape::render is "may mutate" (because of AnimatedRectangle).
+// Call sites through Shape see exclusive-borrow requirements:
+
+public void redraw(Shape s) {
+    s.render();                     // exclusive borrow of s
+}
+
+public void redrawCircle(Circle c) {
+    c.render();                     // shared borrow — exact analysis on the leaf type
+}
+```
+
+The cost of polymorphism in the borrow system is conservative widening at call sites whose receiver is the base class. Sealed hierarchies make that widening exact. `final` leaves recover full precision when the receiver type is precise.
+
+---
+
+## What This Addendum Does Not Try to Solve
+
+Two design questions are deliberately left for a future revision:
+
+1. **Closures capturing `this` across virtual calls.** §7.9 says closures infer their capture mode. The interaction with virtual mutation inference inside a captured method body needs its own treatment. Conservative answer for now: a closure that calls a virtual method on a captured class receiver captures it exclusively if the union summary mutates, shared otherwise. This is sound but coarse.
+
+2. **Async / await on borrowed class instances.** Not yet specified anywhere in the dossier. When introduced, it will need to interact with the whole-object borrow rule.
+
+Neither is blocking for the language's current goals. Both can be added without revisiting the rules above.
+
+</script>
+<script src="parser.js"></script>
+</body>
+</html>

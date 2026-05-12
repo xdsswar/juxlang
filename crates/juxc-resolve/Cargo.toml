@@ -1,0 +1,16 @@
+[package]
+name = "juxc-resolve"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Phase 4 — name resolution / module linking (per JUX-COMPILER-PIPELINE-ADDENDUM.md §C.2.4)."
+
+[dependencies]
+juxc-source      = { workspace = true }
+juxc-diagnostics = { workspace = true }
+juxc-ast         = { workspace = true }
+
+[dev-dependencies]
+juxc-lex   = { workspace = true }
+juxc-parse = { workspace = true }

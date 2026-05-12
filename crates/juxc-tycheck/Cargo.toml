@@ -1,0 +1,16 @@
+[package]
+name = "juxc-tycheck"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Phases 6–9 — type checking, generic inference, overload resolution (per JUX-COMPILER-PIPELINE-ADDENDUM.md §C.3)."
+
+[dependencies]
+juxc-source      = { workspace = true }
+juxc-diagnostics = { workspace = true }
+juxc-ast         = { workspace = true }
+
+[dev-dependencies]
+juxc-lex   = { workspace = true }
+juxc-parse = { workspace = true }

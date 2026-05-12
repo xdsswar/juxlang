@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Async / Await (v2) — Jux</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="sidebar-brand" href="index.html">
+    <span class="sidebar-brand-mark">J</span>
+    <span>Jux</span>
+  </a>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Start Here</div>
+    <a href="index.html">Overview</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Foundation</div>
+    <a href="JUX-LANG-V1.html">Language V1 — Architecture & Design</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Core Specifications</div>
+    <a href="JUX-GRAMMAR-ADDENDUM.html">Formal Grammar</a>
+    <a href="JUX-SEMANTICS-ADDENDUM.html">Execution Semantics</a>
+    <a href="JUX-OPERATORS-ADDENDUM.html">Operators (Final)</a>
+    <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
+    <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
+    <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+    <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
+    <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Compiler &amp; Tooling</div>
+    <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
+    <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+    <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
+    <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
+    <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
+    <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Earlier Addenda</div>
+    <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
+    <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
+    <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
+  </div>
+  <div class="sidebar-footer">
+    Generated from spec markdown.<br>
+    Self-contained, offline-ready.
+  </div>
+</aside>
+
+  <main class="main">
+    <div class="content">
+      <div class="breadcrumb"><a href="index.html">← Jux Specification</a></div>
+      <div id="rendered"></div>
+    </div>
+  </main>
+</div>
+
+<script id="md-content" type="text/markdown">
+# Jux Spec Addendum — Async and Await (v2)
+
+**Status:** Proposed insertion. New §18 ("Concurrency"), with §18.1 covering async/await. Replaces v1 of this addendum.
+
+**Design stance:** Kotlin-shaped suspension, TypeScript-shaped ergonomics. `async` functions return `T`, not `Future<T>`. The `Task<T>` type (a handle to a running computation) appears only when explicitly created via `spawn`. One built-in event loop, no pinning, no `Send`/`Sync` in user code, no runtime to choose. The borrow checker contributes one rule.
+
+---
+
+## Design Summary (Non-Normative)
+
+### What changed from v1
+
+The v1 addendum required `async Future<T>` in every signature. Calling an async function from another async function meant writing `await someCall()` where `someCall()` produced a `Future<T>` and `await` unwrapped it. This is JavaScript's model. It has two known costs:
+
+1. **Signature noise.** Every async function has `Future<T>` in its return type, even though 95% of callers immediately await it. The future is a transient artifact of every call site.
+2. **Forgotten awaits become silent bugs.** In JS, `userService.fetchUser(1)` (no await) silently returns a Promise, often passed somewhere expecting a `User`. TypeScript catches some of these, but not all.
+
+Kotlin's coroutines split the concept: `suspend fun` returns `T` directly. A handle to a running computation (`Deferred<T>`) is a separate, explicit thing produced by `async { ... }`. Forgetting to await is impossible because there's nothing to await — the function returns a `T`.
+
+Jux adopts this split. Async functions return `T`. The handle type is `Task<T>` and shows up only when you explicitly start concurrent work via `spawn(...)`.
+
+### What was rejected from Rust's model
+
+| Rust | Why rejected for Jux |
+|------|----------------------|
+| `Pin<&mut Self>` | Implementation detail. Refcounting + Jux's borrow model make pinning unnecessary at the surface level. |
+| `Send` / `Sync` bounds | Bound proliferation makes simple async functions unreadable. Default to single-threaded; opt into multithreading explicitly. |
+| Pluggable runtime (tokio/async-std/smol) | Library fragmentation, not flexibility. Jux ships one event loop. |
+| Manual `Future::poll` | Surface API is `await`. Polling is internal. |
+| Cancellation via dropping the future | Subtle and silently buggy. Jux has explicit cancellation. |
+| `async fn in trait` being unstable | Async methods on interfaces work the same as sync ones. |
+
+### What was kept from JavaScript / TypeScript
+
+- `await x` to suspend until a computation completes.
+- `try` / `catch` across `await`.
+- Built-in helpers analogous to `Promise.all`, `Promise.race`, `Promise.any`, `Promise.allSettled`.
+- Single-threaded event loop.
+- Top-level `await` in `main` and module initializers.
+
+### What was taken from Kotlin
+
+- `async` functions return `T`, not `Task<T>` / `Future<T>` / `Promise<T>`.
+- A separate handle type (`Task<T>` here, `Deferred<T>` in Kotlin) appears only when explicit concurrency starts.
+- Calling an async function from another async function looks identical to a normal call — except for the `await` keyword which signals the suspension point.
+
+### What Jux adds
+
+- Native compilation; the event loop is implemented in the runtime.
+- One borrow rule across `await` (§18.1.6).
+- Profile-aware: full async on servers, single-threaded executor on embedded, no async on bare metal.
+
+---
+
+## §18 (new) — Concurrency
+
+### 18.1. Async and Await
+
+#### 18.1.1. Declaring Async Functions
+
+A function declared `async` may suspend execution at `await` points. **Its return type is the value it yields, not a wrapper.** No `Future`, no `Task`, no `Promise` appears in the signature.
+
+```jux
+public async String fetchUser(int id) {
+    var response = await http.get($"/users/$id");
+    return await response.text();
+}
+
+public async List<Post> getUserPosts(int id) {
+    return await db.query("posts where user = ?", id);
+}
+
+public async UserPage loadPage(int id) {
+    var user  = await fetchUser(id);
+    var posts = await getUserPosts(id);
+    return new UserPage(user, posts);
+}
+```
+
+The `async` modifier appears before the return type. It declares a property of the function — that it may suspend — without changing what the function produces.
+
+`async` is permitted on:
+
+- Free functions
+- Class methods (including overrides)
+- Interface methods (including default methods)
+- Lambdas (`async (x) -> { ... }`)
+
+Constructors are not allowed to be async. Use a static async factory method instead:
+
+```jux
+public class Database {
+    private Connection conn;
+
+    private Database(Connection conn) {
+        this.conn = conn;
+    }
+
+    public static async Database connect(String url) {
+        var conn = await Connection.open(url);
+        return new Database(conn);
+    }
+}
+```
+
+#### 18.1.2. Awaiting
+
+`await` suspends the enclosing async function until a computation completes. It applies to two kinds of expressions:
+
+- **A call to an `async` function.** `await fetchUser(1)` runs the function until it returns; the result is the function's declared `T`.
+- **A `Task<T>` value.** `await task` waits for an explicitly-spawned task (§18.1.3) and yields its `T`.
+
+The two cases unify in the type system: `await` accepts anything that "produces a `T` after possibly suspending."
+
+```jux
+public async String example() {
+    var direct = await fetchUser(1);                  // direct call to async function
+    var task   = spawn(() -> fetchUser(2));           // Task<String>
+    var fromTask = await task;                        // unwrap the task
+    return direct + ", " + fromTask;
+}
+```
+
+`await` is permitted only:
+
+- Inside an `async` function or method
+- Inside an async lambda
+- At the top level of `main` (if `main` is declared `async`)
+- At module initialization in modules marked `@async-init`
+
+**Calling an async function without `await` from inside an async context is a compile error.** This is the central improvement over JS/TS:
+
+```jux
+public async void example() {
+    fetchUser(1);                         // ERROR: must await
+}
+```
+
+```
+Error: async function `fetchUser` called without `await`
+  --> example.jux:14:5
+   |
+14 |     fetchUser(1);
+   |     ^^^^^^^^^^^^ this is an async call but its result is being discarded
+   |
+Hint: either await the result:
+   var user = await fetchUser(1);
+or run it concurrently:
+   var task = spawn(() -> fetchUser(1));
+```
+
+There is no silently-dropped Promise.
+
+#### 18.1.3. Spawning Concurrent Work
+
+To run async work alongside other work, use `spawn`. This is the only way to obtain a `Task<T>`:
+
+```jux
+import std.async.{spawn, Task};
+
+public async UserPage loadPageFast(int id) {
+    var userTask  = spawn(() -> fetchUser(id));       // Task<String>
+    var postsTask = spawn(() -> getUserPosts(id));    // Task<List<Post>>
+    return new UserPage(
+        await userTask,
+        await postsTask
+    );
+}
+```
+
+`spawn(f)` schedules `f` on the event loop and returns a `Task<T>` immediately. The lambda passed to `spawn` may itself be async. Awaiting the returned task suspends the caller until the spawned work completes.
+
+If a task is dropped without being awaited, it continues to run to completion. Errors in unawaited tasks are reported via the runtime's unhandled-rejection hook (§18.1.8) — the same mechanism Node.js uses for unhandled promise rejections.
+
+#### 18.1.4. The Task Type
+
+`Task<T>` is a refcounted handle to a running computation. It exists in `std.async`:
+
+```jux
+public class Task<T> {
+    public async T await();               // suspends; same as `await task` syntax
+    public T blockingGet() throws ExecutionException;
+
+    public void cancel();
+    public bool isCancelled();
+    public bool isResolved();
+
+    // Combinators returning Task<U>
+    public <U> Task<U> map((T) -> U f);
+    public <U> Task<U> flatMap((T) -> Task<U> f);
+}
+```
+
+Static constructors and helpers:
+
+```jux
+public static <T> Task<T>          Task.completed(T value);
+public static <T> Task<T>          Task.failed(Exception error);
+public static    Task<void>        Task.delay(Duration d);
+
+public static <T> Task<List<T>>                          Task.all(List<Task<T>> tasks);
+public static <T> Task<T>                                Task.race(List<Task<T>> tasks);
+public static <T> Task<T>                                Task.any(List<Task<T>> tasks);
+public static <T> Task<List<Result<T, Exception>>>       Task.allSettled(List<Task<T>> tasks);
+```
+
+`Task.all(tasks)` resolves when every task resolves; rejects on the first failure. `Task.race` resolves with the first to settle. `Task.any` resolves with the first success and rejects only if all fail. Same semantics as the matching `Promise.*` calls in JavaScript.
+
+A common pattern — fan out, await all — gets a built-in shorthand:
+
+```jux
+import std.async.parallel;
+
+public async List<UserPage> loadAll(List<int> ids) {
+    return await parallel(ids, id -> loadPage(id));
+}
+```
+
+`parallel(items, f)` is equivalent to `Task.all(items.map(it -> spawn(() -> f(it))))` and handles the common case of "do this thing for every item in parallel."
+
+#### 18.1.5. Async Methods on Classes and Interfaces
+
+Async methods are ordinary methods that may suspend. They participate in dispatch, override, and inheritance like any other method:
+
+```jux
+public interface DataSource {
+    async List<Record> fetch(Query q);
+}
+
+public final class HttpDataSource implements DataSource {
+    private HttpClient client;
+
+    @Override
+    public async List<Record> fetch(Query q) {
+        var response = await client.get(q.toUrl());
+        return parseRecords(await response.text());
+    }
+}
+```
+
+There is no "async fn in traits is unstable" story. Async interface methods, default methods, and overrides all work the same way as their sync counterparts:
+
+```jux
+public interface Cache {
+    async String? get(String key);
+    async void put(String key, String value);
+
+    default async String getOrCompute(String key, () async -> String computer) {
+        var existing = await get(key);
+        if (existing != null) return existing;
+        var computed = await computer();
+        await put(key, computed);
+        return computed;
+    }
+}
+```
+
+The `() async -> String` lambda type denotes "a lambda that may suspend and produces a `String`."
+
+#### 18.1.6. The One Borrow Rule
+
+> **No exclusive (mutating) borrow may be active across an `await` point.**
+
+Shared borrows are fine. Class references are fine (refcounting keeps them alive). Owned values are fine. The only thing forbidden is being in the middle of a mutating operation across a suspension.
+
+This rule exists because at an `await`, control returns to the event loop and other code may run, including code that observes the same object. Allowing exclusive borrows across awaits would let two suspended functions interleave their mutations on the same object — the data-race-via-cooperative-scheduling failure that Node.js codebases hit informally and that JS programmers learn to avoid by convention. Jux makes the convention a compile-time check.
+
+```jux
+public async void good(User u) {
+    var name = u.name;                    // shared access
+    await sleep(milliseconds(100));
+    print(name);                          // OK
+}
+
+public async void bad(User u) {
+    var nameField = u.mutableName();      // exclusive borrow on u (whole-object, §6.9.1)
+    await sleep(milliseconds(100));       // ERROR: exclusive borrow held across await
+    nameField.set("new");
+}
+```
+
+Diagnostic:
+
+```
+Error: cannot await while holding an exclusive borrow on `u`
+  --> handler.jux:42:5
+   |
+40 |     var nameField = u.mutableName();
+   |                     - borrows `u` exclusively here
+41 |     await sleep(milliseconds(100));
+   |     ^^^^^ cannot suspend while `u` is mutably borrowed
+   |
+Hint: end the borrow before the await:
+   var newName = "new";
+   await sleep(milliseconds(100));
+   u.mutableName().set(newName);
+```
+
+For struct values (which support field-level borrows per §6.9.1), the same rule applies field by field. Most async code never encounters this rule because most functions don't hold exclusive borrows across statement boundaries to begin with.
+
+#### 18.1.7. Top-Level Await
+
+The entry point may be declared `async`:
+
+```jux
+public async void main() {
+    var config = await loadConfig();
+    await runServer(config);
+}
+```
+
+The runtime starts the event loop, runs `main`, and exits when `main` returns (and the loop drains). No explicit "start the runtime" call is needed.
+
+Module initializers may use `await` at top level when the module is marked `@async-init`:
+
+```jux
+@async-init
+package com.example.app;
+
+import std.io.readFile;
+
+public const String CONFIG = await readFile("/etc/config.json");
+```
+
+Modules with async initializers load asynchronously; their dependents wait for them implicitly. This matches ECMAScript modules with top-level `await`.
+
+#### 18.1.8. Errors and Unhandled Rejections
+
+A `throw` inside an async function causes the awaiter to receive the exception. `try`/`catch` works seamlessly across `await`:
+
+```jux
+public async int example() throws ParseError {
+    try {
+        var s = await readFile("data.txt");
+        return parse(s);
+    } catch (IOException e) {
+        throw new ParseError("read failed: " + e.message);
+    }
+}
+```
+
+A spawned task that fails with no awaiter triggers the runtime's unhandled-rejection hook. The default hook logs the error and aborts the process; embedders can override it via `Runtime.onUnhandledRejection`.
+
+Because direct async calls require `await` (§18.1.2), unhandled rejections can only come from spawned tasks. This is a much smaller surface area than JavaScript, where any call that returns a Promise can be silently dropped.
+
+#### 18.1.9. Cancellation
+
+Calling `task.cancel()` requests cancellation. At the next `await` inside the task, a `CancellationException` is thrown:
+
+```jux
+public async String longOperation() {
+    for (var i = 0; i < 1000; i++) {
+        await sleep(milliseconds(10));    // checks for cancellation
+        // ... work ...
+    }
+    return "done";
+}
+
+public async void driver() {
+    var task = spawn(() -> longOperation());
+    await sleep(milliseconds(50));
+    task.cancel();
+    try {
+        await task;
+    } catch (CancellationException e) {
+        print("cancelled");
+    }
+}
+```
+
+Cancellation is **cooperative**: a function that never awaits cannot be cancelled. The runtime guarantees no other delivery mechanism — no thread interrupts, no exception injection at arbitrary points. This is essential to keep §18.1.6's exclusivity rule sound.
+
+Timeouts are built on cancellation:
+
+```jux
+import std.async.{withTimeout, TimeoutException};
+
+public async String fetchWithTimeout(String url) {
+    try {
+        return await withTimeout(seconds(5), () -> http.get(url));
+    } catch (TimeoutException e) {
+        return "fallback";
+    }
+}
+```
+
+`withTimeout(d, f)` runs `f` and returns its result if it completes within `d`, or cancels it and throws `TimeoutException` otherwise.
+
+#### 18.1.10. Calling Async from Sync Code
+
+Calling an async function from a sync function is a compile error in async contexts (§18.1.2). From a fully-sync context (no `async` modifier on the enclosing function), you must explicitly bridge:
+
+```jux
+public void legacyMain() {                // not async
+    var task = spawn(() -> loadPage(42));
+    var page = task.blockingGet();        // blocks the calling thread
+    print(page.user);
+}
+```
+
+`blockingGet()` runs the event loop until the task completes and returns the result (or throws). In `jux-full` it spins up the runtime if not already running. In `jux-embedded` and `jux-core` it is unavailable — those profiles require an async `main`.
+
+#### 18.1.11. Profiles
+
+| Profile | Async runtime | Notes |
+|---|---|---|
+| `jux-full` | Full event loop, work-stealing executor with worker threads | Multithreading available via `Worker.spawn` (§18.2); main is single-threaded |
+| `jux-embedded` | Single-threaded executor, no workers | Suitable for ESP32 / Cortex-M with FreeRTOS; ~4 KB executor |
+| `jux-core` | Async unavailable | Use `Result<T, E>` and explicit state machines; see §16.7 |
+
+In `jux-core`, declaring an `async` function is a compile error pointing to §16.7. The diagnostic suggests the equivalent state-machine rewrite.
+
+### 18.2. Workers (Multithreading)
+
+Single-threaded async covers the bulk of server and UI workloads. CPU-bound work and parallelism use **workers** — explicitly opted into:
+
+```jux
+import std.async.Worker;
+
+public async int parallelSum(int[] data) {
+    var mid = data.length / 2;
+    var left  = Worker.spawn(() -> sumRange(data, 0, mid));
+    var right = Worker.spawn(() -> sumRange(data, mid, data.length));
+    return await left + await right;
+}
+```
+
+`Worker.spawn(f)` runs `f` on a thread from the worker pool and returns a `Task<T>`. Values captured by `f` must be **transferable** — a property the compiler verifies without exposing `Send` or `Sync` as user-facing terms.
+
+Transferable types are:
+
+- All primitive types and tuples of transferable types
+- `struct` and `record` types whose fields are all transferable
+- `class` types whose refcount can be made atomic; the compiler upgrades the refcount automatically when an instance crosses a worker boundary
+- `String`, `List<T>`, `Map<K, V>` (their internal sharing is thread-safe by construction)
+
+When the compiler rejects a capture, the diagnostic names the offending value and points to the alternative (e.g., "wrap in `AtomicShared<T>`" or "send by value"). The terms `Send` and `Sync` never appear in error messages or in the user-visible type system.
+
+```
+Error: cannot capture `db` across a worker boundary
+  --> parallel.jux:14:5
+   |
+14 |     var task = Worker.spawn(() -> db.query("..."));
+   |                                   ^^ value of type `Database` holds a non-thread-safe handle
+   |
+Hint: Database is single-threaded by design. Either:
+  - move the database operation onto the main thread and send results, or
+  - use `ConcurrentDatabase`, which is thread-safe.
+```
+
+### 18.3. Channels and Synchronization
+
+For inter-task communication:
+
+```jux
+import std.async.Channel;
+
+public async void producerConsumer() {
+    var ch = new Channel<int>(capacity: 16);
+
+    spawn(async () -> {
+        for (var i = 0; i < 100; i++) {
+            await ch.send(i);
+        }
+        ch.close();
+    });
+
+    while (true) {
+        var item = await ch.receive();
+        if (item == null) break;          // closed
+        print(item);
+    }
+}
+```
+
+`Channel<T>` is bounded and async; `send` suspends when full, `receive` suspends when empty. Closing causes pending receives to resolve to `null`. This mirrors Go channels and Kotlin's `Channel<T>`.
+
+For mutual exclusion across awaits, `AsyncMutex<T>`:
+
+```jux
+import std.async.AsyncMutex;
+
+public class Counter {
+    private AsyncMutex<int> count = new AsyncMutex<>(0);
+
+    public async int increment() {
+        var guard = await count.lock();   // suspends until acquired
+        guard.value = guard.value + 1;
+        return guard.value;
+    }                                      // guard drops here, releasing the lock
+}
+```
+
+The guard is the only handle that grants access to the protected value. Holding a guard across an await is permitted (this is the entire point of `AsyncMutex` over a regular mutex). The borrow rule from §18.1.6 is satisfied because the guard is a freshly-acquired handle, not a borrow on existing state.
+
+### 18.4. Worked Example — Concurrent HTTP Aggregator
+
+```jux
+import std.async.{spawn, parallel, withTimeout};
+import std.http.HttpClient;
+import std.time.seconds;
+
+public record UserSummary(int id, String name, int postCount) {}
+
+public class UserService {
+    private HttpClient http;
+
+    public UserService(HttpClient http) {
+        this.http = http;
+    }
+
+    public async UserSummary fetchSummary(int userId) {
+        // Fan out two requests in parallel
+        var userTask  = spawn(() -> http.getJson($"/users/$userId"));
+        var postsTask = spawn(() -> http.getJson($"/users/$userId/posts"));
+
+        // Bound the whole thing to 5 seconds
+        var user  = await withTimeout(seconds(5), () -> userTask);
+        var posts = await withTimeout(seconds(5), () -> postsTask);
+
+        return new UserSummary(
+            id: userId,
+            name: user.getString("name"),
+            postCount: posts.getList().size()
+        );
+    }
+
+    public async List<UserSummary> fetchAll(List<int> userIds) {
+        return await parallel(userIds, id -> fetchSummary(id));
+    }
+}
+
+public async void main() {
+    var service = new UserService(new HttpClient());
+    var summaries = await service.fetchAll([1, 2, 3, 4, 5]);
+    for (var s : summaries) {
+        print($"${s.name}: ${s.postCount} posts");
+    }
+}
+```
+
+No `Future<T>` in any signature. No `Send` bounds. No pinning. No runtime to choose. No `'static`. The shape reads like Kotlin coroutines or modern Swift concurrency, with Java syntax.
+
+### 18.5. Summary Table
+
+| Concept | JavaScript / TS | Kotlin coroutines | Jux | Rust |
+|---------|-----------------|-------------------|-----|------|
+| Async signature | `async function f(): Promise<T>` | `suspend fun f(): T` | `async T f()` | `async fn f() -> T` |
+| What `f()` returns to caller | `Promise<T>` | `T` (after suspension) | `T` (after suspension) | `impl Future<Output=T>` |
+| Awaiting | `await x` | `f()` (implicit at call site) | `await f()` | `f().await` |
+| Concurrent handle | `Promise<T>` (every call) | `Deferred<T>` (only via `async {}`) | `Task<T>` (only via `spawn`) | future you `tokio::spawn` |
+| Forgotten `await` | silent bug | impossible (no Promise to forget) | compile error | clippy lint |
+| Runtime | event loop (built in) | dispatcher (built in) | event loop (built in) | choose tokio / async-std |
+| Threading default | single + Workers | single + Dispatchers | single + Workers | full multithreading |
+| `Send` / `Sync` | n/a | n/a (mostly hidden) | hidden ("transferable") | user-facing |
+| Pinning | none | none | none | `Pin<&mut Self>` |
+| Cancellation | `AbortController` | structured (built in) | `Task.cancel()` | drop the future |
+| Top-level await | yes | n/a | yes | no |
+| Borrow across await | n/a | n/a | shared OK, exclusive forbidden | enforced via Send + lifetimes |
+
+The Kotlin and Jux columns are the closest match. Jux's contribution is making the borrow rule explicit while keeping the surface as light as Kotlin's.
+
+### 18.6. What This Addendum Does Not Specify
+
+- **Async iterators / streams** (`for await (var x of stream)`). Will be a follow-up section. Underlying type: `Stream<T>` with `async T? next()`.
+- **Async generators.** Same.
+- **Cooperative fairness guarantees.** The runtime currently makes none beyond "no task starves indefinitely." Workloads that need stronger guarantees should yield explicitly with `Task.yield()`.
+- **Structured concurrency primitives** (scoped tasks, supervision trees). Likely a future §18.7; the cancellation primitives in §18.1.9 are the foundation.
+
+None block the v0.1 design.
+
+---
+
+## Edits to Other Sections
+
+### §1.3 (Comparison Matrix) — Add row
+
+| Async model | `async T` (Kotlin-style) | n/a | `async fn` returning `Future` | `async`/`await` | `co_await` |
+
+### §3.2 (Keywords) — Add keywords
+
+Add to the reserved set:
+
+```
+async        await        spawn
+```
+
+`spawn` is reserved at the language level even though it appears as a function in `std.async`; this protects users from shadowing it accidentally.
+
+### §16.7 (Error Handling Without Exceptions) — Cross-reference
+
+In `jux-core`, async is unavailable (§18.1.11). The `Result<T, E>` and `?` patterns described in §16.7 are the supported alternative for that profile.
+
+</script>
+<script src="parser.js"></script>
+</body>
+</html>

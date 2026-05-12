@@ -1,0 +1,365 @@
+//! Top-level entry walk — compilation-unit, package, imports, top-level
+//! declaration dispatch, visibility, and top-level error recovery.
+//!
+//! Split out from `lib.rs` during the action-focused module
+//! reorganization. Behavior is identical to the original methods.
+
+use juxc_ast::{
+    CompilationUnit, ImportDecl, ImportItem, ImportSpec, PackageDecl, QualifiedName, TopLevelDecl,
+    Visibility,
+};
+use juxc_diagnostics::{code, Diagnostic};
+use juxc_lex::{Keyword, TokenKind};
+use juxc_source::Span;
+
+use crate::Parser;
+
+impl<'a> Parser<'a> {
+    // ------------------------------------------------------------------
+    // Compilation unit (§A.2.1)
+    //
+    //   compilation-unit = package-decl? import-decl* top-level-decl*
+    // ------------------------------------------------------------------
+
+    /// Top-level entry point. Always returns a `CompilationUnit`, even if
+    /// fatally malformed (with diagnostics explaining the damage).
+    pub(crate) fn parse_compilation_unit(&mut self) -> CompilationUnit {
+        let start = self.peek_span();
+
+        let package = self.try_parse_package_decl();
+        let imports = self.parse_imports();
+
+        let mut items = Vec::new();
+        while !self.at_eof() {
+            if let Some(item) = self.parse_top_level_decl() {
+                items.push(item);
+            } else {
+                // Recovery: jump to the next plausible top-level keyword.
+                self.recover_to_top_level();
+            }
+        }
+
+        // Span the whole file from the first token to the EOF marker.
+        let end = self.peek_span();
+        CompilationUnit { package, imports, items, span: start.join(end) }
+    }
+
+    /// `package qualified-name ';'` — optional, only valid at the very
+    /// top of the file. Per §A.2.1.
+    fn try_parse_package_decl(&mut self) -> Option<PackageDecl> {
+        if !self.at_kw(Keyword::Package) {
+            return None;
+        }
+        let start = self.peek_span();
+        self.advance(); // 'package'
+        let name = self.parse_qualified_name();
+        self.expect(&TokenKind::Semicolon, "';' after package declaration");
+        let end = self.last_consumed_span();
+        Some(PackageDecl { name, span: start.join(end) })
+    }
+
+    /// Zero or more `import-decl`s per §A.2.1:
+    /// ```text
+    /// import-decl  = 'import' import-spec ';'
+    /// ```
+    ///
+    /// The `@cfg(...)` prefix form is parsed by the annotation pass once
+    /// it lands; we only handle the bare `import` form here.
+    fn parse_imports(&mut self) -> Vec<ImportDecl> {
+        let mut imports = Vec::new();
+        while self.at_kw(Keyword::Import) {
+            imports.push(self.parse_import_decl());
+        }
+        imports
+    }
+
+    /// Parse one `import …;` declaration. Always advances past the `;`
+    /// (or to EOF) so the caller can keep going regardless of shape
+    /// errors inside the spec.
+    ///
+    /// Grammar (§A.2.1):
+    /// ```text
+    /// import-spec  = qualified-name ( '.' '*' )? ( 'as' identifier )?
+    ///              | qualified-name '.' '{' import-item ( ',' import-item )* '}'
+    /// import-item  = identifier ( 'as' identifier )?
+    /// ```
+    fn parse_import_decl(&mut self) -> ImportDecl {
+        let start = self.peek_span();
+        self.advance(); // 'import'
+        let spec = self.parse_import_spec();
+        self.expect(&TokenKind::Semicolon, "';' after import declaration");
+        let end = self.last_consumed_span();
+        ImportDecl { spec, span: start.join(end) }
+    }
+
+    /// Parse one `import-spec`. Returns an [`ImportSpec`] either way —
+    /// on shape errors we synthesize an empty path so the caller can
+    /// keep walking and the diagnostics already explain the problem.
+    ///
+    /// Walks the dotted path one segment at a time so we can branch on
+    /// `.*` (wildcard), `.{...}` (grouped), or `.ident` (continue) at
+    /// each step without needing arbitrary lookahead.
+    fn parse_import_spec(&mut self) -> ImportSpec {
+        let start = self.peek_span();
+        let Some(first) = self.parse_ident() else {
+            // No first identifier — recover by skipping to `;`. The
+            // parse_ident call already emitted E0200.
+            self.recover_to_import_terminator();
+            return ImportSpec::Path {
+                name: QualifiedName { segments: Vec::new(), span: Span::DUMMY },
+                wildcard: false,
+                alias: None,
+            };
+        };
+        let mut segments = vec![first];
+
+        // Walk dotted continuations. At each `.` decide whether we hit
+        // `*` (wildcard, end of path), `{` (group, switch to Items
+        // mode), or another identifier (extend the path).
+        let mut wildcard = false;
+        loop {
+            if !self.at(&TokenKind::Dot) {
+                break;
+            }
+            self.advance(); // '.'
+            if self.at(&TokenKind::Star) {
+                self.advance();
+                wildcard = true;
+                break;
+            }
+            if self.at(&TokenKind::LBrace) {
+                // Grouped form. The prefix is everything we've gathered
+                // so far; hand off to the items parser.
+                let prefix = QualifiedName {
+                    segments,
+                    span: start.join(self.last_consumed_span()),
+                };
+                return self.parse_import_items(prefix);
+            }
+            match self.parse_ident() {
+                Some(ident) => segments.push(ident),
+                None => {
+                    // `import foo.;` or `import foo.123;` — parse_ident
+                    // emitted E0200. Recover and return what we have.
+                    self.recover_to_import_terminator();
+                    let path = QualifiedName {
+                        segments,
+                        span: start.join(self.last_consumed_span()),
+                    };
+                    return ImportSpec::Path { name: path, wildcard: false, alias: None };
+                }
+            }
+        }
+
+        // Path complete. Optional `as Alias`. Per the AST contract, an
+        // `as` clause on a wildcard import is a shape error — the
+        // wildcard imports many names, no single name to rename.
+        let alias = if self.eat_kw(Keyword::As) {
+            let parsed = self.parse_ident();
+            if wildcard {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        "`as` rename is not allowed on a wildcard import",
+                    )
+                    .with_span(self.last_consumed_span()),
+                );
+            }
+            parsed
+        } else {
+            None
+        };
+
+        let path = QualifiedName {
+            segments,
+            span: start.join(self.last_consumed_span()),
+        };
+        ImportSpec::Path { name: path, wildcard, alias }
+    }
+
+    /// Parse a `{ item ( ',' item )* }` group. We're positioned on the
+    /// `{`. Empty groups (`{}`) and trailing commas (`{Foo,}`) are
+    /// rejected — both diverge from §A.2.1's `item ( ',' item )*` form.
+    fn parse_import_items(&mut self, prefix: QualifiedName) -> ImportSpec {
+        self.advance(); // '{'
+        let mut items: Vec<ImportItem> = Vec::new();
+
+        // Empty group is a shape error.
+        if self.at(&TokenKind::RBrace) {
+            self.advance();
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "grouped import must list at least one item",
+                )
+                .with_span(self.last_consumed_span()),
+            );
+            return ImportSpec::Items { prefix, items };
+        }
+
+        loop {
+            // Each item is `ident ( 'as' ident )?`.
+            let Some(name) = self.parse_ident() else {
+                // Recovery: consume up to `}` or `;`.
+                self.recover_to_group_terminator();
+                break;
+            };
+            let alias = if self.eat_kw(Keyword::As) {
+                self.parse_ident()
+            } else {
+                None
+            };
+            items.push(ImportItem { name, alias });
+
+            // Comma → expect another item. Closing brace → done.
+            if self.eat(&TokenKind::Comma) {
+                if self.at(&TokenKind::RBrace) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "trailing comma in grouped import",
+                        )
+                        .with_span(self.last_consumed_span()),
+                    );
+                    self.advance(); // consume '}'
+                    break;
+                }
+                continue;
+            }
+            self.expect(&TokenKind::RBrace, "',' or '}' in grouped import");
+            break;
+        }
+
+        ImportSpec::Items { prefix, items }
+    }
+
+    /// Skip ahead until we find `;` or EOF. Used when an import's spec
+    /// blew up before we could parse the trailing `;`. Stops *before*
+    /// the `;` so the caller's `expect(Semicolon, ...)` finishes the
+    /// recovery.
+    fn recover_to_import_terminator(&mut self) {
+        while !matches!(self.peek(), TokenKind::Semicolon | TokenKind::Eof) {
+            self.advance();
+        }
+    }
+
+    /// Skip ahead until we find `}`, `;`, or EOF. Used when an item
+    /// inside a grouped import is malformed.
+    fn recover_to_group_terminator(&mut self) {
+        loop {
+            match self.peek() {
+                TokenKind::RBrace => {
+                    self.advance();
+                    return;
+                }
+                TokenKind::Semicolon | TokenKind::Eof => return,
+                _ => self.advance(),
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Top-level declarations (§A.2.2)
+    //
+    //   top-level-decl       = annotation* visibility? top-level-decl-body
+    //   top-level-decl-body  = type-decl | function-decl | const-decl | type-alias
+    //
+    // Milestone 1 supports only function-decl. Other body kinds emit a
+    // diagnostic and let recovery skip them.
+    // ------------------------------------------------------------------
+
+    /// Parse one top-level declaration, returning `None` on unrecoverable
+    /// parse failure (caller does the recovery).
+    pub(crate) fn parse_top_level_decl(&mut self) -> Option<TopLevelDecl> {
+        // TODO: annotations (§A.2.3).
+        let visibility = self.parse_visibility();
+        // Top-level dispatch: `class` → class decl, `enum` → enum decl,
+        // anything else routes to `parse_fn_decl`. Use `at_kw` (not
+        // `at(&TokenKind::Kw(...))`) — the latter relies on
+        // `mem::discriminant`, which doesn't distinguish keywords inside
+        // the `Kw(_)` variant.
+        //
+        // `abstract` and `class` can appear in either order at top-level
+        // — `public abstract class Foo` and `abstract public class Foo`
+        // both parse. We allow the modifier here and propagate to
+        // `parse_class_decl`.
+        let is_abstract_top = self.eat_kw(Keyword::Abstract);
+        if self.at_kw(Keyword::Class) {
+            let class_decl = self.parse_class_decl(visibility, is_abstract_top)?;
+            return Some(TopLevelDecl::Class(class_decl));
+        }
+        if is_abstract_top {
+            // `abstract` was consumed but no `class` followed — surface
+            // the diagnostic now so the user gets a clear error rather
+            // than a downstream "expected return type" shape.
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "`abstract` modifier is only valid on `class` declarations",
+                )
+                .with_span(self.peek_span()),
+            );
+            return None;
+        }
+        if self.at_kw(Keyword::Enum) {
+            let enum_decl = self.parse_enum_decl(visibility)?;
+            return Some(TopLevelDecl::Enum(enum_decl));
+        }
+        if self.at_kw(Keyword::Record) {
+            let record_decl = self.parse_record_decl(visibility)?;
+            return Some(TopLevelDecl::Record(record_decl));
+        }
+        if self.at_kw(Keyword::Interface) {
+            let interface_decl = self.parse_interface_decl(visibility)?;
+            return Some(TopLevelDecl::Interface(interface_decl));
+        }
+        let fn_decl = self.parse_fn_decl(visibility)?;
+        Some(TopLevelDecl::Function(fn_decl))
+    }
+
+    /// Per §A.2.2 `visibility = 'public' | 'internal' | 'protected' | 'private'`.
+    /// Absence means package-private.
+    pub(crate) fn parse_visibility(&mut self) -> Visibility {
+        if self.eat_kw(Keyword::Public) {
+            Visibility::Public
+        } else if self.eat_kw(Keyword::Internal) {
+            Visibility::Internal
+        } else if self.eat_kw(Keyword::Protected) {
+            Visibility::Protected
+        } else if self.eat_kw(Keyword::Private) {
+            Visibility::Private
+        } else {
+            Visibility::Package
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Error recovery
+    // ------------------------------------------------------------------
+
+    /// Skip tokens until we hit something that plausibly starts a new
+    /// top-level declaration (a visibility modifier, a type-decl keyword,
+    /// `import`, `package`, or EOF). This is the recovery anchor for a
+    /// failed `parse_top_level_decl`.
+    pub(crate) fn recover_to_top_level(&mut self) {
+        while !self.at_eof() {
+            match self.peek() {
+                TokenKind::Kw(
+                    Keyword::Public
+                    | Keyword::Internal
+                    | Keyword::Protected
+                    | Keyword::Private
+                    | Keyword::Class
+                    | Keyword::Interface
+                    | Keyword::Struct
+                    | Keyword::Record
+                    | Keyword::Enum
+                    | Keyword::Annotation
+                    | Keyword::Import
+                    | Keyword::Package,
+                ) => return,
+                _ => self.advance(),
+            }
+        }
+    }
+}

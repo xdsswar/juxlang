@@ -1,0 +1,15 @@
+// Milestone-11 vehicle: bitwise operators.
+//
+// Shows each operator at work on integer literals. Embedded-flavored:
+// register-style hex constants and bit-shift "set bit N" patterns.
+
+public void main() {
+    var a = 0xF0;            // 11110000
+    var b = 0x0F;            // 00001111
+
+    print(a | b);            // 255   (11111111 = 0xFF)
+    print(a & b);            // 0     (no overlapping bits)
+    print(a ^ b);            // 255   (all bits differ)
+    print(1 << 4);           // 16    (bit 4 set)
+    print(0x100 >> 4);       // 16    (256 / 16)
+}

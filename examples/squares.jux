@@ -1,0 +1,26 @@
+// Turn-1 array vehicle: fixed-size arrays + `.length`.
+//
+// Allocates a 10-element int array, fills it with squares (0, 1, 4, 9,
+// 16, 25, 36, 49, 64, 81), and prints each on its own line. Exercises:
+//
+//   - `int[10]` array type in a typed-local declaration.
+//   - `new int[10]` zero-initialized array creation.
+//   - `arr[i] = expr;` index assignment.
+//   - `arr[i]` index read.
+//   - `arr.length` Java-style length access (returns an `int`).
+
+public void main() {
+    int[10] squares = new int[10];
+
+    var i = 0;
+    while (i < squares.length) {
+        squares[i] = i * i;
+        i = i + 1;
+    }
+
+    var j = 0;
+    while (j < squares.length) {
+        print(squares[j]);
+        j = j + 1;
+    }
+}

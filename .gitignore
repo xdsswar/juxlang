@@ -1,0 +1,8 @@
+/target
+Cargo.lock.bak
+*.rs.bk
+.idea/
+.vscode/
+*.swp
+/.claude/
+/examples/target/

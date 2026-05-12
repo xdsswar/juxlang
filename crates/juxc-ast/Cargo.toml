@@ -1,0 +1,10 @@
+[package]
+name = "juxc-ast"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Phase 3 — AST types for the Jux compiler (per JUX-GRAMMAR-ADDENDUM.md §A.2)."
+
+[dependencies]
+juxc-source = { workspace = true }

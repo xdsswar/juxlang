@@ -1,0 +1,28 @@
+// Push/pop vehicle: build a small stack from a dynamic int array.
+//
+// Exercises:
+//   - `int[] stack = {};` empty dynamic array (lowers to Vec).
+//   - `stack.push(v)` — append to end (Rust `Vec::push`).
+//   - `stack.pop()` — remove the last element AND return its value
+//     (Rust `Vec::pop().unwrap()` until Jux has `Option<T>`; panics on
+//     empty).
+//   - `stack.length` — element count survives mutation.
+//
+// Mutation analysis: the `push` and `pop` calls let the backend
+// promote `stack` to `let mut` without the user having to ask.
+
+public void main() {
+    int[] stack = {};
+    stack.push(1);
+    stack.push(2);
+    stack.push(3);
+    print(stack.length);   // 3
+
+    var top = stack.pop();
+    print(top);            // 3
+    print(stack.length);   // 2
+
+    var next = stack.pop();
+    print(next);           // 2
+    print(stack.length);   // 1
+}

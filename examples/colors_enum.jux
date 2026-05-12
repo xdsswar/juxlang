@@ -1,0 +1,30 @@
+// Enum vehicle — Turn-1 enum support per §7.7.
+//
+// Exercises:
+//   - Pattern A: unit-variant enum `Color { Red, Green, Blue }`.
+//   - Pattern C: tuple-payload enum `Token { Number(int), Word(String) }`.
+//   - Variant access `Color.Red` → Rust `Color::Red`.
+//   - Variant construction `Token.Number(42)` → Rust `Token::Number(42)`.
+//   - `==` comparison via auto-derived PartialEq.
+//   - Print via auto-derived Display (variant name only).
+
+public enum Color { Red, Green, Blue }
+
+public enum Token {
+    Number(int),
+    Word(String)
+}
+
+public void main() {
+    var favorite = Color.Green;
+    print(favorite);                       // Green
+
+    if (favorite == Color.Green) {
+        print("matched green");
+    }
+
+    var n = Token.Number(42);
+    var w = Token.Word("hello");
+    print(n);                              // Number
+    print(w);                              // Word
+}

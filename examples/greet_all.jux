@@ -1,0 +1,25 @@
+// for-each-on-arrays vehicle.
+//
+// Iterates a dynamic `String[]` with `for (var name : names)` and then
+// uses the array AGAIN after the loop — confirming the for-each
+// borrows rather than consumes. Also iterates a fixed-size `int[3]`
+// with the same syntax.
+//
+// Exercises:
+//   - `for (var name : names) { … }` on a dynamic array (Vec).
+//   - Re-use of `names` after the loop (post-loop `.length` access).
+//   - `for (var n : numbers) { … }` on a fixed-size array.
+
+public void main() {
+    String[] names = {"Alice", "Bob", "Carol"};
+    for (var name : names) {
+        print(name);
+    }
+    print(names.length);
+
+    int[3] numbers = {10, 20, 30};
+    for (var n : numbers) {
+        print(n);
+    }
+    print(numbers.length);
+}

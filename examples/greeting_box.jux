@@ -1,0 +1,51 @@
+// Bounded-generics vehicle — `<T extends B & C>` where B is a class
+// and C is an interface.
+//
+// Animal is a class. Greeter is an interface. Polite extends Animal
+// AND implements Greeter, so a `Box<Polite>` satisfies both bounds:
+//   - `T extends Animal` — Polite is in Animal's subclass family.
+//   - `T extends Greeter` — Polite implements Greeter, so the trait
+//     methods are callable on T directly.
+//
+// Phase-1 limitation: class-bound methods (Animal's `name()`) aren't
+// directly callable on T because the class bound uses an empty marker
+// trait. Interface-bound methods (`greet()`) are callable.
+
+public class Animal {
+    private String kind;
+    public Animal(String kind) {
+        this.kind = kind;
+    }
+}
+
+public interface Greeter {
+    String greet();
+}
+
+public class Polite extends Animal implements Greeter {
+    public Polite(String kind) {
+        super(kind);
+    }
+    public String greet() {
+        return $"How do you do?";
+    }
+}
+
+public class Box<T extends Animal & Greeter> {
+    private T item;
+
+    public Box(T item) {
+        this.item = item;
+    }
+
+    // Calls `greet()` through the Greeter trait bound on T.
+    public String describe() {
+        return $"item says: ${this.item.greet()}";
+    }
+}
+
+public void main() {
+    var p = new Polite("dog");
+    var b = new Box<Polite>(p);
+    print(b.describe());
+}

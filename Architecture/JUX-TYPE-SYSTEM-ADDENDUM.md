@@ -1,0 +1,769 @@
+# Jux Spec Addendum — Type System Algorithms
+
+**Status:** Proposed insertion. Specifies the algorithms run inside type checker phases (per `JUX-COMPILER-PIPELINE-ADDENDUM.md` phases 6–11): the `Object` root question, overload resolution, generic inference, smart-cast flow, pattern exhaustiveness, the borrow inference algorithm, default-method conflict resolution, and `protected` cross-module semantics.
+
+**Insertion points:**
+- New §T.1 ("The `Object` Root")
+- New §T.2 ("Variance and Wildcards")
+- New §T.3 ("Overload Resolution")
+- New §T.4 ("Generic Type Inference")
+- New §T.5 ("Pattern Exhaustiveness")
+- New §T.6 ("Smart-Cast Flow Analysis")
+- New §T.7 ("Borrow Inference Algorithm")
+- New §T.8 ("Default Method Resolution")
+- New §T.9 ("Closure Capture Inference")
+- New §T.10 ("`protected` Across Modules")
+- New §T.11 ("Const Evaluation")
+
+These sections fill the algorithmic gaps that JUX-LANG-V1 references at the rule level but never specifies.
+
+---
+
+## §T.1 — The `Object` Root
+
+**Decision: Jux has no universal `Object` root.** Class hierarchies are forests, not a single tree. This is the Rust model, applied to a Java-shaped language.
+
+### T.1.1. Rationale
+
+A universal `Object` root creates four problems:
+
+1. **Identity vs structural equality.** Java's `Object.equals` returns reference identity by default; subclasses override. This makes "are these equal?" depend on the runtime type, not the static type — which is exactly what we want to avoid in a borrow-checked language.
+2. **Universal hashing.** `Object.hashCode` baked into the runtime forces every class to be hashable, which forces a hash slot in every vtable, which costs space.
+3. **Generic erasure pressure.** Java's `Object` root is what makes erasure tempting (every reference is an `Object` reference). Jux monomorphizes; there's no need.
+4. **`Object` is a footgun.** "Pass anything" APIs taking `Object` defeat the type system. Generics and interfaces cover the legitimate cases.
+
+There is **no `Equatable`, `Hashable`, `Comparable`, `Cloneable`, `Displayable`, or `Sized` interface** in the language. Equality, ordering, hashing, and formatting are handled by **operator overrides** (`operator==`, `operator<=>`, `operator hash`, `operator string`) per `JUX-OPERATORS-ADDENDUM.md`. C++-style — declare the operators your type needs, no interface ceremony, no magic method names.
+
+### T.1.2. What Replaces `Object`
+
+Where Java APIs use `Object`, Jux APIs use:
+
+- **A structural constraint** when the operation requires a capability: `<T> bool contains(T elem) where T has operator==(T) -> bool`.
+- **A bounded generic** when the operation calls into a user-declared interface: `<T : Iterable<E>> int countItems(T iter)`.
+- **`any` as a catch-all** (see below) when the operation truly accepts anything (rare; usually a code smell).
+
+The `any` type is a built-in opaque type with no methods. Values of type `any` can only be compared by `===` (reference identity for class types; primitive equality for value types) and downcast via `=>` type-test. It is the explicit "I really do mean any value" escape hatch and is meant to be uncommon.
+
+### T.1.3. Equality Without an `Object` Root
+
+`==` is **never** dispatched through an interface. It is resolved by the operator-resolution rules in `JUX-OPERATORS-ADDENDUM.md` §O.2.3:
+
+1. If the receiver type defines `operator==(U)`: dispatch there.
+2. If the receiver is a record, struct, or enum: the auto-derived structural `operator==` applies.
+3. If the receiver is a primitive: built-in primitive equality.
+4. Otherwise (a class with no `operator==` defined): **reference identity**, same as `===`.
+
+There is no "implement Equatable" step. A class that wants structural equality writes `operator==`. A class that wants identity equality writes nothing. That's the entire surface.
+
+The compiler still requires that `operator==` be paired with `operator hash` (per `JUX-OPERATORS-ADDENDUM.md` §O.2.7) — but it's an operator override, not an interface implementation.
+
+### T.1.4. The `=>` Type-Test Operator
+
+`x => T` (read "x is an instance of T") where `T` is a class works as expected: returns `true` if `x`'s runtime type is `T` or a subtype. Without an `Object` root, the static type of `x` matters: `x` must be assignable from `T`, or assignable to `T` (the static check that the cast could succeed).
+
+For interface tests (`x => I`), the runtime checks whether `x`'s class implements `I`. This is the standard interface-table walk.
+
+For `x => T` where `T` is `any`: always `true`.
+
+The bound form `x => T name` introduces a smart-cast binding: `if (x => Dog d) { d.bark(); }` tests and binds in one expression.
+
+---
+
+## §T.2 — Variance and Wildcards
+
+JUX-LANG-V1 §7.8 introduces invariance with wildcards. The parser issue (`?` for wildcard vs `?` for nullable) is resolved in `JUX-GRAMMAR-ADDENDUM.md` §A.2.7. This section gives the type-checker rules.
+
+### T.2.1. Generic Parameters Are Invariant
+
+`List<Dog>` is **not** assignable to `List<Animal>`, even though `Dog extends Animal`. This is the Java rule: invariance preserves soundness in the presence of mutation.
+
+### T.2.2. Use-Site Variance via Wildcards
+
+At a use site, the wildcard `?` introduces variance:
+
+- **`List<? extends Animal>`** — covariance. Accepts `List<Dog>` or `List<Cat>`. Read-only with respect to `T`: the implementation may return `Animal` from any method, but cannot accept `T` as input.
+- **`List<? super Dog>`** — contravariance. Accepts `List<Dog>` or `List<Animal>`. Write-only with respect to `T`: the implementation may accept `Dog` (or any subtype) as input, but reads return `any` (no useful upper bound).
+
+The type checker tracks which methods are available on a wildcarded type:
+
+- For `List<? extends T>`: every method whose `T`-positions are output-only (the parameter never appears as a method argument or as the type of a mutating field).
+- For `List<? super T>`: every method whose `T`-positions are input-only (the parameter never appears as a method return type or as the type of a read-from field).
+- Methods that mix `T` in input and output positions (e.g., `swap(T a, T b) -> (T, T)`) are unavailable through wildcards.
+
+### T.2.3. Bounded-Wildcard Borrow Checker Interaction
+
+Per JUX-LANG-V1 §6.9.6: wildcards expose only the matching read or write API, so the borrow inference treats them as "shared-only" or "exclusive-only" respectively. Read-only-API calls require shared access; write-only-API calls require exclusive access.
+
+### T.2.4. Higher-Variance and Use Sites
+
+Jux does **not** support declaration-site variance (`class List<out T>` à la Kotlin). All variance is at use sites. The grammar reserves `in`/`out` modifiers in `generic-param` declarations for a future edition; in v1 they are rejected (`E0410`).
+
+### T.2.5. Disambiguation in the Parser
+
+`?` in a generic-arg slot:
+
+```jux
+List<?>                       // wildcard, equivalent to List<? extends any>
+List<? extends Animal>        // upper-bounded wildcard
+List<? super Dog>             // lower-bounded wildcard
+List<Dog?>                    // List of nullable Dog (Dog or null)
+List<Dog?>?                   // nullable List of nullable Dog
+```
+
+The parser distinguishes by *position*: a `?` immediately after the opening `<` or after a comma is a wildcard; a `?` immediately after a `simple-type` is the nullable suffix. There's no overlap.
+
+### T.2.6. Worked Example
+
+```jux
+public void copyAll<T>(List<? extends T> source, List<? super T> dest) {
+    for (var item : source) {       // item: T
+        dest.add(item);              // OK: dest accepts T
+    }
+}
+
+List<Dog> dogs = ...;
+List<Animal> animals = ...;
+copyAll(dogs, animals);              // T = Dog: source accepts List<Dog>, dest accepts List<Animal>
+```
+
+The compiler infers `T = Dog` from the source argument; verifies the dest argument is a `List<? super Dog>` (which `List<Animal>` satisfies).
+
+---
+
+## §T.3 — Overload Resolution
+
+When multiple declarations share a name, the resolver picks one. The algorithm runs in compiler phase 8.
+
+### T.3.1. Inputs
+
+For a call `f(a₁, a₂, ..., aₙ)` (or method call `recv.m(a₁, ...)`):
+
+- The set of candidates: every declaration in scope with the same name and a callable type. For methods, this includes inherited and default methods; for free functions, in-scope free functions and statics.
+- The argument expressions and their inferred types `Aᵢ`.
+- The expected return type, if any (from the surrounding context).
+
+### T.3.2. Step 1 — Filter to Applicable
+
+A candidate `f(P₁ p₁, P₂ p₂, ...)` is **applicable** to the call iff:
+
+- The argument count matches: positional + named arguments + variadic-expansion, with default-valued parameters allowed to be omitted.
+- For each supplied argument, its type is **assignable** to the corresponding parameter's type (per T.3.6).
+- For named arguments, every name corresponds to a declared parameter.
+
+Generic candidates: try to infer type arguments via §T.4. If inference succeeds and the instantiated signature is applicable, the generic candidate is applicable.
+
+### T.3.3. Step 2 — Specificity Ordering
+
+Among applicable candidates, the resolver prefers the **most specific**. Candidate `f` is more specific than candidate `g` iff:
+
+- For every argument position, `f`'s parameter type is assignable to `g`'s.
+- At least one position is strictly more specific.
+
+The "more specific" partial order combines:
+
+1. **Subtyping.** `Dog` is more specific than `Animal`. `final class C` is more specific than its non-`final` parent class `P` if `C extends P`.
+2. **No-vararg over vararg.** A non-variadic candidate is more specific than a variadic one with the same fixed prefix.
+3. **Concrete over generic.** A non-generic candidate is more specific than a generic one whose inferred instantiation matches.
+4. **Member over default.** A method declared on a class is more specific than a default method inherited from an interface.
+5. **Interface depth.** A method from a more-derived interface is more specific than one from a less-derived interface.
+
+If a unique most-specific candidate exists, pick it. Otherwise emit `E0420` listing the tied candidates.
+
+### T.3.4. Step 3 — Verify Return Type
+
+If the surrounding context demands a specific return type, verify that the picked candidate produces an assignable return. If not, emit `E0421`.
+
+### T.3.5. Operator Overload Resolution
+
+For `a OP b`:
+
+1. Look for `operator OP` as a member of `a`'s type.
+2. If not found, look for free-function `operator OP` in scope, taking `a`'s type as first argument.
+3. If still not found, fall back to built-in (for primitives) or reject (`E0422`).
+
+For `a == b` and `a != b`, dispatch follows the operator-resolution rules in `JUX-OPERATORS-ADDENDUM.md` §O.2.3 (user-defined `operator==`, then auto-derived for value types, then primitive equality, then reference identity for classes).
+
+### T.3.6. Assignability
+
+`A` is assignable to `B` iff:
+
+- `A` and `B` are the same type. Or
+- `A` is a subtype of `B` (subclass, interface implementation). Or
+- `A` is a numeric literal type and `B` is a numeric type that fits the literal (per `JUX-SEMANTICS-ADDENDUM.md` §S.2.6). Or
+- `A` is `T` and `B` is `T?`. Or
+- `A` is a function type compatible with `B`'s function type (contravariant in parameters, covariant in return). Or
+- `A` and `B` are tuples of the same arity with element-wise assignability. Or
+- `B` is `any` and `A` is any reference type.
+
+Assignability is **not** transitive across explicit casts (no implicit chaining).
+
+### T.3.7. Worked Example
+
+```jux
+public void log(String msg) { ... }                           // (1)
+public void log(int code) { ... }                             // (2)
+public <T> void log(T item) where T has operator string() -> String { ... }  // (3)
+public void log(String msg, String... tags) { ... }           // (4)
+
+log("hi");           // candidates: (1), (3), (4). Most specific: (1).
+log(42);             // candidates: (2), (3). Most specific: (2).
+log(my_record);      // candidates: (3) only. Picks it.
+log("hi", "tag1");   // candidates: (4) only. Picks it.
+```
+
+If two candidates remain after specificity (e.g., a `log(int)` and `log(long)` for an untyped literal `42`), the literal adapts to whichever target type makes the call unambiguous; if both apply, emit `E0420`.
+
+---
+
+## §T.4 — Generic Type Inference
+
+When a generic call site lacks explicit type args, the compiler infers them.
+
+### T.4.1. Local Inference
+
+Inference is **local** to a call site. The compiler does not propagate constraints across statements or across function boundaries. This is more restrictive than Hindley-Milner and produces clearer error messages.
+
+### T.4.2. Algorithm
+
+For a call `f<T₁, T₂, ...>(a₁, a₂, ..., aₙ)` with no explicit type args:
+
+1. **Build the constraint set.** For each argument, the type of the expression `aᵢ` must be assignable to the parameter type `Pᵢ`, where `Pᵢ` may mention type parameters. This produces constraints of the form `type(aᵢ) ≤ Pᵢ`.
+2. **Add bound constraints.** Each `Tⱼ : Bⱼ` clause adds `Tⱼ ≤ Bⱼ`.
+3. **Add return constraint.** If the call site has an expected type `R`, add `f's return type ≤ R`.
+4. **Solve.** Unify the constraints. For each `Tⱼ`:
+   - Find all constraints involving `Tⱼ`.
+   - Compute the join (least upper bound) of all "use site" types — types appearing on the LHS of `≤ Tⱼ`.
+   - Verify the join is `≤` every "constraint site" type — types on the RHS of `Tⱼ ≤`.
+5. **Result.** If a unique solution exists, the call site is resolved. If multiple solutions exist, emit `E0430`. If no solution, emit `E0431` showing the conflicting constraints.
+
+### T.4.3. Worked Examples
+
+```jux
+public <T> T identity(T x) { return x; }
+
+var a = identity(42);            // T = int (from the literal's adaptation)
+long b = identity(42);            // T = long (return-type constraint forces literal)
+var c = identity("hi");           // T = String
+
+public <T> T max(T a, T b) where T has operator<=>(T) -> int {
+    return a <=> b > 0 ? a : b;
+}
+
+var d = max(3, 5);                // T = int; bound satisfied (int has operator<=>)
+var e = max(3, "hi");             // E0431: cannot unify int and String
+```
+
+### T.4.4. Inference and Overload Resolution
+
+Inference and overload resolution are interleaved: for each candidate that is generic, attempt inference; if it succeeds, the candidate is applicable with its inferred instantiation. If multiple candidates remain after inference + applicability, specificity (§T.3.3) breaks the tie.
+
+### T.4.5. Inference Failure Falls Back to Annotation
+
+If a call site's inference is ambiguous, the user disambiguates with explicit type arguments:
+
+```jux
+var f = identity<long>(42);       // explicit
+```
+
+The grammar allows this via `expr<TypeArgs>(args)` (per `JUX-GRAMMAR-ADDENDUM.md` §A.2.9, postfix).
+
+---
+
+## §T.5 — Pattern Exhaustiveness
+
+For `switch` expressions and `switch` statements without a `default` clause, the compiler verifies that every input value is covered. Algorithm runs in phase 9.
+
+### T.5.1. The Algorithm at a High Level
+
+For a scrutinee of type `T`, build the **value set** of `T` (all distinct values, conceptually) and subtract the values covered by each case. If anything remains uncovered, emit `E0440` showing a minimal uncovered example.
+
+The "value set" is conceptual; for any type with finite or sealed structure, it can be enumerated lazily.
+
+### T.5.2. Per-Type Value Sets
+
+| Type                       | Value set                                                       |
+|----------------------------|-----------------------------------------------------------------|
+| `bool`                     | `{ true, false }`                                               |
+| Sealed `interface I`       | Disjoint union of values of each permitted subtype             |
+| Sealed `enum E`            | Disjoint union of cases, each carrying its payload's value set |
+| `T?`                       | `{ null } ∪ values(T)`                                         |
+| Tuple `(A, B)`             | `values(A) × values(B)`                                        |
+| Record `R(A, B)`           | `values(A) × values(B)`                                        |
+| Integer types              | The full range, as a single interval                            |
+| Other types                | Cannot be exhaustively matched; switch requires `default`       |
+
+### T.5.3. Per-Pattern Coverage
+
+| Pattern                     | Covered values                                              |
+|-----------------------------|-------------------------------------------------------------|
+| Literal `42`                | `{ 42 }`                                                    |
+| `null`                      | `{ null }`                                                  |
+| `_` or `var x`              | All values                                                  |
+| Type pattern `Foo`          | All values whose runtime type is `Foo` or subtype           |
+| Record/enum pattern         | The constructor's variant, with sub-pattern coverage on each component |
+| Range pattern `0..10`       | Integers in `[0, 10)`                                       |
+| Range pattern `0..=10`      | Integers in `[0, 10]`                                       |
+| Open range `100..`          | Integers in `[100, ∞)`                                      |
+| Or-pattern `A | B`          | `cover(A) ∪ cover(B)`                                       |
+| Pattern with guard `p when c` | `cover(p)` minus the values where `c` is statically known false (which is "no values" in general — guards reduce coverage but the compiler doesn't try to prove guard satisfaction) |
+
+### T.5.4. Coverage Subtraction
+
+For each switch, run cases in order. After each case, subtract its covered values from the remaining set. After the last case, if the remaining set is non-empty, emit `E0440` with a witness from the remaining set.
+
+### T.5.5. Witnesses
+
+When the compiler emits `E0440`, it shows a concrete missing value:
+
+```
+Error E0440: switch is not exhaustive
+  --> shape.jux:14:5
+   |
+14 |     switch (s) {
+   |     ^^^^^^^^^^^ this switch is missing a case for `Triangle`
+15 |         case Circle(var r) -> ...
+16 |         case Square(var w) -> ...
+17 |     }
+   |
+Hint: add `case Triangle(var b, var h) -> ...` or a `default` clause.
+```
+
+Witness construction picks the simplest missing value: `null` if `null` is missing; the first uncovered variant of a sealed type; the lowest-numbered missing integer for ranges.
+
+### T.5.6. Guards and Exhaustiveness
+
+A guard (`when` clause) reduces the case's coverage. The compiler does **not** prove guard conditions hold; a sealed type with all variants matched but each gated by a guard requires either:
+
+- A "fall-through" pattern at the end (an unguarded version of an earlier pattern), or
+- A `default` clause.
+
+This is the same rule as Java 21+ pattern-matching switches.
+
+---
+
+## §T.6 — Smart-Cast Flow Analysis
+
+After `if (x => Foo f)`, `f` is `Foo` in the then-branch. After `if (x != null)`, `x` is non-null. The flow analysis that tracks these refinements runs in phase 9.
+
+### T.6.1. The Concept
+
+A **flow type** is a refined type assigned to a name in a particular program region, more specific than the name's declared type. The base type comes from the declaration; the flow type comes from the surrounding control flow.
+
+### T.6.2. Refinement Sources
+
+| Construct                                | Refinement                                              |
+|------------------------------------------|---------------------------------------------------------|
+| `if (x => T y)` then-branch              | `y: T` introduced; `x` unchanged in scope               |
+| `if (x => T)` then-branch                | `x: T` (smart-cast)                                     |
+| `if (x != null)` then-branch             | `x: U` where `x: U?` declared (null stripped)           |
+| `if (x == null)` else-branch             | `x: U` (null stripped)                                  |
+| `x ?: throw ...`                         | After the expression, `x: U` (null stripped)            |
+| `assert x != null;`                      | After the assert, `x: U` (null stripped)                |
+| `requireNonNull(x)`                      | Same                                                    |
+| Pattern bindings in `switch` case body   | Bound names take their pattern-derived type             |
+
+### T.6.3. Refinement Persistence
+
+A flow refinement persists until:
+
+- Control flow leaves the region (the `if` body's `}`, the case body's end).
+- An assignment to the name. After `x = ...`, the refinement is dropped.
+- A method call on `x` that the compiler cannot prove is non-mutating (because the method might rebind a field or change the receiver). The flow type is widened back to the declared type.
+- A function call passing `x` as an out-parameter. (See `JUX-MISSING-DEFS-ADDENDUM.md` §M.4.)
+
+The compiler tracks refinements per-name, per-program-point.
+
+### T.6.4. Closures and Refinements
+
+A refinement on `x` made in an enclosing scope is **not** preserved inside a closure. Reason: the closure may execute later, and `x` may have been reassigned in the meantime. To carry a refinement into a closure, copy the refined value to a fresh local first:
+
+```jux
+public void example(User? maybe) {
+    if (maybe != null) {
+        var u = maybe;                                          -- u is User (flow-typed)
+        callback(() -> print(u.name));                          -- closure captures u: User
+    }
+}
+```
+
+### T.6.5. Loop Bodies
+
+Inside a loop body, refinements valid at the loop entry are valid for the body — but only if the body does not invalidate them. A reassignment to `x` inside the body invalidates the refinement on subsequent iterations.
+
+This is conservative; it produces some false negatives (refinements that *would* hold but the compiler can't prove). The user works around with a fresh local or an explicit `as` cast.
+
+### T.6.6. Combined Refinements
+
+Multiple refinements on the same name combine via meet:
+
+```jux
+if (x => Animal a) {                             -- a: Animal
+    if (a => Dog d) {                             -- d: Dog
+        a.???                                    -- a is still Animal here (separate name)
+        d.bark();                                -- d is Dog here
+    }
+}
+```
+
+Each `=>` binding introduces a fresh name; the original name's refinement is whatever flow analysis can prove.
+
+---
+
+## §T.7 — Borrow Inference Algorithm
+
+The borrow checker is the language's central technical guarantee. The user-visible model is in JUX-LANG-V1 §6 and §6.9. This section gives the algorithm.
+
+### T.7.1. Setup
+
+Borrow inference runs on MIR (per `JUX-COMPILER-PIPELINE-ADDENDUM.md` phase 11). MIR has:
+
+- A CFG of basic blocks.
+- Three-address operations: `move`, `copy`, `borrow_shared`, `borrow_excl`, `release`, `call`, `drop`, `return`.
+- Source-span links to the original program for diagnostics.
+
+The algorithm's job: for each program point, compute the set of **active borrows** and verify it is **conflict-free**.
+
+### T.7.2. Places and Paths
+
+A **place** is a path into a value:
+
+- A local variable: `x`.
+- A field of a place: `x.f`.
+- An array element: `x[i]`.
+- A dereference of a place: `*x` (only inside `unsafe`).
+
+For class instances, the place collapses to the instance per JUX-LANG-V1 §6.9.1. So `c.field` and `c.other_field` are tracked as the same place `c` for borrow purposes.
+
+For struct/record instances, places track field-by-field — so `s.x` and `s.y` are independent places, allowing disjoint borrows.
+
+### T.7.3. Borrow Modes
+
+- **Shared.** Multiple shared borrows on the same place may coexist. Reads through a shared borrow are permitted; writes are not.
+- **Exclusive.** No other borrow (shared or exclusive) may coexist on the same place. Reads and writes are permitted.
+
+The borrow mode of an operation is inferred from how the borrow is used: if the borrow's lifetime contains a write through it, it's exclusive; otherwise shared.
+
+### T.7.4. The Algorithm
+
+For each function:
+
+1. **Compute liveness.** Standard backward dataflow: at each program point, which places are live (used later)?
+2. **Compute borrow regions.** For each `borrow_shared` and `borrow_excl` operation, determine the borrow's lifetime: from the operation to the last use of the borrowed reference.
+3. **Compute the active-borrow set at each program point.** A borrow is active from its start operation to the end of its region.
+4. **Check conflict-freedom at each program point.** For each pair of active borrows on the same place, verify compatibility (per T.7.3).
+5. **Check lifetime containment.** A borrow's region must be contained within the lifetime of the borrowed-from value. If a borrow's region extends past its source's lifetime (the source is moved or dropped while the borrow is live), emit `E0501`.
+6. **Check the await rule.** At every `await` point, the active-borrow set must contain no exclusive borrows on observable state. (`AsyncMutex<T>` guards are tagged "unobservable" at lock acquisition.)
+7. **Check move-after-borrow.** A `move` of a place is rejected if any borrow on that place is active.
+8. **Check use-after-move.** A read of a place is rejected if the place is in the moved-from state at that program point.
+
+### T.7.5. Mutation Inference
+
+For each method body, run a sub-analysis:
+
+- A method **mutates `this`** if it writes a field of `this`, or calls another mutating method on `this`, or calls a function passing `this` by exclusive reference.
+- The sub-analysis is the same forward dataflow as the borrow check, scoped to `this`-relative places.
+- Result: each method gets a `mutates_this: bool` annotation.
+
+For virtual methods, the per-call mutation is the OR over reachable overrides (per JUX-LANG-V1 §6.9.3). For sealed hierarchies, the set is closed; for non-`final` (extendable) classes, it's the set of overrides linked into the program (per `JUX-MISSING-DEFS-ADDENDUM.md` §M.12.2).
+
+### T.7.6. Polymorphism Awareness
+
+Borrow inference runs on the polymorphic source — before monomorphization. The function's borrow signature (what borrows it takes from arguments, what borrows it produces in its return) is computed once per source function, not per instantiation.
+
+When monomorphization later instantiates the function for concrete types, the inferred signature transfers without re-running the analysis. The cost: monomorphization cannot specialize away borrow operations even when they would be unnecessary for a particular instantiation. The benefit: polymorphic source produces polymorphic errors, in source-language terms.
+
+### T.7.7. Whole-Program Refinement (Optional)
+
+After monomorphization, the compiler may run a **refinement pass** that inspects each call site's actual type and tightens the mutation summary if possible:
+
+- A call to a virtual method through a receiver of a sealed type: refine to exact mutation summary.
+- A call to a method on a concrete (non-virtual) type: refine to that method's exact summary.
+
+The refinement may turn a previously-rejected program into an accepted one (the user wrote conservative code that the compiler later proves was safe). It does **not** turn a previously-accepted program into a rejected one — refinement only relaxes.
+
+This is opt-in via `--refine-borrows`. By default, the polymorphic-source analysis is the answer.
+
+### T.7.8. Diagnostics
+
+Per JUX-LANG-V1 §6.7, §6.9.7, §10.1.6, borrow-checker diagnostics avoid lifetime jargon. The implementation:
+
+- Identify the conflicting operations (the borrow start, the conflicting use, the relevant sequence of statements).
+- Produce a multi-line snippet showing the timeline.
+- Emit a hint suggesting one of: clone, restructure, seal a base class, end a borrow scope.
+
+The diagnostic catalog (`E0501` through `E0599`) covers the main failure modes; each has a stable message template.
+
+---
+
+## §T.8 — Default Method Resolution
+
+When a class implements multiple interfaces with conflicting default methods, the compiler resolves or rejects at phase 9.
+
+### T.8.1. The Diamond Problem
+
+```jux
+public interface A {
+    default void greet() { print("A"); }
+}
+
+public interface B {
+    default void greet() { print("B"); }
+}
+
+public class C implements A, B {
+    // What does C.greet() do?
+}
+```
+
+### T.8.2. Resolution Rules
+
+For class C implementing interfaces I₁, I₂, ..., for each method `m`:
+
+1. **C overrides `m` directly?** Use C's implementation. End.
+2. **A superclass of C provides `m`?** Use the superclass's implementation (Java rule: class methods win over default interface methods). End.
+3. **Exactly one of I₁..Iₙ provides a default `m`?** Use that one. End.
+4. **Multiple of I₁..Iₙ provide default `m`?** Emit `E0810`: "C must override `m`; defaults from I₁ and I₂ conflict." (No magic resolution.)
+5. **None provides a default and `m` is abstract?** C must override; emit `E0811` if not.
+
+### T.8.3. Explicit Disambiguation
+
+When a class wants to inherit a particular default among conflicts, it overrides and explicitly delegates:
+
+```jux
+public class C implements A, B {
+    @Override
+    public void greet() {
+        A.super.greet();             -- explicitly call A's default
+    }
+}
+```
+
+The `Type.super.method()` syntax is allowed only inside the overriding class for an inherited default method.
+
+### T.8.4. Interaction with Generics
+
+Default methods in generic interfaces resolve before monomorphization, on the generic type. The mutation summary follows the inherited body. Per-instantiation refinement (per §T.7.7) may tighten this.
+
+---
+
+## §T.9 — Closure Capture Inference
+
+JUX-LANG-V1 §7.9 says capture mode is inferred. This section gives the inference rules.
+
+### T.9.1. Capture Mode Determined by Use
+
+For each free variable `x` referenced inside a closure body:
+
+- If the closure body **only reads** `x`: shared capture. The closure holds a shared borrow of `x` for the closure's lifetime.
+- If the closure body **writes to** `x`: exclusive capture. The closure holds an exclusive borrow of `x`.
+- If the closure outlives the enclosing scope of `x`: move capture. The closure takes ownership of `x`. Required when the closure is returned, stored in a longer-lived location, or spawned onto another task.
+
+Move capture is automatically inferred when the lifetime requirement demands it. The user can also force a move with the `move` keyword:
+
+```jux
+var label = "Sensor 5";
+var task = spawn(move () -> publish(label));        -- explicit move
+```
+
+### T.9.2. Class References
+
+A class reference inside a closure does not need exclusive capture even if the closure mutates the referenced object: the class's own borrow rules apply at use sites. The closure captures the *reference* (a refcounted pointer), shared.
+
+### T.9.3. Capture of Self in Method-Body Lambdas
+
+When a lambda inside a method references `this`, it captures `this` according to the same rules:
+
+- Read-only use: shared capture.
+- Mutating use: exclusive capture.
+- Outliving the method: move capture (the closure now owns a strong reference).
+
+For class methods, `this` is a refcounted reference, so move capture means the closure increments the refcount and holds a strong reference.
+
+### T.9.4. Diagnostics
+
+If the inferred capture mode would violate the borrow checker (e.g., the closure is stored in a longer-lived place but captures a borrow that doesn't outlive that place), emit `E0820` showing:
+
+- The closure's lifetime constraint.
+- The captured value's lifetime.
+- A hint to add `move` or to clone the captured value.
+
+The user never has to explain capture modes to the compiler; the compiler explains them when there's a problem.
+
+---
+
+## §T.10 — `protected` Across Modules
+
+JUX-LANG-V1 §4.4 specifies visibility levels but is silent on Java's quirky `protected` semantics across module boundaries. This section pins down the rule.
+
+### T.10.1. Within a Module
+
+`protected` is visible to:
+
+- The declaring class.
+- Subclasses of the declaring class (whether in the same package or not).
+- Other classes in the same package.
+
+This matches Java's `protected` exactly within a module.
+
+### T.10.2. Across Modules
+
+A subclass in a *different* module from the superclass can:
+
+- **Read or write `protected` fields of `this`** (its own inherited fields).
+- **Read `protected` fields of an instance whose static type is the subclass** (or a subtype).
+
+A subclass cannot:
+
+- **Access `protected` fields of an instance whose static type is the superclass.** Even if the instance is dynamically a subclass of the current class, the static-type check fails.
+- **Access `protected` members of unrelated subclasses of the same superclass.**
+
+This eliminates the Java footgun where a subclass can poke at protected members of a sibling subclass (action-at-a-distance through the superclass type).
+
+### T.10.3. Worked Example
+
+```jux
+// Module A
+package mod_a;
+
+public class Animal {
+    protected String name;
+}
+
+// Module B
+package mod_b;
+
+import mod_a.Animal;
+
+public class Dog extends Animal {
+    public void example(Animal a, Dog d) {
+        var x = name;             -- OK: this.name is protected and we are a subclass
+        var y = d.name;            -- OK: d's static type is Dog (a subclass)
+        var z = a.name;            -- ERROR E0830: cannot access protected `name` through Animal type
+    }
+}
+```
+
+### T.10.4. Implementation
+
+The check happens during name resolution / type checking:
+
+- For each access to a `protected` member, walk the access path:
+  - The receiver's static type must be the declaring class or a subclass thereof, AND
+  - The accessing context must be the declaring class, a subclass thereof, or in the declaring class's module (which gives package-style access).
+
+If both conditions fail, emit `E0830`.
+
+---
+
+## §T.11 — Const Evaluation
+
+JUX-LANG-V1 §14.1 says "limited const evaluation only" without specifying limits. This section pins them down.
+
+### T.11.1. What Is Const
+
+A **const fn** is a function declared with the `const` modifier, callable at compile time:
+
+```jux
+public const fn doubled(int x) -> int {
+    return x * 2;
+}
+
+public const int CACHE_SIZE = doubled(1024);
+```
+
+A **const expression** is one that evaluates to a value at compile time:
+
+- Literals.
+- Operations on `const` values.
+- Calls to `const fn`s with `const` arguments.
+- `if`/`match` whose conditions are `const`.
+
+### T.11.2. What Const Code Can Do
+
+Permitted in `const fn`:
+
+- Arithmetic, bitwise, comparison, logical ops on primitives.
+- `if`, `match`, ternary.
+- `for` and `while` loops with bounded iteration count (up to a compile-time-configurable limit; default 10⁶ iterations).
+- Recursion with bounded depth (default 1024).
+- Calls to other `const fn`s.
+- Construction of structs, records, enums, tuples, fixed-size arrays whose components are const.
+- Reading const-marked fields.
+- Inside `unsafe`, only operations that don't depend on runtime addresses (no FFI, no raw I/O).
+
+Forbidden in `const fn`:
+
+- Heap allocation (no `new` for class types or growable collections).
+- I/O of any kind.
+- Calls to non-`const` functions.
+- Mutation of any value not local to the const evaluation.
+- Async/await/yield.
+- Threading or atomics (since there's no runtime).
+
+### T.11.3. Const Generics
+
+A generic parameter declared `<int N>` (or `<long N>`, `<bool B>`, etc.) is a **const generic** — its argument is a compile-time-constant value. Per `JUX-GRAMMAR-ADDENDUM.md` §A.2.6.
+
+```jux
+public class RingBuffer<T, int N> {
+    private T[N] storage;
+    private int head;
+    private int tail;
+}
+
+var rb = new RingBuffer<float, 256>();
+```
+
+The compiler evaluates `N` at compile time and instantiates the type with a fixed-size array.
+
+### T.11.4. Const Evaluation in MIR
+
+Const evaluation runs in compiler phase 16 (per `JUX-COMPILER-PIPELINE-ADDENDUM.md`). The compiler maintains a **const-eval interpreter** that walks MIR with concrete values, reducing every operation to a result value. Limits (iteration count, recursion depth, total operation count) are enforced; exceeding them emits `E0840`.
+
+Const evaluation is deterministic: the same inputs always produce the same outputs across compiler versions, target platforms, and build configurations. Floating-point in const context uses IEEE 754 strictly with no host-rounding-mode assumption.
+
+### T.11.5. Worked Examples
+
+```jux
+public const fn fibonacci(int n) -> int {
+    if (n < 2) return n;
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+public const int FIB_10 = fibonacci(10);     -- evaluated at compile time → 55
+
+public class StackString<int N> {
+    private byte[N + 1] data;                 -- const generic arithmetic in array size
+    private int len;
+}
+
+var s = new StackString<32>();                -- 33-byte array, len field
+```
+
+### T.11.6. Diagnostics
+
+If a const context evaluates a non-const operation: `E0841`, naming the operation.
+If a const evaluation panics (overflow, division by zero, assertion failure): `E0842`, showing the panic site at compile time.
+If a const evaluation exceeds limits: `E0840`.
+
+---
+
+## Cross-References
+
+| Topic                            | Specified here | Used by                                                |
+|----------------------------------|----------------|--------------------------------------------------------|
+| `Object` root removal             | §T.1           | §T.3.6 (assignability); equality via `operator==` per `JUX-OPERATORS-ADDENDUM.md` |
+| Wildcards                         | §T.2           | §C.5 (borrow checker), `JUX-LANG-V1 §6.9.6`           |
+| Overload resolution               | §T.3           | Phase 8 of pipeline                                    |
+| Generic inference                 | §T.4           | Phase 7 of pipeline                                    |
+| Pattern exhaustiveness            | §T.5           | Phase 9 of pipeline                                    |
+| Smart-cast flow                   | §T.6           | Phase 9 of pipeline; refines types in §T.3.6          |
+| Borrow inference                  | §T.7           | Phase 11 of pipeline (the central correctness check)  |
+| Default method resolution         | §T.8           | Phase 9 of pipeline                                    |
+| Closure capture                   | §T.9           | §T.7 (closures over borrowed values)                  |
+| `protected` cross-module          | §T.10          | Phase 6 of pipeline                                    |
+| Const evaluation                  | §T.11          | Phase 16 of pipeline                                   |
+
+---
+
+*End of type-system addendum. With the compiler pipeline (architecture) and this addendum (algorithms) together, every rule the compiler has to enforce has both a where (phase) and a how (algorithm). The remaining work is exception/unwinding semantics and the minimal `core` library.*

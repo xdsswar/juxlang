@@ -1,0 +1,23 @@
+// Turn-3 array vehicle: bare initializer literal on a fixed-size array.
+//
+// `String[3] colors = {…};` lowers to a Rust array literal
+// `[…]` of type `[&str; 3]`. The size in the LHS type and the element
+// count in the initializer must match; Rust enforces that at compile
+// time.
+//
+// Exercises:
+//   - `String[3]` fixed-size array type in a typed-local declaration.
+//   - `String[3] xs = {…};` bare initializer for fixed-size arrays.
+//   - `arr.length` (compile-time-constant for fixed arrays).
+//   - `arr[i]` index read.
+
+public void main() {
+    String[3] colors = {"red", "green", "blue"};
+    print(colors.length);
+
+    var i = 0;
+    while (i < colors.length) {
+        print(colors[i]);
+        i = i + 1;
+    }
+}

@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operators (Final) — Jux</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="sidebar-brand" href="index.html">
+    <span class="sidebar-brand-mark">J</span>
+    <span>Jux</span>
+  </a>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Start Here</div>
+    <a href="index.html">Overview</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Foundation</div>
+    <a href="JUX-LANG-V1.html">Language V1 — Architecture & Design</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Core Specifications</div>
+    <a href="JUX-GRAMMAR-ADDENDUM.html">Formal Grammar</a>
+    <a href="JUX-SEMANTICS-ADDENDUM.html">Execution Semantics</a>
+    <a href="JUX-OPERATORS-ADDENDUM.html">Operators (Final)</a>
+    <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
+    <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
+    <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+    <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
+    <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Compiler &amp; Tooling</div>
+    <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
+    <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+    <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
+    <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
+    <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
+    <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Earlier Addenda</div>
+    <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
+    <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
+    <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
+  </div>
+  <div class="sidebar-footer">
+    Generated from spec markdown.<br>
+    Self-contained, offline-ready.
+  </div>
+</aside>
+
+  <main class="main">
+    <div class="content">
+      <div class="breadcrumb"><a href="index.html">← Jux Specification</a></div>
+      <div id="rendered"></div>
+    </div>
+  </main>
+</div>
+
+<script id="md-content" type="text/markdown">
+# Jux Spec Addendum — Operators (Final)
+
+**Status:** Proposed insertion. **Supersedes** all prior interface-based or magic-name designs across `JUX-MISSING-DEFS-ADDENDUM.md` §M.10, `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.1.3, and `JUX-CORE-LIB-ADDENDUM.md` §K.2. Pins down the operator-only design: every type capability is either auto-derived or expressed by overriding an `operator`. Zero interfaces, zero magic-name methods.
+
+**Insertion points:**
+- New §O.1 ("Design Philosophy")
+- New §O.2 ("The Operator List")
+- New §O.3 ("Auto-Derivation for Value Types")
+- New §O.4 ("Class Defaults and Customization")
+- New §O.5 ("Generic Constraints: `where T has operator OP`")
+- New §O.6 ("Iteration: The One Foundational Interface")
+- New §O.7 ("Compiler Lowering Hooks")
+- New §O.8 ("Worked Examples")
+- New §O.9 ("Supersedes")
+
+---
+
+## §O.1 — Design Philosophy
+
+The user shouldn't write boilerplate. The user should write what their type *does* — nothing else.
+
+Three principles drive every decision in this addendum:
+
+1. **Records, structs, and enums get every standard capability for free.** Equality, ordering, hashing, stringification — all auto-derived from the type's fields. Zero annotations. Zero method overrides.
+
+2. **Classes default to identity.** Identity equality, identity hash, type-and-address stringification. Write nothing → get the obvious behavior.
+
+3. **Customization is always a single operator override.** Want structural equality on a class? Write `operator==`. Want a custom string format? Write `operator string`. There is no `Equatable` interface to declare, no `toString()` method to remember, no annotation to pin on. Just one operator block.
+
+The result: most user types in Jux are **shorter than the Java equivalent** because the boilerplate is gone, **safer than the C++ equivalent** because behavior is consistent, and **clearer than the Rust equivalent** because there are no traits to import.
+
+---
+
+## §O.2 — The Operator List
+
+A type may declare any subset of these. Each is introduced by the `operator` keyword.
+
+### O.2.1. Equality and Ordering
+
+| Form                          | Returns | Auto-derives                                  |
+|-------------------------------|---------|-----------------------------------------------|
+| `operator==(Other)`           | `bool`  | `!=` as negation                              |
+| `operator<=>(Other)`          | `int`   | `<`, `<=`, `>`, `>=` from sign                |
+| individual `operator<` etc.   | `bool`  | (must define all four; no partial sets)       |
+
+`<=>` is preferred over the four-operator form. Defining both is `E0930`.
+
+### O.2.2. Hashing and Stringification
+
+| Form                | Returns  | Used by                                                    |
+|---------------------|----------|------------------------------------------------------------|
+| `operator hash()`   | `int`    | `Map<K, V>` keys, `Set<T>` elements                       |
+| `operator string()` | `String` | `$"..."` interpolation, `print(x)`, `+ String`            |
+
+These replace what other languages call `hashCode()`/`Hashable.hash()` and `toString()`/`Display::fmt()` — but as **operators with the `operator` keyword**, not magic-name methods. They participate in the same `where T has operator hash` constraint syntax (§O.5) as the rest.
+
+### O.2.3. Arithmetic and Bitwise
+
+| Operator | Method shape                              | Notes                       |
+|----------|-------------------------------------------|------------------------------|
+| `+`      | `T operator+(U other)`                     | Binary or unary              |
+| `-`      | `T operator-(U other)`                     | Binary or unary              |
+| `*`      | `T operator*(U other)`                     |                              |
+| `/`      | `T operator/(U other)`                     |                              |
+| `%`      | `T operator%(U other)`                     |                              |
+| `&`      | `T operator&(U other)`                     |                              |
+| `|`      | `T operator|(U other)`                     |                              |
+| `^`      | `T operator^(U other)`                     |                              |
+| `~`      | `T operator~()`                            | Unary                        |
+| `<<`     | `T operator<<(U other)`                    |                              |
+| `>>`     | `T operator>>(U other)`                    |                              |
+
+Compound assignment (`+=`, `-=`, …) auto-desugars to the corresponding binary operator. Cannot be overridden separately.
+
+### O.2.4. Indexing, Calling, Range, Containment
+
+| Operator | Method shape                              | Notes                       |
+|----------|-------------------------------------------|------------------------------|
+| `[]`     | `T operator[](I index)`                    | Indexed read                 |
+| `[]=`    | `void operator[]=(I index, T value)`        | Indexed write                |
+| `()`     | `R operator()(A... args)`                   | Makes the type callable      |
+| `..`     | `Range<T> operator..(T end)`                | Exclusive range              |
+| `..=`    | `Range<T> operator..=(T end)`               | Inclusive range              |
+| `in`     | `bool operator in(T element)`              | Defined on the *container*   |
+
+### O.2.5. What Cannot Be Overridden
+
+- `&&`, `||` — would lose short-circuit
+- `?:` — bound to nullable/result types
+- `=` — assignment is language-defined
+- `.`, `?.` — member access
+- `,` — sequencing
+- `===`, `!==` — always reference identity (per JUX-LANG-V1 §7.14.3); never overridable
+
+### O.2.6. Operator Resolution Rules
+
+For `a == b`:
+
+1. If `a`'s type defines `operator==(U)` and `b` is assignable to `U`: dispatch there.
+2. Else if `a`'s type is a record/struct/enum: auto-derived structural `operator==` (per §O.3).
+3. Else if `a`'s type is a primitive: built-in.
+4. Else (a class with no `operator==`): **reference identity** — same as `===`.
+
+For `a < b`, `a <= b`, `a > b`, `a >= b`:
+
+1. If `a`'s type defines `operator<=>(U)`: derive from sign.
+2. Else if `a`'s type defines individual operators: use them.
+3. Else if primitive: built-in.
+4. Else: `E0930` (type does not support ordering).
+
+For `a.toString()` *(when written)* — there is no such method discovery. Use `$"$a"` or `print(a)` for stringification, both of which dispatch to `operator string`.
+
+### O.2.7. The `==` and `hash` Pairing Rule
+
+If a class defines `operator==`, the compiler **requires** it to also define `operator hash`. Without the hash, the class behaves inconsistently in `Map`/`Set`. The compiler enforces this with `E0931` ("class defines `operator==` but no `operator hash`; structural equality requires consistent hashing").
+
+Records/structs/enums never trigger this — auto-derivation produces a consistent pair.
+
+---
+
+## §O.3 — Auto-Derivation for Value Types
+
+`record`, `struct`, and `enum` automatically gain every relevant operator from their structure. **No annotation.** **No interface.**
+
+### O.3.1. What Records Auto-Provide
+
+```jux
+public record Point(double x, double y) {}
+
+// Automatically available:
+//   operator==(Point)   — field-wise structural equality
+//   operator hash()     — combined hash of fields (consistent with ==)
+//   operator string()   — "Point(x: 1.5, y: 2.7)"
+//   copy on assignment   — implicit (records are value types)
+```
+
+A user-supplied `operator string` (or any other operator) overrides the auto-derived one for the named operator only; the rest stay derived:
+
+```jux
+public record Money(long cents, String currency) {
+    public String operator string() {
+        return $"$$ ${cents / 100}.${cents % 100} $currency";
+    }
+    // operator==, operator hash still auto-derived from fields
+}
+```
+
+### O.3.2. What Structs Auto-Provide
+
+```jux
+public struct Point3D {
+    double x;
+    double y;
+    double z;
+}
+
+// Automatically available:
+//   operator==(Point3D)  — field-wise
+//   operator string()    — "Point3D { x: ..., y: ..., z: ... }"
+//   copy on assignment   — implicit
+```
+
+Note: `operator hash` is **not** auto-derived for mutable structs. Mutable values used as map keys are usually a bug. Add `operator hash` explicitly if you really want it (rare).
+
+### O.3.3. What Enums Auto-Provide
+
+Sealed enums (with or without payloads) auto-provide:
+
+```jux
+public enum Result<T, E> {
+    Ok(T value),
+    Err(E error);
+}
+
+// Automatically:
+//   operator==           — variant + payload field-wise
+//   operator hash()      — variant tag combined with payload hashes
+//   operator string()    — "Ok(value: 42)" or "Err(error: ...)"
+```
+
+For payloads to participate, their types must themselves support the operator (transitively). The compiler propagates the constraint automatically — `Result<T, E>` is hashable iff `T` and `E` are.
+
+### O.3.4. Suppressing Auto-Derivation
+
+A record/struct/enum can opt out of an auto-derived operator by deleting it:
+
+```jux
+public record OpaqueToken(String secret) {
+    public String operator string() = delete;     // hide the secret in default fmt
+}
+
+print($"$myToken");                                 // E0935: operator string is deleted
+```
+
+Used rarely — security-sensitive types, types where the default would be misleading.
+
+---
+
+## §O.4 — Class Defaults and Customization
+
+Classes are reference types with identity. Their defaults reflect that.
+
+### O.4.1. Default Behavior (No Operators)
+
+```jux
+public class Connection {
+    public String host;
+    public int port;
+
+    public Connection(String host, int port) {
+        this.host = host;
+        this.port = port;
+    }
+}
+
+var c1 = new Connection("a.com", 80);
+var c2 = new Connection("a.com", 80);
+
+c1 == c2;            // false  — identity equality (no operator==)
+c1 === c1;            // true   — same instance
+$"$c1";              // "Connection@<addr>"  — auto-derived identity-format
+```
+
+Zero operators defined → behavior follows class identity. This is what you want 90% of the time. No code, no boilerplate.
+
+### O.4.2. Opting Into Structural Equality
+
+```jux
+public class Path {
+    public String value;
+
+    public bool operator==(Path other) { return value == other.value; }
+    public int operator hash() { return value.hash(); }
+    public String operator string() { return value; }
+}
+```
+
+Three short operator blocks — no interface declaration, no method-name discipline, no annotation. The compiler verifies the `==` + `hash` pair is consistent in shape; the user is responsible for the contract (equal values produce equal hashes).
+
+### O.4.3. Cloning Classes (Deliberately Manual)
+
+Jux has **no `operator clone`** and **no special `clone()` method**. If a class wants to expose a copy operation, the user writes whatever method name fits:
+
+```jux
+public class Inventory {
+    public List<Item> items;
+
+    public Inventory snapshot() {
+        var copy = new Inventory();
+        for (var item : items) copy.items.add(item);
+        return copy;
+    }
+}
+
+var saved = inv.snapshot();
+```
+
+The language doesn't second-guess this. There is no global `clone` concept, no `Cloneable` interface, no convention about how class copies should look. Each type designs its own copy semantics, with whatever name and whatever behavior makes sense for that type.
+
+For value types (records, structs, enums), copy is **implicit** on assignment — no method needed.
+
+---
+
+## §O.5 — Generic Constraints: `where T has operator OP`
+
+Generic functions that need a capability of `T` express it as a *structural constraint* — what operator the type must define. No `T : Equatable` or similar. The constraint reads like the operator declaration itself.
+
+### O.5.1. Syntax
+
+```
+where-clause      = 'where' constraint ( ',' constraint )*
+constraint        = type 'has' operator-shape
+                  | type ':' type-bound                          -- nominal (for interfaces, e.g. Iterable)
+
+operator-shape    = 'operator' op '(' param-types? ')' '->' type
+                  | 'operator' op '(' ')' '->' type              -- nullary / unary
+op                = '==' | '<=>' | 'hash' | 'string' | '+' | '-' | '*' | '/' | '%'
+                  | '&' | '|' | '^' | '~' | '<<' | '>>'
+                  | '[' ']' | '[' ']' '=' | '(' ')' | '..' | '..=' | 'in'
+```
+
+### O.5.2. Worked Examples
+
+```jux
+public T max<T>(T a, T b) where T has operator<=>(T) -> int {
+    return a <=> b > 0 ? a : b;
+}
+
+public bool isMember<T>(Set<T> s, T x)
+    where T has operator==(T) -> bool,
+          T has operator hash() -> int {
+    return s.contains(x);
+}
+
+public String describe<T>(T value) where T has operator string() -> String {
+    return $"[$value]";                          // interpolation invokes operator string
+}
+
+public List<T> sorted<T>(List<T> items) where T has operator<=>(T) -> int {
+    var result = items.copy();
+    result.sortInPlace((a, b) -> a <=> b);
+    return result;
+}
+```
+
+### O.5.3. Constraint Failures
+
+```
+Error E0940: type `User` does not satisfy `T has operator<=>(T) -> int`
+  --> sorter.jux:14:5
+   |
+14 |     var sorted = sorted(users);
+   |                  ^^^^^^ `User` does not define operator<=>
+   |
+Hint: define `int operator<=>(User other)` on User, or use a record/struct
+      to get auto-derived ordering.
+```
+
+### O.5.4. Constraints Compose
+
+```jux
+public V getOr<K, V>(Map<K, V> m, K key, V fallback)
+    where K has operator==(K) -> bool,
+          K has operator hash() -> int {
+    return m.contains(key) ? m.get(key) : fallback;
+}
+```
+
+A type satisfies the where-clause iff all listed constraints hold. Records, structs, and enums satisfy `operator==` and `operator hash` constraints automatically; classes need to declare them.
+
+---
+
+## §O.6 — Iteration: The One Foundational Interface
+
+`Iterable<T>` and `Iterator<T>` remain as nominal interfaces in `core` because iteration is special:
+
+- The `for-each` loop's lowering needs to call `.iterator()`.
+- Generic algorithms over iterables are common and benefit from a one-line nominal contract.
+- The cost is a single `implements Iterable<T>` clause on types that opt in.
+
+```jux
+package core.iter;
+
+public interface Iterator<T> {
+    T? next();
+}
+
+public interface Iterable<T> {
+    Iterator<T> iterator();
+
+    default Iterable<R> map<R>((T) -> R f) { ... }
+    default Iterable<T> filter((T) -> bool pred) { ... }
+    default U reduce<U>(U initial, (U, T) -> U combine) { ... }
+    // ... etc.
+    default T? minOrNull() where T has operator<=>(T) -> int { ... }
+}
+```
+
+A user type opts in by `implements Iterable<T>` and providing `iterator()`. That is the **only** time the user writes `implements <something>` for a foundational capability.
+
+For all the operator-driven capabilities (==, hash, string, ordering, arithmetic, indexing), no `implements` clause is ever needed.
+
+---
+
+## §O.7 — Compiler Lowering Hooks
+
+The compiler emits calls to these well-defined entry points during codegen.
+
+### O.7.1. String Interpolation
+
+`$"prefix $x suffix"` lowers to:
+
+```
+String.concat(
+    "prefix ",
+    <stringify x>,
+    " suffix"
+)
+```
+
+Where `<stringify x>` is:
+
+- For primitives: built-in stringification.
+- For value types (records/structs/enums): the auto-derived or user-overridden `operator string()` call.
+- For class types with `operator string` defined: the user's operator.
+- For class types without: synthesized "TypeName@<addr>" string.
+- For `String`: passthrough (already a string).
+- For `String?`: `null` if null, else passthrough.
+
+### O.7.2. Map and Set Operations
+
+Inserting `key` into `Map<K, V>` or `Set<K>` calls `key.operator hash()` for slot computation and `key == bucket_entry` for collision resolution. Generic `Map<K, V>` parameter `K` carries the constraint `where K has operator==(K) -> bool, K has operator hash() -> int` and is verified at every concrete instantiation.
+
+### O.7.3. `for-each` Desugaring
+
+```jux
+for (var x : value) { body }
+```
+
+lowers to:
+
+```jux
+{
+    var __it = value.iterator();
+    while (true) {
+        var __next = __it.next();
+        if (__next == null) break;
+        var x = __next;
+        body
+    }
+}
+```
+
+The compiler verifies `value`'s type implements `Iterable<T>`; otherwise emits `E0941`.
+
+### O.7.4. `print(x)` and `println(x)`
+
+These are free functions in `core.io` (or wherever the I/O helpers live). They're not magic — they take a generic `T` constrained by `T has operator string() -> String`, call `x.operator string()`, and write the result to stdout. Programmers who want different I/O write their own `print`-equivalents.
+
+---
+
+## §O.8 — Worked Examples
+
+### O.8.1. A Value Type — Zero Boilerplate
+
+```jux
+public record Vec3(double x, double y, double z) {
+    // Auto-derived: operator==, operator hash, operator string
+
+    public Vec3 operator+(Vec3 o) { return new Vec3(x+o.x, y+o.y, z+o.z); }
+    public Vec3 operator-(Vec3 o) { return new Vec3(x-o.x, y-o.y, z-o.z); }
+    public Vec3 operator*(double s) { return new Vec3(x*s, y*s, z*s); }
+    public double operator*(Vec3 o) { return x*o.x + y*o.y + z*o.z; }   // dot
+    public Vec3 operator-() { return new Vec3(-x, -y, -z); }
+    public int operator<=>(Vec3 o) {
+        return magnitude() <=> o.magnitude();
+    }
+
+    public double magnitude() { return sqrt(x*x + y*y + z*z); }
+}
+
+public Vec3 operator*(double s, Vec3 v) = v * s;            // free function form
+
+var a = new Vec3(1.0, 2.0, 3.0);
+var b = new Vec3(4.0, 5.0, 6.0);
+
+print(a == b);         // false       (auto-derived)
+print(a < b);          // true        (auto-derived from operator<=>)
+print(a + b * 2.0);    // Vec3(...)
+print($"a = $a");      // "a = Vec3(x: 1.0, y: 2.0, z: 3.0)"  (auto-derived string)
+
+var seen = new Set<Vec3>();
+seen.add(a);                              // works — auto-derived hash
+```
+
+Zero `implements`, zero magic methods, zero annotations. Operators only.
+
+### O.8.2. A Class — Identity by Default
+
+```jux
+public class HttpRequest {
+    public String url;
+    public Map<String, String> headers;
+    public byte[] body;
+
+    public HttpRequest(String url) { this.url = url; this.headers = new Map<>(); this.body = []; }
+}
+
+var r1 = new HttpRequest("/users/1");
+var r2 = new HttpRequest("/users/1");
+
+r1 == r2;               // false  — identity (no operator==)
+r1 === r1;               // true
+$"$r1";                 // "HttpRequest@0x7fff..."
+
+var pending = new Set<HttpRequest>();
+pending.add(r1);                          // works — uses identity hash by default
+```
+
+No operators, identity behavior, just works.
+
+### O.8.3. A Class With Structural Equality
+
+```jux
+public class Path {
+    public String segments;
+
+    public Path(String segments) { this.segments = segments; }
+
+    public bool operator==(Path other) { return segments == other.segments; }
+    public int operator hash() { return segments.operator hash(); }
+    public String operator string() { return segments; }
+}
+
+var p1 = new Path("/usr/bin");
+var p2 = new Path("/usr/bin");
+
+p1 == p2;               // true   — operator== defined, structural
+p1 === p2;               // false  — different instances
+$"$p1";                 // "/usr/bin"
+
+var seen = new Set<Path>();
+seen.add(p1);
+seen.contains(p2);      // true   — same hash, equal
+```
+
+Three operators, full structural behavior. Compare to a Java equivalent which would need `equals(Object)`, `hashCode()`, `toString()` (each with `@Override`), all returning specific types — and require the user to know which methods to override.
+
+### O.8.4. A Generic Sort
+
+```jux
+public List<T> sorted<T>(List<T> items) where T has operator<=>(T) -> int {
+    var result = items.copy();
+    result.sortInPlace((a, b) -> a <=> b);
+    return result;
+}
+
+var nums = sorted([5, 3, 8, 1]);          // works — int has built-in <=>
+var versions = sorted(versionList);       // works if Version defines operator<=>
+```
+
+The constraint is the operator. Read it left-to-right: "T has operator<=>". Done.
+
+---
+
+## §O.9 — Supersedes
+
+This addendum **replaces** the following sections in prior addenda:
+
+### From `JUX-MISSING-DEFS-ADDENDUM.md`:
+
+- §M.10 ("Foundational Interfaces") — already replaced. The interfaces `Equatable`, `Hashable`, `Comparable`, `Cloneable`, `Displayable`, `Sized` **do not exist**.
+- §M.3 ("`@Derive`") — `@Derive(...)` becomes a no-op annotation, accepted but useless. Auto-derivation happens unconditionally for value types.
+
+### From `JUX-TYPE-SYSTEM-ADDENDUM.md`:
+
+- §T.1.3 already updated to reflect operator-based equality.
+
+### From `JUX-CORE-LIB-ADDENDUM.md`:
+
+- §K.2 ("Foundational Traits") — already updated. `core` contains only `Sendable`/`Shareable` markers (in `core.markers`) and `Iterator<T>`/`Iterable<T>` (in `core.iter`).
+
+### From `JUX-LANG-V1.md`:
+
+- §9.4 ("Core Interfaces") — supplanted. Only `Iterator<T>` and `Iterable<T>` remain as foundational interfaces.
+
+### What's removed entirely
+
+- `Equatable`, `Hashable`, `Comparable`, `Cloneable`, `Displayable`, `Sized` interfaces — gone.
+- Magic method names `hashCode()`, `toString()`, `clone()`, `equals()` — gone. (User code may define methods of these names; they have no special compiler treatment.)
+- `@Derive(Equatable)`, `@Derive(Hashable)` etc. — no-op (accepted, ignored, warned about).
+- The `core.basic` module — gone. Replaced with `core.markers`.
+
+### What replaces them
+
+| Old (removed)                       | New (in this addendum)                            |
+|-------------------------------------|---------------------------------------------------|
+| `Equatable.equals(other)`            | `operator==(Other)`                               |
+| `Hashable.hashCode()`                | `operator hash()`                                 |
+| `Comparable.compareTo(other)`        | `operator<=>(Other)`                              |
+| `Cloneable.clone()`                  | (gone — write your own method; value types copy implicitly) |
+| `Displayable.toString()`             | `operator string()`                               |
+| `Sized.size()`                       | (gone — define `size() -> int` as a regular method if your type has one) |
+| `<T : Hashable>` constraint          | `where T has operator hash() -> int`              |
+| `<T : Comparable<T>>` constraint     | `where T has operator<=>(T) -> int`               |
+
+---
+
+## Summary
+
+Every type capability is one of:
+
+1. **Auto-derived from structure** (records, structs, enums for `==`, `hash`, `string`).
+2. **Identity-based default** (classes for everything until they override).
+3. **Operator override** (`operator==`, `operator hash`, `operator string`, `operator<=>`, etc.).
+4. **Iteration** (the one nominal interface, `Iterable<T>`).
+
+That's the entire surface. No interfaces to import. No magic method names to memorize. No annotations to remember. No "did I override `equals` and `hashCode` and `toString` consistently?" review checklist. The compiler enforces the consistency you can't see (the `==`/`hash` pair on classes); everything else is automatic.
+
+Best-of-all-languages syntax: Java-readable, Kotlin-concise (records auto-derive like data classes), Rust-safe (operator overrides plus borrow checker), C++-style customization (operator keyword), Swift-clean (no required interfaces). And always, always: the user writes operators their type *needs*, and nothing else.
+
+---
+
+*End of operators addendum. Final design.*
+
+</script>
+<script src="parser.js"></script>
+</body>
+</html>

@@ -1,0 +1,843 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jux Language — Specification Hub</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  /* Index-specific tweaks */
+  .doc-grid + .section-heading { margin-top: 48px; }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <a class="sidebar-brand" href="index.html">
+      <span class="sidebar-brand-mark">J</span>
+      <span>Jux</span>
+    </a>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Start Here</div>
+      <a href="index.html">Overview</a>
+      <a href="JUX-LANG-V1.html">Language Dossier (V1)</a>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Core Specifications</div>
+      <a href="JUX-GRAMMAR-ADDENDUM.html">Grammar</a>
+      <a href="JUX-SEMANTICS-ADDENDUM.html">Semantics</a>
+      <a href="JUX-OPERATORS-ADDENDUM.html">Operators</a>
+      <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
+      <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions</a>
+      <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+      <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotations</a>
+      <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Compiler</div>
+      <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
+      <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System</a>
+      <a href="JUX-CORE-LIB-ADDENDUM.html">Core Library</a>
+      <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
+      <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling</a>
+      <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostics</a>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Earlier Addenda</div>
+      <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow</a>
+      <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await</a>
+      <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap</a>
+    </div>
+
+    <div class="sidebar-footer">
+      Generated from spec markdown.<br>
+      Self-contained, offline-ready.
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="content">
+
+      <section class="hero">
+        <h1>Jux</h1>
+        <p>A systems programming language with Java-readable syntax, Rust-grade safety, and native LLVM-class performance. Compiles through a modified Rust frontend; final binaries match hand-written Rust speed.</p>
+        <div class="hero-tags">
+          <span class="hero-tag">Java syntax</span>
+          <span class="hero-tag">Rust safety</span>
+          <span class="hero-tag">Native speed</span>
+          <span class="hero-tag">unsafe { } escape</span>
+          <span class="hero-tag">No GC</span>
+        </div>
+      </section>
+
+      <h2 id="architecture">Architecture at a Glance</h2>
+      <p>Jux replaces rustc's <em>top layers</em> (lex, parse, type check, borrow check, MIR) with its own. It then emits Rust source code that any stable rustc can compile. Final binaries are bit-identical to native Rust output — same LLVM IR, same machine code, same speed.</p>
+
+      <div class="diagram-frame">
+        <svg viewBox="0 0 720 380" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="juxGrad" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="#6c4af2"/>
+              <stop offset="1" stop-color="#00d9c5"/>
+            </linearGradient>
+            <linearGradient id="rustGrad" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="#dea584"/>
+              <stop offset="1" stop-color="#ce422b"/>
+            </linearGradient>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#555"/>
+            </marker>
+          </defs>
+
+          <!-- Top: Jux frontend -->
+          <rect x="60" y="20" width="600" height="140" rx="10" fill="url(#juxGrad)" opacity="0.10" stroke="#6c4af2" stroke-width="2"/>
+          <text x="80" y="44" font-family="-apple-system,Segoe UI,sans-serif" font-size="14" font-weight="700" fill="#6c4af2">JUX FRONTEND (you replace rustc's top layers)</text>
+
+          <g font-family="-apple-system,Segoe UI,sans-serif" font-size="12" fill="#1a1a2e">
+            <rect x="80" y="60" width="100" height="40" rx="6" fill="#fff" stroke="#6c4af2"/>
+            <text x="130" y="84" text-anchor="middle">Lexer</text>
+
+            <rect x="200" y="60" width="100" height="40" rx="6" fill="#fff" stroke="#6c4af2"/>
+            <text x="250" y="84" text-anchor="middle">Parser</text>
+
+            <rect x="320" y="60" width="100" height="40" rx="6" fill="#fff" stroke="#6c4af2"/>
+            <text x="370" y="84" text-anchor="middle">Type Check</text>
+
+            <rect x="440" y="60" width="100" height="40" rx="6" fill="#fff" stroke="#6c4af2"/>
+            <text x="490" y="84" text-anchor="middle">Borrow Check</text>
+
+            <rect x="560" y="60" width="80" height="40" rx="6" fill="#fff" stroke="#6c4af2"/>
+            <text x="600" y="84" text-anchor="middle">MIR</text>
+
+            <rect x="200" y="110" width="320" height="40" rx="6" fill="#6c4af2"/>
+            <text x="360" y="135" text-anchor="middle" fill="#fff" font-weight="700">Emit Rust source (the stable handoff)</text>
+          </g>
+
+          <!-- Arrow down to rustc -->
+          <line x1="360" y1="160" x2="360" y2="195" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+          <!-- Bottom: rustc -->
+          <rect x="60" y="200" width="600" height="120" rx="10" fill="url(#rustGrad)" opacity="0.10" stroke="#ce422b" stroke-width="2"/>
+          <text x="80" y="224" font-family="-apple-system,Segoe UI,sans-serif" font-size="14" font-weight="700" fill="#a02a14">RUSTC + LLVM (you keep these for free)</text>
+
+          <g font-family="-apple-system,Segoe UI,sans-serif" font-size="12" fill="#1a1a2e">
+            <rect x="80" y="240" width="100" height="40" rx="6" fill="#fff" stroke="#ce422b"/>
+            <text x="130" y="264" text-anchor="middle">Parse</text>
+
+            <rect x="200" y="240" width="100" height="40" rx="6" fill="#fff" stroke="#ce422b"/>
+            <text x="250" y="264" text-anchor="middle">Optimize</text>
+
+            <rect x="320" y="240" width="100" height="40" rx="6" fill="#fff" stroke="#ce422b"/>
+            <text x="370" y="264" text-anchor="middle">LLVM IR</text>
+
+            <rect x="440" y="240" width="100" height="40" rx="6" fill="#fff" stroke="#ce422b"/>
+            <text x="490" y="264" text-anchor="middle">Codegen</text>
+
+            <rect x="560" y="240" width="80" height="40" rx="6" fill="#fff" stroke="#ce422b"/>
+            <text x="600" y="264" text-anchor="middle">Linker</text>
+          </g>
+
+          <!-- Output -->
+          <line x1="360" y1="320" x2="360" y2="345" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+          <rect x="240" y="345" width="240" height="28" rx="14" fill="#1a1a2e"/>
+          <text x="360" y="365" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#00d9c5">native binary  ·  full Rust speed</text>
+        </svg>
+        <div class="diagram-caption">Architecture: replace rustc's top layers with Jux's; ride on rustc's bottom layers for codegen and optimization.</div>
+      </div>
+
+      <h2 id="pipeline">Compilation Pipeline</h2>
+      <p>The Jux compiler ships as a multi-phase pipeline. Each phase consumes a typed IR and produces the next. The reachability pass (9.5) is the source-level tree-shaker: only items the program can actually reach are emitted to Rust.</p>
+
+      <div class="diagram-frame">
+        <svg viewBox="0 0 720 480" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#888"/>
+            </marker>
+          </defs>
+          <g font-family="-apple-system,Segoe UI,sans-serif" font-size="12">
+            <!-- Phases as a vertical pipeline -->
+            <rect x="220" y="10" width="280" height="38" rx="6" fill="#6c4af2"/>
+            <text x="360" y="34" text-anchor="middle" fill="#fff" font-weight="700">.jux source files</text>
+
+            <line x1="360" y1="48" x2="360" y2="65" stroke="#888" stroke-width="2" marker-end="url(#arrow2)"/>
+
+            <rect x="220" y="68" width="280" height="32" rx="6" fill="#f6f4ff" stroke="#6c4af2"/>
+            <text x="360" y="88" text-anchor="middle" fill="#1a1a2e">1. Lex  →  2. Parse  →  3. AST</text>
+
+            <line x1="360" y1="100" x2="360" y2="115" stroke="#888" stroke-width="2" marker-end="url(#arrow2)"/>
+
+            <rect x="220" y="118" width="280" height="32" rx="6" fill="#f6f4ff" stroke="#6c4af2"/>
+            <text x="360" y="138" text-anchor="middle" fill="#1a1a2e">4. Resolve  →  5. @cfg eval</text>
+
+            <line x1="360" y1="150" x2="360" y2="165" stroke="#888" stroke-width="2" marker-end="url(#arrow2)"/>
+
+            <rect x="220" y="168" width="280" height="32" rx="6" fill="#f6f4ff" stroke="#6c4af2"/>
+            <text x="360" y="188" text-anchor="middle" fill="#1a1a2e">6–9. Type check + smart cast</text>
+
+            <line x1="360" y1="200" x2="360" y2="215" stroke="#888" stroke-width="2" marker-end="url(#arrow2)"/>
+
+            <rect x="200" y="218" width="320" height="36" rx="6" fill="#00d9c5"/>
+            <text x="360" y="241" text-anchor="middle" fill="#fff" font-weight="700">9.5 — Reachability (tree-shake)</text>
+
+            <line x1="360" y1="254" x2="360" y2="270" stroke="#888" stroke-width="2" marker-end="url(#arrow2)"/>
+
+            <rect x="220" y="273" width="280" height="32" rx="6" fill="#f6f4ff" stroke="#6c4af2"/>
+            <text x="360" y="293" text-anchor="middle" fill="#1a1a2e">10. MIR build  →  11. Borrow</text>
+
+            <line x1="360" y1="305" x2="360" y2="320" stroke="#888" stroke-width="2" marker-end="url(#arrow2)"/>
+
+            <rect x="220" y="323" width="280" height="32" rx="6" fill="#f6f4ff" stroke="#6c4af2"/>
+            <text x="360" y="343" text-anchor="middle" fill="#1a1a2e">12–14. Move / Drop / Refcount</text>
+
+            <line x1="360" y1="355" x2="360" y2="370" stroke="#888" stroke-width="2" marker-end="url(#arrow2)"/>
+
+            <rect x="220" y="373" width="280" height="32" rx="6" fill="#f6f4ff" stroke="#6c4af2"/>
+            <text x="360" y="393" text-anchor="middle" fill="#1a1a2e">15. Async  →  16. Const eval</text>
+
+            <line x1="360" y1="405" x2="360" y2="420" stroke="#888" stroke-width="2" marker-end="url(#arrow2)"/>
+
+            <rect x="220" y="423" width="280" height="32" rx="6" fill="#f6f4ff" stroke="#6c4af2"/>
+            <text x="360" y="443" text-anchor="middle" fill="#1a1a2e">17. Mono  →  18. DCE  →  Emit Rust</text>
+
+            <!-- side annotation -->
+            <line x1="200" y1="234" x2="80" y2="234" stroke="#00d9c5" stroke-width="2" stroke-dasharray="4,3"/>
+            <text x="76" y="232" text-anchor="end" fill="#00d9c5" font-weight="600" font-size="11">only reachable</text>
+            <text x="76" y="246" text-anchor="end" fill="#00d9c5" font-size="11">code continues</text>
+          </g>
+        </svg>
+        <div class="diagram-caption">Phases 1–18. Reachability (9.5) prunes unused functions/types before MIR — saves rustc work, not just final binary space.</div>
+      </div>
+
+      <h2 id="project-structure">Project Structure</h2>
+      <p>The compiler implementation is a Cargo workspace of focused crates plus a stdlib in Jux source.</p>
+
+      <div class="diagram-frame">
+        <svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg">
+          <g font-family="-apple-system,Segoe UI,sans-serif" font-size="12" fill="#1a1a2e">
+            <rect x="20" y="20" width="680" height="40" rx="6" fill="#15152a"/>
+            <text x="40" y="44" fill="#fff" font-weight="700">juxlang/  ·  Cargo workspace</text>
+
+            <!-- crates -->
+            <rect x="20" y="80" width="220" height="220" rx="8" fill="#f6f4ff" stroke="#6c4af2"/>
+            <text x="32" y="100" font-weight="700" fill="#6c4af2">crates/</text>
+            <text x="40" y="124">juxc/  · compiler binary</text>
+            <text x="40" y="142">jux/  · project tool (cargo-like)</text>
+            <text x="40" y="160">jux-syntax/  · lex + parse</text>
+            <text x="40" y="178">jux-hir/  · resolve + typeck</text>
+            <text x="40" y="196">jux-mir/  · MIR + borrow + lower</text>
+            <text x="40" y="214">jux-codegen/  · emit Rust source</text>
+            <text x="40" y="232">jux-diag/  · diagnostics</text>
+            <text x="40" y="250">jux-driver/  · pipeline glue</text>
+            <text x="40" y="268">jux-manifest/  · jux.toml</text>
+            <text x="40" y="286">jux-rt/  · runtime crate</text>
+
+            <!-- stdlib -->
+            <rect x="260" y="80" width="200" height="120" rx="8" fill="#e0fbf6" stroke="#00d9c5"/>
+            <text x="272" y="100" font-weight="700" fill="#00867a">stdlib/</text>
+            <text x="280" y="124">core/  · written in Jux</text>
+            <text x="290" y="142">option, result, iter</text>
+            <text x="290" y="160">string, exception, async</text>
+            <text x="280" y="180">std/  · expanded in Jux later</text>
+
+            <!-- tests/docs -->
+            <rect x="260" y="220" width="200" height="80" rx="8" fill="#fff8e8" stroke="#e8a87c"/>
+            <text x="272" y="240" font-weight="700" fill="#a06236">tests/</text>
+            <text x="280" y="258">golden/, e2e/</text>
+            <text x="280" y="276">borrow-corpus/</text>
+            <text x="280" y="294">diagnostic-corpus/</text>
+
+            <!-- examples / tools -->
+            <rect x="480" y="80" width="220" height="220" rx="8" fill="#fff" stroke="#cccdd6"/>
+            <text x="492" y="100" font-weight="700" fill="#1a1a2e">examples/  ·  tools/  ·  docs/</text>
+            <text x="500" y="124">examples/  · sample programs</text>
+            <text x="510" y="142">hello, tcp-echo, blink</text>
+            <text x="500" y="166">tools/</text>
+            <text x="510" y="184">borrow-fuzzer  · invariant test</text>
+            <text x="510" y="202">snapshot-runner</text>
+            <text x="510" y="220">benchmarks</text>
+            <text x="500" y="244">docs/  · this site</text>
+            <text x="500" y="268">.github/workflows/</text>
+            <text x="510" y="286">multi-rustc CI matrix</text>
+
+            <text x="20" y="334" fill="#888" font-size="11">10 main crates · 2 binaries (juxc, jux) · 5 test layers · multi-rustc CI</text>
+          </g>
+        </svg>
+        <div class="diagram-caption">Workspace layout. Each crate is small and focused. Most users only see <code>juxc</code> and <code>jux</code>.</div>
+      </div>
+
+      <h2 id="three-profiles">Three Build Profiles</h2>
+      <p>The same Jux source compiles to three target classes depending on the profile. Features adapt to what the target supports.</p>
+
+      <div class="diagram-frame">
+        <svg viewBox="0 0 720 240" xmlns="http://www.w3.org/2000/svg">
+          <g font-family="-apple-system,Segoe UI,sans-serif" font-size="12" fill="#1a1a2e">
+            <!-- jux-full -->
+            <rect x="20" y="20" width="220" height="200" rx="10" fill="#f6f4ff" stroke="#6c4af2" stroke-width="2"/>
+            <text x="130" y="48" text-anchor="middle" font-weight="700" font-size="16" fill="#6c4af2">jux-full</text>
+            <text x="130" y="68" text-anchor="middle" font-size="11" fill="#888">Linux · macOS · Windows</text>
+            <line x1="40" y1="78" x2="220" y2="78" stroke="#cccdd6"/>
+            <text x="40" y="98">✓ Heap allocation</text>
+            <text x="40" y="118">✓ Refcount on classes</text>
+            <text x="40" y="138">✓ Exceptions</text>
+            <text x="40" y="158">✓ Threads + workers</text>
+            <text x="40" y="178">✓ Async / await</text>
+            <text x="40" y="198">apps · servers · tools</text>
+
+            <!-- jux-embedded -->
+            <rect x="250" y="20" width="220" height="200" rx="10" fill="#e0fbf6" stroke="#00d9c5" stroke-width="2"/>
+            <text x="360" y="48" text-anchor="middle" font-weight="700" font-size="16" fill="#00867a">jux-embedded</text>
+            <text x="360" y="68" text-anchor="middle" font-size="11" fill="#888">ESP32 · STM32 · Pi Pico</text>
+            <line x1="270" y1="78" x2="450" y2="78" stroke="#cccdd6"/>
+            <text x="270" y="98">~ Heap (optional)</text>
+            <text x="270" y="118">~ Refcount (optional)</text>
+            <text x="270" y="138">~ Exceptions (optional)</text>
+            <text x="270" y="158">✗ Workers (single-thread)</text>
+            <text x="270" y="178">~ Async (light executor)</text>
+            <text x="270" y="198">RTOS · MCU firmware</text>
+
+            <!-- jux-core -->
+            <rect x="480" y="20" width="220" height="200" rx="10" fill="#fff8e8" stroke="#e8a87c" stroke-width="2"/>
+            <text x="590" y="48" text-anchor="middle" font-weight="700" font-size="16" fill="#a06236">jux-core</text>
+            <text x="590" y="68" text-anchor="middle" font-size="11" fill="#888">Bare metal · ATmega · kernels</text>
+            <line x1="500" y1="78" x2="680" y2="78" stroke="#cccdd6"/>
+            <text x="500" y="98">✗ Heap</text>
+            <text x="500" y="118">✗ Refcount</text>
+            <text x="500" y="138">✗ Exceptions</text>
+            <text x="500" y="158">✗ Threads</text>
+            <text x="500" y="178">✗ Async</text>
+            <text x="500" y="198">bootloaders · drivers</text>
+          </g>
+        </svg>
+        <div class="diagram-caption">Same syntax, same borrow checker, same FFI on every profile. The profile decides what's available.</div>
+      </div>
+
+      <h2 id="quick-tour">Quick Tour</h2>
+      <p>What Jux looks like when you actually write it.</p>
+
+      <h3>Procedural style — structs + free functions, no classes</h3>
+      <pre><code class="lang-jux"><span class="kw">package</span> com.example.physics;
+
+<span class="kw">public</span> <span class="kw">const</span> <span class="kw">double</span> G = <span class="num">9.81</span>;
+
+<span class="kw">public</span> <span class="kw">struct</span> <span class="typ">Particle</span> {                       <span class="com">// plain data, value type</span>
+    <span class="kw">double</span> x; <span class="kw">double</span> y;
+    <span class="kw">double</span> vx; <span class="kw">double</span> vy;
+    <span class="kw">double</span> mass;
+}
+
+<span class="kw">public</span> <span class="typ">Particle</span> step(<span class="typ">Particle</span> p, <span class="kw">double</span> dt) {     <span class="com">// free function</span>
+    <span class="kw">return</span> <span class="kw">new</span> <span class="typ">Particle</span>(
+        p.x + p.vx * dt, p.y + p.vy * dt,
+        p.vx, p.vy - G * dt,
+        p.mass
+    );
+}
+
+<span class="kw">public</span> <span class="kw">double</span> kineticEnergy(<span class="typ">Particle</span> p) {
+    <span class="kw">return</span> <span class="num">0.5</span> * p.mass * (p.vx * p.vx + p.vy * p.vy);
+}
+
+<span class="com">// Top-level in main.jux:</span>
+<span class="kw">var</span> p = <span class="kw">new</span> <span class="typ">Particle</span>(<span class="num">0.0</span>, <span class="num">100.0</span>, <span class="num">5.0</span>, <span class="num">0.0</span>, <span class="num">1.0</span>);
+<span class="kw">for</span> (<span class="kw">var</span> t : <span class="num">0</span>..<span class="num">100</span>) p = step(p, <span class="num">0.01</span>);
+
+<span class="com">// Zero classes. C ergonomics + Rust safety + generics + ADTs.</span></code></pre>
+
+      <h3>Enums — C, Java, AND Rust styles, all in one construct</h3>
+      <pre><code class="lang-jux"><span class="com">// Pattern A — Java-style with methods</span>
+<span class="kw">public</span> <span class="kw">enum</span> <span class="typ">Direction</span> {
+    <span class="typ">North</span>, <span class="typ">South</span>, <span class="typ">East</span>, <span class="typ">West</span>;
+    <span class="kw">public</span> <span class="typ">Direction</span> opposite() {
+        <span class="kw">return</span> <span class="kw">switch</span> (<span class="kw">this</span>) {
+            <span class="kw">case</span> <span class="typ">North</span> -&gt; <span class="typ">South</span>;  <span class="kw">case</span> <span class="typ">South</span> -&gt; <span class="typ">North</span>;
+            <span class="kw">case</span> <span class="typ">East</span>  -&gt; <span class="typ">West</span>;   <span class="kw">case</span> <span class="typ">West</span>  -&gt; <span class="typ">East</span>;
+        };
+    }
+}
+
+<span class="typ">Direction</span>.values();              <span class="com">// [North, South, East, West] — auto-derived</span>
+<span class="typ">Direction</span>.<span class="typ">North</span>.name();          <span class="com">// "North"</span>
+<span class="typ">Direction</span>.fromName(<span class="str">"east"</span>);       <span class="com">// East (case-insensitive)</span>
+
+<span class="com">// Pattern B — C-compatible for FFI</span>
+@layout(c, repr = <span class="str">"i32"</span>)
+<span class="kw">public</span> <span class="kw">enum</span> <span class="typ">HttpStatus</span> {
+    <span class="typ">Ok</span> = <span class="num">200</span>, <span class="typ">NotFound</span> = <span class="num">404</span>, <span class="typ">ServerError</span> = <span class="num">500</span>
+}
+
+<span class="com">// Pattern C — sum types with payloads (Rust-style ADTs)</span>
+<span class="kw">public</span> <span class="kw">enum</span> <span class="typ">Event</span> {
+    <span class="typ">Click</span>(<span class="kw">int</span> x, <span class="kw">int</span> y),
+    <span class="typ">KeyPress</span>(<span class="typ">String</span> key),
+    <span class="typ">Resize</span>(<span class="kw">int</span> w, <span class="kw">int</span> h)
+}
+
+<span class="kw">switch</span> (event) {
+    <span class="kw">case</span> <span class="typ">Click</span>(<span class="kw">var</span> x, <span class="kw">var</span> y) -&gt; print(<span class="str">$"click ($x, $y)"</span>);
+    <span class="kw">case</span> <span class="typ">KeyPress</span>(<span class="kw">var</span> k)     -&gt; print(<span class="str">$"key $k"</span>);
+    <span class="kw">case</span> <span class="typ">Resize</span>(<span class="kw">var</span> w, <span class="kw">var</span> h) -&gt; print(<span class="str">$"resize ${w}x${h}"</span>);
+}  <span class="com">// exhaustive — compiler verifies</span></code></pre>
+
+      <h3>Records auto-derive everything — zero boilerplate</h3>
+      <pre><code class="lang-jux"><span class="kw">public</span> <span class="kw">record</span> <span class="typ">Vec3</span>(<span class="kw">double</span> x, <span class="kw">double</span> y, <span class="kw">double</span> z) {
+    <span class="com">// operator==, operator hash, operator string auto-derived</span>
+    <span class="com">// copy on assignment is implicit (records are value types)</span>
+
+    <span class="kw">public</span> <span class="typ">Vec3</span> <span class="kw">operator</span>+(<span class="typ">Vec3</span> o) { <span class="kw">return</span> <span class="kw">new</span> <span class="typ">Vec3</span>(x+o.x, y+o.y, z+o.z); }
+    <span class="kw">public</span> <span class="kw">double</span> <span class="kw">operator</span>*(<span class="typ">Vec3</span> o) { <span class="kw">return</span> x*o.x + y*o.y + z*o.z; }  <span class="com">// dot</span>
+    <span class="kw">public</span> <span class="kw">int</span> <span class="kw">operator</span>&lt;=&gt;(<span class="typ">Vec3</span> o) { <span class="kw">return</span> magnitude() &lt;=&gt; o.magnitude(); }
+    <span class="kw">public</span> <span class="kw">double</span> magnitude() { <span class="kw">return</span> sqrt(x*x + y*y + z*z); }
+}
+
+<span class="kw">var</span> a = <span class="kw">new</span> <span class="typ">Vec3</span>(<span class="num">1.0</span>, <span class="num">2.0</span>, <span class="num">3.0</span>);
+<span class="kw">var</span> b = <span class="kw">new</span> <span class="typ">Vec3</span>(<span class="num">4.0</span>, <span class="num">5.0</span>, <span class="num">6.0</span>);
+
+print(a == b);             <span class="com">// false  — auto-derived equality</span>
+print(a &lt; b);              <span class="com">// true   — auto-derived from operator&lt;=&gt;</span>
+print(<span class="str">$"a = $a"</span>);          <span class="com">// "a = Vec3(x: 1.0, y: 2.0, z: 3.0)"</span></code></pre>
+
+      <h3>C#-style properties — get / set / init / expression-bodied</h3>
+      <pre><code class="lang-jux"><span class="kw">public</span> <span class="kw">class</span> <span class="typ">User</span> {
+    <span class="kw">public</span> <span class="typ">String</span> name  { <span class="kw">get</span>; <span class="kw">set</span>; }                    <span class="com">// auto, read-write</span>
+    <span class="kw">public</span> <span class="typ">String</span> id    { <span class="kw">get</span>; <span class="kw">init</span>; }                   <span class="com">// init-only setter</span>
+    <span class="kw">public</span> <span class="kw">int</span>    age   { <span class="kw">get</span>; <span class="kw">private</span> <span class="kw">set</span>; }            <span class="com">// asymmetric visibility</span>
+    <span class="kw">public</span> <span class="typ">String</span> email { <span class="kw">get</span>; <span class="kw">set</span>; } = <span class="str">""</span>;              <span class="com">// with initializer</span>
+
+    <span class="kw">public</span> <span class="typ">String</span> displayName =&gt; <span class="str">$"$name (id: $id)"</span>;          <span class="com">// expression-bodied</span>
+
+    <span class="kw">public</span> <span class="typ">String</span> password {                                 <span class="com">// full body with validation</span>
+        <span class="kw">get</span> =&gt; _hash;
+        <span class="kw">set</span> {
+            <span class="kw">if</span> (value.isEmpty()) <span class="kw">throw</span> <span class="kw">new</span> <span class="typ">IllegalArgumentException</span>();
+            _hash = hash(value);
+        }
+    }
+
+    <span class="kw">private</span> <span class="typ">String</span> _hash;
+}</code></pre>
+
+      <h3>Default methods on interfaces — write once, inherit everywhere</h3>
+      <pre><code class="lang-jux"><span class="kw">public</span> <span class="kw">interface</span> <span class="typ">Repository</span>&lt;T&gt; {
+    <span class="com">// Abstract — every implementer MUST provide</span>
+    T? findById(<span class="kw">int</span> id);
+    <span class="kw">void</span> save(T item);
+    <span class="kw">void</span> deleteById(<span class="kw">int</span> id);
+    <span class="typ">Iterable</span>&lt;T&gt; all();
+
+    <span class="com">// Default — implementers inherit, may override</span>
+    <span class="kw">default</span> <span class="kw">bool</span> exists(<span class="kw">int</span> id) =&gt; findById(id) != <span class="kw">null</span>;
+
+    <span class="kw">default</span> <span class="kw">int</span> count() {
+        <span class="kw">var</span> n = <span class="num">0</span>;
+        <span class="kw">for</span> (<span class="kw">var</span> _ : all()) n = n + <span class="num">1</span>;
+        <span class="kw">return</span> n;
+    }
+
+    <span class="kw">default</span> T findOrThrow(<span class="kw">int</span> id) <span class="kw">throws</span> <span class="typ">NotFoundError</span> {
+        <span class="kw">var</span> item = findById(id);
+        <span class="kw">if</span> (item == <span class="kw">null</span>) <span class="kw">throw</span> <span class="kw">new</span> <span class="typ">NotFoundError</span>(<span class="str">$"id $id"</span>);
+        <span class="kw">return</span> item;
+    }
+
+    <span class="kw">default</span> <span class="typ">Iterable</span>&lt;T&gt; findWhere((T) -&gt; <span class="kw">bool</span> pred) =&gt; all().filter(pred);
+    <span class="kw">default</span> <span class="kw">bool</span> isEmpty =&gt; count() == <span class="num">0</span>;
+}
+
+<span class="com">// Implementer writes only the 4 abstract methods. Everything else</span>
+<span class="com">// (exists, count, findOrThrow, findWhere, isEmpty) comes for free.</span>
+<span class="kw">public</span> <span class="kw">final</span> <span class="kw">class</span> <span class="typ">UserRepo</span> <span class="kw">implements</span> <span class="typ">Repository</span>&lt;<span class="typ">User</span>&gt; {
+    <span class="kw">private</span> <span class="typ">Map</span>&lt;<span class="kw">int</span>, <span class="typ">User</span>&gt; storage = <span class="kw">new</span> <span class="typ">Map</span>&lt;&gt;();
+
+    @<span class="typ">Override</span> <span class="kw">public</span> <span class="typ">User</span>? findById(<span class="kw">int</span> id) =&gt; storage.get(id);
+    @<span class="typ">Override</span> <span class="kw">public</span> <span class="kw">void</span> save(<span class="typ">User</span> u) { storage.put(u.id, u); }
+    @<span class="typ">Override</span> <span class="kw">public</span> <span class="kw">void</span> deleteById(<span class="kw">int</span> id) { storage.remove(id); }
+    @<span class="typ">Override</span> <span class="kw">public</span> <span class="typ">Iterable</span>&lt;<span class="typ">User</span>&gt; all() =&gt; storage.values();
+}
+
+<span class="kw">var</span> repo = <span class="kw">new</span> <span class="typ">UserRepo</span>();
+repo.save(<span class="kw">new</span> <span class="typ">User</span>(<span class="num">1</span>, <span class="str">"Alice"</span>));
+print(repo.exists(<span class="num">1</span>));            <span class="com">// true (default impl)</span>
+print(repo.count());              <span class="com">// 1     (default impl)</span>
+print(repo.isEmpty);              <span class="com">// false (default impl, computed)</span></code></pre>
+
+      <h3>Virtual dispatch — through classes and interfaces</h3>
+      <pre><code class="lang-jux"><span class="com">// Through a class hierarchy</span>
+<span class="kw">public</span> <span class="kw">class</span> <span class="typ">Shape</span> {                              <span class="com">// extendable by default</span>
+    <span class="kw">public</span> <span class="kw">void</span> render() { ... }
+}
+<span class="kw">public</span> <span class="kw">final</span> <span class="kw">class</span> <span class="typ">Circle</span> <span class="kw">extends</span> <span class="typ">Shape</span> {
+    @<span class="typ">Override</span> <span class="kw">public</span> <span class="kw">void</span> render() { draw_circle(radius); }
+}
+
+<span class="kw">public</span> <span class="kw">void</span> drawAll(<span class="typ">List</span>&lt;<span class="typ">Shape</span>&gt; shapes) {
+    <span class="kw">for</span> (<span class="kw">var</span> s : shapes) s.render();    <span class="com">// virtual — chosen at runtime</span>
+}
+
+<span class="com">// Through an interface (abstract methods + default methods)</span>
+<span class="kw">public</span> <span class="kw">interface</span> <span class="typ">Drawable</span> {
+    <span class="kw">void</span> render();                            <span class="com">// abstract</span>
+    <span class="kw">default</span> <span class="kw">void</span> renderTwice() {                <span class="com">// default — overridable</span>
+        render();  render();
+    }
+}
+
+<span class="kw">public</span> <span class="kw">final</span> <span class="kw">class</span> <span class="typ">Sprite</span> <span class="kw">implements</span> <span class="typ">Drawable</span> {
+    @<span class="typ">Override</span> <span class="kw">public</span> <span class="kw">void</span> render() { gpu.blit(tex); }
+}
+
+<span class="kw">public</span> <span class="kw">void</span> renderEach(<span class="typ">List</span>&lt;<span class="typ">Drawable</span>&gt; items) {
+    <span class="kw">for</span> (<span class="kw">var</span> d : items) d.render();        <span class="com">// virtual through interface</span>
+}
+
+<span class="com">// Sealed interface — exact dispatch (compiler knows all implementers)</span>
+<span class="kw">public</span> <span class="kw">sealed</span> <span class="kw">interface</span> <span class="typ">Token</span> <span class="kw">permits</span> <span class="typ">Ident</span>, <span class="typ">Number</span>, <span class="typ">Punct</span> {
+    <span class="typ">String</span> name { <span class="kw">get</span>; }
+}
+<span class="kw">public</span> <span class="kw">final</span> <span class="kw">record</span> <span class="typ">Ident</span>(<span class="typ">String</span> value) <span class="kw">implements</span> <span class="typ">Token</span> {
+    <span class="kw">public</span> <span class="typ">String</span> name =&gt; <span class="str">"ident"</span>;
+}</code></pre>
+
+      <h3>Method overridability — Java-style default</h3>
+      <pre><code class="lang-jux"><span class="kw">public</span> <span class="kw">class</span> <span class="typ">Animal</span> {                                <span class="com">// extendable by default</span>
+    <span class="kw">public</span> <span class="kw">void</span> greet() { print(<span class="str">"Hello"</span>); }       <span class="com">// overridable (default)</span>
+    <span class="kw">public</span> <span class="kw">final</span> <span class="kw">void</span> breathe() { ... }           <span class="com">// NOT overridable — final</span>
+    <span class="kw">public</span> <span class="kw">const</span> <span class="kw">void</span> heartbeat() { ... }         <span class="com">// NOT overridable — const (synonym)</span>
+    <span class="kw">protected</span> <span class="kw">void</span> hunt() { ... }                 <span class="com">// overridable (default)</span>
+    <span class="kw">private</span> <span class="kw">void</span> digest() { ... }                 <span class="com">// NOT inherited at all</span>
+}
+
+<span class="kw">public</span> <span class="kw">class</span> <span class="typ">Dog</span> <span class="kw">extends</span> <span class="typ">Animal</span> {
+    @<span class="typ">Override</span> <span class="kw">public</span> <span class="kw">void</span> greet() { print(<span class="str">"Woof"</span>); }     <span class="com">// OK</span>
+    @<span class="typ">Override</span> <span class="kw">public</span> <span class="kw">void</span> breathe() { ... }              <span class="com">// ERROR — final</span>
+    @<span class="typ">Override</span> <span class="kw">protected</span> <span class="kw">void</span> hunt() { ... }              <span class="com">// OK</span>
+}
+
+<span class="com">// Rules (Java-style):</span>
+<span class="com">//   • Classes are extendable by default. Mark `final`/`const` to forbid extension.</span>
+<span class="com">//   • Public/protected methods are overridable unless final/const.</span>
+<span class="com">//   • Private methods are not inherited at all.</span></code></pre>
+
+      <h3>Type test with <code>=&gt;</code> (replaces instanceof)</h3>
+      <pre><code class="lang-jux"><span class="kw">public</span> <span class="kw">void</span> describe(<span class="typ">Animal</span> a) {
+    <span class="kw">if</span> (a =&gt; <span class="typ">Dog</span> d) {                  <span class="com">// "if a is a Dog, bind it as d"</span>
+        d.bark();
+        d.learn(<span class="str">"sit"</span>);
+    } <span class="kw">else</span> <span class="kw">if</span> (a =&gt; <span class="typ">Cat</span> c) {
+        c.purr();
+    } <span class="kw">else</span> <span class="kw">if</span> (a =&gt; <span class="typ">Bird</span>) {       <span class="com">// test without binding</span>
+        print(<span class="str">"it's a bird"</span>);
+    }
+}</code></pre>
+
+      <h3>Switch uses Java-14 arrow syntax — no fallthrough</h3>
+      <pre><code class="lang-jux"><span class="kw">public</span> <span class="kw">void</span> handle(<span class="typ">HttpStatus</span> s) {
+    <span class="kw">switch</span> (s) {
+        <span class="kw">case</span> <span class="typ">OK</span>, <span class="typ">CREATED</span>, <span class="typ">ACCEPTED</span> -&gt; log.info(<span class="str">"success"</span>);     <span class="com">// multi-pattern</span>
+        <span class="kw">case</span> <span class="typ">NOT_FOUND</span> -&gt; log.warn(<span class="str">"missing"</span>);
+        <span class="kw">case</span> <span class="typ">SERVER_ERROR</span> -&gt; {                                <span class="com">// block body</span>
+            log.error(<span class="str">"server failure"</span>);
+            metrics.incrementErrorCount();
+        }
+        <span class="kw">default</span> -&gt; log.warn(<span class="str">"unhandled"</span>);
+    }
+}</code></pre>
+
+      <h3>Sealed types + pattern matching + exhaustiveness</h3>
+      <pre><code class="lang-jux"><span class="kw">public</span> <span class="kw">sealed</span> <span class="kw">enum</span> <span class="typ">HttpResult</span> {
+    <span class="typ">Ok</span>(<span class="kw">int</span> status, <span class="typ">String</span> body),
+    <span class="typ">Redirect</span>(<span class="typ">String</span> location),
+    <span class="typ">Error</span>(<span class="kw">int</span> code, <span class="typ">String</span> message);
+}
+
+<span class="kw">public</span> <span class="typ">String</span> handle(<span class="typ">HttpResult</span> r) {
+    <span class="kw">return</span> <span class="kw">switch</span> (r) {
+        <span class="kw">case</span> <span class="typ">Ok</span>(<span class="kw">var</span> s, <span class="kw">var</span> b) -&gt; <span class="str">$"$s: $b"</span>;
+        <span class="kw">case</span> <span class="typ">Redirect</span>(<span class="kw">var</span> url) -&gt; <span class="str">$"-&gt; $url"</span>;
+        <span class="kw">case</span> <span class="typ">Error</span>(<span class="kw">var</span> c, <span class="kw">var</span> m) <span class="kw">when</span> c &gt;= <span class="num">500</span> -&gt; <span class="str">$"server error: $m"</span>;
+        <span class="kw">case</span> <span class="typ">Error</span>(<span class="kw">var</span> c, <span class="kw">var</span> m) -&gt; <span class="str">$"client error: $m"</span>;
+    };  <span class="com">// compiler verifies every case is covered</span>
+}</code></pre>
+
+      <h3>Async without <code>Future&lt;T&gt;</code> — Kotlin-shaped, TS-ergonomic</h3>
+      <pre><code class="lang-jux"><span class="kw">public</span> <span class="kw">async</span> <span class="typ">User</span> fetchUser(<span class="kw">int</span> id) {                    <span class="com">// returns User, not Future&lt;User&gt;</span>
+    <span class="kw">var</span> response = <span class="kw">await</span> http.get(<span class="str">$"/users/$id"</span>);
+    <span class="kw">return</span> parseUser(<span class="kw">await</span> response.text());
+}
+
+<span class="kw">public</span> <span class="kw">async</span> <span class="typ">UserPage</span> loadPage(<span class="kw">int</span> id) {                  <span class="com">// fan out, await all</span>
+    <span class="kw">var</span> userTask  = spawn(() -&gt; fetchUser(id));
+    <span class="kw">var</span> postsTask = spawn(() -&gt; getUserPosts(id));
+    <span class="kw">return</span> <span class="kw">new</span> <span class="typ">UserPage</span>(<span class="kw">await</span> userTask, <span class="kw">await</span> postsTask);
+}</code></pre>
+
+      <h3>Annotations are case-insensitive — write it any way you want</h3>
+      <pre><code class="lang-jux">@<span class="typ">Override</span> <span class="kw">public</span> <span class="kw">void</span> render() { ... }       <span class="com">// canonical</span>
+@override <span class="kw">public</span> <span class="kw">void</span> render() { ... }       <span class="com">// also valid — same annotation</span>
+@<span class="typ">OVERRIDE</span> <span class="kw">public</span> <span class="kw">void</span> render() { ... }       <span class="com">// also valid — same annotation</span>
+
+@cfg(os = <span class="str">"linux"</span>) <span class="kw">public</span> <span class="kw">void</span> foo() { ... }
+@<span class="typ">CFG</span>(<span class="typ">OS</span> = <span class="str">"linux"</span>) <span class="kw">public</span> <span class="kw">void</span> foo() { ... }   <span class="com">// even arg names are case-insensitive</span>
+
+<span class="com">// The compiler echoes back YOUR casing in errors and juxc fmt</span>
+<span class="com">// preserves it — your code reads the way you wrote it.</span></code></pre>
+
+      <h3>Casts — two equivalent forms (use whichever feels right)</h3>
+      <pre><code class="lang-jux"><span class="com">// Java/C/C++/C# style — prefix</span>
+<span class="kw">var</span> n = (<span class="kw">int</span>) someLong;
+<span class="kw">var</span> d = (<span class="typ">Dog</span>) someAnimal;
+<span class="kw">var</span> p = (<span class="kw">byte</span>*) buffer;          <span class="com">// (inside unsafe only)</span>
+
+<span class="com">// Rust/Kotlin/Jux style — postfix</span>
+<span class="kw">var</span> n = someLong <span class="kw">as</span> <span class="kw">int</span>;
+<span class="kw">var</span> d = someAnimal <span class="kw">as</span> <span class="typ">Dog</span>;
+<span class="kw">var</span> p = buffer <span class="kw">as</span> <span class="kw">byte</span>*;         <span class="com">// (inside unsafe only)</span>
+
+<span class="com">// Identical semantics. Pick whichever reads better at the call site.</span></code></pre>
+
+      <h3>Variable declarations — Java-style, type-first</h3>
+      <pre><code class="lang-jux"><span class="com">// Explicit type goes BEFORE the identifier (Java-style)</span>
+<span class="kw">int</span> count = <span class="num">42</span>;
+<span class="typ">String</span> name = <span class="str">"Alice"</span>;
+<span class="typ">List</span>&lt;<span class="typ">User</span>&gt; users = <span class="kw">new</span> <span class="typ">List</span>&lt;<span class="typ">User</span>&gt;();
+<span class="kw">fn</span>(<span class="kw">int</span>) -&gt; <span class="kw">int</span> doubler = x -&gt; x * <span class="num">2</span>;
+<span class="typ">StackString</span>&lt;<span class="num">32</span>&gt; sensorId = <span class="str">"sensor_01"</span>;
+
+<span class="com">// Or use `var` to infer the type</span>
+<span class="kw">var</span> count = <span class="num">42</span>;                       <span class="com">// inferred as int</span>
+<span class="kw">var</span> name = <span class="str">"Alice"</span>;                   <span class="com">// inferred as String</span>
+<span class="kw">var</span> users = <span class="kw">new</span> <span class="typ">List</span>&lt;<span class="typ">User</span>&gt;();        <span class="com">// inferred as List&lt;User&gt;</span>
+
+<span class="com">// NO colon-annotation form (Kotlin/TS-style is rejected)</span>
+<span class="com">// var x: int = 5;     ← compile error E0144</span>
+<span class="com">// Use either:  int x = 5;   OR   var x = 5;</span></code></pre>
+
+      <h3>Function pointers, closures, method refs — three first-class forms</h3>
+      <pre><code class="lang-jux"><span class="com">// 1. Closures — first-class function values, may capture state</span>
+<span class="kw">var</span> doubler = (<span class="kw">int</span> x) -&gt; x * <span class="num">2</span>;          <span class="com">// type: (int) -&gt; int</span>
+<span class="kw">var</span> threshold = <span class="num">100</span>;
+<span class="kw">var</span> aboveThreshold = (<span class="kw">int</span> x) -&gt; x &gt; threshold;   <span class="com">// captures `threshold`</span>
+users.map(u -&gt; u.name);                          <span class="com">// passed as arg</span>
+
+<span class="com">// 2. Function pointers — raw code address, no captures, FFI-compatible</span>
+<span class="kw">public</span> <span class="kw">int</span> compare(<span class="kw">int</span> a, <span class="kw">int</span> b) { <span class="kw">return</span> a - b; }
+<span class="kw">fn</span>(<span class="kw">int</span>, <span class="kw">int</span>) -&gt; <span class="kw">int</span> cmp = compare;     <span class="com">// fn pointer to a named function</span>
+<span class="kw">var</span> result = cmp(<span class="num">5</span>, <span class="num">3</span>);                   <span class="com">// safe — calls a safe fn pointer</span>
+
+<span class="com">// 3. Method references — Type::method or instance::method</span>
+<span class="kw">var</span> ref1 = <span class="typ">User</span>::greet;                 <span class="com">// unbound: (User) -&gt; void</span>
+<span class="kw">var</span> ref2 = alice::greet;                 <span class="com">// bound to alice: () -&gt; void</span>
+<span class="kw">var</span> ref3 = <span class="typ">User</span>::<span class="kw">new</span>;                  <span class="com">// constructor ref</span>
+
+<span class="com">// All three compose with generics — store in collections</span>
+<span class="typ">List</span>&lt;(<span class="kw">int</span>) -&gt; <span class="kw">int</span>&gt; transforms = <span class="kw">new</span> <span class="typ">List</span>&lt;&gt;();          <span class="com">// list of closures</span>
+<span class="typ">List</span>&lt;<span class="kw">fn</span>(<span class="kw">void</span>*) -&gt; <span class="kw">void</span>&gt; ffiCallbacks = <span class="kw">new</span> <span class="typ">List</span>&lt;&gt;();    <span class="com">// list of fn pointers</span>
+<span class="typ">List</span>&lt;<span class="kw">void</span>*&gt; opaqueHandles = <span class="kw">new</span> <span class="typ">List</span>&lt;&gt;();              <span class="com">// list of opaque pointers</span></code></pre>
+
+      <h3><code>const</code> ≡ <code>final</code> — synonyms everywhere</h3>
+      <pre><code class="lang-jux"><span class="com">// Bindings (locals, fields, params)</span>
+<span class="kw">const</span> <span class="kw">var</span> pi = <span class="num">3.14159</span>;
+<span class="kw">final</span> <span class="kw">var</span> name = <span class="str">"Alice"</span>;        <span class="com">// identical meaning</span>
+<span class="kw">const</span> <span class="typ">String</span> greeting = <span class="str">"Hi!"</span>;
+
+<span class="com">// Class declarations — non-extensible (no other class can extend)</span>
+<span class="kw">public</span> <span class="kw">final</span> <span class="kw">class</span> <span class="typ">User</span> { ... }
+<span class="kw">public</span> <span class="kw">const</span> <span class="kw">class</span> <span class="typ">User</span> { ... }       <span class="com">// identical — same non-extensible semantics</span>
+
+<span class="com">// Method declarations on extendable classes — non-overridable</span>
+<span class="kw">public</span> <span class="kw">final</span> <span class="kw">void</span> render() { ... }
+<span class="kw">public</span> <span class="kw">const</span> <span class="kw">void</span> render() { ... }      <span class="com">// identical</span>
+
+<span class="com">// Pick whichever feels natural — compiler echoes back YOUR spelling.</span></code></pre>
+
+      <h3>Address-of <code>&amp;</code>, dereference <code>*</code> — C/C++-style inside <code>unsafe</code></h3>
+      <pre><code class="lang-jux"><span class="kw">unsafe</span> {
+    <span class="kw">var</span> x: <span class="kw">int</span> = <span class="num">42</span>;
+    <span class="kw">var</span> p: <span class="kw">int</span>* = &amp;x;             <span class="com">// address-of</span>
+    *p = <span class="num">100</span>;                       <span class="com">// dereference + write</span>
+    print(x);                       <span class="com">// 100</span>
+
+    <span class="kw">var</span> arr = <span class="kw">new</span> <span class="kw">int</span>[<span class="num">10</span>];
+    <span class="kw">var</span> firstPtr = &amp;arr[<span class="num">0</span>];
+    <span class="kw">var</span> q = firstPtr + <span class="num">5</span>;          <span class="com">// pointer arithmetic</span>
+    *q = <span class="num">99</span>;                        <span class="com">// arr[5] = 99</span>
+}
+
+<span class="com">// Outside unsafe, &amp; and * (deref) are compile errors.</span>
+<span class="com">// Pointers exist as a type but are opaque — pass-through only.</span></code></pre>
+
+      <h3>FFI through <code>unsafe { }</code> — wrapped in a safe class</h3>
+      <pre><code class="lang-jux">@extern(lib = <span class="str">"sqlite3"</span>)
+<span class="kw">unsafe</span> <span class="kw">native</span> {
+    <span class="kw">int</span> sqlite3_open(<span class="typ">CString</span> path, <span class="kw">out</span> <span class="typ">RawHandle</span>* db);
+    <span class="kw">int</span> sqlite3_close(<span class="typ">RawHandle</span>* db);
+}
+
+<span class="kw">public</span> <span class="kw">final</span> <span class="kw">class</span> <span class="typ">Database</span> {                    <span class="com">// safe wrapper</span>
+    <span class="kw">private</span> <span class="typ">RawHandle</span>* handle;
+
+    <span class="kw">public</span> <span class="kw">new</span>(<span class="typ">String</span> path) <span class="kw">throws</span> <span class="typ">DbError</span> {
+        <span class="kw">var</span> h: <span class="typ">RawHandle</span>* = <span class="kw">null</span>;
+        <span class="kw">var</span> rc = <span class="kw">unsafe</span> { sqlite3_open(path.toCString(), <span class="kw">out</span> h) };
+        <span class="kw">if</span> (rc != <span class="num">0</span>) <span class="kw">throw</span> <span class="kw">new</span> <span class="typ">DbError</span>(<span class="str">"open failed"</span>);
+        <span class="kw">this</span>.handle = h;
+    }
+
+    <span class="kw">drop</span> {
+        <span class="com">// SAFETY: handle is owned by this Database; this is the unique drop</span>
+        <span class="kw">unsafe</span> { sqlite3_close(handle); }
+    }
+}</code></pre>
+
+      <h3>Embedded — same syntax on a 32 KB MCU</h3>
+      <pre><code class="lang-jux"><span class="com">// File: blink.jux  ·  Profile: jux-core  ·  Target: thumbv7em-none-eabihf</span>
+
+@register(address = <span class="num">0x40023830</span>)
+<span class="kw">public</span> <span class="kw">static</span> <span class="kw">volatile</span> <span class="kw">uint</span> RCC_AHB1ENR;
+
+@register(address = <span class="num">0x40020014</span>)
+<span class="kw">public</span> <span class="kw">static</span> <span class="kw">volatile</span> <span class="kw">uint</span> GPIOA_ODR;
+
+<span class="kw">public</span> <span class="kw">void</span> main() {
+    setup();
+    <span class="kw">while</span> (<span class="kw">true</span>) {
+        GPIOA_ODR = GPIOA_ODR ^ (<span class="num">1</span> &lt;&lt; <span class="num">5</span>);
+        delay_ms(<span class="num">500</span>);
+    }
+}</code></pre>
+
+      <h2 id="documents">Specification Documents</h2>
+      <p>The full spec is structured as a base dossier plus focused addenda. Read in order, or jump to any section.</p>
+
+      <div class="section-heading">Foundation</div>
+      <div class="doc-grid">
+        <a class="doc-card" href="JUX-LANG-V1.html">
+          <div class="doc-card-tag">Dossier</div>
+          <div class="doc-card-title">Language V1 — Architecture &amp; Design</div>
+          <div class="doc-card-desc">The consolidated language design: vision, compilation model, type system, memory model, syntax, FFI, std, concurrency, conditional compilation, embedded targets.</div>
+        </a>
+      </div>
+
+      <div class="section-heading">Core Specifications</div>
+      <div class="doc-grid">
+        <a class="doc-card" href="JUX-GRAMMAR-ADDENDUM.html">
+          <div class="doc-card-tag">Spec</div>
+          <div class="doc-card-title">Formal Grammar</div>
+          <div class="doc-card-desc">Complete EBNF: lexical, syntactic, pattern. Operator precedence and associativity table. Cast and conversion rules.</div>
+        </a>
+        <a class="doc-card" href="JUX-SEMANTICS-ADDENDUM.html">
+          <div class="doc-card-tag">Spec</div>
+          <div class="doc-card-title">Execution Semantics</div>
+          <div class="doc-card-desc">Evaluation order, integer overflow per profile, IEEE float rules, UTF-8 string semantics, init order, drop order, concurrency memory model, panic policy.</div>
+        </a>
+        <a class="doc-card" href="JUX-OPERATORS-ADDENDUM.html">
+          <div class="doc-card-tag">Spec</div>
+          <div class="doc-card-title">Operators (Final)</div>
+          <div class="doc-card-desc">C++-style operator overrides. <code>operator==</code>, <code>operator&lt;=&gt;</code>, <code>operator hash</code>, <code>operator string</code>. Auto-derive for value types. No interfaces.</div>
+        </a>
+        <a class="doc-card" href="JUX-LAYOUT-ABI-ADDENDUM.html">
+          <div class="doc-card-tag">Spec</div>
+          <div class="doc-card-title">Layout / ABI / unsafe</div>
+          <div class="doc-card-desc">Memory layout, vtable structure, calling conventions, symbol mangling. The <code>unsafe { }</code> block — the only escape hatch into C-style pointer access.</div>
+        </a>
+        <a class="doc-card" href="JUX-EXCEPTIONS-ADDENDUM.html">
+          <div class="doc-card-tag">Spec</div>
+          <div class="doc-card-title">Exceptions &amp; Result Lowering</div>
+          <div class="doc-card-desc">Exception class hierarchy. <code>try</code>/<code>catch</code>/<code>finally</code> formal semantics. <code>Result&lt;T, E&gt;</code> and <code>?</code>. The <code>throws</code> ↔ <code>Result</code> mechanical lowering.</div>
+        </a>
+        <a class="doc-card" href="JUX-MISSING-DEFS-ADDENDUM.html">
+          <div class="doc-card-tag">Spec</div>
+          <div class="doc-card-title">Missing Definitions</div>
+          <div class="doc-card-desc"><code>init</code> blocks, <code>yield</code>/generators, <code>out</code> parameters, record <code>with(...)</code>, range <code>step</code>, property accessors, <code>=&gt;</code> type test, <code>@Reflectable</code>.</div>
+        </a>
+        <a class="doc-card" href="JUX-ANNOTATIONS-ADDENDUM.html">
+          <div class="doc-card-tag">Spec</div>
+          <div class="doc-card-title">Annotation System</div>
+          <div class="doc-card-desc">First-class <code>annotation</code> declarations. Targets, retention, parameter types, defaults, repeatability. Compile-time processors. Spring-style framework patterns.</div>
+        </a>
+        <a class="doc-card" href="JUX-ENTRY-POINTS-ADDENDUM.html">
+          <div class="doc-card-tag">Spec</div>
+          <div class="doc-card-title">Entry Points</div>
+          <div class="doc-card-desc">Three tiers: implicit <code>main</code>, <code>@entry</code> annotation for custom symbols and conventions (<code>DllMain</code>, <code>init_module</code>), freestanding mode for bare-metal.</div>
+        </a>
+      </div>
+
+      <div class="section-heading">Compiler Implementation</div>
+      <div class="doc-grid">
+        <a class="doc-card" href="JUX-COMPILER-PIPELINE-ADDENDUM.html">
+          <div class="doc-card-tag">Compiler</div>
+          <div class="doc-card-title">Compiler Pipeline</div>
+          <div class="doc-card-desc">18-phase pipeline. IR design (HIR + MIR). Reachability analysis (9.5). Phase 1 → Rust source mapping table. Build orchestration.</div>
+        </a>
+        <a class="doc-card" href="JUX-TYPE-SYSTEM-ADDENDUM.html">
+          <div class="doc-card-tag">Compiler</div>
+          <div class="doc-card-title">Type System Algorithms</div>
+          <div class="doc-card-desc">No <code>Object</code> root. Overload resolution, generic inference, exhaustiveness, smart-cast, borrow inference algorithm, default-method conflicts, const evaluation.</div>
+        </a>
+        <a class="doc-card" href="JUX-CORE-LIB-ADDENDUM.html">
+          <div class="doc-card-tag">Compiler</div>
+          <div class="doc-card-title">Minimal Core Library</div>
+          <div class="doc-card-desc">The smallest set the compiler must know about: <code>Iterator</code>, <code>Iterable</code>, <code>Option</code>, <code>Result</code>, <code>StackString</code>, <code>String</code>, <code>Volatile</code>, <code>Task</code>.</div>
+        </a>
+        <a class="doc-card" href="JUX-BUILD-SYSTEM-ADDENDUM.html">
+          <div class="doc-card-tag">Tooling</div>
+          <div class="doc-card-title">Build System</div>
+          <div class="doc-card-desc"><code>jux.toml</code> schema, <code>module.jux</code>, filesystem layout, dependency resolution, lockfile, workspaces, feature flags, registry protocol.</div>
+        </a>
+        <a class="doc-card" href="JUX-RUNTIME-ABI-ADDENDUM.html">
+          <div class="doc-card-tag">Runtime</div>
+          <div class="doc-card-title">Runtime / Mangling / Coherence</div>
+          <div class="doc-card-desc">The <code>jux-rt</code> runtime crate symbol table. Exact mangling algorithm. Operator coherence (orphan rules) for multi-crate consistency.</div>
+        </a>
+        <a class="doc-card" href="JUX-DIAGNOSTICS-ADDENDUM.html">
+          <div class="doc-card-tag">Tooling</div>
+          <div class="doc-card-title">Diagnostic Codes</div>
+          <div class="doc-card-desc">Master catalog of every E#### / W#### code. JSON output schema. Output formats. Stability promise.</div>
+        </a>
+      </div>
+
+      <div class="section-heading">Earlier Addenda &amp; Roadmap</div>
+      <div class="doc-grid">
+        <a class="doc-card" href="JUX-INHERITANCE-BORROW-ADDENDUM.html">
+          <div class="doc-card-tag">Reference</div>
+          <div class="doc-card-title">Inheritance × Borrow Inference</div>
+          <div class="doc-card-desc">Whole-object borrow rule for class instances. Mutation union for virtual dispatch. Sealed hierarchies give exact analysis.</div>
+        </a>
+        <a class="doc-card" href="JUX-ASYNC-ADDENDUM-v2.html">
+          <div class="doc-card-tag">Reference</div>
+          <div class="doc-card-title">Async / Await (v2)</div>
+          <div class="doc-card-desc">Kotlin-shaped async — return type is <code>T</code>, not <code>Future&lt;T&gt;</code>. <code>spawn</code>, <code>Task</code>, channels, mutexes, cancellation. Per-profile runtime.</div>
+        </a>
+        <a class="doc-card" href="JUX-GAPS-ROADMAP.html">
+          <div class="doc-card-tag">Reference</div>
+          <div class="doc-card-title">Gaps Roadmap (historical)</div>
+          <div class="doc-card-desc">The original gap analysis from before the operator-first redesign. Some items resolved by later addenda; kept for historical context.</div>
+        </a>
+      </div>
+
+      <h2 id="how-to-read">How to Read This Spec</h2>
+      <p>If you're new to Jux, read in this order:</p>
+      <ol>
+        <li><strong>Language Dossier (V1)</strong> — the mental model.</li>
+        <li><strong>Operators</strong> — how types get capabilities.</li>
+        <li><strong>Grammar</strong> + <strong>Semantics</strong> — what programs mean.</li>
+        <li><strong>Layout / ABI</strong> + <strong>Exceptions</strong> — the runtime contract.</li>
+        <li><strong>Missing Definitions</strong> — closes language gaps.</li>
+        <li><strong>Compiler Pipeline</strong> + <strong>Type System</strong> — how implementations work.</li>
+        <li><strong>Core Library</strong> — what the compiler can lower to.</li>
+        <li><strong>Build System</strong> + <strong>Runtime</strong> + <strong>Diagnostics</strong> — toolchain plumbing.</li>
+      </ol>
+
+      <p>If you're an implementer, the <strong>Compiler Pipeline</strong> is your reference. Every phase, every algorithm, every diagnostic code lives there or one click away.</p>
+
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

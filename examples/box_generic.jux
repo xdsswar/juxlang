@@ -1,0 +1,28 @@
+// Generic class vehicle — Turn-1 generics (no bounds, no wildcards).
+//
+// Demonstrates a single-parameter generic class `Box<T>` and exercises:
+//   - Generic type parameter on the class declaration.
+//   - Generic field type (`T value;` lowers to Rust `value: T`).
+//   - Generic constructor parameter (`Box(T value)`).
+//   - Generic method return (`get() -> T`).
+//   - Explicit instantiation via `new Box<int>(42)` (turbofish).
+//   - Implicit instantiation via `new Box(7)` (Rust inference).
+
+public class Box<T> {
+    private T value;
+
+    public Box(T value) {
+        this.value = value;
+    }
+
+    public T get() {
+        return this.value;
+    }
+}
+
+public void main() {
+    var n = new Box<int>(42);
+    var m = new Box(7);
+    print(n.get());
+    print(m.get());
+}

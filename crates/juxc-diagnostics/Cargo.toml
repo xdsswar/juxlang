@@ -1,0 +1,10 @@
+[package]
+name = "juxc-diagnostics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Diagnostic types and the master E-code catalog for the Jux compiler."
+
+[dependencies]
+juxc-source = { workspace = true }

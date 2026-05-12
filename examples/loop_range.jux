@@ -1,0 +1,15 @@
+// Milestone-7 vehicle: for-each over an inclusive range.
+//
+// Sums 1..=10 = 55 using Jux's for-each form. Exercises:
+//   - `for (var i : 1..=10) { … }`
+//   - Inclusive range expression `1..=10`
+//   - Compound assignment inside the loop body
+//   - Print of the accumulated int
+
+public void main() {
+    var total = 0;
+    for (var i : 1..=10) {
+        total += i;
+    }
+    print(total);
+}

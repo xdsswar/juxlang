@@ -1,0 +1,27 @@
+// Pattern matching vehicle — expression-form `switch` over a
+// payload-carrying enum. Exercises `var name` bind-patterns inside
+// variant patterns plus interpolation using bound names.
+
+public enum Token {
+    Number(int),
+    Word(String),
+    Stop
+}
+
+public String label(Token t) {
+    // Note: every arm produces an interpolated/formatted string so the
+    // emitted Rust `match` has a unified `String` arm type. A plain
+    // `"stop"` would be `&str` and Rust would reject the mix until we
+    // add a type-aware arm-coercion pass in the backend.
+    return switch (t) {
+        case Token.Number(var n) -> $"num=$n";
+        case Token.Word(var w)   -> $"word=$w";
+        case Token.Stop          -> $"stop";
+    };
+}
+
+public void main() {
+    print(label(Token.Number(42)));
+    print(label(Token.Word("hi")));
+    print(label(Token.Stop));
+}

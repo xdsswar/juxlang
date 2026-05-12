@@ -1,0 +1,11 @@
+[package]
+name = "juxc-lex"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Phase 1 — lexer for the Jux compiler (per JUX-COMPILER-PIPELINE-ADDENDUM.md §C.2.1)."
+
+[dependencies]
+juxc-source      = { workspace = true }
+juxc-diagnostics = { workspace = true }

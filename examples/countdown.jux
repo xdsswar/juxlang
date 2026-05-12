@@ -1,0 +1,17 @@
+// Milestone-4 vehicle: while loop + var reassignment.
+//
+// Counts down from 3 to 1, printing each value, then prints "liftoff".
+// Exercises:
+//   - `var i = 3;` (mutable local)
+//   - `while (i > 0) { … }`
+//   - `i = i - 1;` (assignment, drives loop termination)
+//   - print() called with both an int variable and a string literal.
+
+public void main() {
+    var i = 3;
+    while (i > 0) {
+        print(i);
+        i = i - 1;
+    }
+    print("liftoff");
+}

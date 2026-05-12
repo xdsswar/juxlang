@@ -1,0 +1,29 @@
+// String interpolation per §3.4 — `$"…$name…${expr}…"`.
+//
+// Two interpolation forms:
+//   - `$name`     — bare-identifier interpolation, no braces.
+//   - `${expr}`   — arbitrary expression interpolation.
+//
+// Both are typechecked and resolved before lowering. The backend lowers
+// to Rust `format!(…)` with one `{}` per interpolation.
+
+public void main() {
+    var name = "Ada";
+    var age = 36;
+
+    // Bare-ident form.
+    print($"Hello, $name!");
+
+    // Mixed bare-ident + literal text.
+    print($"$name is $age years old.");
+
+    // ${expr} form with arithmetic.
+    print($"Next year $name will be ${age + 1}.");
+
+    // Indexing inside ${...}.
+    int[3] scores = {88, 92, 95};
+    print($"$name's first score: ${scores[0]}");
+
+    // Multiple interpolations in one literal.
+    print($"$name ${age} ${scores.length}");
+}

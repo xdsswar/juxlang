@@ -1,0 +1,17 @@
+// Milestone-8 vehicle: typed local declarations + suffixed int literals
+// + float literals.
+//
+// Exercises the three gaps closed in this pass:
+//   1. `long bigNumber = 1000000L;` — Java-style typed local + L-suffix int
+//   2. `double pi = 3.14;`           — float literal, default `double` shape
+//   3. `float small = 1.5f;`          — float literal with `f` suffix
+
+public void main() {
+    long bigNumber = 1000000L;
+    double pi = 3.14;
+    float small = 1.5f;
+
+    print(bigNumber);
+    print(pi);
+    print(small);
+}
