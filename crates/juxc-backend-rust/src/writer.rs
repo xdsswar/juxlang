@@ -107,4 +107,17 @@ impl Writer {
     pub(crate) fn level(&self) -> usize {
         self.indent_level
     }
+
+    /// Replace the first occurrence of `needle` in the buffer with
+    /// `replacement`. Used by the file-header patcher to fill in the
+    /// real source path once a `SourceFile` is attached to the emitter
+    /// (the placeholder line is written up-front in [`Writer::new`] so
+    /// that crate-wide `#![allow(...)]` attributes stay at the file
+    /// top, but the source path isn't known until the lower entry
+    /// point decides which file we're compiling).
+    pub(crate) fn replace_first(&mut self, needle: &str, replacement: &str) {
+        if let Some(pos) = self.buf.find(needle) {
+            self.buf.replace_range(pos..pos + needle.len(), replacement);
+        }
+    }
 }

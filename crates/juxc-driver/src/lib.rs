@@ -216,6 +216,7 @@ pub fn build(crate_: &RustCrate, crate_dir: &Path, crate_name: &str) -> Result<B
     // Write each source file. The backend uses `src/main.rs` for the
     // single binary right now; future emissions may add library crates
     // and tests, so we handle arbitrary nested paths.
+    let mut written_rs: Vec<PathBuf> = Vec::with_capacity(crate_.sources.len());
     for (rel_path, content) in &crate_.sources {
         let full = crate_dir.join(rel_path);
         if let Some(parent) = full.parent() {
@@ -224,7 +225,16 @@ pub fn build(crate_: &RustCrate, crate_dir: &Path, crate_name: &str) -> Result<B
         }
         fs::write(&full, content)
             .with_context(|| format!("writing source file {}", full.display()))?;
+        if rel_path.ends_with(".rs") {
+            written_rs.push(full);
+        }
     }
+
+    // Run `rustfmt` on every emitted `.rs` file (Fix 2). Failures here
+    // are advisory — generated code already compiles; rustfmt is
+    // purely a readability upgrade. We swallow the error and continue
+    // so users without rustfmt on `PATH` aren't blocked.
+    run_rustfmt(&written_rs);
 
     // Run cargo build inside the emitted crate. `--quiet` suppresses
     // cargo's "compiling/finished" lines; we surface anything that
@@ -265,4 +275,52 @@ pub fn build(crate_: &RustCrate, crate_dir: &Path, crate_name: &str) -> Result<B
         .join(format!("{crate_name}{}", std::env::consts::EXE_SUFFIX));
 
     Ok(BuildArtifact { crate_dir: crate_dir.to_path_buf(), binary_path })
+}
+
+/// Invoke `rustfmt --edition=2021 <file>` on every emitted Rust file
+/// for readability. Failures (rustfmt not on PATH, syntax that
+/// rustfmt rejects, etc.) are logged to stderr but do NOT fail the
+/// build — the generated source still compiles either way, so we
+/// shouldn't block users who haven't installed rustfmt.
+///
+/// Per `JUX-CODEGEN-FIXES.md` Fix 2: rustfmt runs once per emitted
+/// file. We don't batch because rustfmt's `--check` mode behaves
+/// per-file and we want one failure to be visible rather than
+/// masked by another file's success.
+fn run_rustfmt(files: &[PathBuf]) {
+    if files.is_empty() {
+        return;
+    }
+    for path in files {
+        // `--quiet` suppresses rustfmt's own "Formatting…" chatter so
+        // a clean run stays silent. We still surface the spawn error
+        // (rustfmt not found) once, on the first file only — repeating
+        // the same warning for every file would be noisy.
+        let status = Command::new("rustfmt")
+            .arg("--edition=2021")
+            .arg("--quiet")
+            .arg(path)
+            .status();
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(_) => {
+                // Non-zero exit: rustfmt parsed but flagged something.
+                // The unformatted file is still compilable, so we just
+                // warn and move on. Worth knowing about — points at a
+                // codegen bug worth investigating later.
+                eprintln!(
+                    "warning: rustfmt failed on {} (continuing with unformatted source)",
+                    path.display(),
+                );
+            }
+            Err(_) => {
+                // Couldn't spawn rustfmt at all — almost always means
+                // it's missing from PATH. One advisory line covers the
+                // whole batch since the cause is the same for every
+                // file; returning early keeps the warning de-duplicated.
+                eprintln!("warning: rustfmt not found on PATH; emitted code is unformatted");
+                return;
+            }
+        }
+    }
 }

@@ -9,12 +9,15 @@
 use juxc_ast::OperatorKind;
 
 use crate::analysis::{field_supports_copy, field_supports_eq, field_supports_hash};
+use crate::backend_fqn::to_rust_ident;
 use crate::RustEmitter;
 
 impl RustEmitter {
     /// Emit a Jux enum declaration as a Rust `pub enum` with auto-derives
-    /// and a hand-written `Display` impl that mirrors Java's
-    /// `enum.name()` (variant name only, no payload rendering).
+    /// and a hand-written `Display` impl per `JUX-LANG-V1.md` §7.7.2:
+    /// `"VariantName"` for unit variants, `"VariantName(v1, v2, …)"`
+    /// for positional payloads, and `"VariantName(field: v1, …)"`
+    /// when the user named the payload slots.
     ///
     /// **Derives.** Per `JUX-OPERATORS-ADDENDUM.md` §O.3.3 sealed enums
     /// auto-provide `operator==`, `operator hash`, and copy-on-assign
@@ -24,11 +27,12 @@ impl RustEmitter {
     /// across every variant qualifies. Per §O.3.4, `= delete;` on a
     /// matching operator suppresses the corresponding Rust derive.
     ///
-    /// **Display.** The auto-derived `operator string()` matches Java's
-    /// `enum.name()` shape — variant name only. When the user
-    /// overrides `operator string` we emit their version instead;
-    /// when they delete it we skip the Display impl entirely (the
-    /// user opted into "this enum has no default formatting").
+    /// **Display.** The auto-derived `operator string()` destructures
+    /// each variant's payload so values are rendered (per spec
+    /// §7.7.2). When the user overrides `operator string` we emit
+    /// their version instead; when they delete it we skip the
+    /// Display impl entirely (the user opted into "this enum has
+    /// no default formatting").
     pub(crate) fn emit_enum_decl(&mut self, enum_decl: &juxc_ast::EnumDecl) {
         // **Migrated to the indent-aware `Writer` API as a proof of
         // concept for Phase 2 of the backend-split work.** See git
@@ -107,10 +111,14 @@ impl RustEmitter {
         }
     }
 
-    /// Emit the standard variant-name `Display` impl for an enum
-    /// (`match self { Color::Red => write!(f, "Red"), ... }`).
-    /// Separated from `emit_enum_decl` so the override / delete paths
-    /// can elide it cleanly.
+    /// Emit the auto-derived `Display` impl for an enum. Each variant's
+    /// payload (if any) is destructured into positional bindings
+    /// `f0`, `f1`, … which the format string then renders. If the
+    /// user gave a payload slot an explicit name, that name appears
+    /// as `name: value` in the printed output (matching the spec's
+    /// record-style rendering for payloads). Bindings are routed
+    /// through [`to_rust_ident`] so a user-named slot called
+    /// `match` lowers to `r#match` and compiles.
     fn emit_enum_auto_display(&mut self, enum_decl: &juxc_ast::EnumDecl) {
         self.w.emit_indent();
         self.w.push_str("impl std::fmt::Display for ");
@@ -126,13 +134,51 @@ impl RustEmitter {
             self.w.push_str(&enum_decl.name.text);
             self.w.push_str("::");
             self.w.push_str(&variant.name.text);
-            // Wildcard the payload — we only render the variant name.
-            if !variant.payload.is_empty() {
-                self.w.push_str("(..)");
+
+            // Build the destructure bindings and the format spec /
+            // argument list in one pass. Synthesized positional
+            // names (`f0`, `f1`, …) are always safe; user-named
+            // slots go through `to_rust_ident` so reserved words
+            // get the `r#` raw-identifier prefix.
+            let n = variant.payload.len();
+            if n > 0 {
+                self.w.push('(');
+                for i in 0..n {
+                    if i > 0 {
+                        self.w.push_str(", ");
+                    }
+                    self.w.push_str(&format!("f{i}"));
+                }
+                self.w.push(')');
             }
-            self.w.push_str(" => write!(f, \"");
-            self.w.push_str(&variant.name.text);
-            self.w.push_str("\"),\n");
+
+            self.w.push_str(" => ");
+            if n == 0 {
+                self.w.push_str("write!(f, \"");
+                self.w.push_str(&variant.name.text);
+                self.w.push_str("\"),\n");
+            } else {
+                self.w.push_str("write!(f, \"");
+                self.w.push_str(&variant.name.text);
+                self.w.push('(');
+                for (i, slot) in variant.payload.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str(", ");
+                    }
+                    if let Some(name) = &slot.name {
+                        self.w.push_str(&to_rust_ident(&name.text));
+                        self.w.push_str(": {}");
+                    } else {
+                        self.w.push_str("{}");
+                    }
+                }
+                self.w.push_str(")\"");
+                for i in 0..n {
+                    self.w.push_str(", ");
+                    self.w.push_str(&format!("f{i}"));
+                }
+                self.w.push_str("),\n");
+            }
         }
         self.w.indent_dec();
         self.w.line("}");

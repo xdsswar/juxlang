@@ -1350,15 +1350,18 @@ fn enum_variant_access_lowers_to_path_form() {
 }
 
 /// `Token.Number(42)` lowers to `Token::Number(42)` and the
-/// Display impl's match arm wildcards the payload so the printed
-/// form is the bare variant name.
+/// Display impl's match arm destructures the payload so the
+/// printed form is `Variant(value)` per JUX-LANG-V1 §7.7.2.
 #[test]
 fn payload_enum_variant_construction_and_display() {
     let rust = emit(
         "public enum Token { Number(int) }\npublic void main() { var t = Token.Number(7); print(t); }",
     );
     assert!(rust.contains("Number(isize),"), "got: {rust}");
-    assert!(rust.contains("Token::Number(..) => write!(f, \"Number\"),"), "got: {rust}");
+    assert!(
+        rust.contains("Token::Number(f0) => write!(f, \"Number({})\", f0),"),
+        "got: {rust}",
+    );
     assert!(rust.contains("let t = Token::Number(7);"), "got: {rust}");
 }
 
@@ -1523,7 +1526,9 @@ fn abstract_method_emits_unimplemented_stub() {
         "abstract stub: {rust}",
     );
     // Subclass's override emits the actual body in its inherent impl.
-    assert!(rust.contains(r#"format!("Woof!")"#), "Dog::speak body: {rust}");
+    // Post Fix 5: `$"Woof!"` has no interp segments and lowers to
+    // `"Woof!".to_string()` instead of `format!("Woof!")`.
+    assert!(rust.contains(r#""Woof!".to_string()"#), "Dog::speak body: {rust}");
 }
 
 // ----------------------------------------------------------------------

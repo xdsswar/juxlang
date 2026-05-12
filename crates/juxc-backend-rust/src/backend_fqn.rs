@@ -21,6 +21,7 @@ pub(crate) fn fqn_package(fqn: &str) -> Option<&str> {
 /// Case-insensitive built-in annotation lookup. Mirrors tycheck's
 /// `has_annotation` helper — annotations in Jux are case-insensitive
 /// per spec, so we compare against a canonical-lowercase name.
+#[allow(dead_code)]
 pub(crate) fn has_annotation(
     annotations: &[juxc_ast::Annotation],
     canonical_lower: &str,
@@ -32,6 +33,44 @@ pub(crate) fn has_annotation(
             .map(|s| s.text.eq_ignore_ascii_case(canonical_lower))
             .unwrap_or(false)
     })
+}
+
+/// Reserved words that we would emit verbatim from user source but
+/// which the Rust parser rejects without the `r#` raw-identifier
+/// prefix. Used by [`to_rust_ident`] when lowering record fields,
+/// enum payload field names, and similar binding sites that come
+/// straight from a Jux `Ident` rather than from a synthesized name.
+///
+/// Two narrow exceptions: `self` and `Self` cannot become raw
+/// identifiers in Rust at all, so the helper drops them through
+/// unchanged — letting rustc surface its native error if they ever
+/// slip into emitter output (the resolver should already have
+/// caught the user-source case).
+const RUST_KEYWORDS: &[&str] = &[
+    "abstract", "as", "async", "await", "become", "box", "break", "const",
+    "continue", "crate", "do", "dyn", "else", "enum", "extern", "false",
+    "final", "fn", "for", "if", "impl", "in", "let", "loop", "macro",
+    "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
+    "return", "static", "struct", "super", "trait", "true", "try", "type",
+    "typeof", "union", "unsafe", "unsized", "use", "virtual", "where",
+    "while", "yield",
+];
+
+/// Wrap a Jux identifier in Rust's `r#` raw-identifier syntax if it
+/// would otherwise collide with a Rust reserved word. `self` and
+/// `Self` pass through unchanged because Rust forbids them as raw
+/// identifiers — those cases ought to be caught upstream.
+pub(crate) fn to_rust_ident(name: &str) -> String {
+    if name == "self" || name == "Self" {
+        return name.to_string();
+    }
+    if RUST_KEYWORDS.contains(&name) {
+        let mut out = String::with_capacity(name.len() + 2);
+        out.push_str("r#");
+        out.push_str(name);
+        return out;
+    }
+    name.to_string()
 }
 
 impl crate::RustEmitter {

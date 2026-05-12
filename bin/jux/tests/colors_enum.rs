@@ -38,9 +38,12 @@ fn enums_unit_and_payload_variants_print_and_compare() {
         output.status.code(),
     );
     let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
+    // Per JUX-LANG-V1 §7.7.2: payload-bearing variants render with
+    // their values in the auto-derived Display impl, not just the
+    // variant name. Unit variants are still bare names.
     assert_eq!(
         lines.as_slice(),
-        ["Green", "matched green", "Number", "Word"],
+        ["Green", "matched green", "Number(42)", "Word(hello)"],
         "unexpected output:\n{stdout}",
     );
 }

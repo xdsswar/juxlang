@@ -7,3 +7,4 @@ Cargo.lock.bak
 /.claude/
 /examples/target/
 /examples/multifile/target/
+/examples/showcase/target/

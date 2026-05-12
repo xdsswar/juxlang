@@ -9,7 +9,9 @@ use crate::{ArgRef, RustEmitter};
 
 impl RustEmitter {
     /// Lower an interpolated string literal per §3.4 to a Rust
-    /// `format!("…", arg, arg, …)` call.
+    /// `format!("…", arg, arg, …)` call — or, when there are no
+    /// `${…}` segments at all, to `"…".to_string()` (cheaper, no
+    /// `format!` setup, no `useless_format` clippy lint).
     ///
     /// **Format-string assembly.** We walk the segment list:
     /// - `Literal(text)` — write the bytes into the Rust format string,
@@ -21,9 +23,43 @@ impl RustEmitter {
     /// - `Bare(ident)` / `Expr(expr)` — write `{}` into the format
     ///   string and collect the value into the args list.
     ///
-    /// **Empty form.** `$""` lowers to `format!("")` — a no-op-shaped
-    /// empty string. Cheap; no special path needed.
+    /// **No-interp form** (Fix 5). When every segment is a literal —
+    /// e.g. `$"stop"`, `$""`, `$"hello world"` — we emit
+    /// `"…".to_string()` instead of `format!("…")`. Output is a
+    /// `String` value in both cases, so callers that store the
+    /// result (`var msg = $"stop"`) or pattern-merge it across
+    /// `switch` arms see identical types.
     pub(crate) fn emit_interp_string(&mut self, s: &juxc_ast::InterpStringExpr) {
+        let has_interp = s.segments.iter().any(|seg| {
+            matches!(
+                seg,
+                juxc_ast::InterpSegment::Bare(_) | juxc_ast::InterpSegment::Expr(_),
+            )
+        });
+        if !has_interp {
+            // Fast path: concatenate every literal chunk into a single
+            // Rust string literal, then call `.to_string()` on it. We
+            // still run each chunk through `emit_interp_literal_chunk`
+            // so `{` / `}` brace-doubling happens for symmetry — Rust
+            // string literals don't *need* that, but emitting the
+            // exact bytes the user wrote (after `{{` collapse) is
+            // surprising; keeping `{{` literal in the emitted source
+            // would be wrong, so we undouble below. (Cleaner: emit a
+            // raw Rust string literal directly from the literal text,
+            // since no `{}` parsing happens.)
+            self.w.push('"');
+            for seg in &s.segments {
+                if let juxc_ast::InterpSegment::Literal(text) = seg {
+                    // Push the literal verbatim — no `{`/`}` doubling
+                    // because there's no format parser to fool. The
+                    // lexer already preserved Rust-compatible escape
+                    // shapes (`\\`, `\"`, `\n`, …).
+                    self.w.push_str(text);
+                }
+            }
+            self.w.push_str("\".to_string()");
+            return;
+        }
         self.w.push_str("format!(\"");
         let mut args: Vec<&Expr> = Vec::new();
         // We can't easily hold args as owned because borrows on `s`

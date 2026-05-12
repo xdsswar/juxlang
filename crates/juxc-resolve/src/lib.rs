@@ -146,6 +146,15 @@ impl Resolver {
     /// active scope (we're at the global level), declare it in
     /// `user_names` instead — this lets [`Self::collect_top_level`] reuse
     /// the same code path.
+    ///
+    /// **TODO (spec gap).** Same-scope re-declaration (`var x = 1;
+    /// var x = 2;` inside one block) currently overwrites silently.
+    /// The diagnostics addendum hasn't allocated a code for
+    /// duplicate locals yet (E0302 is reserved for cyclic imports);
+    /// once a code lands in §D.4, push it here instead of the
+    /// silent `insert`. Until then this stays a HashSet semantics
+    /// match: every `declare` succeeds. Top-level duplicates are
+    /// caught downstream by tycheck via `E0400_DuplicateDeclaration`.
     fn declare(&mut self, name: &str) {
         if let Some(top) = self.scopes.last_mut() {
             top.insert(name.to_string());
