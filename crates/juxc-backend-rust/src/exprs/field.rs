@@ -11,9 +11,23 @@ use crate::RustEmitter;
 impl RustEmitter {
     pub(crate) fn emit_field(&mut self, f: &FieldExpr) {
         if f.field.text == "length" {
-            self.w.push('(');
+            // `xs.length` → `xs.len() as isize`. Wrap the receiver
+            // in parens only when its shape might otherwise bind
+            // looser than `.` (e.g. binary or range expression);
+            // atoms like idents, field-chains, method calls, and
+            // indexes don't need them and the output reads as
+            // handwritten Rust without the parens. The `as isize`
+            // cast is required because Rust's `.len()` returns
+            // `usize` but Jux's `int` is platform-signed.
+            let needs_parens = receiver_needs_parens(&f.object);
+            if needs_parens {
+                self.w.push('(');
+            }
             self.emit_expr(&f.object);
-            self.w.push_str(").len() as isize");
+            if needs_parens {
+                self.w.push(')');
+            }
+            self.w.push_str(".len() as isize");
             return;
         }
         // Enum variant access: `Color.Red` (a Field whose object is a
@@ -70,7 +84,15 @@ impl RustEmitter {
         // recorded with its precise `Ty`. A missing entry falls back
         // to the conservative "do the .clone()" path, matching the
         // old heuristic for the (rare) cases tycheck didn't visit.
-        if !self.emitting_lvalue && self.field_read_needs_clone(f) {
+        // Two suppressors:
+        // - **lvalue context**: `self.x = ...` must not become
+        //   `self.x.clone() = ...`.
+        // - **format-arg context**: `println!`/`format!` borrow via
+        //   `Display`, so a `&String` borrow on `self.name` is just
+        //   as good as `self.name.clone()` — and one heap alloc
+        //   cheaper.
+        let in_format_arg = self.emitting_format_arg;
+        if !self.emitting_lvalue && !in_format_arg && self.field_read_needs_clone(f) {
             self.w.push_str(".clone()");
         }
     }
@@ -153,6 +175,7 @@ impl RustEmitter {
 
     /// Walk the `extends` chain of `class_name` to find a field by
     /// name, returning its declared [`Ty`]. Mirrors the lookup tycheck
+    /// name, returning its declared [`Ty`]. Mirrors the lookup tycheck
     /// does in `check::Checker::lookup_field_in_chain`. The class's
     /// own generic-params list flows through
     /// [`ty_kind_from_ref_with_params`] so single-segment names
@@ -183,4 +206,27 @@ impl RustEmitter {
         }
         None
     }
+}
+
+/// True when emitting `expr` as the receiver of a method call (e.g.
+/// `expr.len()`) requires wrapping it in parentheses to keep the
+/// `.` binding correct. Atoms — identifiers, `this`, field-chains,
+/// method calls, indexes — bind tighter than `.` already, so
+/// they're paren-free. Composite shapes (binary ops, ranges,
+/// switch-as-expression, lambdas) bind looser and need the
+/// wrapping.
+fn receiver_needs_parens(e: &Expr) -> bool {
+    !matches!(
+        e,
+        Expr::Path(_)
+            | Expr::This(_)
+            | Expr::Field(_)
+            | Expr::Call(_)
+            | Expr::Index(_)
+            | Expr::Literal(_)
+            | Expr::InterpString(_)
+            | Expr::NewObject(_)
+            | Expr::NewArray(_)
+            | Expr::NewArrayLit(_)
+    )
 }

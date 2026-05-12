@@ -296,6 +296,15 @@ struct RustEmitter {
     /// `&'static str` instead of owned `String`. Reads of the const
     /// are still typed by the surrounding context.
     pub(crate) emitting_const_context: bool,
+    /// True while we're emitting an argument **inside a `format!` /
+    /// `println!` macro slot**. Those macros take their args by
+    /// reference (`Display`), so a `&'static str` works as well as
+    /// an owned `String`. Setting this flag tells `emit_literal` to
+    /// drop the `.to_string()` self-coerce — keeps the emitted Rust
+    /// readable (`format!("{}{}", "hi", name)` vs.
+    /// `format!("{}{}", "hi".to_string(), name)`) without changing
+    /// semantics.
+    pub(crate) emitting_format_arg: bool,
     /// Declared return type of the function / method / operator body
     /// currently being emitted. `None` outside any function body and
     /// inside constructor bodies (constructors return `Self`).
@@ -389,6 +398,7 @@ impl RustEmitter {
             user_mut_methods: HashSet::new(),
             emitting_lvalue: false,
             emitting_const_context: false,
+            emitting_format_arg: false,
             current_return_type: None,
             source: None,
             symbols: symbols.clone(),

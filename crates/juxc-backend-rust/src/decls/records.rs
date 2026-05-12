@@ -95,9 +95,12 @@ impl RustEmitter {
         self.w.line("Self {");
         self.w.indent_inc();
         for comp in &record_decl.components {
+            // Field == param-name → use Rust's struct shorthand
+            // (`Self { x, y }` rather than `Self { x: x, y: y }`).
+            // Records always satisfy this — the canonical ctor binds
+            // each component to its own name — so the branch is
+            // unconditional here.
             self.w.emit_indent();
-            self.w.push_str(&comp.name.text);
-            self.w.push_str(": ");
             self.w.push_str(&comp.name.text);
             self.w.push_str(",\n");
         }

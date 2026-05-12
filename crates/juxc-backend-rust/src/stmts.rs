@@ -7,6 +7,7 @@ use juxc_ast::{
     AssignStmt, Block, ElseBranch, Expr, ForEachStmt, IfStmt, Literal, Stmt, VarDecl, WhileStmt,
 };
 use juxc_source::Span;
+use juxc_tycheck::Ty;
 
 use crate::exprs::expr_span_of;
 use crate::RustEmitter;
@@ -86,21 +87,57 @@ impl RustEmitter {
     /// `Item` type. If users need an explicit type, they can write
     /// `for x in iter { let x: int = x; … }` — a future enhancement.
     ///
-    /// **Source preservation.** Java's for-each semantics expect the
-    /// source array to stay usable after the loop, and the loop
-    /// variable to be an owned `T` value (so assignments inside the
-    /// body work). We get both by iterating through
-    /// `iter.iter().cloned()`: `.iter()` borrows the source (so it's
-    /// not moved), `.cloned()` makes each yielded item an owned `T`.
-    /// Every Jux user type derives `Clone`, so the bound holds.
-    /// Ranges (`0..10`) keep their naked form — they're cheap-to-move
-    /// self-iterators and don't need the borrow.
+    /// **Two shapes, chosen by element type:**
+    ///
+    /// 1. **Copy elements** (`int`, `bool`, `char`, `float`, …) →
+    ///    `for &x in &iter { … }`. Pattern-derefs the borrowed item
+    ///    so `x` is a value-typed binding without an allocation.
+    ///    Zero overhead, exactly what hand-written Rust would say.
+    /// 2. **Non-Copy elements** (`String`, user classes, records,
+    ///    enums with payloads) → `for x in iter.iter().cloned() { … }`.
+    ///    Clones each item so the body sees an owned `T`, matching
+    ///    Jux's "Java-shaped" expectation that the loop variable
+    ///    behaves like a value. Every user type derives `Clone`, so
+    ///    the bound holds.
+    ///
+    /// In both cases the source array stays usable after the loop —
+    /// we borrow it, not move it.
+    ///
+    /// **Ranges** (`0..10`) keep their naked form. They're cheap-to-
+    /// move self-iterators with `Item = isize`; no borrow needed.
     pub(crate) fn emit_for_each(&mut self, f: &ForEachStmt) {
-        let is_range = matches!(&f.iter, Expr::Range(_));
+        if matches!(&f.iter, Expr::Range(_)) {
+            self.w.push_str("for ");
+            self.w.push_str(&f.var_name.text);
+            self.w.push_str(" in ");
+            self.emit_expr(&f.iter);
+            self.w.push_str(" {\n");
+            self.w.indent_inc();
+            self.emit_block_contents(&f.body);
+            self.w.indent_dec();
+            self.w.emit_indent();
+            self.w.push_str("}\n");
+            return;
+        }
+
+        // Decide between borrow-and-pattern-deref vs clone shape from
+        // the element type recorded by tycheck. Missing entries fall
+        // back to the clone form — it's the universally-correct
+        // shape; the borrow form only wins when we *know* the
+        // element is Copy.
+        let element_is_copy = match self.expr_types.get(&expr_span_of(&f.iter)) {
+            Some(Ty::Array { element, .. }) => matches!(element.as_ref(), Ty::Primitive(_)),
+            _ => false,
+        };
+
         self.w.push_str("for ");
+        if element_is_copy {
+            self.w.push('&');
+        }
         self.w.push_str(&f.var_name.text);
         self.w.push_str(" in ");
-        if is_range {
+        if element_is_copy {
+            self.w.push('&');
             self.emit_expr(&f.iter);
         } else {
             self.emit_expr(&f.iter);

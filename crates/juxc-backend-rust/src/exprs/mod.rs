@@ -120,12 +120,18 @@ impl RustEmitter {
                     self.w.push('>');
                 }
                 self.w.push_str("::new(");
+                // Constructor args consume their values, so any
+                // nested string literal needs the Fix-1 self-coerce
+                // — clear the format-arg flag for the arg emission.
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
                 for (i, arg) in n.args.iter().enumerate() {
                     if i > 0 {
                         self.w.push_str(", ");
                     }
                     self.emit_expr(arg);
                 }
+                self.emitting_format_arg = prev;
                 self.w.push(')');
             }
             Expr::Lambda(l) => self.emit_lambda(l),

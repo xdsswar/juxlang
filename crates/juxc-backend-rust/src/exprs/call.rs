@@ -3,10 +3,60 @@
 //! variant String-payload coercion that injects `.to_string()` on
 //! positional args matching a `String` slot.
 
-use juxc_ast::{CallExpr, Expr, Literal};
+use juxc_ast::{BinaryExpr, CallExpr, Expr, Literal};
 
+use crate::analysis::is_string_literal;
 use crate::exprs::ArgRef;
 use crate::RustEmitter;
+
+/// Mirror of `binary::collect_string_concat_operands` for the
+/// `print(...)`-collapse hot path. Kept here to avoid exposing the
+/// binary-module helper across modules.
+fn flatten_concat<'a>(b: &'a BinaryExpr, out: &mut Vec<&'a Expr>) {
+    push_concat_operand(&b.left, out);
+    push_concat_operand(&b.right, out);
+}
+
+fn push_concat_operand<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+    if let Expr::Binary(inner) = e {
+        if inner.op == juxc_ast::BinaryOp::Add
+            && (is_string_literal(&inner.left) || is_string_literal(&inner.right))
+        {
+            flatten_concat(inner, out);
+            return;
+        }
+    }
+    out.push(e);
+}
+
+/// Print-path mirror of `binary::fold_concat_into_format`. Folds
+/// `Literal::String` operands directly into the `println!` template
+/// (re-escaped + brace-doubled); non-literal operands become runtime
+/// args with a single `{}` placeholder each.
+fn fold_concat_for_print<'a>(operands: &[&'a Expr]) -> (String, Vec<&'a Expr>) {
+    let mut template = String::new();
+    let mut runtime: Vec<&'a Expr> = Vec::new();
+    for op in operands {
+        if let Expr::Literal(Literal::String(s)) = op {
+            for ch in s.chars() {
+                match ch {
+                    '{' => template.push_str("{{"),
+                    '}' => template.push_str("}}"),
+                    '"' => template.push_str("\\\""),
+                    '\\' => template.push_str("\\\\"),
+                    '\n' => template.push_str("\\n"),
+                    '\r' => template.push_str("\\r"),
+                    '\t' => template.push_str("\\t"),
+                    c => template.push(c),
+                }
+            }
+        } else {
+            template.push_str("{}");
+            runtime.push(op);
+        }
+    }
+    (template, runtime)
+}
 
 impl RustEmitter {
     /// Emit a call expression. Special-cases the built-in `print` to
@@ -37,12 +87,19 @@ impl RustEmitter {
                         self.w.push_str("::");
                         self.w.push_str(&f.field.text);
                         self.w.push('(');
+                        // Args of a regular call consume their values
+                        // — clear the format-arg flag so any nested
+                        // string literal still self-coerces into
+                        // owned `String` (the param's declared type).
+                        let prev = self.emitting_format_arg;
+                        self.emitting_format_arg = false;
                         for (i, arg) in call.args.iter().enumerate() {
                             if i > 0 {
                                 self.w.push_str(", ");
                             }
                             self.emit_expr(arg);
                         }
+                        self.emitting_format_arg = prev;
                         self.w.push(')');
                         return;
                     }
@@ -57,10 +114,16 @@ impl RustEmitter {
         // directly.
         self.emit_expr(&call.callee);
         self.w.push('(');
+        // Same flag discipline as above: a regular call's args
+        // consume String values, so any inner string literal needs
+        // the Fix-1 self-coerce — clear the format-arg context here.
+        let prev = self.emitting_format_arg;
+        self.emitting_format_arg = false;
         for (i, arg) in call.args.iter().enumerate() {
             if i > 0 { self.w.push_str(", "); }
             self.emit_expr(arg);
         }
+        self.emitting_format_arg = prev;
         self.w.push(')');
 
         // Phase-1 workaround: Rust's `Vec::pop` returns `Option<T>` but
@@ -97,6 +160,37 @@ impl RustEmitter {
                 self.w.push(')');
                 return;
             }
+            // Hot path: a string-concat chain (`"a" + b + "c"`) as
+            // the sole argument. The naive lowering would be
+            // `println!("{}", format!("{}{}{}", "a", b, "c"))` — a
+            // wasted heap alloc for the intermediate `String`.
+            // Inline the concat's operands directly as `println!`
+            // args so the macro formats straight into the writer,
+            // AND fold any literal operands into the template so
+            // we end up with one `println!("hello, {}!", name)`
+            // instead of `println!("{}{}{}", "hello, ", name, "!")`.
+            if let Expr::Binary(b) = &call.args[0] {
+                if b.op == juxc_ast::BinaryOp::Add
+                    && (is_string_literal(&b.left) || is_string_literal(&b.right))
+                {
+                    let mut operands: Vec<&Expr> = Vec::new();
+                    flatten_concat(b, &mut operands);
+                    let (template, runtime) =
+                        fold_concat_for_print(&operands);
+                    self.w.push_str("println!(\"");
+                    self.w.push_str(&template);
+                    self.w.push('"');
+                    let prev = self.emitting_format_arg;
+                    self.emitting_format_arg = true;
+                    for op in &runtime {
+                        self.w.push_str(", ");
+                        self.emit_expr(op);
+                    }
+                    self.emitting_format_arg = prev;
+                    self.w.push(')');
+                    return;
+                }
+            }
             // Hot path: one interpolated-string argument. Inline its
             // segments directly into the println! call instead of
             // emitting `println!("{}", format!("…", args))`. Same
@@ -124,6 +218,10 @@ impl RustEmitter {
                     }
                 }
                 self.w.push('"');
+                // `println!` borrows its args, so nested string
+                // literals stay `&str` (saves an alloc per literal).
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = true;
                 for arg_ref in &arg_order {
                     self.w.push_str(", ");
                     match arg_ref {
@@ -131,6 +229,7 @@ impl RustEmitter {
                         ArgRef::Expr(i) => self.emit_expr(expr_args[*i]),
                     }
                 }
+                self.emitting_format_arg = prev;
                 self.w.push(')');
                 return;
             }
@@ -144,10 +243,13 @@ impl RustEmitter {
             self.w.push_str("{}");
         }
         self.w.push('"');
+        let prev = self.emitting_format_arg;
+        self.emitting_format_arg = true;
         for arg in &call.args {
             self.w.push_str(", ");
             self.emit_expr(arg);
         }
+        self.emitting_format_arg = prev;
         self.w.push(')');
     }
 }

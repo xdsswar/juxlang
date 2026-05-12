@@ -3,13 +3,79 @@
 //! string-concatenation (`&str + &str` → `format!`) and the
 //! clone-injection rewrite for operator overloads on user types.
 
-use juxc_ast::{BinaryExpr, BinaryOp, OperatorKind};
+use juxc_ast::{BinaryExpr, BinaryOp, Expr, OperatorKind};
 use juxc_tycheck::Ty;
 
 use crate::analysis::is_string_literal;
 use crate::decls::synthetic_op_method_name;
 use crate::exprs::{binary_prec, expr_span_of};
 use crate::RustEmitter;
+
+/// Recursively flatten a string-concat `Add` chain into a list of
+/// operands in left-to-right order. An operand is "concat-shaped"
+/// when it's a `Binary(Add, lhs, rhs)` with at least one string-
+/// literal child — exactly the condition `emit_binary` uses to
+/// route into `emit_string_concat`. Any other operand contributes
+/// itself as a single element.
+fn collect_string_concat_operands<'a>(b: &'a BinaryExpr, out: &mut Vec<&'a Expr>) {
+    push_concat_operand(&b.left, out);
+    push_concat_operand(&b.right, out);
+}
+
+fn push_concat_operand<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+    if let Expr::Binary(inner) = e {
+        if inner.op == BinaryOp::Add
+            && (is_string_literal(&inner.left) || is_string_literal(&inner.right))
+        {
+            collect_string_concat_operands(inner, out);
+            return;
+        }
+    }
+    out.push(e);
+}
+
+/// Fold each operand of a flattened string-concat into either part
+/// of the `format!` template string (for `Literal::String`
+/// operands) or into the runtime arg list (everything else).
+///
+/// The returned tuple is `(format_template, runtime_args)`. The
+/// template is ready to drop straight inside the macro's `"..."`
+/// quotes — each literal's bytes are re-escaped for Rust string
+/// literal context, and each `{` / `}` inside a literal is doubled
+/// so `format!`'s own parser keeps its hands off them.
+///
+/// Mirrors the brace-doubling that
+/// `RustEmitter::emit_interp_literal_chunk` does for interpolation
+/// segments, but for arbitrary `Literal::String` text rather than
+/// lexer-segmented interp chunks.
+fn fold_concat_into_format<'a>(
+    operands: &[&'a Expr],
+) -> (String, Vec<&'a Expr>) {
+    let mut template = String::new();
+    let mut runtime: Vec<&'a Expr> = Vec::new();
+    for op in operands {
+        if let Expr::Literal(juxc_ast::Literal::String(s)) = op {
+            for ch in s.chars() {
+                match ch {
+                    // Brace-double for format!() parser safety.
+                    '{' => template.push_str("{{"),
+                    '}' => template.push_str("}}"),
+                    // Re-escape Rust string-literal chars.
+                    '"' => template.push_str("\\\""),
+                    '\\' => template.push_str("\\\\"),
+                    '\n' => template.push_str("\\n"),
+                    '\r' => template.push_str("\\r"),
+                    '\t' => template.push_str("\\t"),
+                    c => template.push(c),
+                }
+            }
+        } else {
+            template.push_str("{}");
+            runtime.push(op);
+        }
+    }
+    (template, runtime)
+}
 
 impl RustEmitter {
     /// Lower a binary expression. Every operator in [`BinaryOp`] maps
@@ -110,18 +176,32 @@ impl RustEmitter {
         self.w.push_str(".clone())");
     }
 
-    /// Emit a string-concatenation `Add` as a Rust `format!` call.
+    /// Emit a string-concatenation `Add` as a single Rust `format!`
+    /// call — flattening any nested `+` chains AND folding any
+    /// string-literal operands directly into the format string.
     ///
-    /// Each operand is plugged into a `{}` placeholder — Rust's
-    /// `Display` impl handles strings, integers, floats, bools, and
-    /// most user types. Chains like `"a" + b + "c"` lower naturally:
-    /// the inner `Add(... + "c")` recurses into another `format!` if
-    /// either side is a literal, else into the regular binary path.
+    /// `"hello, " + name + "!"` was already flattened by
+    /// `collect_string_concat_operands` into `["hello, ", name, "!"]`.
+    /// Naively this becomes `format!("{}{}{}", "hello, ", name, "!")`.
+    /// We further notice that the literal operands can simply BECOME
+    /// part of the format string (with `{` / `}` doubled for safety):
+    /// `format!("hello, {}!", name)`. One `{}` per non-literal,
+    /// every literal inlined — exactly what a human would write,
+    /// and one less `format!` arg per literal at runtime.
     pub(crate) fn emit_string_concat(&mut self, b: &BinaryExpr) {
-        self.w.push_str("format!(\"{}{}\", ");
-        self.emit_expr(&b.left);
-        self.w.push_str(", ");
-        self.emit_expr(&b.right);
+        let mut operands: Vec<&juxc_ast::Expr> = Vec::new();
+        collect_string_concat_operands(b, &mut operands);
+        let (fmt_string, runtime_args) = fold_concat_into_format(&operands);
+        self.w.push_str("format!(\"");
+        self.w.push_str(&fmt_string);
+        self.w.push('"');
+        let prev = self.emitting_format_arg;
+        self.emitting_format_arg = true;
+        for op in &runtime_args {
+            self.w.push_str(", ");
+            self.emit_expr(op);
+        }
+        self.emitting_format_arg = prev;
         self.w.push(')');
     }
 }

@@ -87,6 +87,12 @@ impl RustEmitter {
             }
         }
         self.w.push('"');
+        // `format!` borrows its args via `Display`, so any string
+        // literal nested in `${…}` (or in the bare-ident path's
+        // fallback) can stay a `&str` — no heap alloc for an arg
+        // that's about to be borrowed anyway.
+        let prev = self.emitting_format_arg;
+        self.emitting_format_arg = true;
         for arg_ref in &arg_order {
             self.w.push_str(", ");
             match arg_ref {
@@ -94,6 +100,7 @@ impl RustEmitter {
                 ArgRef::Expr(i) => self.emit_expr(args[*i]),
             }
         }
+        self.emitting_format_arg = prev;
         self.w.push(')');
     }
 

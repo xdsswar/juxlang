@@ -31,14 +31,23 @@ impl RustEmitter {
                 // parameters, fields, returns — so match-arm
                 // collisions and assignment coercions evaporate.
                 //
-                // Const-context exception: Rust's const evaluator
-                // can't run `.to_string()`, so a `pub const NAME:
-                // &str = "…";` keeps the bare literal shape (the
-                // const-context type emitter pairs by mapping String
-                // to `&'static str`). Reads of the const are typed
-                // by their use site.
+                // Two contexts skip the self-coerce:
+                //
+                // - **const-context**: Rust's const evaluator can't
+                //   run `.to_string()`, so a `pub const NAME: &str =
+                //   "…";` keeps the bare literal shape (the
+                //   const-context type emitter pairs by mapping
+                //   String to `&'static str`).
+                // - **format-arg context**: `format!`/`println!`
+                //   borrow their args via `Display`, so a `&'static
+                //   str` is just as good as an owned `String`. We
+                //   skip the alloc to keep emitted Rust both correct
+                //   AND efficient — Fix 1's "everything is owned"
+                //   stance was about *types flowing through user
+                //   code*, not about forcing heap allocs in places
+                //   where the borrow shape was always fine.
                 self.emit_rust_string_literal(s);
-                if !self.emitting_const_context {
+                if !self.emitting_const_context && !self.emitting_format_arg {
                     self.w.push_str(".to_string()");
                 }
             }

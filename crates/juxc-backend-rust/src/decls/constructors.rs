@@ -4,11 +4,27 @@
 
 use std::collections::HashSet;
 
+use juxc_ast::Expr;
+
 use crate::analysis::{
     collect_mutated_names, extract_simple_ctor_inits, SimpleCtorInits,
 };
 use crate::stmts::stmt_span;
 use crate::RustEmitter;
+
+/// True when `init_expr` is a single-segment path expression whose
+/// name equals `field_name`. Used by `Self { … }` emission to pick
+/// Rust's struct field shorthand: `Self { x, y }` vs.
+/// `Self { x: x, y: y }`. Anything more complex (a method call, a
+/// `this.foo`, a literal) doesn't qualify.
+fn init_is_same_named_ident(init_expr: &Expr, field_name: &str) -> bool {
+    if let Expr::Path(qn) = init_expr {
+        if qn.segments.len() == 1 {
+            return qn.segments[0].text == field_name;
+        }
+    }
+    false
+}
 
 impl RustEmitter {
     /// Emit a user-declared constructor as `pub fn new(...) -> Self`.
@@ -172,18 +188,26 @@ impl RustEmitter {
                 continue;
             }
             self.w.emit_indent();
-            self.w.push_str(&field.name.text);
-            self.w.push_str(": ");
+            // Rust struct field shorthand: when the init is just an
+            // identifier with the same name as the field
+            // (`Self { x: x, … }`), emit `Self { x, … }` instead.
+            // Idiomatic Rust; identical semantics.
             if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
-                // Field assigned in body — emit its init expression
-                // verbatim. Post Fix 1 a String-typed init expression
-                // is always already an owned Rust `String`, so the
-                // previous `.to_string()` injection is gone.
+                if init_is_same_named_ident(init_expr, &field.name.text) {
+                    self.w.push_str(&field.name.text);
+                    self.w.push_str(",\n");
+                    continue;
+                }
+                self.w.push_str(&field.name.text);
+                self.w.push_str(": ");
                 self.emit_expr(init_expr);
             } else if let Some(default) = &field.default {
-                // Field carries a Jux-source default initializer.
+                self.w.push_str(&field.name.text);
+                self.w.push_str(": ");
                 self.emit_expr(default);
             } else {
+                self.w.push_str(&field.name.text);
+                self.w.push_str(": ");
                 // No assignment and no source default — fall back to
                 // the type's natural default. Generic-typed fields
                 // will surface a Rust compile error here, signaling
