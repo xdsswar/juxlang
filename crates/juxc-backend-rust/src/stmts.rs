@@ -7,7 +7,6 @@ use juxc_ast::{
     AssignStmt, Block, ElseBranch, Expr, ForEachStmt, IfStmt, Literal, Stmt, VarDecl, WhileStmt,
 };
 use juxc_source::Span;
-use juxc_tycheck::Ty;
 
 use crate::exprs::expr_span_of;
 use crate::RustEmitter;
@@ -51,15 +50,12 @@ impl RustEmitter {
                 if let Some(e) = value {
                     self.w.push(' ');
                     self.emit_expr(e);
-                    // `return "literal";` inside a `String`-returning
-                    // fn needs `.to_string()` so the `&str` from the
-                    // literal lands as the owned `String` Rust expects.
-                    // The tail-position helper covers the trailing-
-                    // return case; this mid-body path uses the same
-                    // predicate.
-                    if self.return_wants_string_coercion(e) {
-                        self.w.push_str(".to_string()");
-                    }
+                    // Pre Fix 1 we appended `.to_string()` to bare
+                    // string literals here to bridge `&str` →
+                    // `String`. Fix 1 lifted every Jux string source
+                    // to owned `String` directly inside `emit_literal`,
+                    // so the coercion is now baked in. Keeping the
+                    // call would emit `.to_string().to_string()`.
                 }
                 self.w.push_str(";\n");
             }
@@ -89,29 +85,27 @@ impl RustEmitter {
     /// `var_type` (if any) and let Rust infer from the iterator's
     /// `Item` type. If users need an explicit type, they can write
     /// `for x in iter { let x: int = x; … }` — a future enhancement.
+    ///
+    /// **Source preservation.** Java's for-each semantics expect the
+    /// source array to stay usable after the loop, and the loop
+    /// variable to be an owned `T` value (so assignments inside the
+    /// body work). We get both by iterating through
+    /// `iter.iter().cloned()`: `.iter()` borrows the source (so it's
+    /// not moved), `.cloned()` makes each yielded item an owned `T`.
+    /// Every Jux user type derives `Clone`, so the bound holds.
+    /// Ranges (`0..10`) keep their naked form — they're cheap-to-move
+    /// self-iterators and don't need the borrow.
     pub(crate) fn emit_for_each(&mut self, f: &ForEachStmt) {
-        self.w.push_str("for ");
-        // For non-range iterables (arrays, Vecs) we iterate by
-        // **borrowed reference** so the source value isn't moved —
-        // matching Java's for-each semantics where the array stays
-        // usable after the loop. The `&x` pattern destructures the
-        // borrowed item, leaving `x` as a value-typed binding for the
-        // body. This works for any `T: Copy`, which covers every
-        // Phase-1 element type (primitive ints/floats, `bool`, `char`,
-        // `&str`).
-        //
-        // Ranges (`0..10`) keep their existing naked form — they're
-        // cheap-to-move self-iterators and don't need a borrow.
         let is_range = matches!(&f.iter, Expr::Range(_));
-        if !is_range {
-            self.w.push('&');
-        }
+        self.w.push_str("for ");
         self.w.push_str(&f.var_name.text);
         self.w.push_str(" in ");
-        if !is_range {
-            self.w.push('&');
+        if is_range {
+            self.emit_expr(&f.iter);
+        } else {
+            self.emit_expr(&f.iter);
+            self.w.push_str(".iter().cloned()");
         }
-        self.emit_expr(&f.iter);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.emit_block_contents(&f.body);
@@ -187,14 +181,10 @@ impl RustEmitter {
     /// today: simple name (single-segment `Path`), array index
     /// (`Index`), or field access (`Field`, including `this.field`).
     ///
-    /// **String-field coercion.** If the LHS is a field access whose
-    /// declared type is the Jux primitive `String` (resolved via the
-    /// receiver's class/record signature in tycheck's [`SymbolTable`]),
-    /// append `.to_string()` to the RHS so a `&str` value (the
-    /// natural shape of `String` parameters and string literals)
-    /// becomes an owned `String` ready for the field. Calling
-    /// `.to_string()` on an already-`String` value clones — slightly
-    /// wasteful but always correct.
+    /// Post Fix 1 the RHS of a String-typed assignment is always an
+    /// owned `String` value (literal self-coerces inside
+    /// `emit_literal`; identifiers refer to `String`-typed bindings).
+    /// No `.to_string()` injection is needed here anymore.
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
         // LHS: emit with the lvalue flag set so `emit_field` skips its
         // String-read `.clone()` insertion.
@@ -203,42 +193,7 @@ impl RustEmitter {
         self.emitting_lvalue = false;
         self.w.push_str(" = ");
         self.emit_expr(&a.value);
-        // Position-aware String coercion on assign-to-String-field.
-        //
-        // Phase H: consult tycheck's per-expression `Ty` map for the
-        // assignment target. If the target's recorded type is
-        // `Ty::String`, the field expects an owned `String` and the
-        // RHS (typically a `&str` parameter or a literal) needs
-        // `.to_string()`. Anything else — primitives, user types,
-        // generics, arrays — emits straight.
-        //
-        // Fallback: when the target isn't in `expr_types`, drop back
-        // to the symbol-table lookup so we don't regress on the rare
-        // case where tycheck didn't visit the expression. A miss in
-        // both gives `false`, matching the conservative path the old
-        // heuristic would have taken on an unrecognized field name.
-        if let Expr::Field(f) = &a.target {
-            if self.assign_target_is_string(f) {
-                self.w.push_str(".to_string()");
-            }
-        }
         self.w.push_str(";\n");
-    }
-
-    /// Decide whether the RHS of `target = value;` needs an automatic
-    /// `.to_string()` coercion — true exactly when `target` is a Jux
-    /// `String`-typed field. See [`Self::emit_assign`] for the rule
-    /// and the fallback semantics.
-    ///
-    /// Resolves via [`Self::lookup_field_type`] — receiver-driven —
-    /// rather than `expr_types.get(&f.span)`, for the same reason
-    /// [`Self::field_read_needs_clone`] does: spans inside
-    /// interpolated-string segments are substring-local and can collide
-    /// across the unit. A missing field entry returns false (no
-    /// coercion); the same conservative fallback the heuristic used
-    /// to take when the field name wasn't in the pre-pass set.
-    pub(crate) fn assign_target_is_string(&self, f: &juxc_ast::FieldExpr) -> bool {
-        matches!(self.lookup_field_type(f), Some(Ty::String))
     }
 
     /// Lower `if (cond) { … } else if (…) { … } else { … }` to its

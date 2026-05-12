@@ -489,22 +489,24 @@ impl RustEmitter {
         }
         self.w.push_str(&field.name.text);
         self.w.push_str(": ");
+        // `const`/`static` slots can't run `.to_string()` at init
+        // time, so the const-context flag asks both the type
+        // emitter (`String` → `&'static str`) and `emit_literal`
+        // (suppress the Fix-1 `.to_string()` wrap) to stay
+        // const-evaluatable. See `emit_const_decl` for the
+        // top-level mirror.
+        self.emitting_const_context = true;
         self.emit_field_type_as_rust(&field.ty);
         self.w.push_str(" = ");
         if let Some(init) = &field.default {
             self.emit_expr(init);
-            // String-field coercion: `&str` literal → owned String
-            // when the declared type is Jux `String`. Mirrors the
-            // constructor-body path in `emit_constructor`.
-            if crate::analysis::is_jux_string_type_ref(&field.ty) {
-                self.w.push_str(".to_string()");
-            }
         } else {
             // No initializer — Rust requires one at the const/static
             // site. Emit a placeholder so the build fails with a
             // clear error rather than silently producing wrong code.
             self.emit_field_default_value_for(&field.ty);
         }
+        self.emitting_const_context = false;
         self.w.push_str(";\n");
         self.w.indent_dec();
     }

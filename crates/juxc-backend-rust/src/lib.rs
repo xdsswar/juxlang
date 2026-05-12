@@ -287,6 +287,15 @@ struct RustEmitter {
     /// suppresses the `.clone()` insertion in `emit_field` so we don't
     /// produce nonsense like `self.name.clone() = "x";`.
     emitting_lvalue: bool,
+    /// True while we're emitting a `const NAME: T = …;` (or
+    /// `pub static NAME: T = …;`) initializer. Rust's const evaluator
+    /// can't run `String::from`/`.to_string()`, so the literal must
+    /// stay as a bare `&'static str` — `emit_literal` consults this
+    /// flag to suppress the Fix-1 `.to_string()` wrap, and the
+    /// const-context type emitter maps Jux `String` to
+    /// `&'static str` instead of owned `String`. Reads of the const
+    /// are still typed by the surrounding context.
+    pub(crate) emitting_const_context: bool,
     /// Declared return type of the function / method / operator body
     /// currently being emitted. `None` outside any function body and
     /// inside constructor bodies (constructors return `Self`).
@@ -379,6 +388,7 @@ impl RustEmitter {
             this_alias: None,
             user_mut_methods: HashSet::new(),
             emitting_lvalue: false,
+            emitting_const_context: false,
             current_return_type: None,
             source: None,
             symbols: symbols.clone(),
@@ -703,9 +713,16 @@ impl RustEmitter {
         self.w.push_str("const ");
         self.w.push_str(&decl.name.text);
         self.w.push_str(": ");
+        // Const-context emission. Jux `String` → Rust `&'static str`
+        // here, since `String::new`/`.to_string` aren't const fns.
+        // The matching `emit_literal` path drops its `.to_string()`
+        // wrap when this flag is set, so the value text and type
+        // line up.
+        self.emitting_const_context = true;
         self.emit_type_as_rust(&decl.ty);
         self.w.push_str(" = ");
         self.emit_expr(&decl.value);
+        self.emitting_const_context = false;
         self.w.push_str(";\n");
         self.w.newline();
     }

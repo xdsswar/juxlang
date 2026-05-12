@@ -7,6 +7,7 @@ use juxc_ast::{Expr, Ident, InterpSegment};
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_source::Span;
 
+use crate::literals::process_string_escapes;
 use crate::Parser;
 
 impl<'a> Parser<'a> {
@@ -103,19 +104,23 @@ impl<'a> Parser<'a> {
                 i = j + 1;
                 continue;
             }
-            // Backslash escape — pass both bytes through to the literal
-            // so the backend can render them verbatim into the format
-            // string. Validation/interpretation happens at backend time
-            // alongside the existing `Str` literal logic.
+            // Backslash escape — decode through the shared escape
+            // table per §A.1.5. We process one escape sequence at a
+            // time so that subsequent `$name`/`${…}` markers retain
+            // their normal meaning inside the same literal run.
             if b == b'\\' && i + 1 < bytes.len() {
-                lit_buf.push('\\');
-                // Push the next byte using char form. We rely on the
-                // lexer having already filtered out non-UTF-8 source.
-                if let Some(ch) = raw[i + 1..].chars().next() {
-                    lit_buf.push(ch);
-                    i += 1 + ch.len_utf8();
-                    continue;
+                // Find the end of this single escape (it may span
+                // multiple bytes for `\u{…}` and `\xHH`).
+                let esc_end = escape_byte_end(bytes, i);
+                let (decoded, errs) = process_string_escapes(&raw[i..esc_end]);
+                lit_buf.push_str(&decoded);
+                for msg in errs {
+                    self.diagnostics.push(
+                        Diagnostic::error(code::Code::E0200_UnexpectedToken, msg),
+                    );
                 }
+                i = esc_end;
+                continue;
             }
             // Plain literal byte — append as UTF-8 char.
             if let Some(ch) = raw[i..].chars().next() {
@@ -174,4 +179,43 @@ pub(crate) fn is_ident_start(b: u8) -> bool {
 /// True if `b` can continue an ASCII identifier (`A-Z`, `a-z`, `0-9`, `_`).
 pub(crate) fn is_ident_cont(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Given that `bytes[i]` is a `\` opening an escape inside an interp
+/// string body, return the exclusive end byte index of that one
+/// escape sequence. Used by the interp segment walker so we can hand
+/// exactly the escape's bytes to [`process_string_escapes`] without
+/// accidentally consuming a following `$name` marker as part of the
+/// escape's lookahead.
+///
+/// Rules (mirroring §A.1.5):
+/// - `\x` + 2 chars → 4 bytes total (the `\`, the `x`, two hex digits).
+/// - `\u{...}` → from `\` through the closing `}`. If `{` is missing
+///   or the form is unterminated, we consume what's there and let
+///   [`process_string_escapes`] surface the diagnostic.
+/// - any other escape (`\n`, `\\`, `\"`, …) → 2 bytes total.
+pub(crate) fn escape_byte_end(bytes: &[u8], i: usize) -> usize {
+    if i + 1 >= bytes.len() {
+        return bytes.len();
+    }
+    match bytes[i + 1] {
+        b'x' => (i + 4).min(bytes.len()),
+        b'u' => {
+            // Scan to the matching `}`. Tolerate malformed shapes by
+            // stopping at end-of-buffer; the decoder reports them.
+            let mut j = i + 2;
+            if j < bytes.len() && bytes[j] == b'{' {
+                j += 1;
+                while j < bytes.len() && bytes[j] != b'}' {
+                    j += 1;
+                }
+                if j < bytes.len() {
+                    return j + 1;
+                }
+                return bytes.len();
+            }
+            j.min(bytes.len())
+        }
+        _ => i + 2,
+    }
 }

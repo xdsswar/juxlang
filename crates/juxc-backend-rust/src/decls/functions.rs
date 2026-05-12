@@ -5,9 +5,9 @@
 
 use std::collections::HashSet;
 
-use juxc_ast::{Block, Expr, FnDecl, ReturnType, Stmt};
+use juxc_ast::{Block, FnDecl, ReturnType, Stmt};
 
-use crate::analysis::{collect_mutated_names, is_jux_string_type_ref, is_string_literal};
+use crate::analysis::collect_mutated_names;
 use crate::stmts::stmt_span;
 use crate::RustEmitter;
 
@@ -175,18 +175,13 @@ impl RustEmitter {
     pub(crate) fn emit_tail_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Return(Some(expr)) => {
-                // `return expr;` → bare `expr` on its own line. When
-                // the enclosing fn returns `String` and the expression
-                // is a bare string literal, inject `.to_string()` so
-                // Rust's `&str` → owned `String` gap doesn't trip
-                // rustc with an E0308. Interp strings (`$"..."`)
-                // already lower to `format!(...)` which produces
-                // `String` directly, so no coercion needed there.
+                // `return expr;` → bare `expr` on its own line. Fix 1
+                // unified every string source (literals, parameters,
+                // fields, returns) to owned `String`, so the old
+                // tail-return `.to_string()` coercion is no longer
+                // needed: a bare literal here already self-coerces.
                 self.w.emit_indent();
                 self.emit_expr(expr);
-                if self.return_wants_string_coercion(expr) {
-                    self.w.push_str(".to_string()");
-                }
                 self.w.push('\n');
             }
             Stmt::Return(None) => {
@@ -194,19 +189,5 @@ impl RustEmitter {
             }
             _ => unreachable!("emit_tail_stmt called on non-Return stmt"),
         }
-    }
-
-    /// True iff the enclosing fn's declared return type is the Jux
-    /// `String` (which lowers to Rust's owned `String`) AND `expr` is
-    /// a bare string literal — meaning emission would otherwise
-    /// produce a `&str` where `String` is required. See
-    /// [`Self::emit_tail_stmt`] and the `emit_stmt` Return arm for
-    /// the two call sites.
-    pub(crate) fn return_wants_string_coercion(&self, expr: &Expr) -> bool {
-        let returns_string = match &self.current_return_type {
-            Some(ReturnType::Type(t)) => is_jux_string_type_ref(t),
-            _ => false,
-        };
-        returns_string && is_string_literal(expr)
     }
 }

@@ -132,25 +132,46 @@ fn if_condition_has_no_outer_parens() {
     assert!(!rust.contains("if (1 < 2)"), "outer parens not expected, got: {rust}");
 }
 
-/// String escaping: characters that have special meaning in a Rust
-/// string literal (`"`, `\`, `\n`, `\r`, `\t`) must be re-escaped on
-/// emission so the emitted Rust is well-formed.
-///
-/// Note: full Jux escape *interpretation* (`\n` → U+000A, `\u{…}` →
-/// codepoint) is deferred to a later phase per the lexer's TODO.
-/// What we test here is the narrower property that whatever bytes
-/// the lexer hands us round-trip through valid Rust source.
+/// String escaping: Jux `"c:\\path"` decodes at parse time to the
+/// one-byte-backslash string `c:\path`, and the backend then
+/// re-escapes that single `\` as `\\` when emitting into Rust source.
+/// End result: `println!("c:\\path")` (one logical backslash) —
+/// exactly what the user would write in Java / most C-family
+/// languages.
 #[test]
 fn rust_special_chars_in_string_are_reescaped() {
-    // Embed a backslash in the Jux source. The lexer preserves it raw,
-    // and the backend must emit it as `\\` in Rust source.
     let rust = emit(r#"public void main() { print("c:\\path"); }"#);
-    // Note: for the literal-form println the string is emitted as a
-    // format string, so braces would also be doubled — but there are
-    // none here. Just verify the backslash got re-escaped.
     assert!(
-        rust.contains(r#"println!("c:\\\\path")"#),
-        "expected backslash to be re-escaped as \\\\, got: {rust}"
+        rust.contains(r#"println!("c:\\path")"#),
+        "expected one re-escaped backslash, got: {rust}"
+    );
+}
+
+/// `\n`, `\t`, and `\u{…}` round-trip from Jux to runtime. The
+/// parser-time escape decoder converts each escape sequence to its
+/// real Unicode scalar, then the backend re-encodes those chars
+/// using Rust escape conventions on the way out.
+#[test]
+fn standard_escapes_decoded_at_parse_time() {
+    let rust = emit(r#"public void main() { print("a\nb"); }"#);
+    assert!(
+        rust.contains(r#"println!("a\nb")"#),
+        "newline escape: {rust}"
+    );
+
+    let rust = emit(r#"public void main() { print("hi\tthere"); }"#);
+    assert!(
+        rust.contains(r#"println!("hi\tthere")"#),
+        "tab escape: {rust}"
+    );
+
+    // `\u{1F600}` is the 😀 emoji. The decoder produces the actual
+    // char and the backend emits it verbatim (Rust string literals
+    // accept any Unicode scalar value).
+    let rust = emit(r#"public void main() { print("face=\u{1F600}"); }"#);
+    assert!(
+        rust.contains("face=\u{1F600}"),
+        "unicode escape: {rust}"
     );
 }
 
@@ -166,18 +187,24 @@ fn braces_in_print_literal_are_doubled() {
     );
 }
 
-/// A function with one String parameter lowers to `fn name(p: &str)`.
-/// This is the milestone-3 backend addition: parameters emit and
-/// `String` maps onto Rust's `&str`.
+/// A function with one String parameter lowers to
+/// `fn name(p: String)` post Fix 1: every Jux `String` position is
+/// owned `String` in emitted Rust.
 #[test]
-fn string_param_lowers_to_str_slice() {
+fn string_param_lowers_to_owned_string() {
     let rust = emit(
         r#"public void greet(String name) { print(name); }
            public void main() { greet("Alice"); }"#,
     );
     assert!(
-        rust.contains("fn greet(name: &str)"),
-        "expected `fn greet(name: &str)`, got: {rust}",
+        rust.contains("fn greet(name: String)"),
+        "expected `fn greet(name: String)`, got: {rust}",
+    );
+    // The argument site lowers the literal through Fix 1's
+    // `.to_string()` self-coercion, so the type matches.
+    assert!(
+        rust.contains(r#"greet("Alice".to_string())"#),
+        "expected `greet(\"Alice\".to_string())`, got: {rust}",
     );
 }
 
@@ -544,10 +571,11 @@ fn typed_for_each_drops_type_annotation_for_now() {
 // For-each on arrays (borrow + pattern-deref)
 // ----------------------------------------------------------------------
 
-/// For-each over a dynamic array borrows the source and
-/// pattern-derefs the element — keeps the Vec usable after the loop.
+/// For-each over a dynamic array iterates by `.iter().cloned()` so
+/// the Vec stays usable after the loop and the loop variable is an
+/// owned `T` value (works for non-Copy types like `String`).
 #[test]
-fn for_each_on_vec_borrows_and_destructures() {
+fn for_each_on_vec_clones_each_element() {
     let rust = emit(
         r#"public void main() {
                String[] xs = {"a", "b"};
@@ -555,22 +583,22 @@ fn for_each_on_vec_borrows_and_destructures() {
                print(xs.length);
            }"#,
     );
-    assert!(rust.contains("for &x in &xs {"), "got: {rust}");
+    assert!(rust.contains("for x in xs.iter().cloned() {"), "got: {rust}");
     // The post-loop `.length` reads xs — proves we didn't move it.
     assert!(rust.contains("(xs).len() as isize"), "got: {rust}");
 }
 
-/// For-each over a fixed-size array borrows the same way — works
-/// because `&[T; N]: IntoIterator<Item = &T>`.
+/// Fixed-size arrays follow the same `.iter().cloned()` shape;
+/// the resulting loop variable is owned regardless of `T: Copy`.
 #[test]
-fn for_each_on_fixed_array_borrows_and_destructures() {
+fn for_each_on_fixed_array_clones_each_element() {
     let rust = emit(
         r#"public void main() {
                int[3] xs = {1, 2, 3};
                for (var x : xs) { print(x); }
            }"#,
     );
-    assert!(rust.contains("for &x in &xs {"), "got: {rust}");
+    assert!(rust.contains("for x in xs.iter().cloned() {"), "got: {rust}");
 }
 
 /// Ranges keep their naked `for x in 0..10` form — no borrow.
@@ -579,7 +607,7 @@ fn for_each_on_fixed_array_borrows_and_destructures() {
 fn for_each_on_range_still_unborrowed() {
     let rust = emit("public void main() { for (var i : 0..3) { print(i); } }");
     assert!(rust.contains("for i in 0..3 {"), "got: {rust}");
-    assert!(!rust.contains("for &i in &"), "ranges shouldn't borrow: {rust}");
+    assert!(!rust.contains(".iter()"), "ranges shouldn't .iter(): {rust}");
 }
 
 // -----------------------------------------------------------------
@@ -604,7 +632,9 @@ fn every_primitive_maps_to_its_rust_counterpart() {
         ("float",  "f32"),
         ("double", "f64"),
         ("char",   "char"),
-        ("String", "&str"),
+        // Per Fix 1, Jux `String` is owned `String` in every
+        // position — parameters included.
+        ("String", "String"),
     ];
     for (jux_ty, rust_ty) in cases {
         let src = format!("public void f({jux_ty} x) {{}}");
@@ -1151,15 +1181,15 @@ fn dynamic_int_array_lowers_to_vec_isize_with_vec_macro() {
     );
 }
 
-/// `String[]` lowers to `Vec<&str>` (mirroring the String→&str
-/// position-blind mapping the rest of the backend uses today).
+/// `String[]` lowers to `Vec<String>` (Fix 1 — every Jux String
+/// position is owned `String`, including array element types).
 #[test]
-fn dynamic_string_array_lowers_to_vec_str_slice() {
+fn dynamic_string_array_lowers_to_vec_owned_string() {
     let rust = emit(
         r#"public void main() { String[] xs = new String[]{"a", "b"}; print(xs.length); }"#,
     );
     assert!(
-        rust.contains(r#"let xs: Vec<&str> = vec!["a", "b"];"#),
+        rust.contains(r#"let xs: Vec<String> = vec!["a".to_string(), "b".to_string()];"#),
         "got: {rust}",
     );
 }
@@ -1217,14 +1247,17 @@ fn bare_init_on_dynamic_lhs_emits_vec_macro() {
 }
 
 /// `String[3] colors = {…};` — fixed-size string array lowers to
-/// `[&str; 3]` with a Rust array literal.
+/// `[String; 3]` per Fix 1, with each element self-coerced via
+/// `.to_string()`.
 #[test]
-fn bare_init_string_fixed_array_lowers_to_str_slice_array() {
+fn bare_init_string_fixed_array_lowers_to_owned_string_array() {
     let rust = emit(
         r#"public void main() { String[3] cs = {"a", "b", "c"}; print(cs.length); }"#,
     );
     assert!(
-        rust.contains(r#"let cs: [&str; 3] = ["a", "b", "c"];"#),
+        rust.contains(
+            r#"let cs: [String; 3] = ["a".to_string(), "b".to_string(), "c".to_string()];"#
+        ),
         "got: {rust}",
     );
 }
@@ -1279,11 +1312,12 @@ fn pop_method_call_promotes_receiver_to_let_mut() {
 // ----------------------------------------------------------------------
 
 /// A class field of type `String` lowers to a Rust `String` field
-/// (owned), defaults to `String::new()`, and the constructor
-/// parameter remains `&str` with a `.to_string()` coercion injected
-/// on the `this.name = name;` assignment.
+/// (owned). Post Fix 1 the constructor parameter is also owned
+/// `String`, so the field init becomes a plain move with no
+/// `.to_string()` coercion. Reads still auto-clone so the field
+/// isn't moved out of `u` on every access.
 #[test]
-fn string_field_lowers_to_owned_with_to_string_coercion() {
+fn string_field_lowers_to_owned_string_with_plain_move_init() {
     let rust = emit(
         r#"
         public class User {
@@ -1296,18 +1330,9 @@ fn string_field_lowers_to_owned_with_to_string_coercion() {
         }
         "#,
     );
-    // Field is owned String. With the simple-ctor refactor the
-    // constructor uses a direct `Self { name: … }` literal — the
-    // String::new() default isn't needed because the body assigns
-    // `name` explicitly.
     assert!(rust.contains("name: String,"), "field type: {rust}");
-    // Constructor still takes &str; the coercion is applied to
-    // the init expression inside the direct Self literal.
-    assert!(rust.contains("pub fn new(name: &str)"), "param: {rust}");
-    assert!(
-        rust.contains("name: name.to_string(),"),
-        "ctor init coercion: {rust}",
-    );
+    assert!(rust.contains("pub fn new(name: String)"), "param: {rust}");
+    assert!(rust.contains("name: name,"), "ctor init: {rust}");
     // Read auto-clones so the field isn't moved out of `u`.
     assert!(
         rust.contains("u.name.clone()"),
@@ -1639,11 +1664,11 @@ fn primitive_record_lowers_to_struct_and_canonical_ctor() {
     assert!(rust.contains("Vector3::new(1.0, 2.0, 3.0)"), "ctor call: {rust}");
 }
 
-/// String-component records get position-aware mapping: the field
-/// is owned `String`, the ctor takes `&str`, and the field init
-/// injects `.to_string()`.
+/// String-component records get the Fix-1 unified treatment: the
+/// field is owned `String`, the ctor parameter is also owned
+/// `String`, and the init is a plain move (no `.to_string()`).
 #[test]
-fn string_component_record_uses_owned_string_and_to_string_coercion() {
+fn string_component_record_uses_owned_string_throughout() {
     let rust = emit(
         r#"
         public record Greeting(String name, int age) {}
@@ -1654,8 +1679,8 @@ fn string_component_record_uses_owned_string_and_to_string_coercion() {
         "#,
     );
     assert!(rust.contains("pub name: String,"), "field type: {rust}");
-    assert!(rust.contains("pub fn new(name: &str, age: isize)"), "ctor params: {rust}");
-    assert!(rust.contains("name: name.to_string(),"), "init coercion: {rust}");
+    assert!(rust.contains("pub fn new(name: String, age: isize)"), "ctor params: {rust}");
+    assert!(rust.contains("name: name,"), "init: {rust}");
     // Read auto-clones so the field isn't moved out of `g`.
     assert!(rust.contains("g.name.clone()"), "read clone: {rust}");
 }

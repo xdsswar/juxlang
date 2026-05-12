@@ -85,9 +85,9 @@ impl RustEmitter {
             }
             self.w.push_str(&comp.name.text);
             self.w.push_str(": ");
-            // Ctor params follow normal type emission — Jux `String`
-            // lowers to `&str` (cheap borrow). The field init below
-            // injects `.to_string()` to convert into the owned field.
+            // Post Fix 1 Jux `String` lowers to owned Rust `String`
+            // in every position — params included. Field init below
+            // is therefore a plain move (`name: name`).
             self.emit_type_as_rust(&comp.ty);
         }
         self.w.push_str(") -> Self {\n");
@@ -99,14 +99,6 @@ impl RustEmitter {
             self.w.push_str(&comp.name.text);
             self.w.push_str(": ");
             self.w.push_str(&comp.name.text);
-            // String-component coercion: the corresponding pre-pass
-            // (`collect_record_string_component_names`) tracks which
-            // components are String-typed; the field init writes the
-            // `&str` parameter as `name.to_string()` to land it in the
-            // owned `String` field.
-            if crate::analysis::is_jux_string_type(&comp.ty) {
-                self.w.push_str(".to_string()");
-            }
             self.w.push_str(",\n");
         }
         self.w.indent_dec();

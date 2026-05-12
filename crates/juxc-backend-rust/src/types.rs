@@ -112,6 +112,15 @@ impl RustEmitter {
         }
 
         if let Some(rust_ty) = jux_primitive_to_rust(ty) {
+            // Const-context override: a `const`/`static` decl can't
+            // run `.to_string()` at init time, so `String` lowers to
+            // `&'static str` in this position. The matching
+            // `emit_literal` path drops its `.to_string()` wrap when
+            // `emitting_const_context` is set.
+            if self.emitting_const_context && rust_ty == "String" {
+                self.w.push_str("&'static str");
+                return;
+            }
             self.w.push_str(rust_ty);
             return;
         }
@@ -311,30 +320,26 @@ impl RustEmitter {
     }
 
     /// Like [`Self::emit_type_as_rust`] but for **class-field type
-    /// position** — Jux `String` lowers to owned Rust `String` instead
-    /// of `&str`. Everything else falls through to the standard mapping.
+    /// position** — kept as a thin wrapper so a future divergence
+    /// (e.g. lifetime threading for borrowed-field designs) has a
+    /// natural seam.
     ///
-    /// Rationale: a class field needs to own its String so the value
-    /// outlives any single method call. Constructor/method parameters
-    /// keep their cheap `&str` form; the `emit_assign` coercion takes
-    /// care of `name.to_string()` when assigning into the field.
+    /// Post Fix 1 the standard mapping already lowers Jux `String`
+    /// to owned `String` in every position, so this wrapper is
+    /// effectively a forward — except in `emitting_const_context`,
+    /// where the standard mapping uses `&'static str`. That's the
+    /// behavior we want for `pub const`/`pub static` fields too,
+    /// so the forwarding path is correct without any extra branch.
     pub(crate) fn emit_field_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
-        if is_jux_string_type(ty) {
-            self.w.push_str("String");
-            return;
-        }
         self.emit_type_as_rust(ty);
     }
 
-    /// Like [`Self::emit_type_as_rust`] but for **return-type position** —
-    /// Jux `String` lowers to owned Rust `String` so a method or
-    /// function can return a value that outlives `&self`. Parameter and
-    /// local positions keep `&str`.
+    /// Like [`Self::emit_type_as_rust`] but for **return-type position**.
+    /// Post Fix 1 every position lowers Jux `String` to owned Rust
+    /// `String`, so this is a plain forward. Kept named for call-site
+    /// readability and to leave room for a future divergence (e.g.
+    /// borrow-thread `&'a str` returns when borrow inference lands).
     pub(crate) fn emit_return_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
-        if is_jux_string_type(ty) {
-            self.w.push_str("String");
-            return;
-        }
         self.emit_type_as_rust(ty);
     }
 
@@ -349,7 +354,10 @@ impl RustEmitter {
                 "bool" => "false",
                 "f32" | "f64" => "0.0",
                 "char" => "'\\0'",
-                "&str" => "\"\"",
+                // Per Fix 1, Jux `String` lowers to owned Rust
+                // `String`. The empty value is `String::new()`,
+                // matching the field-default path.
+                "String" => "String::new()",
                 // All integer types (i8/u8/.../i64/u64/isize/usize).
                 _ => "0",
             };
@@ -359,15 +367,10 @@ impl RustEmitter {
         }
     }
 
-    /// Default value for a class field declaration. Differs from
-    /// [`Self::emit_default_value_for`] only in the String case — fields
-    /// default to an empty owned `String::new()` rather than the empty
-    /// `&str` literal.
+    /// Default value for a class field declaration. Forwards to
+    /// [`Self::emit_default_value_for`]; post Fix 1 both paths
+    /// produce `String::new()` for Jux `String` already.
     pub(crate) fn emit_field_default_value_for(&mut self, ty: &juxc_ast::TypeRef) {
-        if is_jux_string_type(ty) {
-            self.w.push_str("String::new()");
-            return;
-        }
         self.emit_default_value_for(ty);
     }
 
@@ -428,7 +431,13 @@ pub(crate) fn jux_primitive_to_rust(t: &juxc_ast::TypeRef) -> Option<&'static st
         "float"  => "f32",
         "double" => "f64",
         "char"   => "char",
-        "String" => "&str",
+        // Per JUX-CODEGEN-FIXES.md Fix 1: Jux `String` always lowers
+        // to owned Rust `String` — never `&str`. Parameters, locals,
+        // fields, returns, and string literals all share the same
+        // type, so `match`-arm unification and value flow Just Work.
+        // The cost is one heap alloc per string literal; Java does
+        // exactly this and nobody notices.
+        "String" => "String",
         // Width-explicit names — fixed widths only.
         "i8"    => "i8",
         "u8"    => "u8",

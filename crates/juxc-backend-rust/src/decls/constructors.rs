@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use crate::analysis::{
-    collect_mutated_names, extract_simple_ctor_inits, is_jux_string_type_ref, SimpleCtorInits,
+    collect_mutated_names, extract_simple_ctor_inits, SimpleCtorInits,
 };
 use crate::stmts::stmt_span;
 use crate::RustEmitter;
@@ -145,17 +145,13 @@ impl RustEmitter {
             // (with a clear Rust error) when the parent's ctor needs
             // arguments and the user forgot to write `super(...)`.
             if let Some(args) = &simple.super_args {
-                // For each super-call arg, ask "what does the parent's
-                // formal-parameter type look like *after* the
-                // extends-clause's generic substitution?" If it's a
-                // Jux `String`, the parent is going to want an owned
-                // `String` in that slot (the field type lowers to
-                // owned per the generic-arg rule), so we inject a
-                // `.to_string()` on `&str`-shaped actual args.
-                let coerce_to_string = self.compute_super_arg_string_coercions(
-                    parent_ty,
-                    args.len(),
-                );
+                // Post Fix 1, every Jux `String` value (literal,
+                // parameter, field, or call result) is already an
+                // owned Rust `String`, so the per-arg `.to_string()`
+                // coercion the parent's String-typed slot used to
+                // need is now a no-op double-wrap. The args go in
+                // verbatim; rustc verifies the types match.
+                let _ = parent_ty;
                 // Clone to release the borrow on `simple` before the
                 // `emit_expr` calls (which need `&mut self`).
                 let args = args.clone();
@@ -164,9 +160,6 @@ impl RustEmitter {
                         self.w.push_str(", ");
                     }
                     self.emit_expr(arg);
-                    if coerce_to_string.get(i).copied().unwrap_or(false) {
-                        self.w.push_str(".to_string()");
-                    }
                 }
             }
             self.w.push_str("),\n");
@@ -182,22 +175,11 @@ impl RustEmitter {
             self.w.push_str(&field.name.text);
             self.w.push_str(": ");
             if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
-                // Field assigned in body — emit its init expression.
-                // Inline the String-field coercion that `emit_assign`
-                // would have added: if the field is a known String
-                // field, append `.to_string()` so `&str` arguments
-                // become owned `String`s.
-                //
-                // Phase H: source the String-ness decision from the
-                // class field's declared `TypeRef` directly rather
-                // than from the retired `string_field_names` pre-pass.
-                // The result is identical for well-formed input but no
-                // longer mis-fires when an unrelated class shares the
-                // same field name.
+                // Field assigned in body — emit its init expression
+                // verbatim. Post Fix 1 a String-typed init expression
+                // is always already an owned Rust `String`, so the
+                // previous `.to_string()` injection is gone.
                 self.emit_expr(init_expr);
-                if is_jux_string_type_ref(&field.ty) {
-                    self.w.push_str(".to_string()");
-                }
             } else if let Some(default) = &field.default {
                 // Field carries a Jux-source default initializer.
                 self.emit_expr(default);
@@ -212,81 +194,6 @@ impl RustEmitter {
         }
         self.w.indent_dec();
         self.w.line("}");
-    }
-
-    /// Decide which super-call args need a `.to_string()` coercion
-    /// to land in an owned-`String` slot on the parent's
-    /// constructor. The parent's formal type-refs are substituted by
-    /// the extends-clause's `<...>` args: for each formal whose
-    /// substituted type is Jux `String`, the matching positional slot
-    /// in the returned vec is `true`.
-    ///
-    /// Returns `vec![false; arg_count]` whenever:
-    /// - the parent class isn't known (resolver should have caught
-    ///   that as E0301),
-    /// - the parent declares no constructor, or
-    /// - the formal-type substitution doesn't bottom out at a Jux
-    ///   `String` shape (most calls — the common case is fully
-    ///   no-op).
-    ///
-    /// The substitution model is the same one tycheck uses (spec
-    /// §T.4): map each bare-param-name reference in a formal to the
-    /// parent's extends-clause arg in matching position. Nested
-    /// generic args aren't analyzed — Phase 1 only coerces when the
-    /// formal is literally `T`, which is the only shape this fix
-    /// needs.
-    fn compute_super_arg_string_coercions(
-        &self,
-        parent_ty: &juxc_ast::TypeRef,
-        arg_count: usize,
-    ) -> Vec<bool> {
-        let mut out = vec![false; arg_count];
-        let Some(parent_name) = parent_ty.name.segments.first().map(|s| s.text.as_str())
-        else {
-            return out;
-        };
-        let Some(parent_class) = self.symbols.classes.get(parent_name) else {
-            return out;
-        };
-        let Some(ctor) = parent_class.constructors.first() else {
-            return out;
-        };
-        for (i, param) in ctor.params.iter().enumerate() {
-            if i >= arg_count {
-                break;
-            }
-            // Coercion ONLY fires when the parent's formal is a
-            // bare generic param `T` that the extends clause bound
-            // to Jux `String`. A direct `String name` formal lowers
-            // to a `&str` parameter on the Rust side per
-            // `emit_param_type_as_rust` — the existing super-call
-            // path already lines up there, no coercion needed.
-            if param.ty.array_shape.is_some()
-                || param.ty.nullable
-                || !param.ty.generic_args.is_empty()
-                || param.ty.name.segments.len() != 1
-            {
-                continue;
-            }
-            let formal_name = param.ty.name.segments[0].text.as_str();
-            // Locate this name in the parent's generic_params; map to
-            // the same position in the extends-clause's actual args.
-            let Some(idx) = parent_class
-                .generic_params
-                .iter()
-                .position(|p| p.name.text == formal_name)
-            else {
-                continue;
-            };
-            let Some(actual) = parent_ty.generic_args.get(idx).and_then(|g| g.as_type())
-            else {
-                continue;
-            };
-            if is_jux_string_type_ref(actual) {
-                out[i] = true;
-            }
-        }
-        out
     }
 
     /// Synthesize a zero-argument default constructor when the class

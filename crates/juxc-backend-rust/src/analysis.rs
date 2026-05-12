@@ -565,9 +565,11 @@ pub(crate) fn is_jux_string_type(ty: &juxc_ast::TypeRef) -> bool {
 }
 
 /// Alias for [`is_jux_string_type`] exported under the name some
-/// Phase-H call sites prefer for readability — "this `TypeRef` is the
-/// Jux `String` type" reads more naturally at the assignment-coercion
-/// site than the legacy `is_jux_string_type` spelling.
+/// Phase-H call sites prefer for readability. Kept around as a
+/// stable handle even though the post-Fix-1 backend no longer
+/// performs the `&str → String` coercion this was originally
+/// introduced for.
+#[allow(dead_code)]
 pub(crate) fn is_jux_string_type_ref(ty: &juxc_ast::TypeRef) -> bool {
     is_jux_string_type(ty)
 }

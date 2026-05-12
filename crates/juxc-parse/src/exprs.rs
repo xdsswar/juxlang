@@ -12,7 +12,7 @@ use juxc_diagnostics::{code, Diagnostic};
 use juxc_lex::{Keyword, TokenKind};
 use juxc_source::Span;
 
-use crate::literals::{parse_float_literal_text, parse_int_literal_text};
+use crate::literals::{parse_float_literal_text, parse_int_literal_text, process_string_escapes};
 use crate::Parser;
 
 impl<'a> Parser<'a> {
@@ -380,10 +380,22 @@ impl<'a> Parser<'a> {
         match self.peek().clone() {
             TokenKind::Str(text) => {
                 self.advance();
-                // TODO: process escape sequences (\n, \t, \uXXXX, …). For
-                // milestone 1 the only literal we care about is
-                // "Hello, world!" which has no escapes.
-                Some(Expr::Literal(Literal::String(text)))
+                // Decode escape sequences per `JUX-GRAMMAR-ADDENDUM.md`
+                // §A.1.5. The lexer handed us the raw bytes between the
+                // quotes; we turn `\n`, `\u{…}`, `\xHH`, etc. into real
+                // characters here so downstream phases see the literal
+                // content rather than its source-form spelling. Invalid
+                // escapes fire a diagnostic against the string's span;
+                // the offending sequence is dropped from the value so
+                // parsing keeps going.
+                let (decoded, errs) = process_string_escapes(&text);
+                for msg in errs {
+                    self.diagnostics.push(
+                        Diagnostic::error(code::Code::E0200_UnexpectedToken, msg)
+                            .with_span(span),
+                    );
+                }
+                Some(Expr::Literal(Literal::String(decoded)))
             }
             TokenKind::InterpStr(raw) => {
                 // Interpolated string per §3.4 — `$"…$name…${expr}…"`.

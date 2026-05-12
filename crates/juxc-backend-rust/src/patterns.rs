@@ -3,6 +3,8 @@
 //! Split out from `lib.rs` during the action-focused module
 //! reorganization. Behavior is identical to the original methods.
 
+use juxc_ast::Literal;
+
 use crate::analysis::pattern_has_parens;
 use crate::RustEmitter;
 
@@ -70,7 +72,18 @@ impl RustEmitter {
     pub(crate) fn emit_pattern(&mut self, pattern: &juxc_ast::Pattern) {
         match pattern {
             juxc_ast::Pattern::Wildcard(_) => self.w.push('_'),
-            juxc_ast::Pattern::Literal(lit, _) => self.emit_literal(lit),
+            juxc_ast::Pattern::Literal(lit, _) => {
+                // Pattern context: Rust match patterns require bare
+                // literals (not `String` values), so we suppress the
+                // `.to_string()` wrap that `emit_literal` applies for
+                // value-position uses. Pure `&str` literal goes into
+                // the pattern slot; the scrutinee side is unaffected.
+                if let Literal::String(s) = lit {
+                    self.emit_rust_string_literal(s);
+                } else {
+                    self.emit_literal(lit);
+                }
+            }
             juxc_ast::Pattern::Bind(name) => self.w.push_str(&name.text),
             juxc_ast::Pattern::EnumVariant { path, args, .. } => {
                 // For two-segment paths whose first segment is a known

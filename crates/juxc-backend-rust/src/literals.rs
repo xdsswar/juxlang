@@ -23,7 +23,25 @@ impl RustEmitter {
         match lit {
             Literal::Int(int_lit) => self.emit_int_lit(int_lit),
             Literal::Float(float_lit) => self.emit_float_lit(float_lit),
-            Literal::String(s) => self.emit_rust_string_literal(s),
+            Literal::String(s) => {
+                // Per JUX-CODEGEN-FIXES.md Fix 1: every Jux string
+                // literal lowers to an owned Rust `String` via
+                // `.to_string()`. This unifies the type of every
+                // string source in emitted Rust — literals,
+                // parameters, fields, returns — so match-arm
+                // collisions and assignment coercions evaporate.
+                //
+                // Const-context exception: Rust's const evaluator
+                // can't run `.to_string()`, so a `pub const NAME:
+                // &str = "…";` keeps the bare literal shape (the
+                // const-context type emitter pairs by mapping String
+                // to `&'static str`). Reads of the const are typed
+                // by their use site.
+                self.emit_rust_string_literal(s);
+                if !self.emitting_const_context {
+                    self.w.push_str(".to_string()");
+                }
+            }
             Literal::Bool(b) => self.w.push_str(if *b { "true" } else { "false" }),
             // §C.9.4: `null` is the unit `()` for now — a placeholder until
             // the nullable-type lowering spec firms up. Replaced when

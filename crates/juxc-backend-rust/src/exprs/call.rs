@@ -5,7 +5,6 @@
 
 use juxc_ast::{CallExpr, Expr, Literal};
 
-use crate::analysis::is_jux_string_type_ref;
 use crate::exprs::ArgRef;
 use crate::RustEmitter;
 
@@ -50,48 +49,17 @@ impl RustEmitter {
                 }
             }
         }
-        // Detect enum-variant construction so we can inject
-        // `.to_string()` on String-typed payload slots. Shape we want:
-        // `Call(Field(Path(EnumName), VariantName), args)`.
-        //
-        // Phase H: the per-variant slot table used to be a pre-pass
-        // collection (`enum_string_slots`). It now derives directly
-        // from tycheck's `SymbolTable.enums[name].variants[variant]`
-        // payload `TypeRef`s — same logical lookup, no parallel
-        // shadow table to keep in sync. The slot booleans tell
-        // `emit_call` which positional args want `.to_string()`.
-        let string_slots: Option<Vec<bool>> = if let Expr::Field(f) = &*call.callee {
-            if let Expr::Path(qn) = &*f.object {
-                if qn.segments.len() == 1 {
-                    self.symbols
-                        .enums
-                        .get(&qn.segments[0].text)
-                        .and_then(|e| e.variants.get(&f.field.text))
-                        .filter(|v| !v.payload.is_empty())
-                        .map(|v| v.payload.iter().map(is_jux_string_type_ref).collect())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // Generic call: emit `callee(args, …)` literally, with the
-        // optional per-arg `.to_string()` coercion when an enum
-        // variant slot wants `String`.
+        // Generic call: emit `callee(args, …)` literally. Post Fix 1
+        // every Jux `String` value is already an owned Rust `String`,
+        // so the previous per-arg enum-variant payload coercion is
+        // unnecessary — the string-literal site self-coerces inside
+        // `emit_literal` and identifier references are typed `String`
+        // directly.
         self.emit_expr(&call.callee);
         self.w.push('(');
         for (i, arg) in call.args.iter().enumerate() {
             if i > 0 { self.w.push_str(", "); }
             self.emit_expr(arg);
-            if let Some(slots) = string_slots.as_ref() {
-                if slots.get(i).copied().unwrap_or(false) {
-                    self.w.push_str(".to_string()");
-                }
-            }
         }
         self.w.push(')');
 
