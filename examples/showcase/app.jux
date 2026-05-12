@@ -1,0 +1,58 @@
+// Driver — pulls everything together. Demonstrates:
+//   - Cross-package imports (aliased and direct).
+//   - Type alias.
+//   - Top-level constant.
+//   - Lambdas / higher-order functions.
+//   - Static-method calls.
+//   - Constructing the sealed-shape hierarchy.
+//   - Generic-class use across packages.
+//   - String interpolation.
+
+package showcase.app;
+
+import showcase.math.MathUtil;
+import showcase.shapes.Circle;
+import showcase.shapes.Square;
+import showcase.shapes.Triangle;
+import showcase.shapes.Container;
+
+// Type alias — shortens a long FQN for local use.
+public type ShapeBox = Container<Circle>;
+
+// Top-level constant.
+public const int SCALE = 10;
+
+// Higher-order helper — `(int) -> int` lowers to
+// `std::rc::Rc<dyn Fn(isize) -> isize>` in Rust.
+public int apply(int x, (int) -> int f) {
+    return f(x);
+}
+
+// Returns a closure that captures `delta` by value (move).
+public (int) -> int adder(int delta) {
+    return x -> x + delta;
+}
+
+public void main() {
+    // Static-method calls across the package boundary.
+    print($"abs(-9) = ${MathUtil.abs(-9)}");
+    print($"max(3, 7) = ${MathUtil.max(3, 7)}");
+    print($"PI = ${MathUtil.PI}");
+
+    // Sealed-shape construction and describe() (inherited).
+    var c = new Circle(2.0);
+    var s = new Square(3.0);
+    var t = new Triangle(4.0, 5.0);
+    print(c.describe());
+    print(s.describe());
+    print(t.describe());
+
+    // Generic container — Container<Circle> from another package.
+    var holder = new ShapeBox(new Circle(1.0));
+    print(holder.get().describe());
+
+    // Higher-order: pass a lambda, then a returned closure.
+    print($"square(${SCALE}) = ${apply(SCALE, x -> x * x)}");
+    var plus3 = adder(3);
+    print($"plus3(40) = ${plus3(40)}");
+}

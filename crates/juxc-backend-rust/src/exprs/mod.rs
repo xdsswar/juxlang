@@ -128,7 +128,62 @@ impl RustEmitter {
                 }
                 self.w.push(')');
             }
+            Expr::Lambda(l) => self.emit_lambda(l),
         }
+    }
+
+    /// Emit a Jux lambda as a Rust closure, wrapped in `Rc::new`
+    /// so it can flow into `std::rc::Rc<dyn Fn(...) -> ...>` slots
+    /// (the Phase-1 lowering of `(A, B) -> R` function types).
+    /// Rust's `CoerceUnsized` on `Rc` auto-converts `Rc<{closure}>`
+    /// to `Rc<dyn Fn>` at the call site, so the same emission
+    /// works whether the lambda is stored locally or passed to a
+    /// function-typed param.
+    ///
+    /// Shape mapping:
+    /// - `x -> x + 1`                 → `Rc::new(|x| x + 1)`
+    /// - `(a, b) -> a + b`           → `Rc::new(|a, b| a + b)`
+    /// - `(int x) -> x * 2`          → `Rc::new(|x: isize| x * 2)`
+    /// - `(x) -> { … return x; }`   → `Rc::new(|x| { …; x })`
+    ///
+    /// Capture semantics (borrow vs `move`) are left to Rust's own
+    /// closure inference. Phase 1 doesn't insert an explicit `move`.
+    pub(crate) fn emit_lambda(&mut self, l: &juxc_ast::LambdaExpr) {
+        // `move` is unconditional: Phase-1 lambdas wrap in
+        // `Rc<dyn Fn>`, which often outlives the enclosing scope
+        // (e.g. a function that returns a closure capturing its
+        // parameters). Capturing by value via `move` keeps the
+        // emission valid in both the local-binding and the
+        // escaping-closure cases. The cost is one extra clone per
+        // captured value, which Rust optimizes away when the
+        // capture is a single use.
+        self.w.push_str("std::rc::Rc::new(move ");
+        self.w.push('|');
+        for (i, p) in l.params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(&p.name.text);
+            if let Some(t) = &p.ty {
+                self.w.push_str(": ");
+                self.emit_type_as_rust(t);
+            }
+        }
+        self.w.push_str("| ");
+        match &l.body {
+            juxc_ast::LambdaBody::Expr(e) => self.emit_expr(e),
+            juxc_ast::LambdaBody::Block(b) => {
+                self.w.push_str("{\n");
+                self.w.indent_inc();
+                for stmt in &b.statements {
+                    self.emit_stmt(stmt);
+                }
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push('}');
+            }
+        }
+        self.w.push(')');
     }
 
     /// Emit `e` inside a parent context with the given precedence,
@@ -196,6 +251,7 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
         Expr::This(s) => *s,
         Expr::NewObject(n) => n.span,
         Expr::Switch(s) => s.span,
+        Expr::Lambda(l) => l.span,
     }
 }
 
@@ -219,6 +275,7 @@ pub(crate) fn ty_kind_from_ref_with_params(
             generic_args: t.generic_args.clone(),
             nullable: t.nullable,
             array_shape: None,
+            fn_shape: t.fn_shape.clone(),
             span: t.span,
         };
         let element = ty_kind_from_ref_with_params(&element_ref, generic_params);

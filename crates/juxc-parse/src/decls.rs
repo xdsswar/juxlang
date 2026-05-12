@@ -26,6 +26,7 @@ impl<'a> Parser<'a> {
     /// constructors, and methods only. At most one constructor.
     pub(crate) fn parse_class_decl(
         &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
         visibility: Visibility,
         is_abstract: bool,
         is_final: bool,
@@ -72,6 +73,10 @@ impl<'a> Parser<'a> {
         let mut operators = Vec::new();
 
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+            // Per grammar §A.2.4 each class member may carry its own
+            // annotations — captured first, then routed to the
+            // member's parser.
+            let member_anns = self.parse_annotations();
             let member_vis = self.parse_visibility();
             // Three dispatch shapes after visibility:
             //   1. `Name(` → constructor (name matches class).
@@ -85,7 +90,7 @@ impl<'a> Parser<'a> {
                 _ => false,
             };
             if is_ctor {
-                let ctor = self.parse_constructor_decl(member_vis)?;
+                let ctor = self.parse_constructor_decl(member_anns, member_vis)?;
                 if !constructors.is_empty() {
                     // Turn 1 enforces single-ctor. Multiple ctors are a
                     // documented Turn-2 feature.
@@ -210,10 +215,10 @@ impl<'a> Parser<'a> {
                 }
             };
             if lookahead_is_method {
-                let method = self.parse_fn_decl(member_vis)?;
+                let method = self.parse_fn_decl(member_anns, member_vis)?;
                 methods.push(method);
             } else {
-                let field = self.parse_field_decl(member_vis)?;
+                let field = self.parse_field_decl(member_anns, member_vis)?;
                 fields.push(field);
             }
         }
@@ -221,6 +226,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::RBrace, "'}' to close class body");
         let end = self.last_consumed_span();
         Some(ClassDecl {
+            annotations,
             visibility,
             is_abstract,
             is_final,
@@ -238,6 +244,69 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Consume any `@Name`, `@Name(args)`, `@pkg.Name(args)`
+    /// annotations at the cursor and return them in source order.
+    /// Empty vec when no `@` is present. Used by every decl
+    /// dispatch point (top-level, class members, etc.).
+    ///
+    /// Args support both positional expressions and named
+    /// (`key = value`) bindings per grammar §A.2.3. Block-form
+    /// annotations (`@export { … }`) are NOT recognized here
+    /// — they're a future extension.
+    pub(crate) fn parse_annotations(&mut self) -> Vec<juxc_ast::Annotation> {
+        let mut out = Vec::new();
+        while self.at(&TokenKind::At) {
+            let Some(ann) = self.parse_single_annotation() else { break };
+            out.push(ann);
+        }
+        out
+    }
+
+    fn parse_single_annotation(&mut self) -> Option<juxc_ast::Annotation> {
+        let start = self.peek_span();
+        self.expect(&TokenKind::At, "'@' to start annotation");
+        let name = self.parse_qualified_name();
+        if name.segments.is_empty() {
+            return None;
+        }
+        let mut args = Vec::new();
+        if self.eat(&TokenKind::LParen) {
+            if !self.at(&TokenKind::RParen) {
+                loop {
+                    let arg = self.parse_single_annotation_arg()?;
+                    args.push(arg);
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            self.expect(&TokenKind::RParen, "')' to close annotation arguments");
+        }
+        let end = self.last_consumed_span();
+        Some(juxc_ast::Annotation { name, args, span: start.join(end) })
+    }
+
+    fn parse_single_annotation_arg(&mut self) -> Option<juxc_ast::AnnotationArg> {
+        // Named arg shape — `identifier '=' expression`. Detected by
+        // peeking two tokens ahead so the bare-identifier expression
+        // case still works for `@Cfg(linux)` etc.
+        let is_named = matches!(
+            (
+                self.tokens.get(self.pos).map(|t| &t.kind),
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+            ),
+            (Some(TokenKind::Ident(_)), Some(TokenKind::Eq)),
+        );
+        if is_named {
+            let name = self.parse_ident()?;
+            self.expect(&TokenKind::Eq, "'=' in named annotation arg");
+            let value = self.parse_expr()?;
+            return Some(juxc_ast::AnnotationArg::Named { name, value });
+        }
+        let value = self.parse_expr()?;
+        Some(juxc_ast::AnnotationArg::Positional(value))
+    }
+
     /// Parse a top-level constant declaration per grammar §A.2.2:
     /// ```text
     /// const-decl = ('const' | 'final') type identifier '=' expression ';'
@@ -247,6 +316,7 @@ impl<'a> Parser<'a> {
     /// spelling the user wrote so error messages echo it back.
     pub(crate) fn parse_const_decl(
         &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
         visibility: Visibility,
         used_final_keyword: bool,
     ) -> Option<juxc_ast::ConstDecl> {
@@ -258,6 +328,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Semicolon, "';' after const declaration");
         let end = self.last_consumed_span();
         Some(juxc_ast::ConstDecl {
+            annotations,
             visibility,
             used_final_keyword,
             ty,
@@ -272,6 +343,7 @@ impl<'a> Parser<'a> {
     /// confirmed the next token is `type`.
     pub(crate) fn parse_type_alias_decl(
         &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
         visibility: Visibility,
     ) -> Option<juxc_ast::TypeAliasDecl> {
         let start = self.peek_span();
@@ -283,6 +355,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Semicolon, "';' after type-alias declaration");
         let end = self.last_consumed_span();
         Some(juxc_ast::TypeAliasDecl {
+            annotations,
             visibility,
             name,
             generic_params,
@@ -337,7 +410,11 @@ impl<'a> Parser<'a> {
     /// **Turn-1 scope**: method signatures only — `void foo();`,
     /// `int bar(int x);`. No default-method bodies, no static members,
     /// no constants, no `extends` between interfaces.
-    pub(crate) fn parse_interface_decl(&mut self, visibility: Visibility) -> Option<InterfaceDecl> {
+    pub(crate) fn parse_interface_decl(
+        &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
+        visibility: Visibility,
+    ) -> Option<InterfaceDecl> {
         let start = self.peek_span();
         self.expect_kw(Keyword::Interface, "expected `interface` keyword");
         let name = self.parse_ident()?;
@@ -346,11 +423,15 @@ impl<'a> Parser<'a> {
 
         let mut methods = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+            // Interface methods don't yet take their own annotations
+            // in the Phase-1 cut — leave empty.
+            let method_annotations = Vec::new();
             let method_vis = self.parse_visibility();
             // Reuse `parse_fn_decl` — its semicolon-or-block body
             // dispatch lets it land an abstract signature naturally
             // when the user writes `void foo();`.
-            let Some(method) = self.parse_fn_decl(method_vis) else { break };
+            let Some(method) = self.parse_fn_decl(method_annotations, method_vis)
+            else { break };
             if method.body.is_some() {
                 // Default-method bodies aren't supported in Turn 1.
                 self.diagnostics.push(
@@ -367,6 +448,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::RBrace, "'}' to close interface body");
         let end = self.last_consumed_span();
         Some(InterfaceDecl {
+            annotations,
             visibility,
             name,
             generic_params,
@@ -375,10 +457,28 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse a single field declaration: `Type name [= expr] ;`.
-    /// Visibility has already been consumed by the caller.
-    pub(crate) fn parse_field_decl(&mut self, visibility: Visibility) -> Option<FieldDecl> {
+    /// Parse a single field declaration: `[static] [final|const] Type name [= expr] ;`.
+    /// Visibility has already been consumed by the caller. `static`
+    /// promotes the field to class scope; `final` / `const` (same
+    /// meaning) marks it non-reassignable and picks the
+    /// `pub const`-shape Rust emission for statics.
+    pub(crate) fn parse_field_decl(
+        &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
+        visibility: Visibility,
+    ) -> Option<FieldDecl> {
         let start = self.peek_span();
+        let mut is_static = false;
+        let mut is_final = false;
+        loop {
+            if self.eat_kw(Keyword::Static) {
+                is_static = true;
+            } else if self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const) {
+                is_final = true;
+            } else {
+                break;
+            }
+        }
         let ty = self.parse_type_ref()?;
         let name = self.parse_ident()?;
         let default = if self.eat(&TokenKind::Eq) {
@@ -388,12 +488,25 @@ impl<'a> Parser<'a> {
         };
         self.expect(&TokenKind::Semicolon, "';' to end field declaration");
         let end = self.last_consumed_span();
-        Some(FieldDecl { visibility, ty, name, default, span: start.join(end) })
+        Some(FieldDecl {
+            annotations,
+            visibility,
+            is_static,
+            is_final,
+            ty,
+            name,
+            default,
+            span: start.join(end),
+        })
     }
 
     /// Parse a constructor: `Name(params) { body }`. The leading
     /// identifier is the class name (already validated by the caller).
-    pub(crate) fn parse_constructor_decl(&mut self, visibility: Visibility) -> Option<ConstructorDecl> {
+    pub(crate) fn parse_constructor_decl(
+        &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
+        visibility: Visibility,
+    ) -> Option<ConstructorDecl> {
         let start = self.peek_span();
         // Consume the class-name identifier (matches the surrounding class).
         self.parse_ident()?;
@@ -402,7 +515,13 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::RParen, "')' to close constructor parameter list");
         let body = self.parse_block();
         let end = self.last_consumed_span();
-        Some(ConstructorDecl { visibility, params, body, span: start.join(end) })
+        Some(ConstructorDecl {
+            annotations,
+            visibility,
+            params,
+            body,
+            span: start.join(end),
+        })
     }
 
     // ------------------------------------------------------------------
@@ -428,7 +547,11 @@ impl<'a> Parser<'a> {
     /// empty (a pair of braces). Methods, compact constructors, and
     /// secondary constructors arrive in a follow-up turn. `implements`
     /// clauses are silently dropped.
-    pub(crate) fn parse_record_decl(&mut self, visibility: Visibility) -> Option<RecordDecl> {
+    pub(crate) fn parse_record_decl(
+        &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
+        visibility: Visibility,
+    ) -> Option<RecordDecl> {
         let start = self.peek_span();
         self.expect_kw(Keyword::Record, "expected `record` keyword");
         let name = self.parse_ident()?;
@@ -513,8 +636,10 @@ impl<'a> Parser<'a> {
                     Some(TokenKind::Ident(_)) => {
                         // Method shape: `[modifiers] returnType
                         // methodName(params) { ... }`. Reuses the
-                        // class fn-decl parser unchanged.
-                        if let Some(m) = self.parse_fn_decl(member_vis) {
+                        // class fn-decl parser unchanged. Record
+                        // methods don't yet carry annotations in
+                        // the Phase-1 cut — empty list.
+                        if let Some(m) = self.parse_fn_decl(Vec::new(), member_vis) {
                             methods.push(m);
                         }
                     }
@@ -539,6 +664,7 @@ impl<'a> Parser<'a> {
 
         let end = self.last_consumed_span();
         Some(RecordDecl {
+            annotations,
             visibility,
             name,
             generic_params,
@@ -549,7 +675,11 @@ impl<'a> Parser<'a> {
         })
     }
 
-    pub(crate) fn parse_enum_decl(&mut self, visibility: Visibility) -> Option<EnumDecl> {
+    pub(crate) fn parse_enum_decl(
+        &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
+        visibility: Visibility,
+    ) -> Option<EnumDecl> {
         let start = self.peek_span();
         self.expect_kw(Keyword::Enum, "expected `enum` keyword");
         let name = self.parse_ident()?;
@@ -628,7 +758,14 @@ impl<'a> Parser<'a> {
 
         self.expect(&TokenKind::RBrace, "'}' to close enum body");
         let end = self.last_consumed_span();
-        Some(EnumDecl { visibility, name, variants, operators, span: start.join(end) })
+        Some(EnumDecl {
+            annotations,
+            visibility,
+            name,
+            variants,
+            operators,
+            span: start.join(end),
+        })
     }
 
     /// Parse one enum variant: `Name` or `Name(Type [name], …)`.
@@ -683,7 +820,11 @@ impl<'a> Parser<'a> {
     /// Parse a function declaration. Visibility has already been consumed
     /// by [`Self::parse_top_level_decl`]. On unrecoverable failure returns
     /// `None`.
-    pub(crate) fn parse_fn_decl(&mut self, visibility: Visibility) -> Option<FnDecl> {
+    pub(crate) fn parse_fn_decl(
+        &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
+        visibility: Visibility,
+    ) -> Option<FnDecl> {
         let start = self.peek_span();
 
         let modifiers = self.parse_fn_modifiers();
@@ -710,6 +851,7 @@ impl<'a> Parser<'a> {
 
         let end = self.last_consumed_span();
         Some(FnDecl {
+            annotations,
             visibility,
             modifiers,
             return_type,
@@ -917,6 +1059,14 @@ impl<'a> Parser<'a> {
             return Some(ReturnType::AsyncType(ty));
         }
         if matches!(self.peek(), TokenKind::Ident(_)) {
+            let ty = self.parse_type_ref()?;
+            return Some(ReturnType::Type(ty));
+        }
+        // A function-type return — `(A) -> R foo() { … }`. The `(`
+        // gives the function-type's parameter list away, so route
+        // through `parse_type_ref` which already handles the
+        // function-type prefix.
+        if matches!(self.peek(), TokenKind::LParen) {
             let ty = self.parse_type_ref()?;
             return Some(ReturnType::Type(ty));
         }

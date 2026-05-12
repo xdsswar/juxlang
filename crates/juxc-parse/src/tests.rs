@@ -2212,6 +2212,68 @@ fn bare_type_alias_parses() {
     assert_eq!(alias.target.name.segments[0].text, "int");
 }
 
+// ---------------------------------------------------------------------------
+// Lambdas (§A.2.9)
+// ---------------------------------------------------------------------------
+
+/// Single-param untyped form: `x -> x * 2`.
+#[test]
+fn single_param_lambda_parses() {
+    use juxc_ast::{LambdaBody, Stmt};
+    let ast = parse_clean("public void main() { var f = x -> x; print(f(1)); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let Some(Expr::Lambda(l)) = v.init.as_ref() else {
+        panic!("expected Lambda init, got {:?}", v.init);
+    };
+    assert_eq!(l.params.len(), 1);
+    assert_eq!(l.params[0].name.text, "x");
+    assert!(l.params[0].ty.is_none());
+    matches!(l.body, LambdaBody::Expr(_));
+}
+
+/// Multi-param parenthesized form: `(a, b) -> a + b`.
+#[test]
+fn multi_param_lambda_parses() {
+    use juxc_ast::Stmt;
+    let ast = parse_clean(
+        "public void main() { var f = (a, b) -> a; print(f(1, 2)); }",
+    );
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let Some(Expr::Lambda(l)) = v.init.as_ref() else { panic!() };
+    assert_eq!(l.params.len(), 2);
+    assert_eq!(l.params[0].name.text, "a");
+    assert_eq!(l.params[1].name.text, "b");
+}
+
+/// Typed-param form: `(int x) -> x * 2`.
+#[test]
+fn typed_param_lambda_parses() {
+    use juxc_ast::Stmt;
+    let ast = parse_clean(
+        "public void main() { var f = (int x) -> x; print(f(7)); }",
+    );
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let Some(Expr::Lambda(l)) = v.init.as_ref() else { panic!() };
+    assert_eq!(l.params.len(), 1);
+    assert!(l.params[0].ty.is_some());
+}
+
+/// Block-body form: `(x) -> { return x; }`.
+#[test]
+fn block_body_lambda_parses() {
+    use juxc_ast::{LambdaBody, Stmt};
+    let ast = parse_clean(
+        "public void main() { var f = (x) -> { return x; }; print(f(1)); }",
+    );
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let Some(Expr::Lambda(l)) = v.init.as_ref() else { panic!() };
+    matches!(l.body, LambdaBody::Block(_));
+}
+
 /// `type Pair<A, B> = Tuple<A, B>;` carries its generic params and
 /// target.
 #[test]

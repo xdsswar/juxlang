@@ -44,15 +44,15 @@ mod types;
 pub use common::{Ident, QualifiedName, Visibility};
 pub use compilation::{CompilationUnit, ImportDecl, ImportItem, ImportSpec, PackageDecl};
 pub use decls::{
-    ClassDecl, ConstDecl, ConstructorDecl, EnumDecl, EnumPayload, EnumVariant,
-    FieldDecl, FnDecl, FnModifier, InterfaceDecl, OperatorDecl,
+    Annotation, AnnotationArg, ClassDecl, ConstDecl, ConstructorDecl, EnumDecl, EnumPayload,
+    EnumVariant, FieldDecl, FnDecl, FnModifier, InterfaceDecl, OperatorDecl,
     OperatorKind, Param, RecordComponent, RecordDecl, ReturnType,
     TopLevelDecl, TypeAliasDecl, TypeParam,
 };
 pub use exprs::{
     BinaryExpr, BinaryOp, CallExpr, CastExpr, Expr, FieldExpr,
-    IndexExpr, InterpSegment, InterpStringExpr, NewArrayExpr,
-    NewArrayLitExpr, NewObjectExpr, RangeExpr, SizeOfExpr,
+    IndexExpr, InterpSegment, InterpStringExpr, LambdaBody, LambdaExpr, LambdaParam,
+    NewArrayExpr, NewArrayLitExpr, NewObjectExpr, RangeExpr, SizeOfExpr,
     UnaryExpr, UnaryOp,
 };
 pub use literals::{FloatKind, FloatLit, IntKind, IntLit, IntRadix, Literal};
@@ -61,4 +61,4 @@ pub use stmts::{
     AssignStmt, Block, ElseBranch, ForEachStmt, IfStmt, Stmt,
     VarDecl, WhileStmt,
 };
-pub use types::{ArrayShape, GenericArg, TypeRef, WildcardArg, WildcardBound};
+pub use types::{ArrayShape, FnTypeShape, GenericArg, TypeRef, WildcardArg, WildcardBound};

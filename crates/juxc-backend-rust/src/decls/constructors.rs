@@ -63,6 +63,9 @@ impl RustEmitter {
         self.w.line("let mut __self = Self {");
         self.w.indent_inc();
         for field in &class_decl.fields {
+            if field.is_static {
+                continue;
+            }
             self.w.emit_indent();
             self.w.push_str(&field.name.text);
             self.w.push_str(": ");
@@ -169,6 +172,12 @@ impl RustEmitter {
             self.w.push_str("),\n");
         }
         for field in &class_decl.fields {
+            // Static fields aren't instance state — skip them
+            // here. They live as `pub const` / `pub static` items
+            // inside the impl block.
+            if field.is_static {
+                continue;
+            }
             self.w.emit_indent();
             self.w.push_str(&field.name.text);
             self.w.push_str(": ");
@@ -307,6 +316,9 @@ impl RustEmitter {
             self.w.push_str("::new(),\n");
         }
         for field in &class_decl.fields {
+            if field.is_static {
+                continue;
+            }
             self.w.emit_indent();
             self.w.push_str(&field.name.text);
             self.w.push_str(": ");

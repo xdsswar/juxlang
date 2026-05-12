@@ -54,6 +54,15 @@ impl<'a> Parser<'a> {
     /// `as`) drop straight through to the next implemented layer and
     /// land as features need them.
     pub(crate) fn parse_expr(&mut self) -> Option<Expr> {
+        // Lambda forms — checked before the operator-precedence
+        // chain because they bind looser than any binary op and
+        // can be heralded by either `identifier ->` or `(…) ->`.
+        // The lookahead in `looks_like_lambda_head` peeks past
+        // matched parens and the optional `async` keyword to
+        // decide; non-lambda parens fall through to `parse_primary`.
+        if self.looks_like_lambda_head() {
+            return self.parse_lambda();
+        }
         self.parse_logic_or()
     }
 
@@ -480,6 +489,7 @@ impl<'a> Parser<'a> {
                     generic_args: Vec::new(),
                     nullable: false,
                     array_shape: None,
+                    fn_shape: None,
                     span: element_name.span,
                 };
                 self.expect(&TokenKind::LBracket, "'[' after `new T`");
@@ -581,6 +591,114 @@ impl<'a> Parser<'a> {
         }
         args
     }
+
+    // ------------------------------------------------------------------
+    // Lambdas (§A.2.9)
+    // ------------------------------------------------------------------
+
+    /// Lookahead — true iff the cursor sits at the start of a
+    /// lambda. We accept four shapes:
+    ///
+    /// - `identifier '->' …`           — single-param, untyped
+    /// - `'async' identifier '->' …`   — same with async marker
+    /// - `'(' lambda-params? ')' '->' …`
+    /// - `'async' '(' lambda-params? ')' '->' …`
+    ///
+    /// The paren-form scan skips past a balanced `(...)` and then
+    /// peeks for `->`. We don't try to peek INTO the params for a
+    /// syntactic guarantee — the actual lambda parser is the
+    /// authority. The lookahead just decides which top-level
+    /// branch fires.
+    fn looks_like_lambda_head(&self) -> bool {
+        let mut i = self.pos;
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Kw(Keyword::Async))) {
+            i += 1;
+        }
+        match self.tokens.get(i).map(|t| &t.kind) {
+            Some(TokenKind::Ident(_)) => {
+                matches!(self.tokens.get(i + 1).map(|t| &t.kind), Some(TokenKind::Arrow))
+            }
+            Some(TokenKind::LParen) => {
+                // Walk to matched RParen, then check for `->`.
+                let mut depth = 1usize;
+                let mut j = i + 1;
+                while depth > 0 {
+                    match self.tokens.get(j).map(|t| &t.kind) {
+                        Some(TokenKind::LParen) => depth += 1,
+                        Some(TokenKind::RParen) => depth -= 1,
+                        Some(TokenKind::Eof) | None => return false,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Arrow))
+            }
+            _ => false,
+        }
+    }
+
+    /// Parse a lambda assuming the lookahead has confirmed it.
+    /// Handles both `x -> …` and `(args) -> …` forms; consumes the
+    /// optional `async` prefix.
+    fn parse_lambda(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
+        let is_async = self.eat_kw(Keyword::Async);
+        let params = if self.eat(&TokenKind::LParen) {
+            let mut out = Vec::new();
+            if !self.at(&TokenKind::RParen) {
+                loop {
+                    let p_start = self.peek_span();
+                    // Optional type prefix. We look two tokens
+                    // ahead: `ident ident` (or `ident ('<' or '[')
+                    // ... ident`) means typed; lone `ident` is
+                    // untyped. The simplest heuristic that's
+                    // robust enough for Phase 1: try `parse_type_ref`
+                    // and rewind if there isn't a following
+                    // identifier. Since rewinding the parser is
+                    // fiddly here, peek instead.
+                    let typed = matches!(
+                        (
+                            self.tokens.get(self.pos).map(|t| &t.kind),
+                            self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                        ),
+                        (Some(TokenKind::Ident(_)), Some(TokenKind::Ident(_))),
+                    );
+                    let ty = if typed { self.parse_type_ref() } else { None };
+                    let name = self.parse_ident()?;
+                    let p_end = self.last_consumed_span();
+                    out.push(juxc_ast::LambdaParam {
+                        ty,
+                        name,
+                        span: p_start.join(p_end),
+                    });
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            self.expect(&TokenKind::RParen, "')' to close lambda parameters");
+            out
+        } else {
+            // Single-param untyped form.
+            let p_start = self.peek_span();
+            let name = self.parse_ident()?;
+            let p_end = self.last_consumed_span();
+            vec![juxc_ast::LambdaParam { ty: None, name, span: p_start.join(p_end) }]
+        };
+        self.expect(&TokenKind::Arrow, "'->' in lambda");
+        let body = if self.at(&TokenKind::LBrace) {
+            juxc_ast::LambdaBody::Block(Box::new(self.parse_block()))
+        } else {
+            juxc_ast::LambdaBody::Expr(Box::new(self.parse_expr()?))
+        };
+        let end = self.last_consumed_span();
+        Some(Expr::Lambda(juxc_ast::LambdaExpr {
+            is_async,
+            params,
+            body,
+            span: start.join(end),
+        }))
+    }
 }
 
 /// Best-effort span of an [`Expr`]. Returns `Span::DUMMY` for literals
@@ -606,6 +724,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::This(s) => *s,
         Expr::NewObject(n) => n.span,
         Expr::Switch(s) => s.span,
+        Expr::Lambda(l) => l.span,
     }
 }
 

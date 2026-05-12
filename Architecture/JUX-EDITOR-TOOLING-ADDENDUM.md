@@ -1,0 +1,172 @@
+# Jux Spec Addendum — Editor and IDE Tooling
+
+**Status:** Proposed insertion. Specifies the editor-integration surface for Jux: the syntax-highlighting grammar (TextMate), the editor-by-editor integration matrix, IntelliJ-specific packaging notes, and the staged rollout from "colored text" to a refactor-aware IDE experience. The companion file `JUX-LSP-SERVER-ADDENDUM.md` specifies the language server itself; this file covers everything around it.
+
+**Insertion points:**
+- New §E.1 ("Goals and Non-Goals")
+- New §E.2 ("Syntax Highlighting — TextMate Grammar")
+- New §E.3 ("Language Server — see `JUX-LSP-SERVER-ADDENDUM.md`")
+- New §E.4 ("Editor Integration Matrix")
+- New §E.5 ("IntelliJ-Specific Notes")
+- New §E.6 ("Implementation Phases")
+
+---
+
+## Design Philosophy (Non-Normative)
+
+Phase 1 of Jux is a transpiler — `juxc` lowers `.jux` source to Rust and hands it to `rustc`. The compiler is already a multi-crate Rust workspace (`juxc-lex`, `juxc-parse`, `juxc-ast`, `juxc-tycheck`, …) with first-class diagnostics. The cheapest path to good editor support is therefore **to reuse the existing front end** rather than rebuild it inside an IDE plugin.
+
+Two consequences follow:
+
+1. **One server, many editors.** The Language Server Protocol (LSP) was designed for exactly this case. We commit to LSP as the primary integration surface; native plugins are scoped to thin launcher shells where the host editor cannot otherwise discover the server.
+2. **TextMate first, semantics second.** Coloring text is a 100-line JSON file and works in every modern editor without any binary. Semantic features (diagnostics, hover, goto-def, completions) require the LSP and ship on a slower cadence. Both layers coexist: TextMate handles tokens, LSP overrides with `textDocument/semanticTokens` once available.
+
+What Jux explicitly **does not** do in Phase 1:
+
+- No native IntelliJ plugin written in Kotlin against the IntelliJ Platform PSI/parser APIs. The cost is months of work, duplicates the `juxc` front end, and locks the result to a single IDE family.
+- No bespoke editor-specific parsers (tree-sitter, ANTLR runtime, etc.). The Rust front end is the source of truth; alternatives drift.
+- No web-based playground in Phase 1. (Phase 2 may revisit, compiling `juxc-lsp` to WASM.)
+
+---
+
+## §E.1 — Goals and Non-Goals
+
+### Goals (Phase 1)
+
+| # | Capability                                  | Layer       |
+|---|---------------------------------------------|-------------|
+| 1 | Syntax coloring for all five string flavors, numeric suffixes, keywords, annotations, and operators | TextMate    |
+| 2 | Real-time diagnostics (E0xxx codes from `juxc-tycheck`)                                              | LSP         |
+| 3 | Hover: type of expression under cursor                                                               | LSP         |
+| 4 | Goto-definition / goto-declaration                                                                   | LSP         |
+| 5 | Find references                                                                                      | LSP         |
+| 6 | Document symbols (outline view)                                                                      | LSP         |
+| 7 | Basic completion (keywords, in-scope identifiers, member access)                                     | LSP         |
+| 8 | Rename refactor (textual; semantic-aware lands in §E.6 phase 3)                                      | LSP         |
+
+### Non-Goals (Phase 1)
+
+- Structural search/replace (IntelliJ SSR), inspections-as-code, intention actions surfaced through IDE-native UIs. These require an IntelliJ-platform plugin.
+- Debugger integration — owned by the runtime/ABI addenda, not editor tooling.
+- Formatter — `juxc fmt` exists separately and is invoked by the LSP via `textDocument/formatting`; the formatter itself is not part of this addendum.
+
+---
+
+## §E.2 — Syntax Highlighting (TextMate Grammar)
+
+### File
+
+```
+editors/jux.tmLanguage.json
+```
+
+A single-file TextMate grammar conforming to the standard `tmLanguage` JSON schema. The grammar is the **canonical source for token classification** for any editor that cannot run `juxc-lsp`.
+
+### Scope name
+
+```
+source.jux
+```
+
+All other scopes are namespaced under this (e.g. `keyword.control.conditional.jux`, `string.quoted.triple.raw.jux`). The `.jux` suffix on every leaf scope keeps theme authors from accidentally bleeding Jux colors into unrelated languages.
+
+### Pattern coverage
+
+The grammar MUST handle, at minimum:
+
+- **Comments**: `// line` and `/* block */`.
+- **All five string flavors** from `JUX-GRAMMAR-ADDENDUM.md` §A.1.5: `"…"`, `"""…"""`, `$"…"`, `$"""…"""`, `'…'`.
+- **Numeric literals** with all radix prefixes (`0x`, `0b`, `0o`) and all suffixes documented in §A.1.4 (`L`, `f`, `d`, `u`, `i8`/`i16`/…/`i128`, `u8`/…/`u128`, `f32`, `f64`).
+- **All 53 reserved keywords** from `juxc-lex/src/token.rs` `Keyword` enum, grouped semantically:
+  - Declaration: `class`, `interface`, `enum`, `record`, `struct`, `annotation`, `package`, `import`, `type`
+  - Modifier: `public`, `private`, `protected`, `internal`, `abstract`, `final`, `sealed`, `static`, `const`, `volatile`, `native`, `async`, `unsafe`, `var`
+  - Inheritance: `extends`, `implements`, `permits`, `throws`
+  - Control: `if`, `else`, `switch`, `case`, `default`, `when`, `for`, `while`, `do`, `break`, `continue`, `yield`, `try`, `catch`, `finally`, `throw`, `return`, `await`, `drop`, `move`
+  - Other: `this`, `super`, `new`, `init`, `as`, `sizeof`, `operator`
+- **Literals**: `true`, `false`, `null` (NOT keywords per §A.2.9; mapped to `constant.language`).
+- **Primitive types**: `bool`, `byte`, `ubyte`, `short`, `ushort`, `int`, `uint`, `long`, `ulong`, `float`, `double`, `char`, `void`, plus width-explicit `i8`/…/`i128`, `u8`/…/`u128`, `f32`, `f64`, `isize`, `usize`, and the built-in reference type `String`.
+- **Annotations**: `@Name` prefix (per `JUX-ANNOTATIONS-ADDENDUM.md`).
+- **String interpolation**: `${expr}` and short-form `$ident` inside `$"…"` / `$"""…"""`. The `${…}` body recursively includes `$self` so nested constructs (operators, function calls, literals) keep their normal coloring.
+- **Operators**: all punctuation tokens from §A.1.6, including the multi-char sequences `<=>`, `===`, `!==`, `==`, `!=`, `<=`, `>=`, `&&`, `||`, `<<`, `>>`, `<<=`, `>>=`, `..`, `..=`, `...`, `?.`, `?:`, `!!`, `->`, `=>`, `::`.
+
+### Limits
+
+TextMate grammars are regular: they cannot disambiguate identifier kinds (variable vs class vs function) without context-free parsing. The grammar therefore uses heuristics — UpperCamelCase → `entity.name.type`, lowerCamelCase followed by `(` → `entity.name.function`. These are best-effort; when `juxc-lsp` is connected, its `semanticTokens` response overrides the TextMate classification per LSP precedence rules.
+
+### Update protocol
+
+Any change to the keyword list in `juxc-lex/src/token.rs` MUST be mirrored in `editors/jux.tmLanguage.json` in the same commit. A CI check (future work) will compare the two lists.
+
+---
+
+## §E.3 — Language Server
+
+The language server (`juxc-lsp`) is specified in **`JUX-LSP-SERVER-ADDENDUM.md`**. The short version: a separate crate at `crates/juxc-lsp/` reuses the existing `juxc-lex`/`-parse`/`-ast`/`-tycheck`/`-diag` front end, speaks LSP over stdio, and provides diagnostics, hover, goto-def, document symbols, references, completion, semantic tokens, rename, and formatting. Capability phasing and the diagnostic-mapping contract live in that document.
+
+This addendum stays focused on the **editor-side concerns** — coloring, packaging, IDE quirks — which apply whether or not the LSP is running.
+
+---
+
+## §E.4 — Editor Integration Matrix
+
+| Editor                | Coloring (TextMate) | LSP client              | Plugin/extension needed?           |
+|-----------------------|---------------------|-------------------------|------------------------------------|
+| VS Code               | Yes (`.tmLanguage.json` shipped in extension) | Built-in        | Thin extension (≈30 LOC) that registers the grammar and launches `juxc-lsp` |
+| IntelliJ Ultimate     | Yes (TextMate Bundles, built-in)             | Built-in (2023.2+) | None for highlighting; tiny `.idea`/LSP-server registration for semantics |
+| IntelliJ Community    | Yes (TextMate Bundles, built-in)             | Via **LSP4IJ** plugin | LSP4IJ from JetBrains Marketplace; configure `juxc-lsp` as a server   |
+| Zed                   | Yes (`.tmLanguage.json` consumable)          | Built-in              | Zed extension registering the grammar + LSP                            |
+| Neovim                | Yes (via `nvim-treesitter` or TextMate fallback) | Built-in (`vim.lsp`) | A few lines in `init.lua` to register the filetype and start the server |
+| Sublime Text          | Yes                                          | LSP package           | Sublime LSP package + a Jux-specific server config                     |
+| Helix                 | Yes (tree-sitter preferred; TextMate not used) | Built-in            | `languages.toml` entry — no plugin                                     |
+
+**Tree-sitter grammar** (separate file, NOT part of this addendum): Helix and Neovim's modern highlighting paths prefer tree-sitter. A `tree-sitter-jux` grammar may be authored later; until then, TextMate is the lowest common denominator and Helix users get keyword-only coloring via its `--config` mechanism.
+
+---
+
+## §E.5 — IntelliJ-Specific Notes
+
+### Bundle layout
+
+IntelliJ's TextMate loader expects a directory whose layout mirrors a classic TextMate bundle:
+
+```
+jux.tmbundle/
+├── info.plist                     # minimal — name, uuid, description
+└── Syntaxes/
+    └── jux.tmLanguage.json
+```
+
+The user points **Settings → Editor → TextMate Bundles → +** at the **bundle root** (`jux.tmbundle/`), NOT at the `Syntaxes/` subfolder. Pointing at `Syntaxes/` produces a `Cannot read the following bundle` error because IntelliJ scans the parent for `info.plist`.
+
+### Ultimate vs Community
+
+- **Ultimate (2023.2+)** ships a native LSP API (`com.intellij.platform.lsp`). Once `juxc-lsp` exists, Ultimate users get diagnostics + hover + goto-def with zero plugin install — just an LSP server registration.
+- **Community** has no LSP API. The recommended path is the third-party **LSP4IJ** plugin (JetBrains Marketplace, MIT-licensed), which adds a generic LSP client to any IntelliJ-platform IDE. Users install LSP4IJ, then add `juxc-lsp` as a custom server pointing at the binary.
+
+A **bundled IntelliJ plugin** that ships both the TextMate grammar and the LSP launcher is in scope for §E.6 phase 4 — purely as a convenience packaging step. It does NOT involve writing a PSI parser or any platform-API integration beyond `LspServerSupportProvider`.
+
+### File type registration
+
+After loading the bundle, IntelliJ does NOT auto-associate `*.jux` with it. Users must add the glob under **Settings → Editor → File Types → Files supported via TextMate Bundles**. A future packaged plugin would register this declaratively in `plugin.xml`.
+
+---
+
+## §E.6 — Implementation Phases (editor-side only)
+
+LSP-side phasing lives in `JUX-LSP-SERVER-ADDENDUM.md` §L.9. The editor-packaging side has its own rollout:
+
+| Phase | Deliverable                                                                                        | Effect                                                        |
+|-------|----------------------------------------------------------------------------------------------------|---------------------------------------------------------------|
+| 1     | `editors/jux.tmLanguage.json` plus the minimal `jux.tmbundle/info.plist` for IntelliJ              | Coloring works in every editor with manual bundle install     |
+| 2     | VS Code extension that ships the grammar and registers `*.jux` as `source.jux`                     | Zero-config coloring on VS Code                               |
+| 3     | JetBrains-Marketplace plugin: bundles `jux.tmbundle`, registers the file type, launches `juxc-lsp` | Zero-config coloring + semantics on IntelliJ Ultimate/Community |
+| 4     | `tree-sitter-jux` grammar (optional)                                                               | Better LSP-less highlighting in Helix/Neovim                  |
+
+Phases 2 and 3 are independent of the LSP-server phases — the editor packaging can ship before the server is feature-complete, and will simply gain capabilities as the server matures.
+
+---
+
+## Open Questions
+
+- **Auto-sync of the keyword list.** A CI check that diffs `juxc-lex::Keyword::as_str` against the keyword arrays in `jux.tmLanguage.json` would catch drift. Probably a five-line `cargo xtask` job; queued.
+- **Marketplace publishing identity.** The VS Code Marketplace publisher and the JetBrains Marketplace vendor name should be reserved early to avoid squatting. Owner: `xdsswar` / `XTREME SOFTWARE SOLUTIONS`.

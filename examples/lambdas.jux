@@ -1,0 +1,35 @@
+// Lambdas per spec §A.2.9:
+//   lambda = 'async'? '(' lambda-params? ')' '->' lambda-body
+//          | 'async'? identifier '->' lambda-body
+//
+// Lowers to a Rust closure: `|args| body` (expression body) or
+// `|args| { … }` (block body). Capture semantics are inferred by
+// Rust's borrow checker.
+
+public void main() {
+    // Single-param, expression body.
+    var dbl = x -> x * 2;
+    print(dbl(7));
+
+    // Multi-param, expression body.
+    var add = (a, b) -> a + b;
+    print(add(3, 4));
+
+    // Typed params.
+    var sub = (int a, int b) -> a - b;
+    print(sub(10, 3));
+
+    // Block body.
+    var clamp = (int v) -> {
+        if (v < 0) {
+            return 0;
+        }
+        if (v > 100) {
+            return 100;
+        }
+        return v;
+    };
+    print(clamp(-5));
+    print(clamp(42));
+    print(clamp(150));
+}

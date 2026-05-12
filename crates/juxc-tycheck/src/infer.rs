@@ -96,6 +96,14 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 Ty::Unknown
             }
         }
+        // Lambda — Phase-1 returns `Ty::Unknown`. A proper
+        // `Ty::Fn { params, return }` lands when call-site type
+        // checking actually consumes the result (e.g. when
+        // passing a lambda to a `Fn`-typed param). Today the
+        // emitted Rust closure infers its own type at compile
+        // time, so the lack of a precise Jux-side type is
+        // observationally a no-op.
+        Expr::Lambda(_) => Ty::Unknown,
     }
 }
 
@@ -187,6 +195,23 @@ fn infer_this(env: &TypeEnv) -> Ty {
 /// Everything else (field on a primitive, field on an enum, etc.)
 /// returns `Unknown`.
 fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    // `ClassName.STATIC_FIELD` — when the receiver is a bare or
+    // multi-segment path that resolves to a class FQN, look the
+    // field up as a static member rather than as an instance field.
+    // Instance access `obj.f` still flows through the regular
+    // `infer_expr` path below; the two are distinguished by
+    // whether the receiver expression names a type or a value.
+    if let Expr::Path(qn) = f.object.as_ref() {
+        if let Some(class_fqn) = path_resolves_to_class(qn, env, symbols) {
+            if let Some(class) = symbols.classes.get(&class_fqn) {
+                if let Some(field) = class.fields.get(f.field.text.as_str()) {
+                    if field.is_static {
+                        return lower_member_type(&field.ty, &class_fqn, symbols);
+                    }
+                }
+            }
+        }
+    }
     let object_ty = infer_expr(&f.object, env, symbols);
     let field_name = f.field.text.as_str();
 
@@ -302,8 +327,27 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         }
         // Method call — `obj.method(args)`.
         Expr::Field(field) => {
-            let receiver_ty = infer_expr(&field.object, env, symbols);
             let method_name = field.field.text.as_str();
+            // `ClassName.staticMethod(args)` — receiver is a type
+            // name, not a value. Resolve the static method
+            // directly off the class's signature and return its
+            // declared return type (lowered in the class's scope).
+            if let Expr::Path(qn) = field.object.as_ref() {
+                if let Some(class_fqn) = path_resolves_to_class(qn, env, symbols) {
+                    if let Some(class) = symbols.classes.get(&class_fqn) {
+                        if let Some(method) = class.methods.get(method_name) {
+                            if method.is_static {
+                                return return_type_in_class(
+                                    &method.return_type,
+                                    &class_fqn,
+                                    symbols,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            let receiver_ty = infer_expr(&field.object, env, symbols);
             if let Ty::User { name, generic_args } = &receiver_ty {
                 // Walk the class extends-chain first.
                 if let Some((method, declaring_class)) =
@@ -491,6 +535,51 @@ fn infer_new_object(n: &NewObjectExpr, env: &TypeEnv, symbols: &SymbolTable) -> 
 /// taken as already-qualified. Falls back to the literal name when
 /// no entry resolves, matching the pre-FQN behavior for top-level
 /// no-package builds.
+/// True if `qn` names a known class (returning its FQN). Used by
+/// `infer_field` / `infer_call` to recognize `ClassName.member` as
+/// a static-member access rather than an instance field/method on
+/// some value of type `ClassName`. Single-segment names route
+/// through the unit's bare→FQN map; multi-segment names are
+/// joined verbatim.
+pub(crate) fn path_resolves_to_class(
+    qn: &juxc_ast::QualifiedName,
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Option<String> {
+    if qn.segments.is_empty() {
+        return None;
+    }
+    if qn.segments.len() == 1 {
+        let bare = &qn.segments[0].text;
+        // Locals shadow type names (e.g. a local `Foo` would beat
+        // the class `Foo` in expression scope) — Java rules don't
+        // really cover this since type names start with uppercase
+        // by convention, but be safe.
+        if env.lookup(bare).is_some() {
+            return None;
+        }
+        if let Some(fqn) = env.unqualified.get(bare) {
+            if symbols.classes.contains_key(fqn) {
+                return Some(fqn.clone());
+            }
+        }
+        if symbols.classes.contains_key(bare) {
+            return Some(bare.clone());
+        }
+        return None;
+    }
+    let joined: String = qn
+        .segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(".");
+    if symbols.classes.contains_key(&joined) {
+        return Some(joined);
+    }
+    None
+}
+
 fn resolve_class_name(
     qn: &juxc_ast::QualifiedName,
     env: &TypeEnv,

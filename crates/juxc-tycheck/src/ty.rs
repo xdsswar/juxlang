@@ -83,6 +83,20 @@ pub enum Ty {
     /// covariant), `List<Animal>` matches `List<? super Dog>`
     /// (consumer → contravariant).
     Wildcard(Wildcard),
+    /// Function type per grammar §A.2.7 — `(A, B) -> R`,
+    /// `() async -> R`, etc. Lowers from
+    /// [`juxc_ast::FnTypeShape`]. Matches a lambda whose param
+    /// arity and return-type are compatible.
+    Fn {
+        /// Parameter types, left to right.
+        params: Vec<Ty>,
+        /// Return type. `void` lands as `Ty::Void`.
+        return_type: Box<Ty>,
+        /// True if the function type carries the `async` marker.
+        /// Phase 1 keeps this informational — `async`-aware
+        /// compatibility checks land with the runtime work.
+        is_async: bool,
+    },
     /// The unit/return-nothing type. Methods declared `void` return
     /// this. Expressions are never `Void` — that's reserved for
     /// statement-context constructs.
@@ -250,6 +264,20 @@ impl fmt::Display for Ty {
                 Wildcard::Extends(b) => write!(f, "? extends {b}"),
                 Wildcard::Super(b) => write!(f, "? super {b}"),
             },
+            Ty::Fn { params, return_type, is_async } => {
+                f.write_str("(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{p}")?;
+                }
+                f.write_str(")")?;
+                if *is_async {
+                    f.write_str(" async")?;
+                }
+                write!(f, " -> {return_type}")
+            }
             Ty::Void => f.write_str("void"),
             Ty::Unknown => f.write_str("<unknown>"),
         }
@@ -306,6 +334,23 @@ fn primitive_name(p: Primitive) -> &'static str {
 /// 6. Anything else → [`Ty::Unknown`]. **No diagnostic is emitted.**
 ///    Phase D will surface unresolved-name errors at use sites.
 pub fn ty_from_ref(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    // 0. Function-type shape — `(A, B) -> R` per grammar §A.2.7.
+    //    `fn_shape` lowers to `Ty::Fn` with each param/return
+    //    recursively resolved. Checked first because the rest of
+    //    `TypeRef` carries no useful info in this case.
+    if let Some(fn_shape) = &t.fn_shape {
+        let params: Vec<Ty> = fn_shape
+            .params
+            .iter()
+            .map(|p| ty_from_ref(p, env, symbols))
+            .collect();
+        let return_type = Box::new(ty_from_ref(&fn_shape.return_type, env, symbols));
+        return Ty::Fn {
+            params,
+            return_type,
+            is_async: fn_shape.is_async,
+        };
+    }
     // 1. Array shape — peel one shape, recurse on the element form.
     if let Some(shape) = &t.array_shape {
         let element_ref = TypeRef {
@@ -313,6 +358,7 @@ pub fn ty_from_ref(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             generic_args: t.generic_args.clone(),
             nullable: t.nullable,
             array_shape: None,
+            fn_shape: t.fn_shape.clone(),
             span: t.span,
         };
         let element = ty_from_ref(&element_ref, env, symbols);
@@ -511,6 +557,14 @@ fn substitute_inner(ty: &Ty, params: &[TypeParam], args: &[Ty]) -> Ty {
             Wildcard::Super(bound) => Ty::Wildcard(Wildcard::Super(Box::new(
                 substitute_inner(bound, params, args),
             ))),
+        },
+        Ty::Fn { params: ps, return_type, is_async } => Ty::Fn {
+            params: ps
+                .iter()
+                .map(|p| substitute_inner(p, params, args))
+                .collect(),
+            return_type: Box::new(substitute_inner(return_type, params, args)),
+            is_async: *is_async,
         },
         Ty::Primitive(_) | Ty::String | Ty::Void | Ty::Unknown => ty.clone(),
     }

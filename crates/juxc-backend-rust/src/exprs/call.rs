@@ -20,6 +20,36 @@ impl RustEmitter {
                 return self.emit_print_call(call);
             }
         }
+        // Static method call: `ClassName.staticMethod(args)` (or
+        // `pkg.Cls.method(args)`) → `Path::method(args)`. Recognize
+        // the receiver as a class name and switch the dot to `::`.
+        if let Expr::Field(f) = &*call.callee {
+            if let Expr::Path(qn) = &*f.object {
+                if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                    let is_static_method = self
+                        .symbols
+                        .classes
+                        .get(&class_fqn)
+                        .and_then(|c| c.methods.get(f.field.text.as_str()))
+                        .map(|m| m.is_static)
+                        .unwrap_or(false);
+                    if is_static_method {
+                        self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                        self.w.push_str("::");
+                        self.w.push_str(&f.field.text);
+                        self.w.push('(');
+                        for (i, arg) in call.args.iter().enumerate() {
+                            if i > 0 {
+                                self.w.push_str(", ");
+                            }
+                            self.emit_expr(arg);
+                        }
+                        self.w.push(')');
+                        return;
+                    }
+                }
+            }
+        }
         // Detect enum-variant construction so we can inject
         // `.to_string()` on String-typed payload slots. Shape we want:
         // `Call(Field(Path(EnumName), VariantName), args)`.

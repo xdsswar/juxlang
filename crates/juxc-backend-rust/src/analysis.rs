@@ -151,6 +151,12 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
         // - Literal, Path: source-level atoms.
         // - This: implicit-receiver token; no body to walk.
         Expr::Literal(_) | Expr::Path(_) | Expr::This(_) => {}
+        // Walk the lambda body so a mutating call inside (e.g.
+        // `xs -> xs.push(1)`) still marks the captured receiver.
+        Expr::Lambda(l) => match &l.body {
+            juxc_ast::LambdaBody::Expr(e) => collect_mutating_calls(e, out, user_mut),
+            juxc_ast::LambdaBody::Block(b) => collect_mutated_names(b, out, user_mut),
+        },
     }
 }
 
@@ -490,6 +496,7 @@ pub(crate) fn field_supports_eq(ty: &juxc_ast::TypeRef) -> bool {
             generic_args: ty.generic_args.clone(),
             nullable: ty.nullable,
             array_shape: None,
+            fn_shape: ty.fn_shape.clone(),
             span: ty.span,
         };
         return field_supports_eq(&element);
@@ -500,6 +507,7 @@ pub(crate) fn field_supports_eq(ty: &juxc_ast::TypeRef) -> bool {
             generic_args: ty.generic_args.clone(),
             nullable: false,
             array_shape: None,
+            fn_shape: ty.fn_shape.clone(),
             span: ty.span,
         };
         return field_supports_eq(&inner);
@@ -631,6 +639,7 @@ impl WildcardLifter {
             generic_args,
             nullable: ty.nullable,
             array_shape: ty.array_shape.clone(),
+            fn_shape: ty.fn_shape.clone(),
             span: ty.span,
         }
     }
@@ -666,6 +675,7 @@ impl WildcardLifter {
             generic_args: Vec::new(),
             nullable: false,
             array_shape: None,
+            fn_shape: None,
             span: Span::DUMMY,
         }
     }

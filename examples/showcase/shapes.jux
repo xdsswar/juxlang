@@ -1,0 +1,104 @@
+// Sealed shape hierarchy + an interface + a generic container,
+// all in their own package.
+
+package showcase.shapes;
+
+import showcase.math.MathUtil;
+
+// Interface — any shape implements this.
+public interface Drawable {
+    public String describe();
+}
+
+// Abstract sealed base. `permits` restricts inheritance to the
+// listed subclasses; tycheck enforces it.
+public abstract sealed class Shape implements Drawable
+    permits Circle, Square, Triangle
+{
+    public String label;
+    public Shape(String label) {
+        this.label = label;
+    }
+
+    public abstract double area();
+
+    // Default impl uses `area()` and the field — annotations are
+    // case-insensitive so either `@Override` or `@override` works.
+    @Override
+    public String describe() {
+        return $"${this.label} (area ${this.area()})";
+    }
+}
+
+public final class Circle extends Shape {
+    public double radius;
+    public Circle(double radius) {
+        super("circle");
+        this.radius = radius;
+    }
+
+    @Override
+    public double area() {
+        return MathUtil.PI * this.radius * this.radius;
+    }
+
+    // Phase-1 lowering uses composition + Deref, so the parent's
+    // `describe()` calling `this.area()` would dispatch
+    // statically to `Shape::area()` (the abstract stub). We
+    // re-implement `describe()` per concrete class so each call
+    // hits the right area.
+    @Override
+    public String describe() {
+        return $"${this.label} (area ${this.area()})";
+    }
+}
+
+public final class Square extends Shape {
+    public double side;
+    public Square(double side) {
+        super("square");
+        this.side = side;
+    }
+
+    @Override
+    public double area() {
+        return this.side * this.side;
+    }
+
+    @Override
+    public String describe() {
+        return $"${this.label} (area ${this.area()})";
+    }
+}
+
+public final class Triangle extends Shape {
+    public double base;
+    public double height;
+    public Triangle(double base, double height) {
+        super("triangle");
+        this.base = base;
+        this.height = height;
+    }
+
+    @Override
+    public double area() {
+        return 0.5 * this.base * this.height;
+    }
+
+    @Override
+    public String describe() {
+        return $"${this.label} (area ${this.area()})";
+    }
+}
+
+// Generic container for any kind of shape. Cross-package use:
+// `import showcase.shapes.Container;` from app.jux.
+public class Container<T> {
+    public T value;
+    public Container(T value) {
+        this.value = value;
+    }
+    public T get() {
+        return this.value;
+    }
+}

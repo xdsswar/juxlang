@@ -1,0 +1,39 @@
+// Static methods and fields — Java-style class-level members.
+//
+// Static fields lower to `pub const NAME: T = …;` (when `final`)
+// or `pub static NAME: T = …;` (mutable). Static methods lower to
+// inherent functions on the impl block without `&self`. Call sites
+// switch from `.` to `::` automatically: `Math.PI` becomes
+// `Math::PI`, `Math.max(a, b)` becomes `Math::max(a, b)`.
+
+public class Math {
+    // Static `final` field → emits `pub const PI: f64 = 3.14159;`.
+    public static final double PI = 3.14159;
+
+    // Static `final` int.
+    public static final int MAX_INT = 2147483647;
+
+    // Static method: no `this`, called as `Math.max(...)`.
+    public static int max(int a, int b) {
+        if (a > b) {
+            return a;
+        } else {
+            return b;
+        }
+    }
+
+    public static int abs(int x) {
+        if (x < 0) {
+            return -x;
+        } else {
+            return x;
+        }
+    }
+}
+
+public void main() {
+    print(Math.PI);
+    print(Math.MAX_INT);
+    print(Math.max(3, 7));
+    print(Math.abs(-42));
+}

@@ -271,13 +271,19 @@ impl<'a> Parser<'a> {
     /// Parse one top-level declaration, returning `None` on unrecoverable
     /// parse failure (caller does the recovery).
     pub(crate) fn parse_top_level_decl(&mut self) -> Option<TopLevelDecl> {
-        // TODO: annotations (§A.2.3).
+        // Per grammar §A.2.2 every top-level decl is prefixed by an
+        // (optional) annotation list, then a visibility modifier,
+        // then the decl body. We consume both prefixes here and
+        // thread the captured annotations into whichever decl
+        // dispatch arm fires.
+        let annotations = self.parse_annotations();
         let visibility = self.parse_visibility();
 
         // `const NAME …;` is unambiguously a top-level constant —
         // `const` is never a class modifier in Jux.
         if self.eat_kw(Keyword::Const) {
-            let decl = self.parse_const_decl(visibility, /*used_final=*/ false)?;
+            let decl =
+                self.parse_const_decl(annotations, visibility, /*used_final=*/ false)?;
             return Some(TopLevelDecl::Const(decl));
         }
         // `final` is overloaded — it modifies a class (`final class
@@ -287,7 +293,8 @@ impl<'a> Parser<'a> {
         // class modifier path; otherwise it's a const decl.
         if self.at_kw(Keyword::Final) && !looks_like_class_modifier_chain(self) {
             self.advance(); // eat `final`
-            let decl = self.parse_const_decl(visibility, /*used_final=*/ true)?;
+            let decl =
+                self.parse_const_decl(annotations, visibility, /*used_final=*/ true)?;
             return Some(TopLevelDecl::Const(decl));
         }
         // Top-level dispatch: `class` → class decl, `enum` → enum decl,
@@ -336,6 +343,7 @@ impl<'a> Parser<'a> {
         }
         if self.at_kw(Keyword::Class) {
             let class_decl = self.parse_class_decl(
+                annotations,
                 visibility,
                 is_abstract_top,
                 is_final_top,
@@ -358,22 +366,22 @@ impl<'a> Parser<'a> {
             return None;
         }
         if self.at_kw(Keyword::Enum) {
-            let enum_decl = self.parse_enum_decl(visibility)?;
+            let enum_decl = self.parse_enum_decl(annotations, visibility)?;
             return Some(TopLevelDecl::Enum(enum_decl));
         }
         if self.at_kw(Keyword::Record) {
-            let record_decl = self.parse_record_decl(visibility)?;
+            let record_decl = self.parse_record_decl(annotations, visibility)?;
             return Some(TopLevelDecl::Record(record_decl));
         }
         if self.at_kw(Keyword::Interface) {
-            let interface_decl = self.parse_interface_decl(visibility)?;
+            let interface_decl = self.parse_interface_decl(annotations, visibility)?;
             return Some(TopLevelDecl::Interface(interface_decl));
         }
         if self.at_kw(Keyword::Type) {
-            let alias = self.parse_type_alias_decl(visibility)?;
+            let alias = self.parse_type_alias_decl(annotations, visibility)?;
             return Some(TopLevelDecl::TypeAlias(alias));
         }
-        let fn_decl = self.parse_fn_decl(visibility)?;
+        let fn_decl = self.parse_fn_decl(annotations, visibility)?;
         Some(TopLevelDecl::Function(fn_decl))
     }
 

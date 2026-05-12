@@ -35,6 +35,12 @@ use juxc_backend_rust::{RustCrate, CRATE_NAME};
 use juxc_diagnostics::{Diagnostic, Severity};
 use juxc_source::SourceFile;
 
+/// Re-export the legacy default crate name so binaries that link
+/// against `juxc-driver` (but not `juxc-backend-rust` directly)
+/// can still pass it to [`build`]. New code should prefer a
+/// caller-derived name (e.g. from the input file's stem).
+pub const DEFAULT_CRATE_NAME: &str = CRATE_NAME;
+
 mod source_map;
 
 /// Top-level compile result.
@@ -192,14 +198,19 @@ pub struct BuildArtifact {
 /// cargo so callers can surface it to the user. The juxc-emitted Rust
 /// should always compile cleanly; if it doesn't, that's a juxc bug, not
 /// a user error.
-pub fn build(crate_: &RustCrate, crate_dir: &Path) -> Result<BuildArtifact> {
+pub fn build(crate_: &RustCrate, crate_dir: &Path, crate_name: &str) -> Result<BuildArtifact> {
     // Ensure the destination directory and any intermediate `src/`
     // subdirectories exist before writing.
     fs::create_dir_all(crate_dir.join("src"))
         .with_context(|| format!("creating emitted crate dir {}", crate_dir.display()))?;
 
-    // Write Cargo.toml.
-    fs::write(crate_dir.join("Cargo.toml"), &crate_.cargo_toml)
+    // Regenerate Cargo.toml with the user-requested crate name.
+    // The backend emits a default-named Cargo.toml during
+    // `lower_workspace`; here we override with the CLI-chosen
+    // (or auto-derived) name so `target/debug/{name}.exe` matches
+    // the user's expectation.
+    let cargo_toml = juxc_backend_rust::cargo_toml_for(crate_name);
+    fs::write(crate_dir.join("Cargo.toml"), &cargo_toml)
         .with_context(|| format!("writing Cargo.toml to {}", crate_dir.display()))?;
 
     // Write each source file. The backend uses `src/main.rs` for the
@@ -251,7 +262,7 @@ pub fn build(crate_: &RustCrate, crate_dir: &Path) -> Result<BuildArtifact> {
     let binary_path = crate_dir
         .join("target")
         .join("debug")
-        .join(format!("{CRATE_NAME}{}", std::env::consts::EXE_SUFFIX));
+        .join(format!("{crate_name}{}", std::env::consts::EXE_SUFFIX));
 
     Ok(BuildArtifact { crate_dir: crate_dir.to_path_buf(), binary_path })
 }

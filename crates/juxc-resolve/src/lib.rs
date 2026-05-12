@@ -682,6 +682,21 @@ impl Resolver {
                     self.visit_expr(&f.object);
                 }
             }
+            Expr::Lambda(l) => {
+                // Push a scope, declare each parameter as a known
+                // name, then walk the body. Body-position
+                // expressions and blocks both go through the
+                // existing visitors.
+                self.push_scope();
+                for p in &l.params {
+                    self.declare(&p.name.text);
+                }
+                match &l.body {
+                    juxc_ast::LambdaBody::Expr(e) => self.visit_expr(e),
+                    juxc_ast::LambdaBody::Block(b) => self.visit_block(b),
+                }
+                self.pop_scope();
+            }
         }
     }
 

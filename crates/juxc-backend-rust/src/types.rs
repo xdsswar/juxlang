@@ -46,6 +46,26 @@ impl RustEmitter {
     /// allocating. Owned-string semantics (mutation, storage in structs)
     /// will need a more nuanced mapping when we get there.
     pub(crate) fn emit_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
+        // Function-type shape `(A, B) -> R` per grammar §A.2.7.
+        // Lower to `std::rc::Rc<dyn Fn(A, B) -> R>` — Rc rather
+        // than Box so the type stays `Clone` (the storage path
+        // wraps these inside `#[derive(Clone)]` structs). Param
+        // positions could use the more-ergonomic `impl Fn(...)
+        // -> ...` form, but Rust's `impl Trait` placement rules
+        // get fussy; the uniform Rc lowering is friendlier.
+        if let Some(fn_shape) = &ty.fn_shape {
+            self.w.push_str("std::rc::Rc<dyn Fn(");
+            for (i, p) in fn_shape.params.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.emit_type_as_rust(p);
+            }
+            self.w.push_str(") -> ");
+            self.emit_type_as_rust(&fn_shape.return_type);
+            self.w.push('>');
+            return;
+        }
         // Array types lower to Rust `[ElementType; N]` for fixed-size
         // (Turn 1) or `Vec<ElementType>` for dynamic (Turn 2, deferred).
         if let Some(shape) = &ty.array_shape {
@@ -60,6 +80,7 @@ impl RustEmitter {
                         generic_args: ty.generic_args.clone(),
                         nullable: ty.nullable,
                         array_shape: None,
+                        fn_shape: ty.fn_shape.clone(),
                         span: ty.span,
                     };
                     self.emit_type_as_rust(&element_ty);
@@ -80,6 +101,7 @@ impl RustEmitter {
                         generic_args: ty.generic_args.clone(),
                         nullable: ty.nullable,
                         array_shape: None,
+                        fn_shape: ty.fn_shape.clone(),
                         span: ty.span,
                     };
                     self.emit_type_as_rust(&element_ty);

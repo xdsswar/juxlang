@@ -61,6 +61,58 @@ pub enum Expr {
     /// expression-form switch — context decides whether the resulting
     /// value is used.
     Switch(SwitchExpr),
+    /// `(args) -> body` or `x -> body` per grammar §A.2.9. See
+    /// [`LambdaExpr`]. Lowers to a Rust closure (`|args| body`).
+    Lambda(LambdaExpr),
+}
+
+/// Lambda expression per grammar §A.2.9:
+/// ```text
+/// lambda       = 'async'? '(' lambda-params? ')' '->' lambda-body
+///              | 'async'? identifier '->' lambda-body  -- single-param
+/// lambda-body  = expression | block
+/// lambda-param = type? identifier
+/// ```
+///
+/// **Phase-1 scope.** `async` lambdas parse but are not yet wired
+/// to a runtime — the marker is stored for forward-compat. Closure
+/// capture semantics are left to Rust's borrow-checker (`move`
+/// vs borrow is inferred at the emit site).
+#[derive(Debug, Clone)]
+pub struct LambdaExpr {
+    /// Whether the user wrote `async`. Currently informational —
+    /// `async` lambdas need a runtime decision that's still ahead.
+    pub is_async: bool,
+    /// Formal parameters in declaration order. Each may carry an
+    /// explicit type (`int x`) or be untyped (`x`); untyped params
+    /// fall through to Rust's closure-parameter inference.
+    pub params: Vec<LambdaParam>,
+    /// Body — either a single expression (`x -> x * 2`) or a block
+    /// (`(x) -> { … }`).
+    pub body: LambdaBody,
+    /// Span of the whole lambda.
+    pub span: Span,
+}
+
+/// One lambda parameter — optional type, mandatory name.
+#[derive(Debug, Clone)]
+pub struct LambdaParam {
+    /// Declared type, if the user wrote `(int x) -> …`. Absent in
+    /// the untyped form `x -> …`.
+    pub ty: Option<TypeRef>,
+    /// Parameter name.
+    pub name: Ident,
+    /// Span covering the param.
+    pub span: Span,
+}
+
+/// Lambda body — single expression or block.
+#[derive(Debug, Clone)]
+pub enum LambdaBody {
+    /// `x -> x + 1`.
+    Expr(Box<Expr>),
+    /// `(x) -> { … return x + 1; }`.
+    Block(Box<crate::stmts::Block>),
 }
 
 /// `new ClassName(args)` per §7.3.1 — invokes a class's constructor and

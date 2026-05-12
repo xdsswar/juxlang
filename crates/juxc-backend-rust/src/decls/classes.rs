@@ -66,6 +66,12 @@ impl RustEmitter {
             self.w.push_str(",\n");
         }
         for field in &class_decl.fields {
+            // Static fields live on the class, not the instance —
+            // skip them here. They land below as `pub const` /
+            // `pub static` items inside the `impl Foo { … }`.
+            if field.is_static {
+                continue;
+            }
             self.w.emit_indent();
             self.emit_visibility(field.visibility);
             self.w.push_str(&field.name.text);
@@ -131,6 +137,19 @@ impl RustEmitter {
         self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(" {\n");
 
+        // Static fields land as associated constants inside the
+        // inherent impl so `Foo::X` works in Rust. `final` (or
+        // `const`) static fields emit as `pub const`; mutable
+        // statics emit as a `pub static` (which Rust requires to
+        // be Sync — generic-aware mutable statics are a Phase-2
+        // concern, so we only emit `pub static` here for trivial
+        // types).
+        for field in &class_decl.fields {
+            if !field.is_static {
+                continue;
+            }
+            self.emit_static_field(field);
+        }
         // Constructor → `pub fn new(args) -> Self` with the __self pattern.
         for ctor in &class_decl.constructors {
             self.emit_constructor(class_decl, ctor);
@@ -449,6 +468,47 @@ impl RustEmitter {
     /// method signature sits at depth 1 inside the `impl`, and the
     /// body at depth 2. Method emission is host-agnostic — the same
     /// shape works for classes and records.
+    /// Emit a `static` class field as an associated item inside the
+    /// inherent `impl` block. `final` / `const` fields land as
+    /// `pub const`; bare `static` fields emit `pub static`.
+    ///
+    /// **Phase-1 caveat.** A static field without an initializer
+    /// would need `Default::default()` evaluated at compile time,
+    /// which Rust doesn't permit. We emit a TODO marker — the
+    /// resulting Rust won't compile, but `cargo build` produces a
+    /// clear error pointing at the field. A future pass either
+    /// rejects this at tycheck or routes through `lazy_static!`.
+    pub(crate) fn emit_static_field(&mut self, field: &juxc_ast::FieldDecl) {
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.emit_visibility(field.visibility);
+        if field.is_final {
+            self.w.push_str("const ");
+        } else {
+            self.w.push_str("static ");
+        }
+        self.w.push_str(&field.name.text);
+        self.w.push_str(": ");
+        self.emit_field_type_as_rust(&field.ty);
+        self.w.push_str(" = ");
+        if let Some(init) = &field.default {
+            self.emit_expr(init);
+            // String-field coercion: `&str` literal → owned String
+            // when the declared type is Jux `String`. Mirrors the
+            // constructor-body path in `emit_constructor`.
+            if crate::analysis::is_jux_string_type_ref(&field.ty) {
+                self.w.push_str(".to_string()");
+            }
+        } else {
+            // No initializer — Rust requires one at the const/static
+            // site. Emit a placeholder so the build fails with a
+            // clear error rather than silently producing wrong code.
+            self.emit_field_default_value_for(&field.ty);
+        }
+        self.w.push_str(";\n");
+        self.w.indent_dec();
+    }
+
     pub(crate) fn emit_method(&mut self, method: &FnDecl) {
         // (Migrated to Writer indent-aware API)
         // Caller (`emit_class_decl`) is at level 0; method signature
@@ -493,13 +553,27 @@ impl RustEmitter {
             self.emit_generic_params_with_clone_bound(&combined_method_generics);
         }
         self.w.push('(');
-        if needs_mut_self {
-            self.w.push_str("&mut self");
-        } else {
-            self.w.push_str("&self");
+        // Static methods have no implicit receiver in Rust either —
+        // skip the `&self` / `&mut self` slot so callers do
+        // `Foo::method(args)` directly.
+        let is_static = method
+            .modifiers
+            .iter()
+            .any(|m| matches!(m, juxc_ast::FnModifier::Static));
+        let mut first_param = true;
+        if !is_static {
+            if needs_mut_self {
+                self.w.push_str("&mut self");
+            } else {
+                self.w.push_str("&self");
+            }
+            first_param = false;
         }
         for (i, param) in method.params.iter().enumerate() {
-            self.w.push_str(", ");
+            if !first_param {
+                self.w.push_str(", ");
+            }
+            first_param = false;
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
             self.emit_type_as_rust(&lifted_param_tys[i]);
@@ -520,12 +594,16 @@ impl RustEmitter {
         // `emit_fn_body_at` sees the writer at the body depth.
         self.w.indent_inc();
         if let Some(body) = body {
-            self.this_alias = Some("self".to_string());
+            // Static methods have no `self` — leave `this_alias`
+            // unset so an accidental `this` in the body produces a
+            // visible Rust error (tycheck E0425 catches it first,
+            // but defense-in-depth).
+            if !is_static {
+                self.this_alias = Some("self".to_string());
+            }
             let mut muts = HashSet::new();
             collect_mutated_names(body, &mut muts, &self.user_mut_methods);
             self.mutated_in_fn = muts;
-            // Track the declared return type so `return "lit";` in
-            // a String-returning method picks up `.to_string()`.
             let saved = self.current_return_type.take();
             self.current_return_type = Some(method.return_type.clone());
             self.emit_fn_body_at(body, &method.return_type);

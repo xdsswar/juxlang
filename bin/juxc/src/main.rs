@@ -40,6 +40,13 @@ struct Cli {
     #[arg(long)]
     emit_dir: Option<PathBuf>,
 
+    /// Name of the produced binary. When omitted, defaults to the
+    /// input's file-stem (single file) or directory name (folder
+    /// input). The name flows into the emitted Cargo.toml and
+    /// drives the lookup of the resulting `.exe`.
+    #[arg(long)]
+    name: Option<String>,
+
     /// After lowering, run `cargo build` on the emitted crate.
     #[arg(long)]
     build: bool,
@@ -112,7 +119,17 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
         .emit_dir
         .unwrap_or_else(|| default_emit_dir(&files[0]));
 
-    let artifact = juxc_driver::build(&crate_, &emit_dir)?;
+    // Decide the produced binary's name. `--name` wins. Otherwise:
+    // - For a single source `foo.jux`, use `foo`.
+    // - For a directory input `showcase/`, use `showcase`.
+    // - Multi-file workspace fed individually: fall back to the
+    //   first file's stem.
+    let crate_name = cli
+        .name
+        .clone()
+        .unwrap_or_else(|| default_crate_name(&cli.inputs, &files[0]));
+
+    let artifact = juxc_driver::build(&crate_, &emit_dir, &crate_name)?;
     eprintln!("juxc: built {}", artifact.binary_path.display());
 
     if cli.run {
@@ -184,6 +201,49 @@ fn walk_dir_for_jux(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Pick a default crate name from the user's input paths.
+///
+/// Rule:
+/// - If the user passed a single argument that is a directory,
+///   use the directory's name (e.g. `examples/showcase` → `showcase`).
+/// - Otherwise, use the first source file's stem
+///   (e.g. `app.jux` → `app`).
+///
+/// The result is sanitized: invalid Cargo-name characters are
+/// replaced with `_`, and a leading digit is prefixed with `_`.
+/// Empty results fall back to the legacy `"jux_emitted"`.
+fn default_crate_name(inputs: &[PathBuf], first_file: &Path) -> String {
+    let raw = if inputs.len() == 1 && inputs[0].is_dir() {
+        inputs[0]
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+    } else {
+        first_file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+    };
+    let raw = raw.unwrap_or_default();
+    let mut out: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if out.is_empty() {
+        return "jux_emitted".to_string();
+    }
+    if out.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+        out.insert(0, '_');
+    }
+    out
 }
 
 /// Default emit directory: `<input parent>/target/.rust-build/`.

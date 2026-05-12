@@ -631,6 +631,20 @@ impl RustEmitter {
             TopLevelDecl::Const(d) => d.span,
         };
         self.emit_source_marker(span);
+        // Pre-decl Rust attribute emission for built-in
+        // annotations (`@Deprecated`, `@Cfg`). User-defined
+        // annotations are still Phase-2 work.
+        let anns: &[juxc_ast::Annotation] = match item {
+            TopLevelDecl::Function(d) => &d.annotations,
+            TopLevelDecl::Class(d) => &d.annotations,
+            TopLevelDecl::Enum(d) => &d.annotations,
+            TopLevelDecl::Record(d) => &d.annotations,
+            TopLevelDecl::Interface(d) => &d.annotations,
+            TopLevelDecl::TypeAlias(d) => &d.annotations,
+            TopLevelDecl::Const(d) => &d.annotations,
+        };
+        let anns_owned: Vec<juxc_ast::Annotation> = anns.to_vec();
+        self.emit_annotation_attrs(&anns_owned);
         match item {
             TopLevelDecl::Function(fn_decl) => self.emit_fn_decl(fn_decl),
             TopLevelDecl::Class(class_decl) => self.emit_class_decl(class_decl),
@@ -764,7 +778,7 @@ fn render_qualified(name: &QualifiedName) -> Option<String> {
 /// declaration, cargo refuses to build it ("current package believes
 /// it's in a workspace when it's not"). The empty table opts the emitted
 /// crate out of any enclosing workspace.
-fn cargo_toml_for(name: &str) -> String {
+pub fn cargo_toml_for(name: &str) -> String {
     format!(
         "[package]\n\
          name = \"{name}\"\n\

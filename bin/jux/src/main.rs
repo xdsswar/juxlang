@@ -167,7 +167,15 @@ fn run_single_file(
             // Caller-provided emit dir wins; otherwise fall back to
             // `<input parent>/target/.rust-build/`, matching juxc's default.
             let emit_dir = emit_dir_override.unwrap_or_else(|| default_emit_dir(input));
-            let artifact = juxc_driver::build(&crate_, &emit_dir)?;
+            // The `jux` driver tool always uses the legacy name —
+            // `jux.toml`-driven naming is the proper Phase-2 home
+            // for this knob. `juxc` itself exposes a `--name`
+            // flag for one-off binary-name overrides.
+            let artifact = juxc_driver::build(
+                &crate_,
+                &emit_dir,
+                juxc_driver::DEFAULT_CRATE_NAME,
+            )?;
             eprintln!("jux: built {}", artifact.binary_path.display());
 
             if matches!(action, Action::Run) {

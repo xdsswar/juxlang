@@ -59,6 +59,8 @@ pub enum TopLevelDecl {
 /// echo it, but downstream semantics treat them identically.
 #[derive(Debug, Clone)]
 pub struct ConstDecl {
+    /// Annotations attached to this constant.
+    pub annotations: Vec<Annotation>,
     /// Source visibility.
     pub visibility: Visibility,
     /// `true` if the user wrote `final`; `false` if they wrote
@@ -77,6 +79,40 @@ pub struct ConstDecl {
     pub span: Span,
 }
 
+/// A single annotation occurrence — `@Name`, `@Name(args)`, or
+/// `@Pkg.Name(args)`. Per grammar §A.2.3.
+///
+/// Stored on the declarations the spec says it applies to. The
+/// resolved interpretation lives elsewhere:
+/// - `@Override` is verified at tycheck time.
+/// - `@Deprecated` lowers to Rust `#[deprecated]`.
+/// - `@Cfg(...)` lowers to Rust `#[cfg(...)]` for conditional
+///   compilation.
+/// - User-defined annotations (`annotation Foo { … }` declarations)
+///   are not yet wired — they parse but produce no semantic effect.
+#[derive(Debug, Clone)]
+pub struct Annotation {
+    /// Dotted name, e.g. `Override`, `Deprecated`, `foo.bar.Trace`.
+    pub name: QualifiedName,
+    /// Optional argument list. Empty for the bare `@Name` form
+    /// AND for `@Name()` — the two are indistinguishable here
+    /// since arglists are sugar over positional defaults.
+    pub args: Vec<AnnotationArg>,
+    /// Span of the whole `@…` form including the `@`.
+    pub span: Span,
+}
+
+/// One entry in an annotation's argument list. Either a positional
+/// expression (`@Cfg(linux)`) or a named binding
+/// (`@Extern(lib = "m")`).
+#[derive(Debug, Clone)]
+pub enum AnnotationArg {
+    /// `expr` — positional argument.
+    Positional(Expr),
+    /// `name = expr` — named argument.
+    Named { name: Ident, value: Expr },
+}
+
 /// `type-alias` per grammar §A.2.4:
 /// ```text
 /// type-alias = 'type' identifier generic-params? '=' type ';'
@@ -90,6 +126,8 @@ pub struct ConstDecl {
 /// the alias's params through the substituted target.
 #[derive(Debug, Clone)]
 pub struct TypeAliasDecl {
+    /// Annotations attached to this alias.
+    pub annotations: Vec<Annotation>,
     /// Source visibility — `public` / `internal` / etc.
     pub visibility: Visibility,
     /// Alias name (PascalCase by convention, not enforced).
@@ -113,6 +151,8 @@ pub struct TypeAliasDecl {
 /// - No `extends` between interfaces (`interface B extends A`).
 #[derive(Debug, Clone)]
 pub struct InterfaceDecl {
+    /// Annotations attached to this interface.
+    pub annotations: Vec<Annotation>,
     /// `public` / `private` / `internal` / `protected` / package-private.
     pub visibility: Visibility,
     /// Interface name.
@@ -139,6 +179,8 @@ pub struct InterfaceDecl {
 ///   `Eq` are deferred because `f32`/`f64` payloads break them.
 #[derive(Debug, Clone)]
 pub struct RecordDecl {
+    /// Annotations attached to this record.
+    pub annotations: Vec<Annotation>,
     /// `public` / `private` / `internal` / `protected` / package-private.
     pub visibility: Visibility,
     /// Record name — used as the type and as the constructor target.
@@ -193,6 +235,8 @@ pub struct RecordComponent {
 /// - Auto-derived helpers (`name()`, `ordinal()`, `values()`, …) deferred.
 #[derive(Debug, Clone)]
 pub struct EnumDecl {
+    /// Annotations attached to this enum.
+    pub annotations: Vec<Annotation>,
     /// Enum visibility.
     pub visibility: Visibility,
     /// The enum's name (used as the type and as the variant qualifier).
@@ -255,6 +299,9 @@ pub struct EnumPayload {
 /// Everything else from §7.3 lands in later turns.
 #[derive(Debug, Clone)]
 pub struct ClassDecl {
+    /// Source-order annotation list — `@Deprecated`, `@Cfg(...)`,
+    /// user-defined, etc. Empty for un-annotated classes.
+    pub annotations: Vec<Annotation>,
     /// `public` / `private` / `internal` / `protected` / package-private.
     pub visibility: Visibility,
     /// True when the class is declared with the `abstract` modifier.
@@ -431,8 +478,21 @@ pub struct TypeParam {
 /// No `static` / `const` / `final` / `volatile` / `weak` modifiers yet.
 #[derive(Debug, Clone)]
 pub struct FieldDecl {
+    /// Annotations attached to this field.
+    pub annotations: Vec<Annotation>,
     /// Field visibility.
     pub visibility: Visibility,
+    /// True if the field is declared `static`. Static fields live on
+    /// the class, not on instances — `Foo.X` reads a static, no
+    /// receiver involved. Backend emits as `pub const` (when also
+    /// `final`/`const`) or `pub static` (otherwise).
+    pub is_static: bool,
+    /// True if the field is declared `final` (or `const` — synonyms
+    /// per spec §A.2.2). For instance fields this marks
+    /// non-reassignability (informational today). For static fields
+    /// it picks the `pub const` over `pub static` shape in the
+    /// emitted Rust.
+    pub is_final: bool,
     /// Declared type.
     pub ty: TypeRef,
     /// Field name.
@@ -451,6 +511,8 @@ pub struct FieldDecl {
 /// other modifiers in Turn 1.
 #[derive(Debug, Clone)]
 pub struct ConstructorDecl {
+    /// Annotations attached to this constructor.
+    pub annotations: Vec<Annotation>,
     /// Constructor visibility.
     pub visibility: Visibility,
     /// Formal parameters.
@@ -470,6 +532,9 @@ pub struct ConstructorDecl {
 /// ```
 #[derive(Debug, Clone)]
 pub struct FnDecl {
+    /// Source-order annotation list. `@Override` is checked at
+    /// tycheck time; `@Deprecated` lowers to Rust `#[deprecated]`.
+    pub annotations: Vec<Annotation>,
     /// `public`/`internal`/`protected`/`private`/package-private.
     pub visibility: Visibility,
     /// `static`, `final`, `abstract`, `async`, `native`, `unsafe`, `override`.

@@ -1,0 +1,32 @@
+// Higher-order function types per spec §A.2.7:
+//   function-type = '(' type-list? ')' ( 'async' )? ( 'throws' type-list )? '->' type
+//
+// Lowers to Rust `std::rc::Rc<dyn Fn(A, B) -> R>` — Rc rather than
+// Box so the type is `Clone` (matters when stored in
+// `#[derive(Clone)]` classes). Lambdas auto-wrap in `Rc::new(...)`
+// at the call site, and Rust's `CoerceUnsized` lets
+// `Rc<{closure}>` coerce to `Rc<dyn Fn>` transparently.
+
+public int apply(int x, (int) -> int f) {
+    return f(x);
+}
+
+public int reduce(int seed, (int, int) -> int op) {
+    return op(seed, 10);
+}
+
+public (int) -> int adder(int n) {
+    return x -> x + n;
+}
+
+public void main() {
+    // Pass a lambda to a function-typed parameter.
+    print(apply(5, x -> x * x));
+
+    // Multi-arg function-type.
+    print(reduce(3, (a, b) -> a + b));
+
+    // Return a closure that captures `n`.
+    var add5 = adder(5);
+    print(add5(10));
+}

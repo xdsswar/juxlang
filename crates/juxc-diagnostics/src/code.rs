@@ -101,6 +101,15 @@ pub enum Code {
     /// other than an interface. `implements` requires interface
     /// names.
     E0424_ImplementsNotAnInterface,
+    /// E0425 — `this` referenced inside a `static` method or
+    /// `static` field initializer. Static members aren't tied to
+    /// an instance, so there's no `this` to refer to.
+    E0425_ThisInStaticContext,
+    /// E0426 — `@Override` annotation on a method that doesn't
+    /// actually override an ancestor's method. Mirrors Java's
+    /// `error: method does not override a method from its
+    /// superclass` (which is the whole point of `@Override`).
+    E0426_OverrideMissing,
 
     // ---- Operators / Auto-derivation (E0900–E0999) ----
     /// E0930 — Conflicting operator declarations. Per
@@ -158,6 +167,8 @@ impl Code {
             Code::E0422_SealedClassNotPermitted  => "E0422",
             Code::E0423_ExtendsNotAClass         => "E0423",
             Code::E0424_ImplementsNotAnInterface => "E0424",
+            Code::E0425_ThisInStaticContext      => "E0425",
+            Code::E0426_OverrideMissing          => "E0426",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",

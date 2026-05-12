@@ -1,0 +1,33 @@
+// Utility static class in its own package. Consumed across the
+// workspace via `import showcase.math.MathUtil;`.
+
+package showcase.math;
+
+public class MathUtil {
+    // Static `final` fields → `pub const NAME: T = …;` in the
+    // emitted Rust.
+    public static final double PI = 3.14159;
+    public static final int MAX_INT = 2147483647;
+
+    // Static methods → `pub fn name(...)` without `&self`.
+    public static int abs(int x) {
+        if (x < 0) {
+            return -x;
+        }
+        return x;
+    }
+
+    public static int max(int a, int b) {
+        if (a > b) {
+            return a;
+        }
+        return b;
+    }
+
+    public static int min(int a, int b) {
+        if (a < b) {
+            return a;
+        }
+        return b;
+    }
+}

@@ -30,8 +30,37 @@ pub struct TypeRef {
     /// Array shape — `Some` for array types (`T[N]` or `T[]`), `None`
     /// for plain (scalar) types. Multi-dimensional support is deferred.
     pub array_shape: Option<ArrayShape>,
+    /// Function-type shape — `Some` when the user wrote
+    /// `(A, B) -> R` (or `() async -> R`, `(A) throws E -> R`) per
+    /// grammar §A.2.7. When set, `name`/`generic_args` are
+    /// conventionally empty; consumers check `fn_shape` FIRST and
+    /// short-circuit before treating this as a named type.
+    ///
+    /// Boxed to keep `TypeRef`'s memory footprint small in the
+    /// common (non-function) case.
+    pub fn_shape: Option<Box<FnTypeShape>>,
     /// Span of the whole reference.
     pub span: Span,
+}
+
+/// `(A, B) async? throws? -> R` — function-type per grammar §A.2.7.
+///
+/// Phase-1 caveats:
+/// - `throws` clauses parse but are recorded only — tycheck doesn't
+///   enforce them yet.
+/// - `async` marks the function as suspending; runtime story for
+///   async is still ahead, so for now it's informational.
+#[derive(Debug, Clone)]
+pub struct FnTypeShape {
+    /// Parameter types in left-to-right order.
+    pub params: Vec<TypeRef>,
+    /// Return type. `void` is its own bare-named `TypeRef`.
+    pub return_type: TypeRef,
+    /// True if the user wrote `async` before the `->`.
+    pub is_async: bool,
+    /// Names listed in the `throws` clause, in source order.
+    /// Empty when the user didn't write `throws`.
+    pub throws: Vec<TypeRef>,
 }
 
 /// One position inside a generic argument list — either a fully-named

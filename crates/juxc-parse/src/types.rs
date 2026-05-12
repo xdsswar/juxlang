@@ -3,8 +3,8 @@
 //! Split out from `lib.rs` during the action-focused module
 //! reorganization. Behavior is identical to the original methods.
 
-use juxc_ast::{ArrayShape, QualifiedName, TypeRef};
-use juxc_lex::TokenKind;
+use juxc_ast::{ArrayShape, FnTypeShape, QualifiedName, TypeRef};
+use juxc_lex::{Keyword, TokenKind};
 use juxc_source::Span;
 
 use crate::Parser;
@@ -17,6 +17,19 @@ impl<'a> Parser<'a> {
     /// Generics, pointers, function types, tuple types are still future
     /// extensions.
     pub(crate) fn parse_type_ref(&mut self) -> Option<TypeRef> {
+        // Function-type shape `(A, B) async? throws? -> R` per
+        // grammar §A.2.7. Detected by the `(` lead. We commit to
+        // the function-type branch only after the closing `)` so
+        // tuple-type misreads (eventually) stay open. The
+        // disambiguation rule (§A.2.7 #4) — value-position
+        // `(T) -> e` is always a lambda — is automatically
+        // respected because `parse_type_ref` is only called from
+        // type positions.
+        if self.at(&TokenKind::LParen) {
+            if let Some(fn_ty) = self.try_parse_function_type() {
+                return Some(fn_ty);
+            }
+        }
         let qname = self.parse_qualified_name();
         if qname.segments.is_empty() {
             return None;
@@ -53,7 +66,109 @@ impl<'a> Parser<'a> {
             generic_args,
             nullable,
             array_shape,
+            fn_shape: None,
             span: qname.span.join(end),
+        })
+    }
+
+    /// Attempt to parse a `function-type` per grammar §A.2.7:
+    /// ```text
+    /// function-type = '(' type-list? ')' ( 'async' )? ( 'throws' type-list )? '->' type
+    /// ```
+    ///
+    /// Returns `Some(TypeRef)` when the input starts with `(` AND
+    /// the closing `)` is followed (modulo `async`/`throws`) by
+    /// `->`. Returns `None` otherwise so the caller can fall
+    /// through to the named-type path. The scan uses a parenthesis
+    /// counter so nested types (`((int) -> int) -> bool`) work.
+    fn try_parse_function_type(&mut self) -> Option<TypeRef> {
+        // Lookahead: find the matched `)` and check the tail.
+        let mut i = self.pos + 1; // past the opening `(`
+        let mut depth = 1usize;
+        while depth > 0 {
+            match self.tokens.get(i).map(|t| &t.kind) {
+                Some(TokenKind::LParen) => depth += 1,
+                Some(TokenKind::RParen) => depth -= 1,
+                Some(TokenKind::Eof) | None => return None,
+                _ => {}
+            }
+            i += 1;
+        }
+        // `i` now points just past the matched `)`. Skip optional
+        // `async` and `throws` prefix to find `->`.
+        let mut j = i;
+        if matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Kw(Keyword::Async))) {
+            j += 1;
+        }
+        if matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Kw(Keyword::Throws))) {
+            // Skip a comma-separated list of names — not authoritative,
+            // just enough to peek past it.
+            j += 1;
+            loop {
+                if !matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
+                    return None;
+                }
+                j += 1;
+                if !matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Comma)) {
+                    break;
+                }
+                j += 1;
+            }
+        }
+        if !matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Arrow)) {
+            return None;
+        }
+        // Commit — consume the actual tokens.
+        let start = self.peek_span();
+        self.expect(&TokenKind::LParen, "'(' to start function-type params");
+        let mut params = Vec::new();
+        if !self.at(&TokenKind::RParen) {
+            loop {
+                let ty = self.parse_type_ref()?;
+                params.push(ty);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect(&TokenKind::RParen, "')' to close function-type params");
+        let is_async = self.eat_kw(Keyword::Async);
+        let throws = if self.eat_kw(Keyword::Throws) {
+            let mut tys = Vec::new();
+            loop {
+                let Some(t) = self.parse_type_ref() else { break };
+                tys.push(t);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            tys
+        } else {
+            Vec::new()
+        };
+        self.expect(&TokenKind::Arrow, "'->' in function type");
+        let return_type = self.parse_type_ref()?;
+        let end = self.last_consumed_span();
+        // The TypeRef shape carries the function-type info in
+        // `fn_shape`; `name` is a synthetic `__fn` sentinel so
+        // pre-fn_shape consumers that read `name` get a stable
+        // (non-matching-anything) value rather than empty.
+        let sentinel = QualifiedName {
+            segments: Vec::new(),
+            span: Span::DUMMY,
+        };
+        Some(TypeRef {
+            name: sentinel,
+            generic_args: Vec::new(),
+            nullable: false,
+            array_shape: None,
+            fn_shape: Some(Box::new(FnTypeShape {
+                params,
+                return_type,
+                is_async,
+                throws,
+            })),
+            span: start.join(end),
         })
     }
 

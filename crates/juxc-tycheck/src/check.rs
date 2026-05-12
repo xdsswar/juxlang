@@ -151,6 +151,10 @@ pub(crate) struct Checker<'a> {
     /// dummy span. The backend's lookup site treats a missing entry as
     /// "fall back to the conservative behavior."
     pub(crate) expr_types: HashMap<Span, Ty>,
+    /// True while we're walking the body of a `static` method (or
+    /// a `static` field initializer once those land). Drives the
+    /// `E0425_ThisInStaticContext` diagnostic in `check_expr`.
+    pub(crate) in_static: bool,
 }
 
 impl<'a> Checker<'a> {
@@ -163,6 +167,7 @@ impl<'a> Checker<'a> {
             diagnostics,
             current_return: None,
             expr_types: HashMap::new(),
+            in_static: false,
         }
     }
 
@@ -366,8 +371,19 @@ impl<'a> Checker<'a> {
     /// skipped.
     fn check_method(&mut self, method: &FnDecl, this_ty: &Ty) {
         let Some(body) = &method.body else { return };
+        let is_static = method
+            .modifiers
+            .iter()
+            .any(|m| matches!(m, juxc_ast::FnModifier::Static));
         self.env.push_scope();
-        self.env.declare("this", this_ty.clone());
+        // Static methods have no implicit receiver — skip the
+        // `this` binding and flip the `in_static` flag so any
+        // `this` inside the body fires `E0425_ThisInStaticContext`.
+        if !is_static {
+            self.env.declare("this", this_ty.clone());
+        }
+        let saved_static = self.in_static;
+        self.in_static = is_static;
         // Method-level generic params extend the class-level set.
         for tp in &method.generic_params {
             self.env.add_generic_param(&tp.name.text);
@@ -384,6 +400,7 @@ impl<'a> Checker<'a> {
         ));
         self.check_block(body);
         self.current_return = saved;
+        self.in_static = saved_static;
         // Method-local generic params would also clear here, but the
         // class's params are still active until check_class finishes.
         // We can't surgically remove just the method's — for Turn 1 we
@@ -722,7 +739,20 @@ impl<'a> Checker<'a> {
         // recorded when their containing check_expr recurses into them.
         let _ = self.infer_and_record(expr);
         match expr {
-            Expr::Literal(_) | Expr::Path(_) | Expr::This(_) => {}
+            Expr::Literal(_) | Expr::Path(_) => {}
+            // `this` inside a `static` method has no receiver to
+            // refer to — fire E0425 once per occurrence.
+            Expr::This(span) => {
+                if self.in_static {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0425_ThisInStaticContext,
+                            "`this` cannot be used inside a `static` method (no receiver)",
+                        )
+                        .with_span(*span),
+                    );
+                }
+            }
 
             Expr::Field(f) => {
                 self.check_expr(&f.object);
@@ -824,6 +854,35 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+            // Lambda — declare params into a fresh scope, then walk
+            // the body for the usual diagnostics. Untyped params
+            // declare as `Ty::Unknown` so internal type-mismatches
+            // stay quiet at the Jux level (Rust will catch any
+            // real shape mismatch on the emitted closure).
+            //
+            // We clear `current_return` while walking the body so a
+            // `return x;` inside the lambda isn't compared against
+            // the enclosing function's return type — they're
+            // unrelated. The lambda's own return type is currently
+            // `Unknown` (Phase 1 doesn't infer it), so suppressing
+            // the check is the right call.
+            Expr::Lambda(l) => {
+                self.env.push_scope();
+                for p in &l.params {
+                    let ty = match &p.ty {
+                        Some(t) => ty_from_ref(t, &self.env, self.symbols),
+                        None => Ty::Unknown,
+                    };
+                    self.env.declare(&p.name.text, ty);
+                }
+                let saved_return = self.current_return.take();
+                match &l.body {
+                    juxc_ast::LambdaBody::Expr(e) => self.check_expr(e),
+                    juxc_ast::LambdaBody::Block(b) => self.check_block(b),
+                }
+                self.current_return = saved_return;
+                self.env.pop_scope();
+            }
         }
     }
 
@@ -922,6 +981,58 @@ impl<'a> Checker<'a> {
     }
 
     fn check_field_access(&mut self, f: &FieldExpr) {
+        // `ClassName.STATIC_FIELD` — recognize the static-access
+        // shape before treating the receiver as a value. Visibility
+        // applies the same as for instance fields; reading an
+        // instance field via `ClassName.x` fires a clean diagnostic
+        // so the user isn't told "no field `x`" when there IS one
+        // but it lives on instances.
+        if let Expr::Path(qn) = f.object.as_ref() {
+            if let Some(class_fqn) = crate::infer::path_resolves_to_class(
+                qn,
+                &self.env,
+                self.symbols,
+            ) {
+                let field_name = f.field.text.as_str();
+                if let Some(field) = self
+                    .symbols
+                    .classes
+                    .get(&class_fqn)
+                    .and_then(|c| c.fields.get(field_name))
+                {
+                    if field.is_static {
+                        let vis = field.visibility;
+                        self.check_visibility(
+                            vis,
+                            &class_fqn,
+                            field_name,
+                            "static field",
+                            f.span,
+                        );
+                    } else {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0412_UnresolvedField,
+                                format!(
+                                    "field `{field_name}` on `{class_fqn}` is an instance field; access it through a receiver, not the class name",
+                                ),
+                            )
+                            .with_span(f.span),
+                        );
+                    }
+                    return;
+                }
+                // No such field — surface E0412 against the class.
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0412_UnresolvedField,
+                        format!("no static field `{field_name}` on class `{class_fqn}`"),
+                    )
+                    .with_span(f.span),
+                );
+                return;
+            }
+        }
         let receiver_ty = infer_expr(&f.object, &self.env, self.symbols);
         let field_name = f.field.text.as_str();
 
@@ -1070,10 +1181,78 @@ impl<'a> Checker<'a> {
             }
 
             Expr::Field(field) => {
+                let method_name = field.field.text.as_str();
+                // `ClassName.staticMethod(args)` — receiver is a
+                // type name; resolve and check as a static call
+                // before treating the object as a value. Mirrors
+                // the static-field path in `check_field_access`.
+                if let Expr::Path(qn) = field.object.as_ref() {
+                    if let Some(class_fqn) = crate::infer::path_resolves_to_class(
+                        qn,
+                        &self.env,
+                        self.symbols,
+                    ) {
+                        let class_method = self
+                            .symbols
+                            .classes
+                            .get(&class_fqn)
+                            .and_then(|c| c.methods.get(method_name))
+                            .cloned();
+                        if let Some(method) = class_method {
+                            if method.is_static {
+                                let vis = method.visibility;
+                                self.check_visibility(
+                                    vis,
+                                    &class_fqn,
+                                    method_name,
+                                    "static method",
+                                    c.span,
+                                );
+                                self.check_call_args(
+                                    method_name,
+                                    &method.params,
+                                    &c.args,
+                                    c.span,
+                                    Some(&class_fqn),
+                                    &[],
+                                    &[],
+                                );
+                                return;
+                            } else {
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        code::Code::E0413_UnresolvedMethod,
+                                        format!(
+                                            "method `{method_name}` on `{class_fqn}` is an instance method; call it on an instance, not on the class name",
+                                        ),
+                                    )
+                                    .with_span(c.span),
+                                );
+                                for arg in &c.args {
+                                    self.check_expr(arg);
+                                }
+                                return;
+                            }
+                        }
+                        // No such method on the class.
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0413_UnresolvedMethod,
+                                format!(
+                                    "no static method `{method_name}` on class `{class_fqn}`",
+                                ),
+                            )
+                            .with_span(c.span),
+                        );
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
+                }
                 // Walk the receiver sub-expression first.
                 self.check_expr(&field.object);
                 let receiver_ty = infer_expr(&field.object, &self.env, self.symbols);
-                let method_name = field.field.text.as_str();
                 // Built-in receivers: short-circuit.
                 if let Ty::Array { .. } = &receiver_ty {
                     if BUILTIN_ARRAY_METHODS.contains(&method_name) {
@@ -1671,6 +1850,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::This(s) => *s,
         Expr::NewObject(n) => n.span,
         Expr::Switch(s) => s.span,
+        Expr::Lambda(l) => l.span,
     }
 }
 
@@ -2558,6 +2738,63 @@ mod tests {
         assert!(
             d.iter().any(|d| d.code == code::Code::E0414_PrivateAccess),
             "expected E0414 on private ctor, got: {d:?}",
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // Static members (call/field resolution + this-in-static)
+    // ----------------------------------------------------------------
+
+    /// `Math.PI` and `Math.max(1, 2)` type-check cleanly.
+    #[test]
+    fn static_member_access_typechecks() {
+        let d = run(
+            r#"
+            public class Math {
+                public static final int X = 1;
+                public static int dbl(int n) { return n + n; }
+            }
+            public void main() {
+                print(Math.X);
+                print(Math.dbl(5));
+            }
+            "#,
+        );
+        assert!(d.is_empty(), "expected clean tycheck: {d:?}");
+    }
+
+    /// `this` inside a `static` method fires E0425.
+    #[test]
+    fn this_in_static_method_emits_e0425() {
+        let d = run(
+            r#"
+            public class C {
+                public int x;
+                public C() { this.x = 0; }
+                public static int f() { return this.x; }
+            }
+            public void main() { print(C.f()); }
+            "#,
+        );
+        assert!(
+            d.iter().any(|d| d.code == code::Code::E0425_ThisInStaticContext),
+            "expected E0425: {d:?}",
+        );
+    }
+
+    /// Reading an instance field through the class name (`C.x`)
+    /// fires a clear `E0412` with the "instance field" message.
+    #[test]
+    fn instance_field_via_classname_emits_e0412() {
+        let d = run(
+            r#"
+            public class C { public int x; public C() { this.x = 0; } }
+            public void main() { print(C.x); }
+            "#,
+        );
+        assert!(
+            d.iter().any(|d| d.code == code::Code::E0412_UnresolvedField),
+            "expected E0412: {d:?}",
         );
     }
 

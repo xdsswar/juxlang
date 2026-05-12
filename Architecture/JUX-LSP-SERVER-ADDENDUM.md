@@ -1,0 +1,228 @@
+# Jux Spec Addendum — Language Server (`juxc-lsp`)
+
+**Status:** Proposed insertion. Specifies the Jux Language Server: its crate layout, transport, dependency surface, capability matrix, re-analysis model, and the mapping from `juxc-diag` diagnostics to LSP `Diagnostic` objects. Companion to `JUX-EDITOR-TOOLING-ADDENDUM.md`, which covers the TextMate grammar and per-editor integration; this file covers the server itself.
+
+**Insertion points:**
+- New §L.1 ("Goals and Non-Goals")
+- New §L.2 ("Crate Layout")
+- New §L.3 ("Transport")
+- New §L.4 ("Dependencies")
+- New §L.5 ("Server Capabilities")
+- New §L.6 ("Re-analysis Model")
+- New §L.7 ("Diagnostic Mapping")
+- New §L.8 ("Position Encoding")
+- New §L.9 ("Implementation Phases")
+- New §L.10 ("Open Questions")
+
+---
+
+## Design Philosophy (Non-Normative)
+
+`juxc` is already a multi-crate Rust workspace (`juxc-lex`, `juxc-parse`, `juxc-ast`, `juxc-tycheck`, `juxc-diag`, …) with first-class diagnostics. The cheapest path to good editor support is therefore **to reuse the existing front end** behind an LSP shim, not to rebuild it inside an IDE plugin.
+
+Consequences:
+
+1. **One server, many editors.** The Language Server Protocol was designed for exactly this case. We commit to LSP as the primary semantic-tooling surface; native IDE plugins are scoped to thin launcher shells where the host editor cannot otherwise discover the server.
+2. **No duplication of the front end.** `juxc-lsp` MUST NOT contain its own parser, type checker, or symbol table. Every semantic answer comes from the same crates that drive the batch compiler. If a question cannot be answered by the existing crates, the right fix is to expose the API on the crate, not to re-implement it in the server.
+3. **Synchronous first, incremental later.** Phase 1 re-analyses on every edit at whole-file granularity. Incremental tycheck is a Phase 3 concern and is gated by demonstrated latency problems, not by speculation.
+
+What `juxc-lsp` explicitly **does not** do:
+
+- It does not invoke `rustc` or shell out to the lowering pass. Diagnostics come from `juxc-tycheck`, not from compile errors in emitted Rust. (Lowering-stage errors are a separate, deferred feature — see §L.10.)
+- It does not maintain its own on-disk index. Cross-file information is rebuilt from the in-memory `DashMap<Url, Document>` plus the project's `module.jux` graph.
+- It does not implement code formatting itself. `textDocument/formatting` delegates to the `juxc fmt` binary (see §L.5, phase 3).
+
+---
+
+## §L.1 — Goals and Non-Goals
+
+### Goals (Phase 1)
+
+| # | Capability                                                | LSP method                              |
+|---|-----------------------------------------------------------|------------------------------------------|
+| 1 | Real-time diagnostics (E0xxx codes from `juxc-tycheck`)   | `textDocument/publishDiagnostics`       |
+| 2 | Hover: type of expression under cursor                    | `textDocument/hover`                    |
+| 3 | Goto-definition / goto-declaration                        | `textDocument/definition`               |
+| 4 | Find references                                           | `textDocument/references`               |
+| 5 | Document symbols (outline view)                           | `textDocument/documentSymbol`           |
+| 6 | Basic completion (keywords, in-scope idents, members)     | `textDocument/completion`               |
+| 7 | Rename refactor (textual-aware; semantic in phase 3)      | `textDocument/rename`                   |
+| 8 | Semantic tokens (overrides TextMate coloring)             | `textDocument/semanticTokens`           |
+
+### Non-Goals (Phase 1)
+
+- Debug Adapter Protocol (DAP) support. Debugging is owned by the runtime/ABI addenda, not this server.
+- Notebook-document support (`notebookDocument/*` LSP methods).
+- Workspace symbol search (`workspace/symbol`) — needs a persistent index; deferred until indexing cost is measured.
+- Inline values, inlay hints, code lens — all phase 3 or later.
+
+---
+
+## §L.2 — Crate Layout
+
+```
+crates/
+├── juxc-lex/          # existing
+├── juxc-parse/        # existing
+├── juxc-ast/          # existing
+├── juxc-tycheck/      # existing
+├── juxc-diag/         # existing
+└── juxc-lsp/          # NEW — this addendum
+    ├── Cargo.toml
+    └── src/
+        ├── main.rs        # binary entry; wires up the tower-lsp Server
+        ├── server.rs      # LanguageServer impl
+        ├── doc.rs         # in-memory document store + dirty tracking
+        ├── analysis.rs    # invokes juxc-{lex,parse,tycheck} on a document
+        ├── diagnostics.rs # juxc-diag → lsp_types::Diagnostic mapping
+        ├── hover.rs       # textDocument/hover
+        ├── definition.rs  # textDocument/definition
+        ├── references.rs  # textDocument/references
+        ├── symbols.rs     # textDocument/documentSymbol
+        ├── completion.rs  # textDocument/completion
+        ├── rename.rs      # textDocument/rename
+        └── semtok.rs      # textDocument/semanticTokens
+```
+
+### Binary name
+
+The produced binary MUST be named `juxc-lsp` (no `.exe` distinction at the crate level; Cargo handles the platform suffix). Editors discover it via `$PATH` or via an explicit path in their server configuration.
+
+### Crate dependencies inside the workspace
+
+`juxc-lsp` depends on `juxc-lex`, `juxc-parse`, `juxc-ast`, `juxc-tycheck`, `juxc-diag`, and `juxc-source`. It MUST NOT add a new dependency on `juxc-codegen` or any lowering crate — those are batch-mode only.
+
+---
+
+## §L.3 — Transport
+
+`juxc-lsp` MUST speak LSP over **stdio** by default. JSON-RPC messages are framed with the standard `Content-Length:` headers per the LSP 3.17 specification.
+
+A `--socket <port>` flag MAY be added for editors that prefer TCP (primarily for debugging the server itself with an inspector attached). No HTTP, no WebSocket transport is supported in Phase 1.
+
+The server MUST NOT log to stdout. All logging goes to stderr or to the LSP `window/logMessage` channel — writing to stdout corrupts the JSON-RPC stream.
+
+---
+
+## §L.4 — Dependencies
+
+Recommended crates:
+
+| Crate          | Purpose                                                    |
+|----------------|------------------------------------------------------------|
+| `tower-lsp`    | Async LSP scaffolding — framing, lifecycle, request routing |
+| `tokio`        | Async runtime (implied by `tower-lsp`)                      |
+| `dashmap`      | Concurrent `Url → Document` store                          |
+| `ropey`        | Rope structure for fast incremental edits to text buffers   |
+| `lsp-types`    | LSP type definitions                                       |
+| `serde`        | Already in the workspace                                   |
+| `serde_json`   | Already in the workspace                                   |
+
+Alternative scaffolding (`async-lsp`, `lsp-server` from `rust-analyzer`) is acceptable if a future contributor presents a clear advantage; `tower-lsp` is the default because it is the most-documented choice in 2026.
+
+### Hard rule
+
+`juxc-lsp` MUST NOT depend on `rustc`, `rustc_*` crates, or any LLVM bindings. All semantic information comes from the Jux front-end crates.
+
+---
+
+## §L.5 — Server Capabilities
+
+The server advertises the following in its `InitializeResult.capabilities`. The "Phase" column refers to §L.9.
+
+| Capability                       | LSP method                              | Phase |
+|----------------------------------|------------------------------------------|-------|
+| `textDocumentSync` (incremental) | `textDocument/didOpen` / `…/didChange` | 1     |
+| `diagnosticProvider`             | `textDocument/publishDiagnostics`       | 1     |
+| `hoverProvider`                  | `textDocument/hover`                    | 1     |
+| `definitionProvider`             | `textDocument/definition`               | 1     |
+| `documentSymbolProvider`         | `textDocument/documentSymbol`           | 1     |
+| `referencesProvider`             | `textDocument/references`               | 2     |
+| `completionProvider`             | `textDocument/completion`               | 2     |
+| `semanticTokensProvider`         | `textDocument/semanticTokens`           | 2     |
+| `renameProvider`                 | `textDocument/rename`                   | 3     |
+| `documentFormattingProvider`     | `textDocument/formatting`               | 3     |
+| `inlayHintProvider`              | `textDocument/inlayHint`                | 3     |
+
+### `textDocumentSync` — incremental
+
+The server requests **incremental** sync (`TextDocumentSyncKind::Incremental`). Documents are stored as `ropey::Rope`; `didChange` edits are applied to the rope in O(log n).
+
+### `semanticTokens` precedence
+
+When `semanticTokens` is enabled and returns a non-empty token map for a document, the editor's LSP client overrides the TextMate-grammar classification for that range. This is the channel through which we resolve "is this identifier a type, a value, or a function?" — questions TextMate cannot answer.
+
+### `completion` triggers
+
+The `CompletionOptions.triggerCharacters` MUST include at least `.`, `:`, `@`. `.` triggers member completion, `:` triggers `::` path completion, `@` triggers annotation-name completion.
+
+---
+
+## §L.6 — Re-analysis Model
+
+### On `didOpen`
+
+Full lex → parse → tycheck pass on the opened document. Cache the resulting AST and tycheck context keyed by `Url`. Publish diagnostics.
+
+### On `didChange`
+
+1. Apply the edit to the document's `Rope`.
+2. Invalidate the cached AST + tycheck context for this document.
+3. Invalidate caches for **every document that transitively imports this one** (per the `package`/`import` graph built from `module.jux`).
+4. Re-run analysis on the changed document only. Diagnostics for transitively-affected documents are recomputed lazily — when the editor next requests them or when the document is opened.
+
+### On `didSave`
+
+No special behavior in Phase 1. (Phase 3 may use save as a trigger for slower work like cross-module rename validation.)
+
+### Whole-workspace re-tycheck
+
+Out of scope for Phase 1. The reasoning: typical Jux projects are small (Phase 1 ships before a package ecosystem), and the cost of caching invalidation logic exceeds the cost of recomputing on demand. Revisit if workspaces over 1,000 files become common.
+
+---
+
+## §L.7 — Diagnostic Mapping
+
+`juxc-diag` already produces structured diagnostics. The mapping to `lsp_types::Diagnostic` is one-to-one:
+
+| `juxc-diag` field     | LSP `Diagnostic` field    | Notes                                                            |
+|-----------------------|---------------------------|------------------------------------------------------------------|
+| `code` (e.g. `E0420`) | `code` (`String` variant) | Surfaced in the editor as a clickable code linking to docs       |
+| `severity`            | `severity`                | `Error` / `Warning` / `Information` / `Hint`                     |
+| `span.start..end`     | `range`                   | Translated via §L.8                                              |
+| `message`             | `message`                 | Primary diagnostic text                                          |
+| `notes` / `labels`    | `relatedInformation`      | Each note becomes a `DiagnosticRelatedInformation` entry         |
+| (constant)            | `source: "juxc"`          | Lets editors group Jux diagnostics distinctly from other tooling |
+
+A future `codeDescription.href` field MAY be populated once the diagnostic catalog has stable URLs (e.g. `https://juxlang.dev/diagnostics/E0420`).
+
+---
+
+## §L.8 — Position Encoding
+
+LSP positions are **UTF-16 code units** by default, not byte offsets. `juxc-source::Span` stores **UTF-8 byte offsets**. The server MUST translate between the two on every position-bearing message.
+
+The server SHOULD advertise `positionEncodings: ["utf-8", "utf-16"]` in its `ServerCapabilities` (LSP 3.17+) and prefer UTF-8 if the client accepts it. Most modern editors (VS Code 1.81+, recent IntelliJ, Zed, Helix) negotiate UTF-8. The UTF-16 fallback path is required for compatibility with editors that have not yet adopted the negotiation.
+
+Translation helpers live in `juxc-source` (extend the existing crate, do not duplicate logic in `juxc-lsp`).
+
+---
+
+## §L.9 — Implementation Phases
+
+| Phase | Deliverable                                                              | Editors unlocked end-to-end                     |
+|-------|---------------------------------------------------------------------------|-------------------------------------------------|
+| 1     | `crates/juxc-lsp` with capabilities marked Phase 1 in §L.5                | VS Code, IntelliJ Ultimate, Zed, Neovim, Helix |
+| 2     | Capabilities marked Phase 2: references, completion, semanticTokens       | Same editors, richer experience                 |
+| 3     | Capabilities marked Phase 3: rename, formatting, inlayHints               | Refactoring-grade IDE experience                |
+| 4     | Packaged extensions (VS Code Marketplace + JetBrains plugin) that ship + launch the server | One-click install on the two dominant IDEs |
+| 5     | Incremental tycheck (if Phase 1 latency proves inadequate)                | No new features; latency improvement only       |
+
+---
+
+## §L.10 — Open Questions
+
+- **Lowering-stage diagnostics.** `juxc` can produce errors during AST-to-Rust lowering (e.g. a feature reaches the lowering pass that tycheck didn't reject because the constraint was post-tycheck). Should the LSP run the lowering pass too? Probably yes for paranoia, but the latency cost is unknown. Deferred until lowering passes are stable enough to benchmark.
+- **WASM build.** Compiling `juxc-lsp` to `wasm32-unknown-unknown` for an in-browser Jux playground (Monaco + a WASM LSP) is plausible — the front end has no `std::fs` requirement that would forbid it. Scope-deferred to a separate playground addendum.
+- **Workspace symbols.** `workspace/symbol` requires an index across all `.jux` files in the project, not just the open document set. The right substrate is probably a `juxc-index` crate (new), but the cost/value tradeoff has not been measured. Deferred.
+- **Multi-root workspaces.** LSP supports multiple workspace folders. The Jux module/package system (`JUX-BUILD-SYSTEM-ADDENDUM.md`) currently assumes a single `jux.toml` at the workspace root. Reconcile before phase 4.

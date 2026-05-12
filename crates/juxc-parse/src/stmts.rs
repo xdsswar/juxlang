@@ -379,6 +379,7 @@ impl<'a> Parser<'a> {
             generic_args: lhs_ty.generic_args.clone(),
             nullable: lhs_ty.nullable,
             array_shape: None,
+            fn_shape: lhs_ty.fn_shape.clone(),
             span: lhs_ty.span,
         };
         let fixed = matches!(lhs_ty.array_shape, Some(ArrayShape::Fixed(_)));

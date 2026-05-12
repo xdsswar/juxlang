@@ -262,8 +262,20 @@ pub struct ClassSig {
 pub struct FieldSig {
     /// Field visibility.
     pub visibility: Visibility,
+    /// True if the field is declared `static` (class-scoped, not
+    /// per-instance). Drives the `ClassName.FIELD` vs `obj.field`
+    /// resolution split.
+    pub is_static: bool,
+    /// True if the field is declared `final` / `const`. For static
+    /// fields, picks `pub const` over `pub static` in the emitted
+    /// Rust.
+    pub is_final: bool,
     /// Declared type as written in source.
     pub ty: TypeRef,
+    /// Default initializer expression (`= expr`) if present. Lifted
+    /// onto the sig so the backend can reach it when emitting
+    /// static-field constants without re-walking the AST.
+    pub default: Option<juxc_ast::Expr>,
     /// Span of the field declaration.
     pub span: Span,
 }
@@ -273,11 +285,21 @@ pub struct FieldSig {
 pub struct MethodSig {
     /// Method visibility.
     pub visibility: Visibility,
+    /// Source-order annotation list — `@Override`, `@Deprecated`,
+    /// `@Cfg(...)`, etc. Built-in semantics are checked at
+    /// build/finalize time; user-defined annotations are
+    /// currently informational.
+    pub annotations: Vec<juxc_ast::Annotation>,
     /// Whether the method is declared `abstract` (no body).
     pub is_abstract: bool,
     /// Whether the method is declared `final` (no overriding by
     /// subclasses). Enforced by `check_final_method_overrides`.
     pub is_final: bool,
+    /// Whether the method is declared `static` (class-scoped, no
+    /// implicit `this`). Drives the `ClassName.method()` vs
+    /// `obj.method()` resolution split and the `&self` omission in
+    /// backend emission.
+    pub is_static: bool,
     /// Method-level generic parameters, if any.
     pub generic_params: Vec<TypeParam>,
     /// Formal parameters in declaration order.
@@ -540,9 +562,11 @@ pub fn build_workspace(
     // without re-resolving on every hop.
     resolve_class_chain_fqns(&mut table, &class_unit);
     // Cross-class rule passes that need every class registered first:
-    // final/sealed extends and final-method override checks.
+    // final/sealed extends, final-method override checks, and
+    // `@Override`-annotation verification.
     check_final_and_sealed_extends(&table, diagnostics);
     check_final_method_overrides(&table, diagnostics);
+    check_override_annotations(&table, diagnostics);
     table
 }
 
@@ -921,7 +945,14 @@ fn check_final_and_sealed_extends(
             );
         }
         if parent.is_sealed {
-            if !parent.permits.iter().any(|n| n == child_name) {
+            // `permits` stores bare class names (no qualified
+            // path allowed by the grammar — `permits Foo, Bar`
+            // not `permits pkg.Foo`). The child's table key is
+            // FQN. Compare on the child's BARE name so the check
+            // works regardless of whether parent and child share
+            // a package.
+            let child_bare = fqn_bare(child_name);
+            if !parent.permits.iter().any(|n| n == child_bare) {
                 diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0422_SealedClassNotPermitted,
@@ -989,6 +1020,119 @@ fn check_final_and_sealed_extends(
                         ),
                     )
                     .with_span(impl_ty.span),
+                );
+            }
+        }
+    }
+}
+
+/// Case-insensitive lookup for a built-in annotation by simple
+/// name. Per spec: `@Override` ≡ `@override` ≡ `@OVERRIDE`.
+/// Multi-segment names (`@foo.Bar`) are only matched on their
+/// trailing identifier — built-ins don't live in packages.
+pub(crate) fn has_annotation(
+    annotations: &[juxc_ast::Annotation],
+    canonical_lower: &str,
+) -> bool {
+    annotations.iter().any(|a| {
+        a.name
+            .segments
+            .last()
+            .map(|s| s.text.eq_ignore_ascii_case(canonical_lower))
+            .unwrap_or(false)
+    })
+}
+
+/// Verify every method annotated with `@Override` actually
+/// overrides a method from an ancestor class. Fires E0426 when
+/// no matching method exists in the extends chain.
+fn check_override_annotations(
+    table: &SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (child_name, child) in &table.classes {
+        for (method_name, method) in &child.methods {
+            if !has_annotation(&method.annotations, "override") {
+                continue;
+            }
+            let mut found = false;
+
+            // Check the implemented interfaces first — Java's
+            // `@Override` is valid on a method that satisfies an
+            // interface contract, not just one that shadows a
+            // superclass method.
+            for impl_ty in &child.implements {
+                let Some(seg) = impl_ty.name.segments.last() else { continue };
+                let bare = seg.text.as_str();
+                // Try the FQN'd lookup via the workspace: an
+                // interface named `Bar` declared in `pkg` is keyed
+                // `pkg.Bar`. Bare-name match is enough since the
+                // grammar doesn't yet allow `implements pkg.Bar`
+                // and bare imports route through the unit's
+                // resolver before reaching this table.
+                let key = if table.interfaces.contains_key(bare) {
+                    bare.to_string()
+                } else {
+                    table
+                        .interfaces
+                        .keys()
+                        .find(|fqn| fqn_bare(fqn) == bare)
+                        .cloned()
+                        .unwrap_or_default()
+                };
+                if let Some(iface) = table.interfaces.get(&key) {
+                    if iface.methods.contains_key(method_name) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+
+            // Walk the extends chain looking for the same-named
+            // method. Reuses the same FQN-aware cursor pattern as
+            // `check_final_method_overrides`.
+            let mut cursor: Option<&str> = if found {
+                None
+            } else {
+                child
+                    .extends_fqn
+                    .as_deref()
+                    .or_else(|| {
+                        child
+                            .extends
+                            .as_ref()
+                            .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+                    })
+            };
+            let mut depth = 0usize;
+            while let Some(ancestor_name) = cursor {
+                if depth > 64 {
+                    break;
+                }
+                let Some(ancestor) = table.classes.get(ancestor_name) else {
+                    break;
+                };
+                if ancestor.methods.contains_key(method_name) {
+                    found = true;
+                    break;
+                }
+                cursor = ancestor.extends_fqn.as_deref().or_else(|| {
+                    ancestor
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+                });
+                depth += 1;
+            }
+            if !found {
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0426_OverrideMissing,
+                        format!(
+                            "method `{method_name}` on `{child_name}` is annotated `@Override` but doesn't override any ancestor method",
+                        ),
+                    )
+                    .with_span(method.span),
                 );
             }
         }
@@ -1435,7 +1579,10 @@ fn insert_function(
 fn field_sig(field: &FieldDecl) -> FieldSig {
     FieldSig {
         visibility: field.visibility,
+        is_static: field.is_static,
+        is_final: field.is_final,
         ty: field.ty.clone(),
+        default: field.default.clone(),
         span: field.span,
     }
 }
@@ -1443,11 +1590,16 @@ fn field_sig(field: &FieldDecl) -> FieldSig {
 fn method_sig(method: &FnDecl) -> MethodSig {
     MethodSig {
         visibility: method.visibility,
+        annotations: method.annotations.clone(),
         is_abstract: method.body.is_none(),
         is_final: method
             .modifiers
             .iter()
             .any(|m| matches!(m, juxc_ast::FnModifier::Final)),
+        is_static: method
+            .modifiers
+            .iter()
+            .any(|m| matches!(m, juxc_ast::FnModifier::Static)),
         generic_params: method.generic_params.clone(),
         params: method.params.iter().map(param_sig).collect(),
         return_type: method.return_type.clone(),
@@ -2930,6 +3082,105 @@ mod tests {
     // ----------------------------------------------------------------
     // Top-level constants (§A.2.2)
     // ----------------------------------------------------------------
+
+    // ----------------------------------------------------------------
+    // Static members (class-scoped fields and methods)
+    // ----------------------------------------------------------------
+
+    /// A `static final double` field lands on ClassSig with the
+    /// flags set.
+    #[test]
+    fn static_field_records_flags() {
+        let (table, diags) = build_table(
+            r#"
+            public class Math {
+                public static final double PI = 3.14;
+            }
+            "#,
+        );
+        assert!(diags.is_empty(), "no diagnostics: {diags:?}");
+        let class = &table.classes["Math"];
+        let pi = &class.fields["PI"];
+        assert!(pi.is_static);
+        assert!(pi.is_final);
+    }
+
+    // ----------------------------------------------------------------
+    // Annotations + @Override semantics
+    // ----------------------------------------------------------------
+
+    /// `@Override` on a method that actually overrides emits no
+    /// diagnostic.
+    #[test]
+    fn override_present_is_ok() {
+        let (_table, diags) = build_table(
+            r#"
+            public class Animal { public String speak() { return ""; } }
+            public class Dog extends Animal {
+                @Override
+                public String speak() { return "woof"; }
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0426_OverrideMissing),
+            "no E0426 expected: {diags:?}",
+        );
+    }
+
+    /// `@Override` on a method that doesn't override fires E0426.
+    #[test]
+    fn override_missing_emits_e0426() {
+        let (_table, diags) = build_table(
+            r#"
+            public class Animal {}
+            public class Dog extends Animal {
+                @Override
+                public String speak() { return "woof"; }
+            }
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0426_OverrideMissing),
+            "expected E0426: {diags:?}",
+        );
+    }
+
+    /// Lowercase `@override` is the same annotation as `@Override`
+    /// per spec — case-insensitive matching applies.
+    #[test]
+    fn override_case_insensitive() {
+        let (_table, diags) = build_table(
+            r#"
+            public class Animal {}
+            public class Dog extends Animal {
+                @override
+                public String speak() { return "woof"; }
+            }
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0426_OverrideMissing),
+            "lowercase @override should be matched the same: {diags:?}",
+        );
+    }
+
+    /// A `static int max(...)` method lands on ClassSig with
+    /// `is_static = true`.
+    #[test]
+    fn static_method_records_flag() {
+        let (table, diags) = build_table(
+            r#"
+            public class Math {
+                public static int max(int a, int b) { return a; }
+            }
+            "#,
+        );
+        assert!(diags.is_empty(), "no diagnostics: {diags:?}");
+        let class = &table.classes["Math"];
+        let max = &class.methods["max"];
+        assert!(max.is_static);
+    }
 
     /// `const int MAX = 100;` lands in `table.consts` with the
     /// declared type recorded.

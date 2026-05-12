@@ -29,6 +29,23 @@ impl RustEmitter {
                 return;
             }
         }
+        // Static-field access: `ClassName.X` (or `pkg.Cls.X`) where
+        // the path resolves to a known class lowers to Rust's
+        // `Path::X` form. Cross-package paths get the same
+        // `crate::` rooting `new` uses.
+        if let Expr::Path(qn) = &*f.object {
+            if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                let cls = self.symbols.classes.get(&class_fqn);
+                if let Some(field) = cls.and_then(|c| c.fields.get(f.field.text.as_str())) {
+                    if field.is_static {
+                        self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                        self.w.push_str("::");
+                        self.w.push_str(&f.field.text);
+                        return;
+                    }
+                }
+            }
+        }
         // Generic member access — emit verbatim and rely on Rust to
         // resolve.
         self.emit_expr(&f.object);

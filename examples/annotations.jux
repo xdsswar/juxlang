@@ -1,0 +1,44 @@
+// Annotations per spec §A.2.3 — `@Name` / `@Name(args)` /
+// `@Name(key = value, …)` before a declaration. Case-insensitive:
+// `@Override` ≡ `@override` ≡ `@OVERRIDE`.
+//
+// Phase-1 built-ins:
+//   - @Override   — tycheck verifies the method overrides an
+//                   ancestor's. Mismatch → E0426.
+//   - @Deprecated — backend emits Rust `#[deprecated]` (with
+//                   optional `message = "…"` passed through as
+//                   `#[deprecated(note = "…")]`).
+//   - @Cfg(name)  — backend emits `#[cfg(name)]` for conditional
+//                   compilation.
+
+public class Animal {
+    public String name;
+    public Animal(String name) { this.name = name; }
+    public String speak() { return "generic noise"; }
+}
+
+public class Dog extends Animal {
+    public Dog(String name) { super(name); }
+
+    @Override
+    public String speak() {
+        return "woof";
+    }
+}
+
+// Lowercase form: same semantics — `@deprecated` ≡ `@Deprecated`.
+@deprecated
+public void legacyHelper() {
+    print("don't call me");
+}
+
+// @Cfg gates a function on a Rust `#[cfg(...)]` predicate.
+@Cfg(target_os = "linux")
+public void onlyLinux() {
+    print("hello from linux");
+}
+
+public void main() {
+    var d = new Dog("Rex");
+    print(d.speak());
+}
