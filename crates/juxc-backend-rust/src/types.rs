@@ -112,10 +112,28 @@ impl RustEmitter {
                 if i > 0 {
                     self.w.push_str(", ");
                 }
-                self.emit_type_as_rust(arg);
+                // Inside a generic-arg slot a Jux `String` has to
+                // lower to an owned `String`, not `&str` — a stored
+                // `T` field can't carry an elided lifetime. The
+                // top-level position mapping still uses `&str` for
+                // ergonomic param/local positions.
+                self.emit_generic_arg_type_as_rust(arg);
             }
             self.w.push('>');
         }
+    }
+
+    /// Lower a type that appears as a generic argument (e.g. the
+    /// `String` inside `Container<String>`). The only difference
+    /// from [`Self::emit_type_as_rust`] is the `String` case, which
+    /// gets the owned `String` lowering — `&str` won't work as a
+    /// generic-arg slot without an explicit lifetime.
+    pub(crate) fn emit_generic_arg_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
+        if is_jux_string_type(ty) {
+            self.w.push_str("String");
+            return;
+        }
+        self.emit_type_as_rust(ty);
     }
 
     /// Emit a generic-parameter list as a declaration site — `<T, U>`.

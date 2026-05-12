@@ -86,7 +86,8 @@ use crate::env::TypeEnv;
 use crate::infer::{infer_block, infer_expr};
 use crate::symbol_table::{ParamSig, SymbolTable};
 use crate::ty::{
-    infer_generic_args, lower_member_type, substitute, ty_from_ref, Primitive, Ty,
+    compose_extends_substitution, infer_generic_args, lower_member_type, substitute, ty_from_ref,
+    Primitive, Ty,
 };
 
 // ============================================================================
@@ -937,34 +938,29 @@ impl<'a> Checker<'a> {
                         return;
                     }
                 };
-                // Walk the inheritance chain for the method. Substitute
-                // generic args only when the method is declared on the
-                // receiver's own class — cross-extends substitution is
-                // deferred (see `infer.rs` module docs for why).
+                // Walk the inheritance chain for the method, then
+                // compose the substitution through the chain so
+                // `extends Animal<int>` propagates `T → int` onto
+                // an inherited method's param/return types.
                 if let Some((method, declaring_class)) =
                     self.symbols.lookup_method(&name, method_name)
                 {
                     let params = method.params.clone();
                     let method_generic_params = method.generic_params.clone();
-                    let owner_on_receiver = declaring_class == name;
                     // Clone the declaring-class name into an owned
                     // String so it outlives the immutable borrow on
                     // `self.symbols` we'd otherwise need.
                     let owner_name = declaring_class.to_string();
-                    let mut subst_params: Vec<TypeParam> = if owner_on_receiver {
-                        self.symbols
-                            .classes
-                            .get(&name)
-                            .map(|c| c.generic_params.clone())
-                            .unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
-                    let mut subst_args: Vec<Ty> = if owner_on_receiver {
-                        generic_args
-                    } else {
-                        Vec::new()
-                    };
+                    let (mut subst_params, mut subst_args): (Vec<TypeParam>, Vec<Ty>) =
+                        match compose_extends_substitution(
+                            &name,
+                            &generic_args,
+                            &owner_name,
+                            self.symbols,
+                        ) {
+                            Some(pair) => pair,
+                            None => (Vec::new(), Vec::new()),
+                        };
                     // Method-level generic inference (spec §T.4).
                     self.append_method_generic_inference(
                         &method_generic_params,

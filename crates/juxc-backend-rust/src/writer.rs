@@ -95,11 +95,6 @@ impl Writer {
     // Consumption / inspection.
     // ------------------------------------------------------------------
 
-    /// Borrow the accumulated buffer for inspection (e.g. tests).
-    pub(crate) fn as_str(&self) -> &str {
-        &self.buf
-    }
-
     /// Consume the writer and return the accumulated source.
     pub(crate) fn into_string(self) -> String {
         self.buf

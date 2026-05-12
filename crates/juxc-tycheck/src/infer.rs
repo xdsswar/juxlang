@@ -41,8 +41,8 @@ use juxc_ast::{
 use crate::env::TypeEnv;
 use crate::symbol_table::{MethodSig, SymbolTable};
 use crate::ty::{
-    infer_generic_args, lower_member_type, substitute, substitute_via_inference, ty_from_ref,
-    ArrayKind, Primitive, Ty,
+    compose_extends_substitution, infer_generic_args, lower_member_type, substitute,
+    substitute_via_inference, ty_from_ref, ArrayKind, Primitive, Ty,
 };
 
 // ============================================================================
@@ -204,14 +204,18 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             // `T value;` field reads as `Ty::Param("T")` rather than
             // `Unknown` when we're outside Box's body.
             let raw = lower_member_type(&field.ty, declaring_class, symbols);
-            // Only substitute when the field is declared on the receiver's
-            // own class — substituting across an `extends` boundary would
-            // require threading the ancestor's `extends` generic args,
-            // which Phase E intentionally defers.
-            if declaring_class == name {
-                if let Some(class) = symbols.classes.get(name) {
-                    return substitute(&raw, &class.generic_params, generic_args);
-                }
+            // Compose the substitution through the extends-chain so a
+            // child's `extends Parent<int>` propagates `T → int` onto
+            // an inherited field. When declaring_class == name the
+            // composition reduces to one hop (the receiver's own
+            // scope) and behaves like the previous direct path.
+            if let Some((params, args)) = compose_extends_substitution(
+                name,
+                generic_args,
+                declaring_class,
+                symbols,
+            ) {
+                return substitute(&raw, &params, &args);
             }
             return raw;
         }
@@ -312,17 +316,18 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                         declaring_class,
                         symbols,
                     );
-                    // Only substitute when the method comes from the
-                    // receiver's own class — see `infer_field` for why
-                    // cross-extends substitution is deferred.
-                    let after_class = if declaring_class == name {
-                        if let Some(class) = symbols.classes.get(name) {
-                            substitute(&raw, &class.generic_params, generic_args)
-                        } else {
-                            raw
-                        }
-                    } else {
-                        raw
+                    // Compose the substitution through the
+                    // extends-chain (see `infer_field` for the same
+                    // pattern). For a direct method on the receiver
+                    // this collapses to a single hop.
+                    let after_class = match compose_extends_substitution(
+                        name,
+                        generic_args,
+                        declaring_class,
+                        symbols,
+                    ) {
+                        Some((params, args)) => substitute(&raw, &params, &args),
+                        None => raw,
                     };
                     return method_infer_return(
                         &after_class,
@@ -1532,6 +1537,122 @@ mod tests {
                 );
             }
             other => panic!("expected Ty::User Pair<int, String>, got {other:?}"),
+        }
+    }
+
+    // ============================================================================
+    // Cross-extends generic substitution
+    // ============================================================================
+
+    /// `class Dog extends Animal<int>` — a field `T value;` declared
+    /// on `Animal<T>` should read as `int` when accessed through a
+    /// `Dog` receiver.
+    #[test]
+    fn cross_extends_concrete_field_substitutes() {
+        let (table, unit) = build_table(
+            r#"
+            public class Animal<T> {
+                public T tag;
+            }
+            public class Dog extends Animal<int> {}
+            public void main() {
+                var d = new Dog();
+                var t = d.tag;
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("t"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// `class Dog extends Animal<int>` — calling an inherited
+    /// `T speak()` should return `int` from the `Dog` receiver.
+    #[test]
+    fn cross_extends_concrete_method_return_substitutes() {
+        let (table, unit) = build_table(
+            r#"
+            public class Animal<T> {
+                public T tag;
+                public T speak() { return this.tag; }
+            }
+            public class Dog extends Animal<int> {}
+            public void main() {
+                var d = new Dog();
+                var t = d.speak();
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("t"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// `class Sub<U> extends Sup<U>` — the chain forwards the
+    /// receiver's `U` binding into the parent's `T` slot.
+    #[test]
+    fn cross_extends_forwarded_param_substitutes() {
+        let (table, unit) = build_table(
+            r#"
+            public class Sup<T> {
+                public T value;
+            }
+            public class Sub<U> extends Sup<U> {}
+            public void main() {
+                var s = new Sub<String>();
+                var v = s.value;
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("v"), Some(&Ty::String));
+    }
+
+    /// Two-hop chain: `C extends B<int>`, `B<T> extends A<T>`,
+    /// `A<U> { U tag; }`. A `C` receiver's `tag` should be `int`.
+    #[test]
+    fn cross_extends_two_hop_substitutes() {
+        let (table, unit) = build_table(
+            r#"
+            public class A<U> { public U tag; }
+            public class B<T> extends A<T> {}
+            public class C extends B<int> {}
+            public void main() {
+                var c = new C();
+                var t = c.tag;
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        assert_eq!(env.lookup("t"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// Raw extends (`extends Animal`, no `<...>`) leaves the
+    /// inherited field as `Ty::Param` — there's nothing to bind T to.
+    #[test]
+    fn cross_extends_raw_parent_leaves_param() {
+        let (table, unit) = build_table(
+            r#"
+            public class Animal<T> { public T tag; }
+            public class Dog extends Animal {}
+            public void main() {
+                var d = new Dog();
+                var t = d.tag;
+            }
+            "#,
+        );
+        let block = fn_body_by_name(&unit, "main");
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        match env.lookup("t") {
+            Some(Ty::Param(name)) => assert_eq!(name, "T"),
+            other => panic!("expected Ty::Param(\"T\"), got {other:?}"),
         }
     }
 

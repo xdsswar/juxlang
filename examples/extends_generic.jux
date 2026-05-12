@@ -1,0 +1,38 @@
+// Cross-extends generic substitution — a child class binds its
+// parent's type parameter to a concrete type via the extends clause.
+// Without cross-extends substitution, the tycheck would see `tag`
+// and `name()` as `Ty::Param("T")`; with it, they read as `int` or
+// `String` depending on what the child bound T to.
+
+public class Container<T> {
+    public T tag;
+
+    public Container(T tag) {
+        this.tag = tag;
+    }
+
+    public T name() {
+        return this.tag;
+    }
+}
+
+public class IntBox extends Container<int> {
+    public IntBox(int n) {
+        super(n);
+    }
+}
+
+public class Label extends Container<String> {
+    public Label(String s) {
+        super(s);
+    }
+}
+
+public void main() {
+    var b = new IntBox(42);
+    var l = new Label("hello");
+    print(b.tag);
+    print(b.name());
+    print(l.tag);
+    print(l.name());
+}

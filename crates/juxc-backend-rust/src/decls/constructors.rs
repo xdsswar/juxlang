@@ -126,7 +126,15 @@ impl RustEmitter {
         if let Some(parent_ty) = &class_decl.extends {
             self.w.emit_indent();
             self.w.push_str("__parent: ");
-            self.emit_type_as_rust(parent_ty);
+            // Emit only the parent's bare identifier here, not the
+            // full `<...>` instantiation. The `__parent` field
+            // declaration already pins the parent's generic args, so
+            // Rust infers them at the call site — and
+            // `Parent<int>::new(...)` is invalid Rust syntax anyway
+            // (would need the turbofish form `Parent::<int>::new`).
+            if let Some(seg) = parent_ty.name.segments.first() {
+                self.w.push_str(&seg.text);
+            }
             self.w.push_str("::new(");
             // If the constructor wrote `super(args);`, lift those args
             // here. If it didn't, Phase 1 calls `Parent::new()` with
@@ -134,6 +142,17 @@ impl RustEmitter {
             // (with a clear Rust error) when the parent's ctor needs
             // arguments and the user forgot to write `super(...)`.
             if let Some(args) = &simple.super_args {
+                // For each super-call arg, ask "what does the parent's
+                // formal-parameter type look like *after* the
+                // extends-clause's generic substitution?" If it's a
+                // Jux `String`, the parent is going to want an owned
+                // `String` in that slot (the field type lowers to
+                // owned per the generic-arg rule), so we inject a
+                // `.to_string()` on `&str`-shaped actual args.
+                let coerce_to_string = self.compute_super_arg_string_coercions(
+                    parent_ty,
+                    args.len(),
+                );
                 // Clone to release the borrow on `simple` before the
                 // `emit_expr` calls (which need `&mut self`).
                 let args = args.clone();
@@ -142,6 +161,9 @@ impl RustEmitter {
                         self.w.push_str(", ");
                     }
                     self.emit_expr(arg);
+                    if coerce_to_string.get(i).copied().unwrap_or(false) {
+                        self.w.push_str(".to_string()");
+                    }
                 }
             }
             self.w.push_str("),\n");
@@ -183,6 +205,80 @@ impl RustEmitter {
         self.w.line("}");
     }
 
+    /// Decide which super-call args need a `.to_string()` coercion
+    /// to land in an owned-`String` slot on the parent's
+    /// constructor. The parent's formal type-refs are substituted by
+    /// the extends-clause's `<...>` args: for each formal whose
+    /// substituted type is Jux `String`, the matching positional slot
+    /// in the returned vec is `true`.
+    ///
+    /// Returns `vec![false; arg_count]` whenever:
+    /// - the parent class isn't known (resolver should have caught
+    ///   that as E0301),
+    /// - the parent declares no constructor, or
+    /// - the formal-type substitution doesn't bottom out at a Jux
+    ///   `String` shape (most calls — the common case is fully
+    ///   no-op).
+    ///
+    /// The substitution model is the same one tycheck uses (spec
+    /// §T.4): map each bare-param-name reference in a formal to the
+    /// parent's extends-clause arg in matching position. Nested
+    /// generic args aren't analyzed — Phase 1 only coerces when the
+    /// formal is literally `T`, which is the only shape this fix
+    /// needs.
+    fn compute_super_arg_string_coercions(
+        &self,
+        parent_ty: &juxc_ast::TypeRef,
+        arg_count: usize,
+    ) -> Vec<bool> {
+        let mut out = vec![false; arg_count];
+        let Some(parent_name) = parent_ty.name.segments.first().map(|s| s.text.as_str())
+        else {
+            return out;
+        };
+        let Some(parent_class) = self.symbols.classes.get(parent_name) else {
+            return out;
+        };
+        let Some(ctor) = parent_class.constructors.first() else {
+            return out;
+        };
+        for (i, param) in ctor.params.iter().enumerate() {
+            if i >= arg_count {
+                break;
+            }
+            // Coercion ONLY fires when the parent's formal is a
+            // bare generic param `T` that the extends clause bound
+            // to Jux `String`. A direct `String name` formal lowers
+            // to a `&str` parameter on the Rust side per
+            // `emit_param_type_as_rust` — the existing super-call
+            // path already lines up there, no coercion needed.
+            if param.ty.array_shape.is_some()
+                || param.ty.nullable
+                || !param.ty.generic_args.is_empty()
+                || param.ty.name.segments.len() != 1
+            {
+                continue;
+            }
+            let formal_name = param.ty.name.segments[0].text.as_str();
+            // Locate this name in the parent's generic_params; map to
+            // the same position in the extends-clause's actual args.
+            let Some(idx) = parent_class
+                .generic_params
+                .iter()
+                .position(|p| p.name.text == formal_name)
+            else {
+                continue;
+            };
+            let Some(actual) = parent_ty.generic_args.get(idx) else {
+                continue;
+            };
+            if is_jux_string_type_ref(actual) {
+                out[i] = true;
+            }
+        }
+        out
+    }
+
     /// Synthesize a zero-argument default constructor when the class
     /// declared none — per §7.3.1's "implicit zero-arg constructor".
     pub(crate) fn emit_synthetic_default_constructor(&mut self, class_decl: &juxc_ast::ClassDecl) {
@@ -201,7 +297,12 @@ impl RustEmitter {
         if let Some(parent_ty) = &class_decl.extends {
             self.w.emit_indent();
             self.w.push_str("__parent: ");
-            self.emit_type_as_rust(parent_ty);
+            // Same rule as the explicit-ctor path: emit the parent's
+            // bare identifier and let Rust infer the generic args
+            // from the `__parent` field's declared type.
+            if let Some(seg) = parent_ty.name.segments.first() {
+                self.w.push_str(&seg.text);
+            }
             self.w.push_str("::new(),\n");
         }
         for field in &class_decl.fields {

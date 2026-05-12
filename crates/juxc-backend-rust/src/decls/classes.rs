@@ -258,7 +258,14 @@ impl RustEmitter {
             self.w.push_str("impl");
             self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
             self.w.push(' ');
-            self.emit_type_as_rust(&parent_ty);
+            // The marker trait is `<ParentName>Kind` — a bare name,
+            // *not* parameterized. So we emit only the parent's
+            // identifier here, even when the user wrote
+            // `extends Container<int>`; the parent's `<...>` args
+            // belong on the storage/Deref impls, not on the kind tag.
+            if let Some(n) = parent_name.as_deref() {
+                self.w.push_str(n);
+            }
             self.w.push_str("Kind for ");
             self.w.push_str(&class_decl.name.text);
             self.emit_generic_params_as_args(&class_decl.generic_params);

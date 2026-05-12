@@ -652,6 +652,67 @@ pub fn substitute_via_inference(
     substitute(ty, generic_params, &args)
 }
 
+/// Compose the substitution table needed to interpret a member
+/// declared in `declaring_class` when accessed through a receiver of
+/// `receiver_name<receiver_args>`.
+///
+/// Walks the extends-chain from receiver up to `declaring_class`. At
+/// each hop, the child's `extends Parent<...>` clause names how the
+/// parent's generics are bound: lowering those args in the child's
+/// scope yields `Ty::Param`-bearing values that we then resolve
+/// against the current substitution. The result is the (params, args)
+/// pair for `declaring_class`'s own scope, ready to feed
+/// [`substitute`].
+///
+/// Returns [`None`] when:
+/// - the receiver name isn't a known class, or
+/// - the chain breaks before reaching the declaring class (no
+///   `extends` clause on a link), or
+/// - any parent name fails to resolve (the resolver should already
+///   have surfaced that as E0301).
+///
+/// Phase 1 caps the chain depth at 64 to keep cyclic / malformed
+/// inputs from looping.
+pub fn compose_extends_substitution(
+    receiver_name: &str,
+    receiver_args: &[Ty],
+    declaring_class: &str,
+    symbols: &SymbolTable,
+) -> Option<(Vec<TypeParam>, Vec<Ty>)> {
+    let mut current_name = receiver_name.to_string();
+    let mut current_class = symbols.classes.get(&current_name)?;
+    let mut current_params: Vec<TypeParam> = current_class.generic_params.clone();
+    let mut current_args: Vec<Ty> = receiver_args.to_vec();
+    let mut depth = 0usize;
+    while current_name != declaring_class {
+        if depth > 64 {
+            return None;
+        }
+        let extends = current_class.extends.as_ref()?;
+        let parent_name = extends.name.segments.last()?.text.clone();
+        // Lower the extends-clause's `<...>` args in the child's own
+        // generic-param scope so a `Param("U")` reference resolves.
+        let raw_parent_args: Vec<Ty> = extends
+            .generic_args
+            .iter()
+            .map(|g| lower_member_type(g, &current_name, symbols))
+            .collect();
+        // Compose with the running substitution so `Param("U")`
+        // collapses to whatever the receiver bound U to.
+        let parent_args_final: Vec<Ty> = raw_parent_args
+            .iter()
+            .map(|a| substitute(a, &current_params, &current_args))
+            .collect();
+        let parent_class = symbols.classes.get(&parent_name)?;
+        current_name = parent_name;
+        current_class = parent_class;
+        current_params = parent_class.generic_params.clone();
+        current_args = parent_args_final;
+        depth += 1;
+    }
+    Some((current_params, current_args))
+}
+
 /// Map a bare primitive name onto its [`Primitive`] tag. Returns `None`
 /// for any other identifier — including `"String"`, which lives in its
 /// own [`Ty::String`] variant. Mirrors the comprehensive primitive list
