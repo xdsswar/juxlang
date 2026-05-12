@@ -63,7 +63,39 @@ impl<'a> Parser<'a> {
         if self.looks_like_lambda_head() {
             return self.parse_lambda();
         }
-        self.parse_logic_or()
+        self.parse_elvis()
+    }
+
+    /// Elvis (null-coalescing) layer per §A.4 level 3 — sits just
+    /// below the ternary and just above logical-or. Right-
+    /// associative: `a ?: b ?: c` parses as `a ?: (b ?: c)`. Both
+    /// sides are full elvis-expressions, so a fallback that's
+    /// itself a chain just nests one level deeper.
+    ///
+    /// Two spellings are accepted as aliases per
+    /// `JUX-GRAMMAR-ADDENDUM.md` §A.1.6: `?:` (Kotlin/Groovy) and
+    /// `??` (C#/JavaScript). Both produce the same `Expr::Elvis`
+    /// AST node — the only difference is the surface syntax the
+    /// user chose. Diagnostic spans cover the actual operator
+    /// token, so an error report still names the spelling typed.
+    pub(crate) fn parse_elvis(&mut self) -> Option<Expr> {
+        let left = self.parse_logic_or()?;
+        if matches!(
+            self.peek(),
+            TokenKind::QuestionColon | TokenKind::QuestionQuestion,
+        ) {
+            self.advance(); // '?:' or '??'
+            // Right-associative: recurse into `parse_elvis` for the
+            // fallback so chains stack the right way.
+            let fallback = self.parse_elvis()?;
+            let span = expr_span(&left).join(expr_span(&fallback));
+            return Some(Expr::Elvis(juxc_ast::ElvisExpr {
+                value: Box::new(left),
+                fallback: Box::new(fallback),
+                span,
+            }));
+        }
+        Some(left)
     }
 
     /// Logical-OR layer: left-associative short-circuit `||` per §A.4
@@ -242,15 +274,34 @@ impl<'a> Parser<'a> {
         Some(expr)
     }
 
-    /// Unary layer: prefix `-`, `!`, `~` per §A.4 level 18.
+    /// Unary layer: prefix `-`, `!`, `~`, and the C-style cast form
+    /// `(T) expr` per §A.4 level 18 / §A.5.
     ///
-    /// Right-associative: `--x` parses as `-(-x)`, `!!flag` as `!(!flag)`.
-    /// This is implemented by recursing into `parse_unary` for the
-    /// operand rather than dropping straight to postfix.
+    /// Right-associative: `--x` parses as `-(-x)`, `!!flag` as
+    /// `!(!flag)`. This is implemented by recursing into
+    /// `parse_unary` for the operand rather than dropping straight
+    /// to postfix.
+    ///
+    /// **C-style cast disambiguation** (§A.5): when the cursor is at
+    /// `(`, we use [`Self::looks_like_c_style_cast`] to peek past
+    /// the closing `)` and check whether the parens contain a valid
+    /// type AND the next token can start a unary expression. If
+    /// both, `(T) expr` lowers to the same `Expr::Cast` shape as the
+    /// postfix `expr as T` form — semantics are identical per the
+    /// grammar addendum. Otherwise the `(` falls through to
+    /// `parse_postfix` → `parse_primary`'s parenthesized-expression
+    /// branch.
     ///
     /// The other §A.4-level-18 prefix operators (`+`, `move`, `await`,
     /// `&`, `*`) are not modeled yet.
     pub(crate) fn parse_unary(&mut self) -> Option<Expr> {
+        // C-style cast first — looks like `(T) expr` and binds at
+        // unary precedence. The lookahead is pure (no token
+        // consumption, no diagnostics) so a mis-detection costs
+        // nothing.
+        if self.at(&TokenKind::LParen) && self.looks_like_c_style_cast() {
+            return self.parse_c_style_cast();
+        }
         let start_span = self.peek_span();
         let op = match self.peek() {
             TokenKind::Minus => Some(UnaryOp::Neg),
@@ -271,6 +322,137 @@ impl<'a> Parser<'a> {
             }));
         }
         self.parse_postfix()
+    }
+
+    /// Peek-only check for the C-style cast shape `( TYPE ) UNARY`.
+    /// Walks the token stream without consuming anything or emitting
+    /// diagnostics. Returns true exactly when:
+    ///
+    /// - the cursor is at `(`,
+    /// - the tokens after `(` form a valid type-like sequence —
+    ///   either a recognized **primitive type name** (`int`,
+    ///   `long`, `String`, …) optionally with `?`/`[]`/`[N]`, OR
+    ///   any qualified-name carrying an explicit array/nullable
+    ///   marker (`Foo?`, `Foo[]`),
+    /// - the matching `)` closes the type cleanly, AND
+    /// - the token after `)` can start a unary expression.
+    ///
+    /// **Disambiguation against parenthesized expressions** per
+    /// `JUX-GRAMMAR-ADDENDUM.md` §A.5: `(int) x` is always a cast;
+    /// `(x) y` (where `x` is a plain identifier with no type
+    /// markers) is treated as a parenthesized expression so user
+    /// code that just groups a name doesn't accidentally trip the
+    /// cast path. Once name resolution can answer "is this name a
+    /// type?", the bare-ident case can be re-promoted to a cast.
+    ///
+    /// Conservative on every ambiguity: anything we can't classify
+    /// returns false, leaving `(...)` to flow through as a
+    /// parenthesized expression. The real parsing still goes through
+    /// [`Self::parse_type_ref`] and emits diagnostics there if the
+    /// shape turns out to be wrong.
+    pub(crate) fn looks_like_c_style_cast(&self) -> bool {
+        let mut i = self.pos;
+        // Must be at `(`.
+        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen)) {
+            return false;
+        }
+        i += 1;
+        // Qualified name: Ident ('.' Ident)*. Track the first
+        // segment's text so we can decide later whether it's a
+        // recognized primitive.
+        let first_ident = match self.tokens.get(i).map(|t| &t.kind) {
+            Some(TokenKind::Ident(s)) => s.clone(),
+            _ => return false,
+        };
+        i += 1;
+        let mut multi_segment = false;
+        while matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Dot)) {
+            if !matches!(self.tokens.get(i + 1).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
+                return false;
+            }
+            multi_segment = true;
+            i += 2;
+        }
+        // Optional nullable `?`.
+        let mut has_nullable = false;
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Question)) {
+            has_nullable = true;
+            i += 1;
+        }
+        // Optional array suffix `[]` or `[N]`. Generic args `<T>`
+        // are skipped: `(List<int>) x` would ambiguate with
+        // comparison chains and isn't worth the complexity yet.
+        let mut has_array = false;
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LBracket)) {
+            i += 1;
+            if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Int(_))) {
+                i += 1;
+            }
+            if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::RBracket)) {
+                return false;
+            }
+            has_array = true;
+            i += 1;
+        }
+        // Closing `)` of the cast.
+        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::RParen)) {
+            return false;
+        }
+        i += 1;
+        // Token after `)` must be able to start a unary expression.
+        let followed_by_unary = matches!(
+            self.tokens.get(i).map(|t| &t.kind),
+            Some(TokenKind::Ident(_))
+                | Some(TokenKind::Int(_))
+                | Some(TokenKind::Float(_))
+                | Some(TokenKind::Str(_))
+                | Some(TokenKind::InterpStr(_))
+                | Some(TokenKind::Bool(_))
+                | Some(TokenKind::Null)
+                | Some(TokenKind::Minus)
+                | Some(TokenKind::Bang)
+                | Some(TokenKind::Tilde)
+                | Some(TokenKind::LParen)
+                | Some(TokenKind::Kw(Keyword::New))
+                | Some(TokenKind::Kw(Keyword::This))
+                | Some(TokenKind::Kw(Keyword::Sizeof)),
+        );
+        if !followed_by_unary {
+            return false;
+        }
+        // Final disambiguation: is the inner "type-like enough"
+        // that we should treat the parens as a cast? Per the spec:
+        //
+        // - **Primitive name** (`int`, `String`, …) → always a cast.
+        // - **User-named type with markers** (`Foo?`, `Foo[]`,
+        //   `pkg.Foo[]`) → also a cast; the markers make the
+        //   type-shape unambiguous.
+        // - **Bare qualified name** (`Foo`, `pkg.Foo`) without any
+        //   markers → could be a paren-expr around a variable
+        //   reference; leave it alone until name resolution.
+        if is_known_primitive_type_name(&first_ident) {
+            return true;
+        }
+        has_nullable || has_array || multi_segment
+    }
+
+    /// Real-parse path for the C-style cast form once
+    /// [`Self::looks_like_c_style_cast`] has confirmed the shape.
+    /// Consumes `(`, parses the type, consumes `)`, parses the
+    /// unary operand, and wraps it in `Expr::Cast` — identical to
+    /// the `as T` postfix form's AST shape.
+    fn parse_c_style_cast(&mut self) -> Option<Expr> {
+        let start = self.peek_span();
+        self.advance(); // '('
+        let ty = self.parse_type_ref()?;
+        self.expect(&TokenKind::RParen, "')' to close cast type");
+        let operand = self.parse_unary()?;
+        let span = start.join(expr_span(&operand));
+        Some(Expr::Cast(CastExpr {
+            value: Box::new(operand),
+            ty,
+            span,
+        }))
     }
 
     /// If the current token is an equality operator, return its
@@ -362,6 +544,25 @@ impl<'a> Parser<'a> {
                     expr = Expr::Field(FieldExpr {
                         object: Box::new(expr),
                         field,
+                        safe: false,
+                        span,
+                    });
+                }
+                TokenKind::QuestionDot => {
+                    // Safe-navigation: `object?.field` and `object?.method(args)`.
+                    // Same parse shape as `.`, but the resulting
+                    // `FieldExpr` carries `safe: true` so the
+                    // backend can lower it to
+                    // `object.as_ref().map(|x| x.field.clone())`.
+                    // Call-form follows by the next loop iteration
+                    // picking up the `(` and wrapping in `CallExpr`.
+                    self.advance(); // '?.'
+                    let field = self.parse_ident()?;
+                    let span = expr_span(&expr).join(field.span);
+                    expr = Expr::Field(FieldExpr {
+                        object: Box::new(expr),
+                        field,
+                        safe: true,
                         span,
                     });
                 }
@@ -737,6 +938,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::NewObject(n) => n.span,
         Expr::Switch(s) => s.span,
         Expr::Lambda(l) => l.span,
+        Expr::Elvis(e) => e.span,
     }
 }
 
@@ -750,4 +952,30 @@ pub(crate) fn make_binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
         right: Box::new(right),
         span,
     })
+}
+
+/// True when `name` is one of Jux's blessed primitive type names per
+/// `JUX-LANG-V1.md` §5 — the set that the C-style cast lookahead
+/// can recognize without help from name resolution. Covers both the
+/// Java-family names (`int`, `long`, `String`, …) and the
+/// width-explicit synonyms (`i32`, `u64`, `f64`, …). Reserved words
+/// `void` and `Self` are NOT in this set: they aren't legal cast
+/// targets in the first place.
+pub(crate) fn is_known_primitive_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "bool"
+            | "byte" | "ubyte"
+            | "short" | "ushort"
+            | "int" | "uint"
+            | "long" | "ulong"
+            | "float" | "double"
+            | "char"
+            | "String"
+            | "i8" | "u8"
+            | "i16" | "u16"
+            | "i32" | "u32"
+            | "i64" | "u64"
+            | "f32" | "f64"
+    )
 }

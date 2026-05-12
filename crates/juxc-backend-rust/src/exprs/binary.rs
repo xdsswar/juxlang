@@ -77,6 +77,47 @@ fn fold_concat_into_format<'a>(
     (template, runtime)
 }
 
+/// Match `expr op null` / `null op expr` for `==` / `!=`. Returns
+/// `Some((target_expr, is_equality))` when the binary is a null
+/// comparison; `is_equality` is true for `==`, false for `!=`.
+/// Returns `None` for every other shape — including `null == null`
+/// (degenerate but harmless: caller falls through to the generic
+/// binary path which emits `None == None`, valid Rust).
+fn match_null_comparison<'a>(b: &'a BinaryExpr) -> Option<(&'a Expr, bool)> {
+    let is_eq = match b.op {
+        BinaryOp::Eq => true,
+        BinaryOp::NotEq => false,
+        _ => return None,
+    };
+    let left_null = matches!(*b.left, Expr::Literal(juxc_ast::Literal::Null));
+    let right_null = matches!(*b.right, Expr::Literal(juxc_ast::Literal::Null));
+    match (left_null, right_null) {
+        (false, true) => Some((&b.left, is_eq)),
+        (true, false) => Some((&b.right, is_eq)),
+        _ => None,
+    }
+}
+
+/// Same shape as `field::receiver_needs_parens` (kept local so we
+/// don't cross-module-import a tiny helper). True when emitting
+/// `expr.method()` would require wrapping `expr` in parens —
+/// false for atoms, true for composite shapes.
+fn receiver_needs_parens(e: &Expr) -> bool {
+    !matches!(
+        e,
+        Expr::Path(_)
+            | Expr::This(_)
+            | Expr::Field(_)
+            | Expr::Call(_)
+            | Expr::Index(_)
+            | Expr::Literal(_)
+            | Expr::InterpString(_)
+            | Expr::NewObject(_)
+            | Expr::NewArray(_)
+            | Expr::NewArrayLit(_)
+    )
+}
+
 impl RustEmitter {
     /// Lower a binary expression. Every operator in [`BinaryOp`] maps
     /// onto a Rust operator with identical spelling, so the lowering is
@@ -101,6 +142,26 @@ impl RustEmitter {
             self.emit_string_concat(b);
             return;
         }
+        // Null-equality peephole: `x == null` and `x != null` lower
+        // to `x.is_none()` / `x.is_some()` respectively, instead of
+        // the literal `x == None` (which would require `T: PartialEq`
+        // even for the nullable-only check). The match accepts the
+        // null literal on either side, since Jux source allows both
+        // orderings. The non-null side is emitted as a method
+        // receiver, so we wrap composite expressions in parens via
+        // the receiver-paren helper.
+        if let Some((target, is_eq)) = match_null_comparison(b) {
+            let needs_parens = receiver_needs_parens(target);
+            if needs_parens {
+                self.w.push('(');
+            }
+            self.emit_expr(target);
+            if needs_parens {
+                self.w.push(')');
+            }
+            self.w.push_str(if is_eq { ".is_none()" } else { ".is_some()" });
+            return;
+        }
         // Operator-overload clone-injection: when the LHS is a user
         // class with an `operator+` (etc.) declared, rewrite from the
         // trait form (`a + b` — consumes both) into a direct inherent
@@ -113,6 +174,25 @@ impl RustEmitter {
             return;
         }
         let prec = binary_prec(b.op);
+        // Comparison ops (`==`, `!=`, `<`, `<=`, `>`, `>=`) borrow
+        // both operands through `PartialEq`/`PartialOrd` — String /
+        // generic field reads inside don't need auto-`.clone()`.
+        // We set the flag for the lifetime of both operand
+        // emissions so a nested `(a == b)` inside another binary
+        // also benefits.
+        let is_cmp = matches!(
+            b.op,
+            BinaryOp::Eq
+                | BinaryOp::NotEq
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge,
+        );
+        let prev_cmp = self.emitting_comparison_operand;
+        if is_cmp {
+            self.emitting_comparison_operand = true;
+        }
         // Left side of a left-associative op: equal precedence is OK,
         // because emission order already preserves grouping.
         self.emit_expr_with_parent_prec(&b.left, prec, /*right=*/ false);
@@ -122,6 +202,7 @@ impl RustEmitter {
         // Right side: equal precedence would *change* grouping
         // (`1 + (2 + 3)` vs `1 + 2 + 3`), so parens are required.
         self.emit_expr_with_parent_prec(&b.right, prec, /*right=*/ true);
+        self.emitting_comparison_operand = prev_cmp;
     }
 
     /// If `b`'s LHS is a known user class that defines the matching

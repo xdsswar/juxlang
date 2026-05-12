@@ -180,8 +180,19 @@ impl RustEmitter {
                 // fields, returns) to owned `String`, so the old
                 // tail-return `.to_string()` coercion is no longer
                 // needed: a bare literal here already self-coerces.
+                //
+                // Nullable-return wrap: same rule as the mid-body
+                // return path in `emit_stmt` — a `T?`-returning fn
+                // lifts a `T` value into `Some(T)`.
+                let wrap_some = self.return_wants_some_wrap(expr);
                 self.w.emit_indent();
+                if wrap_some {
+                    self.w.push_str("Some(");
+                }
                 self.emit_expr(expr);
+                if wrap_some {
+                    self.w.push(')');
+                }
                 self.w.push('\n');
             }
             Stmt::Return(None) => {

@@ -1,0 +1,418 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Jux",
+  "scopeName": "source.jux",
+  "fileTypes": ["jux"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#annotations" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#chars" },
+    { "include": "#constants" },
+    { "include": "#keywords-decl" },
+    { "include": "#keywords-mod" },
+    { "include": "#keywords-control" },
+    { "include": "#keywords-other" },
+    { "include": "#types-primitive" },
+    { "include": "#types-name" },
+    { "include": "#function-decl" },
+    { "include": "#function-call" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.jux",
+          "begin": "//",
+          "end": "$",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.jux" }
+          }
+        },
+        {
+          "name": "comment.block.jux",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "captures": {
+            "0": { "name": "punctuation.definition.comment.jux" }
+          }
+        }
+      ]
+    },
+
+    "annotations": {
+      "patterns": [
+        {
+          "name": "storage.type.annotation.jux",
+          "match": "@[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.jux",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.jux",
+          "match": "\\bnull\\b"
+        }
+      ]
+    },
+
+    "numbers": {
+      "patterns": [
+        {
+          "comment": "Hex int, optional underscores, optional suffix",
+          "name": "constant.numeric.integer.hex.jux",
+          "match": "\\b0[xX][0-9A-Fa-f_]+(?:[uU]?[lL]|[uU](?:[bB]|[sS]|[lL])?|[iIuU](?:8|16|32|64|128))?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.binary.jux",
+          "match": "\\b0[bB][01_]+(?:[uU]?[lL]|[uU](?:[bB]|[sS]|[lL])?|[iIuU](?:8|16|32|64|128))?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.octal.jux",
+          "match": "\\b0[oO][0-7_]+(?:[uU]?[lL]|[uU](?:[bB]|[sS]|[lL])?|[iIuU](?:8|16|32|64|128))?\\b"
+        },
+        {
+          "name": "constant.numeric.float.jux",
+          "match": "\\b[0-9][0-9_]*(?:\\.[0-9][0-9_]*)(?:[eE][+-]?[0-9_]+)?(?:[fFdD]|f32|f64)?\\b"
+        },
+        {
+          "name": "constant.numeric.float.jux",
+          "match": "\\b[0-9][0-9_]*[eE][+-]?[0-9_]+(?:[fFdD]|f32|f64)?\\b"
+        },
+        {
+          "name": "constant.numeric.float.jux",
+          "match": "\\b[0-9][0-9_]*(?:[fFdD]|f32|f64)\\b"
+        },
+        {
+          "name": "constant.numeric.integer.jux",
+          "match": "\\b[0-9][0-9_]*(?:[uU]?[lL]|[uU](?:[bB]|[sS]|[lL])?|[iIuU](?:8|16|32|64|128))?\\b"
+        }
+      ]
+    },
+
+    "chars": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.jux",
+          "begin": "'",
+          "end": "'",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.jux" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.jux" }
+          },
+          "patterns": [
+            { "include": "#string-escapes" }
+          ]
+        }
+      ]
+    },
+
+    "strings": {
+      "patterns": [
+        {
+          "comment": "$\"\"\"…\"\"\" — interpolated raw triple-quoted",
+          "name": "string.quoted.triple.interpolated.jux",
+          "begin": "\\$\"\"\"",
+          "end": "\"\"\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.jux" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.jux" }
+          },
+          "patterns": [
+            { "include": "#interpolation" }
+          ]
+        },
+        {
+          "comment": "\"\"\"…\"\"\" — raw triple-quoted string",
+          "name": "string.quoted.triple.raw.jux",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.jux" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.jux" }
+          }
+        },
+        {
+          "comment": "$\"…\" — interpolated string",
+          "name": "string.quoted.double.interpolated.jux",
+          "begin": "\\$\"",
+          "end": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.jux" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.jux" }
+          },
+          "patterns": [
+            { "include": "#string-escapes" },
+            { "include": "#interpolation" }
+          ]
+        },
+        {
+          "comment": "\"…\" — regular double-quoted string",
+          "name": "string.quoted.double.jux",
+          "begin": "\"",
+          "end": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.jux" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.jux" }
+          },
+          "patterns": [
+            { "include": "#string-escapes" }
+          ]
+        }
+      ]
+    },
+
+    "string-escapes": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.unicode.jux",
+          "match": "\\\\u\\{[0-9A-Fa-f]+\\}"
+        },
+        {
+          "name": "constant.character.escape.unicode.jux",
+          "match": "\\\\u[0-9A-Fa-f]{4}"
+        },
+        {
+          "name": "constant.character.escape.jux",
+          "match": "\\\\[abefnrtv0\\\\'\"$]"
+        },
+        {
+          "name": "constant.character.escape.hex.jux",
+          "match": "\\\\x[0-9A-Fa-f]{2}"
+        },
+        {
+          "name": "invalid.illegal.unrecognized-string-escape.jux",
+          "match": "\\\\."
+        }
+      ]
+    },
+
+    "interpolation": {
+      "patterns": [
+        {
+          "comment": "${ expr } — full expression interpolation",
+          "name": "meta.embedded.expression.jux",
+          "begin": "\\$\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": { "name": "punctuation.section.embedded.begin.jux" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.section.embedded.end.jux" }
+          },
+          "patterns": [
+            { "include": "$self" }
+          ]
+        },
+        {
+          "comment": "$ident — short-form interpolation",
+          "match": "(\\$)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.section.embedded.jux" },
+            "2": { "name": "variable.other.interpolation.jux" }
+          }
+        }
+      ]
+    },
+
+    "keywords-decl": {
+      "patterns": [
+        {
+          "name": "keyword.declaration.jux",
+          "match": "\\b(class|interface|enum|record|struct|annotation|package|import|type)\\b"
+        }
+      ]
+    },
+
+    "keywords-mod": {
+      "patterns": [
+        {
+          "name": "storage.modifier.jux",
+          "match": "\\b(public|private|protected|internal|abstract|final|sealed|static|const|volatile|native|async|unsafe|var)\\b"
+        },
+        {
+          "name": "storage.modifier.inheritance.jux",
+          "match": "\\b(extends|implements|permits|throws)\\b"
+        }
+      ]
+    },
+
+    "keywords-control": {
+      "patterns": [
+        {
+          "name": "keyword.control.conditional.jux",
+          "match": "\\b(if|else|switch|case|default|when|match)\\b"
+        },
+        {
+          "name": "keyword.control.loop.jux",
+          "match": "\\b(for|while|do|break|continue|yield)\\b"
+        },
+        {
+          "name": "keyword.control.exception.jux",
+          "match": "\\b(try|catch|finally|throw)\\b"
+        },
+        {
+          "name": "keyword.control.flow.jux",
+          "match": "\\b(return|await|drop|move)\\b"
+        }
+      ]
+    },
+
+    "keywords-other": {
+      "patterns": [
+        {
+          "name": "variable.language.self.jux",
+          "match": "\\b(this|super)\\b"
+        },
+        {
+          "name": "keyword.operator.expression.new.jux",
+          "match": "\\b(new|init)\\b"
+        },
+        {
+          "name": "keyword.operator.expression.as.jux",
+          "match": "\\b(as|sizeof|operator)\\b"
+        }
+      ]
+    },
+
+    "types-primitive": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.jux",
+          "match": "\\b(bool|byte|ubyte|short|ushort|int|uint|long|ulong|float|double|char|void|i8|u8|i16|u16|i32|u32|i64|u64|i128|u128|f32|f64|isize|usize|String)\\b"
+        }
+      ]
+    },
+
+    "types-name": {
+      "patterns": [
+        {
+          "comment": "UpperCamelCase identifier — heuristically a type reference",
+          "name": "entity.name.type.jux",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+
+    "function-decl": {
+      "patterns": [
+        {
+          "comment": "Function-like declaration: ident immediately followed by '('",
+          "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.jux" }
+          }
+        }
+      ]
+    },
+
+    "function-call": {
+      "patterns": [
+        {
+          "comment": "Method/function call site",
+          "match": "([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.call.jux" }
+          }
+        }
+      ]
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.jux",
+          "match": "<=>|===|!==|==|!=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.logical.jux",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "name": "keyword.operator.bitwise.jux",
+          "match": "<<=|>>=|<<|>>|&=|\\|=|\\^=|&|\\||\\^|~"
+        },
+        {
+          "name": "keyword.operator.assignment.compound.jux",
+          "match": "\\+=|-=|\\*=|/=|%="
+        },
+        {
+          "name": "keyword.operator.assignment.jux",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.arithmetic.jux",
+          "match": "\\+|-|\\*|/|%"
+        },
+        {
+          "name": "keyword.operator.range.jux",
+          "match": "\\.\\.=|\\.\\.|\\.\\.\\."
+        },
+        {
+          "name": "keyword.operator.null.jux",
+          "match": "\\?\\.|\\?:|!!|\\?"
+        },
+        {
+          "name": "keyword.operator.arrow.jux",
+          "match": "->|=>"
+        },
+        {
+          "name": "keyword.operator.path.jux",
+          "match": "::"
+        }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.terminator.statement.jux",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.comma.jux",
+          "match": ","
+        },
+        {
+          "name": "punctuation.separator.colon.jux",
+          "match": ":"
+        },
+        {
+          "name": "punctuation.accessor.dot.jux",
+          "match": "\\."
+        },
+        {
+          "name": "punctuation.section.parens.jux",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.section.brackets.jux",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.section.braces.jux",
+          "match": "[{}]"
+        }
+      ]
+    }
+  }
+}

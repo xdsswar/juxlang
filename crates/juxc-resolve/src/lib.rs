@@ -706,6 +706,14 @@ impl Resolver {
                 }
                 self.pop_scope();
             }
+            Expr::Elvis(e) => {
+                // Both the nullable value and the non-null fallback
+                // are evaluated in the surrounding scope. The result
+                // type is the fallback's type; resolution of either
+                // side is independent.
+                self.visit_expr(&e.value);
+                self.visit_expr(&e.fallback);
+            }
         }
     }
 

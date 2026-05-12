@@ -10,7 +10,7 @@
 use juxc_source::Span;
 
 use crate::common::Ident;
-use crate::exprs::Expr;
+use crate::exprs::{BinaryOp, Expr};
 use crate::types::TypeRef;
 
 /// A brace-delimited block of statements.
@@ -162,16 +162,25 @@ pub struct ForEachStmt {
 /// - `name = value;` — simple variable assignment (`Expr::Path` with a
 ///   single segment).
 /// - `arr[i] = value;` — array element assignment (`Expr::Index`).
+/// - `obj.field = value;` — field assignment (`Expr::Field`).
 ///
-/// Member-access (`obj.field = …`) will join when field-access lands.
-/// The parser validates the lvalue shape at construction time; anything
-/// outside the supported set emits `E0200_UnexpectedToken`.
+/// **Compound assignment** (`x += y`, `x *= y`, …) preserves the
+/// operator on the AssignStmt rather than desugaring at parse time.
+/// The backend lowers `x += y` directly to Rust's `+=`, which evaluates
+/// the lvalue exactly once even for side-effecting shapes like
+/// `arr[next()] += 1`. Plain `x = y` carries `op = None`.
 #[derive(Debug, Clone)]
 pub struct AssignStmt {
     /// The lvalue being assigned to. Must be one of the parser-validated
     /// lvalue shapes listed above.
     pub target: Expr,
-    /// New value.
+    /// Compound-assignment operator (`+=`, `-=`, …) or `None` for a
+    /// plain `=`. Stored as a [`BinaryOp`] for type-uniformity with
+    /// the regular binary path: tycheck reuses its op-typing rules
+    /// and the backend reuses its op-spelling table when emitting
+    /// the matching `target op= value` form.
+    pub op: Option<BinaryOp>,
+    /// New value (right-hand side of the operator).
     pub value: Expr,
     /// Span covering `target = value ;`.
     pub span: Span,

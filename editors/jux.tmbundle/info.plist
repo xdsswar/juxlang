@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>name</key>
+    <string>Jux</string>
+    <key>description</key>
+    <string>Jux language support</string>
+    <key>contactName</key>
+    <string>XTREME SOFTWARE SOLUTIONS</string>
+    <key>uuid</key>
+    <string>9b1e8a2c-7d4f-4a3b-9f0c-1e2d3c4b5a67</string>
+</dict>
+</plist>

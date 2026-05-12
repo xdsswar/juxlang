@@ -301,14 +301,52 @@ fn assignment_lowers_directly() {
 /// Compound assignment `+=` lowers (via parse-time desugar) to
 /// `name = name + value;` in Rust.
 #[test]
-fn compound_assignment_lowers_to_full_form() {
+fn compound_assignment_preserves_op_form() {
+    // Post the compound-assign AST preservation pass, `+=` no longer
+    // desugars at parse time. The backend emits `x += 5;` directly,
+    // matching Rust's own `+=` (which evaluates the place expr
+    // once even for side-effecting shapes like `arr[next()] += 1`).
     let rust = emit(
         r#"public void main() {
                var x = 10;
                x += 5;
            }"#,
     );
-    assert!(rust.contains("x = x + 5;"), "got: {rust}");
+    assert!(rust.contains("x += 5;"), "expected `x += 5`, got: {rust}");
+    assert!(
+        !rust.contains("x = x + 5"),
+        "should NOT desugar to `x = x + 5`: {rust}",
+    );
+}
+
+/// Side-effecting place expressions on the LHS of `+=` are evaluated
+/// EXACTLY ONCE — the audit-flagged double-eval bug
+/// (`arr[next()] += 1` calling `next()` twice) is gone now that
+/// compound assignment preserves the operator instead of expanding
+/// to `target = target + rhs` at parse time.
+#[test]
+fn compound_assignment_does_not_double_evaluate_index() {
+    let rust = emit(
+        r#"public int next() { return 0; }
+           public void main() {
+               int[3] xs = {0, 0, 0};
+               xs[next()] += 1;
+           }"#,
+    );
+    // Emitted code must use `+=`, not the desugared form. Index
+    // expression may carry a `usize` cast — the key invariant is
+    // that `next()` is invoked exactly once on the assignment
+    // statement. Find the `+= 1` line and confirm `next()` only
+    // appears once in it.
+    let line = rust
+        .lines()
+        .find(|l| l.contains("+= 1"))
+        .expect("expected a `+= 1` line in emitted source");
+    let call_count = line.matches("next()").count();
+    assert_eq!(
+        call_count, 1,
+        "next() should be evaluated exactly once on the assign line, got {call_count}: {line}\nfull:\n{rust}",
+    );
 }
 
 /// `break;` lowers to `break;`. `continue;` lowers to `continue;`.

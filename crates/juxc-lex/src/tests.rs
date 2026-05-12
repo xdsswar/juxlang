@@ -156,8 +156,14 @@ fn bangbang_distinct_from_bang() {
 #[test]
 fn question_family() {
     assert_eq!(
-        kinds("? ?. ?:"),
-        vec![TokenKind::Question, TokenKind::QuestionDot, TokenKind::QuestionColon, TokenKind::Eof]
+        kinds("? ?. ?: ??"),
+        vec![
+            TokenKind::Question,
+            TokenKind::QuestionDot,
+            TokenKind::QuestionColon,
+            TokenKind::QuestionQuestion,
+            TokenKind::Eof,
+        ],
     );
 }
 

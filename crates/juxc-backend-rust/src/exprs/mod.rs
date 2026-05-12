@@ -135,7 +135,45 @@ impl RustEmitter {
                 self.w.push(')');
             }
             Expr::Lambda(l) => self.emit_lambda(l),
+            Expr::Elvis(e) => self.emit_elvis(e),
         }
+    }
+
+    /// Lower `value ?: fallback` to Rust. `value` has type
+    /// `Option<T>`; `fallback` has type `T`. The simple
+    /// `value.unwrap_or(fallback)` works as long as we don't
+    /// re-use `value` after — which is the case for an Elvis
+    /// expression's own evaluation (the result IS the consumption).
+    ///
+    /// `unwrap_or` evaluates the fallback eagerly. When the user
+    /// puts a side-effecting expression there (`x ?: launch()`),
+    /// Rust still runs `launch()` exactly as Jux semantics expect.
+    /// `unwrap_or_else` would defer it; for now eager matches the
+    /// spec text "else `b`".
+    pub(crate) fn emit_elvis(&mut self, e: &juxc_ast::ElvisExpr) {
+        let value_needs_parens = !matches!(
+            *e.value,
+            Expr::Path(_)
+                | Expr::This(_)
+                | Expr::Field(_)
+                | Expr::Call(_)
+                | Expr::Index(_)
+                | Expr::Literal(_)
+                | Expr::InterpString(_)
+                | Expr::NewObject(_)
+                | Expr::NewArray(_)
+                | Expr::NewArrayLit(_)
+        );
+        if value_needs_parens {
+            self.w.push('(');
+        }
+        self.emit_expr(&e.value);
+        if value_needs_parens {
+            self.w.push(')');
+        }
+        self.w.push_str(".unwrap_or(");
+        self.emit_expr(&e.fallback);
+        self.w.push(')');
     }
 
     /// Emit a Jux lambda as a Rust closure, wrapped in `Rc::new`
@@ -258,6 +296,7 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
         Expr::NewObject(n) => n.span,
         Expr::Switch(s) => s.span,
         Expr::Lambda(l) => l.span,
+        Expr::Elvis(e) => e.span,
     }
 }
 

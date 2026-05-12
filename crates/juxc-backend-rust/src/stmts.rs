@@ -12,6 +12,63 @@ use juxc_tycheck::Ty;
 use crate::exprs::expr_span_of;
 use crate::RustEmitter;
 
+/// True when `e` is the AST `null` literal — used to decide
+/// whether a value flowing into a nullable slot needs the
+/// `Some(...)` wrap or is already `None`.
+fn is_null_literal(e: &Expr) -> bool {
+    matches!(e, Expr::Literal(Literal::Null))
+}
+
+impl RustEmitter {
+    /// True iff the enclosing function's declared return type is
+    /// `T?` (nullable) AND `expr` isn't itself a `null` literal —
+    /// meaning the value flowing through `return …` is a `T`
+    /// that needs the `Some(...)` lift to match the `Option<T>`
+    /// declared return type.
+    pub(crate) fn return_wants_some_wrap(&self, expr: &Expr) -> bool {
+        let returns_nullable = match &self.current_return_type {
+            Some(juxc_ast::ReturnType::Type(t)) => t.nullable,
+            Some(juxc_ast::ReturnType::AsyncType(t)) => t.nullable,
+            _ => false,
+        };
+        returns_nullable && !is_null_literal(expr)
+    }
+}
+
+/// Match the Kotlin-style null-smart-cast head: `name != null`
+/// where `name` is a bare single-segment path. Returns
+/// `Some(name)` when the shape matches, else `None`. Used by
+/// `emit_if` to lower the canonical null-guard
+/// (`if (x != null) { … }`) to Rust's `if let Some(x) = x`
+/// pattern — inside the block, `x` is the unwrapped inner type.
+///
+/// Composite lvalues (`obj.field != null`, `arr[i] != null`) are
+/// intentionally NOT matched here. Lowering them to `if let
+/// Some(name) = obj.field` introduces a fresh binding `name`
+/// without giving the user a way to write it — they'd have to
+/// stash the result into a local anyway. A future smart-cast
+/// pass can extend this.
+fn match_simple_not_null_check(cond: &Expr) -> Option<&str> {
+    let Expr::Binary(b) = cond else { return None };
+    if !matches!(b.op, juxc_ast::BinaryOp::NotEq) {
+        return None;
+    }
+    // The non-null side must be a bare identifier (single-segment
+    // path). The null side must be the `null` literal.
+    let (target, other) = match (&*b.left, &*b.right) {
+        (Expr::Literal(Literal::Null), other) => (other, &*b.left),
+        (other, Expr::Literal(Literal::Null)) => (other, &*b.right),
+        _ => return None,
+    };
+    let _ = other;
+    if let Expr::Path(qn) = target {
+        if qn.segments.len() == 1 {
+            return Some(qn.segments[0].text.as_str());
+        }
+    }
+    None
+}
+
 impl RustEmitter {
     /// Emit the body of a block — statements one per line, each indented.
     /// The enclosing `{ … }` is emitted by the caller so we can match
@@ -50,13 +107,20 @@ impl RustEmitter {
                 self.w.push_str("return");
                 if let Some(e) = value {
                     self.w.push(' ');
+                    // Nullable-return coercion: when the enclosing
+                    // fn returns `T?` (lowered as `Option<T>`) and
+                    // the value being returned isn't already a
+                    // `null` literal, wrap it in `Some(...)` so the
+                    // type-check passes. A `return null;` already
+                    // lowers to `return None;` via `emit_literal`.
+                    let wrap_some = self.return_wants_some_wrap(e);
+                    if wrap_some {
+                        self.w.push_str("Some(");
+                    }
                     self.emit_expr(e);
-                    // Pre Fix 1 we appended `.to_string()` to bare
-                    // string literals here to bridge `&str` →
-                    // `String`. Fix 1 lifted every Jux string source
-                    // to owned `String` directly inside `emit_literal`,
-                    // so the coercion is now baked in. Keeping the
-                    // call would emit `.to_string().to_string()`.
+                    if wrap_some {
+                        self.w.push(')');
+                    }
                 }
                 self.w.push_str(";\n");
             }
@@ -172,13 +236,25 @@ impl RustEmitter {
         // Java-style typed local (`int x = 5;`) carries an explicit
         // type annotation; emit it as `let x: T = init;`. The `var`
         // form leaves `ty == None` and we let Rust infer.
+        let declared_nullable = var.ty.as_ref().map_or(false, |t| t.nullable);
         if let Some(ty) = &var.ty {
             self.w.push_str(": ");
             self.emit_type_as_rust(ty);
         }
         if let Some(init) = &var.init {
             self.w.push_str(" = ");
+            // When the declared type is nullable (`T?` → `Option<T>`)
+            // and the init isn't a `null` literal, wrap in `Some(...)`
+            // so the assignment type-checks. A `null` init already
+            // lowers to `None` via `emit_literal`, so no wrap there.
+            let wrap_some = declared_nullable && !is_null_literal(init);
+            if wrap_some {
+                self.w.push_str("Some(");
+            }
             self.emit_expr(init);
+            if wrap_some {
+                self.w.push(')');
+            }
         }
         self.w.push_str(";\n");
     }
@@ -228,7 +304,19 @@ impl RustEmitter {
         self.emitting_lvalue = true;
         self.emit_expr(&a.target);
         self.emitting_lvalue = false;
-        self.w.push_str(" = ");
+        // Compound assignment lowers to Rust's matching `op=`:
+        // `x += y`, `arr[i] *= n`, etc. Rust evaluates the place
+        // expression exactly once even for side-effecting shapes
+        // like `arr[next()] += 1`, so we don't have to introduce
+        // any temp. The op spelling is the regular Rust binary
+        // operator with `=` appended.
+        if let Some(op) = a.op {
+            self.w.push(' ');
+            self.w.push_str(op.as_rust_str());
+            self.w.push_str("= ");
+        } else {
+            self.w.push_str(" = ");
+        }
         self.emit_expr(&a.value);
         self.w.push_str(";\n");
     }
@@ -236,10 +324,27 @@ impl RustEmitter {
     /// Lower `if (cond) { … } else if (…) { … } else { … }` to its
     /// directly-corresponding Rust form. Rust uses no parentheses around
     /// `if` conditions, so we drop them.
+    ///
+    /// **Null smart-cast** (Kotlin-style): when the condition is
+    /// `name != null` for a bare identifier `name`, lower the head
+    /// to `if let Some(name) = name` so the binding inside the
+    /// `then` block sees the unwrapped inner type. Pairs with the
+    /// `is_some()`/`is_none()` peephole in `emit_binary` — the
+    /// peephole stays the right shape for boolean-context uses
+    /// (`var ok = x != null;`), while this branch handles the
+    /// narrower `if` form.
     pub(crate) fn emit_if(&mut self, if_stmt: &IfStmt) {
-        self.w.push_str("if ");
-        self.emit_expr(&if_stmt.condition);
-        self.w.push_str(" {\n");
+        if let Some(name) = match_simple_not_null_check(&if_stmt.condition) {
+            self.w.push_str("if let Some(");
+            self.w.push_str(name);
+            self.w.push_str(") = ");
+            self.w.push_str(name);
+            self.w.push_str(" {\n");
+        } else {
+            self.w.push_str("if ");
+            self.emit_expr(&if_stmt.condition);
+            self.w.push_str(" {\n");
+        }
         self.w.indent_inc();
         self.emit_block_contents(&if_stmt.then_block);
         self.w.indent_dec();

@@ -10,7 +10,7 @@ use juxc_ast::{
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_lex::{Keyword, TokenKind};
 
-use crate::exprs::{expr_span, make_binary};
+use crate::exprs::expr_span;
 use crate::Parser;
 
 impl<'a> Parser<'a> {
@@ -209,25 +209,26 @@ impl<'a> Parser<'a> {
             return None;
         }
 
-        // Desugar `x op= rhs` to `x = x op rhs`. The target expression
-        // is reused on the LHS of the binary so we evaluate it once
-        // (semantically — see TODO below for arr[i] += rhs).
+        // Compound assignment (`x += y`, `arr[f()] *= n`, …) keeps
+        // the operator on the AssignStmt rather than rewriting to
+        // `x = x op y` at parse time. This solves two things at
+        // once:
         //
-        // TODO: for `arr[i] += rhs` this currently emits
-        // `arr[i] = arr[i] + rhs` which evaluates `arr[i]` twice. With
-        // simple expressions that's a non-issue; with side-effecting
-        // index expressions it would matter. A later phase should
-        // introduce a temporary.
-        let value = match compound_op {
-            None => rhs_expr,
-            Some(op) => {
-                let target_read = target_expr.clone();
-                make_binary(op, target_read, rhs_expr)
-            }
-        };
-
+        // - **No double-eval.** `arr[next()] += 1` lowers directly to
+        //   Rust's `arr[next()] += 1`, which evaluates the place
+        //   expression exactly once per Rust's semantics. The old
+        //   parse-time desugar produced
+        //   `arr[next()] = arr[next()] + 1` and ran `next()` twice.
+        // - **Readability.** The backend emits `+=` verbatim instead
+        //   of reconstructing it from a Binary expression — what
+        //   the user wrote is what they see in the rustc errors.
         let span = expr_span(&target_expr).join(self.last_consumed_span());
-        Some(Stmt::Assign(AssignStmt { target: target_expr, value, span }))
+        Some(Stmt::Assign(AssignStmt {
+            target: target_expr,
+            op: compound_op,
+            value: rhs_expr,
+            span,
+        }))
     }
 
     /// `return-stmt = 'return' expression? ';'`.
@@ -299,6 +300,12 @@ impl<'a> Parser<'a> {
                 }
                 i += 1;
             }
+        }
+        // Optional nullable suffix `?` — `int? x = 5;`. Sits between
+        // the type-name (with optional generics) and the optional
+        // array shape, matching `parse_type_ref`'s ordering.
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Question)) {
+            i += 1;
         }
         // Walk through optional `[ … ]` array dim segments. Bracket depth
         // tracking lets us skip past whatever's inside (size expression).

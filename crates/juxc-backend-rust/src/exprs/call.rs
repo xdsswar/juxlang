@@ -69,6 +69,18 @@ impl RustEmitter {
                 return self.emit_print_call(call);
             }
         }
+        // Safe-navigation method call (`obj?.method(args)`): the
+        // callee parses as a `Field` with `safe: true`. Lower to
+        // `obj.as_ref().map(|__t| __t.method(args))` so the result
+        // is `Option<ReturnType>` and the receiver isn't moved.
+        // Cleared inside the closure: args are still consumed
+        // values, so the format-arg flag (if set) doesn't leak.
+        if let Expr::Field(f) = &*call.callee {
+            if f.safe {
+                self.emit_safe_method_call(f, call);
+                return;
+            }
+        }
         // Static method call: `ClassName.staticMethod(args)` (or
         // `pkg.Cls.method(args)`) → `Path::method(args)`. Recognize
         // the receiver as a class name and switch the dot to `::`.
@@ -138,6 +150,51 @@ impl RustEmitter {
                 self.w.push_str(".unwrap()");
             }
         }
+    }
+
+    /// Lower `obj?.method(args)` to
+    /// `obj.as_ref().map(|__t| __t.method(args))`. Closure body
+    /// emits with `emitting_format_arg=false` so any string-literal
+    /// arg still self-coerces — same discipline as a regular
+    /// `emit_call`'s args. The result type is `Option<ReturnType>`.
+    pub(crate) fn emit_safe_method_call(
+        &mut self,
+        callee: &juxc_ast::FieldExpr,
+        call: &CallExpr,
+    ) {
+        let needs_parens = !matches!(
+            *callee.object,
+            Expr::Path(_)
+                | Expr::This(_)
+                | Expr::Field(_)
+                | Expr::Call(_)
+                | Expr::Index(_)
+                | Expr::Literal(_)
+                | Expr::InterpString(_)
+                | Expr::NewObject(_)
+                | Expr::NewArray(_)
+                | Expr::NewArrayLit(_)
+        );
+        if needs_parens {
+            self.w.push('(');
+        }
+        self.emit_expr(&callee.object);
+        if needs_parens {
+            self.w.push(')');
+        }
+        self.w.push_str(".as_ref().map(|__t| __t.");
+        self.w.push_str(&callee.field.text);
+        self.w.push('(');
+        let prev = self.emitting_format_arg;
+        self.emitting_format_arg = false;
+        for (i, arg) in call.args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.emit_expr(arg);
+        }
+        self.emitting_format_arg = prev;
+        self.w.push_str("))");
     }
 
     /// Lower a call to the built-in `print(…)` into the most natural Rust

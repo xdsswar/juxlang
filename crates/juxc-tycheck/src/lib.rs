@@ -44,6 +44,7 @@ use juxc_source::Span;
 pub mod check;
 pub mod env;
 pub mod infer;
+mod nullable_check;
 pub mod symbol_table;
 pub mod ty;
 
@@ -105,6 +106,13 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     let symbols = symbol_table::build_workspace(units, &mut tc.diagnostics);
     for unit in units {
         tc.check_unit(unit);
+        // Reject `T?` where T is a non-nullable value-type primitive
+        // (`int?`, `bool?`, `double?`, …). Per spec, only reference
+        // types — `String`, user classes/records/enums, arrays of
+        // references — can carry the nullable marker. Primitives are
+        // value types that always have a meaningful default and
+        // never hold null.
+        nullable_check::check_nullable_primitives(unit, &mut tc.diagnostics);
     }
     let mut all_expr_types = std::collections::HashMap::new();
     for (idx, unit) in units.iter().enumerate() {

@@ -255,12 +255,13 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// `?`, `?.`, or `?:`.
+    /// `?`, `?.`, `?:`, or `??` (null-coalescing alias for `?:`).
     fn lex_question(&mut self, start: usize) {
         self.bump();
         match self.peek() {
-            Some(b'.') => { self.bump(); self.emit(TokenKind::QuestionDot,   start, self.pos); }
-            Some(b':') => { self.bump(); self.emit(TokenKind::QuestionColon, start, self.pos); }
+            Some(b'.') => { self.bump(); self.emit(TokenKind::QuestionDot,      start, self.pos); }
+            Some(b':') => { self.bump(); self.emit(TokenKind::QuestionColon,    start, self.pos); }
+            Some(b'?') => { self.bump(); self.emit(TokenKind::QuestionQuestion, start, self.pos); }
             _          => self.emit(TokenKind::Question, start, self.pos),
         }
     }

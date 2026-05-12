@@ -10,6 +10,26 @@ use crate::RustEmitter;
 
 impl RustEmitter {
     pub(crate) fn emit_field(&mut self, f: &FieldExpr) {
+        // Safe-navigation field access (`obj?.field`) lowers via
+        // `Option::map`: the closure runs only when the receiver
+        // is `Some`, and the result is `Option<FieldType>`. We
+        // emit through `as_ref()` so the original `Option<T>` isn't
+        // moved — the user is free to keep reading `obj` after.
+        // A `?.field` access on a method-call result (`f()?.field`)
+        // works the same way: the inner expression's value goes
+        // through `.as_ref()` then `.map(...)`.
+        //
+        // Field clones inside the closure use `.clone()` for
+        // ownership; the closure receives a `&T`, so we clone the
+        // field out. Every Jux user type derives `Clone`, so this
+        // is always valid (primitives are `Copy` and ignore the
+        // call). The `length` short-circuit below stays
+        // safe-aware: `obj?.length` on a nullable array produces
+        // an `Option<isize>` length.
+        if f.safe {
+            self.emit_safe_field(f);
+            return;
+        }
         if f.field.text == "length" {
             // `xs.length` → `xs.len() as isize`. Wrap the receiver
             // in parens only when its shape might otherwise bind
@@ -84,17 +104,48 @@ impl RustEmitter {
         // recorded with its precise `Ty`. A missing entry falls back
         // to the conservative "do the .clone()" path, matching the
         // old heuristic for the (rare) cases tycheck didn't visit.
-        // Two suppressors:
-        // - **lvalue context**: `self.x = ...` must not become
+        // Auto-`.clone()` is suppressed in any **borrow context** —
+        // a position where the surrounding code only needs to *read*
+        // the field, not own it. Today three such positions:
+        //
+        // - **lvalue context**: `self.x = ...` must never become
         //   `self.x.clone() = ...`.
         // - **format-arg context**: `println!`/`format!` borrow via
-        //   `Display`, so a `&String` borrow on `self.name` is just
-        //   as good as `self.name.clone()` — and one heap alloc
-        //   cheaper.
-        let in_format_arg = self.emitting_format_arg;
-        if !self.emitting_lvalue && !in_format_arg && self.field_read_needs_clone(f) {
+        //   `Display`; a `&String` is as good as `String` and we
+        //   save the alloc.
+        // - **comparison operand**: `==`, `!=`, `<`, `<=`, `>`, `>=`
+        //   on Strings borrow both sides through `PartialEq`/
+        //   `PartialOrd`, so the clone is redundant.
+        let in_borrow_context =
+            self.emitting_format_arg || self.emitting_comparison_operand;
+        if !self.emitting_lvalue && !in_borrow_context && self.field_read_needs_clone(f) {
             self.w.push_str(".clone()");
         }
+    }
+
+    /// Lower `obj?.field` to
+    /// `obj.as_ref().map(|__t| __t.field.clone())`. The receiver is
+    /// borrowed (via `as_ref`) so the original `Option<T>` stays
+    /// usable; inside the closure the field is cloned so the
+    /// result is owned.
+    ///
+    /// Method-call variant `obj?.method(args)` is handled at the
+    /// `emit_call` level: when the callee is a safe-field, the
+    /// call rewrites to
+    /// `obj.as_ref().map(|__t| __t.method(args))`. This routine
+    /// covers the pure-field path.
+    pub(crate) fn emit_safe_field(&mut self, f: &FieldExpr) {
+        let needs_parens = receiver_needs_parens(&f.object);
+        if needs_parens {
+            self.w.push('(');
+        }
+        self.emit_expr(&f.object);
+        if needs_parens {
+            self.w.push(')');
+        }
+        self.w.push_str(".as_ref().map(|__t| __t.");
+        self.w.push_str(&f.field.text);
+        self.w.push_str(".clone())");
     }
 
     /// Decide whether a `.clone()` should follow a field read.

@@ -2169,8 +2169,11 @@ public void main() {
         print(name);                        // smart-cast: name is non-null here
     }
 
-    // Elvis operator for default value
+    // Elvis / null-coalescing for default value. `?:` and `??` are
+    // aliases — same operator, same AST. Pick whichever reads
+    // better at the call site.
     var displayName = findName(42) ?: "unknown";
+    var altName     = findName(42) ?? "unknown";
 
     // Safe navigation
     var length = findName(42)?.length();    // returns int?
@@ -2401,7 +2404,7 @@ The following C++-overloadable operators are **not** overloadable in Jux. The re
 |----------|---------|
 | `&&`, `\|\|` | Would lose short-circuit evaluation — `a && b` would always evaluate `b`. C++ allows this and it is a known footgun. |
 | `?:` (ternary `c ? a : b`) | Bound to nullable/result semantics; overriding would break null-handling guarantees. |
-| `?:` (Elvis `a ?: b`) | Same — bound to nullable semantics. |
+| `?:` / `??` (Elvis `a ?: b` / `a ?? b`) | Same — bound to nullable semantics. The two spellings are interchangeable. |
 | `,` | The comma operator overload was a C++ mistake. Sequencing is not a value-producing operation worth overloading. |
 | `=` | Plain assignment. Jux's ownership and refcount semantics define what assignment means; user override would violate borrow-checker invariants. |
 | `.`, `?.` | Member access. Overload would essentially be macro magic; defeats `goto-definition`. |

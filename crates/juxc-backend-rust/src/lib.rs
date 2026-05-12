@@ -305,6 +305,14 @@ struct RustEmitter {
     /// `format!("{}{}", "hi".to_string(), name)`) without changing
     /// semantics.
     pub(crate) emitting_format_arg: bool,
+    /// True while we're emitting an operand of an **equality or
+    /// ordering comparison** (`==`, `!=`, `<`, `<=`, `>`, `>=`).
+    /// Rust's `PartialEq`/`PartialOrd` trait methods take `&self`,
+    /// so the operands are borrowed — auto-`.clone()` on
+    /// `String`/generic field reads is wasted in this position.
+    /// Mirrors the `emitting_format_arg` discipline: set in the
+    /// comparison emitter, consulted by `emit_field`.
+    pub(crate) emitting_comparison_operand: bool,
     /// Declared return type of the function / method / operator body
     /// currently being emitted. `None` outside any function body and
     /// inside constructor bodies (constructors return `Self`).
@@ -399,6 +407,7 @@ impl RustEmitter {
             emitting_lvalue: false,
             emitting_const_context: false,
             emitting_format_arg: false,
+            emitting_comparison_operand: false,
             current_return_type: None,
             source: None,
             symbols: symbols.clone(),

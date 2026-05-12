@@ -46,13 +46,25 @@ impl RustEmitter {
     /// allocating. Owned-string semantics (mutation, storage in structs)
     /// will need a more nuanced mapping when we get there.
     pub(crate) fn emit_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
-        // Function-type shape `(A, B) -> R` per grammar §A.2.7.
-        // Lower to `std::rc::Rc<dyn Fn(A, B) -> R>` — Rc rather
-        // than Box so the type stays `Clone` (the storage path
-        // wraps these inside `#[derive(Clone)]` structs). Param
-        // positions could use the more-ergonomic `impl Fn(...)
-        // -> ...` form, but Rust's `impl Trait` placement rules
-        // get fussy; the uniform Rc lowering is friendlier.
+        // Nullable types `T?` lower to Rust's `Option<T>`. We peel
+        // the `nullable` flag here and recurse on the inner type
+        // (which is `ty` with `nullable = false`). All other shape
+        // flags — array, generics, fn-shape — apply to the inner
+        // type, NOT to the `Option` wrapper: `int?[]` is
+        // `Option<Vec<isize>>` is wrong; it should be
+        // `Vec<Option<isize>>`. So the order is:
+        //
+        //   1. Function-type? (always outermost shape — fn-types are
+        //      first-class).
+        //   2. Array? Element keeps the `nullable` flag so `int?[]`
+        //      → `Vec<Option<isize>>`.
+        //   3. Nullable? Recurse on non-nullable inner.
+        //   4. Primitive / user type.
+        //
+        // (1) and (2) are already handled below; the nullable
+        // pass-through inside the array-shape recursion preserves
+        // `ty.nullable` so the inner element-type emit hits the
+        // nullable branch with the right per-element type.
         if let Some(fn_shape) = &ty.fn_shape {
             self.w.push_str("std::rc::Rc<dyn Fn(");
             for (i, p) in fn_shape.params.iter().enumerate() {
@@ -108,6 +120,25 @@ impl RustEmitter {
                     self.w.push('>');
                 }
             }
+            return;
+        }
+
+        // Nullable peeled here, after array — `T?` wraps the
+        // already-emitted inner type in `Option<…>`. Done after
+        // arrays so `T?[]` lowers to `Vec<Option<T>>` (the `?`
+        // applies to each element, not the Vec).
+        if ty.nullable {
+            let inner = juxc_ast::TypeRef {
+                name: ty.name.clone(),
+                generic_args: ty.generic_args.clone(),
+                nullable: false,
+                array_shape: ty.array_shape.clone(),
+                fn_shape: ty.fn_shape.clone(),
+                span: ty.span,
+            };
+            self.w.push_str("Option<");
+            self.emit_type_as_rust(&inner);
+            self.w.push('>');
             return;
         }
 

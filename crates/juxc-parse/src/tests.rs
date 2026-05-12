@@ -503,10 +503,65 @@ fn field_lvalue_is_accepted() {
 // ---------------------------------------------------------------------------
 // Compound assignments — parse-time desugar to `target = target op rhs`
 // ---------------------------------------------------------------------------
+// Elvis / null-coalescing (`?:` and its `??` alias)
+// ---------------------------------------------------------------------------
 
-/// `x += 1;` parses to an AssignStmt whose `value` is a `Binary(Add, x, 1)`.
+/// Both `a ?: b` and `a ?? b` parse to the same `Expr::Elvis` shape.
+/// Per `JUX-GRAMMAR-ADDENDUM.md` §A.1.6 the two spellings are
+/// interchangeable aliases.
 #[test]
-fn plus_equals_desugars_to_assign_with_binary() {
+fn elvis_and_double_question_produce_same_ast() {
+    let colon = parse_clean("public void main() { var x = a ?: b; }");
+    let qq    = parse_clean("public void main() { var x = a ?? b; }");
+    let bc = body_of(&colon.items[0]);
+    let bq = body_of(&qq.items[0]);
+    let Stmt::VarDecl(vc) = &bc.statements[0] else { panic!() };
+    let Stmt::VarDecl(vq) = &bq.statements[0] else { panic!() };
+    let ic = vc.init.as_ref().unwrap();
+    let iq = vq.init.as_ref().unwrap();
+    let Expr::Elvis(_) = ic else {
+        panic!("?: should parse to Expr::Elvis, got {ic:?}");
+    };
+    let Expr::Elvis(_) = iq else {
+        panic!("?? should parse to Expr::Elvis, got {iq:?}");
+    };
+}
+
+/// Right-associativity holds for both spellings. `a ?? b ?? c`
+/// parses as `a ?? (b ?? c)` — same as `a ?: b ?: c`.
+#[test]
+fn elvis_double_question_is_right_associative() {
+    let ast = parse_clean("public void main() { var x = a ?? b ?? c; }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let init = v.init.as_ref().unwrap();
+    let Expr::Elvis(outer) = init else { panic!() };
+    let Expr::Elvis(_inner) = &*outer.fallback else {
+        panic!("right side should be another Elvis, got {:?}", outer.fallback);
+    };
+}
+
+/// `?:` and `??` can be mixed freely in a single chain (they're
+/// the same operator); the chain still parses right-associatively.
+#[test]
+fn elvis_spellings_can_be_mixed() {
+    let ast = parse_clean("public void main() { var x = a ?: b ?? c; }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let init = v.init.as_ref().unwrap();
+    let Expr::Elvis(outer) = init else { panic!() };
+    let Expr::Elvis(_) = &*outer.fallback else {
+        panic!("mixed chain should still nest right: {:?}", outer.fallback);
+    };
+}
+
+// ---------------------------------------------------------------------------
+
+/// `x += 1;` parses to an AssignStmt with `op = Some(Add)` and the
+/// bare rhs in `value`. The compound operator no longer desugars at
+/// parse time — that's the backend's job (lowers to Rust `+=`).
+#[test]
+fn plus_equals_preserves_op_on_assign_stmt() {
     use juxc_ast::BinaryOp;
     let ast = parse_clean("public void main() { var x = 1; x += 2; }");
     let body = body_of(&ast.items[0]);
@@ -515,18 +570,17 @@ fn plus_equals_desugars_to_assign_with_binary() {
     };
     let Expr::Path(t_qn) = &a.target else { panic!("expected Path lvalue") };
     assert_eq!(t_qn.segments[0].text, "x");
-    let Expr::Binary(b) = &a.value else {
-        panic!("compound assignment should desugar to a Binary expr");
+    assert_eq!(a.op, Some(BinaryOp::Add), "compound op should be Add");
+    // RHS is the bare literal `2`, NOT a synthetic `x + 2` binary.
+    let Expr::Literal(_) = &a.value else {
+        panic!("rhs should be the literal value, not a binary: {:?}", a.value);
     };
-    assert_eq!(b.op, BinaryOp::Add);
-    // Left side of the binary should be a read of `x`.
-    let Expr::Path(qn) = &*b.left else { panic!() };
-    assert_eq!(qn.segments[0].text, "x");
 }
 
-/// All five arithmetic compound operators desugar with the right op.
+/// All five arithmetic compound operators preserve their op on
+/// `AssignStmt`.
 #[test]
-fn all_compound_arithmetic_ops_desugar() {
+fn all_compound_arithmetic_ops_round_trip() {
     use juxc_ast::BinaryOp;
     let cases = [
         ("+=", BinaryOp::Add),
@@ -540,9 +594,17 @@ fn all_compound_arithmetic_ops_desugar() {
         let ast = parse_clean(&src);
         let body = body_of(&ast.items[0]);
         let Stmt::Assign(a) = &body.statements[1] else { panic!() };
-        let Expr::Binary(b) = &a.value else { panic!() };
-        assert_eq!(b.op, expected, "wrong op for {op_src}");
+        assert_eq!(a.op, Some(expected), "wrong op for {op_src}");
     }
+}
+
+/// A plain `x = 1;` carries `op = None`.
+#[test]
+fn plain_assignment_has_no_compound_op() {
+    let ast = parse_clean("public void main() { var x = 1; x = 7; }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Assign(a) = &body.statements[1] else { panic!() };
+    assert!(a.op.is_none(), "plain `=` should have no compound op, got {:?}", a.op);
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,6 +1097,88 @@ fn cast_is_tighter_than_multiplicative() {
         panic!("rhs of `*` should be a cast");
     };
     assert_eq!(c.ty.name.segments[0].text, "long");
+}
+
+/// C-style cast `(long) x` parses to the same `Expr::Cast` shape as
+/// `x as long`. Triggers because `long` is a known primitive name.
+#[test]
+fn c_style_cast_with_primitive_parses_as_cast() {
+    let ast = parse_clean("public void main() { print((long) x); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
+    let Expr::Cast(c) = &call.args[0] else {
+        panic!("expected Expr::Cast, got {:?}", call.args[0]);
+    };
+    assert_eq!(c.ty.name.segments[0].text, "long");
+    assert!(matches!(&*c.value, Expr::Path(_)), "cast target should be ident");
+}
+
+/// `(int) -x` — cast binds at unary precedence, so the operand is
+/// the **unary expression** `-x`, not the value `x` alone.
+#[test]
+fn c_style_cast_takes_unary_operand() {
+    use juxc_ast::UnaryOp;
+    let ast = parse_clean("public void main() { print((int) -x); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
+    let Expr::Cast(c) = &call.args[0] else { panic!() };
+    let Expr::Unary(u) = &*c.value else {
+        panic!("operand should be `-x`, got {:?}", c.value);
+    };
+    assert_eq!(u.op, UnaryOp::Neg);
+}
+
+/// `(x) y` — grouping a plain non-primitive ident does **not**
+/// become a cast. The grammar addendum §A.5 reserves user-name
+/// casts for name-resolution; until then the parens are pure
+/// grouping. (Here `(x) + 3` is the canonical shape — the
+/// expression after `)` doesn't have to be valid for a cast to
+/// have triggered, but our lookahead conservatively rejects
+/// non-primitive bare names so this stays a plain `(x) + 3`.)
+#[test]
+fn paren_grouped_non_primitive_ident_stays_paren_expr() {
+    let ast = parse_clean("public void main() { print((x) + 3); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
+    // The arg is the binary `(x) + 3` — NOT a cast.
+    assert!(
+        !matches!(&call.args[0], Expr::Cast(_)),
+        "should not parse as cast: {:?}",
+        call.args[0],
+    );
+}
+
+/// A user-named type with an array marker (`(Foo[]) x`) DOES
+/// trigger the cast path because the markers make the type-shape
+/// unambiguous.
+#[test]
+fn c_style_cast_with_array_marker_on_user_type() {
+    let ast = parse_clean("public void main() { print((Foo[]) xs); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
+    let Expr::Cast(c) = &call.args[0] else {
+        panic!("array-marked user type should trigger cast: {:?}", call.args[0]);
+    };
+    assert_eq!(c.ty.name.segments[0].text, "Foo");
+    assert!(c.ty.array_shape.is_some(), "cast type should carry array shape");
+}
+
+/// `(x as int)` and `(int) x` should produce structurally
+/// identical AST: both an `Expr::Cast` with the same target type.
+#[test]
+fn postfix_and_prefix_cast_produce_same_ast_shape() {
+    let postfix = parse_clean("public void main() { print(x as int); }");
+    let prefix  = parse_clean("public void main() { print((int) x); }");
+    let pa = body_of(&postfix.items[0]);
+    let pp = body_of(&prefix.items[0]);
+    let Stmt::Expr(Expr::Call(call_a)) = &pa.statements[0] else { panic!() };
+    let Stmt::Expr(Expr::Call(call_p)) = &pp.statements[0] else { panic!() };
+    let Expr::Cast(ca) = &call_a.args[0] else { panic!() };
+    let Expr::Cast(cp) = &call_p.args[0] else { panic!() };
+    assert_eq!(ca.ty.name.segments[0].text, cp.ty.name.segments[0].text);
+    // Both cast targets are a single-segment Path `x`.
+    assert!(matches!(&*ca.value, Expr::Path(_)));
+    assert!(matches!(&*cp.value, Expr::Path(_)));
 }
 
 // ---------------------------------------------------------------------------

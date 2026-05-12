@@ -157,6 +157,12 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
             juxc_ast::LambdaBody::Expr(e) => collect_mutating_calls(e, out, user_mut),
             juxc_ast::LambdaBody::Block(b) => collect_mutated_names(b, out, user_mut),
         },
+        // Elvis evaluates both sides — both can contain a mutating
+        // call (e.g. `xs.pop() ?: empty()`); walk recursively.
+        Expr::Elvis(e) => {
+            collect_mutating_calls(&e.value, out, user_mut);
+            collect_mutating_calls(&e.fallback, out, user_mut);
+        }
     }
 }
 

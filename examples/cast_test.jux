@@ -1,0 +1,35 @@
+// C-style and postfix `as` casts both produce a `CastExpr` AST.
+// Identical semantics; pick whichever reads better.
+
+public long widenAs(int x) {
+    return x as long;
+}
+
+public long widenCStyle(int x) {
+    return (long) x;
+}
+
+public void main() {
+    var a = 5L;
+    var b = 7;
+
+    // Postfix form
+    var sum1 = a + (b as long);
+
+    // Prefix form
+    var sum2 = a + (long) b;
+
+    print(sum1);
+    print(sum2);
+
+    print(widenAs(42));
+    print(widenCStyle(42));
+
+    // Narrowing cast
+    var x = (int) 100L;
+    print(x);
+
+    int[3] xs = {10, 20, 30};
+    var first = (int) xs[0];
+    print(first);
+}

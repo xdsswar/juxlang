@@ -107,8 +107,14 @@ pub enum TokenKind {
     Question,
     /// `?.` — safe-navigation member access.
     QuestionDot,
-    /// `?:` — Elvis operator.
+    /// `?:` — Elvis / null-coalescing operator.
     QuestionColon,
+    /// `??` — null-coalescing alias for `?:` (C#/JavaScript-style
+    /// spelling). The parser treats this identically to
+    /// [`Self::QuestionColon`]; the two are kept as distinct tokens
+    /// so source-mapped diagnostics can report the spelling the
+    /// user actually typed. Per `JUX-GRAMMAR-ADDENDUM.md` §A.1.6.
+    QuestionQuestion,
     /// `!!` — non-null assertion.
     BangBang,
     /// `@` — annotation prefix.

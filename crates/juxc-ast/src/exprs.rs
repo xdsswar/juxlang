@@ -64,6 +64,25 @@ pub enum Expr {
     /// `(args) -> body` or `x -> body` per grammar §A.2.9. See
     /// [`LambdaExpr`]. Lowers to a Rust closure (`|args| body`).
     Lambda(LambdaExpr),
+    /// `a ?: b` — null-coalescing per §7.10 / §A.4 level 3. `a` is
+    /// a nullable expression (`T?`); when non-null its inner `T`
+    /// is the result, else `b` (also of type `T`) provides the
+    /// fallback. Backend lowers to `a.unwrap_or(b)`.
+    Elvis(ElvisExpr),
+}
+
+/// Elvis (null-coalescing) operator: `value ?: fallback`. Returns
+/// the unwrapped `T` if `value` is non-null, else `fallback`.
+/// Right-associative per the grammar table; the parser builds the
+/// chain so `a ?: b ?: c` is `a ?: (b ?: c)`.
+#[derive(Debug, Clone)]
+pub struct ElvisExpr {
+    /// Nullable left-hand value being unwrapped.
+    pub value: Box<Expr>,
+    /// Non-nullable fallback used when `value` is null.
+    pub fallback: Box<Expr>,
+    /// Span covering `value ?: fallback`.
+    pub span: Span,
 }
 
 /// Lambda expression per grammar §A.2.9:
@@ -182,6 +201,12 @@ pub struct FieldExpr {
     /// Name of the field. The backend special-cases known names
     /// (currently just `length`).
     pub field: Ident,
+    /// True when the access used the `?.` safe-navigation form per
+    /// §A.4 level 20 / §7.10. Plain `.` carries `false`; `?.`
+    /// carries `true`. The backend lowers `obj?.field` to
+    /// `obj.as_ref().map(|x| x.field.clone())` so the result is
+    /// `Option<FieldType>` and chains propagate None through.
+    pub safe: bool,
     /// Span of the whole `object.field` form.
     pub span: Span,
 }

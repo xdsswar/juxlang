@@ -50,7 +50,7 @@ pub use decls::{
     TopLevelDecl, TypeAliasDecl, TypeParam,
 };
 pub use exprs::{
-    BinaryExpr, BinaryOp, CallExpr, CastExpr, Expr, FieldExpr,
+    BinaryExpr, BinaryOp, CallExpr, CastExpr, ElvisExpr, Expr, FieldExpr,
     IndexExpr, InterpSegment, InterpStringExpr, LambdaBody, LambdaExpr, LambdaParam,
     NewArrayExpr, NewArrayLitExpr, NewObjectExpr, RangeExpr, SizeOfExpr,
     UnaryExpr, UnaryOp,

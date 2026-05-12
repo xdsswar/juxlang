@@ -883,6 +883,15 @@ impl<'a> Checker<'a> {
                 self.current_return = saved_return;
                 self.env.pop_scope();
             }
+            Expr::Elvis(e) => {
+                // Walk both sides; Phase 1 doesn't yet enforce
+                // "value must be nullable" or "fallback type
+                // matches inner". The backend lowers to
+                // `value.unwrap_or(fallback)` and rustc surfaces
+                // any type mismatch.
+                self.check_expr(&e.value);
+                self.check_expr(&e.fallback);
+            }
         }
     }
 
@@ -1851,6 +1860,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::NewObject(n) => n.span,
         Expr::Switch(s) => s.span,
         Expr::Lambda(l) => l.span,
+        Expr::Elvis(e) => e.span,
     }
 }
 

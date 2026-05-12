@@ -104,6 +104,10 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // time, so the lack of a precise Jux-side type is
         // observationally a no-op.
         Expr::Lambda(_) => Ty::Unknown,
+        // Elvis: result type is the fallback's type. Both sides are
+        // expected to share an inner type (Phase 1 doesn't enforce
+        // it yet — that's a future tycheck refinement).
+        Expr::Elvis(e) => infer_expr(&e.fallback, env, symbols),
     }
 }
 

@@ -148,7 +148,7 @@ String literals are UTF-8 sequences of Unicode scalar values. Surrogate code poi
 ```
 punct             = '(' | ')' | '[' | ']' | '{' | '}'
                   | ',' | ';' | ':' | '::' | '.' | '..' | '..='
-                  | '?' | '?.' | '?:' | '@'
+                  | '?' | '?.' | '?:' | '??' | '@'
                   | '->' | '=>'
                   | '=' | '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|='
                   | '^=' | '<<=' | '>>='
@@ -515,7 +515,9 @@ conditional       = elvis-expr ( '?' expression ':' expression )?
                   | if-expr
                   | try-expr
 
-elvis-expr        = logic-or ( '?:' elvis-expr )?
+elvis-expr        = logic-or ( ( '?:' | '??' ) elvis-expr )?
+                                                              -- '??' is an alias for '?:'; they
+                                                              -- produce the same AST node.
 
 logic-or          = logic-and ( '||' logic-and )*
 logic-and         = bit-or ( '&&' bit-or )*
@@ -733,7 +735,7 @@ The table is from loosest binding (top) to tightest (bottom). Within each level,
 |-----|------------------------------------------------------------------|---------------|---------------|-----------------------------------------------------------------------------|
 | 1   | `=`  `+=`  `-=`  `*=`  `/=`  `%=`  `&=`  `|=`  `^=`  `<<=`  `>>=` | right         | binary        | Compound forms desugar via the binary operator (§7.14, last paragraph).     |
 | 2   | `?` `:`                                                          | right         | ternary       | `c ? a : b`; `a` and `b` must have a common type.                           |
-| 3   | `?:`                                                             | right         | binary        | Elvis. `a ?: b` is `a` if non-null, else `b`.                               |
+| 3   | `?:`  `??`                                                       | right         | binary        | Elvis / null-coalescing. `a ?: b` (Kotlin/Groovy) and `a ?? b` (C#/JS) are aliases producing the same AST. Returns `a`'s inner value when non-null, else `b`. |
 | 4   | `||`                                                             | left          | binary        | Short-circuit. Not overloadable.                                            |
 | 5   | `&&`                                                             | left          | binary        | Short-circuit. Not overloadable.                                            |
 | 6   | `|`                                                              | left          | binary        | Bitwise OR.                                                                  |

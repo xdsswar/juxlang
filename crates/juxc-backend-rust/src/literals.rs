@@ -52,10 +52,14 @@ impl RustEmitter {
                 }
             }
             Literal::Bool(b) => self.w.push_str(if *b { "true" } else { "false" }),
-            // §C.9.4: `null` is the unit `()` for now — a placeholder until
-            // the nullable-type lowering spec firms up. Replaced when
-            // `Option`-style lowering lands.
-            Literal::Null => self.w.push_str("()"),
+            // `null` is the empty value of an `Option<T>`. We always
+            // emit `None` and let Rust's type inference fill in the
+            // `T`; var decls / returns / fn args carry an explicit
+            // `Option<T>` annotation that pins the type. When the
+            // surrounding context can't infer T (a free-standing
+            // `null` expression), rustc surfaces the ambiguity with
+            // a clear "cannot infer" message at the user's site.
+            Literal::Null => self.w.push_str("None"),
         }
     }
 

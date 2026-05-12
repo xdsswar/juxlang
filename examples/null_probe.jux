@@ -1,0 +1,43 @@
+// Nullable types — full vehicle.
+//
+// `String? lookup(...)` returns a nullable String. Call sites use
+//   - smart-cast `if (x != null) { print(x); }` — inside the block,
+//     x is unwrapped to plain String
+//   - `?.` safe-call — `obj?.method()` propagates None
+//   - `?:` elvis — `x ?: "default"` returns the unwrapped value or
+//     a fallback
+
+public class User {
+    public String name;
+    public User(String name) { this.name = name; }
+    public String greet() { return "hi, " + this.name; }
+}
+
+public User? lookupUser(int id) {
+    if (id < 0) { return null; }
+    return new User("user_" + id);
+}
+
+public void main() {
+    var found = lookupUser(42);
+    var missing = lookupUser(-1);
+
+    // 1. Smart-cast: `if (x != null)` narrows to non-null `x` inside.
+    if (found != null) {
+        print(found.greet());
+    }
+
+    // 2. Safe-call: `obj?.method()` returns Option<String>. The
+    //    chained `?:` (Kotlin-style) extracts the value or uses a
+    //    fallback.
+    var greeting = lookupUser(7)?.greet() ?: "no user";
+    print(greeting);
+
+    // Same operator, C#/JS-style `??` spelling.
+    var fallback = lookupUser(-1)?.greet() ?? "no user";
+    print(fallback);
+
+    // 3. Elvis alone: unwrap-or-default on the variable directly.
+    var nameOrEmpty = missing?.name ?? "";
+    print("name=" + nameOrEmpty);
+}
