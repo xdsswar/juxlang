@@ -233,6 +233,17 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 }
             }
         }
+        // `IfaceName.FIELD` — interface fields are implicitly
+        // `public static final`, so the receiver-as-type-name
+        // path applies. Inferring as the field's declared type
+        // matches the class-static branch above.
+        if let Some(iface_fqn) = path_resolves_to_interface(qn, env, symbols) {
+            if let Some(iface) = symbols.interfaces.get(&iface_fqn) {
+                if let Some(field) = iface.fields.get(f.field.text.as_str()) {
+                    return lower_member_type(&field.ty, &iface_fqn, symbols);
+                }
+            }
+        }
         // Enum-variant access: `Color.Red`, `Token.Number`. The
         // path resolves to the enum type itself, so the result
         // type is `Ty::User { name: <enum> }` — same shape an

@@ -1,0 +1,28 @@
+// Interface fields are implicitly `public static final`.
+//
+// `int MAX_RETRIES = 3;` and `String DEFAULT_NAME = "anon";` are
+// both constants on the interface itself — no instance carries
+// them. You read them as `Settings.MAX_RETRIES`, never through
+// an implementing class's instance. The backend lowers each
+// field to a free `pub const Settings_MAX_RETRIES: ... = ...;`
+// matching the static-method lowering shape.
+//
+// Java rule from `classes-rules.md` §3.3: fields cannot be
+// `private` or `protected`, must carry an initializer, and the
+// `static` / `final` keywords are redundant (the parser
+// tolerates them but doesn't require them).
+
+public interface Settings {
+    int MAX_RETRIES = 3;
+    String DEFAULT_NAME = "anon";
+}
+
+public class Session implements Settings {
+    public int attempts() { return Settings.MAX_RETRIES; }
+}
+
+public void main() {
+    print(Settings.MAX_RETRIES);
+    print(Settings.DEFAULT_NAME);
+    print(new Session().attempts());
+}

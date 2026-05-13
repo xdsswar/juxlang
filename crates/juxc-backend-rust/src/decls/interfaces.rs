@@ -161,5 +161,38 @@ impl RustEmitter {
             }
             self.w.newline();
         }
+
+        // Interface fields — emitted as free `pub const`
+        // declarations named `Interface_FIELD` (mirroring the
+        // static-method naming) so call sites like
+        // `Iface.FIELD` rewrite cleanly. They're always
+        // initialized (parser enforced) and always
+        // `public static final` by §3.3. The const-context
+        // flag re-uses the class-static-field trick: `String`
+        // types lower to `&'static str` and string literals
+        // skip the `.to_string()` wrap so `const` stays
+        // const-evaluatable.
+        for field in &interface.fields {
+            self.w.emit_indent();
+            self.emit_visibility(interface.visibility);
+            self.w.push_str("const ");
+            self.w.push_str(&interface.name.text);
+            self.w.push('_');
+            self.w.push_str(&field.name.text);
+            self.w.push_str(": ");
+            self.emitting_const_context = true;
+            self.emit_field_type_as_rust(&field.ty);
+            self.w.push_str(" = ");
+            if let Some(init) = &field.default {
+                self.emit_expr(init);
+            } else {
+                self.w.push_str("Default::default()");
+            }
+            self.emitting_const_context = false;
+            self.w.push_str(";\n");
+        }
+        if !interface.fields.is_empty() {
+            self.w.newline();
+        }
     }
 }

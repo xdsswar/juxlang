@@ -147,6 +147,28 @@ pub enum Code {
     /// same shape; without it, rustc surfaces a much less
     /// readable "multiple applicable items" error.
     E0430_AmbiguousDefaultMethod,
+    /// E0431 — A method carries a combination of modifiers that
+    /// cannot coexist. Examples (per `classes-rules.md` §1.4):
+    /// `abstract` declared inside a non-abstract class; `abstract`
+    /// paired with `static`, `final`, or `private`. The
+    /// diagnostic names the offending combination so the fix is
+    /// mechanical.
+    E0431_InvalidMethodModifiers,
+    /// E0432 — A top-level class or interface declared `private`
+    /// or `protected`. Per `classes-rules.md` §1.1 / §3.1 the
+    /// only legal visibility for a top-level type is `public` or
+    /// package-private (no modifier). Nested types can use the
+    /// narrower modifiers, but Phase 1 doesn't have nested types
+    /// yet.
+    E0432_InvalidTopLevelVisibility,
+    /// E0433 — An overriding method narrows its visibility
+    /// relative to the method it overrides. Per
+    /// `classes-rules.md` §1.4 the override must be **at least as
+    /// visible** as the parent's. Without this code the lowered
+    /// Rust still compiles but the narrowed override silently
+    /// breaks Liskov substitutability — callers holding the
+    /// parent type can't reach the override.
+    E0433_OverrideNarrowsAccess,
     /// E0440 — A `switch` over a sealed type (enum or sealed
     /// class) doesn't cover every variant / permitted subclass
     /// and has no wildcard arm. Per `JUX-DIAGNOSTICS-ADDENDUM.md`
@@ -218,6 +240,9 @@ impl Code {
             Code::E0428_CannotInstantiate        => "E0428",
             Code::E0429_AbstractNotImplemented   => "E0429",
             Code::E0430_AmbiguousDefaultMethod   => "E0430",
+            Code::E0431_InvalidMethodModifiers   => "E0431",
+            Code::E0432_InvalidTopLevelVisibility => "E0432",
+            Code::E0433_OverrideNarrowsAccess    => "E0433",
             Code::E0440_NotExhaustive            => "E0440",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",

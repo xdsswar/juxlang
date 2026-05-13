@@ -79,6 +79,21 @@ impl RustEmitter {
                     }
                 }
             }
+            // Interface static field: `IfaceName.FIELD` lowers to
+            // `Iface_FIELD`. The free-`pub const` definition is
+            // emitted by `emit_interface_decl` alongside the trait.
+            if let Some(iface_fqn) = self.path_resolves_to_interface_in_emit(qn) {
+                let iface = self.symbols.interfaces.get(&iface_fqn);
+                if iface
+                    .and_then(|i| i.fields.get(f.field.text.as_str()))
+                    .is_some()
+                {
+                    self.emit_fqn_path_in_rust(&iface_fqn, qn.segments.len() > 1);
+                    self.w.push('_');
+                    self.w.push_str(&f.field.text);
+                    return;
+                }
+            }
         }
         // Generic member access — emit verbatim and rely on Rust to
         // resolve.

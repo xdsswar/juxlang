@@ -1173,6 +1173,36 @@ impl<'a> Checker<'a> {
                 );
                 return;
             }
+            // `IfaceName.CONST` — interface fields are implicitly
+            // public static final (§3.3), so the receiver is a
+            // type name in expression position just like a class
+            // static. We resolve them the same way and emit a
+            // clean E0412 when the field doesn't exist.
+            if let Some(iface_fqn) = crate::infer::path_resolves_to_interface(
+                qn,
+                &self.env,
+                self.symbols,
+            ) {
+                let field_name = f.field.text.as_str();
+                if let Some(_field) = self
+                    .symbols
+                    .interfaces
+                    .get(&iface_fqn)
+                    .and_then(|i| i.fields.get(field_name))
+                {
+                    return;
+                }
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0412_UnresolvedField,
+                        format!(
+                            "no static field `{field_name}` on interface `{iface_fqn}`",
+                        ),
+                    )
+                    .with_span(f.span),
+                );
+                return;
+            }
         }
         let receiver_ty = infer_expr(&f.object, &self.env, self.symbols);
         let field_name = f.field.text.as_str();
@@ -1691,6 +1721,23 @@ impl<'a> Checker<'a> {
             .collect();
 
         if let Some(class) = self.symbols.classes.get(&class_name) {
+            // Abstract classes can't be instantiated directly —
+            // only concrete subclasses can satisfy the `new`. Fire
+            // E0428 with the abstract-class-specific message so
+            // users know to extend the class rather than chase the
+            // synthesized constructor.
+            if class.is_abstract {
+                self.diagnostics.push(
+                    juxc_diagnostics::Diagnostic::error(
+                        code::Code::E0428_CannotInstantiate,
+                        format!(
+                            "cannot instantiate `{class_name}`: it's an abstract class. Subclass it with a concrete class and instantiate that instead.",
+                        ),
+                    )
+                    .with_span(n.span),
+                );
+                return;
+            }
             // At most one constructor in Turn 1. If there are none, the
             // synthesized default takes zero args.
             let params: Vec<ParamSig> = class

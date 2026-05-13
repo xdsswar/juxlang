@@ -241,6 +241,38 @@ impl crate::RustEmitter {
         None
     }
 
+    /// Sibling of [`path_resolves_to_class_in_emit`] that maps a
+    /// path to an interface FQN. Used by the static-member
+    /// emission paths to recognize `IfaceName.FIELD` or
+    /// `IfaceName.method()` shapes whose lowering goes through
+    /// the `Iface_FIELD` / `Iface_method` free-fn naming.
+    pub(crate) fn path_resolves_to_interface_in_emit(
+        &self,
+        qn: &juxc_ast::QualifiedName,
+    ) -> Option<String> {
+        if qn.segments.is_empty() {
+            return None;
+        }
+        let joined: String = qn
+            .segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+        if self.symbols.interfaces.contains_key(&joined) {
+            return Some(joined);
+        }
+        if qn.segments.len() == 1 {
+            let bare = &qn.segments[0].text;
+            for fqn in self.symbols.interfaces.keys() {
+                if fqn_bare(fqn) == bare.as_str() {
+                    return Some(fqn.clone());
+                }
+            }
+        }
+        None
+    }
+
     /// Emit an FQN as a Rust path. Any FQN with a package portion
     /// gets a `crate::` root so it resolves correctly regardless
     /// of how deep the surrounding `pub mod` nest is.

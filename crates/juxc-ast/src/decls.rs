@@ -163,6 +163,11 @@ pub struct InterfaceDecl {
     /// Method signatures. Each `FnDecl` here has `body: None`. The
     /// parser enforces signature-only form for Turn 1.
     pub methods: Vec<FnDecl>,
+    /// Interface fields — implicitly `public static final` per
+    /// `classes-rules.md` §3.3. The parser treats `int X = 10;` as
+    /// a constant declaration; an initializer is required because
+    /// the field can't be assigned elsewhere.
+    pub fields: Vec<FieldDecl>,
     /// Span covering the whole `interface Name { … }` declaration.
     pub span: Span,
 }

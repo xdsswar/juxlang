@@ -422,11 +422,115 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::LBrace, "'{' to start interface body");
 
         let mut methods = Vec::new();
+        let mut fields = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             // Interface methods don't yet take their own annotations
             // in the Phase-1 cut — leave empty.
-            let method_annotations = Vec::new();
-            let method_vis = self.parse_visibility();
+            let member_annotations = Vec::new();
+            let member_vis = self.parse_visibility();
+            // Field-vs-method lookahead. Per `classes-rules.md` §3.3
+            // any field in an interface is implicitly `public static
+            // final`, so we accept `int X = 10;` as the canonical
+            // shape and tolerate redundant `static` / `final` /
+            // `const` prefixes. The discriminator: after walking
+            // past field-only modifiers and the type, we land on
+            // either `Ident =`/`Ident ;` (field) or `Ident (` (method).
+            let lookahead_is_field = {
+                let mut i = self.pos;
+                while matches!(
+                    self.tokens.get(i).map(|t| &t.kind),
+                    Some(TokenKind::Kw(Keyword::Static))
+                        | Some(TokenKind::Kw(Keyword::Final))
+                        | Some(TokenKind::Kw(Keyword::Const)),
+                ) {
+                    i += 1;
+                }
+                let starts_with_type = matches!(
+                    self.tokens.get(i).map(|t| &t.kind),
+                    Some(TokenKind::Ident(_)),
+                );
+                if starts_with_type {
+                    i += 1;
+                    // Eat any `<T, ...>` generic arg list — naive depth
+                    // counter handles nested generics.
+                    if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
+                        let mut depth = 1;
+                        i += 1;
+                        while depth > 0 {
+                            match self.tokens.get(i).map(|t| &t.kind) {
+                                Some(TokenKind::Lt) => depth += 1,
+                                Some(TokenKind::Gt) => depth -= 1,
+                                Some(TokenKind::Eof) | None => break,
+                                _ => {}
+                            }
+                            i += 1;
+                        }
+                    }
+                    // Optional `?` nullable marker — fields can be
+                    // nullable just like locals.
+                    if matches!(
+                        self.tokens.get(i).map(|t| &t.kind),
+                        Some(TokenKind::Question),
+                    ) {
+                        i += 1;
+                    }
+                    // The member identifier sits here. If `=`/`;`
+                    // follows, we're parsing a field; if `(` follows,
+                    // it's a method.
+                    if matches!(
+                        self.tokens.get(i).map(|t| &t.kind),
+                        Some(TokenKind::Ident(_)),
+                    ) {
+                        i += 1;
+                        matches!(
+                            self.tokens.get(i).map(|t| &t.kind),
+                            Some(TokenKind::Eq) | Some(TokenKind::Semicolon),
+                        )
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+            if lookahead_is_field {
+                // Interfaces don't admit `private` / `protected` on
+                // members (§3.3) — emit a diagnostic but still parse
+                // so the rest of the body is recovered.
+                if matches!(member_vis, Visibility::Private | Visibility::Protected) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "interface fields cannot be `private` or `protected` — they are implicitly public",
+                        )
+                        .with_span(self.peek_span()),
+                    );
+                }
+                if let Some(mut field) = self.parse_field_decl(member_annotations, member_vis) {
+                    // Per §3.3: interface fields are implicitly
+                    // public static final — promote the declared
+                    // visibility to public if the user wrote
+                    // package-private, and force is_static /
+                    // is_final on whatever was parsed. An interface
+                    // field without an initializer would have no
+                    // value (interfaces don't have constructors),
+                    // so require one here.
+                    if field.default.is_none() {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0200_UnexpectedToken,
+                                "interface field must be initialized — every interface field is implicitly `public static final`",
+                            )
+                            .with_span(field.span),
+                        );
+                    }
+                    field.visibility = Visibility::Public;
+                    field.is_static = true;
+                    field.is_final = true;
+                    fields.push(field);
+                }
+                continue;
+            }
             // Java-style interface-method modifiers per
             // `JUX-LANG-V1.md` §7.6:
             //
@@ -440,6 +544,8 @@ impl<'a> Parser<'a> {
             // `default` and `static` are mutually exclusive. The
             // body-vs-no-body contract is enforced after
             // parse_fn_decl below.
+            let method_annotations = member_annotations;
+            let method_vis = member_vis;
             let is_default = self.eat_kw(Keyword::Default);
             let default_kw_span = if is_default {
                 Some(self.last_consumed_span())
@@ -521,6 +627,7 @@ impl<'a> Parser<'a> {
             name,
             generic_params,
             methods,
+            fields,
             span: start.join(end),
         })
     }

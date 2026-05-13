@@ -459,6 +459,11 @@ pub struct InterfaceSig {
     /// Method signatures indexed by name. Bodies are absent (`body:
     /// None` in the source). Duplicate names emit `E0402`.
     pub methods: HashMap<String, MethodSig>,
+    /// Field signatures indexed by name. Per `classes-rules.md` §3.3
+    /// these are implicitly `public static final` — the parser
+    /// already forces those flags on the `FieldSig` before it
+    /// lands here.
+    pub fields: HashMap<String, FieldSig>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -592,6 +597,9 @@ pub fn build_workspace(
     check_override_annotations(&table, diagnostics);
     check_abstract_methods_implemented(&table, diagnostics);
     check_diamond_default_conflicts(&table, diagnostics);
+    check_method_modifier_combinations(&table, diagnostics);
+    check_top_level_visibility(&table, diagnostics);
+    check_override_does_not_narrow_access(&table, diagnostics);
     table
 }
 
@@ -1239,10 +1247,11 @@ fn check_abstract_methods_implemented(
         if class.is_abstract {
             continue;
         }
-        if class.implements.is_empty() {
+        if class.implements.is_empty() && class.extends.is_none() {
             continue;
         }
         let mut missing: Vec<(String, String)> = Vec::new();
+        // Source 1: abstract methods on each implemented interface.
         for iface_ty in &class.implements {
             let Some(iface_name) = iface_ty.name.segments.last().map(|s| s.text.as_str()) else {
                 continue;
@@ -1266,12 +1275,53 @@ fn check_abstract_methods_implemented(
                 missing.push((iface_name.to_string(), m_name.clone()));
             }
         }
+        // Source 2: abstract methods inherited from an abstract
+        // ancestor class. A concrete subclass must implement every
+        // such method directly or via another concrete ancestor
+        // further down the chain.
+        let mut cursor: Option<&str> = class
+            .extends_fqn
+            .as_deref()
+            .or_else(|| {
+                class
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+            });
+        let mut depth = 0usize;
+        while let Some(ancestor_name) = cursor {
+            if depth > 64 {
+                break;
+            }
+            let Some(ancestor) = table.classes.get(ancestor_name) else {
+                break;
+            };
+            for (m_name, m_sig) in &ancestor.methods {
+                if !m_sig.is_abstract || m_sig.is_static {
+                    continue;
+                }
+                if class_provides_method(table, class_name, m_name) {
+                    continue;
+                }
+                missing.push((ancestor_name.to_string(), m_name.clone()));
+            }
+            cursor = ancestor
+                .extends_fqn
+                .as_deref()
+                .or_else(|| {
+                    ancestor
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+                });
+            depth += 1;
+        }
         if !missing.is_empty() {
             missing.sort();
             missing.dedup();
             let list = missing
                 .iter()
-                .map(|(iface, m)| format!("`{iface}.{m}`"))
+                .map(|(owner, m)| format!("`{owner}.{m}`"))
                 .collect::<Vec<_>>()
                 .join(", ");
             diagnostics.push(
@@ -1403,6 +1453,217 @@ fn check_diamond_default_conflicts(
                 .with_span(class.span),
             );
         }
+    }
+}
+
+/// Cross-class pass enforcing the modifier-combination rules
+/// listed in `classes-rules.md` §1.4:
+/// - `abstract` is only legal inside an `abstract` class
+///   (R-M1).
+/// - `abstract` cannot coexist with `static`, `final`, or
+///   `private` on the same method (R-M2..M4).
+///
+/// Interface methods are exempted from R-M1 because they're
+/// implicitly abstract by construction. The interface
+/// abstract+static collision (`static` on an unbodied
+/// signature) is already enforced by the parser (E0200).
+fn check_method_modifier_combinations(
+    table: &SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (class_name, class) in &table.classes {
+        for (method_name, method) in &class.methods {
+            if method.is_abstract && !class.is_abstract {
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0431_InvalidMethodModifiers,
+                        format!(
+                            "method `{class_name}.{method_name}` is declared `abstract` but `{class_name}` is not — `abstract` methods are only allowed in `abstract` classes",
+                        ),
+                    )
+                    .with_span(method.span),
+                );
+            }
+            if method.is_abstract && method.is_static {
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0431_InvalidMethodModifiers,
+                        format!(
+                            "method `{class_name}.{method_name}` declares both `abstract` and `static` — these modifiers cannot coexist",
+                        ),
+                    )
+                    .with_span(method.span),
+                );
+            }
+            if method.is_abstract && method.is_final {
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0431_InvalidMethodModifiers,
+                        format!(
+                            "method `{class_name}.{method_name}` declares both `abstract` and `final` — an abstract method must be overridable",
+                        ),
+                    )
+                    .with_span(method.span),
+                );
+            }
+            if method.is_abstract
+                && matches!(method.visibility, juxc_ast::Visibility::Private)
+            {
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0431_InvalidMethodModifiers,
+                        format!(
+                            "method `{class_name}.{method_name}` is `private` and `abstract` — a private method can't be overridden, so it can't be abstract",
+                        ),
+                    )
+                    .with_span(method.span),
+                );
+            }
+        }
+    }
+}
+
+/// Top-level types may only be `public` or package-private
+/// (no modifier). Nested types — when Jux gets them — can use
+/// the narrower modifiers, but at the unit's top level
+/// `private` and `protected` are nonsense: nothing can name the
+/// type from outside the file where it was declared. Fires
+/// **E0432**.
+fn check_top_level_visibility(
+    table: &SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    use juxc_ast::Visibility;
+    for (name, class) in &table.classes {
+        match class.visibility {
+            Visibility::Private | Visibility::Protected => {
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0432_InvalidTopLevelVisibility,
+                        format!(
+                            "top-level class `{name}` cannot be `{}` — use `public` or omit the modifier",
+                            visibility_label(class.visibility),
+                        ),
+                    )
+                    .with_span(class.span),
+                );
+            }
+            _ => {}
+        }
+    }
+    for (name, iface) in &table.interfaces {
+        match iface.visibility {
+            Visibility::Private | Visibility::Protected => {
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0432_InvalidTopLevelVisibility,
+                        format!(
+                            "top-level interface `{name}` cannot be `{}` — use `public` or omit the modifier",
+                            visibility_label(iface.visibility),
+                        ),
+                    )
+                    .with_span(iface.span),
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Helper: human-readable visibility name for diagnostics.
+fn visibility_label(v: juxc_ast::Visibility) -> &'static str {
+    use juxc_ast::Visibility;
+    match v {
+        Visibility::Public => "public",
+        Visibility::Protected => "protected",
+        Visibility::Private => "private",
+        Visibility::Package => "package-private",
+        Visibility::Internal => "internal",
+    }
+}
+
+/// Liskov rule (`classes-rules.md` §1.4): an overriding method
+/// must be **at least as visible** as the method it overrides.
+/// Narrowing `public greet()` to `private greet()` in a subclass
+/// breaks substitutability — code holding the parent reference
+/// can call the method, but code holding the subclass reference
+/// cannot. We walk the extends chain for every concrete method
+/// and compare against the ancestor's visibility; widening is
+/// fine. Fires **E0433**.
+fn check_override_does_not_narrow_access(
+    table: &SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (child_name, child) in &table.classes {
+        for (method_name, child_method) in &child.methods {
+            let mut cursor: Option<&str> = child
+                .extends_fqn
+                .as_deref()
+                .or_else(|| {
+                    child
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+                });
+            let mut depth = 0usize;
+            while let Some(ancestor_name) = cursor {
+                if depth > 64 {
+                    break;
+                }
+                let Some(ancestor) = table.classes.get(ancestor_name) else {
+                    break;
+                };
+                if let Some(ancestor_method) = ancestor.methods.get(method_name) {
+                    if visibility_rank(child_method.visibility)
+                        < visibility_rank(ancestor_method.visibility)
+                    {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0433_OverrideNarrowsAccess,
+                                format!(
+                                    "override `{child_name}.{method_name}` is `{}` but the inherited method `{ancestor_name}.{method_name}` is `{}` — an override cannot narrow visibility",
+                                    visibility_label(child_method.visibility),
+                                    visibility_label(ancestor_method.visibility),
+                                ),
+                            )
+                            .with_span(child_method.span),
+                        );
+                        break;
+                    }
+                }
+                cursor = ancestor
+                    .extends_fqn
+                    .as_deref()
+                    .or_else(|| {
+                        ancestor
+                            .extends
+                            .as_ref()
+                            .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+                    });
+                depth += 1;
+            }
+        }
+    }
+}
+
+/// Visibility ordering for the narrowing check. Higher rank =
+/// more visible. Package-private and protected aren't strictly
+/// ordered in Java (each lets through some access the other
+/// doesn't), but for the override-narrowing rule both sit
+/// strictly above `private` and below `public`, which is what
+/// the rule's "at least as visible" comparison actually cares
+/// about.
+fn visibility_rank(v: juxc_ast::Visibility) -> u8 {
+    use juxc_ast::Visibility;
+    match v {
+        Visibility::Private => 0,
+        Visibility::Package => 1,
+        // `internal` is a module-scoped variant sitting alongside
+        // package-private semantically — same rank for the
+        // narrowing comparison.
+        Visibility::Internal => 1,
+        Visibility::Protected => 2,
+        Visibility::Public => 3,
     }
 }
 
@@ -1743,12 +2004,30 @@ fn insert_interface(
         }
         methods.insert(method.name.text.clone(), method_sig(method));
     }
+    let mut fields = HashMap::new();
+    for field in &interface_decl.fields {
+        if fields.contains_key(&field.name.text) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0401_DuplicateField,
+                    format!(
+                        "field `{}` is declared more than once in interface `{}`",
+                        field.name.text, interface_decl.name.text,
+                    ),
+                )
+                .with_span(field.span),
+            );
+            continue;
+        }
+        fields.insert(field.name.text.clone(), field_sig(field));
+    }
     table.interfaces.insert(
         fqn,
         InterfaceSig {
             visibility: interface_decl.visibility,
             generic_params: interface_decl.generic_params.clone(),
             methods,
+            fields,
             span: interface_decl.span,
         },
     );
