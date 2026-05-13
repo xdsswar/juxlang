@@ -580,6 +580,35 @@ impl RustEmitter {
             self.w.push_str(");\n");
             return;
         }
+        // Mutable-static target: evaluate the RHS first into a local
+        // (releasing any locks the RHS itself takes), then acquire
+        // the LHS lock once for the write. Without this scoping the
+        // statement `Class.x = …` deadlocks whenever the RHS reads
+        // the same mutable static (`x = x + 1`, `Class.x = Class.x`,
+        // …) because the LHS's `MutexGuard` is a statement-scoped
+        // temporary that's still live while the RHS runs. Compound
+        // forms (`x += rhs`) get the same wrap so `x += x` doesn't
+        // hit the same trap. See §CR.5.7 in
+        // `JUX-CLASS-REPRESENTATION-ADDENDUM.md` for the lowering
+        // contract.
+        let target_is_mutable_static = self.target_is_mutable_static(&a.target);
+        if target_is_mutable_static {
+            self.w.push_str("{ let __jux_v = ");
+            self.emit_expr(&a.value);
+            self.w.push_str("; ");
+            self.emitting_lvalue = true;
+            self.emit_expr(&a.target);
+            self.emitting_lvalue = false;
+            if let Some(op) = a.op {
+                self.w.push(' ');
+                self.w.push_str(op.as_rust_str());
+                self.w.push_str("= __jux_v");
+            } else {
+                self.w.push_str(" = __jux_v");
+            }
+            self.w.push_str("; }\n");
+            return;
+        }
         // LHS: emit with the lvalue flag set so `emit_field` skips its
         // String-read `.clone()` insertion.
         self.emitting_lvalue = true;
@@ -607,6 +636,40 @@ impl RustEmitter {
         let assign_nullable = !is_compound && self.assign_target_is_nullable(&a.target);
         self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
         self.w.push_str(";\n");
+    }
+
+    /// True iff the assignment target resolves to a non-`final`
+    /// `static` class field — i.e. one of the
+    /// `LazyLock<Mutex<T>>`-lowered slots. Recognized in two shapes:
+    ///
+    /// - **Qualified** `Class.field` — `Expr::Field` whose object is
+    ///   a `Path` resolving to a class FQN, and the named field is
+    ///   `is_static && !is_final`.
+    /// - **Bare-name** `field` inside `class Class { … }` — single-
+    ///   segment `Expr::Path` that matches a static field on
+    ///   `self.enclosing_class`.
+    ///
+    /// Both shapes share the same Mutex-deadlock concern, so they
+    /// share the temp-binding wrap in [`Self::emit_assign`].
+    pub(crate) fn target_is_mutable_static(&self, target: &Expr) -> bool {
+        match target {
+            Expr::Field(f) => {
+                let Expr::Path(qn) = f.object.as_ref() else { return false };
+                let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) else { return false };
+                let Some(class) = self.symbols.classes.get(&class_fqn) else { return false };
+                let Some(field) = class.fields.get(f.field.text.as_str()) else { return false };
+                field.is_static && !field.is_final
+            }
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let Some(class_name) = &self.enclosing_class else { return false };
+                let Some(class) = self.symbols.classes.get(class_name) else { return false };
+                let Some(field) = class.fields.get(qn.segments[0].text.as_str()) else {
+                    return false;
+                };
+                field.is_static && !field.is_final
+            }
+            _ => false,
+        }
     }
 
     /// True iff the assignment target is a class/record field whose

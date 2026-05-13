@@ -6,9 +6,15 @@ interface A {
 final class Test implements A{
     public static String a = "INITIAL VALUE";
     public static int counter = 0;
+    public static final String x = "NULL";
 
     public void chill(){
-        print($"This is a crazy exmaple of static members in jux : ${Test.a} and ${Test.counter}");
+        // Bare names — `a` / `counter` resolve to Test.a / Test.counter
+        // because chill() is a method of the enclosing class.
+        print($"This is a crazy exmaple of static members in jux : ${a} and ${counter}");
+        // Bare-name reassignment too.
+        counter = counter + 1;
+        a = "TOUCHED BY chill()";
     }
 }
 
@@ -28,4 +34,9 @@ public void main() {
 
     print($"a = ${Test.a}");
     print($"counter = ${Test.counter}");
+
+    final var t = new Test();
+    t.chill();
+
+    print(Test.x);
 }

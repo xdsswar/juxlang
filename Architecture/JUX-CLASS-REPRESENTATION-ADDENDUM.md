@@ -340,6 +340,59 @@ synchronization has to happen at the lowering layer instead.
 error against the modifier). A non-final static accepts reassignment
 through the `*C_x.lock().unwrap() = e` shape above.
 
+**Bare-name access inside the enclosing class.** Inside any
+constructor / method / operator body of `class C`, an unqualified
+reference to one of `C`'s static fields resolves to that field —
+matching Java's member-access rule (`a` ≡ `C.a` inside `class C`).
+Both the read and the write forms are accepted:
+
+```jux
+class Test {
+    public static int counter = 0;
+
+    public void bump() {
+        counter = counter + 1;       // bare-name read + write
+        print($"counter = ${counter}");
+    }
+}
+```
+
+The lowering is identical to the qualified form — single-segment
+`Expr::Path` references that resolve to a static field of the
+enclosing class emit through the same `C::x` (final) or
+`C_x.lock().unwrap()` (mutable) shapes as `C.x`. Phase responsibilities:
+
+- **Resolver** pre-declares every static field name into each body's
+  scope so the bare reference doesn't fire `E0301_NameNotFound`.
+- **Tycheck infer** falls back to the enclosing class's static fields
+  when an unqualified `Expr::Path` misses the local environment, so
+  the bare reference carries the field's `Ty` for downstream checks.
+- **Backend** keeps an `enclosing_class: Option<String>` on the
+  emitter, set for the duration of class-body emission, and rewrites
+  single-segment `Expr::Path` whose name matches an enclosing-class
+  static to the qualified emission path.
+
+**Read/modify/write deadlock avoidance.** A naive lowering of
+`C.x = expr-that-reads-C.x` deadlocks the Mutex because the LHS's
+`MutexGuard` is a statement-scoped temporary that's still live while
+the RHS evaluates. Assignments whose target is a non-`final` static
+are therefore wrapped in a scoped temp so the RHS lock is released
+before the LHS lock is acquired:
+
+```rust
+// Lowering for `C.x = <rhs>;` when `x` is a mutable static.
+// Same shape covers the bare-name form (`x = <rhs>;` inside `C`)
+// and compound forms (`x += <rhs>;`).
+{
+    let __jux_v = /* RHS */;
+    *C_x.lock().unwrap() = __jux_v;
+}
+```
+
+Compound assignments (`x += rhs`) use the same wrap so `x += x`
+doesn't hit the same trap — the RHS still evaluates and unlocks
+before the LHS lock is taken for the `+=` write.
+
 ---
 
 ## §CR.6 — Rust Lowering Rules

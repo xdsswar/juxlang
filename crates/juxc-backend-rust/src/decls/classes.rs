@@ -41,6 +41,14 @@ impl RustEmitter {
     /// in the body still drive `let mut` promotion as before.
     pub(crate) fn emit_class_decl(&mut self, class_decl: &juxc_ast::ClassDecl) {
         // (Migrated to Writer indent-aware API)
+        // Track the enclosing class so `Expr::Path` emission can
+        // rewrite a bare reference to a static field (`a` inside
+        // `class Test` → `Test.a`) to the qualified form the
+        // existing static-field lowering knows how to handle. We
+        // restore the previous value at the end of emission so
+        // nested-class scenarios (Phase-2) compose correctly.
+        let prev_enclosing = self.enclosing_class.take();
+        self.enclosing_class = Some(class_decl.name.text.clone());
         // Derive Clone unconditionally so the `T: Clone` bound used on
         // generic impls (and the auto-`.clone()` injected on field
         // reads) keeps working when the user nests classes — `Box<User>`
@@ -256,6 +264,10 @@ impl RustEmitter {
         // (`List<? extends Animal>` as a local/field/return) rely
         // on this.
         self.emit_class_marker_trait(class_decl);
+        // Restore the previous enclosing-class context. See the
+        // matching `take` at the top of this function for the
+        // bare-static-name rewrite this powers.
+        self.enclosing_class = prev_enclosing;
     }
 
     /// Emit a class's marker trait and the transitive marker impls

@@ -183,6 +183,43 @@ impl RustEmitter {
     ///
     /// Method-call variant `obj?.method(args)` is handled at the
     /// `emit_call` level (`emit_safe_method_call`).
+    /// Emit a bare reference to a static field of the enclosing
+    /// class. Mirrors the explicit-`Class.field` branch in
+    /// [`Self::emit_field`] but takes the class name and field
+    /// metadata directly because the caller (in `Expr::Path`
+    /// emission) has already resolved both.
+    ///
+    /// `is_final` picks the lowering shape:
+    /// - `true`  → `pub const`-style access, `Class::field`.
+    /// - `false` → `LazyLock<Mutex<T>>`-style at module scope,
+    ///   `Class_field`. Lvalue/rvalue context drives the lock
+    ///   shape, identical to the qualified-form rule.
+    pub(crate) fn emit_enclosing_class_static_ref(
+        &mut self,
+        class_name: &str,
+        field_name: &str,
+        is_final: bool,
+    ) {
+        if is_final {
+            self.w.push_str(class_name);
+            self.w.push_str("::");
+            self.w.push_str(field_name);
+            return;
+        }
+        if self.emitting_lvalue {
+            self.w.push('*');
+            self.w.push_str(class_name);
+            self.w.push('_');
+            self.w.push_str(field_name);
+            self.w.push_str(".lock().unwrap()");
+        } else {
+            self.w.push_str(class_name);
+            self.w.push('_');
+            self.w.push_str(field_name);
+            self.w.push_str(".lock().unwrap().clone()");
+        }
+    }
+
     pub(crate) fn emit_safe_field(&mut self, f: &FieldExpr) {
         let needs_parens = receiver_needs_parens(&f.object);
         if needs_parens {

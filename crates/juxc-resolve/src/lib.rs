@@ -419,6 +419,19 @@ impl Resolver {
                 self.visit_expr(init);
             }
         }
+        // Static fields of this class are visible as bare names inside
+        // every constructor / method / operator body (Java rule:
+        // `a` inside `class Test` resolves to `Test.a`). Collect them
+        // once so each body scope can pre-declare them — the tycheck
+        // and backend each do their own enclosing-class lookup on the
+        // emission side; this resolver pass exists only to suppress
+        // the spurious E0301 the bare reference would otherwise raise.
+        let static_field_names: Vec<&str> = class_decl
+            .fields
+            .iter()
+            .filter(|f| f.is_static)
+            .map(|f| f.name.text.as_str())
+            .collect();
         for ctor in &class_decl.constructors {
             self.push_scope();
             // `this` is the implicit receiver — register it as a known
@@ -426,6 +439,9 @@ impl Resolver {
             // access then walks through the Field/Path resolution path
             // (which is suppressed at the root of a field chain anyway).
             self.declare("this");
+            for name in &static_field_names {
+                self.declare(name);
+            }
             for param in &ctor.params {
                 self.declare(&param.name.text);
             }
@@ -435,6 +451,9 @@ impl Resolver {
         for method in &class_decl.methods {
             self.push_scope();
             self.declare("this");
+            for name in &static_field_names {
+                self.declare(name);
+            }
             for param in &method.params {
                 self.declare(&param.name.text);
             }
@@ -451,6 +470,9 @@ impl Resolver {
         for op in &class_decl.operators {
             self.push_scope();
             self.declare("this");
+            for name in &static_field_names {
+                self.declare(name);
+            }
             for param in &op.params {
                 self.declare(&param.name.text);
             }

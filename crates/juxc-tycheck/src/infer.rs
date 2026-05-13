@@ -66,6 +66,23 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 if let Some(ty) = env.lookup(name) {
                     return ty.clone();
                 }
+                // Enclosing-class static fallback: inside a class
+                // body, a bare name may refer to a static field of
+                // the current class (Java rule — `a` ≡ `Test.a`
+                // inside `class Test`). The walker uses the FQN
+                // stored in `env.current_class` and consults the
+                // symbol table directly so we pick up the same
+                // type substitution `infer_field`'s class-static
+                // branch produces for the qualified form.
+                if let Some(class_fqn) = &env.current_class {
+                    if let Some(class) = symbols.classes.get(class_fqn) {
+                        if let Some(field) = class.fields.get(name.as_str()) {
+                            if field.is_static {
+                                return lower_member_type(&field.ty, class_fqn, symbols);
+                            }
+                        }
+                    }
+                }
             }
             Ty::Unknown
         }

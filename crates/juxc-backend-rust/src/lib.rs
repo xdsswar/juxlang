@@ -273,6 +273,15 @@ struct RustEmitter {
     /// - `None` everywhere else (and `this` would never appear there
     ///   — the resolver flags it earlier).
     this_alias: Option<String>,
+    /// Name of the class whose body we're currently emitting (a
+    /// constructor, method, or operator). Used to rewrite bare
+    /// references to static fields — `a` inside `class Test`'s
+    /// method body resolves to `Test.a`, matching Java's
+    /// member-access rule. `None` while emitting top-level
+    /// functions or `main`. Set in `emit_method` /
+    /// `emit_constructor` / `emit_operator_as_method` for the
+    /// duration of each body and restored afterwards.
+    pub(crate) enclosing_class: Option<String>,
     /// Names of user-defined methods whose bodies write to `this.field`
     /// — i.e. methods that the backend emits with `&mut self`. Computed
     /// in a single pre-pass over the compilation unit before any
@@ -443,6 +452,7 @@ impl RustEmitter {
             w,
             mutated_in_fn: HashSet::new(),
             this_alias: None,
+            enclosing_class: None,
             user_mut_methods: HashSet::new(),
             emitting_lvalue: false,
             emitting_const_context: false,

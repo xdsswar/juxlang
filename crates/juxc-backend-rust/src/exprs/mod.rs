@@ -46,6 +46,29 @@ impl RustEmitter {
         match expr {
             Expr::Literal(lit) => self.emit_literal(lit),
             Expr::Path(qn) => {
+                // Bare-name rewrite for enclosing-class static fields:
+                // inside `class Test`, the name `a` resolves to
+                // `Test.a` (Java/Jux rule). Detect that case here and
+                // forward to the same shape `emit_field` produces
+                // for the explicit `Test.a` access — keeps the
+                // mutable-static lock/unlock machinery in one place.
+                if qn.segments.len() == 1 {
+                    if let Some(class_name) = self.enclosing_class.clone() {
+                        let name = &qn.segments[0].text;
+                        if let Some(class) = self.symbols.classes.get(&class_name) {
+                            if let Some(field) = class.fields.get(name.as_str()) {
+                                if field.is_static {
+                                    self.emit_enclosing_class_static_ref(
+                                        &class_name,
+                                        name,
+                                        field.is_final,
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
                 // Dot-separated Jux paths become `::`-separated Rust paths.
                 // Module mapping is a TODO — for milestone 1 we emit
                 // identical structure on faith.
