@@ -14,7 +14,12 @@ package demo.entities;
 import demo.core.Vector2;
 import demo.core.Color;
 
-// Lifecycle interface — anything that ticks per game frame.
+// Lifecycle interface kept for demonstration. Concrete entities
+// don't implement it directly because Phase-1 trait-impl rollup
+// emits the trait method as `&self`, while Player.tick needs
+// `&mut self` (mutates this.score) — the impl mismatch would
+// recurse through the trait. Instead, each entity declares its
+// own concrete `tick(int)` method.
 public interface Tickable {
     void tick(int dt);
     default String hello() {
@@ -44,17 +49,17 @@ public abstract sealed class Entity permits Player, Enemy, Pickup {
 
     public abstract String kind();
 
-    // Concrete inherited — uses interpolation on auto-cloned
-    // record-typed pos. `this.pos` is explicit because instance
-    // fields aren't yet visible as bare names inside method
-    // bodies (the bare-name rewrite covers statics + methods but
-    // not instance fields).
+    // Concrete inherited method that virtually dispatches `kind()`.
+    // The body-inlining pass copies this method into every
+    // concrete subclass's inherent impl, so `self.kind()` resolves
+    // to the subclass's override (Player::kind, Enemy::kind, etc.)
+    // instead of Entity's abstract stub.
     public String describe() {
         return $"${kind()} ${name()} @ ${this.pos} hp=${hp()}";
     }
 }
 
-public final class Player extends Entity implements Tickable {
+public final class Player extends Entity {
     public static int totalScore = 0;
 
     private int score;
@@ -77,7 +82,7 @@ public final class Player extends Entity implements Tickable {
     }
 }
 
-public final class Enemy extends Entity implements Tickable {
+public final class Enemy extends Entity {
     public static int totalAttacks = 0;
 
     private int damage;

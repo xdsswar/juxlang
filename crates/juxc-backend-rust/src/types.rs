@@ -371,6 +371,27 @@ impl RustEmitter {
     /// readability and to leave room for a future divergence (e.g.
     /// borrow-thread `&'a str` returns when borrow inference lands).
     pub(crate) fn emit_return_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
+        // Interface-typed return position needs `impl Trait` (or a
+        // boxed trait object) because Rust can't return a bare
+        // trait. We pick `impl Trait` — works for factories that
+        // return one concrete type per call site (the common case);
+        // factories that conditionally return different concrete
+        // impls of the same interface would need `Box<dyn Trait>`
+        // and can lift to that explicitly when needed.
+        if ty.array_shape.is_none() && !ty.nullable && ty.generic_args.is_empty() {
+            if let Some(seg) = ty.name.segments.last() {
+                let bare = seg.text.as_str();
+                let is_iface = self
+                    .lookup_interface_by_bare_or_fqn(bare)
+                    .is_some()
+                    || self.symbols.interfaces.contains_key(bare);
+                if is_iface {
+                    self.w.push_str("impl ");
+                    self.emit_type_as_rust(ty);
+                    return;
+                }
+            }
+        }
         self.emit_type_as_rust(ty);
     }
 

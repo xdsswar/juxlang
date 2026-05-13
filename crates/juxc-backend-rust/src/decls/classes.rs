@@ -174,6 +174,66 @@ impl RustEmitter {
         for method in &class_decl.methods {
             self.emit_method(method);
         }
+        // **Method body inlining for virtual dispatch.** Walk the
+        // `extends` chain and copy every concrete (non-abstract,
+        // non-static) inherited method that THIS class doesn't
+        // override into the class's own inherent impl. The copy
+        // keeps the parent's body verbatim; `self` inside that
+        // body is now `&mut Self` (where Self = the subclass),
+        // so a call like `self.kind()` resolves to the subclass's
+        // override via Rust's inherent-method-first method
+        // resolution. Without this copy, `entity.describe()`
+        // would Deref to the abstract parent's `describe`, where
+        // `self.kind()` finds the parent's abstract stub instead
+        // of the subclass override.
+        if !class_decl.is_abstract {
+            let mut own_method_names: std::collections::HashSet<String> = class_decl
+                .methods
+                .iter()
+                .map(|m| m.name.text.clone())
+                .collect();
+            let mut cursor: Option<juxc_ast::TypeRef> = class_decl.extends.clone();
+            while let Some(parent_ref) = cursor {
+                let Some(seg) = parent_ref.name.segments.first() else { break };
+                let bare = seg.text.as_str();
+                // FQN-aware lookup against the class_asts map.
+                let parent_decl: Option<juxc_ast::ClassDecl> = self
+                    .class_asts
+                    .get(bare)
+                    .cloned()
+                    .or_else(|| {
+                        self.class_asts
+                            .iter()
+                            .find(|(k, _)| {
+                                k.rsplit('.').next().unwrap_or(k.as_str()) == bare
+                            })
+                            .map(|(_, v)| v.clone())
+                    });
+                let Some(parent) = parent_decl else { break };
+                let parent_methods = parent.methods.clone();
+                let parent_extends = parent.extends.clone();
+                for m in &parent_methods {
+                    if own_method_names.contains(&m.name.text) {
+                        continue; // overridden by this class (or a closer parent)
+                    }
+                    if m.body.is_none() {
+                        // Abstract on the parent — the concrete
+                        // subclass must override (rustc surfaces
+                        // any miss).
+                        continue;
+                    }
+                    if m.modifiers
+                        .iter()
+                        .any(|mo| matches!(mo, juxc_ast::FnModifier::Static))
+                    {
+                        continue;
+                    }
+                    own_method_names.insert(m.name.text.clone());
+                    self.emit_method(m);
+                }
+                cursor = parent_extends;
+            }
+        }
         // Operator overloads (§O.2) land as **inherent** methods with
         // synthetic names (`__op_eq`, `__op_string`, …). Trait impls
         // below delegate to these for the operators we know how to
@@ -618,8 +678,13 @@ impl RustEmitter {
                 self.w.push_str("fn ");
                 self.w.push_str(method_name);
                 // Match the interface's declared receiver: always
-                // `&self` in Turn 1. Implementing classes must also be
-                // non-mutating for the delegation to type-check.
+                // `&self` matches the interface's declared
+                // receiver. When an implementing class's inherent
+                // method needs `&mut self` (because it writes to
+                // `this.field`), the user must drop `implements
+                // Iface` and use inherent methods directly —
+                // proper resolution awaits interior-mutability
+                // wrapping in a future pass.
                 self.w.push_str("(&self");
                 // `MethodSig.params` is `Vec<ParamSig>`; ParamSig
                 // carries `name: String` (not `Ident`) and `ty: TypeRef`.
@@ -966,10 +1031,8 @@ fn type_ref_mentions_any(
                 return true;
             }
         }
-        if let Some(ret) = &fn_shape.ret {
-            if type_ref_mentions_any(ret, names) {
-                return true;
-            }
+        if type_ref_mentions_any(&fn_shape.return_type, names) {
+            return true;
         }
     }
     false

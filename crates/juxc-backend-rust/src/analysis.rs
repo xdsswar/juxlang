@@ -344,15 +344,24 @@ pub(crate) struct SimpleCtorInits {
     /// call appears (either no parent, or the user omitted the
     /// explicit call).
     pub(crate) super_args: Option<Vec<Expr>>,
-    /// `(field-name, init-expr)` pairs in source order. Same semantics
-    /// as before — the simple path requires every body statement that
-    /// isn't the super call to be a `this.field = expr;` assignment.
+    /// `(field-name, init-expr)` pairs in source order — the
+    /// `this.field = expr;` assignments. Same semantics as before.
     pub(crate) inits: Vec<(String, Expr)>,
+    /// Side-effect statements that don't touch `this.field` —
+    /// most commonly static-field compound assignments like
+    /// `MyStatic = MyStatic + 1`. Emitted before the struct
+    /// literal in their original source order so a counter bump
+    /// still happens at construction time even when the simple
+    /// path is taken. Order is preserved relative to each other
+    /// but field inits all happen "logically together" in the
+    /// final `Self { ... }` literal.
+    pub(crate) side_effects: Vec<juxc_ast::Stmt>,
 }
 
 pub(crate) fn extract_simple_ctor_inits(ctor: &juxc_ast::ConstructorDecl) -> Option<SimpleCtorInits> {
     let mut super_args: Option<Vec<Expr>> = None;
     let mut inits = Vec::with_capacity(ctor.body.statements.len());
+    let mut side_effects: Vec<juxc_ast::Stmt> = Vec::new();
     for (i, stmt) in ctor.body.statements.iter().enumerate() {
         match stmt {
             // `super(args);` is allowed as the first statement and
@@ -369,17 +378,32 @@ pub(crate) fn extract_simple_ctor_inits(ctor: &juxc_ast::ConstructorDecl) -> Opt
                 super_args = Some(args.clone());
             }
             Stmt::Assign(a) => {
-                let Expr::Field(f) = &a.target else { return None };
-                if !matches!(&*f.object, Expr::This(_)) {
-                    return None;
+                // `this.field = expr;` → field init.
+                if let Expr::Field(f) = &a.target {
+                    if !matches!(&*f.object, Expr::This(_)) {
+                        return None;
+                    }
+                    inits.push((f.field.text.clone(), a.value.clone()));
+                    continue;
                 }
-                inits.push((f.field.text.clone(), a.value.clone()));
+                // `staticField = expr;` (bare-name Path target) →
+                // side effect. The simple path can run these
+                // before the struct literal without needing
+                // Default initialization for any generic-typed
+                // field. Anything more complex (array indexing,
+                // arbitrary lvalues) still falls through to the
+                // slow path.
+                if matches!(&a.target, Expr::Path(_)) {
+                    side_effects.push(stmt.clone());
+                    continue;
+                }
+                return None;
             }
             // Any other statement disqualifies the fast path.
             _ => return None,
         }
     }
-    Some(SimpleCtorInits { super_args, inits })
+    Some(SimpleCtorInits { super_args, inits, side_effects })
 }
 
 /// Whether a pattern's source form carried explicit parens. Lets the

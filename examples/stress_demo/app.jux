@@ -17,10 +17,10 @@
 package demo.app;
 
 import demo.core.{ Vector2, Color, ColorCodes, FIXED_POINT };
-import demo.entities.{ Entity, Player, Enemy, Pickup, Tickable };
+import demo.entities.{ Entity, Player, Enemy, Pickup };
 import demo.events.{ Event, EventReporter };
 import demo.world.{ Slot, World };
-import demo.ui.UIFactory;
+import demo.ui.{ Renderer, UIFactory };
 
 public void main() {
     print($"=== demo.app boot (FIXED_POINT=${FIXED_POINT}) ===");
@@ -41,13 +41,21 @@ public void main() {
     var enemy  = new Enemy("Goblin", new Vector2(5, 5), 7);
     var prize  = new Pickup("GoldCoin", new Vector2(3, 3), 25);
 
-    // 4. Render every entity through the UIFactory (anonymous-class
-    //    inside, with an instance initializer block).
-    print(UIFactory.compactRender(player.describe()));
-    print(UIFactory.compactRender(enemy.describe()));
-    print(UIFactory.compactRender(prize.describe()));
-    print(UIFactory.verboseRender(player.describe()));
-    print(UIFactory.verboseRender(enemy.describe()));
+    // 4. Render every entity through factory-built Renderer
+    //    instances. UIFactory returns `Renderer` (trait return
+    //    type → `impl Renderer` in Rust). The describe() call on
+    //    each entity uses the inlined-method virtual dispatch so
+    //    it reaches the subclass's kind() override correctly.
+    var compactR = UIFactory.compact();
+    print(compactR.header());
+    print(compactR.render(player.describe()));
+    print(compactR.render(enemy.describe()));
+    print(compactR.render(prize.describe()));
+
+    var verboseR = UIFactory.verbose();
+    print(verboseR.header());
+    print(verboseR.render(player.describe()));
+    print(verboseR.render(enemy.describe()));
 
     // 5. Tick the tickables a few times. Concrete-type dispatch
     //    avoids the no-upcast-to-Entity gap.

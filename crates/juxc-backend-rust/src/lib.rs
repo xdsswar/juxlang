@@ -199,6 +199,28 @@ pub fn lower_workspace(
         let unit_set = collect_user_mut_methods(unit);
         e.user_mut_methods.extend(unit_set);
     }
+    // Build FQN → ClassDecl map so emit_class_decl can walk
+    // parent chains and copy inherited concrete method bodies
+    // down. The FQN is `<package>.<class>` (empty package → bare
+    // name), matching how the symbol table keys class entries.
+    for unit in units {
+        let pkg: Vec<String> = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
+            .unwrap_or_default();
+        let pkg_str = pkg.join(".");
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                let fqn = if pkg_str.is_empty() {
+                    cd.name.text.clone()
+                } else {
+                    format!("{pkg_str}.{}", cd.name.text)
+                };
+                e.class_asts.insert(fqn, cd.clone());
+            }
+        }
+    }
     // Single-source workspaces (e.g. `juxc foo.jux`) get a precise
     // `// Source:` header line so terminal emit-dir click-throughs
     // land in the user's `.jux` file. Multi-source workspaces leave
@@ -433,6 +455,14 @@ struct RustEmitter {
     /// name (`__JuxAnon0`, `__JuxAnon1`, …) at the use site so
     /// distinct anonymous classes don't collide.
     pub(crate) anonymous_class_counter: usize,
+    /// Cloned `ClassDecl` ASTs keyed by FQN, populated upfront in
+    /// `lower_workspace`. Lets `emit_class_decl` walk parent
+    /// classes by FQN and copy inherited concrete method bodies
+    /// down into each concrete subclass — preserving virtual
+    /// dispatch (so `Entity.describe()` sees `Player::kind()`
+    /// when called on a Player, rather than Entity's abstract
+    /// stub via Deref).
+    pub(crate) class_asts: std::collections::HashMap<String, juxc_ast::ClassDecl>,
 }
 
 impl RustEmitter {
@@ -501,6 +531,7 @@ impl RustEmitter {
             workspace_mode: false,
             current_unit_idx: None,
             anonymous_class_counter: 0,
+            class_asts: std::collections::HashMap::new(),
         }
     }
 
@@ -545,6 +576,29 @@ impl RustEmitter {
         // Mutation analysis in `main` (and elsewhere) consults this set
         // so that calling `p.shift(…)` correctly promotes `p` to `let mut`.
         self.user_mut_methods = collect_user_mut_methods(unit);
+        // Pre-pass: stash this unit's class ASTs by FQN so
+        // `emit_class_decl` can walk parents and copy inherited
+        // concrete method bodies. Workspace mode does the same
+        // collection upfront for every unit; the single-unit path
+        // here covers `lower_with_source` and friends.
+        if !self.workspace_mode {
+            let pkg: Vec<String> = unit
+                .package
+                .as_ref()
+                .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
+                .unwrap_or_default();
+            let pkg_str = pkg.join(".");
+            for item in &unit.items {
+                if let TopLevelDecl::Class(cd) = item {
+                    let fqn = if pkg_str.is_empty() {
+                        cd.name.text.clone()
+                    } else {
+                        format!("{pkg_str}.{}", cd.name.text)
+                    };
+                    self.class_asts.insert(fqn, cd.clone());
+                }
+            }
+        }
 
         // Each unit is wrapped in its OWN package's module path —
         // read from the unit's parsed `package foo.bar;` declaration

@@ -27,25 +27,26 @@ public interface Renderer {
 public class UIFactory {
     public static int builtCount = 0;
 
-    public static String compactRender(String label) {
+    // Factory methods that RETURN an interface — backend now wraps
+    // trait return positions as `impl Trait`, so anonymous-class
+    // values flow through cleanly. Each call site constructs a
+    // fresh synthetic instance.
+    public static Renderer compact() {
         builtCount = builtCount + 1;
-        // Anonymous class with init block — each call constructs
-        // a fresh impl and runs it once.
-        var r = new Renderer() {
+        return new Renderer() {
             {
-                // Per-call init block (logs the build).
+                // Init block runs once at construction time.
             }
             @Override
             public String render(String label) {
                 return $"- ${label}";
             }
         };
-        return r.header() + $" :: " + r.render(label);
     }
 
-    public static String verboseRender(String label) {
+    public static Renderer verbose() {
         builtCount = builtCount + 1;
-        var r = new Renderer() {
+        return new Renderer() {
             @Override
             public String render(String label) {
                 return $"** ${label} **";
@@ -55,6 +56,5 @@ public class UIFactory {
                 return $">>>>>>>> Verbose Frame <<<<<<<<";
             }
         };
-        return r.header() + $" :: " + r.render(label);
     }
 }

@@ -146,6 +146,19 @@ impl RustEmitter {
             chosen.insert(name.as_str(), expr);
         }
 
+        // Emit any side-effect statements first (e.g. static-field
+        // counter bumps). They run at construction time, before the
+        // struct literal is produced, which matches the original
+        // source order for a `MyClass.counter = counter + 1;`
+        // statement sitting alongside `this.field = expr;` lines.
+        if !simple.side_effects.is_empty() {
+            let side_effects = simple.side_effects.clone();
+            for stmt in &side_effects {
+                self.w.emit_indent();
+                self.emit_stmt(stmt);
+            }
+        }
+
         self.w.line("Self {");
         self.w.indent_inc();
         // Inherited parent — emit the `__parent` slot first, before
