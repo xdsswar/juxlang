@@ -215,6 +215,24 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 }
             }
         }
+        // Enum-variant access: `Color.Red`, `Token.Number`. The
+        // path resolves to the enum type itself, so the result
+        // type is `Ty::User { name: <enum> }` — same shape an
+        // instance of the enum would carry. This is what powers
+        // smart-cast on `var c = Color.Red` and feeds the
+        // exhaustiveness check (`check_switch_exhaustive`) the
+        // right scrutinee type.
+        if qn.segments.len() == 1 {
+            let enum_name = &qn.segments[0].text;
+            if let Some(e) = symbols.enums.get(enum_name) {
+                if e.variants.contains_key(&f.field.text) {
+                    return Ty::User {
+                        name: enum_name.clone(),
+                        generic_args: Vec::new(),
+                    };
+                }
+            }
+        }
     }
     let object_ty = infer_expr(&f.object, env, symbols);
     let field_name = f.field.text.as_str();

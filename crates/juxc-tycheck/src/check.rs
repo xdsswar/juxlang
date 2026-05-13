@@ -76,8 +76,9 @@ use std::collections::HashMap;
 
 use juxc_ast::{
     BinaryOp, Block, CallExpr, ClassDecl, CompilationUnit, ConstructorDecl, ElseBranch, Expr,
-    FieldExpr, FnDecl, InterpSegment, NewObjectExpr, OperatorDecl, OperatorKind, RecordDecl,
-    ReturnType, Stmt, SwitchBody, TopLevelDecl, TypeParam, TypeRef, UnaryOp,
+    FieldExpr, FnDecl, InterpSegment, NewObjectExpr, OperatorDecl, OperatorKind, Pattern,
+    RecordDecl, ReturnType, Stmt, SwitchBody, SwitchExpr, TopLevelDecl, TypeParam, TypeRef,
+    UnaryOp,
 };
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_source::Span;
@@ -853,6 +854,13 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
+                // Exhaustiveness check (§T.5.5): when the
+                // scrutinee resolves to an enum, every variant
+                // must be covered by some arm or there must be a
+                // wildcard catchall. Sealed-class scrutinees get
+                // the same treatment via the `permits` list (not
+                // yet wired; deferred to the next pass).
+                self.check_switch_exhaustive(s);
             }
             // Lambda — declare params into a fresh scope, then walk
             // the body for the usual diagnostics. Untyped params
@@ -986,6 +994,102 @@ impl<'a> Checker<'a> {
                 ),
             )
             .with_span(access_span),
+        );
+    }
+
+    /// Exhaustiveness check for a `switch` expression. Fires
+    /// `E0440_NotExhaustive` when the scrutinee is a sealed shape
+    /// (enum, or `sealed class` with a non-empty `permits` list)
+    /// AND the arms neither (a) collectively name every alternative
+    /// nor (b) include a wildcard / bind catchall.
+    ///
+    /// **Enum scrutinees** — every variant must be matched. Variant
+    /// patterns can write `case EnumName.Variant(...)` (two-segment
+    /// path) or just `case Variant(...)` (single-segment, common
+    /// when the enum is well-known); both shapes count.
+    ///
+    /// **Sealed-class scrutinees** — every name in the `permits`
+    /// list must appear in some arm. Patterns use `case Subclass`
+    /// or `case Subclass(...)` shape per `JUX-LANG-V1.md` §7.5
+    /// example. Other arms that don't name a permitted subclass
+    /// are ignored for exhaustiveness (they're either wildcards,
+    /// which the catchall check above handles, or pattern-typos
+    /// rustc / the resolver flags separately).
+    ///
+    /// **Non-sealed scrutinees** — `switch (n) { case 0 -> ...;
+    /// case _ -> ... }` over an integer doesn't have a finite
+    /// variant set, so exhaustiveness via enumeration doesn't
+    /// apply. The check returns silently; the wildcard arm
+    /// remains the user's catchall there.
+    fn check_switch_exhaustive(&mut self, s: &SwitchExpr) {
+        let scrut_ty = infer_expr(&s.scrutinee, &self.env, self.symbols);
+        // Two scrutinee shapes drive exhaustiveness: enums (every
+        // variant) and sealed classes (every permitted subclass).
+        // Resolve to one of them, or bail.
+        enum SealedKind<'a> {
+            Enum { name: &'a str, variants: Vec<String> },
+            Class { name: &'a str, permits: Vec<String> },
+        }
+        let scrut_name = match &scrut_ty {
+            Ty::User { name, .. } => name.as_str(),
+            _ => return,
+        };
+        let kind = if let Some(e) = self.symbols.enums.get(scrut_name) {
+            SealedKind::Enum {
+                name: scrut_name,
+                variants: e.variants.keys().cloned().collect(),
+            }
+        } else if let Some(c) = self.symbols.classes.get(scrut_name) {
+            if c.is_sealed && !c.permits.is_empty() {
+                SealedKind::Class {
+                    name: scrut_name,
+                    permits: c.permits.clone(),
+                }
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+
+        // A wildcard arm (`case _ -> …` / `default ->`) trivially
+        // covers everything left. Same with a top-level bind
+        // pattern (`case var x -> …`) — `x` is irrefutable, so it
+        // catches anything.
+        let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for arm in &s.arms {
+            if pattern_is_catchall(&arm.pattern) {
+                return;
+            }
+            match &kind {
+                SealedKind::Enum { name, .. } => {
+                    collect_variants_covered(&arm.pattern, name, &mut covered);
+                }
+                SealedKind::Class { .. } => {
+                    collect_sealed_subclasses_covered(&arm.pattern, &mut covered);
+                }
+            }
+        }
+        let (scrut_label, all, scrut_name) = match &kind {
+            SealedKind::Enum { name, variants } => ("enum", variants.clone(), *name),
+            SealedKind::Class { name, permits } => ("sealed class", permits.clone(), *name),
+        };
+        let missing: Vec<String> =
+            all.into_iter().filter(|v| !covered.contains(v)).collect();
+        if missing.is_empty() {
+            return;
+        }
+        let names = missing.join(", ");
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0440_NotExhaustive,
+                format!(
+                    "non-exhaustive `switch` on {scrut_label} `{scrut_name}`: \
+                     no arm covers {names}; add explicit `case` arms \
+                     for each, or a `case _` wildcard at the end",
+                ),
+            )
+            .with_span(s.span),
         );
     }
 
@@ -1864,6 +1968,66 @@ fn expr_span(e: &Expr) -> Span {
     }
 }
 
+/// True when `pattern` is irrefutable — covers every value of the
+/// scrutinee type. Used by the exhaustiveness check to detect
+/// catchall arms (`case _ -> …`, `case name -> …`). Variant
+/// patterns are NOT irrefutable, even when their sub-patterns are
+/// — they only cover their specific variant.
+fn pattern_is_catchall(p: &Pattern) -> bool {
+    matches!(p, Pattern::Wildcard(_) | Pattern::Bind(_))
+}
+
+/// Walk a pattern and record every variant of `enum_name` it
+/// matches. Accepts both the qualified `case EnumName.Variant`
+/// form AND the bare `case Variant` form (common when the
+/// surrounding `switch` makes the enum unambiguous). Nested
+/// sub-patterns (`Token.Number(var n)`) don't recurse for
+/// exhaustiveness — the variant either matches or it doesn't, the
+/// inner shape is bookkeeping.
+fn collect_variants_covered(
+    pattern: &Pattern,
+    enum_name: &str,
+    out: &mut std::collections::HashSet<String>,
+) {
+    if let Pattern::EnumVariant { path, .. } = pattern {
+        match path.segments.len() {
+            // `case EnumName.Variant(...)` — qualified form.
+            2 if path.segments[0].text == enum_name => {
+                out.insert(path.segments[1].text.clone());
+            }
+            // `case Variant(...)` — bare form. The scrutinee's
+            // known to be `enum_name` from the type-check above,
+            // so a single-segment path here can only mean a
+            // variant of that enum. The resolver still flags
+            // misspellings via the regular name-resolution
+            // diagnostics.
+            1 => {
+                out.insert(path.segments[0].text.clone());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Walk a pattern and record every sealed-class subclass it
+/// matches. Sealed-class patterns are written as `case Subclass`
+/// or `case Subclass(...)` (single-segment path naming a
+/// permitted subclass), per `JUX-LANG-V1.md` §7.5. Other
+/// pattern shapes (literals, two-segment paths) contribute
+/// nothing — they're either wildcards (which the catchall check
+/// already short-circuited) or pattern-typos to be flagged by
+/// the resolver.
+fn collect_sealed_subclasses_covered(
+    pattern: &Pattern,
+    out: &mut std::collections::HashSet<String>,
+) {
+    if let Pattern::EnumVariant { path, .. } = pattern {
+        if path.segments.len() == 1 {
+            out.insert(path.segments[0].text.clone());
+        }
+    }
+}
+
 /// Type-compatibility predicate. See module docs for the full rule
 /// table; the short version:
 ///
@@ -2040,6 +2204,171 @@ mod tests {
     fn bool_if_condition_is_ok() {
         let d = run("public void main() { if (true) {} }");
         assert!(d.is_empty(), "{d:?}");
+    }
+
+    // ---- Exhaustiveness on switch over enum (E0440) ----
+
+    /// A `switch` over an enum that names every variant compiles
+    /// without a wildcard arm — every case is covered.
+    #[test]
+    fn switch_over_enum_with_all_variants_is_exhaustive() {
+        let d = run(
+            r#"public enum Color { Red, Green, Blue }
+               public void main() {
+                   var c = Color.Red;
+                   switch (c) {
+                       case Color.Red -> {}
+                       case Color.Green -> {}
+                       case Color.Blue -> {}
+                   }
+               }"#,
+        );
+        assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
+    }
+
+    /// A `switch` that misses a variant and has no wildcard fires
+    /// E0440 naming the missing variant.
+    #[test]
+    fn switch_over_enum_missing_variant_emits_e0440() {
+        let d = run(
+            r#"public enum Color { Red, Green, Blue }
+               public void main() {
+                   var c = Color.Red;
+                   switch (c) {
+                       case Color.Red -> {}
+                       case Color.Green -> {}
+                   }
+               }"#,
+        );
+        assert!(has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
+        let msg = d
+            .iter()
+            .find(|x| x.code == code::Code::E0440_NotExhaustive)
+            .map(|x| x.message.as_str())
+            .unwrap_or("");
+        assert!(msg.contains("Blue"), "diagnostic should name `Blue`: {msg}");
+    }
+
+    /// A wildcard `case _` arm catches every remaining variant —
+    /// no E0440 even when explicit variants are missing.
+    #[test]
+    fn switch_with_wildcard_arm_is_exhaustive() {
+        let d = run(
+            r#"public enum Color { Red, Green, Blue }
+               public void main() {
+                   var c = Color.Red;
+                   switch (c) {
+                       case Color.Red -> {}
+                       case _ -> {}
+                   }
+               }"#,
+        );
+        assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
+    }
+
+    /// Explicit `case var name -> …` bind-pattern is irrefutable:
+    /// it catches every remaining variant.
+    #[test]
+    fn switch_with_bind_arm_is_exhaustive() {
+        let d = run(
+            r#"public enum Color { Red, Green, Blue }
+               public void main() {
+                   var c = Color.Red;
+                   switch (c) {
+                       case Color.Red -> {}
+                       case var other -> {}
+                   }
+               }"#,
+        );
+        assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
+    }
+
+    /// Non-enum scrutinees (numeric, string) aren't checked for
+    /// exhaustiveness — the wildcard arm remains the user's tool.
+    #[test]
+    fn switch_over_int_does_not_check_exhaustiveness() {
+        let d = run(
+            r#"public void main() {
+                   var n = 1;
+                   switch (n) {
+                       case 0 -> {}
+                       case 1 -> {}
+                   }
+               }"#,
+        );
+        assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
+    }
+
+    /// `switch` over a sealed-class scrutinee that names every
+    /// permitted subclass passes exhaustiveness.
+    #[test]
+    fn switch_over_sealed_class_with_all_subclasses_is_exhaustive() {
+        let d = run(
+            r#"public sealed class Shape permits Circle, Square {}
+               public class Circle extends Shape {
+                   public Circle() {}
+               }
+               public class Square extends Shape {
+                   public Square() {}
+               }
+               public void describe(Shape s) {
+                   switch (s) {
+                       case Circle -> {}
+                       case Square -> {}
+                   }
+               }
+               public void main() {}"#,
+        );
+        assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
+    }
+
+    /// `switch` over a sealed-class scrutinee that misses a
+    /// permitted subclass fires E0440, naming the gap.
+    #[test]
+    fn switch_over_sealed_class_missing_subclass_emits_e0440() {
+        let d = run(
+            r#"public sealed class Shape permits Circle, Square {}
+               public class Circle extends Shape {
+                   public Circle() {}
+               }
+               public class Square extends Shape {
+                   public Square() {}
+               }
+               public void describe(Shape s) {
+                   switch (s) {
+                       case Circle -> {}
+                   }
+               }
+               public void main() {}"#,
+        );
+        assert!(has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
+        let msg = d
+            .iter()
+            .find(|x| x.code == code::Code::E0440_NotExhaustive)
+            .map(|x| x.message.as_str())
+            .unwrap_or("");
+        assert!(msg.contains("Square"), "should name `Square`: {msg}");
+        assert!(msg.contains("sealed class"), "label: {msg}");
+    }
+
+    /// A non-sealed class scrutinee doesn't trigger the check —
+    /// open inheritance means more subclasses can land later, so
+    /// the wildcard arm stays the canonical fallback.
+    #[test]
+    fn switch_over_non_sealed_class_does_not_check_exhaustiveness() {
+        let d = run(
+            r#"public class Animal { public Animal() {} }
+               public class Dog extends Animal {
+                   public Dog() {}
+               }
+               public void main() {
+                   var a = new Animal();
+                   switch (a) {
+                       case Dog -> {}
+                   }
+               }"#,
+        );
+        assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
     }
 
     /// Assigning a String to an int local → E0410.

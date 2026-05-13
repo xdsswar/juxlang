@@ -1,0 +1,18 @@
+// Switch over an enum — every variant covered, no wildcard.
+// Should compile cleanly.
+
+public enum Color { Red, Green, Blue }
+
+public String classify(Color c) {
+    return switch (c) {
+        case Color.Red   -> "warm";
+        case Color.Green -> "fresh";
+        case Color.Blue  -> "cool";
+    };
+}
+
+public void main() {
+    print(classify(Color.Red));
+    print(classify(Color.Green));
+    print(classify(Color.Blue));
+}

@@ -1,0 +1,23 @@
+// Elvis preserves the LHS binding when it's a Path or Field
+// read, so the source variable stays usable afterwards.
+
+public String? lookup(int id) {
+    if (id < 0) { return null; }
+    return "user_" + id;
+}
+
+public void main() {
+    var maybe = lookup(42);
+
+    // First use: extract via elvis. The path-LHS form clones, so
+    // `maybe` survives.
+    var name = maybe ?? "default";
+    print(name);
+
+    // Second use: maybe is still usable. Print it directly (uses
+    // JuxOpt adapter for `Option<String>` Display).
+    print(maybe);
+
+    // Third use: another elvis. Same source, same outcome.
+    print(maybe ?? "fallback");
+}

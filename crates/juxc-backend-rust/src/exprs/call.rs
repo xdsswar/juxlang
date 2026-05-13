@@ -29,6 +29,20 @@ fn push_concat_operand<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
     out.push(e);
 }
 
+/// True iff the print path should treat `e` as `String`-typed.
+/// Mirrors `binary.rs::operand_is_string_typed` — kept module-
+/// local rather than sharing the helper to avoid cross-module
+/// privacy churn. Both paths use the same `expr_types` lookup so
+/// the trigger fires consistently.
+impl super::super::RustEmitter {
+    fn operand_is_string_typed_for_print(&self, e: &Expr) -> bool {
+        matches!(
+            self.expr_types.get(&crate::exprs::expr_span_of(e)),
+            Some(juxc_tycheck::Ty::String),
+        )
+    }
+}
+
 /// Print-path mirror of `binary::fold_concat_into_format`. Folds
 /// `Literal::String` operands directly into the `println!` template
 /// (re-escaped + brace-doubled); non-literal operands become runtime
@@ -103,13 +117,18 @@ impl RustEmitter {
                         // — clear the format-arg flag so any nested
                         // string literal still self-coerces into
                         // owned `String` (the param's declared type).
+                        // Per-arg nullable-wrap: when the static
+                        // method's matching positional parameter is
+                        // `T?`, a non-nullable value is lifted into
+                        // `Some(value)`.
                         let prev = self.emitting_format_arg;
                         self.emitting_format_arg = false;
                         for (i, arg) in call.args.iter().enumerate() {
                             if i > 0 {
                                 self.w.push_str(", ");
                             }
-                            self.emit_expr(arg);
+                            let nullable = self.callee_param_is_nullable(&call.callee, i);
+                            self.emit_arg_with_nullable_wrap(arg, nullable);
                         }
                         self.emitting_format_arg = prev;
                         self.w.push(')');
@@ -129,11 +148,15 @@ impl RustEmitter {
         // Same flag discipline as above: a regular call's args
         // consume String values, so any inner string literal needs
         // the Fix-1 self-coerce — clear the format-arg context here.
+        // Per-arg nullable-wrap when the callee's declared
+        // parameter type is `T?` and the value isn't already
+        // `Option<T>`-shaped.
         let prev = self.emitting_format_arg;
         self.emitting_format_arg = false;
         for (i, arg) in call.args.iter().enumerate() {
             if i > 0 { self.w.push_str(", "); }
-            self.emit_expr(arg);
+            let nullable = self.callee_param_is_nullable(&call.callee, i);
+            self.emit_arg_with_nullable_wrap(arg, nullable);
         }
         self.emitting_format_arg = prev;
         self.w.push(')');
@@ -227,9 +250,15 @@ impl RustEmitter {
             // we end up with one `println!("hello, {}!", name)`
             // instead of `println!("{}{}{}", "hello, ", name, "!")`.
             if let Expr::Binary(b) = &call.args[0] {
-                if b.op == juxc_ast::BinaryOp::Add
-                    && (is_string_literal(&b.left) || is_string_literal(&b.right))
-                {
+                // Mirror the binary emitter's string-concat trigger:
+                // literal-shape OR `Ty::String`-typed either side.
+                // Either condition routes through the inline-print
+                // path and the intermediate `format!` evaporates.
+                let lhs_string = is_string_literal(&b.left)
+                    || self.operand_is_string_typed_for_print(&b.left);
+                let rhs_string = is_string_literal(&b.right)
+                    || self.operand_is_string_typed_for_print(&b.right);
+                if b.op == juxc_ast::BinaryOp::Add && (lhs_string || rhs_string) {
                     let mut operands: Vec<&Expr> = Vec::new();
                     flatten_concat(b, &mut operands);
                     let (template, runtime) =
@@ -241,7 +270,7 @@ impl RustEmitter {
                     self.emitting_format_arg = true;
                     for op in &runtime {
                         self.w.push_str(", ");
-                        self.emit_expr(op);
+                        self.emit_format_arg(op);
                     }
                     self.emitting_format_arg = prev;
                     self.w.push(')');
@@ -277,13 +306,26 @@ impl RustEmitter {
                 self.w.push('"');
                 // `println!` borrows its args, so nested string
                 // literals stay `&str` (saves an alloc per literal).
+                // Nullable args are wrapped in `JuxOpt(&v)` so
+                // `Display` works — `Some(v)` prints `v`, `None`
+                // prints `"null"`.
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = true;
                 for arg_ref in &arg_order {
                     self.w.push_str(", ");
                     match arg_ref {
-                        ArgRef::Bare(i) => self.w.push_str(&bare_args[*i].text),
-                        ArgRef::Expr(i) => self.emit_expr(expr_args[*i]),
+                        ArgRef::Bare(i) => {
+                            // Bare-ident interp `$name` — synthesize
+                            // a Path expression so `emit_format_arg`
+                            // can run its nullable-shape check.
+                            let qn = juxc_ast::QualifiedName {
+                                segments: vec![bare_args[*i].clone()],
+                                span: bare_args[*i].span,
+                            };
+                            let synth = Expr::Path(qn);
+                            self.emit_format_arg(&synth);
+                        }
+                        ArgRef::Expr(i) => self.emit_format_arg(expr_args[*i]),
                     }
                 }
                 self.emitting_format_arg = prev;
@@ -304,7 +346,7 @@ impl RustEmitter {
         self.emitting_format_arg = true;
         for arg in &call.args {
             self.w.push_str(", ");
-            self.emit_expr(arg);
+            self.emit_format_arg(arg);
         }
         self.emitting_format_arg = prev;
         self.w.push(')');

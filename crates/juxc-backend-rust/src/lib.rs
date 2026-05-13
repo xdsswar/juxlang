@@ -313,6 +313,19 @@ struct RustEmitter {
     /// Mirrors the `emitting_format_arg` discipline: set in the
     /// comparison emitter, consulted by `emit_field`.
     pub(crate) emitting_comparison_operand: bool,
+    /// Names of locals in the current function body whose declared
+    /// type is nullable (`T?`). Populated by [`Self::emit_var_decl`]
+    /// when it sees a `var_decl.ty` with `nullable = true`, and
+    /// consulted by the nullable-wrap helper to decide whether a
+    /// path reference is already `Option<T>`-shaped (no extra
+    /// `Some(...)` wrap needed) or a plain `T` value flowing into
+    /// a `T?` slot (wrap it).
+    ///
+    /// Reset at function-body boundaries by the entry points
+    /// (`emit_fn_body`, `emit_constructor`, …) so a local from
+    /// one function doesn't leak into another's emission. Cleared
+    /// in tandem with [`Self::mutated_in_fn`].
+    pub(crate) nullable_locals: HashSet<String>,
     /// Declared return type of the function / method / operator body
     /// currently being emitted. `None` outside any function body and
     /// inside constructor bodies (constructors return `Self`).
@@ -399,6 +412,23 @@ impl RustEmitter {
         w.push_str("#![allow(non_camel_case_types)]\n");
         w.push_str("#![allow(non_upper_case_globals)]\n");
         w.push_str("#![allow(clippy::all)]\n\n");
+        // Prelude: a tiny `Display` adapter for `Option<T>` so
+        // `print(maybeName)` produces `"value"` or `"null"` rather
+        // than failing to compile (Rust's std doesn't impl
+        // `Display` for `Option`). Used by the print/format-arg
+        // emit paths whenever the value being formatted has
+        // nullable shape; non-nullable args pass straight through.
+        // Hidden behind `#[allow(dead_code)]` from the block
+        // above, so unused-Optional programs don't emit a warning.
+        w.push_str("struct JuxOpt<'a, T: std::fmt::Display>(&'a Option<T>);\n");
+        w.push_str("impl<'a, T: std::fmt::Display> std::fmt::Display for JuxOpt<'a, T> {\n");
+        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
+        w.push_str("        match self.0 {\n");
+        w.push_str("            Some(v) => std::fmt::Display::fmt(v, f),\n");
+        w.push_str("            None => f.write_str(\"null\"),\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n\n");
         Self {
             w,
             mutated_in_fn: HashSet::new(),
@@ -408,6 +438,7 @@ impl RustEmitter {
             emitting_const_context: false,
             emitting_format_arg: false,
             emitting_comparison_operand: false,
+            nullable_locals: HashSet::new(),
             current_return_type: None,
             source: None,
             symbols: symbols.clone(),

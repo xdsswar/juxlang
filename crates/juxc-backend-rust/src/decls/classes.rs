@@ -606,6 +606,16 @@ impl RustEmitter {
             let mut muts = HashSet::new();
             collect_mutated_names(body, &mut muts, &self.user_mut_methods);
             self.mutated_in_fn = muts;
+            // Seed nullable-locals from this method's params so
+            // value-consuming sites in the body know which paths
+            // are already `Option<T>` shape. Reset first to drop
+            // any leftover entries from a previous fn's body.
+            self.nullable_locals.clear();
+            for p in &method.params {
+                if p.ty.nullable {
+                    self.nullable_locals.insert(p.name.text.clone());
+                }
+            }
             let saved = self.current_return_type.take();
             self.current_return_type = Some(method.return_type.clone());
             self.emit_fn_body_at(body, &method.return_type);

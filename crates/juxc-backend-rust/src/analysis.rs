@@ -188,11 +188,14 @@ pub(crate) fn lvalue_base_name(e: &Expr) -> Option<String> {
     match e {
         Expr::Path(qn) if qn.segments.len() == 1 => Some(qn.segments[0].text.clone()),
         Expr::Index(idx) => lvalue_base_name(&idx.array),
-        // `this.field` and `this.field[i]` count as mutations of the
-        // receiver — but we don't surface a name here (the receiver
-        // isn't a local binding). Callers that need to know "did this
-        // body mutate self?" use `body_writes_to_this` instead.
-        Expr::This(_) | Expr::Field(_) => None,
+        // Field chains walk through to find the lvalue root. For
+        // `u.nickname = ...` the root is `u`, which must be
+        // `let mut` so Rust can take `&mut self` on the field
+        // assignment. For `this.field = ...` the root is `This`,
+        // which isn't a local binding — `body_writes_to_this`
+        // tracks that case for receiver `&mut self` promotion.
+        Expr::Field(f) => lvalue_base_name(&f.object),
+        Expr::This(_) => None,
         _ => None,
     }
 }
@@ -578,6 +581,188 @@ pub(crate) fn is_jux_string_type(ty: &juxc_ast::TypeRef) -> bool {
 #[allow(dead_code)]
 pub(crate) fn is_jux_string_type_ref(ty: &juxc_ast::TypeRef) -> bool {
     is_jux_string_type(ty)
+}
+
+impl crate::RustEmitter {
+    /// True iff `expr`'s emitted Rust value is already
+    /// `Option<T>`-shaped — meaning no additional `Some(...)` wrap
+    /// is needed when feeding it into a `T?` slot. Recognized
+    /// shapes:
+    ///
+    /// - `null` literal → already `None`.
+    /// - A `Path` (single-segment) to a binding we've tagged
+    ///   nullable via [`Self::nullable_locals`].
+    /// - A `Call` to a known function / method whose declared
+    ///   return type is `T?`.
+    /// - A `Field` access on a known class/record whose field's
+    ///   declared type is `T?`.
+    /// - An `Elvis` expression — `?:` / `??` produces a non-null
+    ///   `T`, never an `Option`, so it must STILL be wrapped. So
+    ///   Elvis returns `false` here.
+    /// - A safe-call `obj?.field` / `obj?.method()` produces an
+    ///   `Option<T>` by construction; recognized as nullable.
+    ///
+    /// Conservative on the no-info side: anything we can't classify
+    /// returns `false`, meaning the caller wraps. Over-wrapping a
+    /// value that's actually nullable would produce
+    /// `Some(Some(...))` — wrong type. Under-wrapping (the case
+    /// here) produces `Some(plain_value)`, which is correct as
+    /// long as the value really IS plain. The trade-off favors
+    /// safety: returning `false` defaults to wrap, which is the
+    /// safer direction.
+    pub(crate) fn expression_is_already_nullable(&self, expr: &juxc_ast::Expr) -> bool {
+        match expr {
+            juxc_ast::Expr::Literal(juxc_ast::Literal::Null) => true,
+            juxc_ast::Expr::Path(qn) => {
+                qn.segments.len() == 1
+                    && self.nullable_locals.contains(&qn.segments[0].text)
+            }
+            juxc_ast::Expr::Call(c) => {
+                // Single-segment callee: top-level fn whose return
+                // type tells us the result's shape.
+                if let juxc_ast::Expr::Path(qn) = &*c.callee {
+                    if qn.segments.len() == 1 {
+                        if let Some(f) = self.symbols.functions.get(&qn.segments[0].text) {
+                            return matches!(
+                                &f.return_type,
+                                juxc_ast::ReturnType::Type(t) if t.nullable
+                            );
+                        }
+                    }
+                }
+                // Method call: receiver-typed lookup is a tycheck
+                // job. Without the dynamic dispatch we treat the
+                // result as non-nullable; conservative.
+                false
+            }
+            juxc_ast::Expr::Field(f) => {
+                // `?.` produces `Option<T>` regardless of what
+                // `field`'s declared type is — safe-nav semantics.
+                if f.safe {
+                    return true;
+                }
+                // Plain `obj.field`: look up the receiver's class
+                // via tycheck's `expr_types`, then ask the class
+                // signature whether the field is `T?`. The lookup
+                // mirrors `assign_target_is_nullable` but as a
+                // read-side query — Phase 1 only checks the
+                // immediate class, not the inheritance chain.
+                let Some(juxc_tycheck::Ty::User { name, .. }) =
+                    self.expr_types.get(&crate::exprs::expr_span_of(&f.object))
+                else {
+                    return false;
+                };
+                if let Some(class) = self.symbols.classes.get(name) {
+                    if let Some(field) = class.fields.get(&f.field.text) {
+                        return field.ty.nullable;
+                    }
+                }
+                if let Some(record) = self.symbols.records.get(name) {
+                    if let Some(c) =
+                        record.components.iter().find(|c| c.name == f.field.text)
+                    {
+                        return c.ty.nullable;
+                    }
+                }
+                false
+            }
+            // Elvis returns the non-null inner — wrap when feeding
+            // into a `T?` slot.
+            juxc_ast::Expr::Elvis(_) => false,
+            _ => false,
+        }
+    }
+
+    /// Return the declared `nullable` flag of the *positional*
+    /// parameter at `arg_idx` of `callee`, when we can figure out
+    /// which function/method the call resolves to. `None` means
+    /// "unknown" — caller should NOT wrap, since we can't tell
+    /// whether the slot is `T?` or `T`.
+    ///
+    /// Recognized callees:
+    /// - Single-segment `Path` → top-level function in
+    ///   `symbols.functions`.
+    /// - `Field` over a `Path` that resolves to a class, and the
+    ///   field name matches a known method → static or instance
+    ///   method. The class lookup uses
+    ///   [`Self::path_resolves_to_class_in_emit`]; same code path
+    ///   the static-method call routing uses.
+    ///
+    /// Instance methods on non-Path receivers (e.g. `foo().bar(x)`)
+    /// would need tycheck's per-expression type to identify the
+    /// receiver's class; left as a future refinement.
+    pub(crate) fn callee_param_is_nullable(
+        &self,
+        callee: &juxc_ast::Expr,
+        arg_idx: usize,
+    ) -> bool {
+        // Top-level fn: `f(...)`.
+        if let juxc_ast::Expr::Path(qn) = callee {
+            if qn.segments.len() == 1 {
+                if let Some(f) = self.symbols.functions.get(&qn.segments[0].text) {
+                    return f
+                        .params
+                        .get(arg_idx)
+                        .map(|p| p.ty.nullable)
+                        .unwrap_or(false);
+                }
+            }
+        }
+        // Static or instance method: `Receiver.method(...)`.
+        if let juxc_ast::Expr::Field(f) = callee {
+            if let juxc_ast::Expr::Path(qn) = &*f.object {
+                if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                    if let Some(class) = self.symbols.classes.get(&class_fqn) {
+                        if let Some(m) = class.methods.get(f.field.text.as_str()) {
+                            return m
+                                .params
+                                .get(arg_idx)
+                                .map(|p| p.ty.nullable)
+                                .unwrap_or(false);
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Wrap `arg` in `Some(arg)` if the target slot wants a
+    /// nullable value and the expression isn't already
+    /// `Option<T>`-shaped. Emits the wrapping parentheses; the
+    /// caller calls `emit_expr` between the `Some(` and the `)`
+    /// or — to keep call sites readable — relies on
+    /// [`Self::emit_arg_with_nullable_wrap`] which does the whole
+    /// arg emission in one call.
+    pub(crate) fn emit_arg_with_nullable_wrap(
+        &mut self,
+        arg: &juxc_ast::Expr,
+        target_is_nullable: bool,
+    ) {
+        let wrap = target_is_nullable && !self.expression_is_already_nullable(arg);
+        if wrap {
+            self.w.push_str("Some(");
+        }
+        self.emit_expr(arg);
+        if wrap {
+            self.w.push(')');
+        }
+    }
+
+    /// Emit `arg` as the body of a `println!` / `format!` value
+    /// slot. When `arg` has nullable shape (Option<T>), wrap in
+    /// the prelude's `JuxOpt(&value)` adapter so Display works —
+    /// `Some(v)` prints as `v`, `None` as `"null"`. Non-nullable
+    /// args pass straight through.
+    pub(crate) fn emit_format_arg(&mut self, arg: &juxc_ast::Expr) {
+        if self.expression_is_already_nullable(arg) {
+            self.w.push_str("JuxOpt(&");
+            self.emit_expr(arg);
+            self.w.push(')');
+        } else {
+            self.emit_expr(arg);
+        }
+    }
 }
 
 /// True if `name`'s first character is an uppercase letter. Used by

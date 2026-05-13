@@ -110,6 +110,13 @@ pub enum Code {
     /// `error: method does not override a method from its
     /// superclass` (which is the whole point of `@Override`).
     E0426_OverrideMissing,
+    /// E0440 — A `switch` over a sealed type (enum or sealed
+    /// class) doesn't cover every variant / permitted subclass
+    /// and has no wildcard arm. Per `JUX-DIAGNOSTICS-ADDENDUM.md`
+    /// §D.4 / type-system §T.5.5: exhaustiveness is mandatory
+    /// for sealed-shape scrutinees so missed cases are caught at
+    /// compile time, not via a runtime panic.
+    E0440_NotExhaustive,
 
     // ---- Operators / Auto-derivation (E0900–E0999) ----
     /// E0930 — Conflicting operator declarations. Per
@@ -169,6 +176,7 @@ impl Code {
             Code::E0424_ImplementsNotAnInterface => "E0424",
             Code::E0425_ThisInStaticContext      => "E0425",
             Code::E0426_OverrideMissing          => "E0426",
+            Code::E0440_NotExhaustive            => "E0440",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",

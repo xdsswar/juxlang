@@ -100,6 +100,15 @@ impl RustEmitter {
         let mut muts = HashSet::new();
         collect_mutated_names(&ctor.body, &mut muts, &self.user_mut_methods);
         self.mutated_in_fn = muts;
+        // Seed nullable-locals from this constructor's params so
+        // a body that passes a `T?` parameter into a `T?` slot
+        // doesn't double-wrap.
+        self.nullable_locals.clear();
+        for p in &ctor.params {
+            if p.ty.nullable {
+                self.nullable_locals.insert(p.name.text.clone());
+            }
+        }
         for stmt in &ctor.body.statements {
             self.emit_source_marker(stmt_span(stmt));
             self.w.emit_indent();

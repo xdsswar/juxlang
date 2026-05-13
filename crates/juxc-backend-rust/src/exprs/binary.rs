@@ -119,6 +119,24 @@ fn receiver_needs_parens(e: &Expr) -> bool {
 }
 
 impl RustEmitter {
+    /// True iff `e` is recorded by tycheck as having type
+    /// `Ty::String`. Used by `emit_binary` to recognize
+    /// `a + b` as string concatenation even when neither operand
+    /// is a string literal (e.g. `name + greeting` where both are
+    /// `String`-typed locals or fields). Lookup uses
+    /// `expr_types[span]`; expressions tycheck didn't visit fall
+    /// back to `false` and route through the standard binary path
+    /// — same conservative fallback as the other type-aware
+    /// helpers.
+    fn operand_is_string_typed(&self, e: &Expr) -> bool {
+        matches!(
+            self.expr_types.get(&crate::exprs::expr_span_of(e)),
+            Some(juxc_tycheck::Ty::String),
+        )
+    }
+}
+
+impl RustEmitter {
     /// Lower a binary expression. Every operator in [`BinaryOp`] maps
     /// onto a Rust operator with identical spelling, so the lowering is
     /// mostly textual.
@@ -138,7 +156,22 @@ impl RustEmitter {
     /// silently change grouping). This matches what a human would write
     /// and keeps the output rustfmt-shaped.
     pub(crate) fn emit_binary(&mut self, b: &BinaryExpr) {
-        if b.op == BinaryOp::Add && (is_string_literal(&b.left) || is_string_literal(&b.right)) {
+        // String-concat trigger fires when either operand is
+        // **typed** as `String` — covers literals (parser sets
+        // their type to `Ty::String` upstream) AND identifier
+        // references whose declared type is `String`. Falling
+        // back to the literal-shape check stays for operands
+        // whose `expr_types` entry is missing (e.g. an expression
+        // tycheck didn't visit). The two predicates are
+        // complementary: literal-shape always wins, type-shape
+        // catches the `name + greeting` case where both sides are
+        // `String`-typed identifiers without a literal in sight.
+        if b.op == BinaryOp::Add
+            && (is_string_literal(&b.left)
+                || is_string_literal(&b.right)
+                || self.operand_is_string_typed(&b.left)
+                || self.operand_is_string_typed(&b.right))
+        {
             self.emit_string_concat(b);
             return;
         }
@@ -280,7 +313,10 @@ impl RustEmitter {
         self.emitting_format_arg = true;
         for op in &runtime_args {
             self.w.push_str(", ");
-            self.emit_expr(op);
+            // Wrap nullable operands in `JuxOpt(&v)` so
+            // `"prefix " + maybeName + " suffix"` prints "null" for
+            // None rather than failing the `Display` bound.
+            self.emit_format_arg(op);
         }
         self.emitting_format_arg = prev;
         self.w.push(')');

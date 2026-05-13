@@ -96,8 +96,19 @@ impl RustEmitter {
         for arg_ref in &arg_order {
             self.w.push_str(", ");
             match arg_ref {
-                ArgRef::Bare(i) => self.w.push_str(&bare_args[*i].text),
-                ArgRef::Expr(i) => self.emit_expr(args[*i]),
+                ArgRef::Bare(i) => {
+                    // Wrap nullable bare-ident interps in `JuxOpt`
+                    // so `${maybe_name}` prints "value" or "null"
+                    // instead of failing to compile.
+                    let ident = bare_args[*i].clone();
+                    let qn = juxc_ast::QualifiedName {
+                        segments: vec![ident],
+                        span: bare_args[*i].span,
+                    };
+                    let synth = juxc_ast::Expr::Path(qn);
+                    self.emit_format_arg(&synth);
+                }
+                ArgRef::Expr(i) => self.emit_format_arg(args[*i]),
             }
         }
         self.emitting_format_arg = prev;

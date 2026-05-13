@@ -19,6 +19,213 @@ fn is_null_literal(e: &Expr) -> bool {
     matches!(e, Expr::Literal(Literal::Null))
 }
 
+/// True when the loop body somewhere consumes `name` — uses it in
+/// a position that needs an OWNED `T` rather than just a `&T`.
+/// Drives the for-each lowering: when this returns `false`, we
+/// can iterate by reference and skip the per-iteration clone.
+///
+/// Considered "moves":
+/// - `var y = x;` (the init is exactly `Path(x)`)
+/// - `f(x)`, `obj.method(x)`, `new T(x)` — fn / method / ctor arg
+/// - `return x;`
+/// - `obj.field = x;` — assign rhs
+/// - `super(x);` — super-constructor arg
+/// - `x as T` — cast operand (cast consumes the value)
+/// - Inside an array literal: `[x, ...]`
+///
+/// NOT considered moves:
+/// - `x.method()`, `x.field` — read through borrow
+/// - `x == y`, `x != y` — comparisons borrow
+/// - `format!`/`println!` args — borrow via `Display`
+/// - `if (x)` / `while (x)` — bool conditions borrow
+///
+/// The walker is conservative: any uncertainty returns `true` so
+/// the loop falls back to the clone form, which always compiles.
+fn body_moves_path(block: &Block, name: &str) -> bool {
+    for stmt in &block.statements {
+        if stmt_moves_path(stmt, name) {
+            return true;
+        }
+    }
+    false
+}
+
+fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Expr(e) => expr_moves_path_at_top(e, name),
+        Stmt::VarDecl(v) => v.init.as_ref().map_or(false, |e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
+        Stmt::Return(opt) => opt.as_ref().map_or(false, |e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
+        Stmt::Assign(a) => {
+            is_path_named(&a.value, name)
+                || expr_moves_path_at_top(&a.value, name)
+                || expr_moves_path_at_top(&a.target, name)
+        }
+        Stmt::If(s) => {
+            expr_moves_path_at_top(&s.condition, name)
+                || body_moves_path(&s.then_block, name)
+                || else_branch_moves_path(s.else_branch.as_deref(), name)
+        }
+        Stmt::While(s) => {
+            expr_moves_path_at_top(&s.condition, name)
+                || body_moves_path(&s.body, name)
+        }
+        Stmt::ForEach(s) => {
+            // A nested for-each that consumes the outer var
+            // (`for y in xs` where xs shadows our name) is a move.
+            // The shadowing case — same-named inner loop var —
+            // can't appear in well-formed Jux source because the
+            // resolver would see two scopes; if it does we
+            // conservatively report a move.
+            is_path_named(&s.iter, name)
+                || expr_moves_path_at_top(&s.iter, name)
+                || body_moves_path(&s.body, name)
+        }
+        Stmt::SuperCall(args, _) => {
+            args.iter().any(|a| is_path_named(a, name) || expr_moves_path_at_top(a, name))
+        }
+        Stmt::Break(_) | Stmt::Continue(_) => false,
+    }
+}
+
+fn else_branch_moves_path(branch: Option<&ElseBranch>, name: &str) -> bool {
+    let mut cursor = branch;
+    while let Some(b) = cursor {
+        match b {
+            ElseBranch::If(inner) => {
+                if expr_moves_path_at_top(&inner.condition, name)
+                    || body_moves_path(&inner.then_block, name)
+                {
+                    return true;
+                }
+                cursor = inner.else_branch.as_deref();
+            }
+            ElseBranch::Block(block) => {
+                return body_moves_path(block, name);
+            }
+        }
+    }
+    false
+}
+
+/// True iff `e` is exactly `Path(name)` — a bare reference to the
+/// loop variable. Used at consume sites (var-decl init, return
+/// value, assign rhs, call args) to detect "the whole expression
+/// IS the loop var".
+fn is_path_named(e: &Expr, name: &str) -> bool {
+    match e {
+        Expr::Path(qn) => qn.segments.len() == 1 && qn.segments[0].text == name,
+        _ => false,
+    }
+}
+
+/// Recursive walker for "does this expression contain a consume
+/// site for `name`?" Distinct from `is_path_named` — this walks
+/// into sub-expressions looking for fn-call args, ctor args, etc.
+/// that consume the loop var. Returns false for borrow-shaped
+/// uses (`.method()`, `==`, format args) so the caller can
+/// safely emit `for x in &xs`.
+fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
+    match e {
+        // Function / method call: each arg is a consume site
+        // (passes by value). Method receivers (`x.method()`)
+        // borrow via auto-deref, so we walk the callee for nested
+        // consume shapes but don't treat the receiver itself as
+        // moved.
+        //
+        // **Exception** — the builtin `print(...)` lowers to
+        // `println!(...)` which borrows its args via `Display`,
+        // so a bare path arg here doesn't move. The recognition
+        // mirrors `emit_call`'s `print` dispatch: single-segment
+        // path named `print`.
+        Expr::Call(c) => {
+            let is_print_builtin = matches!(
+                &*c.callee,
+                Expr::Path(qn) if qn.segments.len() == 1 && qn.segments[0].text == "print",
+            );
+            if is_print_builtin {
+                // Args of `print` borrow; only walk for nested
+                // consume shapes inside complex sub-expressions.
+                return c.args.iter().any(|a| expr_moves_path_at_top(a, name));
+            }
+            for arg in &c.args {
+                if is_path_named(arg, name) || expr_moves_path_at_top(arg, name) {
+                    return true;
+                }
+            }
+            // Walk callee for nested calls (`f(g(x))`).
+            expr_moves_path_at_top(&c.callee, name)
+        }
+        Expr::NewObject(n) => n
+            .args
+            .iter()
+            .any(|a| is_path_named(a, name) || expr_moves_path_at_top(a, name)),
+        Expr::NewArray(n) => expr_moves_path_at_top(&n.size, name),
+        Expr::NewArrayLit(n) => n
+            .elements
+            .iter()
+            .any(|el| is_path_named(el, name) || expr_moves_path_at_top(el, name)),
+        Expr::Cast(c) => is_path_named(&c.value, name) || expr_moves_path_at_top(&c.value, name),
+        Expr::Binary(b) => {
+            // String concat (`+` with a string operand) emits as
+            // `format!` which borrows — no move. Other binaries
+            // are arithmetic/comparison which also borrow for
+            // `String`/user types via the trait method. So walk
+            // for nested calls but don't treat top-level
+            // operands as moves.
+            expr_moves_path_at_top(&b.left, name)
+                || expr_moves_path_at_top(&b.right, name)
+        }
+        Expr::Unary(u) => expr_moves_path_at_top(&u.operand, name),
+        Expr::Range(r) => {
+            expr_moves_path_at_top(&r.start, name) || expr_moves_path_at_top(&r.end, name)
+        }
+        Expr::Index(i) => {
+            expr_moves_path_at_top(&i.array, name) || expr_moves_path_at_top(&i.index, name)
+        }
+        Expr::Field(f) => expr_moves_path_at_top(&f.object, name),
+        Expr::InterpString(s) => s.segments.iter().any(|seg| match seg {
+            // Bare-ident interp is a borrow (Display); no move.
+            juxc_ast::InterpSegment::Literal(_) | juxc_ast::InterpSegment::Bare(_) => false,
+            juxc_ast::InterpSegment::Expr(inner) => expr_moves_path_at_top(inner, name),
+        }),
+        Expr::Switch(s) => {
+            if expr_moves_path_at_top(&s.scrutinee, name) {
+                return true;
+            }
+            for arm in &s.arms {
+                let arm_moves = match &arm.body {
+                    juxc_ast::SwitchBody::Expr(e) => {
+                        is_path_named(e, name) || expr_moves_path_at_top(e, name)
+                    }
+                    juxc_ast::SwitchBody::Block(b) => body_moves_path(b, name),
+                };
+                if arm_moves {
+                    return true;
+                }
+            }
+            false
+        }
+        Expr::Elvis(e) => {
+            // Both sides of elvis are value-consuming via
+            // `.unwrap_or(...)`, so a bare `Path(name)` on
+            // either side is a move.
+            is_path_named(&e.value, name)
+                || expr_moves_path_at_top(&e.value, name)
+                || is_path_named(&e.fallback, name)
+                || expr_moves_path_at_top(&e.fallback, name)
+        }
+        Expr::Lambda(l) => match &l.body {
+            // A lambda captures by value (the emitter wraps in
+            // `move`), so any read of the loop var inside the
+            // body is a move-capture.
+            juxc_ast::LambdaBody::Expr(e) => is_path_named(e, name) || expr_moves_path_at_top(e, name),
+            juxc_ast::LambdaBody::Block(b) => body_moves_path(b, name),
+        },
+        Expr::SizeOf(s) => expr_moves_path_at_top(&s.operand, name),
+        Expr::Literal(_) | Expr::Path(_) | Expr::This(_) => false,
+    }
+}
+
 impl RustEmitter {
     /// True iff the enclosing function's declared return type is
     /// `T?` (nullable) AND `expr` isn't itself a `null` literal —
@@ -184,15 +391,31 @@ impl RustEmitter {
             return;
         }
 
-        // Decide between borrow-and-pattern-deref vs clone shape from
-        // the element type recorded by tycheck. Missing entries fall
-        // back to the clone form — it's the universally-correct
-        // shape; the borrow form only wins when we *know* the
-        // element is Copy.
+        // Three lowering shapes:
+        //
+        // - **Copy element type** (`int`, `bool`, `char`, `f64`, …):
+        //   `for &x in &xs { … }`. Pattern-derefs the borrowed
+        //   item; zero overhead.
+        // - **Non-Copy element type, body never moves x**:
+        //   `for x in &xs { … }`. The loop variable binds as
+        //   `&T`; auto-deref covers method calls, `==`, format
+        //   args, etc. Saves the `.iter().cloned()` heap clone
+        //   per iteration.
+        // - **Non-Copy element type, body moves x**: fall back to
+        //   `for x in xs.iter().cloned() { … }` so `x` is owned
+        //   and the move sites compile.
+        //
+        // "Moves x" = the loop variable appears as the immediate
+        // value in a position that consumes ownership: a fn-call
+        // arg, a `new T` arg, a var-decl init, an assignment rhs,
+        // a return value, or a super-call arg. Reads through `.`
+        // / `[]` / comparisons / format don't move it.
         let element_is_copy = match self.expr_types.get(&expr_span_of(&f.iter)) {
             Some(Ty::Array { element, .. }) => matches!(element.as_ref(), Ty::Primitive(_)),
             _ => false,
         };
+        let body_moves_var =
+            !element_is_copy && body_moves_path(&f.body, &f.var_name.text);
 
         self.w.push_str("for ");
         if element_is_copy {
@@ -203,9 +426,15 @@ impl RustEmitter {
         if element_is_copy {
             self.w.push('&');
             self.emit_expr(&f.iter);
-        } else {
+        } else if body_moves_var {
             self.emit_expr(&f.iter);
             self.w.push_str(".iter().cloned()");
+        } else {
+            // Borrow-iter: yields `&T`, so `x.method()` /
+            // `format!("{}", x)` / `x == y` all work through
+            // auto-deref / `Display` / `PartialEq` blanket impls.
+            self.w.push('&');
+            self.emit_expr(&f.iter);
         }
         self.w.push_str(" {\n");
         self.w.indent_inc();
@@ -237,6 +466,19 @@ impl RustEmitter {
         // type annotation; emit it as `let x: T = init;`. The `var`
         // form leaves `ty == None` and we let Rust infer.
         let declared_nullable = var.ty.as_ref().map_or(false, |t| t.nullable);
+        // Inferred nullability for `var` (no explicit type):
+        // when the init expression is itself `Option<T>`-shaped
+        // (a nullable-returning call, a `?.`-chain, a known
+        // nullable local, etc.), the resulting binding also has
+        // nullable shape. Seed `nullable_locals` so downstream
+        // sites can recognize reads of this binding.
+        let init_is_nullable = var
+            .init
+            .as_ref()
+            .map_or(false, |e| self.expression_is_already_nullable(e));
+        if declared_nullable || init_is_nullable {
+            self.nullable_locals.insert(var.name.text.clone());
+        }
         if let Some(ty) = &var.ty {
             self.w.push_str(": ");
             self.emit_type_as_rust(ty);
@@ -310,6 +552,7 @@ impl RustEmitter {
         // like `arr[next()] += 1`, so we don't have to introduce
         // any temp. The op spelling is the regular Rust binary
         // operator with `=` appended.
+        let is_compound = a.op.is_some();
         if let Some(op) = a.op {
             self.w.push(' ');
             self.w.push_str(op.as_rust_str());
@@ -317,8 +560,47 @@ impl RustEmitter {
         } else {
             self.w.push_str(" = ");
         }
-        self.emit_expr(&a.value);
+        // Nullable-field assign coercion: when the LHS is a field
+        // whose declared type is `T?` and the RHS isn't already
+        // nullable-shaped, wrap RHS in `Some(...)`. Skipped for
+        // compound forms (`obj.x += y`) because `Option<T> +=` has
+        // no sensible meaning and rustc will surface the misuse.
+        let assign_nullable = !is_compound && self.assign_target_is_nullable(&a.target);
+        self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
         self.w.push_str(";\n");
+    }
+
+    /// True iff the assignment target is a class/record field whose
+    /// declared type carries the `nullable` flag. Walks the field
+    /// expression to find the receiver's class via `expr_types`,
+    /// then looks up the field on that class. Conservative — a
+    /// miss (no class info, no such field) returns false so the
+    /// caller won't add a wrap and rustc will surface any real
+    /// mismatch.
+    pub(crate) fn assign_target_is_nullable(&self, target: &Expr) -> bool {
+        let Expr::Field(f) = target else { return false };
+        let Some(juxc_tycheck::Ty::User { name, .. }) =
+            self.expr_types.get(&expr_span_of(&f.object))
+        else {
+            return false;
+        };
+        // Walk the class's own fields; ancestor fields would need
+        // an inheritance walk like `lookup_field_type` does. For
+        // Phase 1 the assign-coercion fires only on direct fields
+        // — Java/Kotlin user code that assigns to an inherited
+        // nullable field is rare enough that we'll wait for an
+        // example to motivate the deeper walk.
+        if let Some(class) = self.symbols.classes.get(name) {
+            if let Some(field) = class.fields.get(&f.field.text) {
+                return field.ty.nullable;
+            }
+        }
+        if let Some(record) = self.symbols.records.get(name) {
+            if let Some(c) = record.components.iter().find(|c| c.name == f.field.text) {
+                return c.ty.nullable;
+            }
+        }
+        false
     }
 
     /// Lower `if (cond) { … } else if (…) { … } else { … }` to its

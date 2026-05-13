@@ -1,0 +1,17 @@
+// String concatenation triggered by TYPE, not just by literal.
+// `name + greeting` with both sides String-typed must produce a
+// `format!` (or equivalent) — Rust's bare `+` on owned String
+// doesn't compile, so without this we'd emit invalid Rust.
+
+public String join(String a, String b) {
+    return a + b;
+}
+
+public void main() {
+    var first = "hello, ";
+    var second = "world!";
+    // Both operands are identifiers — no string literal in sight.
+    // The TYPE-based trigger picks this up and routes through
+    // `format!(...)`.
+    print(first + second);
+}

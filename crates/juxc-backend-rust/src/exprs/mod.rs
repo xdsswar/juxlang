@@ -123,13 +123,26 @@ impl RustEmitter {
                 // Constructor args consume their values, so any
                 // nested string literal needs the Fix-1 self-coerce
                 // — clear the format-arg flag for the arg emission.
+                // Per-arg nullable-wrap: when a positional ctor
+                // parameter is `T?`, a non-nullable arg is lifted
+                // into `Some(arg)` so the field's `Option<T>`
+                // type-check passes.
+                let bare_class = n.class_name.segments.last().map(|s| s.text.as_str());
+                let ctor_nullable_flags: Vec<bool> = match bare_class
+                    .and_then(|name| self.symbols.classes.get(name))
+                    .and_then(|c| c.constructors.first())
+                {
+                    Some(ctor) => ctor.params.iter().map(|p| p.ty.nullable).collect(),
+                    None => Vec::new(),
+                };
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
                 for (i, arg) in n.args.iter().enumerate() {
                     if i > 0 {
                         self.w.push_str(", ");
                     }
-                    self.emit_expr(arg);
+                    let nullable = ctor_nullable_flags.get(i).copied().unwrap_or(false);
+                    self.emit_arg_with_nullable_wrap(arg, nullable);
                 }
                 self.emitting_format_arg = prev;
                 self.w.push(')');
@@ -164,6 +177,16 @@ impl RustEmitter {
                 | Expr::NewArray(_)
                 | Expr::NewArrayLit(_)
         );
+        // Both sides are value-consuming positions (`unwrap_or`
+        // takes `self` and `default: T` by value). Inside a
+        // `println!`/`format!` arg this matters: the format-arg
+        // flag is set on the way in, so any literal nested inside
+        // — e.g. the fallback `"no note"` in
+        // `note ?? "no note"` — must still self-coerce to `String`
+        // because `unwrap_or`'s `T` is `String`. Clear the flag
+        // for the whole elvis emission and restore after.
+        let prev = self.emitting_format_arg;
+        self.emitting_format_arg = false;
         if value_needs_parens {
             self.w.push('(');
         }
@@ -171,9 +194,27 @@ impl RustEmitter {
         if value_needs_parens {
             self.w.push(')');
         }
+        // Preserve the LHS binding when it's a Path or Field read:
+        // `x ?? b` should leave `x` usable after the expression.
+        // `.clone().unwrap_or(b)` clones the `Option<T>` (which
+        // for `T: Clone` clones the inner `T`) so the original
+        // binding stays whole. For non-Path / non-Field LHS
+        // (call results, indices, switch expressions, …) the
+        // value is fresh — no need to clone, the bare
+        // `.unwrap_or(b)` move is fine.
+        //
+        // Field-read auto-clone (see `emit_field`) only fires for
+        // `Ty::String`/`Ty::Param` field types today and would
+        // skip nullable fields, so we add the clone here at the
+        // elvis level instead of relying on the field-read path.
+        let preserve_lhs = matches!(*e.value, Expr::Path(_) | Expr::Field(_));
+        if preserve_lhs {
+            self.w.push_str(".clone()");
+        }
         self.w.push_str(".unwrap_or(");
         self.emit_expr(&e.fallback);
         self.w.push(')');
+        self.emitting_format_arg = prev;
     }
 
     /// Emit a Jux lambda as a Rust closure, wrapped in `Rc::new`

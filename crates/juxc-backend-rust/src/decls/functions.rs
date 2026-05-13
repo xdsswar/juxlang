@@ -98,6 +98,17 @@ impl RustEmitter {
             let mut muts = HashSet::new();
             collect_mutated_names(body, &mut muts, &self.user_mut_methods);
             self.mutated_in_fn = muts;
+            // Reset and re-seed the nullable-locals set for this fn:
+            // any param whose declared type is `T?` (post-spec
+            // nullable-primitive check has already rejected
+            // `int?` shapes) goes in so call sites passing it
+            // through to other slots don't double-wrap.
+            self.nullable_locals.clear();
+            for p in &fn_decl.params {
+                if p.ty.nullable {
+                    self.nullable_locals.insert(p.name.text.clone());
+                }
+            }
             // Save/restore around the body so `return "lit";` inside
             // a `String`-returning fn picks up `.to_string()` while
             // tail-position emission is consulting `current_return_type`.

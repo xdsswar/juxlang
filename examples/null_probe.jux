@@ -1,43 +1,66 @@
-// Nullable types — full vehicle.
+// Nullable types — comprehensive vehicle.
 //
-// `String? lookup(...)` returns a nullable String. Call sites use
-//   - smart-cast `if (x != null) { print(x); }` — inside the block,
-//     x is unwrapped to plain String
-//   - `?.` safe-call — `obj?.method()` propagates None
-//   - `?:` elvis — `x ?: "default"` returns the unwrapped value or
-//     a fallback
+// Exercises:
+//   - `T?` field/local declarations
+//   - `null` returns and var inits
+//   - `if (x != null)` smart-cast to non-null inner
+//   - `?.` safe-call
+//   - `?:` / `??` elvis (aliases)
+//   - **Type-aware Some-wrap**:
+//       - non-null value passed to `T?` parameter
+//       - non-null value assigned to `T?` field
+//       - non-null value passed as ctor arg for a `T?` field
 
 public class User {
     public String name;
-    public User(String name) { this.name = name; }
+    public String? nickname;  // nullable field
+    public User(String name, String? nickname) {
+        this.name = name;
+        this.nickname = nickname;
+    }
     public String greet() { return "hi, " + this.name; }
 }
 
 public User? lookupUser(int id) {
     if (id < 0) { return null; }
-    return new User("user_" + id);
+    return new User("user_" + id, null);  // null arg to a T? slot
+}
+
+// Top-level fn taking a nullable param.
+public void announce(String? note) {
+    print(note ?? "no note");
 }
 
 public void main() {
-    var found = lookupUser(42);
-    var missing = lookupUser(-1);
+    // Non-null literal flowing into a `T?` parameter: Some-wrap.
+    announce("hello");
+    // null literal flows through unchanged.
+    announce(null);
 
-    // 1. Smart-cast: `if (x != null)` narrows to non-null `x` inside.
+    // Constructor arg: `T?` field initialized with a non-null
+    // String literal — wrap into Some.
+    var u = new User("Ada", "ace");
+    print(u.greet());
+    print(u.nickname ?? "no nick");
+
+    // Print a nullable directly (no null-guard). JuxOpt adapter
+    // renders Some(v) as v and None as "null".
+    print(u.nickname);
+    u.nickname = null;
+    print(u.nickname);
+
+    // Field assignment: `obj.nickname = "new"` → Some-wrap.
+    u.nickname = "ace2";
+    print(u.nickname ?? "no nick");
+
+    // Inside a format string too.
+    print($"nick=${u.nickname}");
+
+    // Smart-cast + safe-call + elvis chain.
+    var found = lookupUser(42);
+    var greeting = lookupUser(7)?.greet() ?? "no user";
+    print(greeting);
     if (found != null) {
         print(found.greet());
     }
-
-    // 2. Safe-call: `obj?.method()` returns Option<String>. The
-    //    chained `?:` (Kotlin-style) extracts the value or uses a
-    //    fallback.
-    var greeting = lookupUser(7)?.greet() ?: "no user";
-    print(greeting);
-
-    // Same operator, C#/JS-style `??` spelling.
-    var fallback = lookupUser(-1)?.greet() ?? "no user";
-    print(fallback);
-
-    // 3. Elvis alone: unwrap-or-default on the variable directly.
-    var nameOrEmpty = missing?.name ?? "";
-    print("name=" + nameOrEmpty);
 }

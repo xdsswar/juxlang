@@ -614,7 +614,7 @@ fn typed_for_each_drops_type_annotation_for_now() {
 /// the loop and the loop variable is an owned `T` value (works
 /// for non-Copy types like `String`).
 #[test]
-fn for_each_on_string_vec_clones_each_element() {
+fn for_each_on_string_vec_borrows_when_body_doesnt_move() {
     let rust = emit(
         r#"public void main() {
                String[] xs = {"a", "b"};
@@ -622,11 +622,35 @@ fn for_each_on_string_vec_clones_each_element() {
                print(xs.length);
            }"#,
     );
-    assert!(rust.contains("for x in xs.iter().cloned() {"), "got: {rust}");
+    // Body only borrows via `print(x)` — no `.iter().cloned()`
+    // needed. The cheaper `for x in &xs` form fires here so each
+    // iteration runs without a per-element heap clone.
+    assert!(rust.contains("for x in &xs {"), "got: {rust}");
+    assert!(
+        !rust.contains(".iter().cloned()"),
+        "non-moving body shouldn't clone: {rust}",
+    );
     // The post-loop `.length` reads xs — proves we didn't move it.
     // Identifier receiver, so no parens around it.
     assert!(rust.contains("xs.len() as isize"), "got: {rust}");
-    assert!(!rust.contains("(xs).len()"), "stale parens: {rust}");
+}
+
+/// When the body **moves** the loop variable (passes it to a fn
+/// expecting `T` by value), we fall back to `.iter().cloned()`
+/// so each iteration owns a fresh `T`.
+#[test]
+fn for_each_on_string_vec_clones_when_body_consumes() {
+    let rust = emit(
+        r#"public void take(String s) { print(s); }
+           public void main() {
+               String[] xs = {"a", "b"};
+               for (var x : xs) { take(x); }
+           }"#,
+    );
+    assert!(
+        rust.contains("for x in xs.iter().cloned() {"),
+        "moving body should clone: {rust}",
+    );
 }
 
 /// Fixed-size array of a Copy element type uses the cheap
