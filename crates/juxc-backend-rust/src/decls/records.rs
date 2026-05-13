@@ -122,10 +122,27 @@ impl RustEmitter {
         for method in &record_decl.methods {
             self.emit_method(method);
         }
+        // Static fields declared inside the record body (JEP 395 §3,
+        // Java-records-with-static). `final` / `const` ones lower as
+        // associated `pub const`; mutable ones get the same
+        // module-scope `LazyLock<Mutex<T>>` shape class statics use,
+        // but emitted after the impl block closes.
+        for field in &record_decl.static_fields {
+            if field.is_final {
+                self.emit_static_field(field);
+            }
+        }
         // Close the `impl Name { ... }` block.
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();
+        // Module-scope mutable statics for the record's non-final
+        // static fields.
+        for field in &record_decl.static_fields {
+            if !field.is_final {
+                self.emit_mutable_static_field(&record_decl.name.text, field);
+            }
+        }
 
         // Auto-derived `operator string` per §O.3.1 — `"Point(x: 1.5, y: 2.7)"`.
         //
@@ -266,6 +283,9 @@ fn record_derive_attribute(record_decl: &juxc_ast::RecordDecl) -> String {
     let all_eq = component_tys.iter().all(|t| field_supports_eq(t));
     let all_hash = component_tys.iter().all(|t| field_supports_hash(t));
     let all_copy = component_tys.iter().all(|t| field_supports_copy(t));
+    let all_default = component_tys
+        .iter()
+        .all(|t| crate::analysis::field_supports_default(t));
 
     // PartialEq: derived unless the user wrote operator== (override
     // or delete). The user's override path emits its own `impl
@@ -288,6 +308,13 @@ fn record_derive_attribute(record_decl: &juxc_ast::RecordDecl) -> String {
     // operator-level decision.
     if all_copy {
         derives.push("Copy");
+    }
+    // Default: derived when every component is Default-able. Lets a
+    // class storing this record as a field flow through the
+    // struct-init shim's `field: Default::default()` fallback when
+    // the user didn't supply an explicit field initializer.
+    if all_default {
+        derives.push("Default");
     }
     format!("#[derive({})]", derives.join(", "))
 }

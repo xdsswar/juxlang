@@ -3,7 +3,7 @@
 //
 //   - cross-package class instantiation (Customer, Staff, Cart)
 //   - cross-package enum-variant construction (Item.*)
-//   - cross-package static method calls (CatalogOps.*)
+//   - cross-package static method calls (Catalog.*)
 //   - default-method dispatch (Loggable.banner via Customer/Staff)
 //   - nullable + Elvis on Cart's customerName
 //   - bare-name access from inside imported classes' bodies
@@ -17,11 +17,9 @@
 package shop.app;
 
 import shop.money.Money;
-// Grouped import — pulls multiple names from shop.catalog in one
-// statement. Import aliasing (`as`) is parsed but the backend's
-// Rust `use` doesn't honor it yet, so we use the source names
-// here. Single-import alias still works for type renaming.
-import shop.catalog.{ Item, CatalogOps };
+// Grouped import with an alias: brings `Item` in by its source
+// name and renames `CatalogOps` to `Catalog` locally.
+import shop.catalog.{ Item, CatalogOps as Catalog };
 // Grouped import without aliases.
 import shop.users.{ Loggable, Customer, Staff, Person };
 import shop.cart.Cart;
@@ -41,9 +39,9 @@ public void main() {
     print(charlie.banner());
 
     // Describe a few items.
-    print(CatalogOps.describe(Item.Book("Effective Jux", new Money(2999, "USD"))));
-    print(CatalogOps.describe(Item.Apparel("T-Shirt", new Money(1500, "USD"), "M")));
-    print(CatalogOps.describe(Item.Subscription("Pro Plan", new Money(999, "USD"), 12)));
+    print(Catalog.describe(Item.Book("Effective Jux", new Money(2999, "USD"))));
+    print(Catalog.describe(Item.Apparel("T-Shirt", new Money(1500, "USD"), "M")));
+    print(Catalog.describe(Item.Subscription("Pro Plan", new Money(999, "USD"), 12)));
 
     // Two carts. Item values are constructed inline at each `.add()`
     // call so the by-value move semantics never bite.
@@ -60,6 +58,6 @@ public void main() {
 
     // Static counters from across the loaded packages.
     print($"Person.created = ${Person.created}");
-    print($"CatalogOps.describedCount = ${CatalogOps.describedCount}");
+    print($"Catalog.describedCount = ${Catalog.describedCount}");
     print($"Cart.allocated = ${Cart.allocated}");
 }

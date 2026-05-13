@@ -503,26 +503,31 @@ impl RustEmitter {
             // also drop static methods — they're emitted as free
             // functions adjacent to the trait, never as trait
             // items, so they have no place in `impl Trait for ...`.
-            // Retain only methods this class declares inherently —
-            // delegating via `self.method()` is safe here because
-            // method resolution finds the inherent body before the
-            // trait method. Methods that come from the parent chain
-            // would recurse infinitely through this same trait
-            // impl, so we leave them for the empty-impl branch
-            // (Rust's trait default handles them). The compile-time
-            // limit: an interface with an abstract method whose
-            // body lives in a parent class won't currently produce
-            // a working concrete impl. The fix is a future
-            // ancestor-FQN-aware delegating body — for now,
-            // make such methods `default` on the interface.
+            // Retain methods declared inherently on this class only.
+            // Methods inherited through a parent class would need
+            // either virtual-dispatch-preserving body inlining
+            // (copy Person's body into Customer's inherent so
+            // `self.role()` resolves to Customer's override) or
+            // dyn-trait-object lowering, neither wired up yet.
+            // The empty-impl branch below handles methods that
+            // come through default-method bodies on the trait
+            // itself. Interface methods declared abstract whose
+            // implementation lives only on a parent class will
+            // currently produce an `E0046 missing method` from
+            // rustc — workaround is to give the interface method
+            // a `default` body, even a trivial one.
             let class_method_names: std::collections::HashSet<&str> = class_decl
                 .methods
                 .iter()
                 .map(|m| m.name.text.as_str())
                 .collect();
-            methods.retain(|(name, sig)| {
-                !sig.is_static && class_method_names.contains(name.as_str())
-            });
+            let method_targets: std::collections::HashMap<String, Option<String>> = methods
+                .iter()
+                .filter(|(_, sig)| !sig.is_static)
+                .filter(|(name, _)| class_method_names.contains(name.as_str()))
+                .map(|(name, _)| (name.clone(), Some(String::new())))
+                .collect();
+            methods.retain(|(name, _)| method_targets.contains_key(name));
             if methods.is_empty() {
                 // The class implements the interface entirely via
                 // default methods; we still emit an empty impl
@@ -585,22 +590,54 @@ impl RustEmitter {
                         self.w.push_str(" -> ()");
                     }
                 }
-                // Delegating body — `self.method(params)` forwards to
-                // the inherent impl. Void methods drop the value; the
-                // unit-return body still compiles for them.
+                // Delegating body. Two shapes per the method_targets
+                // table built above:
+                //
+                //   - **Empty target** (`Some("")`) → method lives
+                //     on this class inherently; emit `self.X(args)`
+                //     which method-resolves to the inherent first.
+                //   - **Ancestor FQN target** → method lives on a
+                //     parent class; emit
+                //     `<crate::pkg::Parent>::X(self, args)` to
+                //     bypass the trait method (which is this
+                //     impl's own — using `self.X()` would recurse).
                 self.w.push_str(" {\n");
                 self.w.indent_inc();
                 self.w.emit_indent();
-                self.w.push_str("self.");
-                self.w.push_str(method_name);
-                self.w.push('(');
-                for (i, param) in method.params.iter().enumerate() {
-                    if i > 0 {
-                        self.w.push_str(", ");
+                let target = method_targets.get(method_name.as_str()).cloned().flatten();
+                match target {
+                    Some(ref fqn) if !fqn.is_empty() => {
+                        // Cross-package: FQN-rooted path, `crate::`
+                        // when the FQN has a package portion.
+                        if fqn.contains('.') {
+                            self.w.push_str("crate::");
+                        }
+                        let parent_path: String =
+                            fqn.split('.').collect::<Vec<_>>().join("::");
+                        self.w.push_str(&parent_path);
+                        self.w.push_str("::");
+                        self.w.push_str(method_name);
+                        self.w.push_str("(self");
+                        for param in &method.params {
+                            self.w.push_str(", ");
+                            self.w.push_str(&param.name);
+                        }
+                        self.w.push(')');
                     }
-                    self.w.push_str(&param.name);
+                    _ => {
+                        self.w.push_str("self.");
+                        self.w.push_str(method_name);
+                        self.w.push('(');
+                        for (i, param) in method.params.iter().enumerate() {
+                            if i > 0 {
+                                self.w.push_str(", ");
+                            }
+                            self.w.push_str(&param.name);
+                        }
+                        self.w.push(')');
+                    }
                 }
-                self.w.push_str(")\n");
+                self.w.push('\n');
                 self.w.indent_dec();
                 self.w.line("}");
             }

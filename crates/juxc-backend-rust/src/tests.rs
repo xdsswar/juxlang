@@ -1759,9 +1759,10 @@ fn primitive_record_lowers_to_struct_and_canonical_ctor() {
         "#,
     );
     // Floats are Copy but NOT Eq/Hash → Vector3 picks up Copy from the
-    // §O.3 auto-derive pass on top of the baseline three.
+    // §O.3 auto-derive pass on top of the baseline three. Default
+    // is added because every component (double) is `Default`-able.
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Copy)]"),
+        rust.contains("#[derive(Debug, Clone, PartialEq, Copy, Default)]"),
         "derive line: {rust}",
     );
     assert!(rust.contains("pub struct Vector3 {"), "struct header: {rust}");
@@ -2238,7 +2239,7 @@ fn int_only_record_gets_full_derive_set() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]"),
+        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, Default)]"),
         "got: {rust}",
     );
 }
@@ -2254,7 +2255,7 @@ fn string_bearing_record_gets_eq_hash_but_not_copy() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash)]"),
+        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]"),
         "got: {rust}",
     );
     assert!(!rust.contains("Copy"), "Copy should be skipped: {rust}");
@@ -2272,8 +2273,9 @@ fn float_bearing_record_drops_eq_and_hash() {
         "#,
     );
     // PartialEq stays, Copy stays (float is Copy), Eq/Hash are absent.
+    // Default joins the line because `double` implements Default.
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Copy)]"),
+        rust.contains("#[derive(Debug, Clone, PartialEq, Copy, Default)]"),
         "got: {rust}",
     );
     assert!(!rust.contains(", Eq"), "Eq should be skipped: {rust}");
@@ -2938,7 +2940,7 @@ fn record_eq_delete_drops_partial_eq_from_derive() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, Copy)]"),
+        rust.contains("#[derive(Debug, Clone, Copy, Default)]"),
         "expected baseline derives minus PartialEq, got: {rust}",
     );
     // Should NOT see Display impl for Unequal either way (PartialEq

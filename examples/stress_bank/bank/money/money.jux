@@ -1,0 +1,50 @@
+// bank.money — Money record with operator overload + Currency
+// enum + a top-level const for the precision unit.
+//
+// Exercises:
+//   - record with methods + operator string
+//   - top-level `public const` (cross-package import target)
+//   - enum without payload (cross-package matchable type)
+//   - record method-chaining (.plus(...).times(2))
+
+package bank.money;
+
+public const int CENTS_PER_UNIT = 100;
+
+public enum Currency {
+    USD,
+    EUR,
+    JPY,
+}
+
+public record Money(int cents, Currency currency) {
+    public bool isZero() {
+        return this.cents == 0;
+    }
+
+    public Money plus(Money other) {
+        return new Money(this.cents + other.cents, this.currency);
+    }
+
+    public Money minus(Money other) {
+        return new Money(this.cents - other.cents, this.currency);
+    }
+
+    public Money times(int n) {
+        return new Money(this.cents * n, this.currency);
+    }
+
+    public String currencyCode() {
+        return switch (this.currency) {
+            case Currency.USD -> $"USD";
+            case Currency.EUR -> $"EUR";
+            case Currency.JPY -> $"JPY";
+        };
+    }
+
+    public String operator string() {
+        var whole = this.cents / CENTS_PER_UNIT;
+        var fract = this.cents % CENTS_PER_UNIT;
+        return $"${whole}.${fract} ${this.currencyCode()}";
+    }
+}

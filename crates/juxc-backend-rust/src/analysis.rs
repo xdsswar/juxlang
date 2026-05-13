@@ -548,6 +548,43 @@ pub(crate) fn field_supports_hash(ty: &juxc_ast::TypeRef) -> bool {
     field_supports_eq(ty)
 }
 
+/// True if a field of type `ty` is `Default`-compatible (every Jux
+/// primitive and `String` implements `Default`, arrays of those do
+/// too via `Vec::default()` / array-of-Default initialization, and
+/// nullable wraps default to `None`). Records derive `Default` when
+/// every component qualifies so a class that stores a record-typed
+/// field without an explicit initializer can still flow through
+/// the struct-init shim's `Default::default()` fallback.
+pub(crate) fn field_supports_default(ty: &juxc_ast::TypeRef) -> bool {
+    if ty.nullable {
+        // `Option<T>::default()` is `None` regardless of T.
+        return true;
+    }
+    if ty.array_shape.is_some() {
+        // Dynamic arrays lower to `Vec<T>` which is always `Default`;
+        // fixed-size `[T; N]` needs T: Default + Copy — the existing
+        // const-context paths take care of constant N initializers,
+        // so we conservatively require the element to qualify.
+        let element = juxc_ast::TypeRef {
+            name: ty.name.clone(),
+            generic_args: ty.generic_args.clone(),
+            nullable: false,
+            array_shape: None,
+            fn_shape: ty.fn_shape.clone(),
+            span: ty.span,
+        };
+        return field_supports_default(&element);
+    }
+    if ty.name.segments.len() != 1 || !ty.generic_args.is_empty() {
+        return false;
+    }
+    let name = ty.name.segments[0].text.as_str();
+    if name == "String" {
+        return true;
+    }
+    is_copy_eq_primitive(name) || is_float_primitive(name)
+}
+
 /// True if a field of type `ty` is `Display`-compatible — used to
 /// decide whether to emit the auto-derived `operator string` impl
 /// (§O.3.1) for the enclosing record/enum.

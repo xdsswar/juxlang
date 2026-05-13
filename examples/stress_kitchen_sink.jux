@@ -1,0 +1,190 @@
+// Crazy stress test — single file, exercises:
+//   - ternary chains nested in interpolation
+//   - generic class with two type params + method returning a
+//     re-arranged generic instance
+//   - sealed-class hierarchy with virtual-dispatch overrides
+//   - nullable + Elvis + auto-Some() wrap on ctor args
+//   - mutable static counters with bare-name access from class
+//     methods (including the unifying static counter)
+//   - method references + lambdas (higher-order)
+//   - interface with default methods (no abstract-via-parent)
+//   - records with the operator-string auto-derive
+//   - record-typed field read (auto-clone)
+
+// Constants live as top-level `const` (records-with-static-fields
+// is parser-level now but cross-package symbol-table propagation
+// isn't wired up yet; top-level const + sibling class is the
+// portable workaround).
+public const int CENTS_PER_UNIT = 100;
+
+public record Money(int cents, String currency) {
+    public bool isZero() {
+        return this.cents == 0;
+    }
+
+    public Money plus(Money other) {
+        return new Money(this.cents + other.cents, this.currency);
+    }
+
+    public Money times(int n) {
+        return new Money(this.cents * n, this.currency);
+    }
+
+    public String operator string() {
+        var whole = this.cents / CENTS_PER_UNIT;
+        var fract = this.cents % CENTS_PER_UNIT;
+        return $"${whole}.${fract} ${this.currency}";
+    }
+}
+
+// Generic class with two type params.
+public class Pair<A, B> {
+    public A first;
+    public B second;
+
+    public Pair(A first, B second) {
+        this.first = first;
+        this.second = second;
+    }
+
+    public Pair<B, A> swap() {
+        return new Pair<B, A>(this.second, this.first);
+    }
+}
+
+// Sealed hierarchy + bare-name compound write to a base-class static.
+public sealed class Shape permits Circle, Square, Triangle {
+    public static int allocated = 0;
+
+    public Shape() {
+        allocated = allocated + 1;
+    }
+
+    public double area() {
+        return 0.0;
+    }
+}
+
+public final class Circle extends Shape {
+    public double radius;
+    public Circle(double r) { this.radius = r; }
+    public double area() {
+        return 3.14159 * this.radius * this.radius;
+    }
+}
+
+public final class Square extends Shape {
+    public double side;
+    public Square(double s) { this.side = s; }
+    public double area() {
+        return this.side * this.side;
+    }
+}
+
+public final class Triangle extends Shape {
+    public double base;
+    public double height;
+    public Triangle(double b, double h) {
+        this.base = b;
+        this.height = h;
+    }
+    public double area() {
+        return 0.5 * this.base * this.height;
+    }
+}
+
+// Interface with a default method + a class that exercises
+// nullable Elvis fallback with an inline literal (avoids the
+// const-fallback-as-`&str` coercion gap).
+public interface Named {
+    default String describe() {
+        return $"<named:${nameOrDefault()}>";
+    }
+    String nameOrDefault();
+}
+
+public class Tag implements Named {
+    public static int produced = 0;
+    private String? slot;
+
+    public Tag(String? slot) {
+        this.slot = slot;
+        produced = produced + 1;
+    }
+
+    public String nameOrDefault() {
+        // Elvis with an inline-literal fallback — `&str` literal
+        // self-coerces to owned `String` at the Elvis fallback
+        // position, so no coercion gap here.
+        return this.slot ?? "(unnamed)";
+    }
+}
+
+// Higher-order: lambda + method reference + accumulator.
+public class Stats {
+    public static int callCount = 0;
+
+    public static double sumOfSquares(int n, (int) -> double f) {
+        var total = 0.0;
+        for (var i : 0..n) {
+            total = total + f(i);
+        }
+        return total;
+    }
+
+    public static double cube(int x) {
+        callCount = callCount + 1;
+        // Explicit double cast because the lambda's return type is
+        // `double` but `x * x * x` is `int * int * int`. Jux's
+        // backend doesn't yet auto-widen integer expressions in
+        // float-return contexts.
+        return (double) (x * x * x);
+    }
+}
+
+public void main() {
+    // Records — operator string via interpolation.
+    var price = new Money(2999, "USD");
+    var doubled = price.times(2);
+    print($"price=${price}, doubled=${doubled}");
+    print($"sum=${price.plus(doubled)}");
+    print($"zero.isZero=${new Money(0, "USD").isZero()}");
+
+    // Generic class with two type params and swap().
+    var p = new Pair<int, String>(7, "lucky");
+    print($"pair=(${p.first}, ${p.second})");
+    var sw = p.swap();
+    print($"swap=(${sw.first}, ${sw.second})");
+
+    // Sealed hierarchy with virtual-dispatch overrides.
+    var c = new Circle(5.0);
+    var sq = new Square(4.0);
+    var tri = new Triangle(3.0, 6.0);
+
+    print($"circle area=${c.area()}");
+    print($"square area=${sq.area()}");
+    print($"triangle area=${tri.area()}");
+
+    // Ternary nested in ternary, nested in interpolation: classify
+    // by which shape has the biggest area.
+    var biggest = c.area() > sq.area()
+        ? (c.area() > tri.area() ? $"circle" : $"triangle")
+        : (sq.area() > tri.area() ? $"square" : $"triangle");
+    print($"biggest=${biggest}");
+
+    print($"Shape.allocated=${Shape.allocated}");
+
+    // Nullable + auto-Some on ctor arg.
+    var named = new Tag("hello");
+    var anon = new Tag(null);
+    print(named.describe());
+    print(anon.describe());
+    print($"Tag.produced=${Tag.produced}");
+
+    // Higher-order: method reference vs. inline lambda.
+    var s1 = Stats.sumOfSquares(5, Stats::cube);
+    var s2 = Stats.sumOfSquares(5, x -> (double) (x + 1));
+    print($"sumOfCubes(5)=${s1}");
+    print($"sumOf(x+1)(5)=${s2}");
+    print($"Stats.callCount=${Stats.callCount}");
+}

@@ -420,6 +420,14 @@ struct RustEmitter {
     /// (`lower_with_source`, `lower`, etc.) leave this `false` so
     /// existing behavior is preserved unchanged.
     workspace_mode: bool,
+    /// Index into `symbols.units` for the compilation unit currently
+    /// being emitted. Powers import-alias-aware bare-name lookups
+    /// in the backend — the unit's [`UnitContext::unqualified`]
+    /// map carries `alias_name → FQN` for both bare imports and
+    /// grouped `{ X as Y }` aliases. `None` outside workspace
+    /// emission (legacy single-file paths don't have an `units`
+    /// table to consult).
+    pub(crate) current_unit_idx: Option<usize>,
 }
 
 impl RustEmitter {
@@ -486,6 +494,7 @@ impl RustEmitter {
             symbols: symbols.clone(),
             expr_types,
             workspace_mode: false,
+            current_unit_idx: None,
         }
     }
 
@@ -656,6 +665,12 @@ impl RustEmitter {
             if !self.workspace_mode {
                 self.user_mut_methods = collect_user_mut_methods(unit);
             }
+            // Track which unit we're emitting so import-alias
+            // aware bare-name lookups (e.g. `Catalog.describe()`
+            // where `Catalog` is `CatalogOps`'s alias) can consult
+            // the unit's `unqualified` map.
+            let prev_unit = self.current_unit_idx.take();
+            self.current_unit_idx = Some(idx);
             self.source = sources.get(idx).cloned();
             // Imports inside a packaged unit need `crate::`-rooted
             // paths so they don't resolve relative to the current
@@ -664,6 +679,7 @@ impl RustEmitter {
             for item in &unit.items {
                 self.emit_top_level_decl(item);
             }
+            self.current_unit_idx = prev_unit;
         }
         for (name, child) in &node.children {
             self.w.emit_indent();

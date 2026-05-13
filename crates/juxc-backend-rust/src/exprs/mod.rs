@@ -161,17 +161,30 @@ impl RustEmitter {
                 let bare_class = n.class_name.segments.last().map(|s| s.text.as_str());
                 let ctor_nullable_flags: Vec<bool> = bare_class
                     .and_then(|name| {
-                        self.symbols
-                            .classes
-                            .get(name)
+                        // FQN-tolerant lookup: classes/records may be
+                        // keyed under their full package name when
+                        // imported across packages, while the
+                        // `new C(...)` syntax site only carries the
+                        // bare or imported name. Helper falls back
+                        // to a suffix scan so cross-package ctor
+                        // auto-`Some()` wrapping works the same as
+                        // single-file emission.
+                        self.lookup_class_by_bare_or_fqn(name)
                             .and_then(|c| c.constructors.first())
                             .map(|ctor| {
                                 ctor.params.iter().map(|p| p.ty.nullable).collect()
                             })
                             .or_else(|| {
-                                self.symbols.records.get(name).map(|r| {
-                                    r.components.iter().map(|c| c.ty.nullable).collect()
-                                })
+                                self.symbols
+                                    .records
+                                    .iter()
+                                    .find(|(k, _)| {
+                                        k.as_str() == name
+                                            || k.rsplit('.').next().unwrap_or(k.as_str()) == name
+                                    })
+                                    .map(|(_, r)| {
+                                        r.components.iter().map(|c| c.ty.nullable).collect()
+                                    })
                             })
                     })
                     .unwrap_or_default();

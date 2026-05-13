@@ -229,9 +229,28 @@ impl crate::RustEmitter {
             return Some(joined);
         }
         if qn.segments.len() == 1 {
-            // Bare name — could be a same-package sibling or an
-            // import. Search the table for a matching bare suffix.
             let bare = &qn.segments[0].text;
+            // 1. Import-alias-aware lookup: the current unit's
+            //    `unqualified` map carries every name that's
+            //    visible bare in this unit, including aliased
+            //    grouped imports (`{ X as Y }` registers `Y → FQN`).
+            //    A hit here gets us the FQN even when the bare
+            //    name doesn't match any FQN's last segment (which
+            //    is the bog-standard "import alias renames the
+            //    target" case).
+            if let Some(idx) = self.current_unit_idx {
+                if let Some(ctx) = self.symbols.units.get(idx) {
+                    if let Some(fqn) = ctx.unqualified.get(bare.as_str()) {
+                        if self.symbols.classes.contains_key(fqn) {
+                            return Some(fqn.clone());
+                        }
+                    }
+                }
+            }
+            // 2. Fallback suffix scan — works for same-package
+            //    siblings and any class whose bare name matches
+            //    the source token (the common single-file or
+            //    no-alias case).
             for fqn in self.symbols.classes.keys() {
                 if fqn_bare(fqn) == bare.as_str() {
                     return Some(fqn.clone());
@@ -300,6 +319,17 @@ impl crate::RustEmitter {
         }
         if qn.segments.len() == 1 {
             let bare = &qn.segments[0].text;
+            // Import-alias-aware lookup — same shape as the class
+            // path's unit-context consultation above.
+            if let Some(idx) = self.current_unit_idx {
+                if let Some(ctx) = self.symbols.units.get(idx) {
+                    if let Some(fqn) = ctx.unqualified.get(bare.as_str()) {
+                        if self.symbols.interfaces.contains_key(fqn) {
+                            return Some(fqn.clone());
+                        }
+                    }
+                }
+            }
             for fqn in self.symbols.interfaces.keys() {
                 if fqn_bare(fqn) == bare.as_str() {
                     return Some(fqn.clone());

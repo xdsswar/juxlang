@@ -24,25 +24,25 @@ impl<'a, T: std::fmt::Display> std::fmt::Display for JuxOpt<'a, T> {
 pub mod shop {
     pub mod app {
         use crate::shop::cart::Cart;
-        use crate::shop::catalog::{CatalogOps, Item};
+        use crate::shop::catalog::{CatalogOps as Catalog, Item};
         use crate::shop::money::Money;
         use crate::shop::users::{Customer, Loggable, Person, Staff};
 
-        // JUX:examples/stress_shop\app.jux:29:8
+        // JUX:examples/stress_shop\app.jux:27:8
         pub fn main() {
-            // JUX:examples/stress_shop\app.jux:33:5
+            // JUX:examples/stress_shop\app.jux:31:5
             let alice = Customer::new("Alice".to_string(), 1001, true);
-            // JUX:examples/stress_shop\app.jux:34:5
+            // JUX:examples/stress_shop\app.jux:32:5
             let bob = Customer::new("Bob".to_string(), 1002, false);
-            // JUX:examples/stress_shop\app.jux:35:5
+            // JUX:examples/stress_shop\app.jux:33:5
             let charlie = Staff::new("Charlie".to_string(), 9001, "logistics".to_string());
-            // JUX:examples/stress_shop\app.jux:39:5
+            // JUX:examples/stress_shop\app.jux:37:5
             println!("{}", alice.banner());
-            // JUX:examples/stress_shop\app.jux:40:5
+            // JUX:examples/stress_shop\app.jux:38:5
             println!("{}", bob.banner());
-            // JUX:examples/stress_shop\app.jux:41:5
+            // JUX:examples/stress_shop\app.jux:39:5
             println!("{}", charlie.banner());
-            // JUX:examples/stress_shop\app.jux:44:5
+            // JUX:examples/stress_shop\app.jux:42:5
             println!(
                 "{}",
                 crate::shop::catalog::CatalogOps::describe(Item::Book(
@@ -50,7 +50,7 @@ pub mod shop {
                     Money::new(2999, "USD".to_string())
                 ))
             );
-            // JUX:examples/stress_shop\app.jux:45:5
+            // JUX:examples/stress_shop\app.jux:43:5
             println!(
                 "{}",
                 crate::shop::catalog::CatalogOps::describe(Item::Apparel(
@@ -59,7 +59,7 @@ pub mod shop {
                     "M".to_string()
                 ))
             );
-            // JUX:examples/stress_shop\app.jux:46:5
+            // JUX:examples/stress_shop\app.jux:44:5
             println!(
                 "{}",
                 crate::shop::catalog::CatalogOps::describe(Item::Subscription(
@@ -68,50 +68,50 @@ pub mod shop {
                     12
                 ))
             );
-            // JUX:examples/stress_shop\app.jux:50:5
+            // JUX:examples/stress_shop\app.jux:48:5
             let mut cart = Cart::new(None);
-            // JUX:examples/stress_shop\app.jux:51:5
+            // JUX:examples/stress_shop\app.jux:49:5
             cart.add(Item::Book(
                 "Effective Jux".to_string(),
                 Money::new(2999, "USD".to_string()),
             ));
-            // JUX:examples/stress_shop\app.jux:52:5
+            // JUX:examples/stress_shop\app.jux:50:5
             cart.add(Item::Apparel(
                 "T-Shirt".to_string(),
                 Money::new(1500, "USD".to_string()),
                 "M".to_string(),
             ));
-            // JUX:examples/stress_shop\app.jux:53:5
+            // JUX:examples/stress_shop\app.jux:51:5
             cart.add(Item::Subscription(
                 "Pro Plan".to_string(),
                 Money::new(999, "USD".to_string()),
                 12,
             ));
-            // JUX:examples/stress_shop\app.jux:55:5
+            // JUX:examples/stress_shop\app.jux:53:5
             let mut anonCart = Cart::new(None);
-            // JUX:examples/stress_shop\app.jux:56:5
+            // JUX:examples/stress_shop\app.jux:54:5
             anonCart.add(Item::Book(
                 "Effective Jux".to_string(),
                 Money::new(2999, "USD".to_string()),
             ));
-            // JUX:examples/stress_shop\app.jux:58:5
+            // JUX:examples/stress_shop\app.jux:56:5
             println!("{}", cart.describe());
-            // JUX:examples/stress_shop\app.jux:59:5
+            // JUX:examples/stress_shop\app.jux:57:5
             println!("{}", anonCart.describe());
-            // JUX:examples/stress_shop\app.jux:62:5
+            // JUX:examples/stress_shop\app.jux:60:5
             println!(
                 "Person.created = {}",
                 crate::shop::users::Person_created.lock().unwrap().clone()
             );
-            // JUX:examples/stress_shop\app.jux:63:5
+            // JUX:examples/stress_shop\app.jux:61:5
             println!(
-                "CatalogOps.describedCount = {}",
+                "Catalog.describedCount = {}",
                 crate::shop::catalog::CatalogOps_describedCount
                     .lock()
                     .unwrap()
                     .clone()
             );
-            // JUX:examples/stress_shop\app.jux:64:5
+            // JUX:examples/stress_shop\app.jux:62:5
             println!(
                 "Cart.allocated = {}",
                 crate::shop::cart::Cart_allocated.lock().unwrap().clone()
@@ -267,7 +267,7 @@ pub mod shop {
         pub const CENTS_PER_UNIT: isize = 100;
 
         // JUX:examples/stress_shop\shop\money\money.jux:12:8
-        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
         pub struct Money {
             pub cents: isize,
             pub currency: String,
@@ -312,16 +312,16 @@ pub mod shop {
         // JUX:examples/stress_shop\shop\users\users.jux:8:8
         pub trait Loggable {
             fn displayName(&self) -> String {
-                // JUX:examples/stress_shop\shop\users\users.jux:14:16
+                // JUX:examples/stress_shop\shop\users\users.jux:16:16
                 "<user>".to_string()
             }
             fn banner(&self) -> String {
-                // JUX:examples/stress_shop\shop\users\users.jux:17:16
+                // JUX:examples/stress_shop\shop\users\users.jux:19:16
                 format!("[user: {}]", self.displayName())
             }
         }
 
-        // JUX:examples/stress_shop\shop\users\users.jux:21:17
+        // JUX:examples/stress_shop\shop\users\users.jux:23:17
         #[derive(Clone)]
         pub struct Person {
             pub(crate) name: String,
@@ -334,11 +334,11 @@ pub mod shop {
                     name: String::new(),
                     idNumber: 0,
                 };
-                // JUX:examples/stress_shop\shop\users\users.jux:27:9
-                __self.name = name;
-                // JUX:examples/stress_shop\shop\users\users.jux:28:9
-                __self.idNumber = id;
                 // JUX:examples/stress_shop\shop\users\users.jux:29:9
+                __self.name = name;
+                // JUX:examples/stress_shop\shop\users\users.jux:30:9
+                __self.idNumber = id;
+                // JUX:examples/stress_shop\shop\users\users.jux:31:9
                 {
                     let __jux_v = Person_created.lock().unwrap().clone() + 1;
                     *Person_created.lock().unwrap() = __jux_v;
@@ -347,12 +347,12 @@ pub mod shop {
             }
 
             pub fn id(&self) -> isize {
-                // JUX:examples/stress_shop\shop\users\users.jux:32:30
+                // JUX:examples/stress_shop\shop\users\users.jux:34:30
                 self.idNumber
             }
 
             pub fn name(&self) -> String {
-                // JUX:examples/stress_shop\shop\users\users.jux:33:35
+                // JUX:examples/stress_shop\shop\users\users.jux:35:35
                 self.name.clone()
             }
 
@@ -361,7 +361,7 @@ pub mod shop {
             }
 
             pub fn displayName(&self) -> String {
-                // JUX:examples/stress_shop\shop\users\users.jux:40:16
+                // JUX:examples/stress_shop\shop\users\users.jux:42:16
                 format!("{} ({})", self.name(), self.role())
             }
         }
@@ -371,7 +371,7 @@ pub mod shop {
         pub trait PersonKind {}
         impl PersonKind for Person {}
 
-        // JUX:examples/stress_shop\shop\users\users.jux:44:8
+        // JUX:examples/stress_shop\shop\users\users.jux:46:8
         #[derive(Clone)]
         pub struct Customer {
             __parent: Person,
@@ -400,7 +400,7 @@ pub mod shop {
             }
 
             pub fn role(&self) -> String {
-                // JUX:examples/stress_shop\shop\users\users.jux:53:16
+                // JUX:examples/stress_shop\shop\users\users.jux:55:16
                 if self.premium {
                     "premium-customer".to_string()
                 } else {
@@ -409,7 +409,7 @@ pub mod shop {
             }
 
             pub fn isPremium(&self) -> bool {
-                // JUX:examples/stress_shop\shop\users\users.jux:57:16
+                // JUX:examples/stress_shop\shop\users\users.jux:59:16
                 self.premium
             }
         }
@@ -420,7 +420,7 @@ pub mod shop {
         impl CustomerKind for Customer {}
         impl PersonKind for Customer {}
 
-        // JUX:examples/stress_shop\shop\users\users.jux:61:14
+        // JUX:examples/stress_shop\shop\users\users.jux:63:14
         #[derive(Clone)]
         pub struct Staff {
             __parent: Person,
@@ -449,7 +449,7 @@ pub mod shop {
             }
 
             pub fn role(&self) -> String {
-                // JUX:examples/stress_shop\shop\users\users.jux:70:16
+                // JUX:examples/stress_shop\shop\users\users.jux:72:16
                 format!("staff:{}", self.department)
             }
         }

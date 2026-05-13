@@ -210,6 +210,12 @@ pub struct RecordDecl {
     /// fields, and the canonical constructor is synthesized. Empty
     /// when the body has no methods.
     pub methods: Vec<FnDecl>,
+    /// Static-field declarations inside the record body, in source
+    /// order. Java records permit `public static [final] T x = …;`
+    /// (JEP 395 §3) — instance fields are still forbidden. The
+    /// parser sets `is_static = true` on every entry and rejects
+    /// non-static fields with E0200 to keep that rule explicit.
+    pub static_fields: Vec<FieldDecl>,
     /// Span covering the whole `record … { … }` declaration.
     pub span: Span,
 }

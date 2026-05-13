@@ -795,14 +795,19 @@ impl<'a> Parser<'a> {
         // synthesized.
         let mut operators = Vec::new();
         let mut methods = Vec::new();
+        let mut static_fields: Vec<juxc_ast::FieldDecl> = Vec::new();
         if self.eat(&TokenKind::LBrace) {
             while !self.at(&TokenKind::RBrace) && !self.at_eof() {
                 let member_vis = self.parse_visibility();
                 // Member-shape lookahead: walk past modifiers and
-                // the return type, then check whether the next
-                // token is `operator` (→ operator decl) or an
-                // identifier (→ method decl). Anything else is a
-                // shape error.
+                // the return type, then probe what follows. Three
+                // shapes are recognized:
+                //   - `operator …` → operator override
+                //   - `IDENT(` → method declaration
+                //   - `IDENT =` / `IDENT ;` → static field (Java
+                //     records allow these; instance fields are
+                //     still forbidden — we reject any `is_static =
+                //     false` field with a clean diagnostic below)
                 let mut i = self.pos;
                 while matches!(
                     self.tokens.get(i).map(|t| &t.kind),
@@ -821,19 +826,65 @@ impl<'a> Parser<'a> {
                     Some(TokenKind::Ident(_)) => Some(i + 1),
                     _ => None,
                 };
+                // For field detection we may need to skip a generic
+                // arg list right after the type identifier
+                // (`Map<K, V> CONSTANT = …;`).
+                let after_type_skipped: Option<usize> = after_type.map(|mut j| {
+                    if matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Lt)) {
+                        j += 1;
+                        let mut depth: u32 = 1;
+                        while depth > 0 {
+                            match self.tokens.get(j).map(|t| &t.kind) {
+                                Some(TokenKind::Lt) => depth += 1,
+                                Some(TokenKind::Gt) => depth -= 1,
+                                Some(TokenKind::Eof) | None => break,
+                                _ => {}
+                            }
+                            j += 1;
+                        }
+                    }
+                    j
+                });
                 let next_kind = after_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind));
+                let after_member_name: Option<&TokenKind> =
+                    after_type_skipped.and_then(|j| self.tokens.get(j + 1).map(|t| &t.kind));
                 match next_kind {
                     Some(TokenKind::Kw(Keyword::Operator)) => {
                         if let Some(op) = self.parse_operator_decl(member_vis) {
                             operators.push(op);
                         }
                     }
+                    Some(TokenKind::Ident(_))
+                        if matches!(
+                            after_member_name,
+                            Some(TokenKind::Eq) | Some(TokenKind::Semicolon)
+                        ) =>
+                    {
+                        // Static-field shape. Reuse the class
+                        // field-decl parser (which already handles
+                        // modifiers + initializer); reject any
+                        // non-static result so the "no instance
+                        // fields" rule still bites.
+                        if let Some(field) = self.parse_field_decl(Vec::new(), member_vis) {
+                            if !field.is_static {
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        code::Code::E0200_UnexpectedToken,
+                                        "records cannot have instance fields — the header \
+                                         components are the only instance state; mark this \
+                                         field `static` or move it to a class",
+                                    )
+                                    .with_span(field.span),
+                                );
+                            } else {
+                                static_fields.push(field);
+                            }
+                        }
+                    }
                     Some(TokenKind::Ident(_)) => {
                         // Method shape: `[modifiers] returnType
                         // methodName(params) { ... }`. Reuses the
-                        // class fn-decl parser unchanged. Record
-                        // methods don't yet carry annotations in
-                        // the Phase-1 cut — empty list.
+                        // class fn-decl parser unchanged.
                         if let Some(m) = self.parse_fn_decl(Vec::new(), member_vis) {
                             methods.push(m);
                         }
@@ -843,8 +894,9 @@ impl<'a> Parser<'a> {
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0200_UnexpectedToken,
-                                "record bodies support operator overrides and methods only \
-                                 (fields and constructors are class-exclusive)",
+                                "record bodies support operator overrides, methods, and \
+                                 static fields only (instance fields and extra \
+                                 constructors are class-exclusive)",
                             )
                             .with_span(here),
                         );
@@ -866,6 +918,7 @@ impl<'a> Parser<'a> {
             components,
             operators,
             methods,
+            static_fields,
             span: start.join(end),
         })
     }

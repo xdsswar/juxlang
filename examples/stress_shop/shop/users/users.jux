@@ -6,10 +6,12 @@
 package shop.users;
 
 public interface Loggable {
-    // Both methods carry default bodies — abstract methods on
-    // interfaces inherited through an abstract base class don't
-    // currently get delegating impl bodies emitted on the
-    // concrete subclass, so we stay on the default path here.
+    // Both default — abstract methods whose body lives only on a
+    // parent class would need body-inlining (virtual-dispatch
+    // preserving) for Customer/Staff to override transitively
+    // through Person. Phase 1 doesn't do that yet; the
+    // workaround is to put a trivial default on the interface so
+    // the trait still has a callable body.
     default String displayName() {
         return $"<user>";
     }

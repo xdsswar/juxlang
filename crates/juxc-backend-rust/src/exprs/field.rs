@@ -323,9 +323,40 @@ impl RustEmitter {
         // the collision: a stale receiver type just means the field
         // lookup fails and we fall back to "no clone."
         if let Some(ty) = self.lookup_field_type(f) {
-            return matches!(ty, Ty::String | Ty::Param(_));
+            return self.ty_needs_clone_on_field_read(&ty);
         }
         false
+    }
+
+    /// True iff a field of type `ty` should auto-`.clone()` on read.
+    /// Catches the standard non-`Copy` cases: `String`, generic
+    /// parameters (always conservatively cloned), records (records
+    /// derive `Clone` but not `Copy` unless every component is
+    /// primitive — returning by value would otherwise move out of
+    /// `&self`), and class references (classes always derive
+    /// `Clone`, never `Copy`).
+    fn ty_needs_clone_on_field_read(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::String | Ty::Param(_) => true,
+            Ty::User { name, .. } => {
+                // A user-typed field is `Copy` only when it's a
+                // record whose components are all `Copy` (the
+                // record-derive code in `decls/records.rs` controls
+                // the marker). Be conservative: classes are never
+                // `Copy`, so always clone. For records: check
+                // whether all components are copy-primitive.
+                if let Some(record) = self.symbols.records.get(name) {
+                    let all_copy = record
+                        .components
+                        .iter()
+                        .all(|c| crate::analysis::field_supports_copy(&c.ty));
+                    return !all_copy;
+                }
+                // Class / enum / unknown user type — always clone.
+                self.symbols.classes.contains_key(name) || self.symbols.enums.contains_key(name)
+            }
+            _ => false,
+        }
     }
 
     /// Resolve a field access's declared type via the symbol table.
