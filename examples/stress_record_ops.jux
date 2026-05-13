@@ -1,0 +1,33 @@
+// Stress test: records with methods and operator string +
+// boolean alias + record method-chain.
+
+public record Money(int cents, String currency) {
+    public bool isZero() {
+        return this.cents == 0;
+    }
+
+    public Money plus(Money other) {
+        return new Money(this.cents + other.cents, this.currency);
+    }
+
+    public String operator string() {
+        return $"${this.cents} ${this.currency}";
+    }
+}
+
+public void main() {
+    var a = new Money(100, "USD");
+    print($"a = $a");
+    print($"a.isZero = ${a.isZero()}");
+
+    var zero = new Money(0, "USD");
+    print($"zero.isZero = ${zero.isZero()}");
+
+    // Chain plus through fresh literals so each value moves once
+    // and is not used after.
+    var total = new Money(0, "USD")
+        .plus(new Money(100, "USD"))
+        .plus(new Money(250, "USD"))
+        .plus(new Money(50, "USD"));
+    print($"total = $total");
+}

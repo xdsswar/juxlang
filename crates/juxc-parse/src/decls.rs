@@ -180,6 +180,26 @@ impl<'a> Parser<'a> {
                 );
                 if starts_with_type {
                     i += 1;
+                    // Skip a generic-arg list `<...>` after the type
+                    // name (`Pair<A, B>`, `Map<K, V>`, …) by
+                    // balancing angle brackets. Without this the
+                    // lookahead bails on the leading `<` and the
+                    // dispatcher routes a perfectly good method
+                    // declaration to the field parser. Mirrors the
+                    // same scan in `looks_like_typed_local`.
+                    if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
+                        i += 1;
+                        let mut depth: u32 = 1;
+                        while depth > 0 {
+                            match self.tokens.get(i).map(|t| &t.kind) {
+                                Some(TokenKind::Lt) => depth += 1,
+                                Some(TokenKind::Gt) => depth -= 1,
+                                Some(TokenKind::Eof) | None => break,
+                                _ => {}
+                            }
+                            i += 1;
+                        }
+                    }
                     // Skip array dims attached to the type (not legal
                     // on `void` returns, but we let parse_return_type
                     // surface that diagnostic if it happens).

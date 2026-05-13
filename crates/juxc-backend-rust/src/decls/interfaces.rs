@@ -91,10 +91,18 @@ impl RustEmitter {
                 // emits correctly.
                 let prev_alias = self.this_alias.take();
                 self.this_alias = Some("self".to_string());
+                // Track the enclosing interface so a bare-name
+                // method call inside the default body (Java rule:
+                // `foo()` ≡ `self.foo()` when `foo` is declared on
+                // the same interface) rewrites correctly in
+                // `emit_call`.
+                let prev_iface = self.enclosing_interface.take();
+                self.enclosing_interface = Some(interface.name.text.clone());
                 let saved_return = self.current_return_type.take();
                 self.current_return_type = Some(method.return_type.clone());
                 self.emit_fn_body_at(body, &method.return_type);
                 self.current_return_type = saved_return;
+                self.enclosing_interface = prev_iface;
                 self.this_alias = prev_alias;
                 self.w.indent_dec();
                 self.w.line("}");

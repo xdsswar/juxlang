@@ -1,0 +1,38 @@
+// Stress test: enum payload patterns + match exhaustiveness +
+// mutable static counter + bare-name field update + record returns +
+// string interp with method calls inside arm bodies.
+
+public enum Op {
+    Push(int),
+    Pop,
+    Add,
+    Mul,
+}
+
+public class Calculator {
+    public static int opsRun = 0;
+
+    public String describe(Op op) {
+        // Bare-name compound write — exercises the deadlock fix.
+        opsRun = opsRun + 1;
+
+        return switch (op) {
+            case Op.Push(var n) -> $"PUSH ${n}";
+            case Op.Pop         -> $"POP";
+            case Op.Add         -> $"ADD";
+            case Op.Mul         -> $"MUL";
+        };
+    }
+}
+
+public void main() {
+    var c = new Calculator();
+    print(c.describe(Op.Push(42)));
+    print(c.describe(Op.Push(7)));
+    print(c.describe(Op.Add));
+    print(c.describe(Op.Push(3)));
+    print(c.describe(Op.Mul));
+    print(c.describe(Op.Pop));
+
+    print($"ops run: ${Calculator.opsRun}");
+}

@@ -1,0 +1,68 @@
+// Stress test: 3-level inheritance + abstract base + interface +
+// `super(...)` chaining + bare-name field write + final subclasses +
+// String interpolation in default method + per-class static counters.
+
+interface Tagged {
+    String tag();
+    default String shout() {
+        return $"<${tag()}>";
+    }
+}
+
+public abstract class Animal implements Tagged {
+    private String name;
+    public static int liveCount = 0;
+
+    public Animal(String name) {
+        this.name = name;
+        liveCount = liveCount + 1;
+    }
+
+    public String name() { return this.name; }
+
+    public abstract String sound();
+}
+
+public abstract class Mammal extends Animal {
+    private int legs;
+    public Mammal(String name, int legs) {
+        super(name);
+        this.legs = legs;
+    }
+    public int legs() { return this.legs; }
+}
+
+public final class Dog extends Mammal {
+    public static int barkCount = 0;
+    public Dog(String name) { super(name, 4); }
+    public String sound() { return $"Woof!"; }
+    public String tag() { return $"dog"; }
+    public String bark() {
+        barkCount = barkCount + 1;
+        return $"${name()}: ${sound()}";
+    }
+}
+
+public final class Bat extends Mammal {
+    public Bat(String name) { super(name, 2); }
+    public String sound() { return $"Screech!"; }
+    public String tag() { return $"bat"; }
+}
+
+public void main() {
+    var rex = new Dog("Rex");
+    var fang = new Dog("Fang");
+    var batty = new Bat("Batty");
+
+    print(rex.bark());
+    print(rex.bark());
+    print(fang.bark());
+
+    // Default method dispatch through inheritance chain.
+    print(rex.shout());
+    print(batty.shout());
+
+    print($"legs (rex)=${rex.legs()}, sound=${rex.sound()}");
+    print($"Animal.liveCount=${Animal.liveCount}");
+    print($"Dog.barkCount=${Dog.barkCount}");
+}

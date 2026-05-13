@@ -1,0 +1,22 @@
+class Pair<A, B> {
+    public A left;
+    public B right;
+
+    public Pair(A left, B right) {
+        this.left = left;
+        this.right = right;
+    }
+}
+
+class Counter {
+    public Pair<int, String> make(int n, String s) {
+        return new Pair<int, String>(n, s);
+    }
+}
+
+public void main() {
+    var c = new Counter();
+    var p = c.make(1, "hi");
+    print(p.left);
+    print(p.right);
+}

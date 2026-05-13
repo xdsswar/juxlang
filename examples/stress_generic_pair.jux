@@ -1,0 +1,51 @@
+// Stress test: generic class with two type parameters, operator
+// overloading, method on generic class, bare-name static read,
+// nested generics, interpolation with method call on a generic
+// receiver.
+
+class Pair<A, B> {
+    public A left;
+    public B right;
+
+    public Pair(A left, B right) {
+        this.left = left;
+        this.right = right;
+    }
+
+    public Pair<B, A> swapped() {
+        return new Pair<B, A>(this.right, this.left);
+    }
+
+    public String describe() {
+        return $"<${this.left}, ${this.right}>";
+    }
+}
+
+class Counter {
+    public static int paired = 0;
+
+    public Pair<int, String> make(int n, String s) {
+        // Bare-name read + write to enclosing-class mutable static.
+        paired = paired + 1;
+        return new Pair<int, String>(n, s);
+    }
+}
+
+public void main() {
+    var c = new Counter();
+
+    var p1 = c.make(1, "one");
+    var p2 = c.make(2, "two");
+    var p3 = c.make(3, "three");
+
+    print(p1.describe());
+    print(p2.describe());
+    print(p3.describe());
+
+    // swap() returns a Pair<String, int> — nested generic on a
+    // method-call result that itself uses string interpolation.
+    var swapped = p1.swapped();
+    print($"swapped: ${swapped.describe()}");
+
+    print($"paired count: ${Counter.paired}");
+}

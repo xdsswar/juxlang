@@ -1,0 +1,81 @@
+// Stress test: interfaces + default methods + abstract class +
+// inheritance chain + mutable static counter via bare-name +
+// final static constant + cross-class static access + method
+// overriding + string interpolation with method calls.
+
+interface Payable {
+    int monthlySalary();
+    default String summarize() {
+        return $"earns ${monthlySalary()} per month";
+    }
+}
+
+public abstract class Person implements Payable {
+    public static int instanceCount = 0;
+    private String name;
+
+    public Person(String name) {
+        this.name = name;
+        // Bare-name write to enclosing-class static.
+        instanceCount = instanceCount + 1;
+    }
+
+    public String getName() {
+        return this.name;
+    }
+
+    public abstract String role();
+}
+
+public final class Employee extends Person {
+    // Final static constant on a subclass (alongside Person's
+    // mutable static).
+    public static final double TAX_RATE = 0.30;
+    private int salary;
+
+    public Employee(String name, int salary) {
+        super(name);
+        this.salary = salary;
+    }
+
+    public int monthlySalary() {
+        return this.salary / 12;
+    }
+
+    public String role() {
+        return $"Employee";
+    }
+}
+
+public final class Contractor extends Person {
+    private int hourlyRate;
+    private int hoursPerMonth;
+
+    public Contractor(String name, int hourlyRate, int hoursPerMonth) {
+        super(name);
+        this.hourlyRate = hourlyRate;
+        this.hoursPerMonth = hoursPerMonth;
+    }
+
+    public int monthlySalary() {
+        return this.hourlyRate * this.hoursPerMonth;
+    }
+
+    public String role() {
+        return $"Contractor";
+    }
+}
+
+public void main() {
+    var alice = new Employee("Alice", 120000);
+    var bob = new Contractor("Bob", 80, 160);
+
+    // Method calls on instances; summarize() default-dispatches
+    // through the interface to each receiver's monthlySalary().
+    print($"${alice.getName()}: ${alice.role()} ${alice.summarize()}");
+    print($"${bob.getName()}: ${bob.role()} ${bob.summarize()}");
+
+    // Cross-class static reads.
+    print($"instances created: ${Person.instanceCount}");
+    print($"Employee TAX_RATE: ${Employee.TAX_RATE}");
+}

@@ -396,13 +396,51 @@ impl RustEmitter {
     /// method order (Rust resolves by name), and a deterministic sort
     /// keeps the emitted output stable across runs.
     pub(crate) fn emit_class_trait_impls(&mut self, class_decl: &juxc_ast::ClassDecl) {
-        if class_decl.implements.is_empty() {
+        // Abstract classes don't emit trait impls — they would
+        // produce an `impl Iface for AbstractC {}` with no method
+        // bodies because the abstract methods have no concrete
+        // implementation here, and rustc would reject the empty
+        // impl with E0046. The trait-impl walk for each concrete
+        // subclass rolls up `extends` so the abstract intermediate
+        // still propagates its `implements` clause down to the
+        // class that actually carries the method bodies.
+        if class_decl.is_abstract {
             return;
         }
-        // Clone the per-interface signature lists upfront so we can
-        // mutably-call `self.emit_*` inside the loop without fighting
-        // the borrow checker.
-        let interfaces: Vec<juxc_ast::TypeRef> = class_decl.implements.clone();
+        // Concrete classes pick up interfaces from their own
+        // `implements` clause AND from every ancestor in the
+        // `extends` chain — Java's "an Employee IS-A Payable
+        // because Person says so" rule. We walk the chain via the
+        // symbol table since the AST only carries the class's own
+        // `implements` list.
+        let mut implements: Vec<juxc_ast::TypeRef> = class_decl.implements.clone();
+        {
+            let mut seen: std::collections::HashSet<String> = implements
+                .iter()
+                .filter_map(|t| t.name.segments.first().map(|s| s.text.clone()))
+                .collect();
+            // Walk parent chain by FQN-resolving each `extends`
+            // segment through the symbol table. Stop at the first
+            // missing entry (broken/unresolved chain — tycheck
+            // already surfaced that).
+            let mut cursor: Option<&juxc_ast::TypeRef> = class_decl.extends.as_ref();
+            while let Some(parent_ref) = cursor {
+                let Some(parent_name) = parent_ref.name.segments.first() else { break };
+                let Some(parent_sig) = self.symbols.classes.get(parent_name.text.as_str())
+                else { break };
+                for inherited in &parent_sig.implements {
+                    let Some(iface_seg) = inherited.name.segments.first() else { continue };
+                    if seen.insert(iface_seg.text.clone()) {
+                        implements.push(inherited.clone());
+                    }
+                }
+                cursor = parent_sig.extends.as_ref();
+            }
+        }
+        if implements.is_empty() {
+            return;
+        }
+        let interfaces: Vec<juxc_ast::TypeRef> = implements;
         for interface_ty in &interfaces {
             // Interface name must be a single-segment path today —
             // imports and module-qualified interfaces are a future

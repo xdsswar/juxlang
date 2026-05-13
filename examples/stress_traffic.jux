@@ -1,0 +1,59 @@
+// Stress test: sealed-shape pattern matching with payloads,
+// bare-name static read inside a method, mutable static history
+// counter, enum-like state transition machine, exhaustive match
+// without a wildcard arm.
+
+sealed class Light permits Red, Yellow, Green {}
+
+final class Red extends Light {
+    public int seconds;
+    public Red(int s) { this.seconds = s; }
+}
+
+final class Yellow extends Light {
+    public int seconds;
+    public Yellow(int s) { this.seconds = s; }
+}
+
+final class Green extends Light {
+    public int seconds;
+    public boolean leftTurnArrow;
+    public Green(int s, boolean arrow) {
+        this.seconds = s;
+        this.leftTurnArrow = arrow;
+    }
+}
+
+class TrafficLight {
+    // Mutable history counter — incremented inside step() via bare
+    // name. `final` neighbor sits in the same class without
+    // interfering.
+    public static int totalTransitions = 0;
+    public static final String SIGNATURE = "TL-2026";
+
+    public String step(Light current) {
+        // Bare-name compound write — exercises the deadlock-avoiding
+        // scoped-temp lowering.
+        totalTransitions = totalTransitions + 1;
+
+        return switch (current) {
+            case Red(int s)               -> $"red for ${s}s; switching to green";
+            case Yellow(int s)            -> $"yellow for ${s}s; switching to red";
+            case Green(int s, boolean a)  -> a
+                                              ? $"green ${s}s + left arrow; switching to yellow"
+                                              : $"green ${s}s; switching to yellow";
+        };
+    }
+}
+
+public void main() {
+    var t = new TrafficLight();
+
+    print(t.step(new Red(30)));
+    print(t.step(new Green(25, true)));
+    print(t.step(new Green(25, false)));
+    print(t.step(new Yellow(5)));
+
+    print($"transitions counted: ${TrafficLight.totalTransitions}");
+    print($"signature: ${TrafficLight.SIGNATURE}");
+}

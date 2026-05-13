@@ -447,7 +447,12 @@ pub(crate) fn jux_primitive_to_rust(t: &juxc_ast::TypeRef) -> Option<&'static st
     }
     Some(match t.name.segments[0].text.as_str() {
         // Java-family names
-        "bool"   => "bool",
+        "bool"     => "bool",
+        // `boolean` is Java's spelling; we accept both so a Java
+        // developer's muscle memory doesn't trip a confusing
+        // "cannot find type `boolean`" rustc error on the emitted
+        // crate. Both spell the same Rust `bool`.
+        "boolean"  => "bool",
         "byte"   => "i8",
         "ubyte"  => "u8",
         "short"  => "i16",

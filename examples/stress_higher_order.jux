@@ -1,0 +1,31 @@
+// Stress test: lambdas + method references + higher-order callees +
+// loops + mutable static counter incremented inside a lambda.
+
+public class Tracker {
+    public static int calls = 0;
+
+    public static int bump(int x) {
+        calls = calls + 1;
+        return x + 1;
+    }
+
+    public static int sumOfFirst(int n, (int) -> int f) {
+        var total = 0;
+        for (var i : 0..n) {
+            total = total + f(i);
+        }
+        return total;
+    }
+}
+
+public void main() {
+    // Method reference to a static method.
+    var viaRef = Tracker.sumOfFirst(5, Tracker::bump);
+    print($"viaRef = ${viaRef}");
+
+    // Inline lambda.
+    var doubled = Tracker.sumOfFirst(5, x -> x * 2);
+    print($"doubled = ${doubled}");
+
+    print($"Tracker.calls = ${Tracker.calls}");
+}

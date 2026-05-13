@@ -282,6 +282,14 @@ struct RustEmitter {
     /// `emit_constructor` / `emit_operator_as_method` for the
     /// duration of each body and restored afterwards.
     pub(crate) enclosing_class: Option<String>,
+    /// Name of the interface whose default-method body we're
+    /// currently emitting. Powers bare-name method-call rewrites
+    /// inside `default` bodies — `monthlySalary()` resolves to
+    /// `self.monthlySalary()` when `monthlySalary` is declared on
+    /// the enclosing interface, matching Java's member-access rule.
+    /// `None` outside an interface default-method body. Set in
+    /// `emit_interface_decl` only.
+    pub(crate) enclosing_interface: Option<String>,
     /// Names of user-defined methods whose bodies write to `this.field`
     /// — i.e. methods that the backend emits with `&mut self`. Computed
     /// in a single pre-pass over the compilation unit before any
@@ -453,6 +461,7 @@ impl RustEmitter {
             mutated_in_fn: HashSet::new(),
             this_alias: None,
             enclosing_class: None,
+            enclosing_interface: None,
             user_mut_methods: HashSet::new(),
             emitting_lvalue: false,
             emitting_const_context: false,

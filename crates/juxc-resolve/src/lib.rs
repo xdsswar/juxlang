@@ -110,6 +110,19 @@ struct Resolver {
     /// Stack of lexical scopes. The top of the stack is the current scope.
     /// Each entry is the set of names declared at that level.
     scopes: Vec<HashSet<String>>,
+    /// Per-class member name index: class name → set of member names
+    /// (static fields, instance fields, methods) declared on that
+    /// class. Used to pre-declare member names into a class body's
+    /// scope so bare references (Java rule: `foo()` ≡ `this.foo()`)
+    /// don't fire E0301. Built by [`Self::collect_top_level`].
+    ///
+    /// The names are not inherited at this point — inheritance roll-up
+    /// is done at the use site by walking [`Self::class_parents`].
+    class_members: std::collections::HashMap<String, HashSet<String>>,
+    /// Per-class parent-name index: class name → direct `extends`
+    /// target name, if any. The chain is walked at the use site so
+    /// inherited members surface as bare names too.
+    class_parents: std::collections::HashMap<String, String>,
     /// Diagnostics accumulated as we walk.
     diagnostics: Vec<Diagnostic>,
 }
@@ -128,6 +141,8 @@ impl Resolver {
             user_names: HashSet::new(),
             imported_names: HashSet::new(),
             scopes: Vec::new(),
+            class_members: std::collections::HashMap::new(),
+            class_parents: std::collections::HashMap::new(),
             diagnostics: Vec::new(),
         }
     }
@@ -269,6 +284,24 @@ impl Resolver {
                     // top-level names — they're looked up through their
                     // receiver, not as bare identifiers.
                     self.user_names.insert(class_decl.name.text.clone());
+                    // Index members + parent so a method body can
+                    // pre-declare class-member names (including the
+                    // inherited ones — walked via `class_parents`).
+                    let mut members: HashSet<String> = HashSet::new();
+                    for f in &class_decl.fields {
+                        members.insert(f.name.text.clone());
+                    }
+                    for m in &class_decl.methods {
+                        members.insert(m.name.text.clone());
+                    }
+                    self.class_members
+                        .insert(class_decl.name.text.clone(), members);
+                    if let Some(parent) = &class_decl.extends {
+                        if let Some(seg) = parent.name.segments.first() {
+                            self.class_parents
+                                .insert(class_decl.name.text.clone(), seg.text.clone());
+                        }
+                    }
                 }
                 TopLevelDecl::Enum(enum_decl) => {
                     // Register the enum name so `Color.Red` and the
@@ -419,47 +452,64 @@ impl Resolver {
                 self.visit_expr(init);
             }
         }
-        // Static fields of this class are visible as bare names inside
-        // every constructor / method / operator body (Java rule:
-        // `a` inside `class Test` resolves to `Test.a`). Collect them
-        // once so each body scope can pre-declare them — the tycheck
-        // and backend each do their own enclosing-class lookup on the
-        // emission side; this resolver pass exists only to suppress
-        // the spurious E0301 the bare reference would otherwise raise.
-        let static_field_names: Vec<&str> = class_decl
-            .fields
-            .iter()
-            .filter(|f| f.is_static)
-            .map(|f| f.name.text.as_str())
-            .collect();
+        // Static fields and methods (instance and static) of this class
+        // are visible as bare names inside every constructor / method /
+        // operator body (Java rule: `a` inside `class Test` resolves
+        // to `Test.a`; `foo()` resolves to `this.foo()` for an instance
+        // method or `Test.foo()` for a static one). We declare them
+        // into an OUTER scope (so locals/params can still shadow them
+        // in the inner body scope) only to suppress the spurious
+        // E0301 the resolver would otherwise raise — tycheck and the
+        // backend each do their own enclosing-class lookup on the
+        // emission side and pick the right shape.
+        //
+        // Walks the `extends` chain so inherited static fields and
+        // methods are also reachable bare from the subclass body.
+        let mut member_names: HashSet<String> = HashSet::new();
+        let mut cursor: Option<&str> = Some(class_decl.name.text.as_str());
+        while let Some(n) = cursor {
+            if let Some(set) = self.class_members.get(n) {
+                for m in set {
+                    member_names.insert(m.clone());
+                }
+            }
+            cursor = self.class_parents.get(n).map(|s| s.as_str());
+        }
+        // Helper closure: predeclared class-member names land in an
+        // outer scope so a local/param of the same name shadows them
+        // in the inner scope without firing
+        // `E0304_DuplicateLocalDeclaration`. (Same-scope duplicates
+        // are only caught against the innermost frame.) `this` rides
+        // along since it shouldn't conflict with a `this` param —
+        // the parser already rejects that.
         for ctor in &class_decl.constructors {
-            self.push_scope();
-            // `this` is the implicit receiver — register it as a known
-            // name so reads of `this` resolve. `this.field` member
-            // access then walks through the Field/Path resolution path
-            // (which is suppressed at the root of a field chain anyway).
+            self.push_scope(); // outer: class-member visibility
             self.declare("this");
-            for name in &static_field_names {
+            for name in &member_names {
                 self.declare(name);
             }
+            self.push_scope(); // inner: ctor body locals + params
             for param in &ctor.params {
                 self.declare(&param.name.text);
             }
             self.visit_block(&ctor.body);
             self.pop_scope();
+            self.pop_scope();
         }
         for method in &class_decl.methods {
             self.push_scope();
             self.declare("this");
-            for name in &static_field_names {
+            for name in &member_names {
                 self.declare(name);
             }
+            self.push_scope();
             for param in &method.params {
                 self.declare(&param.name.text);
             }
             if let Some(body) = &method.body {
                 self.visit_block(body);
             }
+            self.pop_scope();
             self.pop_scope();
         }
         // Operator overloads (§O.2). Same scope shape as methods —
@@ -470,15 +520,17 @@ impl Resolver {
         for op in &class_decl.operators {
             self.push_scope();
             self.declare("this");
-            for name in &static_field_names {
+            for name in &member_names {
                 self.declare(name);
             }
+            self.push_scope();
             for param in &op.params {
                 self.declare(&param.name.text);
             }
             if let Some(body) = &op.body {
                 self.visit_block(body);
             }
+            self.pop_scope();
             self.pop_scope();
         }
     }

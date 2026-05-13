@@ -99,6 +99,69 @@ impl RustEmitter {
                 return self.emit_print_call(call);
             }
         }
+        // Bare-name method-call rewrite inside a class/interface body.
+        // `foo(args)` inside `class C` or `interface I` should resolve
+        // to `self.foo(args)` when `foo` is a non-static method on
+        // the enclosing type (Java's implicit-`this` rule). The
+        // resolver pre-declares parameter and local names so a
+        // bare-name reference there shadows the method lookup; we
+        // only get here when no shadowing happened.
+        if let Expr::Path(qn) = &*call.callee {
+            if qn.segments.len() == 1 {
+                let name = &qn.segments[0].text;
+                let mut on_self = false;
+                if let Some(iface_name) = &self.enclosing_interface {
+                    if let Some(iface) = self.symbols.interfaces.get(iface_name) {
+                        if let Some(m) = iface.methods.get(name.as_str()) {
+                            if !m.is_static {
+                                on_self = true;
+                            }
+                        }
+                    }
+                }
+                if !on_self {
+                    // Walk the enclosing class's `extends` chain so a
+                    // bare call to an inherited method (`name()` in
+                    // `Dog.bark()` finding `Animal::name`) resolves
+                    // through `self.method()` and Rust's `Deref` does
+                    // the rest. Static methods don't inherit, so we
+                    // still gate on `!is_static`.
+                    let mut cursor: Option<String> = self.enclosing_class.clone();
+                    while let Some(class_name) = cursor {
+                        let Some(class) = self.symbols.classes.get(&class_name) else { break };
+                        if let Some(m) = class.methods.get(name.as_str()) {
+                            if !m.is_static {
+                                on_self = true;
+                            }
+                            break;
+                        }
+                        cursor = class
+                            .extends
+                            .as_ref()
+                            .and_then(|t| t.name.segments.first())
+                            .map(|s| s.text.clone());
+                    }
+                }
+                if on_self {
+                    let alias = self.this_alias.as_deref().unwrap_or("self");
+                    self.w.push_str(alias);
+                    self.w.push('.');
+                    self.w.push_str(name);
+                    self.w.push('(');
+                    let prev = self.emitting_format_arg;
+                    self.emitting_format_arg = false;
+                    for (i, arg) in call.args.iter().enumerate() {
+                        if i > 0 {
+                            self.w.push_str(", ");
+                        }
+                        self.emit_expr(arg);
+                    }
+                    self.emitting_format_arg = prev;
+                    self.w.push(')');
+                    return;
+                }
+            }
+        }
         // Safe-navigation method call (`obj?.method(args)`): the
         // callee parses as a `Field` with `safe: true`. Lower to
         // `obj.as_ref().map(|__t| __t.method(args))` so the result

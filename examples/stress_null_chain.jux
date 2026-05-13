@@ -1,0 +1,32 @@
+// Stress test: nullable types + Elvis operator + bare-name static
+// read inside a method + interpolation with method calls.
+
+public class Config {
+    public static String defaultHost = "localhost";
+
+    private String? host;
+    private int port;
+
+    public Config(String? host, int port) {
+        this.host = host;
+        this.port = port;
+    }
+
+    public String resolvedHost() {
+        // Elvis on a nullable field; falls back to a bare-name
+        // static read on the enclosing class.
+        return this.host ?? defaultHost;
+    }
+
+    public String describe() {
+        return $"host=${resolvedHost()}, port=${this.port}";
+    }
+}
+
+public void main() {
+    var fully = new Config("example.com", 443);
+    var none = new Config(null, 9999);
+
+    print(fully.describe());
+    print(none.describe());
+}
