@@ -1,0 +1,33 @@
+// Anonymous-class instance-initializer blocks (Java's bare
+// `{ … }` at body level — the only constructor hook anonymous
+// classes have).
+
+public interface test {
+    void t();
+}
+
+public void that() {
+    new test() {
+        {
+            // Instance initializer block — runs once when the
+            // anonymous instance is constructed.
+            var x = 10;
+            print($"init block ran, x=${x}");
+        }
+
+        {
+            // A second init block runs in source order after
+            // the first.
+            print("second init block");
+        }
+
+        @Override
+        public void t() {
+            print("t() called");
+        }
+    }.t();
+}
+
+public void main() {
+    that();
+}

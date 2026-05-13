@@ -1,0 +1,12 @@
+public interface Initializable {
+    void initialize(int location);
+}
+
+public void main() {
+    var go = new Initializable() {
+        public void initialize(int location) {
+            print($"loc=${location}");
+        }
+    };
+    go.initialize(42);
+}

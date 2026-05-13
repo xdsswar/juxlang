@@ -768,6 +768,35 @@ impl Resolver {
                 for arg in &n.args {
                     self.visit_expr(arg);
                 }
+                // Anonymous-class body: each method body opens its
+                // own scope with `this` + the formal params. The
+                // body has no access to the enclosing method's
+                // locals (the synthetic struct is stateless and
+                // its methods don't capture — see spec §1379's
+                // anonymous-class rules). Instance initializer
+                // blocks (bare `{ … }`) get their own scope too
+                // and run sequentially before the instance is
+                // returned.
+                if let Some(body) = &n.anonymous_body {
+                    for init_block in &body.init_blocks {
+                        self.push_scope();
+                        self.visit_block(init_block);
+                        self.pop_scope();
+                    }
+                    for method in &body.methods {
+                        self.push_scope();
+                        self.declare("this");
+                        self.push_scope();
+                        for param in &method.params {
+                            self.declare(&param.name.text);
+                        }
+                        if let Some(body) = &method.body {
+                            self.visit_block(body);
+                        }
+                        self.pop_scope();
+                        self.pop_scope();
+                    }
+                }
             }
             Expr::Switch(s) => {
                 // Walk the scrutinee in the surrounding scope, then

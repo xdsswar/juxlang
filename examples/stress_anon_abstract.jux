@@ -1,0 +1,41 @@
+// Anonymous-class targeting an abstract class — synthesizes a
+// concrete subclass at the use site, embedding the parent as
+// __parent and routing inherited methods through Rust's Deref.
+
+public abstract class Drawable {
+    private String label;
+
+    public Drawable(String label) {
+        this.label = label;
+    }
+
+    public String label() { return this.label; }
+
+    // Concrete inherited method — anonymous body inherits it free.
+    public String describe() {
+        return $"<drawable label=${this.label}>";
+    }
+
+    public abstract String draw();
+}
+
+public void main() {
+    var circle = new Drawable("circle") {
+        @Override
+        public String draw() {
+            return $"(o)";
+        }
+    };
+    print(circle.label());      // inherited concrete method via Deref
+    print(circle.describe());    // inherited concrete method via Deref
+    print(circle.draw());        // anonymous override
+
+    var square = new Drawable("square") {
+        @Override
+        public String draw() {
+            return $"[]";
+        }
+    };
+    print(square.label());
+    print(square.draw());
+}

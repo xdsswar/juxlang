@@ -12,3 +12,9 @@ Cargo.lock.bak
 /jux.exe
 /classes-rules.md
 /examples/stress_shop/target/.rust-build/target/
+/examples/stress_bank/target/
+/stderr.txt
+/stdout.txt
+/examples/stress_demo/target/
+/*/target/*
+/examples/stress_shop/target/

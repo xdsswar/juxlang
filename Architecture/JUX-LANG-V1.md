@@ -1376,7 +1376,26 @@ public const class Baz { }            // identical to `final` — not extendable
 
 For methods: `public const void render() { ... }` ≡ `public final void render() { ... }` — both forbid override (per §7.4.1).
 
-**Nested types.** A class may declare other types inside it — nested classes, structs, records, enums, and interfaces. All nested types are **static** by definition (they have no implicit reference to the enclosing instance). Per `JUX-MISSING-DEFS-ADDENDUM.md` §M.9, inner classes (Java's non-static nested with implicit outer reference), anonymous classes, and local classes are **not** supported — lambdas and explicit composition cover those cases more cleanly.
+**Nested types.** A class may declare other types inside it — nested classes, structs, records, enums, and interfaces. All nested types are **static** by definition (they have no implicit reference to the enclosing instance). Per `JUX-MISSING-DEFS-ADDENDUM.md` §M.9, inner classes (Java's non-static nested with implicit outer reference) and local classes are **not** supported — lambdas and explicit composition cover those cases more cleanly.
+
+**Anonymous-class expressions.** Jux supports the Java-style `new Iface() { … }` expression form for implementing an interface (or extending a non-abstract class with method overrides) at a single use site. The body is restricted to method overrides — no fields, no constructors, no static members. The anonymous instance has no implicit reference to the enclosing class's `this`; only parameters and local variables in scope are visible inside the body (closures over locals are not captured today — Phase-1 limitation that mirrors Rust's struct/method semantics; the recommended pattern is to thread state through parameters or a sibling lambda when capture is needed).
+
+```jux
+public interface Initializable {
+    void initialize(int location);
+}
+
+public void main() {
+    var init = new Initializable() {
+        public void initialize(int location) {
+            print($"location=${location}");
+        }
+    };
+    init.initialize(42);
+}
+```
+
+The compiler synthesizes a fresh struct + `impl Trait for Struct` per anonymous-class expression at the point of use; each `new Iface() { … }` produces a distinct concrete type whose only purpose is to carry the user's method bodies. Functional-interface auto-conversion (Java's "lambda where an interface is expected") is the lighter-weight path for single-abstract-method targets; the anonymous-class form is the multi-method or "I need a named impl right here" escape hatch.
 
 ```java
 public class HttpServer {

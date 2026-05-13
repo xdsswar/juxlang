@@ -1727,15 +1727,28 @@ impl<'a> Checker<'a> {
             // users know to extend the class rather than chase the
             // synthesized constructor.
             if class.is_abstract {
-                self.diagnostics.push(
-                    juxc_diagnostics::Diagnostic::error(
-                        code::Code::E0428_CannotInstantiate,
-                        format!(
-                            "cannot instantiate `{class_name}`: it's an abstract class. Subclass it with a concrete class and instantiate that instead.",
-                        ),
-                    )
-                    .with_span(n.span),
-                );
+                // Anonymous-class form (`new AbstractC() { … overrides }`)
+                // creates a synthetic concrete subclass at the use
+                // site that supplies the abstract methods, so it's
+                // the one legal `new AbstractC(...)` shape — let it
+                // through. Plain `new AbstractC(...)` without a body
+                // still errors with the usual subclass-required
+                // message.
+                if n.anonymous_body.is_none() {
+                    self.diagnostics.push(
+                        juxc_diagnostics::Diagnostic::error(
+                            code::Code::E0428_CannotInstantiate,
+                            format!(
+                                "cannot instantiate `{class_name}`: it's an abstract class. Subclass it with a concrete class and instantiate that instead.",
+                            ),
+                        )
+                        .with_span(n.span),
+                    );
+                    return;
+                }
+                // Anonymous-class form against an abstract class
+                // skips constructor-arg checking and returns;
+                // backend emission handles the synthesis.
                 return;
             }
             // At most one constructor in Turn 1. If there are none, the
@@ -1812,6 +1825,12 @@ impl<'a> Checker<'a> {
         // otherwise reach rustc as a confusing E0782 ("expected a
         // type, found a trait"). Emit E0428 instead so users see a
         // Jux-level explanation.
+        //
+        // **Exception:** `new Iface() { body }` is the
+        // anonymous-class form (spec §1379) — the body's method
+        // overrides synthesize a concrete impl at the use site.
+        // It's the only legal `new Iface(...)` shape and is
+        // explicitly allowed.
         let kind = if self.symbols.interfaces.contains_key(&class_name) {
             Some("interface")
         } else if self.symbols.enums.contains_key(&class_name) {
@@ -1820,6 +1839,10 @@ impl<'a> Checker<'a> {
             None
         };
         if let Some(kind) = kind {
+            if n.anonymous_body.is_some() && kind == "interface" {
+                // Skip E0428 — anonymous-class form is valid.
+                return;
+            }
             self.diagnostics.push(
                 juxc_diagnostics::Diagnostic::error(
                     code::Code::E0428_CannotInstantiate,

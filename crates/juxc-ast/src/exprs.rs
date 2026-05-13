@@ -190,8 +190,36 @@ pub struct NewObjectExpr {
     pub generic_args: Vec<TypeRef>,
     /// Constructor arguments in source order.
     pub args: Vec<Expr>,
-    /// Span of the whole `new T(args)` form.
+    /// Anonymous-class body — `Some(_)` when the user wrote
+    /// `new Iface() { method overrides }` per spec §1379's
+    /// anonymous-class form. Holds method declarations PLUS the
+    /// instance-initializer-block statements (Java's bare
+    /// `{ … }` at class-body level — the only constructor-like
+    /// setup hook anonymous classes have). Fields, named
+    /// constructors, and static members are rejected by the
+    /// parser. `None` for the regular `new T(args)` form.
+    pub anonymous_body: Option<AnonymousBody>,
+    /// Span of the whole `new T(args) [ { body } ]` form.
     pub span: Span,
+}
+
+/// Parsed body of an anonymous-class instantiation. Carries the
+/// user's method overrides plus any instance-initializer blocks
+/// (bare `{ … }` at class-body level — Java's only constructor
+/// hook for anonymous classes). The two are stored separately
+/// because they execute at different points: init blocks run
+/// once, when the instance is created; method bodies run on
+/// each call.
+#[derive(Debug, Clone)]
+pub struct AnonymousBody {
+    /// Instance-initializer blocks in source order. Each runs
+    /// once at instantiation time, before the synthetic struct
+    /// value is returned.
+    pub init_blocks: Vec<crate::Block>,
+    /// Method-override declarations. Each becomes a `fn` on the
+    /// synthetic impl block. Tycheck enforces that abstract
+    /// methods of the target are covered.
+    pub methods: Vec<crate::FnDecl>,
 }
 
 /// `$"...${expr}..."` per §3.4. Holds the parsed segments of an

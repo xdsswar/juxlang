@@ -1,0 +1,24 @@
+// bank.audit — interface with default methods. The bare-name
+// call inside `banner()` (calling `id()` and `kind()`) routes
+// through the trait via the interface bare-name backend rewrite.
+
+package bank.audit;
+
+public interface Audited {
+    String id();
+    String kind();
+
+    // Both default — abstract methods inherited through a parent
+    // class don't currently get virtual-dispatch-preserving impl
+    // bodies in Phase 1 (the trait-impl rollup limitation), so
+    // we go with default bodies and `Audited`'s implementers
+    // call `id()` and `kind()` directly via their inherent
+    // members. Sub-implementing classes can still override.
+    default String banner() {
+        return $"[${kind()}#${id()}]";
+    }
+
+    default String hello() {
+        return $"<<audited>>";
+    }
+}

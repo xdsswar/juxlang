@@ -110,6 +110,13 @@ impl RustEmitter {
             if qn.segments.len() == 1 {
                 let name = &qn.segments[0].text;
                 let mut on_self = false;
+                // Static-method emit: when the bare call resolves
+                // to a static on the enclosing class, emit
+                // `EnclosingClass::method(args)` so we don't fall
+                // through to the generic free-function path
+                // (which would emit a bare `method(args)` that
+                // Rust can't find).
+                let mut as_static_on: Option<String> = None;
                 if let Some(iface_name) = &self.enclosing_interface {
                     if let Some((_, iface)) = self.lookup_interface_by_bare_or_fqn(iface_name) {
                         if let Some(m) = iface.methods.get(name.as_str()) {
@@ -124,15 +131,18 @@ impl RustEmitter {
                     // bare call to an inherited method (`name()` in
                     // `Dog.bark()` finding `Animal::name`) resolves
                     // through `self.method()` and Rust's `Deref` does
-                    // the rest. Static methods don't inherit, so we
-                    // still gate on `!is_static`.
+                    // the rest. Static methods don't inherit Java-
+                    // style — we record the FQN so the emitter can
+                    // produce `Class::method(args)` instead.
                     let mut cursor: Option<String> = self.enclosing_class.clone();
                     while let Some(class_name) = cursor {
                         let Some(class) = self.lookup_class_by_bare_or_fqn(&class_name) else {
                             break;
                         };
                         if let Some(m) = class.methods.get(name.as_str()) {
-                            if !m.is_static {
+                            if m.is_static {
+                                as_static_on = Some(class_name.clone());
+                            } else {
                                 on_self = true;
                             }
                             break;
@@ -143,6 +153,23 @@ impl RustEmitter {
                             .and_then(|t| t.name.segments.first())
                             .map(|s| s.text.clone());
                     }
+                }
+                if let Some(class_name) = as_static_on {
+                    self.w.push_str(&class_name);
+                    self.w.push_str("::");
+                    self.w.push_str(name);
+                    self.w.push('(');
+                    let prev = self.emitting_format_arg;
+                    self.emitting_format_arg = false;
+                    for (i, arg) in call.args.iter().enumerate() {
+                        if i > 0 {
+                            self.w.push_str(", ");
+                        }
+                        self.emit_expr(arg);
+                    }
+                    self.emitting_format_arg = prev;
+                    self.w.push(')');
+                    return;
                 }
                 if on_self {
                     let alias = self.this_alias.as_deref().unwrap_or("self");

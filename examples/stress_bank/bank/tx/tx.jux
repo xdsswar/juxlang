@@ -1,0 +1,48 @@
+// bank.tx — Transaction enum-with-payload + summarize helper.
+// Exercises:
+//   - enum with payload variants (records via tuple-style)
+//   - exhaustive switch + nested ternary in arm body
+//   - cross-package types in variant payloads (Money)
+//   - top-level static counter via a sibling class
+//   - bare-name compound-write inside class method
+
+package bank.tx;
+
+import bank.money.Money;
+
+public enum Transaction {
+    Deposit(String, Money),
+    Withdraw(String, Money),
+    Transfer(String, String, Money),   // from, to, amount
+    InterestAccrual(String, Money),
+}
+
+public class TxLog {
+    public static int counted = 0;
+    public static int hugeAmounts = 0;
+    public static final int HUGE_CENTS = 1000000;  // $10,000
+
+    public static String summarize(Transaction t) {
+        counted = counted + 1;
+        return switch (t) {
+            case Transaction.Deposit(var who, var amt)
+                -> $"DEPOSIT to ${who} of ${amt}";
+            case Transaction.Withdraw(var who, var amt)
+                // Inline-ternary classify: huge-amount tag prefix.
+                // Compound-write to the enclosing-class static
+                // through the same path the bare-name lowering uses.
+                -> (amt.cents > HUGE_CENTS
+                        ? bumpHugeReturn($"[HUGE] WITHDRAW from ${who} of ${amt}")
+                        : $" WITHDRAW from ${who} of ${amt}");
+            case Transaction.Transfer(var from, var to, var amt)
+                -> $"TRANSFER ${amt} from ${from} to ${to}";
+            case Transaction.InterestAccrual(var who, var amt)
+                -> $"INTEREST for ${who}: ${amt}";
+        };
+    }
+
+    public static String bumpHugeReturn(String s) {
+        hugeAmounts = hugeAmounts + 1;
+        return s;
+    }
+}

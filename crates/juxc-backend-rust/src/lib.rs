@@ -428,6 +428,11 @@ struct RustEmitter {
     /// emission (legacy single-file paths don't have an `units`
     /// table to consult).
     pub(crate) current_unit_idx: Option<usize>,
+    /// Monotonic counter for anonymous-class instances seen during
+    /// emission. Each `new Iface() { … }` site mints a fresh struct
+    /// name (`__JuxAnon0`, `__JuxAnon1`, …) at the use site so
+    /// distinct anonymous classes don't collide.
+    pub(crate) anonymous_class_counter: usize,
 }
 
 impl RustEmitter {
@@ -495,6 +500,7 @@ impl RustEmitter {
             expr_types,
             workspace_mode: false,
             current_unit_idx: None,
+            anonymous_class_counter: 0,
         }
     }
 

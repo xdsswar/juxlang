@@ -1,0 +1,80 @@
+// bank.accounts — abstract Account + Checking/Savings concrete
+// classes. Exercises:
+//   - cross-package interface import (Audited)
+//   - abstract class with protected field + concrete subclasses
+//   - per-class mutable static counter via bare-name access
+//   - bare-name access to enclosing-class statics from a base ctor
+//   - cross-package record (Money) carried as a stored field
+
+package bank.accounts;
+
+import bank.money.Money;
+import bank.money.Currency;
+import bank.audit.Audited;
+
+public abstract class Account implements Audited {
+    public static int opened = 0;
+
+    protected int accountId;
+    protected String owner;
+    // Field initializer so the struct-init shim doesn't need
+    // `Money: Default`. The ctor body overwrites this before any
+    // user code sees it.
+    protected Money balance = new Money(0, Currency.USD);
+
+    public Account(String owner, Money initial) {
+        // Bare-name compound-write to enclosing-class static.
+        opened = opened + 1;
+        this.accountId = opened;
+        this.owner = owner;
+        this.balance = initial;
+    }
+
+    public String owner() { return this.owner; }
+
+    public Money balance() { return this.balance; }
+
+    public void deposit(Money amount) {
+        this.balance = this.balance.plus(amount);
+    }
+
+    public void withdraw(Money amount) {
+        this.balance = this.balance.minus(amount);
+    }
+
+    // Audited.id() — bare-name returns `this.accountId` as a String via
+    // an interpolation cast. Each concrete subclass provides its own
+    // `kind()` to disambiguate.
+    public String id() {
+        return $"${this.accountId}";
+    }
+}
+
+public final class Checking extends Account {
+    public static final int OVERDRAFT_FEE_CENTS = 3500;
+
+    public Checking(String owner, Money initial) {
+        super(owner, initial);
+    }
+
+    public String kind() { return $"Checking"; }
+}
+
+public final class Savings extends Account {
+    public static int interestRunsTotal = 0;
+
+    private int aprBps;  // basis points (100 = 1%)
+
+    public Savings(String owner, Money initial, int aprBps) {
+        super(owner, initial);
+        this.aprBps = aprBps;
+    }
+
+    public String kind() { return $"Savings"; }
+
+    public Money accruedInterest() {
+        // Bare-name compound-write on enclosing-class static.
+        interestRunsTotal = interestRunsTotal + 1;
+        return new Money(this.balance.cents * this.aprBps / 10000, this.balance.currency);
+    }
+}

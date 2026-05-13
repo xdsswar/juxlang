@@ -1,0 +1,53 @@
+// demo.core — primitives shared by the game packages.
+//
+// Shows:
+//   - record + operator string + methods + static field
+//   - enum (no payload) used cross-package
+//   - top-level public const
+//   - operator overloading on a record
+//   - boolean alias
+
+package demo.core;
+
+public const int FIXED_POINT = 100;          // cents-style scale for ints
+public const double GRAVITY  = 9.8;
+
+public enum Color {
+    Red, Green, Blue, Yellow,
+}
+
+public record Vector2(int x, int y) {
+    public static int constructed = 0;       // mutable static counter
+
+    public Vector2 plus(Vector2 other) {
+        return new Vector2(this.x + other.x, this.y + other.y);
+    }
+
+    public Vector2 times(int n) {
+        return new Vector2(this.x * n, this.y * n);
+    }
+
+    public bool isOrigin() {
+        return this.x == 0 && this.y == 0;
+    }
+
+    // Operator string — picked up by `$"${vec}"` interpolation.
+    public String operator string() {
+        return $"(${this.x}, ${this.y})";
+    }
+}
+
+// Helper class so cross-package calls have somewhere to dispatch.
+public class ColorCodes {
+    public static int requested = 0;
+
+    public static String code(Color c) {
+        requested = requested + 1;
+        return switch (c) {
+            case Color.Red    -> $"#FF0000";
+            case Color.Green  -> $"#00FF00";
+            case Color.Blue   -> $"#0000FF";
+            case Color.Yellow -> $"#FFFF00";
+        };
+    }
+}

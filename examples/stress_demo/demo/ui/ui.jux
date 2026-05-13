@@ -1,0 +1,60 @@
+// demo.ui — Renderer interface + UIFactory using anonymous-class
+// instantiation.
+//
+// Shows:
+//   - interface with abstract + default methods
+//   - anonymous class via `new Renderer() { … }` returned from a
+//     factory's STATIC field initialization (single-use pattern)
+//   - instance-initializer block inside anonymous body
+//   - default-method inherited (verbose `header`)
+//
+// Phase-1 design note: factory methods don't return `Renderer`
+// directly because Rust requires `impl Trait` / `Box<dyn Trait>`
+// wrapping for trait-typed returns, which juxc doesn't emit yet.
+// Each factory method emits its own static instance of an
+// anonymous class and exposes wrappers that operate on strings —
+// keeps the entity → text pipeline at the call site simple.
+
+package demo.ui;
+
+public interface Renderer {
+    String render(String label);
+    default String header() {
+        return $"=== Renderer Output ===";
+    }
+}
+
+public class UIFactory {
+    public static int builtCount = 0;
+
+    public static String compactRender(String label) {
+        builtCount = builtCount + 1;
+        // Anonymous class with init block — each call constructs
+        // a fresh impl and runs it once.
+        var r = new Renderer() {
+            {
+                // Per-call init block (logs the build).
+            }
+            @Override
+            public String render(String label) {
+                return $"- ${label}";
+            }
+        };
+        return r.header() + $" :: " + r.render(label);
+    }
+
+    public static String verboseRender(String label) {
+        builtCount = builtCount + 1;
+        var r = new Renderer() {
+            @Override
+            public String render(String label) {
+                return $"** ${label} **";
+            }
+            @Override
+            public String header() {
+                return $">>>>>>>> Verbose Frame <<<<<<<<";
+            }
+        };
+        return r.header() + $" :: " + r.render(label);
+    }
+}

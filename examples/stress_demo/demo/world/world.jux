@@ -1,0 +1,72 @@
+// demo.world — generic registry + World container.
+//
+// Shows:
+//   - generic class with one type param (cross-package types)
+//   - auto-Some() wrap on nullable ctor arg
+//   - nullable + Elvis on stored value
+//   - cross-package mut method call propagation
+//   - bare-name compound-write to enclosing-class static
+//   - field initializer at declaration
+
+package demo.world;
+
+import demo.core.Vector2;
+import demo.entities.{ Player, Enemy, Pickup };
+
+// Generic single-slot registry — Jux doesn't have collections in
+// Phase 1, so we use one-slot generic boxes to demo the generic
+// pipeline.
+public class Slot<T> {
+    public static int created = 0;
+
+    public T value;
+    public String label;
+
+    public Slot(T value, String label) {
+        this.value = value;
+        this.label = label;
+        created = created + 1;
+    }
+}
+
+public class World {
+    public static int turns = 0;
+    public static final int MAX_TURNS = 100;
+
+    // Field initializers so the struct-init shim doesn't need
+    // Default-derives on record-typed fields.
+    public Vector2 origin = new Vector2(0, 0);
+
+    private String? campaignName;
+    private int score;
+
+    public World(String? campaignName) {
+        this.campaignName = campaignName;
+        this.score = 0;
+    }
+
+    public String name() {
+        return this.campaignName ?? $"<untitled>";
+    }
+
+    public int score() { return this.score; }
+
+    public void addScore(int n) {
+        this.score = this.score + n;
+        // Cross-class bare-name compound write — exercises the
+        // deadlock-avoiding scoped temp.
+        turns = turns + 1;
+    }
+
+    public String describe() {
+        // Ternary chain on score thresholds.
+        var grade = this.score >= 100
+            ? $"S"
+            : (this.score >= 50
+                ? $"A"
+                : (this.score >= 10
+                    ? $"B"
+                    : $"C"));
+        return $"world '${name()}' score=${this.score} grade=${grade}";
+    }
+}

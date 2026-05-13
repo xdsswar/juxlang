@@ -189,14 +189,22 @@ impl RustEmitter {
         // inside `impl` blocks and unsynchronized mutable global
         // state requires `Sync`. Field access (`Foo.x` /
         // `Foo.x = …`) is routed to these in `emit_field` /
-        // `emit_assign`. Generic classes are skipped — Java forbids
-        // a generic class's static field from referencing the class's
-        // type parameter, and we follow that rule here.
-        if class_decl.generic_params.is_empty() {
-            for field in &class_decl.fields {
-                if field.is_static && !field.is_final {
-                    self.emit_mutable_static_field(&class_decl.name.text, field);
+        // `emit_assign`. For generic classes, only statics whose
+        // declared type doesn't reference the class's type
+        // parameters can land at module scope (Java's rule:
+        // a generic class's static field can't mention `T`).
+        // Non-`T`-mentioning statics still emit cleanly.
+        let generic_param_names: std::collections::HashSet<&str> = class_decl
+            .generic_params
+            .iter()
+            .map(|p| p.name.text.as_str())
+            .collect();
+        for field in &class_decl.fields {
+            if field.is_static && !field.is_final {
+                if type_ref_mentions_any(&field.ty, &generic_param_names) {
+                    continue;
                 }
+                self.emit_mutable_static_field(&class_decl.name.text, field);
             }
         }
 
@@ -503,30 +511,78 @@ impl RustEmitter {
             // also drop static methods — they're emitted as free
             // functions adjacent to the trait, never as trait
             // items, so they have no place in `impl Trait for ...`.
-            // Retain methods declared inherently on this class only.
-            // Methods inherited through a parent class would need
-            // either virtual-dispatch-preserving body inlining
-            // (copy Person's body into Customer's inherent so
-            // `self.role()` resolves to Customer's override) or
-            // dyn-trait-object lowering, neither wired up yet.
-            // The empty-impl branch below handles methods that
-            // come through default-method bodies on the trait
-            // itself. Interface methods declared abstract whose
-            // implementation lives only on a parent class will
-            // currently produce an `E0046 missing method` from
-            // rustc — workaround is to give the interface method
-            // a `default` body, even a trivial one.
+            // Decide a call target for each trait method:
+            //
+            //   - **Empty string** → `self.method()` resolves to
+            //     this class's inherent (no recursion because
+            //     method resolution finds inherent first).
+            //   - **Ancestor FQN** → `<crate::pkg::Parent>::method(self, args)`
+            //     for methods whose body lives on an ancestor and
+            //     this class doesn't override. Bypasses the
+            //     trait-impl recursion that bare `self.method()`
+            //     would trigger when there's no inherent.
+            //   - **Absent from the map** → drop from `methods`,
+            //     let Rust's trait default fire (interface
+            //     method has a default body).
+            //
+            // **Caveat.** Ancestor delegation calls the parent's
+            // inherent directly, so `self.something_else()`
+            // inside the parent's body resolves against the
+            // parent (not via virtual dispatch back to the
+            // subclass). For methods that depend on virtual
+            // dispatch of OTHER methods, mark the interface
+            // method `default` so this path drops it and Rust's
+            // trait default does the right thing.
             let class_method_names: std::collections::HashSet<&str> = class_decl
                 .methods
                 .iter()
                 .map(|m| m.name.text.as_str())
                 .collect();
-            let method_targets: std::collections::HashMap<String, Option<String>> = methods
-                .iter()
-                .filter(|(_, sig)| !sig.is_static)
-                .filter(|(name, _)| class_method_names.contains(name.as_str()))
-                .map(|(name, _)| (name.clone(), Some(String::new())))
-                .collect();
+            let mut method_targets: std::collections::HashMap<String, Option<String>> =
+                std::collections::HashMap::new();
+            for (name, sig) in &methods {
+                if sig.is_static {
+                    continue;
+                }
+                if class_method_names.contains(name.as_str()) {
+                    method_targets.insert(name.clone(), Some(String::new()));
+                    continue;
+                }
+                if sig.is_abstract {
+                    // Abstract on the interface — must provide a
+                    // body. Walk ancestors for an inherent.
+                    let mut cursor: Option<&juxc_ast::TypeRef> = class_decl.extends.as_ref();
+                    let mut found: Option<String> = None;
+                    while let Some(parent_ref) = cursor {
+                        let Some(seg) = parent_ref.name.segments.first() else { break };
+                        let Some((fqn, parent_sig)) = self
+                            .symbols
+                            .classes
+                            .iter()
+                            .find(|(k, _)| {
+                                k.as_str() == seg.text.as_str()
+                                    || k.rsplit('.').next().unwrap_or(k.as_str())
+                                        == seg.text.as_str()
+                            })
+                            .map(|(k, v)| (k.clone(), v))
+                        else { break };
+                        if let Some(parent_method) = parent_sig.methods.get(name.as_str()) {
+                            // Skip abstract parent methods — they
+                            // have no body to delegate to.
+                            if !parent_method.is_abstract {
+                                found = Some(fqn);
+                                break;
+                            }
+                        }
+                        cursor = parent_sig.extends.as_ref();
+                    }
+                    if let Some(fqn) = found {
+                        method_targets.insert(name.clone(), Some(fqn));
+                    }
+                }
+                // Default interface method that nobody overrides:
+                // skip entry → Rust trait default fires.
+            }
             methods.retain(|(name, _)| method_targets.contains_key(name));
             if methods.is_empty() {
                 // The class implements the interface entirely via
@@ -883,6 +939,42 @@ impl RustEmitter {
 /// class's `implements Box<int>` choice down to the trait
 /// method's `T` references so the emitted Rust doesn't dangle a
 /// free `T` inside the impl scope.
+/// True iff `ty` (or any of its nested generic args / array element /
+/// fn-shape param/return types) names any identifier in `names`.
+/// Used to gate mutable-static emission on generic classes — a
+/// static whose type mentions the class's `T` can't lift to module
+/// scope since `T` isn't in scope there.
+fn type_ref_mentions_any(
+    ty: &juxc_ast::TypeRef,
+    names: &std::collections::HashSet<&str>,
+) -> bool {
+    if ty.name.segments.len() == 1
+        && names.contains(ty.name.segments[0].text.as_str())
+    {
+        return true;
+    }
+    for arg in &ty.generic_args {
+        if let Some(t) = arg.as_type() {
+            if type_ref_mentions_any(t, names) {
+                return true;
+            }
+        }
+    }
+    if let Some(fn_shape) = &ty.fn_shape {
+        for p in &fn_shape.params {
+            if type_ref_mentions_any(p, names) {
+                return true;
+            }
+        }
+        if let Some(ret) = &fn_shape.ret {
+            if type_ref_mentions_any(ret, names) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn substitute_type_ref(
     ty: &juxc_ast::TypeRef,
     subst: &std::collections::HashMap<String, juxc_ast::TypeRef>,

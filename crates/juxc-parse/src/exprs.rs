@@ -745,16 +745,67 @@ impl<'a> Parser<'a> {
                 let generic_args = self.parse_generic_args_concrete();
 
                 // Class-instantiation form — `new Foo(args)` or
-                // `new Foo<T1,T2>(args)`.
+                // `new Foo<T1,T2>(args)`. Optionally followed by an
+                // anonymous-class body `{ method overrides }` per
+                // spec §1379. Fields and constructors are rejected
+                // inside the body; static members would shadow the
+                // synthetic struct's namespace and are skipped.
                 if self.at(&TokenKind::LParen) {
                     self.advance(); // '('
                     let args = self.parse_arg_list();
-                    let end = self.peek_span();
+                    let mut end = self.peek_span();
                     self.expect(&TokenKind::RParen, "')' to close constructor arguments");
+                    let mut anonymous_body: Option<juxc_ast::AnonymousBody> = None;
+                    if self.at(&TokenKind::LBrace) {
+                        let mut methods: Vec<juxc_ast::FnDecl> = Vec::new();
+                        let mut init_blocks: Vec<juxc_ast::Block> = Vec::new();
+                        self.advance(); // '{'
+                        while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+                            // Bare `{ … }` at body level → instance
+                            // initializer block. Java's only
+                            // constructor hook for anonymous classes
+                            // (the "double-brace initialization"
+                            // pattern). We parse the block as
+                            // statements and run them once when the
+                            // synthetic instance is constructed.
+                            if self.at(&TokenKind::LBrace) {
+                                let block = self.parse_block();
+                                init_blocks.push(block);
+                                continue;
+                            }
+                            // Otherwise expect a method shape:
+                            // `[annotations] [visibility] [modifiers]
+                            //  return-type name(params) { body }`.
+                            let anns = self.parse_annotations();
+                            let vis = self.parse_visibility();
+                            if let Some(method) = self.parse_fn_decl(anns, vis) {
+                                methods.push(method);
+                            } else {
+                                // Recovery: skip to the next `;` or `}`
+                                // so a malformed entry doesn't loop.
+                                while !self.at(&TokenKind::Semicolon)
+                                    && !self.at(&TokenKind::RBrace)
+                                    && !self.at_eof()
+                                {
+                                    self.advance();
+                                }
+                                if self.at(&TokenKind::Semicolon) {
+                                    self.advance();
+                                }
+                            }
+                        }
+                        end = self.peek_span();
+                        self.expect(&TokenKind::RBrace, "'}' to close anonymous-class body");
+                        anonymous_body = Some(juxc_ast::AnonymousBody {
+                            init_blocks,
+                            methods,
+                        });
+                    }
                     return Some(Expr::NewObject(NewObjectExpr {
                         class_name: element_name,
                         generic_args,
                         args,
+                        anonymous_body,
                         span: start.join(end),
                     }));
                 }

@@ -1,0 +1,96 @@
+// bank.app — top-level driver. Imports from every sibling package,
+// exercising aliased grouped imports, cross-package class
+// instantiation, ternary chains, lambdas + method references,
+// nullable + Elvis, virtual dispatch through the inheritance
+// chain, default-method dispatch on the Audited interface, and
+// the deadlock-safe lowering for static-counter compound writes.
+
+package bank.app;
+
+import bank.money.{ Money, Currency, CENTS_PER_UNIT };
+// Grouped import with alias on Checking AND Savings — exercises
+// the import-alias plumbing through the unit-context map.
+import bank.accounts.{ Account, Checking as CK, Savings as SV };
+// Single-import alias.
+import bank.tx.Transaction as Tx;
+import bank.tx.TxLog;
+import bank.ledger.{ Ledger, Stamp };
+import bank.audit.Audited;
+
+public void main() {
+    print($"--- Bank stress, CENTS_PER_UNIT=${CENTS_PER_UNIT} ---");
+
+    // Open a few accounts. `CK` and `SV` are aliases for Checking
+    // and Savings — the unit-context import-alias lookup resolves
+    // them to their FQN-keyed class entries in the symbol table.
+    var alice = new CK("Alice", new Money(50000, Currency.USD));
+    var bob   = new SV("Bob", new Money(20000, Currency.USD), 350);    // 3.50% APR
+    var carol = new CK("Carol", new Money(15000, Currency.EUR));
+
+    print($"opened=${Account.opened}");
+
+    // Default-method dispatch through Audited — `banner()` calls
+    // `id()` and `kind()` which the concrete subclass provides.
+    print(alice.banner());
+    print(bob.banner());
+    print(carol.banner());
+
+    // Trade some money around. `deposit` / `withdraw` mutate the
+    // account's running balance; the cross-class user_mut_methods
+    // union picks them up so `let mut alice` is the right Rust
+    // promotion at this call site.
+    alice.deposit(new Money(2500, Currency.USD));
+    bob.deposit(new Money(1000, Currency.USD));
+    alice.withdraw(new Money(700, Currency.USD));
+
+    // Read each account's balance via the auto-cloning record-field
+    // accessor (`balance()` returns Money by value, clone fires).
+    print($"${alice.banner()} bal=${alice.balance()}");
+    print($"${bob.banner()} bal=${bob.balance()}");
+    print($"${carol.banner()} bal=${carol.balance()}");
+
+    // Accrue interest on the savings account — uses its own static
+    // counter.
+    var i1 = bob.accruedInterest();
+    var i2 = bob.accruedInterest();
+    print($"${bob.banner()} interest: ${i1}, ${i2}");
+    print($"interest runs total = ${SV.interestRunsTotal}");
+
+    // Summarize a few transactions through the sealed-style
+    // payload-bearing enum. Multiple per-arm shapes test pattern
+    // matching across the full variant set.
+    print(TxLog.summarize(Tx.Deposit("Alice", new Money(2500, Currency.USD))));
+    print(TxLog.summarize(Tx.Withdraw("Alice", new Money(700, Currency.USD))));
+    print(TxLog.summarize(Tx.Withdraw("Carol", new Money(1500000, Currency.EUR))));  // huge
+    print(TxLog.summarize(Tx.Transfer("Bob", "Alice", new Money(50, Currency.USD))));
+    print(TxLog.summarize(Tx.InterestAccrual("Bob", new Money(700, Currency.USD))));
+
+    print($"tx counted=${TxLog.counted}, huge=${TxLog.hugeAmounts}");
+
+    // Generic Ledger<T> wrapping a Money. Stamp counter ticks once
+    // per Ledger construction.
+    var l1 = new Ledger<Money>(new Money(99, Currency.USD));
+    var l2 = new Ledger<String>("manual entry");
+    print($"${l1.stamp()} ${l1.entry}");
+    print($"${l2.stamp()} ${l2.entry}");
+    print($"stamp seq=${Stamp.sequence}");
+
+    // Ternary chain in interpolation — pick the biggest balance.
+    // Ternary nests deeply enough to exercise the if/else lowering.
+    var biggest = alice.balance().cents > bob.balance().cents
+        ? (alice.balance().cents > carol.balance().cents
+            ? $"alice"
+            : $"carol")
+        : (bob.balance().cents > carol.balance().cents
+            ? $"bob"
+            : $"carol");
+    print($"biggest balance holder = ${biggest}");
+
+    // Final tally — every static counter we touched.
+    print($"--- counters ---");
+    print($"  Account.opened=${Account.opened}");
+    print($"  Savings.interestRunsTotal=${SV.interestRunsTotal}");
+    print($"  TxLog.counted=${TxLog.counted}");
+    print($"  TxLog.hugeAmounts=${TxLog.hugeAmounts}");
+    print($"  Stamp.sequence=${Stamp.sequence}");
+}

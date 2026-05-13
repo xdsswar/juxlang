@@ -1,0 +1,24 @@
+// Init blocks on an anonymous class extending an abstract class.
+
+public abstract class Widget {
+    public abstract String render();
+    public String tag() { return $"<widget>"; }
+}
+
+public void main() {
+    var w = new Widget() {
+        {
+            print("widget anonymous init: first block");
+        }
+        {
+            var n = 7;
+            print($"widget anonymous init: second block, n=${n}");
+        }
+        @Override
+        public String render() {
+            return $"[rendered]";
+        }
+    };
+    print(w.tag());
+    print(w.render());
+}

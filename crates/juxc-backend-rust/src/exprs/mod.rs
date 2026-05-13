@@ -101,6 +101,9 @@ impl RustEmitter {
                 self.w.push_str(alias);
             }
             Expr::Switch(s) => self.emit_switch(s),
+            Expr::NewObject(n) if n.anonymous_body.is_some() => {
+                self.emit_anonymous_class(n);
+            }
             Expr::NewObject(n) => {
                 // `new Foo(args)`              → `Foo::new(args)`.
                 // `new com.lib.Foo(args)`      → `crate::com::lib::Foo::new(args)`.
@@ -537,6 +540,194 @@ impl RustEmitter {
         if needs_paren {
             self.w.push(')');
         }
+    }
+}
+
+impl RustEmitter {
+    /// Emit `new Iface() { method overrides }` as a Rust block
+    /// expression containing a fresh synthetic struct + `impl Trait
+    /// for Struct` carrying the user's bodies, evaluating to an
+    /// instance of the synthetic struct. Each call site mints its
+    /// own struct (via [`Self::anonymous_class_counter`]), so two
+    /// `new Iface() { … }` expressions never collide.
+    ///
+    /// Shape emitted:
+    ///
+    /// ```text
+    /// {
+    ///     #[derive(Clone)]
+    ///     struct __JuxAnonN;
+    ///     impl <Iface> for __JuxAnonN {
+    ///         fn method(&self, …) -> R { /* user body */ }
+    ///         …
+    ///     }
+    ///     __JuxAnonN
+    /// }
+    /// ```
+    ///
+    /// **Limitations** (spec §1379): no fields, no constructor,
+    /// no static members in the body; no capture of enclosing
+    /// `this` or locals. The body is a pure dispatch target.
+    pub(crate) fn emit_anonymous_class(&mut self, n: &juxc_ast::NewObjectExpr) {
+        let id = self.anonymous_class_counter;
+        self.anonymous_class_counter += 1;
+        let struct_name = format!("__JuxAnon{id}");
+        // Target FQN path emission — same `crate::`-rooting rule
+        // `new Foo(...)` uses for cross-package construction.
+        let path_segs: Vec<&str> = n
+            .class_name
+            .segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect();
+        let path: String = path_segs.join("::");
+        // Resolve the target's kind. Interface → emit `impl Trait for
+        // __JuxAnonN`; class (abstract or concrete) → embed the parent
+        // and route method calls through Rust's Deref. The bare name
+        // resolver consults both the unit-context alias map (for
+        // grouped imports) and the FQN-suffix scan.
+        let target_bare = n
+            .class_name
+            .segments
+            .last()
+            .map(|s| s.text.as_str())
+            .unwrap_or("");
+        let target_is_interface = self
+            .lookup_interface_by_bare_or_fqn(target_bare)
+            .is_some();
+        let target_is_class = self.lookup_class_by_bare_or_fqn(target_bare).is_some();
+        let crate_prefix = if n.class_name.segments.len() > 1 { "crate::" } else { "" };
+        let body = n.anonymous_body.clone().unwrap_or_else(|| juxc_ast::AnonymousBody {
+            init_blocks: Vec::new(),
+            methods: Vec::new(),
+        });
+        let methods = body.methods;
+        let init_blocks = body.init_blocks;
+
+        if !target_is_interface && target_is_class {
+            // Abstract-class (or any class) target — synthesize a
+            // real subclass shape with `__parent: Target` and
+            // route through Deref. The user's overrides land as
+            // inherent methods on the synthetic struct; inherited
+            // methods stay reachable via `Deref` to the parent.
+            self.w.push_str("{ #[derive(Clone)] struct ");
+            self.w.push_str(&struct_name);
+            self.w.push_str(" { __parent: ");
+            self.w.push_str(crate_prefix);
+            self.w.push_str(&path);
+            self.w.push_str(" } impl std::ops::Deref for ");
+            self.w.push_str(&struct_name);
+            self.w.push_str(" { type Target = ");
+            self.w.push_str(crate_prefix);
+            self.w.push_str(&path);
+            self.w.push_str("; fn deref(&self) -> &Self::Target { &self.__parent } } ");
+            self.w.push_str("impl std::ops::DerefMut for ");
+            self.w.push_str(&struct_name);
+            self.w.push_str(" { fn deref_mut(&mut self) -> &mut Self::Target { &mut self.__parent } } ");
+            self.w.push_str("impl ");
+            self.w.push_str(&struct_name);
+            self.w.push_str(" {");
+            // Inherent override methods.
+            for method in &methods {
+                self.emit_anonymous_method(method);
+            }
+            self.w.push_str(" } ");
+            // Instance-initializer blocks (Java's "double-brace
+            // initialization" form) — each wraps in `{ … }` so the
+            // statements run sequentially in their own scope and
+            // any locals they declare don't leak into the parent
+            // expression-block.
+            for ib in &init_blocks {
+                self.w.push_str(" {");
+                self.emit_block_contents(ib);
+                self.w.push_str(" }");
+            }
+            // Instantiate the synthetic with __parent built via the
+            // target class's `new(args)`.
+            self.w.push(' ');
+            self.w.push_str(&struct_name);
+            self.w.push_str(" { __parent: ");
+            self.w.push_str(crate_prefix);
+            self.w.push_str(&path);
+            self.w.push_str("::new(");
+            let args = n.args.clone();
+            let prev_fmt = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.emit_expr(arg);
+            }
+            self.emitting_format_arg = prev_fmt;
+            self.w.push_str(") } }");
+            return;
+        }
+        // Default path — interface target. Empty `impl Trait for
+        // __JuxAnonN { ... }` block carrying the user's overrides.
+        self.w.push_str("{ #[derive(Clone)] struct ");
+        self.w.push_str(&struct_name);
+        self.w.push_str("; impl ");
+        self.w.push_str(crate_prefix);
+        self.w.push_str(&path);
+        self.w.push_str(" for ");
+        self.w.push_str(&struct_name);
+        self.w.push_str(" {");
+        for method in &methods {
+            self.emit_anonymous_method(method);
+        }
+        self.w.push_str(" }");
+        // Instance-initializer blocks run before returning the
+        // synthetic instance. Each is its own scope so locals
+        // declared inside don't leak.
+        for ib in &init_blocks {
+            self.w.push_str(" {");
+            self.emit_block_contents(ib);
+            self.w.push_str(" }");
+        }
+        self.w.push(' ');
+        self.w.push_str(&struct_name);
+        self.w.push_str(" }");
+    }
+
+    /// Emit one method from an anonymous-class body as an
+    /// inherent-style `fn name(&self, args) -> R { body }` inline
+    /// within the synthetic struct's `impl` block. Shared by
+    /// the interface-target path (where the impl block is for the
+    /// trait) and the class-target path (where the impl block
+    /// targets the synthetic struct itself).
+    fn emit_anonymous_method(&mut self, method: &juxc_ast::FnDecl) {
+        self.w.push_str(" fn ");
+        self.w.push_str(&method.name.text);
+        self.w.push_str("(&self");
+        for param in &method.params {
+            self.w.push_str(", ");
+            self.w.push_str(&param.name.text);
+            self.w.push_str(": ");
+            self.emit_type_as_rust(&param.ty);
+        }
+        self.w.push(')');
+        match &method.return_type {
+            juxc_ast::ReturnType::Void => {}
+            juxc_ast::ReturnType::Type(t) => {
+                self.w.push_str(" -> ");
+                self.emit_return_type_as_rust(t);
+            }
+            juxc_ast::ReturnType::AsyncType(_) => {
+                self.w.push_str(" -> ()");
+            }
+        }
+        self.w.push_str(" {");
+        if let Some(body) = &method.body {
+            let prev_alias = self.this_alias.take();
+            self.this_alias = Some("self".to_string());
+            let saved_return = self.current_return_type.take();
+            self.current_return_type = Some(method.return_type.clone());
+            self.emit_fn_body_at(body, &method.return_type);
+            self.current_return_type = saved_return;
+            self.this_alias = prev_alias;
+        }
+        self.w.push('}');
     }
 }
 

@@ -1,0 +1,97 @@
+// demo.app — top-level driver. Imports from every sibling
+// package and exercises:
+//
+//   - grouped imports + import aliases
+//   - cross-package record / enum / class instantiation
+//   - record method-chaining + operator string + auto-clone reads
+//   - 3-level virtual dispatch through abstract-class hierarchy
+//   - anonymous-class instantiations (interface + abstract)
+//   - instance-initializer blocks
+//   - generics with cross-package type args
+//   - exhaustive switch with payload destructuring
+//   - higher-order: lambda invocation at the call site
+//   - mutable static counters from every loaded package
+//   - nullable + Elvis + auto-Some on ctor args
+//   - ternary chains nested in interpolation
+
+package demo.app;
+
+import demo.core.{ Vector2, Color, ColorCodes, FIXED_POINT };
+import demo.entities.{ Entity, Player, Enemy, Pickup, Tickable };
+import demo.events.{ Event, EventReporter };
+import demo.world.{ Slot, World };
+import demo.ui.UIFactory;
+
+public void main() {
+    print($"=== demo.app boot (FIXED_POINT=${FIXED_POINT}) ===");
+
+    // 1. Vector2 record — operator overload + method chaining.
+    var origin = new Vector2(0, 0);
+    var step = new Vector2(3, 4);
+    var trail = step.plus(step).plus(step.times(2));
+    print($"origin=${origin}, step=${step}, trail=${trail}");
+    print($"origin.isOrigin=${origin.isOrigin()}");
+
+    // 2. Color enum + cross-package static method dispatch.
+    print($"red=${ColorCodes.code(Color.Red)} green=${ColorCodes.code(Color.Green)}");
+    print($"ColorCodes.requested=${ColorCodes.requested}");
+
+    // 3. Build the cast.
+    var player = new Player("Hero", new Vector2(1, 1), Color.Yellow);
+    var enemy  = new Enemy("Goblin", new Vector2(5, 5), 7);
+    var prize  = new Pickup("GoldCoin", new Vector2(3, 3), 25);
+
+    // 4. Render every entity through the UIFactory (anonymous-class
+    //    inside, with an instance initializer block).
+    print(UIFactory.compactRender(player.describe()));
+    print(UIFactory.compactRender(enemy.describe()));
+    print(UIFactory.compactRender(prize.describe()));
+    print(UIFactory.verboseRender(player.describe()));
+    print(UIFactory.verboseRender(enemy.describe()));
+
+    // 5. Tick the tickables a few times. Concrete-type dispatch
+    //    avoids the no-upcast-to-Entity gap.
+    for (var i : 0..3) {
+        player.tick(5);
+        enemy.tick(1);
+    }
+    print($"after tick: player.score=${player.score()}, Player.totalScore=${Player.totalScore}");
+    print($"Enemy.totalAttacks=${Enemy.totalAttacks}");
+
+    // 6. Generic Slot<T> — using int and String (primitive +
+    //    String both derive Default, so the struct shim's
+    //    Default::default() path is satisfied).
+    var slot1 = new Slot<int>(42, "the-answer");
+    var slot2 = new Slot<String>("hello", "greeting");
+    print($"slot[${slot1.label}]=${slot1.value}");
+    print($"slot[${slot2.label}]=${slot2.value}");
+    print($"Slot.created=${Slot.created}");
+
+    // 7. World with nullable campaign name + Elvis fallback.
+    var w = new World(null);
+    w.addScore(8);
+    w.addScore(12);
+    w.addScore(33);
+    print(w.describe());
+
+    // 8. Dispatch events — each variant carries different payload
+    //    shapes; EventReporter's exhaustive switch destructures.
+    print(EventReporter.summarize(Event.Spawn("Goblin", new Vector2(5, 5))));
+    print(EventReporter.summarize(Event.Damage("Hero", 12)));
+    print(EventReporter.summarize(Event.Damage("Hero", 30)));
+    print(EventReporter.summarize(Event.Damage("Goblin", 75)));
+    print(EventReporter.summarize(Event.Collected("GoldCoin", 25)));
+    print(EventReporter.summarize(Event.Quit));
+
+    // 9. Final counter tally — pulls statics from every package.
+    print($"--- counters ---");
+    print($"  Entity.spawnCount=${Entity.spawnCount}");
+    print($"  Player.totalScore=${Player.totalScore}");
+    print($"  Enemy.totalAttacks=${Enemy.totalAttacks}");
+    print($"  ColorCodes.requested=${ColorCodes.requested}");
+    print($"  EventReporter.dispatched=${EventReporter.dispatched}");
+    print($"  EventReporter.quitCount=${EventReporter.quitCount}");
+    print($"  Slot.created=${Slot.created}");
+    print($"  World.turns=${World.turns}");
+    print($"  UIFactory.builtCount=${UIFactory.builtCount}");
+}

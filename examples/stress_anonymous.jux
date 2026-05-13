@@ -1,0 +1,44 @@
+// Anonymous-class stress test — spec §1379 anonymous form.
+
+public interface Initializable {
+    void initialize(int location);
+    default String describe() {
+        return $"<initializable>";
+    }
+}
+
+public interface Renderer {
+    String render(int width);
+    String banner();
+    default String paint() {
+        return $"[paint]";
+    }
+}
+
+public void main() {
+    // Anonymous class implementing a single-method interface.
+    var go = new Initializable() {
+        @Override
+        public void initialize(int location) {
+            print($"initialize called with location=${location}");
+        }
+    };
+    go.initialize(42);
+    print(go.describe());
+
+    // Anonymous class overriding two abstract methods. The default
+    // `paint()` is inherited automatically.
+    var renderer = new Renderer() {
+        @Override
+        public String render(int width) {
+            return $"render(width=${width})";
+        }
+        @Override
+        public String banner() {
+            return $"==== HEADER ====";
+        }
+    };
+    print(renderer.banner());
+    print(renderer.render(80));
+    print(renderer.paint());
+}

@@ -1,0 +1,50 @@
+// demo.events — Event enum + EventBus that dispatches via a
+// stored callback (function-typed field). Shows:
+//
+//   - enum with mixed-payload variants
+//   - exhaustive switch with ternary nested in arm body
+//   - cross-package record (Vector2) in variant payloads
+//   - higher-order field (Rc<dyn Fn(...)>) holding a lambda
+//   - cross-class static counter
+//   - bare-name compound-write deadlock-safe lowering
+
+package demo.events;
+
+import demo.core.Vector2;
+
+public enum Event {
+    Spawn(String, Vector2),                  // name, at-position
+    Damage(String, int),                     // who, hp delta
+    Collected(String, int),                  // pickup name, value
+    Quit,
+}
+
+public class EventReporter {
+    public static int dispatched = 0;
+    public static int quitCount = 0;
+    public static final String SEPARATOR = " | ";
+
+    public static String summarize(Event e) {
+        dispatched = dispatched + 1;
+        return switch (e) {
+            case Event.Spawn(var who, var at)
+                -> $"SPAWN ${who} at ${at}";
+            case Event.Damage(var who, var amount)
+                // Ternary chain: classify hit severity.
+                -> (amount >= 50
+                        ? $"FATAL ${who} -${amount} hp"
+                        : (amount >= 20
+                            ? $"HEAVY ${who} -${amount} hp"
+                            : $"hit ${who} -${amount} hp"));
+            case Event.Collected(var item, var value)
+                -> $"COLLECT ${item} (+${value})";
+            case Event.Quit
+                -> bumpQuitReturn($"QUIT");
+        };
+    }
+
+    public static String bumpQuitReturn(String s) {
+        quitCount = quitCount + 1;
+        return s;
+    }
+}

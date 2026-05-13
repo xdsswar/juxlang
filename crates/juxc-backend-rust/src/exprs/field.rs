@@ -66,6 +66,26 @@ impl RustEmitter {
                     self.w.push_str(&f.field.text);
                     return;
                 }
+                // Import-alias-aware: the current unit's
+                // `unqualified` map carries `alias → FQN` for both
+                // bare imports and grouped `{ X as Y }` aliases. A
+                // hit there resolves enum-variant constructions
+                // through the user's chosen alias name. Emit the
+                // alias name on the LHS (Rust scope has it via the
+                // emitted `use X as Y;`) while the FQN match
+                // confirms the enum is real.
+                if let Some(idx) = self.current_unit_idx {
+                    if let Some(ctx) = self.symbols.units.get(idx) {
+                        if let Some(fqn) = ctx.unqualified.get(bare.as_str()) {
+                            if self.symbols.enums.contains_key(fqn) {
+                                self.w.push_str(bare);
+                                self.w.push_str("::");
+                                self.w.push_str(&f.field.text);
+                                return;
+                            }
+                        }
+                    }
+                }
                 // Bare-name reference to an enum imported from
                 // another package: scan all enum FQNs and pick one
                 // whose last segment matches. Same shape the
@@ -339,21 +359,42 @@ impl RustEmitter {
         match ty {
             Ty::String | Ty::Param(_) => true,
             Ty::User { name, .. } => {
-                // A user-typed field is `Copy` only when it's a
-                // record whose components are all `Copy` (the
-                // record-derive code in `decls/records.rs` controls
-                // the marker). Be conservative: classes are never
-                // `Copy`, so always clone. For records: check
-                // whether all components are copy-primitive.
-                if let Some(record) = self.symbols.records.get(name) {
+                // The `Ty::User { name }` here can be either an FQN
+                // (multi-package programs) or a bare class name
+                // (`ty_kind_from_ref_with_params` doesn't resolve
+                // FQNs from a TypeRef). Try direct lookup, then
+                // fall back to a suffix scan on each kind of
+                // user-type slot in the symbol table.
+                let resolve_record = || -> Option<&juxc_tycheck::symbol_table::RecordSig> {
+                    self.symbols.records.get(name.as_str()).or_else(|| {
+                        self.symbols
+                            .records
+                            .iter()
+                            .find(|(k, _)| {
+                                k.rsplit('.').next().unwrap_or(k.as_str()) == name.as_str()
+                            })
+                            .map(|(_, v)| v)
+                    })
+                };
+                if let Some(record) = resolve_record() {
                     let all_copy = record
                         .components
                         .iter()
                         .all(|c| crate::analysis::field_supports_copy(&c.ty));
                     return !all_copy;
                 }
-                // Class / enum / unknown user type — always clone.
-                self.symbols.classes.contains_key(name) || self.symbols.enums.contains_key(name)
+                // Class / enum / unknown user type — always clone
+                // (classes derive Clone, never Copy; enums derive
+                // Clone via the auto-derive set).
+                let class_hit = self.symbols.classes.contains_key(name.as_str())
+                    || self.symbols.classes.keys().any(|k| {
+                        k.rsplit('.').next().unwrap_or(k.as_str()) == name.as_str()
+                    });
+                let enum_hit = self.symbols.enums.contains_key(name.as_str())
+                    || self.symbols.enums.keys().any(|k| {
+                        k.rsplit('.').next().unwrap_or(k.as_str()) == name.as_str()
+                    });
+                class_hit || enum_hit
             }
             _ => false,
         }

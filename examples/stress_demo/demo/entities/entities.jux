@@ -1,0 +1,109 @@
+// demo.entities — entity hierarchy with sealed base + concrete
+// subclasses + interface.
+//
+// Shows:
+//   - abstract class with protected/private fields + ctor
+//   - sealed permits clause + final subclasses
+//   - interface with abstract + default methods
+//   - bare-name access to enclosing-class static counter
+//   - cross-package record (Vector2) carried as instance state
+//   - inherited concrete method via auto-clone field read
+
+package demo.entities;
+
+import demo.core.Vector2;
+import demo.core.Color;
+
+// Lifecycle interface — anything that ticks per game frame.
+public interface Tickable {
+    void tick(int dt);
+    default String hello() {
+        return $"<tickable>";
+    }
+}
+
+public abstract sealed class Entity permits Player, Enemy, Pickup {
+    // Class-wide counter — every new entity bumps it.
+    public static int spawnCount = 0;
+
+    protected Vector2 pos = new Vector2(0, 0);
+    protected int hp;
+    private String name;
+
+    public Entity(String name, Vector2 pos, int hp) {
+        this.name = name;
+        this.pos = pos;
+        this.hp = hp;
+        // Bare-name compound write.
+        spawnCount = spawnCount + 1;
+    }
+
+    public String name() { return this.name; }
+    public Vector2 position() { return this.pos; }
+    public int hp() { return this.hp; }
+
+    public abstract String kind();
+
+    // Concrete inherited — uses interpolation on auto-cloned
+    // record-typed pos. `this.pos` is explicit because instance
+    // fields aren't yet visible as bare names inside method
+    // bodies (the bare-name rewrite covers statics + methods but
+    // not instance fields).
+    public String describe() {
+        return $"${kind()} ${name()} @ ${this.pos} hp=${hp()}";
+    }
+}
+
+public final class Player extends Entity implements Tickable {
+    public static int totalScore = 0;
+
+    private int score;
+    private Color shirt;
+
+    public Player(String name, Vector2 pos, Color shirt) {
+        super(name, pos, 100);
+        this.score = 0;
+        this.shirt = shirt;
+    }
+
+    public String kind() { return $"Player"; }
+    public int score() { return this.score; }
+    public Color shirt() { return this.shirt; }
+
+    public void tick(int dt) {
+        // Earn one point per dt unit.
+        this.score = this.score + dt;
+        totalScore = totalScore + dt;
+    }
+}
+
+public final class Enemy extends Entity implements Tickable {
+    public static int totalAttacks = 0;
+
+    private int damage;
+
+    public Enemy(String name, Vector2 pos, int damage) {
+        super(name, pos, 30);
+        this.damage = damage;
+    }
+
+    public String kind() { return $"Enemy"; }
+    public int damage() { return this.damage; }
+
+    public void tick(int dt) {
+        // Each tick the enemy "attacks" once.
+        totalAttacks = totalAttacks + 1;
+    }
+}
+
+public final class Pickup extends Entity {
+    private int value;
+
+    public Pickup(String name, Vector2 pos, int value) {
+        super(name, pos, 1);
+        this.value = value;
+    }
+
+    public String kind() { return $"Pickup"; }
+    public int value() { return this.value; }
+}
