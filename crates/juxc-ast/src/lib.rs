@@ -53,7 +53,7 @@ pub use exprs::{
     BinaryExpr, BinaryOp, CallExpr, CastExpr, ElvisExpr, Expr, FieldExpr,
     IndexExpr, InterpSegment, InterpStringExpr, LambdaBody, LambdaExpr, LambdaParam,
     MethodRefExpr, NewArrayExpr, NewArrayLitExpr, NewObjectExpr, RangeExpr, SizeOfExpr,
-    UnaryExpr, UnaryOp,
+    TernaryExpr, UnaryExpr, UnaryOp,
 };
 pub use literals::{FloatKind, FloatLit, IntKind, IntLit, IntRadix, Literal};
 pub use patterns::{Pattern, SwitchArm, SwitchBody, SwitchExpr};

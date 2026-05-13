@@ -748,6 +748,11 @@ impl Resolver {
                 // E0413; acceptable trade-off for Phase 1.
                 self.check_path(&m.receiver);
             }
+            Expr::Ternary(t) => {
+                self.visit_expr(&t.condition);
+                self.visit_expr(&t.then_branch);
+                self.visit_expr(&t.else_branch);
+            }
         }
     }
 

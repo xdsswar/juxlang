@@ -128,11 +128,36 @@ impl RustEmitter {
     /// back to `false` and route through the standard binary path
     /// — same conservative fallback as the other type-aware
     /// helpers.
+    ///
+    /// **Smart-cast aware**: when `e` is a path to a binding that
+    /// the smart-cast pass has unwrapped from `T?` to `T`
+    /// (removed from `nullable_locals`), and tycheck still records
+    /// the original nullable shape, we peel the `Ty::Nullable`
+    /// wrap and check the inner type. Without this, the type-
+    /// based concat trigger misses inside `if (b != null)` blocks
+    /// where `b` is now effectively `String`.
     fn operand_is_string_typed(&self, e: &Expr) -> bool {
-        matches!(
-            self.expr_types.get(&crate::exprs::expr_span_of(e)),
-            Some(juxc_tycheck::Ty::String),
-        )
+        let recorded = self.expr_types.get(&crate::exprs::expr_span_of(e));
+        let unwrapped = self.unwrap_for_smart_cast(e, recorded);
+        matches!(unwrapped, Some(juxc_tycheck::Ty::String))
+    }
+
+    /// Apply the smart-cast unwrap to a recorded tycheck `Ty`
+    /// when `e` is a path to a binding that's been smart-cast
+    /// out of `nullable_locals`. Other shapes fall through.
+    fn unwrap_for_smart_cast<'a>(
+        &self,
+        e: &Expr,
+        recorded: Option<&'a juxc_tycheck::Ty>,
+    ) -> Option<&'a juxc_tycheck::Ty> {
+        if let (Expr::Path(qn), Some(juxc_tycheck::Ty::Nullable(inner))) = (e, recorded) {
+            if qn.segments.len() == 1
+                && !self.nullable_locals.contains(&qn.segments[0].text)
+            {
+                return Some(inner.as_ref());
+            }
+        }
+        recorded
     }
 }
 

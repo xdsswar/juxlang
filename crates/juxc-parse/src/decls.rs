@@ -427,20 +427,88 @@ impl<'a> Parser<'a> {
             // in the Phase-1 cut — leave empty.
             let method_annotations = Vec::new();
             let method_vis = self.parse_visibility();
-            // Reuse `parse_fn_decl` — its semicolon-or-block body
-            // dispatch lets it land an abstract signature naturally
-            // when the user writes `void foo();`.
-            let Some(method) = self.parse_fn_decl(method_annotations, method_vis)
-            else { break };
-            if method.body.is_some() {
-                // Default-method bodies aren't supported in Turn 1.
+            // Java-style interface-method modifiers per
+            // `JUX-LANG-V1.md` §7.6:
+            //
+            // - **abstract** (no modifier, no body) — implementing
+            //   class must provide.
+            // - **default** (body required) — implementing class
+            //   inherits the body unless it overrides.
+            // - **static** (body required) — interface-scoped;
+            //   not inherited; accessed as `Interface.method()`.
+            //
+            // `default` and `static` are mutually exclusive. The
+            // body-vs-no-body contract is enforced after
+            // parse_fn_decl below.
+            let is_default = self.eat_kw(Keyword::Default);
+            let default_kw_span = if is_default {
+                Some(self.last_consumed_span())
+            } else {
+                None
+            };
+            let is_static = self.eat_kw(Keyword::Static);
+            let static_kw_span = if is_static {
+                Some(self.last_consumed_span())
+            } else {
+                None
+            };
+            if is_default && is_static {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0200_UnexpectedToken,
-                        "interface method bodies (default methods) aren't supported yet",
+                        "`default` and `static` are mutually exclusive on interface methods",
                     )
-                    .with_span(method.span),
+                    .with_span(static_kw_span.unwrap_or_else(|| self.peek_span())),
                 );
+            }
+            // Reuse `parse_fn_decl` — its semicolon-or-block body
+            // dispatch lets it land an abstract signature naturally
+            // when the user writes `void foo();`.
+            let Some(mut method) = self.parse_fn_decl(method_annotations, method_vis)
+            else { break };
+            // Promote `static` to the method's modifier list so
+            // backend / tycheck see it the same way as static
+            // class methods. (parse_fn_decl already absorbed any
+            // modifiers it found inside its own pre-loop; the
+            // `static` here was consumed before that and needs
+            // to be re-attached.)
+            if is_static {
+                method
+                    .modifiers
+                    .push(juxc_ast::FnModifier::Static);
+            }
+            // Enforce the body / no-body contract.
+            let has_body = method.body.is_some();
+            match (is_default, is_static, has_body) {
+                (true, _, false) => {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "`default` interface method must have a body",
+                        )
+                        .with_span(default_kw_span.unwrap_or(method.span)),
+                    );
+                }
+                (_, true, false) => {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "`static` interface method must have a body",
+                        )
+                        .with_span(static_kw_span.unwrap_or(method.span)),
+                    );
+                }
+                (false, false, true) => {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "interface method with a body must be marked `default` \
+                             or `static`; omit the body to declare an abstract method",
+                        )
+                        .with_span(method.span),
+                    );
+                }
+                _ => {}
             }
             methods.push(method);
         }
@@ -1032,6 +1100,11 @@ impl<'a> Parser<'a> {
     /// 'async' | 'native' | 'unsafe' | 'override'`. Consumes as many in a
     /// row as appear. `final` and `const` are synonyms per §5.6; we
     /// canonicalize both to `FnModifier::Final`.
+    // `Final` and `Const` deliberately push the same value
+    // (synonyms per §5.6); the branch-per-keyword shape keeps
+    // the cascade readable. Clippy's `if_same_then_else` is a
+    // false positive here — silenced locally.
+    #[allow(clippy::if_same_then_else)]
     pub(crate) fn parse_fn_modifiers(&mut self) -> Vec<FnModifier> {
         let mut mods = Vec::new();
         loop {

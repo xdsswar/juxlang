@@ -620,6 +620,14 @@ fn substitute_inner(ty: &Ty, params: &[TypeParam], args: &[Ty]) -> Ty {
 // Tests
 // ============================================================================
 
+// `walk_extends_reaches` / `compose_extends_substitution` follow
+// this `mod tests` in source order — they were added after the
+// test block was already in place. Clippy normally flags
+// "items after test module" because it inhibits incremental
+// rebuild caching; for this file the organization is intentional
+// (substitution helpers sit next to the types they substitute on),
+// so we suppress locally.
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod tests {
     use super::*;

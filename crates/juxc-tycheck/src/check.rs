@@ -907,6 +907,27 @@ impl<'a> Checker<'a> {
                 // Untyped today — backend emits the closure
                 // adapter and Rust catches missing members.
             }
+            Expr::Ternary(t) => {
+                self.check_expr(&t.condition);
+                self.check_expr(&t.then_branch);
+                self.check_expr(&t.else_branch);
+                // Condition must be `bool`. Branches should
+                // unify; Phase 1 keeps the unification check
+                // permissive and lets rustc surface a real
+                // mismatch on the emitted `if`.
+                let cond_ty = infer_expr(&t.condition, &self.env, self.symbols);
+                if !compatible(&Ty::Primitive(Primitive::Bool), &cond_ty, self.symbols) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0410_TypeMismatch,
+                            format!(
+                                "ternary condition must be bool, found {cond_ty}",
+                            ),
+                        )
+                        .with_span(expr_span(&t.condition)),
+                    );
+                }
+            }
         }
     }
 
@@ -1369,6 +1390,71 @@ impl<'a> Checker<'a> {
                         }
                         return;
                     }
+                    // `IfaceName.staticMethod(...)` — same shape,
+                    // routed through the interface table. A static
+                    // method dispatches normally; a default or
+                    // abstract method called this way is an error
+                    // (E0427) so users don't paper over the
+                    // wrong-shape issue and silently miscompile.
+                    if let Some(iface_fqn) = crate::infer::path_resolves_to_interface(
+                        qn,
+                        &self.env,
+                        self.symbols,
+                    ) {
+                        let iface_method = self
+                            .symbols
+                            .interfaces
+                            .get(&iface_fqn)
+                            .and_then(|i| i.methods.get(method_name))
+                            .cloned();
+                        if let Some(method) = iface_method {
+                            if method.is_static {
+                                self.check_visibility(
+                                    method.visibility,
+                                    &iface_fqn,
+                                    method_name,
+                                    "static method",
+                                    c.span,
+                                );
+                                self.check_call_args(
+                                    method_name,
+                                    &method.params,
+                                    &c.args,
+                                    c.span,
+                                    Some(&iface_fqn),
+                                    &[],
+                                    &[],
+                                );
+                                return;
+                            }
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0427_StaticCalledOnInstance,
+                                    format!(
+                                        "`{method_name}` on interface `{iface_fqn}` is not static; call it on an instance of an implementing class",
+                                    ),
+                                )
+                                .with_span(c.span),
+                            );
+                            for arg in &c.args {
+                                self.check_expr(arg);
+                            }
+                            return;
+                        }
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0413_UnresolvedMethod,
+                                format!(
+                                    "no static method `{method_name}` on interface `{iface_fqn}`",
+                                ),
+                            )
+                            .with_span(c.span),
+                        );
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
                 }
                 // Walk the receiver sub-expression first.
                 self.check_expr(&field.object);
@@ -1411,10 +1497,33 @@ impl<'a> Checker<'a> {
                     let params = method.params.clone();
                     let method_generic_params = method.generic_params.clone();
                     let method_vis = method.visibility;
+                    let method_is_static = method.is_static;
                     // Clone the declaring-class name into an owned
                     // String so it outlives the immutable borrow on
                     // `self.symbols` we'd otherwise need.
                     let owner_name = declaring_class.to_string();
+                    // Java rule: a `static` method must be called via
+                    // its declaring type, not an instance. `obj.foo()`
+                    // where `foo` is static is misleading because the
+                    // receiver doesn't participate in dispatch. We
+                    // diagnose at the call site rather than letting
+                    // the backend miscompile or rustc complain
+                    // downstream.
+                    if method_is_static {
+                        self.diagnostics.push(
+                            juxc_diagnostics::Diagnostic::error(
+                                code::Code::E0427_StaticCalledOnInstance,
+                                format!(
+                                    "`{method_name}` is a static method on `{owner_name}`; call it as `{owner_name}.{method_name}(...)`, not on an instance",
+                                ),
+                            )
+                            .with_span(c.span),
+                        );
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
                     // Visibility check (E0414 / E0415 / E0416) —
                     // run after cloning out the fields we need so
                     // the symbol-table borrow ends before the
@@ -1427,15 +1536,13 @@ impl<'a> Checker<'a> {
                         c.span,
                     );
                     let (mut subst_params, mut subst_args): (Vec<TypeParam>, Vec<Ty>) =
-                        match compose_extends_substitution(
+                        compose_extends_substitution(
                             &name,
                             &generic_args,
                             &owner_name,
                             self.symbols,
-                        ) {
-                            Some(pair) => pair,
-                            None => (Vec::new(), Vec::new()),
-                        };
+                        )
+                        .unwrap_or_default();
                     // Method-level generic inference (spec §T.4).
                     self.append_method_generic_inference(
                         &method_generic_params,
@@ -1461,6 +1568,26 @@ impl<'a> Checker<'a> {
                 // there's no cross-extends complication.
                 if let Some(iface) = self.symbols.interfaces.get(&name) {
                     if let Some(method) = iface.methods.get(method_name) {
+                        // Same static-via-instance check as the
+                        // class path above. Receiver here is a
+                        // value typed by an interface, so a static
+                        // method on it would still need to be
+                        // called as `Iface.foo(...)`.
+                        if method.is_static {
+                            self.diagnostics.push(
+                                juxc_diagnostics::Diagnostic::error(
+                                    code::Code::E0427_StaticCalledOnInstance,
+                                    format!(
+                                        "`{method_name}` is a static method on `{name}`; call it as `{name}.{method_name}(...)`, not on an instance",
+                                    ),
+                                )
+                                .with_span(c.span),
+                            );
+                            for arg in &c.args {
+                                self.check_expr(arg);
+                            }
+                            return;
+                        }
                         let params = method.params.clone();
                         let method_generic_params = method.generic_params.clone();
                         let mut subst_params = iface.generic_params.clone();
@@ -1632,11 +1759,35 @@ impl<'a> Checker<'a> {
             );
             return;
         }
-        // Not a known class or record. Stay silent if the resolver
-        // already flagged the name (it lands in `resolve` as E0301);
-        // emitting a parallel E0413 would be double-counting.
-        // (When we have a "no class N" code in the future, swap this
-        // for an emit.)
+        // `new` against an interface, enum, or other non-class type:
+        // the resolver already finds the name, so we wouldn't be
+        // double-counting an E0301 — and the lowered Rust would
+        // otherwise reach rustc as a confusing E0782 ("expected a
+        // type, found a trait"). Emit E0428 instead so users see a
+        // Jux-level explanation.
+        let kind = if self.symbols.interfaces.contains_key(&class_name) {
+            Some("interface")
+        } else if self.symbols.enums.contains_key(&class_name) {
+            Some("enum")
+        } else {
+            None
+        };
+        if let Some(kind) = kind {
+            self.diagnostics.push(
+                juxc_diagnostics::Diagnostic::error(
+                    code::Code::E0428_CannotInstantiate,
+                    format!(
+                        "cannot instantiate `{class_name}`: it's an {kind}, not a class. Implement {kind} `{class_name}` on a class and instantiate that instead.",
+                    ),
+                )
+                .with_span(n.span),
+            );
+            return;
+        }
+        // Not a known class, record, interface, or enum. Stay silent
+        // if the resolver already flagged the name (it lands in
+        // `resolve` as E0301); emitting a parallel E0413 would be
+        // double-counting.
     }
 
     /// Resolve a `super(args)` invocation inside a constructor body
@@ -1973,6 +2124,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::Lambda(l) => l.span,
         Expr::Elvis(e) => e.span,
         Expr::MethodRef(m) => m.span,
+        Expr::Ternary(t) => t.span,
     }
 }
 
@@ -2122,6 +2274,20 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
             Ty::Array { element: e2, kind: k2 },
         ) => k1 == k2 && compatible(e1, e2, symbols),
         // User types — same name AND pairwise compatible generic args.
+        //
+        // **Pending: upcasting.** Java semantics allow a subclass
+        // instance into a parent-typed slot (`void greet(Animal a)`
+        // accepts a `Dog`). Phase 1 doesn't implement this because
+        // the **backend** can't lower the upcast safely — passing a
+        // `Circle` value where a `Shape` is expected loses the
+        // subclass's identity (Rust's auto-deref doesn't kick in
+        // for by-value fn args; `__parent` extraction would discard
+        // Circle's own fields). Wiring the upcast end-to-end
+        // requires the class-representation selector (Tier 1.1)
+        // that boxes subclasses behind a trait object or similar.
+        // Until then the strict same-name match keeps the
+        // diagnostic clear: the user gets E0410 at the call site
+        // rather than a Rust E0308 deeper into the emitted code.
         (
             Ty::User { name: n1, generic_args: a1 },
             Ty::User { name: n2, generic_args: a2 },

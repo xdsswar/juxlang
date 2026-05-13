@@ -17,6 +17,16 @@ impl RustEmitter {
     /// Each arm becomes `pattern => body,`. Block bodies emit as
     /// `pattern => { stmts… },`. Expression-bodies emit naked.
     pub(crate) fn emit_switch(&mut self, s: &juxc_ast::SwitchExpr) {
+        // When the surrounding context requires `Option<T>` (the
+        // `emitting_nullable_target` flag is set, currently fired
+        // by `emit_tail_stmt` for a `T?`-returning fn), push the
+        // `Some(...)` wrap into each arm body so mixed
+        // `T` / `null` arms unify cleanly. We clear the flag
+        // BEFORE walking each arm body so a nested switch inside
+        // an arm doesn't re-wrap; the arm-body context resets.
+        let wrap_each_arm = self.emitting_nullable_target;
+        let prev_nullable_target = self.emitting_nullable_target;
+        self.emitting_nullable_target = false;
         self.w.push_str("match ");
         self.emit_expr(&s.scrutinee);
         self.w.push_str(" {\n");
@@ -34,7 +44,21 @@ impl RustEmitter {
             self.w.push_str(" => ");
             match &arm.body {
                 juxc_ast::SwitchBody::Expr(e) => {
+                    // Per-arm nullable wrap: skip when the value
+                    // is already `null` (a `Literal::Null` lowers
+                    // to `None`) or already nullable-shaped (the
+                    // generic-arg helper recognizes paths to
+                    // nullable locals and `?.`-chain results).
+                    let wrap = wrap_each_arm
+                        && !matches!(&**e, juxc_ast::Expr::Literal(juxc_ast::Literal::Null))
+                        && !self.expression_is_already_nullable(e);
+                    if wrap {
+                        self.w.push_str("Some(");
+                    }
                     self.emit_expr(e);
+                    if wrap {
+                        self.w.push(')');
+                    }
                 }
                 juxc_ast::SwitchBody::Block(b) => {
                     self.w.push_str("{\n");
@@ -61,6 +85,7 @@ impl RustEmitter {
             self.w.push_str(",\n");
         }
         self.w.push('}');
+        self.emitting_nullable_target = prev_nullable_target;
     }
 
     /// Emit a single pattern in Rust source. Recursive for variant
@@ -86,20 +111,13 @@ impl RustEmitter {
             }
             juxc_ast::Pattern::Bind(name) => self.w.push_str(&name.text),
             juxc_ast::Pattern::EnumVariant { path, args, .. } => {
-                // For two-segment paths whose first segment is a known
-                // enum (`Color.Red` → `Color::Red`), emit with `::`.
-                // Otherwise emit the path verbatim with `.` rewritten
-                // to `::` (Rust path syntax).
+                // Rust match patterns join path segments with `::`,
+                // regardless of whether the first segment is a
+                // known enum (`Color.Red` → `Color::Red`) or any
+                // other dotted shape. Emit verbatim with `.`
+                // rewritten to `::`.
                 let segs: Vec<&str> =
                     path.segments.iter().map(|s| s.text.as_str()).collect();
-                let is_enum_path =
-                    segs.len() == 2 && self.symbols.enums.contains_key(segs[0]);
-                let joiner = if is_enum_path { "::" } else { "::" };
-                // Even when not a known enum, Rust expects `::` between
-                // path segments in match patterns — `Foo::Bar(…)`. The
-                // joiner above is the same in both branches; the
-                // discrimination matters only for diagnostic clarity.
-                let _ = joiner;
                 self.w.push_str(&segs.join("::"));
                 if !args.is_empty() || pattern_has_parens(pattern) {
                     self.w.push('(');

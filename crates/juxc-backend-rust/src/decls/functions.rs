@@ -186,22 +186,35 @@ impl RustEmitter {
     pub(crate) fn emit_tail_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Return(Some(expr)) => {
-                // `return expr;` → bare `expr` on its own line. Fix 1
-                // unified every string source (literals, parameters,
-                // fields, returns) to owned `String`, so the old
-                // tail-return `.to_string()` coercion is no longer
-                // needed: a bare literal here already self-coerces.
+                // `return expr;` → bare `expr` on its own line.
                 //
-                // Nullable-return wrap: same rule as the mid-body
-                // return path in `emit_stmt` — a `T?`-returning fn
-                // lifts a `T` value into `Some(T)`.
+                // Nullable-return wrap: a `T?`-returning fn lifts a
+                // `T` value into `Some(T)`. Two shapes:
+                //
+                // 1. **Direct value** (`return "hi";`,
+                //    `return name;`) — outer `Some(...)` wrap.
+                // 2. **Switch expression** (`return switch (x) {
+                //    case A -> "warm"; case B -> null; }`) — outer
+                //    wrap would force every arm to produce the
+                //    same non-`Option<T>` type, but `null` doesn't
+                //    fit `T`. Set the
+                //    `emitting_nullable_target` flag so the
+                //    switch emitter wraps each arm body
+                //    individually (`A => Some(...), B => None`),
+                //    and skip the outer wrap.
                 let wrap_some = self.return_wants_some_wrap(expr);
+                let is_switch = matches!(expr, juxc_ast::Expr::Switch(_));
                 self.w.emit_indent();
-                if wrap_some {
+                if wrap_some && !is_switch {
                     self.w.push_str("Some(");
                 }
+                let prev_nullable_target = self.emitting_nullable_target;
+                if wrap_some && is_switch {
+                    self.emitting_nullable_target = true;
+                }
                 self.emit_expr(expr);
-                if wrap_some {
+                self.emitting_nullable_target = prev_nullable_target;
+                if wrap_some && !is_switch {
                     self.w.push(')');
                 }
                 self.w.push('\n');

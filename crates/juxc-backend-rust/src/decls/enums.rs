@@ -87,6 +87,11 @@ impl RustEmitter {
         }
 
         // Auto `Display` — mirrors Java's `enum.name()`. Skipped when:
+        //   - the enum has no variants (uninhabited; can't be
+        //     instantiated, so emitting `match self {}` would
+        //     trip Rust's E0004 on the `&Empty` borrow at the
+        //     formatter boundary — empty enums have no Display
+        //     because there's nothing to display),
         //   - the user overrode `operator string` (their wrapper
         //     supplies Display), or
         //   - the user deleted `operator string` (intentional opt-out
@@ -99,7 +104,7 @@ impl RustEmitter {
             .operators
             .iter()
             .any(|o| o.kind == OperatorKind::ToString && o.is_deleted);
-        if !has_string_override && !string_deleted {
+        if !enum_decl.variants.is_empty() && !has_string_override && !string_deleted {
             self.emit_enum_auto_display(enum_decl);
         }
 

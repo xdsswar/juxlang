@@ -226,6 +226,16 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
         // Method reference is a static expression — no sub-paths
         // referring to the loop variable.
         Expr::MethodRef(_) => false,
+        // Ternary: both branches are value-consuming positions
+        // (the surrounding context picks one). A bare `Path(name)`
+        // on either side is a move.
+        Expr::Ternary(t) => {
+            expr_moves_path_at_top(&t.condition, name)
+                || is_path_named(&t.then_branch, name)
+                || expr_moves_path_at_top(&t.then_branch, name)
+                || is_path_named(&t.else_branch, name)
+                || expr_moves_path_at_top(&t.else_branch, name)
+        }
     }
 }
 
@@ -544,6 +554,32 @@ impl RustEmitter {
     /// `emit_literal`; identifiers refer to `String`-typed bindings).
     /// No `.to_string()` injection is needed here anymore.
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
+        // String `+=` special-case: Rust's `String + String` and
+        // `String += String` aren't implemented (only the
+        // `&str`-RHS variants exist), and emitting the regular
+        // `s += rhs` path would force the literal-coerce on the
+        // RHS to produce a `String` that Rust then rejects. The
+        // idiomatic form is `s.push_str(&rhs)` — works for both
+        // `String` and `&str` RHS via `AsRef<str>` semantics.
+        if matches!(a.op, Some(juxc_ast::BinaryOp::Add))
+            && matches!(
+                self.expr_types.get(&expr_span_of(&a.target)),
+                Some(Ty::String),
+            )
+        {
+            self.emitting_lvalue = true;
+            self.emit_expr(&a.target);
+            self.emitting_lvalue = false;
+            self.w.push_str(".push_str(&");
+            // Borrow context so a literal RHS stays `&str` (no
+            // wasted `.to_string()`).
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = true;
+            self.emit_expr(&a.value);
+            self.emitting_format_arg = prev;
+            self.w.push_str(");\n");
+            return;
+        }
         // LHS: emit with the lvalue flag set so `emit_field` skips its
         // String-read `.clone()` insertion.
         self.emitting_lvalue = true;
@@ -619,7 +655,20 @@ impl RustEmitter {
     /// (`var ok = x != null;`), while this branch handles the
     /// narrower `if` form.
     pub(crate) fn emit_if(&mut self, if_stmt: &IfStmt) {
-        if let Some(name) = match_simple_not_null_check(&if_stmt.condition) {
+        // Smart-cast bookkeeping: when the condition is `name !=
+        // null`, `name` inside the `then` block is the unwrapped
+        // inner `T` (no longer `Option<T>`). Remove it from
+        // `nullable_locals` for the duration of the body so
+        // format-arg JuxOpt wrapping and elvis null-checks treat
+        // it correctly. Restore on the way out so the rest of the
+        // function still sees the original nullable shape.
+        let cast_name: Option<String> =
+            match_simple_not_null_check(&if_stmt.condition).map(|s| s.to_string());
+        let was_nullable = cast_name
+            .as_ref()
+            .map_or(false, |n| self.nullable_locals.contains(n));
+
+        if let Some(name) = &cast_name {
             self.w.push_str("if let Some(");
             self.w.push_str(name);
             self.w.push_str(") = ");
@@ -630,9 +679,24 @@ impl RustEmitter {
             self.emit_expr(&if_stmt.condition);
             self.w.push_str(" {\n");
         }
+        // Apply the smart-cast: inside the `then` block the
+        // binding is no longer nullable.
+        if let Some(name) = &cast_name {
+            if was_nullable {
+                self.nullable_locals.remove(name);
+            }
+        }
         self.w.indent_inc();
         self.emit_block_contents(&if_stmt.then_block);
         self.w.indent_dec();
+        // Restore: outside the block, the binding regains its
+        // declared nullable type for subsequent uses (the next
+        // else-arm, code after the if).
+        if let Some(name) = &cast_name {
+            if was_nullable {
+                self.nullable_locals.insert(name.clone());
+            }
+        }
         self.w.emit_indent();
         self.w.push('}');
 

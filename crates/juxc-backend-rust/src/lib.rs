@@ -313,6 +313,16 @@ struct RustEmitter {
     /// Mirrors the `emitting_format_arg` discipline: set in the
     /// comparison emitter, consulted by `emit_field`.
     pub(crate) emitting_comparison_operand: bool,
+    /// True while emitting an expression whose result must be
+    /// `Option<T>` (most commonly a return value of a `T?`-typed
+    /// function). When set, expression emitters that produce
+    /// multi-arm value shapes — `switch` today, ternary in the
+    /// future — push the `Some(...)` wrap *into each arm body*
+    /// instead of around the outer expression. This keeps mixed
+    /// `T` / `null` arms unifiable: `case A -> "x"; case B -> null`
+    /// becomes `match … { A => Some("x".to_string()), B => None }`
+    /// rather than the broken `Some(match … { … })` form.
+    pub(crate) emitting_nullable_target: bool,
     /// Names of locals in the current function body whose declared
     /// type is nullable (`T?`). Populated by [`Self::emit_var_decl`]
     /// when it sees a `var_decl.ty` with `nullable = true`, and
@@ -438,6 +448,7 @@ impl RustEmitter {
             emitting_const_context: false,
             emitting_format_arg: false,
             emitting_comparison_operand: false,
+            emitting_nullable_target: false,
             nullable_locals: HashSet::new(),
             current_return_type: None,
             source: None,

@@ -63,7 +63,33 @@ impl<'a> Parser<'a> {
         if self.looks_like_lambda_head() {
             return self.parse_lambda();
         }
-        self.parse_elvis()
+        self.parse_ternary()
+    }
+
+    /// Ternary (conditional) layer per §A.4 level 2 — the
+    /// looser-than-everything-binary form `cond ? then : else`.
+    /// Right-associative: `a ? b : c ? d : e` parses as
+    /// `a ? b : (c ? d : e)`. Both branches recurse into
+    /// `parse_ternary` so a nested ternary on the right-hand
+    /// side stacks correctly. The condition itself parses at
+    /// elvis precedence (level 3) since `?` here is the
+    /// ternary marker, not the postfix-error-prop operator.
+    pub(crate) fn parse_ternary(&mut self) -> Option<Expr> {
+        let cond = self.parse_elvis()?;
+        if !matches!(self.peek(), TokenKind::Question) {
+            return Some(cond);
+        }
+        self.advance(); // '?'
+        let then_branch = self.parse_expr()?;
+        self.expect(&TokenKind::Colon, "':' in ternary expression");
+        let else_branch = self.parse_ternary()?;
+        let span = expr_span(&cond).join(expr_span(&else_branch));
+        Some(Expr::Ternary(juxc_ast::TernaryExpr {
+            condition: Box::new(cond),
+            then_branch: Box::new(then_branch),
+            else_branch: Box::new(else_branch),
+            span,
+        }))
     }
 
     /// Elvis (null-coalescing) layer per §A.4 level 3 — sits just
@@ -977,6 +1003,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::Lambda(l) => l.span,
         Expr::Elvis(e) => e.span,
         Expr::MethodRef(m) => m.span,
+        Expr::Ternary(t) => t.span,
     }
 }
 

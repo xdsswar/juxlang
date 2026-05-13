@@ -114,6 +114,12 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // higher-order callbacks; emitting `Unknown` keeps the
         // call-site flow open for the backend to wire up.
         Expr::MethodRef(_) => Ty::Unknown,
+        // Ternary: take the then-branch's type as the result
+        // type. The else-branch should unify; Phase 1 doesn't
+        // enforce that here — rustc surfaces real mismatches on
+        // the emitted `if`. Generic / numeric coercion across
+        // branches is a future tycheck refinement.
+        Expr::Ternary(t) => infer_expr(&t.then_branch, env, symbols),
     }
 }
 
@@ -609,6 +615,45 @@ pub(crate) fn path_resolves_to_class(
         .collect::<Vec<_>>()
         .join(".");
     if symbols.classes.contains_key(&joined) {
+        return Some(joined);
+    }
+    None
+}
+
+/// Mirror of [`path_resolves_to_class`] for interfaces. Recognizes
+/// `IfaceName.member` as an interface-static-member access so the
+/// call/field dispatch in `check.rs` can branch on it before
+/// inferring a (non-existent) value type for `IfaceName`.
+pub(crate) fn path_resolves_to_interface(
+    qn: &juxc_ast::QualifiedName,
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Option<String> {
+    if qn.segments.is_empty() {
+        return None;
+    }
+    if qn.segments.len() == 1 {
+        let bare = &qn.segments[0].text;
+        if env.lookup(bare).is_some() {
+            return None;
+        }
+        if let Some(fqn) = env.unqualified.get(bare) {
+            if symbols.interfaces.contains_key(fqn) {
+                return Some(fqn.clone());
+            }
+        }
+        if symbols.interfaces.contains_key(bare) {
+            return Some(bare.clone());
+        }
+        return None;
+    }
+    let joined: String = qn
+        .segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(".");
+    if symbols.interfaces.contains_key(&joined) {
         return Some(joined);
     }
     None

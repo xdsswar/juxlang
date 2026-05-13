@@ -324,6 +324,11 @@ fn check_expr(e: &Expr, diags: &mut Vec<Diagnostic>) {
             // The receiver is a type path; member is just a
             // name. No nested expression to walk.
         }
+        Expr::Ternary(t) => {
+            check_expr(&t.condition, diags);
+            check_expr(&t.then_branch, diags);
+            check_expr(&t.else_branch, diags);
+        }
     }
 }
 

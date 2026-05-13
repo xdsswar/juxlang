@@ -166,6 +166,13 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
         // Method-ref is a closure construction; no calls happen
         // until the user invokes the returned value.
         Expr::MethodRef(_) => {}
+        // Ternary evaluates condition + one branch; walk all
+        // three for nested mutating calls.
+        Expr::Ternary(t) => {
+            collect_mutating_calls(&t.condition, out, user_mut);
+            collect_mutating_calls(&t.then_branch, out, user_mut);
+            collect_mutating_calls(&t.else_branch, out, user_mut);
+        }
     }
 }
 
@@ -614,11 +621,26 @@ impl crate::RustEmitter {
     /// safety: returning `false` defaults to wrap, which is the
     /// safer direction.
     pub(crate) fn expression_is_already_nullable(&self, expr: &juxc_ast::Expr) -> bool {
-        // First, ask tycheck directly. With the `Ty::Nullable`
-        // refactor, every expression visited by `check::Checker`
-        // carries its full type — including the nullable wrap —
-        // in `expr_types[span]`. Reading this answer is more
-        // precise than the syntactic fallback paths below.
+        // **Path queries** (single-segment ident) consult
+        // `nullable_locals` as the source of truth so that
+        // smart-cast removal (`emit_if`'s `if (x != null) { … }`
+        // pops the binding from the set for the body) takes
+        // effect. The tycheck-recorded `expr_types[span]` would
+        // still say the binding is nullable at the AST level —
+        // we override that for the inside of the smart-cast
+        // block. Other expression shapes fall through to the
+        // `expr_types` consult below.
+        if let juxc_ast::Expr::Path(qn) = expr {
+            if qn.segments.len() == 1 {
+                return self.nullable_locals.contains(&qn.segments[0].text);
+            }
+        }
+        // For non-Path shapes, ask tycheck directly. With the
+        // `Ty::Nullable` refactor, every expression visited by
+        // `check::Checker` carries its full type — including the
+        // nullable wrap — in `expr_types[span]`. Reading this
+        // answer is more precise than the syntactic fallback
+        // paths below.
         if let Some(juxc_tycheck::Ty::Nullable(_)) =
             self.expr_types.get(&crate::exprs::expr_span_of(expr))
         {
@@ -752,13 +774,33 @@ impl crate::RustEmitter {
         arg: &juxc_ast::Expr,
         target_is_nullable: bool,
     ) {
-        let wrap = target_is_nullable && !self.expression_is_already_nullable(arg);
+        let already_nullable = self.expression_is_already_nullable(arg);
+        let wrap = target_is_nullable && !already_nullable;
         if wrap {
             self.w.push_str("Some(");
         }
         self.emit_expr(arg);
         if wrap {
             self.w.push(')');
+            return;
+        }
+        // Auto-clone when forwarding a *nullable local* into a
+        // call's nullable arg slot. Rust's `Option<T>` isn't
+        // `Copy`, so passing the bare path would move the local
+        // — preventing further use by the surrounding function.
+        // The clone restores Java-shape "the call borrows my
+        // handle" ergonomics. Only fires for single-segment path
+        // arguments referring to a binding in `nullable_locals`
+        // — call-result paths (`f()`) and `?.` chains are fresh
+        // values where cloning is wasteful.
+        if target_is_nullable && already_nullable {
+            if let juxc_ast::Expr::Path(qn) = arg {
+                if qn.segments.len() == 1
+                    && self.nullable_locals.contains(&qn.segments[0].text)
+                {
+                    self.w.push_str(".clone()");
+                }
+            }
         }
     }
 

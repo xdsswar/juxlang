@@ -129,8 +129,11 @@ impl SymbolTable {
         class_name: &str,
         method_name: &str,
     ) -> Option<(&'a MethodSig, &'a str)> {
+        // Pass 1: walk the class-extends chain. Inherent methods
+        // shadow interface defaults, so we look for them first.
         let mut cursor: Option<&str> = Some(class_name);
         let mut depth = 0usize;
+        let mut implements_chain: Vec<&'a str> = Vec::new();
         while let Some(name) = cursor {
             if depth > 64 {
                 return None;
@@ -141,6 +144,13 @@ impl SymbolTable {
             let (class_key, class) = self.classes.get_key_value(name)?;
             if let Some(m) = class.methods.get(method_name) {
                 return Some((m, class_key.as_str()));
+            }
+            // Collect this class's implemented interfaces for the
+            // Pass-2 default-method walk below.
+            for iface_ty in &class.implements {
+                if let Some(seg) = iface_ty.name.segments.last() {
+                    implements_chain.push(seg.text.as_str());
+                }
             }
             // Hop to the resolved parent FQN (set during the
             // `resolve_class_chain_fqns` finalize pass). Falling
@@ -156,6 +166,19 @@ impl SymbolTable {
                         .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
                 });
             depth += 1;
+        }
+        // Pass 2: no inherent method found — look for a
+        // default-method match on any implemented interface. The
+        // declaring-class string we return points at the
+        // interface, so call-site emission can still find the
+        // method's signature; the backend's trait-dispatch
+        // emission picks up the default body.
+        for iface_name in implements_chain {
+            if let Some((iface_key, iface)) = self.interfaces.get_key_value(iface_name) {
+                if let Some(m) = iface.methods.get(method_name) {
+                    return Some((m, iface_key.as_str()));
+                }
+            }
         }
         None
     }
@@ -567,6 +590,8 @@ pub fn build_workspace(
     check_final_and_sealed_extends(&table, diagnostics);
     check_final_method_overrides(&table, diagnostics);
     check_override_annotations(&table, diagnostics);
+    check_abstract_methods_implemented(&table, diagnostics);
+    check_diamond_default_conflicts(&table, diagnostics);
     table
 }
 
@@ -1191,6 +1216,192 @@ fn check_final_method_overrides(
                 });
                 depth += 1;
             }
+        }
+    }
+}
+
+/// For each non-abstract class with `implements`, verify that
+/// every abstract method on the implemented interfaces has a
+/// matching concrete implementation reachable through either the
+/// class itself, the class's extends chain, or a default method
+/// on one of the implemented interfaces. Missing implementations
+/// fire **E0429** with the offending method names listed inline.
+///
+/// Abstract classes are skipped — they're allowed to leave
+/// abstract methods unimplemented for a concrete subclass to
+/// satisfy. The same is true for interfaces themselves; this
+/// pass only looks at classes.
+fn check_abstract_methods_implemented(
+    table: &SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (class_name, class) in &table.classes {
+        if class.is_abstract {
+            continue;
+        }
+        if class.implements.is_empty() {
+            continue;
+        }
+        let mut missing: Vec<(String, String)> = Vec::new();
+        for iface_ty in &class.implements {
+            let Some(iface_name) = iface_ty.name.segments.last().map(|s| s.text.as_str()) else {
+                continue;
+            };
+            let Some(iface) = table.interfaces.get(iface_name) else {
+                continue;
+            };
+            for (m_name, m_sig) in &iface.methods {
+                if !m_sig.is_abstract || m_sig.is_static {
+                    continue;
+                }
+                // Reachable through the class's own extends chain?
+                if class_provides_method(table, class_name, m_name) {
+                    continue;
+                }
+                // Reachable through another implemented interface
+                // as a default method?
+                if implements_provides_default(table, &class.implements, m_name) {
+                    continue;
+                }
+                missing.push((iface_name.to_string(), m_name.clone()));
+            }
+        }
+        if !missing.is_empty() {
+            missing.sort();
+            missing.dedup();
+            let list = missing
+                .iter()
+                .map(|(iface, m)| format!("`{iface}.{m}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0429_AbstractNotImplemented,
+                    format!(
+                        "class `{class_name}` doesn't implement abstract method(s): {list}",
+                    ),
+                )
+                .with_span(class.span),
+            );
+        }
+    }
+}
+
+/// True if `class_name` (or one of its ancestor classes) has an
+/// own (non-abstract) method named `method_name`.
+fn class_provides_method(
+    table: &SymbolTable,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
+    let mut cursor: Option<&str> = Some(class_name);
+    let mut depth = 0usize;
+    while let Some(name) = cursor {
+        if depth > 64 {
+            return false;
+        }
+        let Some(class) = table.classes.get(name) else {
+            return false;
+        };
+        if let Some(m) = class.methods.get(method_name) {
+            if !m.is_abstract {
+                return true;
+            }
+        }
+        cursor = class
+            .extends_fqn
+            .as_deref()
+            .or_else(|| {
+                class
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+            });
+        depth += 1;
+    }
+    false
+}
+
+/// True if any interface in `implements` provides a non-abstract
+/// (default) method named `method_name`. Used by the
+/// abstract-implementation check to recognize that a sibling
+/// interface's default covers the gap.
+fn implements_provides_default(
+    table: &SymbolTable,
+    implements: &[TypeRef],
+    method_name: &str,
+) -> bool {
+    for iface_ty in implements {
+        let Some(iface_name) = iface_ty.name.segments.last().map(|s| s.text.as_str()) else {
+            continue;
+        };
+        let Some(iface) = table.interfaces.get(iface_name) else {
+            continue;
+        };
+        if let Some(m) = iface.methods.get(method_name) {
+            if !m.is_abstract && !m.is_static {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Diamond-default detection: for every class with multiple
+/// `implements`, find methods that two or more implemented
+/// interfaces each provide as a **default** method, and the class
+/// itself does not override. Fires **E0430** so users see a clear
+/// resolution prompt instead of rustc's "multiple applicable
+/// items" message.
+fn check_diamond_default_conflicts(
+    table: &SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (class_name, class) in &table.classes {
+        if class.implements.len() < 2 {
+            continue;
+        }
+        // Collect default methods per interface, then look for
+        // names that appear in more than one interface and that
+        // the class doesn't override locally. Walking once per
+        // class keeps the cost linear in the number of (iface,
+        // method) pairs.
+        use std::collections::BTreeMap;
+        let mut sources: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for iface_ty in &class.implements {
+            let Some(iface_name) = iface_ty.name.segments.last().map(|s| s.text.as_str()) else {
+                continue;
+            };
+            let Some(iface) = table.interfaces.get(iface_name) else {
+                continue;
+            };
+            for (m_name, m_sig) in &iface.methods {
+                if m_sig.is_abstract || m_sig.is_static {
+                    continue;
+                }
+                sources
+                    .entry(m_name.clone())
+                    .or_default()
+                    .push(iface_name.to_string());
+            }
+        }
+        for (m_name, ifaces) in &sources {
+            if ifaces.len() < 2 {
+                continue;
+            }
+            if class.methods.contains_key(m_name) {
+                continue;
+            }
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0430_AmbiguousDefaultMethod,
+                    format!(
+                        "class `{class_name}` inherits conflicting default implementations of `{m_name}` from interfaces {}; override `{m_name}` on `{class_name}` to disambiguate",
+                        ifaces.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", "),
+                    ),
+                )
+                .with_span(class.span),
+            );
         }
     }
 }

@@ -118,6 +118,35 @@ pub enum Code {
     /// `error: method does not override a method from its
     /// superclass` (which is the whole point of `@Override`).
     E0426_OverrideMissing,
+    /// E0427 — A `static` method (on a class or interface) was
+    /// called via an **instance** receiver — `obj.staticMethod()`
+    /// instead of `Type.staticMethod()`. Java rejects this form
+    /// because the receiver isn't actually used (the dispatch is
+    /// resolved at the declaration's owning type), so the syntax
+    /// suggests a per-instance call that doesn't happen. Jux
+    /// follows suit: name the type explicitly.
+    E0427_StaticCalledOnInstance,
+    /// E0428 — `new X(...)` where `X` is not a class or record —
+    /// for instance, an interface, enum, or type alias. Only
+    /// classes and records can be instantiated. Without this
+    /// code, the emitted Rust falls through to a confusing
+    /// `expected a type, found a trait` from rustc.
+    E0428_CannotInstantiate,
+    /// E0429 — A class with `implements` doesn't supply every
+    /// abstract method from the interface(s) it implements.
+    /// Missing implementations are listed in the diagnostic so
+    /// the fix is mechanical. Java raises the same error at
+    /// compile time; Rust would surface it as E0046 with much
+    /// less context.
+    E0429_AbstractNotImplemented,
+    /// E0430 — Diamond default-method conflict. A class
+    /// `implements A, B` where both `A` and `B` provide a default
+    /// implementation of the same method, and the class does
+    /// not override it. The fix is to either pick one or
+    /// override the method explicitly. Java requires this in the
+    /// same shape; without it, rustc surfaces a much less
+    /// readable "multiple applicable items" error.
+    E0430_AmbiguousDefaultMethod,
     /// E0440 — A `switch` over a sealed type (enum or sealed
     /// class) doesn't cover every variant / permitted subclass
     /// and has no wildcard arm. Per `JUX-DIAGNOSTICS-ADDENDUM.md`
@@ -185,6 +214,10 @@ impl Code {
             Code::E0424_ImplementsNotAnInterface => "E0424",
             Code::E0425_ThisInStaticContext      => "E0425",
             Code::E0426_OverrideMissing          => "E0426",
+            Code::E0427_StaticCalledOnInstance   => "E0427",
+            Code::E0428_CannotInstantiate        => "E0428",
+            Code::E0429_AbstractNotImplemented   => "E0429",
+            Code::E0430_AmbiguousDefaultMethod   => "E0430",
             Code::E0440_NotExhaustive            => "E0440",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",

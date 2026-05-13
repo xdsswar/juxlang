@@ -1,4 +1,19 @@
 //! Jux interface declarations → Rust `trait`.
+//!
+//! Per `JUX-LANG-V1.md` §7.6: interfaces are **public** (no
+//! visibility modifier required; the parser enforces) and
+//! implicitly **final** (interfaces themselves can't be extended;
+//! only implemented). They carry method signatures plus optional
+//! default-method bodies. Both shapes lower to Rust trait
+//! methods — abstract signatures become required `fn name(&self);`
+//! lines and default-bodied methods become `fn name(&self) { … }`
+//! with the body inline.
+//!
+//! **Receiver kind.** Trait methods always use `&self`. Default
+//! methods that try to mutate `self` would need `&mut self` (the
+//! receiver-kind cross-class analysis isn't in yet); for Phase 1,
+//! default methods that need mutation should call back through
+//! abstract accessor methods on `&self` instead.
 
 use juxc_ast::ReturnType;
 
@@ -7,13 +22,10 @@ use crate::RustEmitter;
 impl RustEmitter {
     /// Lower a Jux interface to a Rust `trait`. Method signatures
     /// emit directly — `void foo();` becomes `fn foo(&self);` —
-    /// and Turn-1 interfaces have no default-method bodies.
-    ///
-    /// **Receiver kind.** Trait methods always use `&self` in Turn 1.
-    /// If a class implementing the interface needs to mutate state in
-    /// its method body, the user has to mark that method non-interface
-    /// — the cross-class receiver-kind analysis isn't in yet. See the
-    /// Turn-1 limitations note in the interface doc.
+    /// and default-bodied methods become `fn foo(&self) { … }`
+    /// inline. Rust's native trait-default-method support picks
+    /// up the body so implementing classes can omit the method
+    /// to inherit the default, or override it by re-declaring.
     pub(crate) fn emit_interface_decl(&mut self, interface: &juxc_ast::InterfaceDecl) {
         // (Migrated to Writer indent-aware API)
         self.w.emit_indent();
@@ -27,6 +39,21 @@ impl RustEmitter {
         self.w.push_str(" {\n");
         self.w.indent_inc();
         for method in &interface.methods {
+            let is_static = method
+                .modifiers
+                .iter()
+                .any(|m| matches!(m, juxc_ast::FnModifier::Static));
+            // Static interface methods don't fit inside Rust
+            // traits cleanly — `Trait::staticMethod()` needs
+            // `<Type as Trait>::staticMethod()` qualification
+            // from the call site, which doesn't match Jux's
+            // `Interface.staticMethod(args)` shape. We emit them
+            // as **free functions** below the trait instead; the
+            // call-site dispatch in `emit_call` rewrites
+            // `Iface.foo(args)` to `Iface_foo(args)`.
+            if is_static {
+                continue;
+            }
             self.w.emit_indent();
             self.w.push_str("fn ");
             self.w.push_str(&method.name.text);
@@ -49,10 +76,90 @@ impl RustEmitter {
                     self.w.push_str(" -> ()");
                 }
             }
-            self.w.push_str(";\n");
+            // Two shapes: abstract signature (`;`) vs. default
+            // body (`{ … }`). The presence of `method.body`
+            // discriminates. Default bodies go through the same
+            // `emit_fn_body` path as regular function bodies so
+            // tail-return elision, format-arg discipline, etc. all
+            // apply uniformly.
+            if let Some(body) = &method.body {
+                self.w.push_str(" {\n");
+                self.w.indent_inc();
+                // `&self` in the interface trait method maps to
+                // the Rust `self` keyword as the implicit
+                // receiver; set the alias so `this` in the body
+                // emits correctly.
+                let prev_alias = self.this_alias.take();
+                self.this_alias = Some("self".to_string());
+                let saved_return = self.current_return_type.take();
+                self.current_return_type = Some(method.return_type.clone());
+                self.emit_fn_body_at(body, &method.return_type);
+                self.current_return_type = saved_return;
+                self.this_alias = prev_alias;
+                self.w.indent_dec();
+                self.w.line("}");
+            } else {
+                self.w.push_str(";\n");
+            }
         }
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();
+
+        // Static interface methods: free functions named
+        // `<Interface>_<method>`. The call-site dispatch in
+        // `emit_call` recognizes `Iface.foo(args)` against the
+        // symbol table's `is_static` flag and emits the
+        // matching name. Same body-emit pipeline as regular
+        // free functions.
+        for method in &interface.methods {
+            let is_static = method
+                .modifiers
+                .iter()
+                .any(|m| matches!(m, juxc_ast::FnModifier::Static));
+            if !is_static {
+                continue;
+            }
+            self.w.emit_indent();
+            self.emit_visibility(interface.visibility);
+            self.w.push_str("fn ");
+            self.w.push_str(&interface.name.text);
+            self.w.push('_');
+            self.w.push_str(&method.name.text);
+            self.emit_generic_params(&method.generic_params);
+            self.w.push('(');
+            for (i, param) in method.params.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str(&param.name.text);
+                self.w.push_str(": ");
+                self.emit_type_as_rust(&param.ty);
+            }
+            self.w.push(')');
+            match &method.return_type {
+                ReturnType::Void => {}
+                ReturnType::Type(t) => {
+                    self.w.push_str(" -> ");
+                    self.emit_return_type_as_rust(t);
+                }
+                ReturnType::AsyncType(_) => {
+                    self.w.push_str(" -> ()");
+                }
+            }
+            if let Some(body) = &method.body {
+                self.w.push_str(" {\n");
+                self.w.indent_inc();
+                let saved_return = self.current_return_type.take();
+                self.current_return_type = Some(method.return_type.clone());
+                self.emit_fn_body_at(body, &method.return_type);
+                self.current_return_type = saved_return;
+                self.w.indent_dec();
+                self.w.line("}");
+            } else {
+                self.w.push_str(" { unimplemented!() }\n");
+            }
+            self.w.newline();
+        }
     }
 }

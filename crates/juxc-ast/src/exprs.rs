@@ -75,6 +75,28 @@ pub enum Expr {
     /// `Type::method` directly. Common shape for higher-order
     /// callbacks: `users.forEach(User::greet)`.
     MethodRef(MethodRefExpr),
+    /// `cond ? then : else` — ternary expression per §A.4 level 2.
+    /// Right-associative; the two branches must produce types
+    /// that unify. Backend lowers to Rust's `if cond { then }
+    /// else { else }` expression form.
+    Ternary(TernaryExpr),
+}
+
+/// Ternary expression: `condition ? then_branch : else_branch`.
+/// Right-associative — `a ? b : c ? d : e` parses as
+/// `a ? b : (c ? d : e)`. The condition must be a `bool`; the
+/// branches' types unify under the surrounding context (tycheck
+/// rules in §T.5).
+#[derive(Debug, Clone)]
+pub struct TernaryExpr {
+    /// Bool-valued condition expression.
+    pub condition: Box<Expr>,
+    /// Value when the condition is `true`.
+    pub then_branch: Box<Expr>,
+    /// Value when the condition is `false`.
+    pub else_branch: Box<Expr>,
+    /// Span covering `condition ? then : else`.
+    pub span: Span,
 }
 
 /// Method-reference expression: `ReceiverType::memberName`.

@@ -123,17 +123,26 @@ impl RustEmitter {
         }
     }
 
-    /// Lower `obj?.field` to
-    /// `obj.as_ref().map(|__t| __t.field.clone())`. The receiver is
-    /// borrowed (via `as_ref`) so the original `Option<T>` stays
-    /// usable; inside the closure the field is cloned so the
-    /// result is owned.
+    /// Lower `obj?.field` to a closure that runs only when the
+    /// receiver is `Some`. Two shapes depending on whether the
+    /// field itself is nullable:
+    ///
+    /// - **Non-nullable field** →
+    ///   `obj.as_ref().map(|__t| __t.field.clone())`. The closure
+    ///   returns the field's value; the whole expression is
+    ///   `Option<FieldType>`.
+    /// - **Nullable field** →
+    ///   `obj.as_ref().and_then(|__t| __t.field.clone())`. The
+    ///   field already returns `Option<T>`; `and_then` flattens
+    ///   the two layers so the result stays `Option<T>` instead
+    ///   of the wrong `Option<Option<T>>` `.map` would produce.
+    ///
+    /// The receiver is borrowed (via `as_ref`) so the original
+    /// `Option<T>` stays usable. Inside the closure the field is
+    /// cloned so the result is owned.
     ///
     /// Method-call variant `obj?.method(args)` is handled at the
-    /// `emit_call` level: when the callee is a safe-field, the
-    /// call rewrites to
-    /// `obj.as_ref().map(|__t| __t.method(args))`. This routine
-    /// covers the pure-field path.
+    /// `emit_call` level (`emit_safe_method_call`).
     pub(crate) fn emit_safe_field(&mut self, f: &FieldExpr) {
         let needs_parens = receiver_needs_parens(&f.object);
         if needs_parens {
@@ -143,9 +152,50 @@ impl RustEmitter {
         if needs_parens {
             self.w.push(')');
         }
-        self.w.push_str(".as_ref().map(|__t| __t.");
+        let combinator = if self.safe_field_is_nullable(f) {
+            ".as_ref().and_then(|__t| __t."
+        } else {
+            ".as_ref().map(|__t| __t."
+        };
+        self.w.push_str(combinator);
         self.w.push_str(&f.field.text);
         self.w.push_str(".clone())");
+    }
+
+    /// True iff the field named by `f` is declared `T?` on the
+    /// receiver's class/record. Used by `emit_safe_field` to
+    /// pick between `.map` (non-nullable field) and
+    /// `.and_then` (nullable field; flattens
+    /// `Option<Option<T>>`).
+    ///
+    /// Resolution: tycheck records the receiver's full type in
+    /// `expr_types`. For `obj.inner?.note`, the receiver of
+    /// `?.note` is `obj.inner` which infers to
+    /// `Ty::Nullable(Inner)`; we peel the nullable wrap before
+    /// looking up the field. Missing info (unrecognized class,
+    /// unknown field) returns false — `.map` is the safer default
+    /// when in doubt; Rust surfaces real shape mismatches.
+    fn safe_field_is_nullable(&self, f: &FieldExpr) -> bool {
+        let object_ty = self.expr_types.get(&crate::exprs::expr_span_of(&f.object));
+        let receiver_name = match object_ty {
+            Some(juxc_tycheck::Ty::Nullable(inner)) => match inner.as_ref() {
+                juxc_tycheck::Ty::User { name, .. } => name.as_str(),
+                _ => return false,
+            },
+            Some(juxc_tycheck::Ty::User { name, .. }) => name.as_str(),
+            _ => return false,
+        };
+        if let Some(class) = self.symbols.classes.get(receiver_name) {
+            if let Some(field) = class.fields.get(&f.field.text) {
+                return field.ty.nullable;
+            }
+        }
+        if let Some(record) = self.symbols.records.get(receiver_name) {
+            if let Some(c) = record.components.iter().find(|c| c.name == f.field.text) {
+                return c.ty.nullable;
+            }
+        }
+        false
     }
 
     /// Decide whether a `.clone()` should follow a field read.

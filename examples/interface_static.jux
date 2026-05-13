@@ -1,0 +1,34 @@
+// Static + default methods on an interface.
+//
+// `static int doubled(int n) { … }` is a class-side helper: it
+// lives on the interface, not on any instance, and you call it
+// as `MathLike.doubled(5)`. The backend lowers it to a free
+// function named `MathLike_doubled` so call sites stay free of
+// `<Type as Trait>::method` qualification.
+//
+// `default int quadrupled(int n) { … }` provides a body shared
+// by every implementer. Lowering uses Rust's native trait-default
+// support — implementers can override or inherit. Here `TripleIt`
+// doesn't override it, so it inherits `quadrupled` and gets the
+// shared body for free.
+//
+// Per Jux semantics (Java-shaped): you must say `MathLike.doubled(5)`,
+// not `tripleIt.doubled(5)` — calling a static via an instance is
+// a compile error (E0427).
+
+public interface MathLike {
+    static int doubled(int n) { return n + n; }
+    default int quadrupled(int n) { return MathLike.doubled(MathLike.doubled(n)); }
+    int compute(int n);
+}
+
+public class TripleIt implements MathLike {
+    public int compute(int n) { return n * 3; }
+}
+
+public void main() {
+    print(MathLike.doubled(5));   // 10 — direct static call
+    var t = new TripleIt();
+    print(t.compute(7));          // 21 — instance dispatch through TripleIt
+    print(t.quadrupled(3));       // 12 — inherited interface default
+}

@@ -127,14 +127,31 @@ impl RustEmitter {
                 // parameter is `T?`, a non-nullable arg is lifted
                 // into `Some(arg)` so the field's `Option<T>`
                 // type-check passes.
+                //
+                // Two callee shapes carry constructor signatures:
+                // **classes** (declared `constructors`) and
+                // **records** (synthesized canonical ctor matching
+                // the component list). We consult both — records
+                // were missing in the original wiring, which left
+                // `new Maybe<String>("hello")` un-wrapped when
+                // `Maybe`'s component is `String?`.
                 let bare_class = n.class_name.segments.last().map(|s| s.text.as_str());
-                let ctor_nullable_flags: Vec<bool> = match bare_class
-                    .and_then(|name| self.symbols.classes.get(name))
-                    .and_then(|c| c.constructors.first())
-                {
-                    Some(ctor) => ctor.params.iter().map(|p| p.ty.nullable).collect(),
-                    None => Vec::new(),
-                };
+                let ctor_nullable_flags: Vec<bool> = bare_class
+                    .and_then(|name| {
+                        self.symbols
+                            .classes
+                            .get(name)
+                            .and_then(|c| c.constructors.first())
+                            .map(|ctor| {
+                                ctor.params.iter().map(|p| p.ty.nullable).collect()
+                            })
+                            .or_else(|| {
+                                self.symbols.records.get(name).map(|r| {
+                                    r.components.iter().map(|c| c.ty.nullable).collect()
+                                })
+                            })
+                    })
+                    .unwrap_or_default();
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
                 for (i, arg) in n.args.iter().enumerate() {
@@ -150,6 +167,47 @@ impl RustEmitter {
             Expr::Lambda(l) => self.emit_lambda(l),
             Expr::Elvis(e) => self.emit_elvis(e),
             Expr::MethodRef(m) => self.emit_method_ref(m),
+            Expr::Ternary(t) => self.emit_ternary(t),
+        }
+    }
+
+    /// Lower `cond ? then : else` to Rust's `if cond { then }
+    /// else { else }` expression form — Rust's only multi-arm
+    /// value expression that matches the ternary's semantics.
+    /// We use the inline form (no statement-style braces around
+    /// the whole thing) so it composes inside larger expressions
+    /// (`var y = x > 0 ? "+" : "-"` becomes
+    /// `let y = if x > 0 { "+" } else { "-" }`).
+    ///
+    /// Per-arm `Some(...)` wrap propagates from `emitting_nullable_target`
+    /// — the same discipline `emit_switch` uses for nullable-
+    /// returning fns. A ternary returning `String?` with mixed
+    /// `T` / `null` branches produces `if cond { Some(...) }
+    /// else { None }`.
+    pub(crate) fn emit_ternary(&mut self, t: &juxc_ast::TernaryExpr) {
+        let wrap_each_arm = self.emitting_nullable_target;
+        let prev = self.emitting_nullable_target;
+        self.emitting_nullable_target = false;
+        self.w.push_str("if ");
+        self.emit_expr(&t.condition);
+        self.w.push_str(" { ");
+        self.emit_ternary_arm(&t.then_branch, wrap_each_arm);
+        self.w.push_str(" } else { ");
+        self.emit_ternary_arm(&t.else_branch, wrap_each_arm);
+        self.w.push_str(" }");
+        self.emitting_nullable_target = prev;
+    }
+
+    fn emit_ternary_arm(&mut self, arm: &Expr, wrap_each_arm: bool) {
+        let wrap = wrap_each_arm
+            && !matches!(arm, Expr::Literal(juxc_ast::Literal::Null))
+            && !self.expression_is_already_nullable(arm);
+        if wrap {
+            self.w.push_str("Some(");
+        }
+        self.emit_expr(arm);
+        if wrap {
+            self.w.push(')');
         }
     }
 
@@ -187,11 +245,26 @@ impl RustEmitter {
             .last()
             .map(|s| s.text.as_str())
             .unwrap_or("");
-        let method_info = self
+        let class_method = self
             .symbols
             .classes
             .get(receiver_name)
             .and_then(|c| c.methods.get(m.member.text.as_str()));
+        // Interface lookup runs in parallel — `MathLike::doubled`
+        // doesn't appear in `classes` but does in `interfaces`. The
+        // call-site spelling for an interface static is the free
+        // function `Iface_method` (see `emit_interface_decl`); for
+        // instance / default methods the closure still takes a
+        // receiver and calls through the trait method on it.
+        let iface_method = self
+            .symbols
+            .interfaces
+            .get(receiver_name)
+            .and_then(|i| i.methods.get(m.member.text.as_str()));
+        let is_interface_static = iface_method
+            .map(|mi| mi.is_static)
+            .unwrap_or(false);
+        let method_info = class_method.or(iface_method);
         let is_static = method_info.map(|mi| mi.is_static).unwrap_or(false);
         let arity = method_info.map(|mi| mi.params.len()).unwrap_or(0);
 
@@ -226,14 +299,29 @@ impl RustEmitter {
             if m.receiver.segments.len() > 1 {
                 self.w.push_str("crate::");
             }
-            for (i, seg) in m.receiver.segments.iter().enumerate() {
-                if i > 0 {
-                    self.w.push_str("::");
+            if is_interface_static {
+                // Interface statics are free functions named
+                // `Iface_method`. Concatenate with `_` rather
+                // than the class-side `::` so we hit the
+                // companion definition site.
+                for (i, seg) in m.receiver.segments.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str("::");
+                    }
+                    self.w.push_str(&seg.text);
                 }
-                self.w.push_str(&seg.text);
+                self.w.push('_');
+                self.w.push_str(&m.member.text);
+            } else {
+                for (i, seg) in m.receiver.segments.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str("::");
+                    }
+                    self.w.push_str(&seg.text);
+                }
+                self.w.push_str("::");
+                self.w.push_str(&m.member.text);
             }
-            self.w.push_str("::");
-            self.w.push_str(&m.member.text);
             self.w.push('(');
             for i in 0..arity {
                 if i > 0 {
@@ -444,6 +532,7 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
         Expr::Lambda(l) => l.span,
         Expr::Elvis(e) => e.span,
         Expr::MethodRef(m) => m.span,
+        Expr::Ternary(t) => t.span,
     }
 }
 

@@ -36,10 +36,26 @@ fn push_concat_operand<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
 /// the trigger fires consistently.
 impl super::super::RustEmitter {
     fn operand_is_string_typed_for_print(&self, e: &Expr) -> bool {
-        matches!(
-            self.expr_types.get(&crate::exprs::expr_span_of(e)),
-            Some(juxc_tycheck::Ty::String),
-        )
+        let recorded = self.expr_types.get(&crate::exprs::expr_span_of(e));
+        // Mirror `binary::operand_is_string_typed`'s smart-cast
+        // unwrap: when `e` is a path that the smart-cast pass
+        // has removed from `nullable_locals`, peel a recorded
+        // `Ty::Nullable` so the inner `String` matches the
+        // type-driven concat trigger.
+        let effective = if let (Expr::Path(qn), Some(juxc_tycheck::Ty::Nullable(inner))) =
+            (e, recorded)
+        {
+            if qn.segments.len() == 1
+                && !self.nullable_locals.contains(&qn.segments[0].text)
+            {
+                Some(inner.as_ref())
+            } else {
+                recorded
+            }
+        } else {
+            recorded
+        };
+        matches!(effective, Some(juxc_tycheck::Ty::String))
     }
 }
 
@@ -93,6 +109,47 @@ impl RustEmitter {
             if f.safe {
                 self.emit_safe_method_call(f, call);
                 return;
+            }
+        }
+        // Static interface-method call: `Interface.staticMethod(args)`
+        // → `<Interface>::staticMethod(args)`. Interface methods
+        // declared `static` lower to Rust trait associated functions
+        // and are called the same way as class statics. We check
+        // this BEFORE the class-static path because interfaces are
+        // a separate namespace; `path_resolves_to_class_in_emit`
+        // doesn't see them.
+        if let Expr::Field(f) = &*call.callee {
+            if let Expr::Path(qn) = &*f.object {
+                if qn.segments.len() == 1 {
+                    let iface_name = &qn.segments[0].text;
+                    if let Some(iface) = self.symbols.interfaces.get(iface_name) {
+                        if iface
+                            .methods
+                            .get(f.field.text.as_str())
+                            .map(|m| m.is_static)
+                            .unwrap_or(false)
+                        {
+                            // `Iface_method` free function — see
+                            // `emit_interface_decl` for the
+                            // companion definition site.
+                            self.w.push_str(iface_name);
+                            self.w.push('_');
+                            self.w.push_str(&f.field.text);
+                            self.w.push('(');
+                            let prev = self.emitting_format_arg;
+                            self.emitting_format_arg = false;
+                            for (i, arg) in call.args.iter().enumerate() {
+                                if i > 0 {
+                                    self.w.push_str(", ");
+                                }
+                                self.emit_expr(arg);
+                            }
+                            self.emitting_format_arg = prev;
+                            self.w.push(')');
+                            return;
+                        }
+                    }
+                }
             }
         }
         // Static method call: `ClassName.staticMethod(args)` (or

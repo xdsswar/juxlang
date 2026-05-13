@@ -378,14 +378,36 @@ impl RustEmitter {
             let Some(iface_name) = interface_ty.name.segments.first() else {
                 continue;
             };
+            // Build a name→TypeRef substitution from the interface's
+            // generic params and the args the class supplied
+            // (`implements Box<int>` → `T ↦ int`). Applied to each
+            // emitted param/return type below so the trait impl
+            // uses the class's concrete type args rather than the
+            // interface's bare type parameter, which would otherwise
+            // be out of scope inside `impl Trait for Class {}`.
+            let iface_sig = self.symbols.interfaces.get(iface_name.text.as_str());
+            let mut type_subst: std::collections::HashMap<String, juxc_ast::TypeRef> =
+                std::collections::HashMap::new();
+            if let Some(iface) = iface_sig {
+                for (param, arg) in iface
+                    .generic_params
+                    .iter()
+                    .zip(interface_ty.generic_args.iter())
+                {
+                    // Wildcards in an `implements` clause don't make
+                    // sense as concrete substitutions — skip them and
+                    // let the emitted type carry through unchanged
+                    // (rustc will surface anything we miss).
+                    if let Some(arg_ty) = arg.as_type() {
+                        type_subst.insert(param.name.text.clone(), arg_ty.clone());
+                    }
+                }
+            }
             // Pull (name, MethodSig) pairs from the symbol table and
             // sort by name for deterministic emission order. Empty
             // when the interface isn't in the table (e.g. unresolved
             // name — tycheck would have already flagged that).
-            let mut methods: Vec<(String, MethodSig)> = self
-                .symbols
-                .interfaces
-                .get(iface_name.text.as_str())
+            let mut methods: Vec<(String, MethodSig)> = iface_sig
                 .map(|sig| {
                     sig.methods
                         .iter()
@@ -397,6 +419,40 @@ impl RustEmitter {
                 continue;
             }
             methods.sort_by(|a, b| a.0.cmp(&b.0));
+            // Filter to methods this class **overrides** — the
+            // ones we need to emit a delegating impl for. Methods
+            // the class doesn't define inherently inherit the
+            // interface's default body via Rust's native trait
+            // default mechanism (no delegation needed). Without
+            // this filter every default method would recurse
+            // infinitely: `fn greet(&self) { self.greet() }`. We
+            // also drop static methods — they're emitted as free
+            // functions adjacent to the trait, never as trait
+            // items, so they have no place in `impl Trait for ...`.
+            let class_method_names: std::collections::HashSet<&str> = class_decl
+                .methods
+                .iter()
+                .map(|m| m.name.text.as_str())
+                .collect();
+            methods.retain(|(name, sig)| {
+                !sig.is_static && class_method_names.contains(name.as_str())
+            });
+            if methods.is_empty() {
+                // The class implements the interface entirely via
+                // default methods; we still emit an empty impl
+                // block so `impl Trait for Class` registers and
+                // trait-dispatch works.
+                self.w.emit_indent();
+                self.w.push_str("impl");
+                self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+                self.w.push(' ');
+                self.emit_type_as_rust(interface_ty);
+                self.w.push_str(" for ");
+                self.w.push_str(&class_decl.name.text);
+                self.emit_generic_params_as_args(&class_decl.generic_params);
+                self.w.push_str(" {}\n\n");
+                continue;
+            }
             self.w.emit_indent();
             self.w.push_str("impl");
             // The class's own generic params (with the Clone bound)
@@ -420,18 +476,24 @@ impl RustEmitter {
                 self.w.push_str("(&self");
                 // `MethodSig.params` is `Vec<ParamSig>`; ParamSig
                 // carries `name: String` (not `Ident`) and `ty: TypeRef`.
+                // Substituting the interface's type params with the
+                // class's `implements` args here keeps `impl Box<isize>
+                // for IntBox { fn unwrap(&self) -> isize }` instead of
+                // leaving `T` floating free in the impl scope.
                 for param in &method.params {
                     self.w.push_str(", ");
                     self.w.push_str(&param.name);
                     self.w.push_str(": ");
-                    self.emit_type_as_rust(&param.ty);
+                    let subst = substitute_type_ref(&param.ty, &type_subst);
+                    self.emit_type_as_rust(&subst);
                 }
                 self.w.push(')');
                 match &method.return_type {
                     ReturnType::Void => {}
                     ReturnType::Type(t) => {
                         self.w.push_str(" -> ");
-                        self.emit_return_type_as_rust(t);
+                        let subst = substitute_type_ref(t, &type_subst);
+                        self.emit_return_type_as_rust(&subst);
                     }
                     ReturnType::AsyncType(_) => {
                         self.w.push_str(" -> ()");
@@ -636,5 +698,70 @@ impl RustEmitter {
         self.w.line("}");
         self.w.newline();
         self.w.indent_dec();
+    }
+}
+
+/// Walk `ty` and substitute any name in `subst` with its
+/// replacement TypeRef. The substitution is structural — generic
+/// args, array element, and fn-shape param/return types all
+/// recurse. Used by `emit_class_trait_impls` to propagate the
+/// class's `implements Box<int>` choice down to the trait
+/// method's `T` references so the emitted Rust doesn't dangle a
+/// free `T` inside the impl scope.
+fn substitute_type_ref(
+    ty: &juxc_ast::TypeRef,
+    subst: &std::collections::HashMap<String, juxc_ast::TypeRef>,
+) -> juxc_ast::TypeRef {
+    // Single-segment names with no generic args or shape: bare
+    // type-parameter reference. Look it up in the table and
+    // return the replacement directly — but preserve the
+    // outer ty's `nullable` flag so `T?` becomes `Replacement?`,
+    // not just `Replacement`.
+    if ty.fn_shape.is_none()
+        && ty.array_shape.is_none()
+        && ty.generic_args.is_empty()
+        && ty.name.segments.len() == 1
+    {
+        let key = &ty.name.segments[0].text;
+        if let Some(replacement) = subst.get(key) {
+            let mut out = replacement.clone();
+            if ty.nullable {
+                out.nullable = true;
+            }
+            return out;
+        }
+    }
+    // Recurse into composite shapes. Generic-arg wildcards keep
+    // their original shape; only the `Type(...)` variant carries a
+    // TypeRef that can be substituted.
+    let generic_args: Vec<juxc_ast::GenericArg> = ty
+        .generic_args
+        .iter()
+        .map(|a| match a {
+            juxc_ast::GenericArg::Type(t) => {
+                juxc_ast::GenericArg::Type(substitute_type_ref(t, subst))
+            }
+            other => other.clone(),
+        })
+        .collect();
+    let fn_shape = ty.fn_shape.as_ref().map(|fs| {
+        Box::new(juxc_ast::FnTypeShape {
+            params: fs
+                .params
+                .iter()
+                .map(|p| substitute_type_ref(p, subst))
+                .collect(),
+            return_type: substitute_type_ref(&fs.return_type, subst),
+            is_async: fs.is_async,
+            throws: fs.throws.clone(),
+        })
+    });
+    juxc_ast::TypeRef {
+        name: ty.name.clone(),
+        generic_args,
+        nullable: ty.nullable,
+        array_shape: ty.array_shape.clone(),
+        fn_shape,
+        span: ty.span,
     }
 }

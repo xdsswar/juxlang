@@ -823,13 +823,15 @@ fn suffixed_int_literals_classify_correctly() {
 /// `3.14` parses as a Float literal with no suffix.
 #[test]
 fn unsuffixed_float_is_double_kind() {
-    let ast = parse_clean("public void main() { print(3.14); }");
+    // `2.5` instead of `3.14` to dodge clippy's
+    // `approx_constant` lint (PI-shaped literals).
+    let ast = parse_clean("public void main() { print(2.5); }");
     let body = body_of(&ast.items[0]);
     let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
     let Expr::Literal(Literal::Float(f)) = &call.args[0] else {
         panic!("expected Float literal, got {:?}", call.args[0]);
     };
-    assert!((f.value - 3.14).abs() < 1e-9);
+    assert!((f.value - 2.5).abs() < 1e-9);
     assert!(f.kind.is_none(), "expected default (double), got {:?}", f.kind);
 }
 
