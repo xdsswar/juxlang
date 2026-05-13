@@ -175,6 +175,10 @@ impl Resolver {
         // self-measure timing in benchmarks / stress tests
         // (e.g. proving Worker.spawn yields wall-clock speedup).
         builtins.insert("now_ms");
+        // `File` — stdlib I/O host per JUX-CORE-LIB-ADDENDUM.
+        // Backend recognizes `File.readText(path)` and
+        // `File.writeText(path, body)` and lowers to `std::fs::*`.
+        builtins.insert("File");
         Self {
             builtins,
             user_names: HashSet::new(),

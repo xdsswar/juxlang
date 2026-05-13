@@ -212,6 +212,57 @@ impl RustEmitter {
                 }
             }
         }
+        // `File.readText(path)` / `File.writeText(path, body)` —
+        // stdlib I/O per JUX-CORE-LIB-ADDENDUM. Lowers to
+        // `std::fs::read_to_string(path)` and
+        // `std::fs::write(path, body)`. Phase-1 chooses panic-on-
+        // error (`.unwrap()`) over Result-mode to keep the
+        // surface synchronous and match the spec's
+        // "throws IOException" implicit contract — when typed
+        // exceptions land, we'll swap to `?` and lift the
+        // `std::io::Error` into a Jux IOException.
+        if let Expr::Field(f) = &*call.callee {
+            if let Expr::Path(qn) = &*f.object {
+                if qn.segments.len() == 1 && qn.segments[0].text == "File" {
+                    let method = f.field.text.as_str();
+                    match method {
+                        "readText" => {
+                            self.w.push_str("std::fs::read_to_string(");
+                            self.emit_call_args(call);
+                            self.w.push_str(").unwrap()");
+                            return;
+                        }
+                        "writeText" => {
+                            self.w.push_str("std::fs::write(");
+                            self.emit_call_args(call);
+                            self.w.push_str(").unwrap()");
+                            return;
+                        }
+                        "exists" => {
+                            self.w.push_str("std::path::Path::new(&(");
+                            self.emit_call_args(call);
+                            self.w.push_str(")).exists()");
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // Stdlib method dispatch — `xs.add(v)`, `s.toUpperCase()`,
+        // etc. These call sites look like a regular
+        // `Field { receiver, method }(args)` to the AST but the
+        // backend rewrites them into the Rust equivalent (snake_case
+        // method name, argument shape coercion). The receiver's
+        // *inferred* type (looked up in `expr_types`) drives the
+        // dispatch: arrays/Vec take the `BUILTIN_ARRAY_METHODS`
+        // path, `String` takes `BUILTIN_STRING_METHODS`. Same
+        // ground rules as the existing `.length` field-side
+        // rewrite — the type info is best-effort, so the helper
+        // returns `false` to fall through when it can't decide.
+        if self.try_emit_stdlib_method(call) {
+            return;
+        }
         // Bare-name method-call rewrite inside a class/interface body.
         // `foo(args)` inside `class C` or `interface I` should resolve
         // to `self.foo(args)` when `foo` is a non-static method on
@@ -390,7 +441,11 @@ impl RustEmitter {
                                 self.w.push_str(", ");
                             }
                             let nullable = self.callee_param_is_nullable(&call.callee, i);
+                            let upcast = self.arg_needs_sealed_upcast(&call.callee, i, arg);
                             self.emit_arg_with_nullable_wrap(arg, nullable);
+                            if upcast {
+                                self.w.push_str(".into()");
+                            }
                         }
                         self.emitting_format_arg = prev;
                         self.w.push(')');
@@ -413,12 +468,23 @@ impl RustEmitter {
         // Per-arg nullable-wrap when the callee's declared
         // parameter type is `T?` and the value isn't already
         // `Option<T>`-shaped.
+        // Per-arg sealed-upcast wrap when the param is a sealed
+        // parent and the arg is one of its permitted subclasses:
+        // emit `arg.into()` so the auto-`From<Sub> for Sealed`
+        // impl from `emit_sealed_enum` lifts the subclass into
+        // the matching variant.
         let prev = self.emitting_format_arg;
         self.emitting_format_arg = false;
         for (i, arg) in call.args.iter().enumerate() {
             if i > 0 { self.w.push_str(", "); }
             let nullable = self.callee_param_is_nullable(&call.callee, i);
-            self.emit_arg_with_nullable_wrap(arg, nullable);
+            let upcast = self.arg_needs_sealed_upcast(&call.callee, i, arg);
+            if upcast {
+                self.emit_arg_with_nullable_wrap(arg, nullable);
+                self.w.push_str(".into()");
+            } else {
+                self.emit_arg_with_nullable_wrap(arg, nullable);
+            }
         }
         self.emitting_format_arg = prev;
         self.w.push(')');
@@ -612,5 +678,378 @@ impl RustEmitter {
         }
         self.emitting_format_arg = prev;
         self.w.push(')');
+    }
+
+    /// Stdlib method dispatch — rewrites Jux's spec-level method
+    /// names (`add`, `isEmpty`, `toUpperCase`, …) on arrays and
+    /// `String` receivers into the matching Rust shape.
+    ///
+    /// Returns `true` when this path handled the call (so the
+    /// surrounding `emit_call` should return immediately). Returns
+    /// `false` for any call shape this method doesn't recognize —
+    /// receiver type unknown, method name unknown, receiver isn't
+    /// a method call's Field-callee, etc. — and lets the regular
+    /// emit path proceed.
+    ///
+    /// The receiver's type comes from `expr_types`, the tycheck
+    /// inference map. The dispatch is best-effort: if the
+    /// expression hasn't been typed (e.g. inside a lambda body
+    /// where inference doesn't run), the helper falls through and
+    /// the user gets either the regular emit (which may compile
+    /// if the method name happens to be a Vec/String method) or a
+    /// clear rustc error pointing at the offending site.
+    pub(crate) fn try_emit_stdlib_method(&mut self, call: &CallExpr) -> bool {
+        // Must be a `receiver.method(args)` shape.
+        let Expr::Field(f) = &*call.callee else {
+            return false;
+        };
+        let method = f.field.text.as_str();
+        // Receiver-type lookup. Two paths:
+        //   1. `expr_types` map (the normal route — typed by the
+        //      inference pass for paths, calls, fields).
+        //   2. Literal short-circuit — literal expressions have
+        //      `Span::DUMMY`, so they never appear in the map. We
+        //      special-case string and array literals here.
+        let recv_span = crate::exprs::expr_span_of(&f.object);
+        let recv_ty = self.expr_types.get(&recv_span).cloned().or_else(|| {
+            match &*f.object {
+                Expr::Literal(juxc_ast::Literal::String(_)) => {
+                    Some(juxc_tycheck::Ty::String)
+                }
+                _ => None,
+            }
+        });
+        let Some(recv_ty) = recv_ty else {
+            return false;
+        };
+        let is_array = matches!(&recv_ty, juxc_tycheck::Ty::Array { .. });
+        let is_string =
+            matches!(&recv_ty, juxc_tycheck::Ty::String);
+        if !is_array && !is_string {
+            return false;
+        }
+        // From here, we know the receiver is a typed array/String.
+        // Each method gets a custom Rust emission.
+        if is_array {
+            return self.emit_array_stdlib_method(call, method);
+        }
+        if is_string {
+            return self.emit_string_stdlib_method(call, method);
+        }
+        false
+    }
+
+    /// Emit the Rust equivalent of a Jux `List<T>` / array method
+    /// call. Returns `true` when the method was handled.
+    fn emit_array_stdlib_method(&mut self, call: &CallExpr, method: &str) -> bool {
+        let Expr::Field(f) = &*call.callee else {
+            return false;
+        };
+        // Helpers — emit the receiver with proper grouping, and
+        // the comma-separated arg list with format-arg flag
+        // cleared so nested string literals self-coerce.
+        let receiver = &*f.object;
+        match method {
+            // `xs.add(v)` → `xs.push(v)` — Java/spec name vs Rust.
+            "add" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".push(");
+                self.emit_call_args(call);
+                self.w.push(')');
+                true
+            }
+            // `xs.size()` → `xs.len() as isize` — same as `.length`
+            // field shape but used as a method.
+            "size" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".len() as isize");
+                true
+            }
+            // `xs.isEmpty()` → `xs.is_empty()` — pure rename.
+            "isEmpty" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".is_empty()");
+                true
+            }
+            // `xs.contains(v)` → `xs.contains(&v)` — Rust needs &T.
+            "contains" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".contains(&(");
+                self.emit_call_args(call);
+                self.w.push_str("))");
+                true
+            }
+            // `xs.indexOf(v)` → linear scan returning -1 on miss.
+            // Matches Java's API contract.
+            "indexOf" => {
+                self.w.push_str("(");
+                self.emit_expr(receiver);
+                self.w.push_str(".iter().position(|__e| *__e == ");
+                self.emit_call_args(call);
+                self.w.push_str(").map(|__i| __i as isize).unwrap_or(-1))");
+                true
+            }
+            // `xs.get(i)` → `xs[i as usize].clone()` — clone so the
+            // value-shape consistent with index-access elsewhere.
+            "get" => {
+                self.emit_expr(receiver);
+                self.w.push_str("[(");
+                self.emit_call_args(call);
+                self.w.push_str(") as usize].clone()");
+                true
+            }
+            // `xs.set(i, v)` → block expression that mutates in
+            // place, returning the old value (consistent with
+            // Java's List.set contract).
+            "set" => {
+                self.w.push_str("{ let __i = (");
+                // Args are (index, value). Emit index first then value.
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                if let Some(idx) = call.args.first() {
+                    self.emit_expr(idx);
+                }
+                self.w.push_str(") as usize; let __old = ");
+                self.emit_expr(receiver);
+                self.w.push_str("[__i].clone(); ");
+                self.emit_expr(receiver);
+                self.w.push_str("[__i] = ");
+                if let Some(val) = call.args.get(1) {
+                    self.emit_expr(val);
+                }
+                self.emitting_format_arg = prev;
+                self.w.push_str("; __old }");
+                true
+            }
+            // `xs.first()` / `xs.last()` — indexed access with clone.
+            "first" => {
+                self.emit_expr(receiver);
+                self.w.push_str("[0].clone()");
+                true
+            }
+            "last" => {
+                self.w.push('(');
+                self.emit_expr(receiver);
+                self.w.push_str(".last().cloned().unwrap())");
+                true
+            }
+            // `xs.clear()` / `xs.reverse()` / `xs.sort()` — direct
+            // Rust equivalents.
+            "clear" | "reverse" => {
+                self.emit_expr(receiver);
+                self.w.push('.');
+                self.w.push_str(method);
+                self.w.push_str("()");
+                true
+            }
+            "sort" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".sort()");
+                true
+            }
+            // `xs.remove(i)` / `xs.insert(i, v)` with isize→usize cast.
+            "remove" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".remove((");
+                self.emit_call_args(call);
+                self.w.push_str(") as usize)");
+                true
+            }
+            "insert" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".insert((");
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                if let Some(idx) = call.args.first() {
+                    self.emit_expr(idx);
+                }
+                self.w.push_str(") as usize, ");
+                if let Some(val) = call.args.get(1) {
+                    self.emit_expr(val);
+                }
+                self.emitting_format_arg = prev;
+                self.w.push(')');
+                true
+            }
+            // `xs.join(sep)` — only well-defined for `Vec<String>`;
+            // Rust's `Vec<String>::join(&str)` returns String.
+            "join" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".join(&(");
+                self.emit_call_args(call);
+                self.w.push_str("))");
+                true
+            }
+            // forEach: iterator chain calling the closure on each
+            // borrowed element. Closure capture rules let it borrow
+            // surrounding state.
+            "forEach" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".iter().for_each(|__e| (");
+                self.emit_call_args(call);
+                self.w.push_str(")(__e.clone()))");
+                true
+            }
+            // map / filter: collect into a fresh Vec so the result
+            // stays Jux-array-shaped.
+            "map" => {
+                self.emit_expr(receiver);
+                self.w
+                    .push_str(".iter().cloned().map(|__e| (");
+                self.emit_call_args(call);
+                self.w.push_str(")(__e)).collect::<Vec<_>>()");
+                true
+            }
+            "filter" => {
+                self.emit_expr(receiver);
+                self.w
+                    .push_str(".iter().cloned().filter(|__e| (");
+                self.emit_call_args(call);
+                self.w.push_str(")(__e.clone())).collect::<Vec<_>>()");
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Emit the Rust equivalent of a Jux `String` method call.
+    /// Returns `true` when the method was handled.
+    fn emit_string_stdlib_method(&mut self, call: &CallExpr, method: &str) -> bool {
+        let Expr::Field(f) = &*call.callee else {
+            return false;
+        };
+        let receiver = &*f.object;
+        match method {
+            // `s.length()` → `s.chars().count() as isize` — Java's
+            // length counts code-units, but Phase-1 lowers to
+            // char-count for usability. A `len_bytes()` variant
+            // can land later when raw-byte counts matter.
+            "length" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".chars().count() as isize");
+                true
+            }
+            "isEmpty" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".is_empty()");
+                true
+            }
+            // Pure renames: snake_case Rust spelling.
+            "toUpperCase" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".to_uppercase()");
+                true
+            }
+            "toLowerCase" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".to_lowercase()");
+                true
+            }
+            "trim" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".trim().to_string()");
+                true
+            }
+            "startsWith" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".starts_with(");
+                self.emit_call_args(call);
+                self.w.push_str(".as_str())");
+                true
+            }
+            "endsWith" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".ends_with(");
+                self.emit_call_args(call);
+                self.w.push_str(".as_str())");
+                true
+            }
+            "contains" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".contains(");
+                self.emit_call_args(call);
+                self.w.push_str(".as_str())");
+                true
+            }
+            "replace" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".replace(");
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                if let Some(needle) = call.args.first() {
+                    self.emit_expr(needle);
+                }
+                self.w.push_str(".as_str(), ");
+                if let Some(rep) = call.args.get(1) {
+                    self.emit_expr(rep);
+                }
+                self.w.push_str(".as_str())");
+                self.emitting_format_arg = prev;
+                true
+            }
+            "indexOf" => {
+                self.w.push('(');
+                self.emit_expr(receiver);
+                self.w.push_str(".find(");
+                self.emit_call_args(call);
+                self.w.push_str(".as_str()).map(|__i| __i as isize).unwrap_or(-1))");
+                true
+            }
+            "split" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".split(");
+                self.emit_call_args(call);
+                self.w
+                    .push_str(".as_str()).map(::std::string::String::from).collect::<Vec<_>>()");
+                true
+            }
+            "substring" => {
+                // `s.substring(start, end)` — char-indexed slice.
+                self.w.push('(');
+                self.emit_expr(receiver);
+                self.w.push_str(".chars().skip((");
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                if let Some(start) = call.args.first() {
+                    self.emit_expr(start);
+                }
+                self.w.push_str(") as usize).take(((");
+                if let Some(end) = call.args.get(1) {
+                    self.emit_expr(end);
+                }
+                self.w.push_str(") - (");
+                if let Some(start) = call.args.first() {
+                    self.emit_expr(start);
+                }
+                self.emitting_format_arg = prev;
+                self.w
+                    .push_str(")) as usize).collect::<String>())");
+                true
+            }
+            "charAt" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".chars().nth((");
+                self.emit_call_args(call);
+                self.w.push_str(") as usize).unwrap()");
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Emit a call's args as a comma-separated list, with the
+    /// format-arg flag cleared so nested string literals
+    /// self-coerce. Used by the stdlib-method rewriter to splat
+    /// the original args into the rewritten Rust shape.
+    fn emit_call_args(&mut self, call: &CallExpr) {
+        let prev = self.emitting_format_arg;
+        self.emitting_format_arg = false;
+        for (i, arg) in call.args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.emit_expr(arg);
+        }
+        self.emitting_format_arg = prev;
     }
 }

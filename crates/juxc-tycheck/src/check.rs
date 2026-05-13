@@ -101,17 +101,77 @@ use crate::ty::{
 /// `block_on` is the sync-side driver for awaiting a Future from a
 /// non-async context. If/when more built-ins land (`assert`, `panic`,
 /// …) they go here.
-const BUILTINS: &[&str] = &["print", "parallel", "block_on", "yield_now", "Worker", "now_ms"];
+const BUILTINS: &[&str] = &[
+    "print", "parallel", "block_on", "yield_now", "Worker", "now_ms",
+    // Stdlib I/O — `File.readText(path)`, `File.writeText(path, body)`.
+    // The Jux-level shape is `File.readText(...)`, parsed as a
+    // Field call on Path("File"). Registering `File` in BUILTINS
+    // lets the resolver accept it; the backend special-cases the
+    // method calls into matching `std::fs` operations.
+    "File",
+];
 
-/// Methods we let through on **any array receiver** without checking
-/// against a class signature. These are the Vec/array methods the
-/// backend already knows how to lower; the typechecker plays along.
-const BUILTIN_ARRAY_METHODS: &[&str] = &["push", "pop", "clone", "len", "length"];
+/// Methods we let through on **any array / List receiver** without
+/// checking against a class signature. The backend lowers each to
+/// the matching Rust `Vec` operation; the typechecker plays along
+/// without requiring a class lookup.
+///
+/// **Phase-1 stdlib for `List<T>`** — these mirror the spec's
+/// `std.collections.List` shape:
+///
+/// | Jux       | Rust equivalent                           |
+/// |-----------|-------------------------------------------|
+/// | `.add(x)`     | `.push(x)`                            |
+/// | `.get(i)`     | `[i]` (indexed access, panics on OOB) |
+/// | `.set(i, x)`  | `[i] = x`                             |
+/// | `.contains(x)`| `.contains(&x)`                       |
+/// | `.indexOf(x)` | `.iter().position(|e| *e == x).map(...)` |
+/// | `.isEmpty()`  | `.is_empty()`                         |
+/// | `.size()`     | `.len()` (alias for `.length`)        |
+/// | `.first()`    | `[0]` (Phase-1: panics on empty)      |
+/// | `.last()`     | `[len-1]`                             |
+/// | `.reverse()`  | `.reverse()`                          |
+/// | `.sort()`     | `.sort()`                             |
+/// | `.clear()`    | `.clear()`                            |
+/// | `.remove(i)`  | `.remove(i)`                          |
+/// | `.insert(i,x)`| `.insert(i, x)`                       |
+/// | `.join(sep)`  | `.join(sep)`                          |
+/// | `.map(f)` / `.filter(f)` / `.forEach(f)` | `iter().map/...` |
+const BUILTIN_ARRAY_METHODS: &[&str] = &[
+    "push", "pop", "clone", "len", "length",
+    // List<T> spec methods.
+    "add", "get", "set", "contains", "indexOf", "isEmpty", "size",
+    "first", "last", "reverse", "sort", "clear", "remove", "insert",
+    "join", "map", "filter", "forEach",
+];
 
 /// Methods we let through on a **String receiver**. Same idea: the
 /// backend understands these, so the typechecker accepts them.
-const BUILTIN_STRING_METHODS: &[&str] =
-    &["length", "len", "clone", "chars", "bytes", "to_string"];
+///
+/// **Phase-1 stdlib for `String`** — the most common spec methods:
+///
+/// | Jux               | Rust equivalent                                |
+/// |-------------------|------------------------------------------------|
+/// | `.length()`       | `.chars().count() as isize`                    |
+/// | `.split(sep)`     | `.split(sep).map(String::from).collect::<Vec>` |
+/// | `.trim()`         | `.trim().to_string()`                          |
+/// | `.contains(s)`    | `.contains(s.as_str())`                        |
+/// | `.startsWith(s)`  | `.starts_with(s.as_str())`                     |
+/// | `.endsWith(s)`    | `.ends_with(s.as_str())`                       |
+/// | `.toUpperCase()`  | `.to_uppercase()`                              |
+/// | `.toLowerCase()`  | `.to_lowercase()`                              |
+/// | `.replace(a,b)`   | `.replace(a.as_str(), b.as_str())`             |
+/// | `.indexOf(s)`     | `.find(s.as_str()).map(...).unwrap_or(-1)`     |
+/// | `.substring(s,e)` | `.chars().skip(s).take(e-s).collect()`         |
+/// | `.charAt(i)`      | `.chars().nth(i).unwrap()`                     |
+/// | `.isEmpty()`      | `.is_empty()`                                  |
+const BUILTIN_STRING_METHODS: &[&str] = &[
+    "length", "len", "clone", "chars", "bytes", "to_string",
+    // String spec methods.
+    "split", "trim", "contains", "startsWith", "endsWith",
+    "toUpperCase", "toLowerCase", "replace", "indexOf",
+    "substring", "charAt", "isEmpty",
+];
 
 /// Field/property names we allow on **any array receiver** without a
 /// class lookup. Today just `length`; the typechecker treats it as `Int`.

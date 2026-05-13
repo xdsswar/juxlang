@@ -111,11 +111,122 @@ impl RustEmitter {
             }
             juxc_ast::Pattern::Bind(name) => self.w.push_str(&name.text),
             juxc_ast::Pattern::EnumVariant { path, args, .. } => {
-                // Rust match patterns join path segments with `::`,
-                // regardless of whether the first segment is a
-                // known enum (`Color.Red` → `Color::Red`) or any
-                // other dotted shape. Emit verbatim with `.`
-                // rewritten to `::`.
+                // Three shapes to handle:
+                //
+                // 1. **Enum variant** (`Color.Red`, `Token.Number(_)`)
+                //    — rewrite `.` to `::`. The match scrutinee's
+                //    type is an enum.
+                //
+                // 2. **Sealed-class subclass pattern** (`Red(var s)`
+                //    inside a `switch (light) { … }` where `Light`
+                //    is `sealed permits Red, Yellow, Green`). The
+                //    pattern path is the bare subclass name; the
+                //    lowered match is on a Rust enum
+                //    `Light::Red(Red { seconds: s, .. })`. We need
+                //    to (a) prepend the sealed parent's name, and
+                //    (b) translate positional pattern args to the
+                //    subclass struct's named-field pattern.
+                //
+                // 3. **Single bare name** (`Red` without parens,
+                //    inside an enum-variant context) — kept as-is;
+                //    falls into shape 1.
+                //
+                // Detection: single-segment path AND the bare name
+                // resolves to a class whose parent is sealed.
+                let is_single_subclass = path.segments.len() == 1
+                    && self
+                        .lookup_class_by_bare_or_fqn(&path.segments[0].text)
+                        .and_then(|sub| sub.extends_fqn.clone())
+                        .and_then(|fqn| {
+                            // Look up the parent class; check sealed.
+                            // Use the last FQN segment as the bare
+                            // name for our lookup helper.
+                            let bare = fqn
+                                .rsplit('.')
+                                .next()
+                                .unwrap_or(&fqn)
+                                .to_string();
+                            self.lookup_class_by_bare_or_fqn(&bare)
+                                .map(|p| p.is_sealed)
+                        })
+                        .unwrap_or(false);
+                if is_single_subclass {
+                    // Sealed-subclass shape — emit
+                    // `Sealed::Sub(Sub { f0: arg0, f1: arg1, .. })`.
+                    let sub_name = &path.segments[0].text;
+                    let sub_class = self
+                        .lookup_class_by_bare_or_fqn(sub_name)
+                        .cloned();
+                    let parent_fqn = sub_class
+                        .as_ref()
+                        .and_then(|c| c.extends_fqn.clone())
+                        .unwrap_or_default();
+                    let parent_bare = parent_fqn
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or(parent_fqn.as_str())
+                        .to_string();
+                    // Field-name lookup: positional pattern arg i
+                    // maps to subclass field i in declaration order
+                    // (static fields filtered out — they aren't
+                    // instance state, can't appear in a struct
+                    // pattern).
+                    let field_names: Vec<String> = self
+                        .class_asts
+                        .get(sub_name.as_str())
+                        .map(|ast| {
+                            ast.fields
+                                .iter()
+                                .filter(|f| !f.is_static)
+                                .map(|f| f.name.text.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    self.w.push_str(&parent_bare);
+                    self.w.push_str("::");
+                    self.w.push_str(sub_name);
+                    self.w.push('(');
+                    if args.is_empty() {
+                        // Unit-style subclass pattern — empty
+                        // struct. Use `..` to match any contents
+                        // even if Rust later requires it; for an
+                        // empty struct this just lowers to `Sub`.
+                        self.w.push_str(sub_name);
+                        self.w.push_str(" { .. }");
+                    } else {
+                        self.w.push_str(sub_name);
+                        self.w.push_str(" { ");
+                        for (i, sub) in args.iter().enumerate() {
+                            if i > 0 {
+                                self.w.push_str(", ");
+                            }
+                            // Field-name : pattern. We need the
+                            // sub-pattern's text rendered — recurse
+                            // through `emit_pattern`. The field name
+                            // comes from the i-th non-static field;
+                            // out-of-range positions get a synthetic
+                            // `__pos{i}` so the error message points
+                            // at the right shape.
+                            let fname = field_names
+                                .get(i)
+                                .cloned()
+                                .unwrap_or_else(|| format!("__pos{i}"));
+                            self.w.push_str(&fname);
+                            self.w.push_str(": ");
+                            self.emit_pattern(sub);
+                        }
+                        // `..` rest pattern in case the subclass
+                        // has more fields than the pattern listed
+                        // (Java would let the user destructure
+                        // only the prefix they care about; Rust's
+                        // struct patterns require exhaustiveness
+                        // unless `..` is present).
+                        self.w.push_str(", .. }");
+                    }
+                    self.w.push(')');
+                    return;
+                }
+                // Shape 1 / 3: rewrite `.` to `::` verbatim.
                 let segs: Vec<&str> =
                     path.segments.iter().map(|s| s.text.as_str()).collect();
                 self.w.push_str(&segs.join("::"));

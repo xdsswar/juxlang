@@ -89,8 +89,8 @@ enum CliCommand {
 fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
-        CliCommand::New { name } => not_yet_implemented(format!("jux new {name}")),
-        CliCommand::Test         => not_yet_implemented("jux test"),
+        CliCommand::New { name } => cmd_new(&name),
+        CliCommand::Test         => cmd_test(),
         CliCommand::Check { file } => {
             run_single_or_project(file, Action::Check, None, false)
         }
@@ -101,6 +101,40 @@ fn main() -> Result<ExitCode> {
             run_single_or_project(file, Action::Run, emit_dir, release)
         }
     }
+}
+
+/// `jux new <name>` — scaffold a fresh Jux project per §B.2.1.
+/// Creates:
+///   - `<name>/jux.toml`  with a minimum-viable `[package]` block.
+///   - `<name>/src/main.jux` with a "hello world" stub.
+///   - `<name>/.gitignore` with the standard ignore list.
+///
+/// `<name>` is the directory name (and the package name's last
+/// segment). Refuses to overwrite an existing directory.
+fn cmd_new(name: &str) -> Result<ExitCode> {
+    let target = PathBuf::from(name);
+    if target.exists() {
+        eprintln!("jux: target directory '{}' already exists", target.display());
+        return Ok(ExitCode::from(1));
+    }
+    let src_dir = target.join("src");
+    std::fs::create_dir_all(&src_dir).with_context(|| {
+        format!("creating project directory {}", src_dir.display())
+    })?;
+    let manifest = format!(
+        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    );
+    std::fs::write(target.join("jux.toml"), manifest)
+        .context("writing jux.toml")?;
+    let main_jux = "public void main() {\n    print(\"Hello from Jux!\");\n}\n";
+    std::fs::write(src_dir.join("main.jux"), main_jux)
+        .context("writing src/main.jux")?;
+    let gitignore = "/target/\n";
+    std::fs::write(target.join(".gitignore"), gitignore)
+        .context("writing .gitignore")?;
+    eprintln!("jux: created project at {}", target.display());
+    eprintln!("     next: `cd {name} && jux run`");
+    Ok(ExitCode::SUCCESS)
 }
 
 /// What kind of pipeline pass to perform in single-file mode.
@@ -125,12 +159,216 @@ fn run_single_or_project(
 ) -> Result<ExitCode> {
     match file {
         Some(path) => run_single_file(&path, action, emit_dir, release),
-        None => not_yet_implemented(match action {
-            Action::Check => "jux check (project mode)",
-            Action::Build => "jux build (project mode)",
-            Action::Run => "jux run (project mode)",
-        }),
+        None => run_project(action, emit_dir, release),
     }
+}
+
+/// Minimum-viable subset of `jux.toml`'s `[package]` section per
+/// §B.2.1 — enough to identify the project and pick a binary name.
+/// Fancier knobs (`[lib]`, `[[bin]]`, `[dependencies]`, profiles,
+/// features) land when the dep resolver does; today's project
+/// mode just walks `src/` and compiles everything.
+struct ProjectManifest {
+    name: String,
+}
+
+/// Parse `jux.toml` at `path` into a `ProjectManifest`. Bails with
+/// a clear error when `[package].name` is missing — the spec
+/// requires it.
+fn read_manifest(path: &Path) -> Result<ProjectManifest> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let value: toml::Value = raw
+        .parse()
+        .with_context(|| format!("parsing {} as TOML", path.display()))?;
+    let pkg = value
+        .get("package")
+        .and_then(|v| v.as_table())
+        .with_context(|| format!("{}: missing [package] table", path.display()))?;
+    let name = pkg
+        .get("name")
+        .and_then(|v| v.as_str())
+        .with_context(|| {
+            format!("{}: [package].name is required", path.display())
+        })?
+        .to_string();
+    Ok(ProjectManifest { name })
+}
+
+/// `jux build`/`run`/`check` without an explicit file: project
+/// mode. Reads `./jux.toml`, walks `./src/`, compiles every
+/// `.jux` file through the workspace driver.
+fn run_project(
+    action: Action,
+    emit_dir_override: Option<PathBuf>,
+    release: bool,
+) -> Result<ExitCode> {
+    let cwd = std::env::current_dir().context("getting current directory")?;
+    let manifest_path = cwd.join("jux.toml");
+    if !manifest_path.exists() {
+        eprintln!(
+            "jux: no jux.toml found in {} — pass a file or run `jux new <name>` first",
+            cwd.display(),
+        );
+        return Ok(ExitCode::from(1));
+    }
+    let manifest = read_manifest(&manifest_path)?;
+    // Binary name: last segment of the reverse-DNS package name
+    // (`com.example.myapp` → `myapp`). Falls back to the whole
+    // name when the package isn't dotted.
+    let binary_name = manifest
+        .name
+        .rsplit('.')
+        .next()
+        .unwrap_or(manifest.name.as_str())
+        .to_string();
+    let src_dir = cwd.join("src");
+    if !src_dir.exists() {
+        eprintln!(
+            "jux: src/ directory not found in {} — nothing to build",
+            cwd.display(),
+        );
+        return Ok(ExitCode::from(1));
+    }
+    // Drive the workspace compile through `juxc-driver`. Same
+    // pipeline juxc uses when fed a directory.
+    let sources = collect_project_sources(&src_dir)?;
+    if sources.is_empty() {
+        eprintln!("jux: no .jux sources under {}", src_dir.display());
+        return Ok(ExitCode::from(1));
+    }
+    let result = juxc_driver::compile_workspace(sources)?;
+    print_diagnostics(&result.diagnostics);
+    let any_error = result
+        .diagnostics
+        .iter()
+        .any(|d| matches!(d.severity, Severity::Error));
+    if any_error {
+        return Ok(ExitCode::from(1));
+    }
+    match action {
+        Action::Check => {
+            eprintln!("jux: check ok");
+            Ok(ExitCode::SUCCESS)
+        }
+        Action::Build | Action::Run => {
+            let Some(crate_) = result.crate_ else {
+                eprintln!("jux: nothing to build");
+                return Ok(ExitCode::SUCCESS);
+            };
+            let emit_dir = emit_dir_override
+                .unwrap_or_else(|| cwd.join("target").join(".rust-build"));
+            let artifact = juxc_driver::build(
+                &crate_,
+                &emit_dir,
+                &binary_name,
+                release,
+            )?;
+            eprintln!("jux: built {}", artifact.binary_path.display());
+            if matches!(action, Action::Run) {
+                let status = Command::new(&artifact.binary_path).status().with_context(|| {
+                    format!("running {}", artifact.binary_path.display())
+                })?;
+                let code = status.code().unwrap_or(1) as u8;
+                Ok(ExitCode::from(code))
+            } else {
+                Ok(ExitCode::SUCCESS)
+            }
+        }
+    }
+}
+
+/// `jux test` — discover `@Test`-annotated free functions
+/// across `src/` and `test/`, build a test runner, run it.
+/// Returns the runner's exit code so CI sees test failures.
+fn cmd_test() -> Result<ExitCode> {
+    let cwd = std::env::current_dir().context("getting current directory")?;
+    let manifest_path = cwd.join("jux.toml");
+    if !manifest_path.exists() {
+        eprintln!(
+            "jux: no jux.toml found in {} — pass a project directory or run `jux new <name>` first",
+            cwd.display(),
+        );
+        return Ok(ExitCode::from(1));
+    }
+    let manifest = read_manifest(&manifest_path)?;
+    let binary_name = format!(
+        "{}_test",
+        manifest
+            .name
+            .rsplit('.')
+            .next()
+            .unwrap_or(manifest.name.as_str()),
+    );
+    let mut sources: Vec<juxc_source::SourceFile> = Vec::new();
+    let src_dir = cwd.join("src");
+    if src_dir.exists() {
+        sources.extend(collect_project_sources(&src_dir)?);
+    }
+    let test_dir = cwd.join("test");
+    if test_dir.exists() {
+        sources.extend(collect_project_sources(&test_dir)?);
+    }
+    if sources.is_empty() {
+        eprintln!(
+            "jux: no .jux sources under src/ or test/ in {}",
+            cwd.display(),
+        );
+        return Ok(ExitCode::from(1));
+    }
+    let result = juxc_driver::compile_workspace_test(sources)?;
+    print_diagnostics(&result.diagnostics);
+    let any_error = result
+        .diagnostics
+        .iter()
+        .any(|d| matches!(d.severity, Severity::Error));
+    if any_error {
+        return Ok(ExitCode::from(1));
+    }
+    let Some(crate_) = result.crate_ else {
+        eprintln!("jux: nothing to test");
+        return Ok(ExitCode::SUCCESS);
+    };
+    let emit_dir = cwd.join("target").join(".rust-build-test");
+    let artifact = juxc_driver::build(&crate_, &emit_dir, &binary_name, false)?;
+    // Run the test binary, inherit stdio so the user sees PASS/FAIL
+    // output in real time. Forward the exit code so CI gates work.
+    let status = Command::new(&artifact.binary_path)
+        .status()
+        .with_context(|| format!("running {}", artifact.binary_path.display()))?;
+    let code = status.code().unwrap_or(1) as u8;
+    Ok(ExitCode::from(code))
+}
+
+/// Walk `src_dir` recursively and collect every `.jux` file as a
+/// loaded `SourceFile`. Sort order is path-lexicographic so
+/// diagnostics line up across runs.
+fn collect_project_sources(src_dir: &Path) -> Result<Vec<juxc_source::SourceFile>> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    walk_jux_files(src_dir, &mut paths)?;
+    paths.sort();
+    let mut out = Vec::with_capacity(paths.len());
+    for p in paths {
+        let contents = std::fs::read_to_string(&p)
+            .with_context(|| format!("reading {}", p.display()))?;
+        out.push(juxc_source::SourceFile::new(p, contents));
+    }
+    Ok(out)
+}
+
+fn walk_jux_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir)
+        .with_context(|| format!("reading dir {}", dir.display()))?
+    {
+        let entry = entry.with_context(|| format!("reading entry in {}", dir.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            walk_jux_files(&path, out)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jux") {
+            out.push(path);
+        }
+    }
+    Ok(())
 }
 
 /// Compile one `.jux` file through the driver and (optionally) build/run

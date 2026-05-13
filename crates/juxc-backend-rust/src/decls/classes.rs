@@ -40,6 +40,36 @@ impl RustEmitter {
     /// `emit_assign` produces for `this.field = …` patterns. Plain locals
     /// in the body still drive `let mut` promotion as before.
     pub(crate) fn emit_class_decl(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        // **Sealed-class lowering.** A `sealed class Light permits
+        // Red, Yellow, Green {}` becomes a Rust enum whose variants
+        // wrap each permitted subclass struct:
+        //
+        // ```rust
+        // pub enum Light { Red(Red), Yellow(Yellow), Green(Green) }
+        // impl From<Red> for Light { ... }
+        // ```
+        //
+        // The subclass declarations themselves still emit as
+        // normal structs, but with `__parent: Light` *omitted* —
+        // they ARE the variant, they don't contain one. This is
+        // what makes Java upcasting actually work: `new Red(30)`
+        // followed by `.into()` produces `Light::Red(Red{..})`
+        // which carries the subclass's identity through any slot
+        // typed as `Light`.
+        //
+        // Any sealed class with a non-empty permits list lowers
+        // as a Rust enum so upcasting actually carries the
+        // subclass's identity through function boundaries. When
+        // the sealed parent has its own methods, the enum's
+        // inherent impl block emits a match-dispatching wrapper
+        // for each method — `Shape::describe(&self)` becomes
+        // `match self { Shape::Circle(c) => c.describe(), … }`,
+        // and each subclass picks up the inherited body through
+        // the existing method-inlining pass.
+        if class_decl.is_sealed && !class_decl.permits.is_empty() {
+            self.emit_sealed_enum(class_decl);
+            return;
+        }
         // (Migrated to Writer indent-aware API)
         // Track the enclosing class so `Expr::Path` emission can
         // rewrite a bare reference to a static field (`a` inside
@@ -72,11 +102,24 @@ impl RustEmitter {
         // (emitted below), so `child.parent_field` and inherited
         // method calls Just Work. Always emit `__parent` first so the
         // struct layout is consistent across the hierarchy.
+        // Sealed-parent detection: when the parent is a sealed
+        // class, this class IS one of the parent enum's variants
+        // — there's no struct to embed. Skip the `__parent` field
+        // and the Deref impls (those are only meaningful for the
+        // value-class hierarchy).
+        let parent_is_sealed = class_decl
+            .extends
+            .as_ref()
+            .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare).map(|c| c.is_sealed))
+            .unwrap_or(false);
         if let Some(parent_ty) = &class_decl.extends {
-            self.w.emit_indent();
-            self.w.push_str("__parent: ");
-            self.emit_type_as_rust(parent_ty);
-            self.w.push_str(",\n");
+            if !parent_is_sealed {
+                self.w.emit_indent();
+                self.w.push_str("__parent: ");
+                self.emit_type_as_rust(parent_ty);
+                self.w.push_str(",\n");
+            }
         }
         for field in &class_decl.fields {
             // Static fields live on the class, not the instance —
@@ -101,7 +144,15 @@ impl RustEmitter {
         // methods and field access flow through Rust's auto-deref —
         // `child.method()` finds methods on the parent transparently,
         // `child.parent_field = x` works via DerefMut, etc.
+        //
+        // Skipped when the parent is `sealed` — those parents lower
+        // as Rust enums, not structs, and the subclass is just one
+        // of the variants. There's nothing to deref *to*.
         if let Some(parent_ty) = &class_decl.extends {
+            if parent_is_sealed {
+                // Sealed parent: no struct, no Deref impl.
+                // Continue past this block.
+            } else {
             // impl Deref for Child { type Target = Parent; … }
             self.w.emit_indent();
             self.w.push_str("impl");
@@ -132,6 +183,7 @@ impl RustEmitter {
             self.w.indent_dec();
             self.w.line("}");
             self.w.newline();
+            } // end else (parent_is_sealed)
         }
 
         // impl[<T: Clone, U: Clone>] Name<T, U> { …members… }
@@ -1052,6 +1104,213 @@ impl RustEmitter {
         self.w.line("}");
         self.w.newline();
         self.w.indent_dec();
+    }
+
+    /// Emit a sealed-class declaration as a Rust enum whose variants
+    /// wrap each permitted subclass struct. The subclass declarations
+    /// themselves still emit as structs (via `emit_class_decl`) but
+    /// skip the `__parent` embedding so they aren't recursively-
+    /// shaped.
+    ///
+    /// Output shape for `sealed class Light permits Red, Yellow, Green {}`:
+    ///
+    /// ```text
+    /// #[derive(Clone, Debug)]
+    /// pub enum Light {
+    ///     Red(Red),
+    ///     Yellow(Yellow),
+    ///     Green(Green),
+    /// }
+    /// impl From<Red> for Light { fn from(v: Red) -> Self { Self::Red(v) } }
+    /// impl From<Yellow> for Light { fn from(v: Yellow) -> Self { Self::Yellow(v) } }
+    /// impl From<Green> for Light { fn from(v: Green) -> Self { Self::Green(v) } }
+    /// ```
+    ///
+    /// The auto-`From` impls make `.into()` at upcast sites (return
+    /// statements, function-call args, typed-let initializers) wrap
+    /// the subclass into the variant transparently.
+    ///
+    /// Phase-1 limitation: only sealed classes with an empty body
+    /// (no fields, methods, or constructors of their own) take this
+    /// path. Sealed classes with bodies fall back to the regular
+    /// struct emission so existing tests still build; adding
+    /// match-dispatch wrappers for sealed-class methods is a
+    /// follow-up.
+    pub(crate) fn emit_sealed_enum(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        // `#[derive(Clone, Debug)]` mirrors the class-struct shape
+        // so the enum participates in the same auto-Clone/Debug
+        // rules existing code paths rely on (throw-payload
+        // rendering, format-arg JuxOpt wrapping, etc.).
+        self.w.line("#[derive(Clone, Debug)]");
+        self.w.emit_indent();
+        self.emit_visibility(class_decl.visibility);
+        self.w.push_str("enum ");
+        self.w.push_str(&class_decl.name.text);
+        self.emit_generic_params(&class_decl.generic_params);
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        for permitted in &class_decl.permits {
+            self.w.emit_indent();
+            self.w.push_str(&permitted.text);
+            self.w.push('(');
+            self.w.push_str(&permitted.text);
+            self.w.push_str("),\n");
+        }
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+        // From<Sub> for Sealed — drives `.into()` at every upcast
+        // site. Rust's blanket `From<T> for T` covers identity
+        // conversions, so call sites can emit `.into()`
+        // unconditionally without breaking same-type passing.
+        for permitted in &class_decl.permits {
+            self.w.emit_indent();
+            self.w.push_str("impl From<");
+            self.w.push_str(&permitted.text);
+            self.w.push_str("> for ");
+            self.w.push_str(&class_decl.name.text);
+            self.emit_generic_params_as_args(&class_decl.generic_params);
+            self.w.push_str(" { fn from(v: ");
+            self.w.push_str(&permitted.text);
+            self.w.push_str(") -> Self { Self::");
+            self.w.push_str(&permitted.text);
+            self.w.push_str("(v) } }\n");
+        }
+        // Marker trait `<Name>Kind` — emitted to match the
+        // value-class lowering's contract. Subclasses still emit
+        // `impl LightKind for Red {}` from `emit_class_marker_trait`'s
+        // ancestor-walk, so the trait must exist for those impls
+        // to compile. The trait is empty (no methods), so it
+        // costs nothing at runtime.
+        self.w.emit_indent();
+        self.emit_visibility(class_decl.visibility);
+        self.w.push_str("trait ");
+        self.w.push_str(&class_decl.name.text);
+        self.w.push_str("Kind {}\n");
+        // The enum itself satisfies its own marker — keeps the
+        // bound `T: LightKind` usable with a value of type Light.
+        self.w.emit_indent();
+        self.w.push_str("impl ");
+        self.w.push_str(&class_decl.name.text);
+        self.w.push_str("Kind for ");
+        self.w.push_str(&class_decl.name.text);
+        self.emit_generic_params_as_args(&class_decl.generic_params);
+        self.w.push_str(" {}\n");
+        self.w.newline();
+        // Match-dispatching impl block for the sealed parent's
+        // own instance methods. Each method emits as
+        //   `fn name(&self, args) -> R { match self { Shape::Circle(c)
+        //      => c.name(args), Shape::Square(s) => s.name(args), … } }`
+        // Subclasses pick up the inherited method body through
+        // the existing virtual-dispatch inlining pass, so the
+        // `c.name(args)` resolves to the inherited (or overridden)
+        // body on each variant.
+        //
+        // Static methods don't participate in dispatch — they
+        // stay on the parent enum as inherent associated fns.
+        // Constructor on the sealed parent doesn't make sense
+        // (you can't construct an "abstract" enum directly), so
+        // those are skipped.
+        if !class_decl.methods.is_empty() {
+            self.w.emit_indent();
+            self.w.push_str("impl");
+            self.emit_generic_params(&class_decl.generic_params);
+            self.w.push(' ');
+            self.w.push_str(&class_decl.name.text);
+            self.emit_generic_params_as_args(&class_decl.generic_params);
+            self.w.push_str(" {\n");
+            self.w.indent_inc();
+            for method in &class_decl.methods {
+                self.emit_sealed_method_dispatch(class_decl, method);
+            }
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.newline();
+        }
+    }
+
+    /// Emit a single sealed-class method as a match-dispatching
+    /// wrapper on the enum. Each variant delegates to the
+    /// matching subclass's inherent method of the same name.
+    fn emit_sealed_method_dispatch(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+        method: &juxc_ast::FnDecl,
+    ) {
+        // Static methods on a sealed parent stay as plain
+        // associated fns — no dispatch needed.
+        let is_static = method
+            .modifiers
+            .iter()
+            .any(|m| matches!(m, juxc_ast::FnModifier::Static));
+        if is_static {
+            // Static methods on a sealed class don't need
+            // dispatch. Fall back to the regular method emit so
+            // callers can still reach `Shape::staticHelper(...)`.
+            self.emit_method(method);
+            return;
+        }
+        self.w.emit_indent();
+        self.emit_visibility(method.visibility);
+        // Match async — sealed-method dispatch on `async T`
+        // methods just forwards through `.await` on each arm.
+        if matches!(method.return_type, ReturnType::AsyncType(_)) {
+            self.w.push_str("async fn ");
+        } else {
+            self.w.push_str("fn ");
+        }
+        self.w.push_str(&method.name.text);
+        self.w.push_str("(&self");
+        for param in &method.params {
+            self.w.push_str(", ");
+            self.w.push_str(&param.name.text);
+            self.w.push_str(": ");
+            self.emit_type_as_rust(&param.ty);
+        }
+        self.w.push(')');
+        match &method.return_type {
+            ReturnType::Void => {}
+            ReturnType::Type(t) => {
+                self.w.push_str(" -> ");
+                self.emit_return_type_as_rust(t);
+            }
+            ReturnType::AsyncType(t) => {
+                self.w.push_str(" -> ");
+                self.emit_return_type_as_rust(t);
+            }
+        }
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("match self {\n");
+        self.w.indent_inc();
+        for permitted in &class_decl.permits {
+            self.w.emit_indent();
+            self.w.push_str(&class_decl.name.text);
+            self.w.push_str("::");
+            self.w.push_str(&permitted.text);
+            self.w.push_str("(__variant) => __variant.");
+            self.w.push_str(&method.name.text);
+            self.w.push('(');
+            for (i, param) in method.params.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str(&param.name.text);
+            }
+            self.w.push(')');
+            // Async dispatch needs `.await` on each arm so the
+            // outer `async fn` produces the value type, not a
+            // Future-of-future.
+            if matches!(method.return_type, ReturnType::AsyncType(_)) {
+                self.w.push_str(".await");
+            }
+            self.w.push_str(",\n");
+        }
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.line("}");
     }
 }
 

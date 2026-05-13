@@ -18,6 +18,14 @@ impl RustEmitter {
     /// crate-private. Inheritance and trait dispatch don't exist in this
     /// milestone, so there's nothing for visibility to mediate.
     pub(crate) fn emit_fn_decl(&mut self, fn_decl: &FnDecl) {
+        // **Test-mode suppression.** When `jux test` is driving the
+        // build, the synthetic test runner IS `fn main()`. The
+        // user's own `void main()` (e.g. the default scaffold's
+        // "Hello from Jux!") gets skipped here so we don't end up
+        // with two `fn main` symbols at the crate root.
+        if self.test_mode && fn_decl.name.text == "main" {
+            return;
+        }
         // (Migrated to Writer indent-aware API)
         // Caller is at level 0 — top-level functions sit at depth 0,
         // body at depth 1.
@@ -260,6 +268,7 @@ impl RustEmitter {
                 //    individually (`A => Some(...), B => None`),
                 //    and skip the outer wrap.
                 let wrap_some = self.return_wants_some_wrap(expr);
+                let wrap_upcast = self.return_needs_sealed_upcast(expr);
                 let is_switch = matches!(expr, juxc_ast::Expr::Switch(_));
                 self.w.emit_indent();
                 if wrap_some && !is_switch {
@@ -271,6 +280,9 @@ impl RustEmitter {
                 }
                 self.emit_expr(expr);
                 self.emitting_nullable_target = prev_nullable_target;
+                if wrap_upcast {
+                    self.w.push_str(".into()");
+                }
                 if wrap_some && !is_switch {
                     self.w.push(')');
                 }

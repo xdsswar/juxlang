@@ -1,0 +1,69 @@
+// Stdlib stress test — Phase-1 List<T> and String methods.
+//
+// Demonstrates the Java/spec-shaped methods now wired through the
+// backend's `try_emit_stdlib_method` dispatch. Each shape maps to
+// the corresponding Rust Vec / String operation; the surface
+// stays Jux/Java.
+
+public void list_demo() {
+    print("=== List<T> methods ===");
+    final int[] xs = {10, 20, 30};
+
+    // Read-side methods.
+    print($"size       = ${xs.size()}");
+    print($"length     = ${xs.length}");
+    print($"isEmpty    = ${xs.isEmpty()}");
+    print($"contains 20 = ${xs.contains(20)}");
+    print($"contains 99 = ${xs.contains(99)}");
+    print($"indexOf 30 = ${xs.indexOf(30)}");
+    print($"indexOf 99 = ${xs.indexOf(99)}");
+    print($"first      = ${xs.first()}");
+    print($"last       = ${xs.last()}");
+    print($"get(1)     = ${xs.get(1)}");
+
+    // Mutating methods. Inferred-mut promotion picks `let mut` for ys.
+    int[] ys = {1, 2, 3, 4, 5};
+    ys.add(6);
+    print($"after add(6) -> size=${ys.size()}, last=${ys.last()}");
+    ys.remove(0);
+    print($"after remove(0) -> first=${ys.first()}, size=${ys.size()}");
+    ys.insert(0, 99);
+    print($"after insert(0, 99) -> first=${ys.first()}, size=${ys.size()}");
+    ys.reverse();
+    print($"after reverse -> first=${ys.first()}, last=${ys.last()}");
+    ys.sort();
+    print($"after sort -> first=${ys.first()}, last=${ys.last()}");
+    ys.clear();
+    print($"after clear -> isEmpty=${ys.isEmpty()}");
+}
+
+public void string_demo() {
+    print("=== String methods ===");
+    final String s = "  Hello, Jux World!  ";
+
+    print($"length     = ${s.length()}");
+    print($"trimmed    = '${s.trim()}'");
+    print($"upper      = ${s.toUpperCase()}");
+    print($"lower      = ${s.toLowerCase()}");
+    print($"contains J = ${s.contains("Jux")}");
+    print($"startsWith = ${s.trim().startsWith("Hello")}");
+    print($"endsWith   = ${s.trim().endsWith("World!")}");
+    print($"indexOf J  = ${s.indexOf("Jux")}");
+    print($"replace    = ${s.trim().replace("Jux", "Rust")}");
+    print($"substring  = '${s.trim().substring(7, 10)}'");
+    print($"charAt(0)  = ${s.trim().charAt(0)}");
+    print($"isEmpty    = ${s.trim().isEmpty()}");
+    print($"empty.isEmpty = ${"".isEmpty()}");
+
+    // split returns a List<String>.
+    final var parts = s.trim().split(", ");
+    print($"split size = ${parts.size()}");
+    print($"split[0]   = '${parts.get(0)}'");
+    print($"split[1]   = '${parts.get(1)}'");
+}
+
+public void main() {
+    list_demo();
+    print("");
+    string_demo();
+}

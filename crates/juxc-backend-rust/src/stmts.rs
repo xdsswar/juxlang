@@ -356,10 +356,18 @@ impl RustEmitter {
                     // type-check passes. A `return null;` already
                     // lowers to `return None;` via `emit_literal`.
                     let wrap_some = self.return_wants_some_wrap(e);
+                    // Sealed-upcast coercion: `return new Err(...)`
+                    // inside a `Result`-returning function wraps
+                    // through `.into()` so the auto-`From<Err> for
+                    // Result` impl produces `Result::Err(err)`.
+                    let wrap_upcast = self.return_needs_sealed_upcast(e);
                     if wrap_some {
                         self.w.push_str("Some(");
                     }
                     self.emit_expr(e);
+                    if wrap_upcast {
+                        self.w.push_str(".into()");
+                    }
                     if wrap_some {
                         self.w.push(')');
                     }

@@ -504,9 +504,91 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     }
                 }
             }
+            // Stdlib method return-type fallback — covers
+            // `String.trim()`, `xs.map(f)`, etc. so the chained
+            // method call (`s.trim().startsWith(...)`) carries a
+            // typed receiver through to the next stage of
+            // inference. Without this the chain collapses to
+            // `Unknown` after the first stdlib hop and the
+            // backend can't dispatch.
+            if let Some(ty) = infer_stdlib_method(&receiver_ty, method_name, &c.args, env, symbols) {
+                return ty;
+            }
             Ty::Unknown
         }
         _ => Ty::Unknown,
+    }
+}
+
+/// Return type inference for `BUILTIN_*_METHODS` calls. Returns
+/// `Some(Ty)` when `method_name` matches a known stdlib method on
+/// a String or Array receiver, `None` otherwise.
+///
+/// Phase-1 coverage: enough to keep method chains typed end-to-end.
+/// Receivers that aren't `Ty::String` or `Ty::Array { .. }` are
+/// ignored.
+fn infer_stdlib_method(
+    receiver_ty: &Ty,
+    method_name: &str,
+    _args: &[Expr],
+    _env: &TypeEnv,
+    _symbols: &SymbolTable,
+) -> Option<Ty> {
+    use crate::ty::Primitive;
+    match receiver_ty {
+        Ty::String => match method_name {
+            // String → String
+            "trim" | "toUpperCase" | "toLowerCase" | "replace" | "substring"
+            | "to_string" | "clone" => Some(Ty::String),
+            // String → int
+            "length" | "len" | "indexOf" => Some(Ty::Primitive(Primitive::Int)),
+            // String → bool
+            "contains" | "startsWith" | "endsWith" | "isEmpty" => {
+                Some(Ty::Primitive(Primitive::Bool))
+            }
+            // String → char
+            "charAt" => Some(Ty::Primitive(Primitive::Char)),
+            // String → List<String>
+            "split" => Some(Ty::Array {
+                element: Box::new(Ty::String),
+                kind: crate::ty::ArrayKind::Dynamic,
+            }),
+            _ => None,
+        },
+        Ty::Array { element, kind } => match method_name {
+            // List<T> → int
+            "length" | "len" | "size" | "indexOf" => Some(Ty::Primitive(Primitive::Int)),
+            // List<T> → bool
+            "isEmpty" | "contains" => Some(Ty::Primitive(Primitive::Bool)),
+            // List<T> → T (element type)
+            "get" | "first" | "last" | "pop" | "remove" | "set" => {
+                Some((**element).clone())
+            }
+            // List<T> → void (mutating ops, no useful return). Phase-1
+            // doesn't have a Void Ty, so we use Unknown which the
+            // surrounding stmt-level emit treats fine.
+            "add" | "push" | "insert" | "clear" | "reverse" | "sort"
+            | "forEach" => Some(Ty::Unknown),
+            // List<T> → String
+            "join" => Some(Ty::String),
+            // List<T> → List<U> — preserves the wrapper; element is
+            // a fresh unknown because we don't infer the closure's
+            // result type.
+            "map" => Some(Ty::Array {
+                element: Box::new(Ty::Unknown),
+                kind: kind.clone(),
+            }),
+            "filter" => Some(Ty::Array {
+                element: (*element).clone(),
+                kind: kind.clone(),
+            }),
+            "clone" => Some(Ty::Array {
+                element: (*element).clone(),
+                kind: kind.clone(),
+            }),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

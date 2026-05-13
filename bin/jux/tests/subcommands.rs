@@ -161,8 +161,12 @@ fn jux_run_without_file_says_not_yet_implemented() {
         !output.status.success(),
         "expected non-zero exit when no file given; got success with stderr:\n{stderr}",
     );
+    // Project mode is now wired — running `jux run` outside a
+    // project surfaces the "no jux.toml" error rather than an
+    // NYI banner. The test still proves non-zero exit, which is
+    // the user-facing contract.
     assert!(
-        stderr.contains("not yet implemented"),
-        "expected NYI banner on stderr, got:\n{stderr}",
+        stderr.contains("no jux.toml") || stderr.contains("not yet implemented"),
+        "expected project-mode or NYI banner on stderr, got:\n{stderr}",
     );
 }

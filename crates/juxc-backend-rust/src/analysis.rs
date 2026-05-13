@@ -1103,6 +1103,149 @@ impl crate::RustEmitter {
         false
     }
 
+    /// Look up the i-th formal parameter's declared type ref for
+    /// the given callee expression. Mirrors
+    /// [`Self::callee_param_is_nullable`] but returns the whole
+    /// `TypeRef` so the caller can compare it against the arg's
+    /// actual type for upcast detection. `None` when the callee
+    /// can't be resolved or doesn't have a parameter at that
+    /// position.
+    pub(crate) fn callee_param_type(
+        &self,
+        callee: &juxc_ast::Expr,
+        arg_idx: usize,
+    ) -> Option<juxc_ast::TypeRef> {
+        if let juxc_ast::Expr::Path(qn) = callee {
+            if qn.segments.len() == 1 {
+                if let Some(f) = self.symbols.functions.get(&qn.segments[0].text) {
+                    return f.params.get(arg_idx).map(|p| p.ty.clone());
+                }
+            }
+        }
+        if let juxc_ast::Expr::Field(f) = callee {
+            if let juxc_ast::Expr::Path(qn) = &*f.object {
+                if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                    if let Some(class) = self.symbols.classes.get(&class_fqn) {
+                        if let Some(m) = class.methods.get(f.field.text.as_str()) {
+                            return m.params.get(arg_idx).map(|p| p.ty.clone());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// True when `expr` would flow into a slot declared as
+    /// `target_ty` and that slot is a sealed parent whose
+    /// permits list names the expression's inferred class. Used
+    /// by [`Self::arg_needs_sealed_upcast`] and the return /
+    /// variable-init upcast paths. Factored out so the matching
+    /// logic stays in one place.
+    pub(crate) fn expr_needs_sealed_upcast_to(
+        &self,
+        target_ty: &juxc_ast::TypeRef,
+        expr: &juxc_ast::Expr,
+    ) -> bool {
+        let Some(target_bare) = target_ty.name.segments.last().map(|s| s.text.as_str())
+        else {
+            return false;
+        };
+        let Some(parent_class) = self.lookup_class_by_bare_or_fqn(target_bare) else {
+            return false;
+        };
+        if !parent_class.is_sealed {
+            return false;
+        }
+        let arg_span = crate::exprs::expr_span_of(expr);
+        let Some(arg_ty) = self.expr_types.get(&arg_span) else {
+            return false;
+        };
+        let arg_bare = match arg_ty {
+            juxc_tycheck::Ty::User { name, .. } => name.split('.').next_back().unwrap_or(name),
+            _ => return false,
+        };
+        if arg_bare == target_bare {
+            return false;
+        }
+        parent_class.permits.iter().any(|p| p.as_str() == arg_bare)
+    }
+
+    /// True when the enclosing function's return type is a sealed
+    /// parent of the expression's inferred type — the return value
+    /// needs `.into()` so the auto-`From<Sub> for Sealed` impl
+    /// wraps the subclass into the matching enum variant before
+    /// the value crosses the function boundary.
+    pub(crate) fn return_needs_sealed_upcast(&self, expr: &juxc_ast::Expr) -> bool {
+        let target_ty = match &self.current_return_type {
+            Some(juxc_ast::ReturnType::Type(t)) => t.clone(),
+            Some(juxc_ast::ReturnType::AsyncType(t)) => t.clone(),
+            _ => return false,
+        };
+        self.expr_needs_sealed_upcast_to(&target_ty, expr)
+    }
+
+    /// True when the arg at `arg_idx` would be flowing into a slot
+    /// of a SEALED parent class whose declared type differs from
+    /// the arg's inferred type — i.e. a Java-style upcast site
+    /// where we need to wrap the value via `.into()` so the emitted
+    /// `From<Sub> for Sealed` impl lifts the subclass into the
+    /// matching enum variant.
+    ///
+    /// Returns false (no wrap) when:
+    ///   - The callee can't be resolved (defensive).
+    ///   - The param's declared type isn't a user-defined class.
+    ///   - The arg's inferred type already matches the param.
+    ///   - The arg's class isn't a permitted subclass of the
+    ///     param's sealed parent.
+    pub(crate) fn arg_needs_sealed_upcast(
+        &self,
+        callee: &juxc_ast::Expr,
+        arg_idx: usize,
+        arg: &juxc_ast::Expr,
+    ) -> bool {
+        let Some(param_ty) = self.callee_param_type(callee, arg_idx) else {
+            return false;
+        };
+        let Some(param_bare) = param_ty.name.segments.last().map(|s| s.text.as_str())
+        else {
+            return false;
+        };
+        // Param must be a sealed user class.
+        let Some(parent_class) = self.lookup_class_by_bare_or_fqn(param_bare) else {
+            return false;
+        };
+        if !parent_class.is_sealed {
+            return false;
+        }
+        // Walk the arg's inferred type and check it's a permitted
+        // subclass of the param. The expr_types map is keyed by
+        // span; the arg expression's span tells us its inferred
+        // shape.
+        let arg_span = crate::exprs::expr_span_of(arg);
+        let Some(arg_ty) = self.expr_types.get(&arg_span) else {
+            return false;
+        };
+        // Extract a bare class name from the arg's inferred type.
+        let arg_bare = match arg_ty {
+            juxc_tycheck::Ty::User { name, .. } => name.split('.').next_back().unwrap_or(name),
+            _ => return false,
+        };
+        // Same class → no upcast needed (blanket From<T> for T
+        // still works but emitting `.into()` for same-type is just
+        // noise).
+        if arg_bare == param_bare {
+            return false;
+        }
+        // Check `permits` list. Phase-1 sealed lowering only ever
+        // accepts direct permits members (no transitive
+        // subclassing through a non-sealed intermediate).
+        parent_class
+            .permits
+            .iter()
+            .any(|p| p.as_str() == arg_bare)
+    }
+
     /// Wrap `arg` in `Some(arg)` if the target slot wants a
     /// nullable value and the expression isn't already
     /// `Option<T>`-shaped. Emits the wrapping parentheses; the

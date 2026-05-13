@@ -1,0 +1,45 @@
+// Upcasting / sealed-class polymorphism stress test.
+//
+// Three shapes proven here:
+//   1. Returning a subclass from a function declared to return the
+//      sealed parent (`async Result try_parse(...)`).
+//   2. Passing a subclass to a function expecting the sealed parent
+//      (`describe(new Red(30))`).
+//   3. Matching on the parent — `switch (r) { case Ok(var v) -> ... }`
+//      — with positional destructuring of the subclass's fields.
+
+public sealed class Result permits Ok, Err {}
+
+public final class Ok extends Result {
+    public int value;
+    public Ok(int value) { this.value = value; }
+}
+
+public final class Err extends Result {
+    public String message;
+    public Err(String message) { this.message = message; }
+}
+
+public Result try_parse(int n) {
+    if (n < 0) {
+        return new Err($"negative: ${n}");
+    }
+    return new Ok(n * 10);
+}
+
+public String describe(Result r) {
+    return switch (r) {
+        case Ok(var v)   -> $"ok(${v})";
+        case Err(var msg) -> $"err(${msg})";
+    };
+}
+
+public void main() {
+    print(describe(try_parse(7)));
+    print(describe(try_parse(-3)));
+    print(describe(try_parse(0)));
+    // Direct subclass pass-through: tycheck accepts Err into Result,
+    // backend emits `describe(Err::new(...).into())`.
+    print(describe(new Err("direct")));
+    print(describe(new Ok(99)));
+}

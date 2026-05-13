@@ -97,4 +97,33 @@ pub enum Pattern {
         /// Span of the whole variant pattern.
         span: Span,
     },
+    /// Numeric range pattern — `case 0..10 ->`, `case 'a'..='z' ->`,
+    /// etc. Maps directly to Rust's `start..=end` / `start..end`
+    /// match-arm syntax. Both endpoints must be literal values
+    /// (variables aren't allowed in a Rust pattern position).
+    Range {
+        /// Lower bound (always inclusive).
+        start: Literal,
+        /// Upper bound — inclusive when `inclusive == true` (`..=`),
+        /// exclusive when `inclusive == false` (`..`).
+        end: Literal,
+        /// `..=` (true) or `..` (false).
+        inclusive: bool,
+        /// Span covering the whole `start..[=]end` form.
+        span: Span,
+    },
+    /// Type-test bind pattern — `case Sub ident ->`. A bare
+    /// identifier name followed by another identifier, with no
+    /// parens. Equivalent to `Sub(var ident)` for sealed-class
+    /// hierarchies (the `ident` binds to the matched variant's
+    /// underlying struct). Matches Java 21's record/type-pattern
+    /// shape: `case Box b -> ...`.
+    TypeBind {
+        /// The class name being matched on.
+        type_name: Ident,
+        /// The identifier binding the matched value.
+        binder: Ident,
+        /// Span covering `Type ident`.
+        span: Span,
+    },
 }

@@ -115,6 +115,46 @@ pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
     Ok(CompileResult { crate_, diagnostics })
 }
 
+/// `compile_workspace` variant that emits a `jux test` binary
+/// instead of a regular `void main()` shim. The produced crate's
+/// `fn main` is the test runner — it discovers every `@Test`-
+/// annotated free function, runs each one inside
+/// `std::panic::catch_unwind`, and exits non-zero if any test
+/// fails. Same lex/parse/resolve/tycheck pipeline as
+/// [`compile_workspace`]; only the backend emit differs.
+pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult> {
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    if sources.is_empty() {
+        return Ok(CompileResult { crate_: None, diagnostics });
+    }
+    let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
+    for source in &sources {
+        let lex_result = juxc_lex::lex(source);
+        diagnostics.extend(lex_result.diagnostics);
+        let parsed = juxc_parse::parse(&lex_result.tokens);
+        diagnostics.extend(parsed.diagnostics);
+        let resolved = juxc_resolve::resolve(&parsed.ast);
+        diagnostics.extend(resolved.diagnostics);
+        units.push(parsed.ast);
+    }
+    let typed = juxc_tycheck::typecheck_workspace(&units);
+    diagnostics.extend(typed.diagnostics);
+    let has_errors = diagnostics
+        .iter()
+        .any(|d| matches!(d.severity, Severity::Error));
+    let crate_ = if has_errors {
+        None
+    } else {
+        Some(juxc_backend_rust::lower_workspace_test(
+            &units,
+            &typed.symbols,
+            &typed.expr_types,
+            &sources,
+        ))
+    };
+    Ok(CompileResult { crate_, diagnostics })
+}
+
 /// Compile a single source file through every phase that's currently
 /// wired up. Returns a [`CompileResult`].
 ///

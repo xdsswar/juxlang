@@ -251,6 +251,74 @@ pub fn lower_workspace(
     e.finish()
 }
 
+/// Same as [`lower_workspace`], but emits a **test-runner main**
+/// instead of the regular `void main()` shim.
+///
+/// Discovers every top-level free function annotated with `@Test`
+/// (case-insensitive — see [`feedback_annotations_case_insensitive`])
+/// and emits a synthetic `fn main()` at the crate root that:
+///
+///   - Walks the discovered test functions in source-declaration
+///     order.
+///   - Runs each one inside `std::panic::catch_unwind`.
+///   - Reports PASS / FAIL with the captured panic message.
+///   - Exits non-zero when at least one test fails so CI can
+///     detect regressions.
+///
+/// The user's own `void main()` is ignored in test mode — the
+/// test runner is the binary's entry point. This matches Cargo's
+/// `cargo test` shape where `fn main` from the bin target is
+/// replaced by the test harness's main.
+pub fn lower_workspace_test(
+    units: &[CompilationUnit],
+    symbols: &SymbolTable,
+    expr_types: &HashMap<Span, Ty>,
+    sources: &[SourceFile],
+) -> RustCrate {
+    let mut e = RustEmitter::new(symbols, expr_types.clone());
+    e.workspace_mode = true;
+    e.test_mode = true;
+    for unit in units {
+        let unit_set = collect_user_mut_methods(unit);
+        e.user_mut_methods.extend(unit_set);
+    }
+    for unit in units {
+        let pkg: Vec<String> = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
+            .unwrap_or_default();
+        let pkg_str = pkg.join(".");
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                let fqn = if pkg_str.is_empty() {
+                    cd.name.text.clone()
+                } else {
+                    format!("{pkg_str}.{}", cd.name.text)
+                };
+                e.class_asts.insert(fqn, cd.clone());
+            }
+        }
+    }
+    if sources.len() == 1 {
+        let line = format!("// Source: {}\n", sources[0].path().display());
+        e.w.replace_first("// Source: <jux compilation unit>\n", &line);
+    }
+    let mut tree = PackageNode::default();
+    for (i, unit) in units.iter().enumerate() {
+        let pkg: Vec<String> = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
+            .unwrap_or_default();
+        tree.insert(&pkg, i);
+    }
+    e.emit_package_tree(&tree, units, sources);
+    e.source = None;
+    e.emit_test_runner_main(units);
+    e.finish()
+}
+
 /// Internal node in the per-workspace package tree built by
 /// `lower_workspace`. Each node owns the bare path component for its
 /// level plus the indices (into the `units` slice) of every unit
@@ -442,6 +510,11 @@ struct RustEmitter {
     /// (`lower_with_source`, `lower`, etc.) leave this `false` so
     /// existing behavior is preserved unchanged.
     workspace_mode: bool,
+    /// When `true`, the emitter is producing a `jux test` binary:
+    /// the workspace shim is a test runner that invokes every
+    /// `@Test`-annotated function instead of the user's `main()`.
+    /// Set by [`lower_workspace_test`].
+    test_mode: bool,
     /// Index into `symbols.units` for the compilation unit currently
     /// being emitted. Powers import-alias-aware bare-name lookups
     /// in the backend — the unit's [`UnitContext::unqualified`]
@@ -622,6 +695,7 @@ impl RustEmitter {
             symbols: symbols.clone(),
             expr_types,
             workspace_mode: false,
+            test_mode: false,
             current_unit_idx: None,
             anonymous_class_counter: 0,
             class_asts: std::collections::HashMap::new(),
@@ -920,6 +994,122 @@ impl RustEmitter {
             self.w.line("}");
             return;
         }
+    }
+
+    /// Emit the test-runner `fn main()` for `jux test`. Walks every
+    /// unit's top-level functions and collects the ones annotated
+    /// `@Test` (case-insensitive). Each test runs inside
+    /// `std::panic::catch_unwind` so a panicking assertion fails
+    /// the test instead of aborting the whole runner. Output is
+    /// formatted to mirror `cargo test`'s human-readable shape:
+    ///
+    /// ```text
+    /// running 3 tests
+    ///   PASS test_one
+    ///   PASS test_two
+    ///   FAIL test_three: expected 42, got 41
+    ///
+    /// test result: FAILED. 2 passed; 1 failed
+    /// ```
+    pub(crate) fn emit_test_runner_main(&mut self, units: &[CompilationUnit]) {
+        // Discovery — collect `(call_path, display_name)` tuples
+        // for every `@Test` free function across every unit. The
+        // call path includes the package prefix (`mypkg::myfn`)
+        // so the synthetic main can reach into packaged modules.
+        let mut tests: Vec<(String, String)> = Vec::new();
+        for unit in units {
+            let pkg: Vec<&str> = unit
+                .package
+                .as_ref()
+                .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect())
+                .unwrap_or_default();
+            for item in &unit.items {
+                let TopLevelDecl::Function(fn_decl) = item else {
+                    continue;
+                };
+                let has_test = fn_decl.annotations.iter().any(|a| {
+                    a.name.segments.last().is_some_and(|seg| {
+                        // Case-insensitive match per the
+                        // `feedback_annotations_case_insensitive`
+                        // rule — `@Test`, `@test`, `@TEST` all
+                        // count as the same annotation.
+                        seg.text.eq_ignore_ascii_case("Test")
+                    })
+                });
+                if !has_test {
+                    continue;
+                }
+                let mut path = String::new();
+                for seg in &pkg {
+                    path.push_str(seg);
+                    path.push_str("::");
+                }
+                path.push_str(&fn_decl.name.text);
+                tests.push((path, fn_decl.name.text.clone()));
+            }
+        }
+        self.w.newline();
+        self.w.line("fn main() {");
+        self.w.indent_inc();
+        // Suppress the default panic hook's "thread 'main' panicked
+        // at …" noise. Each failed test still surfaces through the
+        // catch_unwind path below as a `FAIL` line — the stderr
+        // diagnostic from rustc's hook would just double-print.
+        self.w
+            .line("std::panic::set_hook(Box::new(|_| {}));");
+        // Header — total count helps the user see at a glance
+        // how many tests will run.
+        self.w.emit_indent();
+        self.w
+            .push_str(&format!("println!(\"running {} tests\");\n", tests.len()));
+        self.w.line("let mut __jux_passed: i64 = 0;");
+        self.w.line("let mut __jux_failed: i64 = 0;");
+        for (call_path, display) in &tests {
+            // Wrap each call in catch_unwind so a panic from one
+            // test doesn't abort the runner. The closure captures
+            // nothing — test functions are top-level, no closure
+            // state needed.
+            self.w.emit_indent();
+            self.w.push_str(
+                "let __jux_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ",
+            );
+            self.w.push_str(call_path);
+            self.w.push_str("()));\n");
+            self.w.emit_indent();
+            self.w.push_str("match __jux_result {\n");
+            self.w.indent_inc();
+            self.w.emit_indent();
+            self.w
+                .push_str(&format!("Ok(_) => {{ println!(\"  PASS {display}\"); __jux_passed += 1; }}\n"));
+            self.w.emit_indent();
+            self.w.push_str("Err(__jux_payload) => {\n");
+            self.w.indent_inc();
+            self.w.line(
+                "let __jux_msg: String = __jux_payload.downcast_ref::<String>().cloned()",
+            );
+            self.w.line(
+                "    .or_else(|| __jux_payload.downcast_ref::<&'static str>().map(|s| s.to_string()))",
+            );
+            self.w.line("    .unwrap_or_else(|| String::from(\"<panic>\"));");
+            self.w.emit_indent();
+            self.w
+                .push_str(&format!("println!(\"  FAIL {display}: {{}}\", __jux_msg);\n"));
+            self.w.line("__jux_failed += 1;");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+        // Summary + exit code. A non-zero exit is what CI looks
+        // at to gate merges, so the runner panics on failure
+        // (Rust's default-hook handles the exit code).
+        self.w.line("println!();");
+        self.w.line(
+            "println!(\"test result: {}. {} passed; {} failed\", if __jux_failed == 0 { \"ok\" } else { \"FAILED\" }, __jux_passed, __jux_failed);",
+        );
+        self.w.line("if __jux_failed > 0 { std::process::exit(1); }");
+        self.w.indent_dec();
+        self.w.line("}");
     }
 
     /// Emit one Rust `use` statement per Jux `import` declaration.

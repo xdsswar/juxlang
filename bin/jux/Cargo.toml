@@ -19,6 +19,11 @@ juxc-source      = { workspace = true }
 juxc-diagnostics = { workspace = true }
 anyhow           = { workspace = true }
 clap             = { workspace = true }
+# `toml` parses the project manifest (`jux.toml`). The minimal-
+# feature build avoids pulling in serde so the bare reader stays
+# small. Project mode (`jux build`/`run`/`check` without a file)
+# uses this to discover the package layout.
+toml             = { version = "0.8", default-features = false, features = ["parse"] }
 
 # Embed Windows resources (icon + VERSIONINFO with product name,
 # company, copyright, file/product version). Only active on the
