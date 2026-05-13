@@ -2395,38 +2395,40 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
             Ty::Array { element: e1, kind: k1 },
             Ty::Array { element: e2, kind: k2 },
         ) => k1 == k2 && compatible(e1, e2, symbols),
-        // User types — same name AND pairwise compatible generic args.
-        //
-        // **Pending: upcasting.** Java semantics allow a subclass
-        // instance into a parent-typed slot (`void greet(Animal a)`
-        // accepts a `Dog`). Phase 1 doesn't implement this because
-        // the **backend** can't lower the upcast safely — passing a
-        // `Circle` value where a `Shape` is expected loses the
-        // subclass's identity (Rust's auto-deref doesn't kick in
-        // for by-value fn args; `__parent` extraction would discard
-        // Circle's own fields). Wiring the upcast end-to-end
-        // requires the class-representation selector (Tier 1.1)
-        // that boxes subclasses behind a trait object or similar.
-        // Until then the strict same-name match keeps the
-        // diagnostic clear: the user gets E0410 at the call site
-        // rather than a Rust E0308 deeper into the emitted code.
+        // User types — same name AND pairwise compatible generic
+        // args, OR `found` is a subclass of `expected` (Java
+        // upcasting). The backend pairs this rule with sealed-class
+        // enum lowering + auto-`From<Sub>` impls so the upcast
+        // actually carries the subclass's identity through the
+        // boundary; non-sealed hierarchies still see strict
+        // same-name matching today, and the backend rejects the
+        // upcast at emit time when the parent isn't sealed (so the
+        // diagnostic is at least loud rather than silently
+        // mis-lowered).
         (
             Ty::User { name: n1, generic_args: a1 },
             Ty::User { name: n2, generic_args: a2 },
         ) => {
-            if n1 != n2 {
-                return false;
+            if n1 == n2 {
+                // Same name — length-mismatch is only a problem
+                // when neither side is empty; empty generic args
+                // on one side typically means "user didn't write
+                // the args" — be lenient.
+                if a1.is_empty() || a2.is_empty() {
+                    return true;
+                }
+                if a1.len() != a2.len() {
+                    return false;
+                }
+                return a1
+                    .iter()
+                    .zip(a2.iter())
+                    .all(|(x, y)| compatible(x, y, symbols));
             }
-            // Length-mismatch is only a problem if neither side is
-            // empty. Empty generic args on one side typically means
-            // "user didn't write the args" — be lenient.
-            if a1.is_empty() || a2.is_empty() {
-                return true;
-            }
-            if a1.len() != a2.len() {
-                return false;
-            }
-            a1.iter().zip(a2.iter()).all(|(x, y)| compatible(x, y, symbols))
+            // Different names — try the upcast direction: is the
+            // found type a subclass of the expected type? Walks
+            // the class-extends chain via `is_subtype`.
+            is_subtype(found, expected, symbols)
         }
         _ => false,
     }

@@ -23,3 +23,5 @@ Cargo.lock.bak
 /examples/_stress_async_parallel/target/
 /examples/_worker_smoke/target/
 /examples/_stress_workers/target/
+/examples/_sealed/target/
+/examples/_seal_pat/target/
