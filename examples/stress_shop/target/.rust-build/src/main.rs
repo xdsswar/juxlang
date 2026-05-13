@@ -414,11 +414,7 @@ pub mod shop {
             }
         }
 
-        impl Loggable for Customer {
-            fn displayName(&self) -> String {
-                self.displayName()
-            }
-        }
+        impl Loggable for Customer {}
 
         pub trait CustomerKind {}
         impl CustomerKind for Customer {}
@@ -458,11 +454,7 @@ pub mod shop {
             }
         }
 
-        impl Loggable for Staff {
-            fn displayName(&self) -> String {
-                self.displayName()
-            }
-        }
+        impl Loggable for Staff {}
 
         pub trait StaffKind {}
         impl StaffKind for Staff {}

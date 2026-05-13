@@ -503,35 +503,23 @@ impl RustEmitter {
             // also drop static methods — they're emitted as free
             // functions adjacent to the trait, never as trait
             // items, so they have no place in `impl Trait for ...`.
-            // Collect method names declared on this class AND on any
-            // ancestor via the `extends` chain. When the trait impl
-            // is rolled up from a parent's `implements` clause, the
-            // method body lives on the parent; we still need to emit
-            // a delegating impl on `self` (`fn x(&self) {
-            // self.x() }`) so Rust dispatches through `Deref`
-            // to the parent's inherent method. Default-only methods
-            // that nobody overrides drop through to Rust's trait
-            // default — those stay out of the retained set so the
-            // empty-impl branch below handles them.
-            let mut class_method_names: std::collections::HashSet<String> =
-                class_decl
-                    .methods
-                    .iter()
-                    .map(|m| m.name.text.clone())
-                    .collect();
-            {
-                let mut cursor: Option<&juxc_ast::TypeRef> = class_decl.extends.as_ref();
-                while let Some(parent_ref) = cursor {
-                    let Some(parent_name) = parent_ref.name.segments.first() else { break };
-                    let Some(parent_sig) =
-                        self.lookup_class_by_bare_or_fqn(parent_name.text.as_str())
-                    else { break };
-                    for m_name in parent_sig.methods.keys() {
-                        class_method_names.insert(m_name.clone());
-                    }
-                    cursor = parent_sig.extends.as_ref();
-                }
-            }
+            // Retain only methods this class declares inherently —
+            // delegating via `self.method()` is safe here because
+            // method resolution finds the inherent body before the
+            // trait method. Methods that come from the parent chain
+            // would recurse infinitely through this same trait
+            // impl, so we leave them for the empty-impl branch
+            // (Rust's trait default handles them). The compile-time
+            // limit: an interface with an abstract method whose
+            // body lives in a parent class won't currently produce
+            // a working concrete impl. The fix is a future
+            // ancestor-FQN-aware delegating body — for now,
+            // make such methods `default` on the interface.
+            let class_method_names: std::collections::HashSet<&str> = class_decl
+                .methods
+                .iter()
+                .map(|m| m.name.text.as_str())
+                .collect();
             methods.retain(|(name, sig)| {
                 !sig.is_static && class_method_names.contains(name.as_str())
             });
