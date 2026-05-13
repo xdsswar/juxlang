@@ -1,0 +1,35 @@
+// Sealed-class pattern destructuring.
+
+public sealed class Light permits Red, Yellow, Green {}
+
+public final class Red extends Light {
+    public int seconds;
+    public Red(int s) { this.seconds = s; }
+}
+public final class Yellow extends Light {
+    public int seconds;
+    public Yellow(int s) { this.seconds = s; }
+}
+public final class Green extends Light {
+    public int seconds;
+    public bool arrow;
+    public Green(int s, bool arrow) {
+        this.seconds = s;
+        this.arrow = arrow;
+    }
+}
+
+public String describe(Light l) {
+    return switch (l) {
+        case Red(var s)              -> $"red for ${s}s";
+        case Yellow(var s)           -> $"yellow for ${s}s";
+        case Green(var s, var arrow) -> arrow ? $"green ${s}s + left arrow" : $"green ${s}s";
+    };
+}
+
+public void main() {
+    print(describe(new Red(30)));
+    print(describe(new Yellow(5)));
+    print(describe(new Green(25, true)));
+    print(describe(new Green(25, false)));
+}

@@ -1,0 +1,33 @@
+// Static nested types — flattened to top level on parse.
+
+public class Outer {
+    public static int count = 0;
+
+    public static class Inner {
+        public int n;
+        public Inner(int n) { this.n = n; }
+        public int squared() { return this.n * this.n; }
+    }
+
+    public static record Pair(int x, int y) {
+        public int sum() { return this.x + this.y; }
+    }
+
+    public int bump() {
+        count = count + 1;
+        return count;
+    }
+}
+
+public void main() {
+    var o = new Outer();
+    print(o.bump());
+    print(o.bump());
+
+    var i = new Inner(7);
+    print($"Inner.n=${i.n}, squared=${i.squared()}");
+
+    var p = new Pair(3, 4);
+    print($"Pair=${p.x},${p.y}, sum=${p.sum()}");
+    print($"Outer.count=${Outer.count}");
+}

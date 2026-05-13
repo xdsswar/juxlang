@@ -38,6 +38,19 @@ impl<'a> Parser<'a> {
                 self.recover_to_top_level();
             }
         }
+        // Flatten nested-type declarations out to the top level so
+        // the symbol table, resolver, and backend treat them like
+        // any other top-level type. Their names stay unchanged
+        // (`new Inner()` resolves via the FQN-suffix scan); the
+        // Java `Outer.Inner` qualified-access path is a follow-up
+        // when nested types need real namespacing. Per spec §1379
+        // nested types are *all* implicitly `static` so this lift
+        // doesn't lose semantics.
+        let mut flattened: Vec<TopLevelDecl> = Vec::new();
+        for item in items.drain(..) {
+            collect_nested_flat(item, &mut flattened);
+        }
+        let items = flattened;
 
         // Span the whole file from the first token to the EOF marker.
         let end = self.peek_span();
@@ -442,6 +455,26 @@ impl<'a> Parser<'a> {
 /// - `final abstract class Foo {}` (illegal but lookahead-true) → true
 /// - `final int X = 5;`                    → false (const decl)
 /// - `final Animal x = new Dog();`         → false (const decl)
+/// Recursively flatten nested-type declarations into a top-level
+/// list. Used by the compilation-unit post-pass so the resolver,
+/// symbol table, and backend treat them like any other top-level
+/// type. Nested types DECLARED on the class are also recursively
+/// flattened (a nested class can itself contain nested classes).
+/// The original `nested_types` list is drained out of the parent
+/// ClassDecl so it ends up empty after this pass.
+fn collect_nested_flat(item: TopLevelDecl, out: &mut Vec<TopLevelDecl>) {
+    match item {
+        TopLevelDecl::Class(mut class_decl) => {
+            let nested = std::mem::take(&mut class_decl.nested_types);
+            out.push(TopLevelDecl::Class(class_decl));
+            for n in nested {
+                collect_nested_flat(n, out);
+            }
+        }
+        other => out.push(other),
+    }
+}
+
 fn looks_like_class_modifier_chain<'a>(parser: &crate::Parser<'a>) -> bool {
     let mut i = parser.pos;
     loop {

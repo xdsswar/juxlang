@@ -71,6 +71,7 @@ impl<'a> Parser<'a> {
         let mut constructors = Vec::new();
         let mut methods = Vec::new();
         let mut operators = Vec::new();
+        let mut nested_types: Vec<juxc_ast::TopLevelDecl> = Vec::new();
 
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             // Per grammar §A.2.4 each class member may carry its own
@@ -78,6 +79,68 @@ impl<'a> Parser<'a> {
             // member's parser.
             let member_anns = self.parse_annotations();
             let member_vis = self.parse_visibility();
+            // Nested-type lookahead: walk forward without consuming
+            // through `[static] [abstract|final|sealed]*` and see
+            // if a `class`/`interface`/`record`/`enum` keyword
+            // eventually appears. If yes, commit (consume the
+            // modifiers + dispatch to the matching parser); else
+            // leave the cursor alone so the field/method/operator
+            // path can do its own static/abstract/final consumption.
+            {
+                let mut probe = self.pos;
+                if matches!(
+                    self.tokens.get(probe).map(|t| &t.kind),
+                    Some(TokenKind::Kw(Keyword::Static))
+                ) {
+                    probe += 1;
+                }
+                while matches!(
+                    self.tokens.get(probe).map(|t| &t.kind),
+                    Some(TokenKind::Kw(Keyword::Abstract))
+                        | Some(TokenKind::Kw(Keyword::Final))
+                        | Some(TokenKind::Kw(Keyword::Sealed))
+                ) {
+                    probe += 1;
+                }
+                let is_nested_keyword = matches!(
+                    self.tokens.get(probe).map(|t| &t.kind),
+                    Some(TokenKind::Kw(Keyword::Class))
+                        | Some(TokenKind::Kw(Keyword::Interface))
+                        | Some(TokenKind::Kw(Keyword::Record))
+                        | Some(TokenKind::Kw(Keyword::Enum))
+                );
+                if is_nested_keyword {
+                    let _ = self.eat_kw(Keyword::Static);
+                    let is_abstract = self.eat_kw(Keyword::Abstract);
+                    let is_final = self.eat_kw(Keyword::Final);
+                    let is_sealed = self.eat_kw(Keyword::Sealed);
+                    let nested = match self.peek() {
+                        TokenKind::Kw(Keyword::Class) => self
+                            .parse_class_decl(
+                                member_anns.clone(),
+                                member_vis,
+                                is_abstract,
+                                is_final,
+                                is_sealed,
+                            )
+                            .map(juxc_ast::TopLevelDecl::Class),
+                        TokenKind::Kw(Keyword::Interface) => self
+                            .parse_interface_decl(member_anns.clone(), member_vis)
+                            .map(juxc_ast::TopLevelDecl::Interface),
+                        TokenKind::Kw(Keyword::Record) => self
+                            .parse_record_decl(member_anns.clone(), member_vis)
+                            .map(juxc_ast::TopLevelDecl::Record),
+                        TokenKind::Kw(Keyword::Enum) => self
+                            .parse_enum_decl(member_anns.clone(), member_vis)
+                            .map(juxc_ast::TopLevelDecl::Enum),
+                        _ => None,
+                    };
+                    if let Some(nt) = nested {
+                        nested_types.push(nt);
+                        continue;
+                    }
+                }
+            }
             // Three dispatch shapes after visibility:
             //   1. `Name(` → constructor (name matches class).
             //   2. `Type Name(` → method.
@@ -260,6 +323,7 @@ impl<'a> Parser<'a> {
             constructors,
             methods,
             operators,
+            nested_types,
             span: start.join(end),
         })
     }

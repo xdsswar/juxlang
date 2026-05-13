@@ -61,7 +61,47 @@ pub enum Stmt {
     /// backend into the `__parent: Parent::new(args)` slot of the
     /// child's struct literal.
     SuperCall(Vec<Expr>, Span),
-    // For, ForEach, Switch, Throw, Try, Unsafe, …
+    /// `throw <expr> ;` — raise an exception per
+    /// `JUX-EXCEPTIONS-ADDENDUM.md` §X.2. Phase-1 lowering panics
+    /// the thread with the expression's `Display` rendering; full
+    /// typed-exception semantics land with the Result-mode pass.
+    Throw(Expr, Span),
+    /// `try { B } catch (T name) { B } ... [finally { B }]`. Per
+    /// §X.3. Phase-1 lowering wraps the try block in
+    /// `std::panic::catch_unwind` and binds the caught name to
+    /// the panic payload's `Display` string regardless of `T`.
+    Try(TryStmt),
+    // For, Switch, Unsafe, …
+}
+
+/// `try B0 catch (T1 e1) B1 catch (T2 e2) B2 ... finally Bf` —
+/// the statement form of try/catch per spec §X.3.1.
+#[derive(Debug, Clone)]
+pub struct TryStmt {
+    /// `B0` — the body that may throw.
+    pub body: Block,
+    /// `catch (T eᵢ) Bᵢ` clauses in source order.
+    pub catches: Vec<CatchClause>,
+    /// Optional `finally { Bf }` block. `None` when omitted.
+    pub finally: Option<Block>,
+    /// Span covering `try { … } …`.
+    pub span: Span,
+}
+
+/// One `catch (T name) { ... }` clause. The declared type drives
+/// the diagnostic (and, in the future, the runtime type filter);
+/// Phase-1 lowering catches any panic and binds `name` to the
+/// panic message as a String, ignoring the declared `T`.
+#[derive(Debug, Clone)]
+pub struct CatchClause {
+    /// Declared exception type — `IOException`, `MyError`, …
+    pub ty: TypeRef,
+    /// Bound name inside the catch block.
+    pub name: Ident,
+    /// Body executed when the catch matches.
+    pub body: Block,
+    /// Span of the whole clause.
+    pub span: Span,
 }
 
 /// A `var` local-variable declaration. Per §A.2.8:

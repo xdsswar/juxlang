@@ -360,6 +360,16 @@ pub struct ClassDecl {
     /// compiler can route them through the dispatch rules in §O.2.6
     /// without having to filter by name shape.
     pub operators: Vec<OperatorDecl>,
+    /// Static nested type declarations inside this class body —
+    /// `static class Inner { … }`, `static record Pair(int x, int y)`,
+    /// etc. Per spec §1379 only `static` nested forms are
+    /// allowed (no inner classes, no anonymous classes here —
+    /// the latter live as expression forms via `new Iface() { … }`).
+    /// The parser stores them here; the backend lifts each to the
+    /// enclosing module scope with a name-prefixed identifier so
+    /// the Java-style `Outer.Inner` access path round-trips
+    /// through the FQN-resolver.
+    pub nested_types: Vec<crate::TopLevelDecl>,
     /// Span covering the whole `class Name { … }` declaration.
     pub span: Span,
 }
