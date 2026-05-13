@@ -163,6 +163,9 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
             collect_mutating_calls(&e.value, out, user_mut);
             collect_mutating_calls(&e.fallback, out, user_mut);
         }
+        // Method-ref is a closure construction; no calls happen
+        // until the user invokes the returned value.
+        Expr::MethodRef(_) => {}
     }
 }
 
@@ -611,6 +614,16 @@ impl crate::RustEmitter {
     /// safety: returning `false` defaults to wrap, which is the
     /// safer direction.
     pub(crate) fn expression_is_already_nullable(&self, expr: &juxc_ast::Expr) -> bool {
+        // First, ask tycheck directly. With the `Ty::Nullable`
+        // refactor, every expression visited by `check::Checker`
+        // carries its full type — including the nullable wrap —
+        // in `expr_types[span]`. Reading this answer is more
+        // precise than the syntactic fallback paths below.
+        if let Some(juxc_tycheck::Ty::Nullable(_)) =
+            self.expr_types.get(&crate::exprs::expr_span_of(expr))
+        {
+            return true;
+        }
         match expr {
             juxc_ast::Expr::Literal(juxc_ast::Literal::Null) => true,
             juxc_ast::Expr::Path(qn) => {

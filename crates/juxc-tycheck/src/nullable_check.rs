@@ -320,6 +320,10 @@ fn check_expr(e: &Expr, diags: &mut Vec<Diagnostic>) {
             check_expr(&e.value, diags);
             check_expr(&e.fallback, diags);
         }
+        Expr::MethodRef(_) => {
+            // The receiver is a type path; member is just a
+            // name. No nested expression to walk.
+        }
     }
 }
 

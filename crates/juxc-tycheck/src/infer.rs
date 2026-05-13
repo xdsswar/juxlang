@@ -108,6 +108,12 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // expected to share an inner type (Phase 1 doesn't enforce
         // it yet — that's a future tycheck refinement).
         Expr::Elvis(e) => infer_expr(&e.fallback, env, symbols),
+        // Method reference: a function-typed value. Phase 1
+        // doesn't track function types as a concrete `Ty`
+        // variant beyond what `Ty::Unknown` allows for
+        // higher-order callbacks; emitting `Unknown` keeps the
+        // call-site flow open for the backend to wire up.
+        Expr::MethodRef(_) => Ty::Unknown,
     }
 }
 
@@ -125,7 +131,13 @@ fn infer_literal(lit: &Literal) -> Ty {
         Literal::Float(FloatLit { kind, .. }) => Ty::Primitive(primitive_from_float_kind(*kind)),
         Literal::String(_) => Ty::String,
         Literal::Bool(_) => Ty::Primitive(Primitive::Bool),
-        Literal::Null => Ty::Unknown,
+        // `null` has no concrete inner type until context fixes
+        // it (e.g. `String? x = null;`). We model it as a nullable
+        // wrapper around `Unknown`; the compatibility predicate
+        // treats `Nullable(Unknown)` as a wildcard `null` value
+        // that fits any `T?` slot. The inner stays `Unknown` so
+        // type-error printers know to elide it.
+        Literal::Null => Ty::Nullable(Box::new(Ty::Unknown)),
     }
 }
 

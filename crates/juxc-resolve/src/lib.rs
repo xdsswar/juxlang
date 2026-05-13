@@ -52,6 +52,7 @@ use juxc_ast::{
     IfStmt, ImportSpec, QualifiedName, Stmt, TopLevelDecl, VarDecl, WhileStmt,
 };
 use juxc_diagnostics::{code, Diagnostic};
+use juxc_source::Span;
 
 /// Output of [`resolve`]. The diagnostics list is empty when every
 /// name resolved cleanly.
@@ -147,16 +148,35 @@ impl Resolver {
     /// `user_names` instead — this lets [`Self::collect_top_level`] reuse
     /// the same code path.
     ///
-    /// **TODO (spec gap).** Same-scope re-declaration (`var x = 1;
-    /// var x = 2;` inside one block) currently overwrites silently.
-    /// The diagnostics addendum hasn't allocated a code for
-    /// duplicate locals yet (E0302 is reserved for cyclic imports);
-    /// once a code lands in §D.4, push it here instead of the
-    /// silent `insert`. Until then this stays a HashSet semantics
-    /// match: every `declare` succeeds. Top-level duplicates are
-    /// caught downstream by tycheck via `E0400_DuplicateDeclaration`.
+    /// **Same-scope shadowing** fires `E0304_DuplicateLocalDeclaration`
+    /// per `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4. Outer-scope
+    /// shadowing (a nested scope reusing a name) is still allowed;
+    /// only collisions within the innermost active scope are
+    /// rejected. Globals (no active scope) silently overwrite —
+    /// duplicate top-level decls land downstream at tycheck via
+    /// `E0400_DuplicateDeclaration`.
     fn declare(&mut self, name: &str) {
+        self.declare_at(name, Span::DUMMY);
+    }
+
+    /// Like [`Self::declare`] but with a source span used to anchor
+    /// the diagnostic on a re-declaration. Use this when the
+    /// caller has a `Span` handy (e.g. the offending `Ident`'s).
+    fn declare_at(&mut self, name: &str, span: Span) {
         if let Some(top) = self.scopes.last_mut() {
+            if top.contains(name) {
+                self.diagnostics.push(
+                    juxc_diagnostics::Diagnostic::error(
+                        code::Code::E0304_DuplicateLocalDeclaration,
+                        format!(
+                            "`{name}` is already declared in this scope; \
+                             rename the local or move it into a nested block",
+                        ),
+                    )
+                    .with_span(span),
+                );
+                return;
+            }
             top.insert(name.to_string());
         } else {
             self.user_names.insert(name.to_string());
@@ -533,7 +553,10 @@ impl Resolver {
         if let Some(init) = &var.init {
             self.visit_expr(init);
         }
-        self.declare(&var.name.text);
+        // Use the span-aware variant so a re-declaration error
+        // (`E0304_DuplicateLocalDeclaration`) lands on the new
+        // `var name` token, not on the original one.
+        self.declare_at(&var.name.text, var.name.span);
     }
 
     fn visit_if(&mut self, if_stmt: &IfStmt) {
@@ -714,6 +737,17 @@ impl Resolver {
                 self.visit_expr(&e.value);
                 self.visit_expr(&e.fallback);
             }
+            Expr::MethodRef(m) => {
+                // `Receiver::member`. Check that the receiver path
+                // resolves to a known type. Member existence is
+                // a tycheck job — the resolver only knows names
+                // at the unit level, not method tables. Until
+                // tycheck wires method-name verification for
+                // method references, a typo in `member` surfaces
+                // at the Rust compile step instead of as an
+                // E0413; acceptable trade-off for Phase 1.
+                self.check_path(&m.receiver);
+            }
         }
     }
 
@@ -822,6 +856,61 @@ mod tests {
             }
         "#;
         assert_eq!(resolve_count(src), 1);
+    }
+
+    /// Same-scope `var x = …; var x = …;` fires E0304 per the
+    /// diagnostics addendum §D.4.
+    #[test]
+    fn same_scope_duplicate_local_emits_e0304() {
+        let src = r#"
+            public void main() {
+                var x = 1;
+                var x = 2;
+            }
+        "#;
+        let diags = resolve(&parse_clean(src)).diagnostics;
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0304_DuplicateLocalDeclaration),
+            "expected E0304, got: {diags:?}",
+        );
+    }
+
+    /// Outer-scope shadowing — a nested block declares a `var x`
+    /// while an outer `x` is in scope — is allowed (no E0304).
+    /// Mirrors Java / Kotlin / Rust: only collisions within one
+    /// scope are rejected.
+    #[test]
+    fn nested_scope_shadowing_is_allowed() {
+        let src = r#"
+            public void main() {
+                var x = 1;
+                if (true) {
+                    var x = 2;
+                    print(x);
+                }
+                print(x);
+            }
+        "#;
+        let diags = resolve(&parse_clean(src)).diagnostics;
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0304_DuplicateLocalDeclaration),
+            "no E0304 for nested-scope shadowing: {diags:?}",
+        );
+    }
+
+    /// Helper for tests that need to inspect parse output before
+    /// resolving. The existing `resolve_count` discards the AST.
+    fn parse_clean(src: &str) -> juxc_ast::CompilationUnit {
+        let sf = SourceFile::new("test.jux", src);
+        let lex_result = juxc_lex::lex(&sf);
+        assert!(lex_result.diagnostics.is_empty(), "lex: {:?}", lex_result.diagnostics);
+        let parse_result = juxc_parse::parse(&lex_result.tokens);
+        assert!(parse_result.diagnostics.is_empty(), "parse: {:?}", parse_result.diagnostics);
+        parse_result.ast
     }
 
     /// A `var` inside an `if` block goes out of scope when the block ends.

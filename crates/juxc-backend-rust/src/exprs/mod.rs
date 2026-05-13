@@ -149,7 +149,112 @@ impl RustEmitter {
             }
             Expr::Lambda(l) => self.emit_lambda(l),
             Expr::Elvis(e) => self.emit_elvis(e),
+            Expr::MethodRef(m) => self.emit_method_ref(m),
         }
+    }
+
+    /// Lower `Receiver::member` to an `Rc<dyn Fn(...) -> R>` —
+    /// always a closure wrapper, even for static methods, so the
+    /// value flows into Jux function-typed slots
+    /// (`Rc<dyn Fn(...)>` shape). Rust function items don't auto-
+    /// coerce to `dyn Fn`; wrapping unifies both shapes.
+    ///
+    /// **Shapes emitted:**
+    ///
+    /// - **Instance method** `User::greet` (arity N) →
+    ///   `Rc::new(move |__r, a0, a1, …| __r.greet(a0, a1, …))`
+    ///   The receiver is the first closure parameter; the method's
+    ///   declared positional args follow.
+    /// - **Static method** `Math::abs` (arity N) →
+    ///   `Rc::new(move |a0, a1, …| Math::abs(a0, a1, …))`
+    ///   No receiver — the args mirror the method's signature.
+    ///
+    /// Param types are elided in the closure so Rust infers them
+    /// from the surrounding function-typed slot. The receiver type
+    /// is the only explicit annotation on the instance form,
+    /// since it can't be inferred from context. Multi-segment
+    /// receivers get the `crate::` prefix the same way
+    /// `NewObject` does.
+    ///
+    /// When the symbol table doesn't carry signature info (member
+    /// is on a record / enum / unknown type, or arity can't be
+    /// looked up), we default to the **zero-arg instance** shape;
+    /// Rust will surface any real mismatch.
+    pub(crate) fn emit_method_ref(&mut self, m: &juxc_ast::MethodRefExpr) {
+        let receiver_name = m
+            .receiver
+            .segments
+            .last()
+            .map(|s| s.text.as_str())
+            .unwrap_or("");
+        let method_info = self
+            .symbols
+            .classes
+            .get(receiver_name)
+            .and_then(|c| c.methods.get(m.member.text.as_str()));
+        let is_static = method_info.map(|mi| mi.is_static).unwrap_or(false);
+        let arity = method_info.map(|mi| mi.params.len()).unwrap_or(0);
+
+        self.w.push_str("std::rc::Rc::new(move |");
+        if !is_static {
+            // Receiver parameter, with explicit type so the
+            // closure body's method call resolves.
+            self.w.push_str("__r: ");
+            if m.receiver.segments.len() > 1 {
+                self.w.push_str("crate::");
+            }
+            for (i, seg) in m.receiver.segments.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str("::");
+                }
+                self.w.push_str(&seg.text);
+            }
+            for i in 0..arity {
+                self.w.push_str(", ");
+                self.w.push_str(&format!("__a{i}"));
+            }
+        } else {
+            for i in 0..arity {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str(&format!("__a{i}"));
+            }
+        }
+        self.w.push_str("| ");
+        if is_static {
+            if m.receiver.segments.len() > 1 {
+                self.w.push_str("crate::");
+            }
+            for (i, seg) in m.receiver.segments.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str("::");
+                }
+                self.w.push_str(&seg.text);
+            }
+            self.w.push_str("::");
+            self.w.push_str(&m.member.text);
+            self.w.push('(');
+            for i in 0..arity {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str(&format!("__a{i}"));
+            }
+            self.w.push(')');
+        } else {
+            self.w.push_str("__r.");
+            self.w.push_str(&m.member.text);
+            self.w.push('(');
+            for i in 0..arity {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str(&format!("__a{i}"));
+            }
+            self.w.push(')');
+        }
+        self.w.push(')');
     }
 
     /// Lower `value ?: fallback` to Rust. `value` has type
@@ -338,6 +443,7 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
         Expr::Switch(s) => s.span,
         Expr::Lambda(l) => l.span,
         Expr::Elvis(e) => e.span,
+        Expr::MethodRef(m) => m.span,
     }
 }
 

@@ -566,6 +566,43 @@ impl<'a> Parser<'a> {
                         span,
                     });
                 }
+                TokenKind::ColonColon => {
+                    // Method reference: `Receiver::member` per
+                    // §A.4 level 20. Only meaningful when the LHS
+                    // is a single-segment Path naming a type
+                    // (class / record / enum / interface). For
+                    // other LHS shapes we still build the
+                    // `MethodRefExpr` — the resolver / tycheck
+                    // flag the bad name with the normal E0301 /
+                    // E0413 diagnostics, so the parser stays
+                    // permissive here.
+                    self.advance(); // '::'
+                    let member = self.parse_ident()?;
+                    let receiver = match &expr {
+                        Expr::Path(qn) => qn.clone(),
+                        _ => {
+                            // Synthesize an empty qualified-name
+                            // and rely on the diagnostic for the
+                            // shape error; expression position
+                            // before `::` is supposed to be a
+                            // type path.
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0200_UnexpectedToken,
+                                    "left-hand side of `::` must be a type name",
+                                )
+                                .with_span(expr_span(&expr)),
+                            );
+                            return Some(expr);
+                        }
+                    };
+                    let span = receiver.span.join(member.span);
+                    expr = Expr::MethodRef(juxc_ast::MethodRefExpr {
+                        receiver,
+                        member,
+                        span,
+                    });
+                }
                 _ => break,
             }
         }
@@ -939,6 +976,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::Switch(s) => s.span,
         Expr::Lambda(l) => l.span,
         Expr::Elvis(e) => e.span,
+        Expr::MethodRef(m) => m.span,
     }
 }
 

@@ -900,6 +900,13 @@ impl<'a> Checker<'a> {
                 self.check_expr(&e.value);
                 self.check_expr(&e.fallback);
             }
+            Expr::MethodRef(_) => {
+                // No sub-expressions to walk; method existence
+                // verification lives in a future tycheck pass
+                // (overload resolution / method-table lookup).
+                // Untyped today — backend emits the closure
+                // adapter and Rust catches missing members.
+            }
         }
     }
 
@@ -1965,6 +1972,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::Switch(s) => s.span,
         Expr::Lambda(l) => l.span,
         Expr::Elvis(e) => e.span,
+        Expr::MethodRef(m) => m.span,
     }
 }
 
@@ -2067,6 +2075,24 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
     // Exact match.
     if expected == found {
         return true;
+    }
+    // Nullable widening (one-way): a `T` fits into a `T?` slot,
+    // and `null` (typed as an Unknown-inner Nullable) fits into
+    // any `T?` slot. The reverse direction (`T?` into `T`) needs
+    // an explicit unwrap (`!!`, `?:` / `??`, or `if (x != null)`
+    // smart-cast); reject it here so tycheck catches the missing
+    // check before the backend turns it into a Rust error.
+    if let Ty::Nullable(inner_expected) = expected {
+        // `null` literal: `found` is `Ty::Nullable(Unknown)` (set
+        // by `infer_literal`). Always fits a `T?` slot.
+        if let Ty::Nullable(inner_found) = found {
+            if matches!(inner_found.as_ref(), Ty::Unknown) {
+                return true;
+            }
+            return compatible(inner_expected, inner_found, symbols);
+        }
+        // Plain `T` flows into `T?` — widening.
+        return compatible(inner_expected, found, symbols);
     }
     match (expected, found) {
         // Default-int / default-float widening — only when the FOUND
@@ -2369,6 +2395,32 @@ mod tests {
                }"#,
         );
         assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
+    }
+
+    // ---- Nullable type widening (Ty::Nullable + compatible) ----
+
+    /// `String? x = "Ada";` — non-nullable `String` widens into
+    /// the `String?` declared type without a diagnostic.
+    #[test]
+    fn non_null_value_widens_into_nullable_slot() {
+        let d = run(r#"public void main() { String? x = "Ada"; }"#);
+        assert!(d.is_empty(), "got: {d:?}");
+    }
+
+    /// `String? x = null;` — the `null` literal fits any nullable
+    /// slot. No diagnostic.
+    #[test]
+    fn null_literal_fits_any_nullable_slot() {
+        let d = run(r#"public void main() { String? x = null; }"#);
+        assert!(d.is_empty(), "got: {d:?}");
+    }
+
+    /// `String x = null;` — `null` doesn't fit a NON-nullable
+    /// slot. Fires `E0410_TypeMismatch`.
+    #[test]
+    fn null_does_not_fit_non_nullable_slot() {
+        let d = run(r#"public void main() { String x = null; }"#);
+        assert!(has(&d, code::Code::E0410_TypeMismatch), "got: {d:?}");
     }
 
     /// Assigning a String to an int local → E0410.

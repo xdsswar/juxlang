@@ -52,7 +52,7 @@ pub use decls::{
 pub use exprs::{
     BinaryExpr, BinaryOp, CallExpr, CastExpr, ElvisExpr, Expr, FieldExpr,
     IndexExpr, InterpSegment, InterpStringExpr, LambdaBody, LambdaExpr, LambdaParam,
-    NewArrayExpr, NewArrayLitExpr, NewObjectExpr, RangeExpr, SizeOfExpr,
+    MethodRefExpr, NewArrayExpr, NewArrayLitExpr, NewObjectExpr, RangeExpr, SizeOfExpr,
     UnaryExpr, UnaryOp,
 };
 pub use literals::{FloatKind, FloatLit, IntKind, IntLit, IntRadix, Literal};

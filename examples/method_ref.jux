@@ -1,0 +1,35 @@
+// Method references (`User::greet`, `Math::abs`) per §A.4 level 20.
+//
+// Two shapes:
+//   - Instance method: `User::greet` becomes a closure
+//     `|u: User| u.greet()` (Rc-wrapped to fit `(User) -> R` slots).
+//   - Static method: `Math::abs` is already function-typed; no
+//     closure wrapper needed.
+
+public class User {
+    public String name;
+    public User(String name) { this.name = name; }
+    public String greet() { return "hi, " + this.name; }
+}
+
+public class Math {
+    public static int doubled(int x) { return x + x; }
+}
+
+public String shout(User u, (User) -> String f) {
+    return f(u);
+}
+
+public int twice(int x, (int) -> int f) {
+    return f(x);
+}
+
+public void main() {
+    var ada = new User("Ada");
+    // Instance method reference: passes `User::greet` to a
+    // function-typed parameter.
+    print(shout(ada, User::greet));
+
+    // Static method reference: passes `Math::doubled`.
+    print(twice(7, Math::doubled));
+}

@@ -101,9 +101,35 @@ pub enum Ty {
     /// this. Expressions are never `Void` — that's reserved for
     /// statement-context constructs.
     Void,
+    /// A nullable wrapper — `T?` per §7.10. Carries the non-nullable
+    /// inner `Ty`. Backend lowers to Rust `Option<T>`. Only
+    /// reference-shaped inner types are well-formed here per spec
+    /// (`String?`, user-typed, `Param`, `Array`); a primitive
+    /// inner is caught by the nullable-primitive pre-pass in
+    /// `crate::nullable_check`.
+    Nullable(Box<Ty>),
     /// Inference failed for this position. Phase D may flag this; Phase
     /// C is silent.
     Unknown,
+}
+
+impl Ty {
+    /// Convenience constructor for `T?` types — wraps `inner` in
+    /// `Ty::Nullable` unless it's already nullable (no double-wrap
+    /// — `T??` collapses to `T?`).
+    pub fn nullable(inner: Ty) -> Ty {
+        if matches!(inner, Ty::Nullable(_)) {
+            inner
+        } else {
+            Ty::Nullable(Box::new(inner))
+        }
+    }
+
+    /// True iff `self` is a `Ty::Nullable(_)`. Doesn't recurse into
+    /// array / generic-arg payloads.
+    pub fn is_nullable(&self) -> bool {
+        matches!(self, Ty::Nullable(_))
+    }
 }
 
 /// Inferred shape of a bounded wildcard. The boxed `Ty` is the
@@ -279,6 +305,7 @@ impl fmt::Display for Ty {
                 write!(f, " -> {return_type}")
             }
             Ty::Void => f.write_str("void"),
+            Ty::Nullable(inner) => write!(f, "{inner}?"),
             Ty::Unknown => f.write_str("<unknown>"),
         }
     }
@@ -334,6 +361,24 @@ fn primitive_name(p: Primitive) -> &'static str {
 /// 6. Anything else → [`Ty::Unknown`]. **No diagnostic is emitted.**
 ///    Phase D will surface unresolved-name errors at use sites.
 pub fn ty_from_ref(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    let inner = ty_from_ref_unnullable(t, env, symbols);
+    // Wrap in `Ty::Nullable` when the source `TypeRef` carries
+    // the `?` suffix. The inner lowering treats `t` as-if non-
+    // nullable; we apply the wrap once at the outermost layer
+    // so nested wrappers (array of nullable, etc.) compose
+    // naturally with the array branch's recursion.
+    if t.nullable {
+        Ty::nullable(inner)
+    } else {
+        inner
+    }
+}
+
+/// Lower the non-nullable shape of `t` — same as [`ty_from_ref`]
+/// but ignores the `?` suffix. The public entry point wraps the
+/// result for nullable types; this routine handles every other
+/// shape (function, array, primitive, user, generic param).
+fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     // 0. Function-type shape — `(A, B) -> R` per grammar §A.2.7.
     //    `fn_shape` lowers to `Ty::Fn` with each param/return
     //    recursively resolved. Checked first because the rest of
@@ -566,6 +611,7 @@ fn substitute_inner(ty: &Ty, params: &[TypeParam], args: &[Ty]) -> Ty {
             return_type: Box::new(substitute_inner(return_type, params, args)),
             is_async: *is_async,
         },
+        Ty::Nullable(inner) => Ty::Nullable(Box::new(substitute_inner(inner, params, args))),
         Ty::Primitive(_) | Ty::String | Ty::Void | Ty::Unknown => ty.clone(),
     }
 }

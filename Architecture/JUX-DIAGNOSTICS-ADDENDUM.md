@@ -268,6 +268,7 @@ The complete catalog of error and warning codes referenced across JUX-LANG-V1 an
 | `E0301`  | Name not found in scope                              | Build system §B.4.1           |
 | `E0302`  | Cyclic module import                                 | Build system §B.4.6           |
 | `E0303`  | Multiple resolution candidates for name              | Build system §B.4.1           |
+| `E0304`  | Duplicate local declaration in the same scope        | JUX-LANG-V1 §6.1 / Semantics §S.1.4 |
 | `E0307`  | Duplicate annotation name (case-insensitive collision) | JUX-LANG-V1 §3.6 / Annotations §A.13 |
 | `E0320`  | Entry file has both top-level statements and a `main` function | Entry Points §E.6     |
 | `E0321`  | Multiple functions carry `@entry` in the same binary | Entry Points §E.6              |

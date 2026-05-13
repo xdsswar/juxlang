@@ -29,6 +29,14 @@ pub enum Code {
     // ---- Resolution (E0300–E0399) ----
     /// E0301 — Name not found in scope.
     E0301_NameNotFound,
+    /// E0304 — A `var` or typed-local declaration uses a name
+    /// already bound in the **same** lexical scope. Per
+    /// `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 / `JUX-LANG-V1.md` §6.1,
+    /// re-declaring a name in the same block silently shadows in
+    /// many languages but bites users; Jux forbids it. Outer-scope
+    /// shadowing (a new scope re-using a name) is still allowed —
+    /// only same-scope collisions fire this code.
+    E0304_DuplicateLocalDeclaration,
     /// E0320 — Entry file has both top-level statements and a `main` function.
     E0320_AmbiguousEntryPoint,
     /// E0323 — `main`'s signature does not match any accepted form.
@@ -156,6 +164,7 @@ impl Code {
             Code::E0210_ConstructorCallNotFirst  => "E0210",
             Code::E0211_MissingSuperCall         => "E0211",
             Code::E0301_NameNotFound             => "E0301",
+            Code::E0304_DuplicateLocalDeclaration => "E0304",
             Code::E0320_AmbiguousEntryPoint      => "E0320",
             Code::E0323_MainSignatureMismatch    => "E0323",
             Code::E0400_DuplicateDeclaration     => "E0400",

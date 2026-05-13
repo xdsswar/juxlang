@@ -223,6 +223,9 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
         },
         Expr::SizeOf(s) => expr_moves_path_at_top(&s.operand, name),
         Expr::Literal(_) | Expr::Path(_) | Expr::This(_) => false,
+        // Method reference is a static expression — no sub-paths
+        // referring to the loop variable.
+        Expr::MethodRef(_) => false,
     }
 }
 

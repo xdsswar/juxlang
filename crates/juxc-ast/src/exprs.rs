@@ -69,6 +69,27 @@ pub enum Expr {
     /// is the result, else `b` (also of type `T`) provides the
     /// fallback. Backend lowers to `a.unwrap_or(b)`.
     Elvis(ElvisExpr),
+    /// `Type::method` — method reference per §A.4 level 20. Produces
+    /// a function-typed value bound to the named member: instance
+    /// methods lower to `|x| x.method()`, static methods to
+    /// `Type::method` directly. Common shape for higher-order
+    /// callbacks: `users.forEach(User::greet)`.
+    MethodRef(MethodRefExpr),
+}
+
+/// Method-reference expression: `ReceiverType::memberName`.
+/// `receiver` is the qualified-name on the LHS of `::`, `member`
+/// the bare identifier after it. Result is a function value whose
+/// shape mirrors the referenced member: an instance method
+/// `(T) -> R`, a static method `(args…) -> R`.
+#[derive(Debug, Clone)]
+pub struct MethodRefExpr {
+    /// Type/class/path on the LHS of `::`.
+    pub receiver: QualifiedName,
+    /// Member name on the RHS of `::`.
+    pub member: Ident,
+    /// Span covering the whole `Receiver::member` form.
+    pub span: Span,
 }
 
 /// Elvis (null-coalescing) operator: `value ?: fallback`. Returns
