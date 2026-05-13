@@ -14,12 +14,11 @@ package demo.entities;
 import demo.core.Vector2;
 import demo.core.Color;
 
-// Lifecycle interface kept for demonstration. Concrete entities
-// don't implement it directly because Phase-1 trait-impl rollup
-// emits the trait method as `&self`, while Player.tick needs
-// `&mut self` (mutates this.score) — the impl mismatch would
-// recurse through the trait. Instead, each entity declares its
-// own concrete `tick(int)` method.
+// Lifecycle interface. Implementing classes whose `tick` body
+// writes to `this.field` now compose cleanly — interface methods
+// emit as `&mut self` and the trait-impl rollup uses an explicit
+// `ClassName::method(self)` call to bypass Rust's "exact receiver
+// match prefers trait" rule.
 public interface Tickable {
     void tick(int dt);
     default String hello() {
@@ -59,7 +58,7 @@ public abstract sealed class Entity permits Player, Enemy, Pickup {
     }
 }
 
-public final class Player extends Entity {
+public final class Player extends Entity implements Tickable {
     public static int totalScore = 0;
 
     private int score;
@@ -82,7 +81,7 @@ public final class Player extends Entity {
     }
 }
 
-public final class Enemy extends Entity {
+public final class Enemy extends Entity implements Tickable {
     public static int totalAttacks = 0;
 
     private int damage;

@@ -58,7 +58,18 @@ impl RustEmitter {
             self.w.push_str("fn ");
             self.w.push_str(&method.name.text);
             self.emit_generic_params(&method.generic_params);
-            self.w.push_str("(&self");
+            // `&mut self` — Java semantics make every `this` mutable,
+            // and an implementing class's method body may need to
+            // write `this.field` to satisfy its concrete behavior.
+            // Emitting the trait method as `&mut self` keeps the
+            // implementer's signature consistent so method
+            // resolution doesn't fall through to the trait method
+            // and recurse. The mutation analyzer (see
+            // `collect_user_mut_methods` + `body_writes_to_this`)
+            // is extended to follow the cascade: callers of trait
+            // methods on `this.field` get promoted to `&mut self`
+            // too.
+            self.w.push_str("(&mut self");
             for param in &method.params {
                 self.w.push_str(", ");
                 self.w.push_str(&param.name.text);

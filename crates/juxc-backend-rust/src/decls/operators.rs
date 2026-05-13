@@ -37,7 +37,12 @@ impl RustEmitter {
             return;
         }
         let body = op.body.as_ref();
-        let needs_mut_self = body.map(|b| body_writes_to_this(b)).unwrap_or(false);
+        let needs_mut_self = body
+            .map(|b| {
+                body_writes_to_this(b)
+                    || crate::analysis::body_calls_mut_method_on_this(b, &self.user_mut_methods)
+            })
+            .unwrap_or(false);
 
         self.w.indent_inc();
         self.w.emit_indent();

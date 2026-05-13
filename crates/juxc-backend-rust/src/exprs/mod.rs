@@ -699,7 +699,9 @@ impl RustEmitter {
     fn emit_anonymous_method(&mut self, method: &juxc_ast::FnDecl) {
         self.w.push_str(" fn ");
         self.w.push_str(&method.name.text);
-        self.w.push_str("(&self");
+        // `&mut self` — matches the receiver kind interfaces now
+        // emit so trait-dispatch flows through without recursion.
+        self.w.push_str("(&mut self");
         for param in &method.params {
             self.w.push_str(", ");
             self.w.push_str(&param.name.text);

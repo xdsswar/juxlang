@@ -1683,8 +1683,11 @@ fn interface_lowers_to_pub_trait_with_method_signatures() {
         "#,
     );
     assert!(rust.contains("pub trait Drawable {"), "trait header: {rust}");
-    assert!(rust.contains("fn draw(&self);"), "void method: {rust}");
-    assert!(rust.contains("fn weight(&self) -> isize;"), "int method: {rust}");
+    // Interface methods emit as `&mut self` so implementer classes
+    // whose bodies write to `this.field` don't trip the trait-vs-
+    // inherent receiver mismatch.
+    assert!(rust.contains("fn draw(&mut self);"), "void method: {rust}");
+    assert!(rust.contains("fn weight(&mut self) -> isize;"), "int method: {rust}");
 }
 
 /// A class implementing an interface gets two impl blocks:
@@ -1713,12 +1716,16 @@ fn class_implements_emits_inherent_and_delegating_impls() {
         rust.contains("pub fn magic(&self) -> isize {"),
         "inherent method header: {rust}",
     );
-    // Delegating trait impl forwards through `self.magic()`.
+    // Delegating trait impl forwards through `Friendly::magic(self)`
+    // — Rust's exact-receiver method-resolution rule prefers the
+    // trait method over an auto-reborrowed inherent, so the
+    // explicit `ClassName::method` path bypasses the recursion
+    // that a `self.magic()` body would trigger.
     assert!(
         rust.contains("impl Greeter for Friendly {"),
         "trait impl header: {rust}",
     );
-    assert!(rust.contains("self.magic()"), "delegating call: {rust}");
+    assert!(rust.contains("Friendly::magic(self)"), "delegating call: {rust}");
 }
 
 /// Multiple `implements` produces one delegating impl block per

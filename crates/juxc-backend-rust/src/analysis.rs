@@ -426,19 +426,192 @@ pub(crate) fn pattern_has_parens(p: &juxc_ast::Pattern) -> bool {
 /// unnecessary `mut`. Once tycheck carries receiver types we can do
 /// the precise per-class lookup instead.
 pub(crate) fn collect_user_mut_methods(unit: &CompilationUnit) -> HashSet<String> {
+    // Seed: methods that directly write to `this.field`, plus every
+    // method declared on an interface (interface trait methods all
+    // emit as `&mut self`, so any call to one on a `this.field`
+    // receiver propagates the `&mut self` requirement up the call
+    // chain).
     let mut out = HashSet::new();
     for item in &unit.items {
-        if let TopLevelDecl::Class(class) = item {
-            for method in &class.methods {
-                if let Some(body) = &method.body {
-                    if body_writes_to_this(body) {
-                        out.insert(method.name.text.clone());
+        match item {
+            TopLevelDecl::Class(class) => {
+                for method in &class.methods {
+                    if let Some(body) = &method.body {
+                        if body_writes_to_this(body) {
+                            out.insert(method.name.text.clone());
+                        }
                     }
                 }
             }
+            TopLevelDecl::Interface(iface) => {
+                for method in &iface.methods {
+                    out.insert(method.name.text.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    // Fixed-point closure: a method that calls a `&mut self`-style
+    // method (one already in `out`) on a `this`-rooted receiver
+    // must itself be `&mut self`. Iterate until no new additions.
+    loop {
+        let mut added = false;
+        for item in &unit.items {
+            if let TopLevelDecl::Class(class) = item {
+                for method in &class.methods {
+                    if out.contains(method.name.text.as_str()) {
+                        continue;
+                    }
+                    let Some(body) = &method.body else { continue };
+                    if body_calls_mut_method_on_this(body, &out) {
+                        out.insert(method.name.text.clone());
+                        added = true;
+                    }
+                }
+                for ctor in &class.constructors {
+                    // Constructors don't have a "name in user_mut_methods"
+                    // (they're keyed by class), but their bodies are
+                    // emitted via the same `&mut self` path —
+                    // already handled by ctor emission.
+                    let _ = ctor;
+                }
+            }
+        }
+        if !added {
+            break;
         }
     }
     out
+}
+
+/// True iff `block` contains a method call whose receiver expression
+/// is rooted at `this` (e.g. `this.method(...)`, `this.field.method(...)`)
+/// AND the called method's name is in `mut_methods`. Used by the
+/// cascade-aware mutation pass — if such a call exists in a method
+/// body, that method also needs `&mut self`.
+pub(crate) fn body_calls_mut_method_on_this(
+    block: &Block,
+    mut_methods: &HashSet<String>,
+) -> bool {
+    for stmt in &block.statements {
+        if stmt_calls_mut_method_on_this(stmt, mut_methods) {
+            return true;
+        }
+    }
+    false
+}
+
+fn stmt_calls_mut_method_on_this(stmt: &Stmt, mut_methods: &HashSet<String>) -> bool {
+    match stmt {
+        Stmt::Expr(e) | Stmt::Return(Some(e)) => expr_calls_mut_method_on_this(e, mut_methods),
+        Stmt::Return(None) => false,
+        Stmt::VarDecl(v) => v
+            .init
+            .as_ref()
+            .map(|e| expr_calls_mut_method_on_this(e, mut_methods))
+            .unwrap_or(false),
+        Stmt::Assign(a) => {
+            expr_calls_mut_method_on_this(&a.target, mut_methods)
+                || expr_calls_mut_method_on_this(&a.value, mut_methods)
+        }
+        Stmt::If(if_stmt) => {
+            if let Expr::Binary(_) | Expr::Unary(_) | Expr::Path(_) = &if_stmt.condition {
+                // condition rarely matters; fall through
+            }
+            if expr_calls_mut_method_on_this(&if_stmt.condition, mut_methods) {
+                return true;
+            }
+            if body_calls_mut_method_on_this(&if_stmt.then_block, mut_methods) {
+                return true;
+            }
+            // Walk else chain.
+            let mut cursor = if_stmt.else_branch.as_deref();
+            while let Some(b) = cursor {
+                match b {
+                    ElseBranch::If(inner) => {
+                        if body_calls_mut_method_on_this(&inner.then_block, mut_methods) {
+                            return true;
+                        }
+                        cursor = inner.else_branch.as_deref();
+                    }
+                    ElseBranch::Block(block) => {
+                        return body_calls_mut_method_on_this(block, mut_methods);
+                    }
+                }
+            }
+            false
+        }
+        Stmt::While(w) => {
+            expr_calls_mut_method_on_this(&w.condition, mut_methods)
+                || body_calls_mut_method_on_this(&w.body, mut_methods)
+        }
+        Stmt::ForEach(f) => {
+            expr_calls_mut_method_on_this(&f.iter, mut_methods)
+                || body_calls_mut_method_on_this(&f.body, mut_methods)
+        }
+        Stmt::SuperCall(args, _) => args
+            .iter()
+            .any(|a| expr_calls_mut_method_on_this(a, mut_methods)),
+        Stmt::Break(_) | Stmt::Continue(_) => false,
+    }
+}
+
+fn expr_calls_mut_method_on_this(expr: &Expr, mut_methods: &HashSet<String>) -> bool {
+    match expr {
+        Expr::Call(c) => {
+            if let Expr::Field(f) = &*c.callee {
+                if receiver_root_is_this(&f.object) && mut_methods.contains(f.field.text.as_str()) {
+                    return true;
+                }
+            }
+            // Recurse into args / callee for chained / nested calls.
+            if expr_calls_mut_method_on_this(&c.callee, mut_methods) {
+                return true;
+            }
+            c.args
+                .iter()
+                .any(|a| expr_calls_mut_method_on_this(a, mut_methods))
+        }
+        Expr::Field(f) => expr_calls_mut_method_on_this(&f.object, mut_methods),
+        Expr::Binary(b) => {
+            expr_calls_mut_method_on_this(&b.left, mut_methods)
+                || expr_calls_mut_method_on_this(&b.right, mut_methods)
+        }
+        Expr::Unary(u) => expr_calls_mut_method_on_this(&u.operand, mut_methods),
+        Expr::Cast(c) => expr_calls_mut_method_on_this(&c.value, mut_methods),
+        Expr::Index(i) => {
+            expr_calls_mut_method_on_this(&i.array, mut_methods)
+                || expr_calls_mut_method_on_this(&i.index, mut_methods)
+        }
+        Expr::Elvis(e) => {
+            expr_calls_mut_method_on_this(&e.value, mut_methods)
+                || expr_calls_mut_method_on_this(&e.fallback, mut_methods)
+        }
+        Expr::Ternary(t) => {
+            expr_calls_mut_method_on_this(&t.condition, mut_methods)
+                || expr_calls_mut_method_on_this(&t.then_branch, mut_methods)
+                || expr_calls_mut_method_on_this(&t.else_branch, mut_methods)
+        }
+        Expr::InterpString(s) => s.segments.iter().any(|seg| match seg {
+            juxc_ast::InterpSegment::Expr(e) => expr_calls_mut_method_on_this(e, mut_methods),
+            _ => false,
+        }),
+        Expr::NewObject(n) => n
+            .args
+            .iter()
+            .any(|a| expr_calls_mut_method_on_this(a, mut_methods)),
+        _ => false,
+    }
+}
+
+fn receiver_root_is_this(expr: &Expr) -> bool {
+    match expr {
+        Expr::This(_) => true,
+        Expr::Field(f) => receiver_root_is_this(&f.object),
+        Expr::Call(c) => receiver_root_is_this(&c.callee),
+        Expr::Index(i) => receiver_root_is_this(&i.array),
+        _ => false,
+    }
 }
 
 // ============================================================================

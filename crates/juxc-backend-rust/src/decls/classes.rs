@@ -678,14 +678,11 @@ impl RustEmitter {
                 self.w.push_str("fn ");
                 self.w.push_str(method_name);
                 // Match the interface's declared receiver: always
-                // `&self` matches the interface's declared
-                // receiver. When an implementing class's inherent
-                // method needs `&mut self` (because it writes to
-                // `this.field`), the user must drop `implements
-                // Iface` and use inherent methods directly —
-                // proper resolution awaits interior-mutability
-                // wrapping in a future pass.
-                self.w.push_str("(&self");
+                // `&mut self` — matches the trait method's
+                // signature so an inherent `&mut self` method
+                // doesn't recurse through the trait when the
+                // rollup body says `self.method(args)`.
+                self.w.push_str("(&mut self");
                 // `MethodSig.params` is `Vec<ParamSig>`; ParamSig
                 // carries `name: String` (not `Ident`) and `ty: TypeRef`.
                 // Substituting the interface's type params with the
@@ -746,13 +743,22 @@ impl RustEmitter {
                         self.w.push(')');
                     }
                     _ => {
-                        self.w.push_str("self.");
+                        // Inherent on this class — emit as an
+                        // explicit `ClassName::method(self, args)`
+                        // call. The trait method we're inside has
+                        // `&mut self` receiver (same as the trait
+                        // demands); Rust's method-resolution
+                        // prefers the EXACT-receiver trait match
+                        // over the inherent's auto-reborrow `&self`,
+                        // which would recurse. Naming the inherent
+                        // path explicitly bypasses that.
+                        self.w.push_str(&class_decl.name.text);
+                        self.emit_generic_params_as_args(&class_decl.generic_params);
+                        self.w.push_str("::");
                         self.w.push_str(method_name);
-                        self.w.push('(');
-                        for (i, param) in method.params.iter().enumerate() {
-                            if i > 0 {
-                                self.w.push_str(", ");
-                            }
+                        self.w.push_str("(self");
+                        for param in &method.params {
+                            self.w.push_str(", ");
                             self.w.push_str(&param.name);
                         }
                         self.w.push(')');
@@ -878,8 +884,18 @@ impl RustEmitter {
         // needs a mutable receiver in Rust. The lvalue walker we use
         // for locals also recognizes `Expr::This` as a root.
         let body = method.body.as_ref();
+        // `&mut self` is needed when the body either directly
+        // writes to `this.field` OR calls a `&mut self` method
+        // (one in `user_mut_methods`) on a `this`-rooted receiver.
+        // The second condition handles the cascade through trait
+        // methods: interface methods all emit as `&mut self` now,
+        // so any method that calls a trait method on `self.field`
+        // propagates the mut-self requirement up.
         let needs_mut_self = body
-            .map(|b| body_writes_to_this(b))
+            .map(|b| {
+                body_writes_to_this(b)
+                    || crate::analysis::body_calls_mut_method_on_this(b, &self.user_mut_methods)
+            })
             .unwrap_or(false);
 
         // Wildcard-lift pre-pass (same rule as `emit_fn_decl`):

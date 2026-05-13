@@ -17,7 +17,7 @@
 package demo.app;
 
 import demo.core.{ Vector2, Color, ColorCodes, FIXED_POINT };
-import demo.entities.{ Entity, Player, Enemy, Pickup };
+import demo.entities.{ Entity, Player, Enemy, Pickup, Tickable };
 import demo.events.{ Event, EventReporter };
 import demo.world.{ Slot, World };
 import demo.ui.{ Renderer, UIFactory };
