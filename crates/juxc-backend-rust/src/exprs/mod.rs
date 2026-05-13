@@ -55,7 +55,7 @@ impl RustEmitter {
                 if qn.segments.len() == 1 {
                     if let Some(class_name) = self.enclosing_class.clone() {
                         let name = &qn.segments[0].text;
-                        if let Some(class) = self.symbols.classes.get(&class_name) {
+                        if let Some(class) = self.lookup_class_by_bare_or_fqn(&class_name) {
                             if let Some(field) = class.fields.get(name.as_str()) {
                                 if field.is_static {
                                     self.emit_enclosing_class_static_ref(

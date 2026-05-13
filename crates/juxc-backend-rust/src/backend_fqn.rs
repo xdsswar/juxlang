@@ -241,6 +241,42 @@ impl crate::RustEmitter {
         None
     }
 
+    /// Resolve a bare or FQN class name to the class signature in
+    /// the symbol table. Direct hit by key first; otherwise scans
+    /// FQNs for a matching last segment. Used by emission helpers
+    /// that hold `self.enclosing_class` (bare in the source) but
+    /// need to access the FQN-keyed `symbols.classes` map.
+    pub(crate) fn lookup_class_by_bare_or_fqn(
+        &self,
+        name: &str,
+    ) -> Option<&juxc_tycheck::symbol_table::ClassSig> {
+        if let Some(c) = self.symbols.classes.get(name) {
+            return Some(c);
+        }
+        self.symbols
+            .classes
+            .iter()
+            .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == name)
+            .map(|(_, c)| c)
+    }
+
+    /// Bare-or-FQN sibling of [`Self::lookup_class_by_bare_or_fqn`]
+    /// for interfaces. Direct hit by key first; otherwise scans
+    /// interface FQNs for a matching last segment.
+    pub(crate) fn lookup_interface_by_bare_or_fqn(
+        &self,
+        name: &str,
+    ) -> Option<(&str, &juxc_tycheck::symbol_table::InterfaceSig)> {
+        if let Some((k, i)) = self.symbols.interfaces.get_key_value(name) {
+            return Some((k.as_str(), i));
+        }
+        self.symbols
+            .interfaces
+            .iter()
+            .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == name)
+            .map(|(k, i)| (k.as_str(), i))
+    }
+
     /// Sibling of [`path_resolves_to_class_in_emit`] that maps a
     /// path to an interface FQN. Used by the static-member
     /// emission paths to recognize `IfaceName.FIELD` or

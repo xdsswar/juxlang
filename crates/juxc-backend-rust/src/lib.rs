@@ -187,6 +187,18 @@ pub fn lower_workspace(
 ) -> RustCrate {
     let mut e = RustEmitter::new(symbols, expr_types.clone());
     e.workspace_mode = true;
+    // Union the per-unit `user_mut_methods` sets so the `&mut self`
+    // promotion analysis sees mutating methods declared in OTHER
+    // files. Without this, `var c = new Cart(); c.add(item);` in
+    // `app.jux` fails to promote `c` to `let mut` because `add`'s
+    // mutation flag lives in `cart.jux`'s per-unit set. The
+    // per-unit reset in `emit_package_node_body` would clobber the
+    // union, so workspace-mode skips that reset (see the gate
+    // there).
+    for unit in units {
+        let unit_set = collect_user_mut_methods(unit);
+        e.user_mut_methods.extend(unit_set);
+    }
     // Single-source workspaces (e.g. `juxc foo.jux`) get a precise
     // `// Source:` header line so terminal emit-dir click-throughs
     // land in the user's `.jux` file. Multi-source workspaces leave
@@ -635,7 +647,15 @@ impl RustEmitter {
     ) {
         for &idx in &node.unit_indices {
             let unit = &units[idx];
-            self.user_mut_methods = collect_user_mut_methods(unit);
+            // In workspace mode the union across all units is
+            // pre-computed in `lower_workspace`; per-unit reset
+            // here would clobber it and reintroduce the cross-file
+            // `&mut` promotion gap. Single-unit emission (the
+            // legacy `lower_with_*` entry points that flip back
+            // through this code path) keeps the per-unit recompute.
+            if !self.workspace_mode {
+                self.user_mut_methods = collect_user_mut_methods(unit);
+            }
             self.source = sources.get(idx).cloned();
             // Imports inside a packaged unit need `crate::`-rooted
             // paths so they don't resolve relative to the current

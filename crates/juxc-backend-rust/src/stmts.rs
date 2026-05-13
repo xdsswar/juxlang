@@ -662,7 +662,9 @@ impl RustEmitter {
             }
             Expr::Path(qn) if qn.segments.len() == 1 => {
                 let Some(class_name) = &self.enclosing_class else { return false };
-                let Some(class) = self.symbols.classes.get(class_name) else { return false };
+                let Some(class) = self.lookup_class_by_bare_or_fqn(class_name) else {
+                    return false;
+                };
                 let Some(field) = class.fields.get(qn.segments[0].text.as_str()) else {
                     return false;
                 };

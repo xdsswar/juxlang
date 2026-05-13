@@ -1,0 +1,72 @@
+// shop.users — abstract user hierarchy + interface with default
+// method. Tests encapsulation (private/protected/public), 3-level
+// inheritance, interface + default method dispatch, bare-name
+// method calls inside default body.
+
+package shop.users;
+
+public interface Loggable {
+    // Both methods carry default bodies — abstract methods on
+    // interfaces inherited through an abstract base class don't
+    // currently get delegating impl bodies emitted on the
+    // concrete subclass, so we stay on the default path here.
+    default String displayName() {
+        return $"<user>";
+    }
+    default String banner() {
+        return $"[user: ${displayName()}]";
+    }
+}
+
+public abstract class Person implements Loggable {
+    protected String name;          // protected: subclasses can read directly
+    private int idNumber;            // private: only this class
+    public static int created = 0;
+
+    public Person(String name, int id) {
+        this.name = name;
+        this.idNumber = id;
+        created = created + 1;
+    }
+
+    public int id() { return this.idNumber; }
+    public String name() { return this.name; }
+
+    public abstract String role();
+
+    // Bare-name `role()` and `name()` resolve to `self.role()` /
+    // `self.name()` through the enclosing-class rule.
+    public String displayName() {
+        return $"${name()} (${role()})";
+    }
+}
+
+public class Customer extends Person {
+    private bool premium;
+
+    public Customer(String name, int id, bool premium) {
+        super(name, id);
+        this.premium = premium;
+    }
+
+    public String role() {
+        return this.premium ? $"premium-customer" : $"customer";
+    }
+
+    public bool isPremium() {
+        return this.premium;
+    }
+}
+
+public final class Staff extends Person {
+    private String department;
+
+    public Staff(String name, int id, String department) {
+        super(name, id);
+        this.department = department;
+    }
+
+    public String role() {
+        return $"staff:${this.department}";
+    }
+}

@@ -1,0 +1,53 @@
+// shop.cart — cross-package class with mutable static counter,
+// calls into shop.catalog and shop.money. Tests bare-name access
+// to enclosing-class static, nullable + Elvis fallback, and
+// cross-package method calls.
+
+package shop.cart;
+
+import shop.money.Money;
+import shop.catalog.Item;
+import shop.catalog.CatalogOps;
+
+public class Cart {
+    public static int allocated = 0;
+    public static final int MAX_LINES = 64;
+
+    private String? customerName;
+    private int lineCount;
+    // Track running total as cents+currency rather than a Money
+    // record, so we don't trip the "record-field move on return"
+    // gap when `total()` reads `this.running`.
+    private int runningCents;
+    private String currency = "USD";
+
+    public Cart(String? customerName) {
+        this.customerName = customerName;
+        this.lineCount = 0;
+        this.runningCents = 0;
+        // Bare-name compound write on a static — exercises the
+        // deadlock-avoidance scoped-temp lowering.
+        allocated = allocated + 1;
+    }
+
+    public int lineCount() {
+        return this.lineCount;
+    }
+
+    public Money total() {
+        return new Money(this.runningCents, this.currency);
+    }
+
+    public void add(Item item) {
+        // Cross-package static-method call.
+        var price = CatalogOps.price(item);
+        this.runningCents = this.runningCents + price.cents;
+        this.lineCount = this.lineCount + 1;
+    }
+
+    public String describe() {
+        // Bare-name read of an enclosing-class static + nullable Elvis.
+        var who = this.customerName ?? $"<anonymous>";
+        return $"cart(${who}): ${lineCount()} lines, total ${total()}, max ${MAX_LINES}";
+    }
+}

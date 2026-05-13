@@ -11,3 +11,4 @@ Cargo.lock.bak
 /juxc.exe
 /jux.exe
 /classes-rules.md
+/examples/stress_shop/target/.rust-build/target/

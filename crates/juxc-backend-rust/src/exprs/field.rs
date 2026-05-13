@@ -56,11 +56,29 @@ impl RustEmitter {
         // construction (`Color.Red(args)`) reuses this path through
         // the enclosing `emit_call`, which appends the arg list.
         if let Expr::Path(qn) = &*f.object {
-            if qn.segments.len() == 1 && self.symbols.enums.contains_key(&qn.segments[0].text) {
-                self.w.push_str(&qn.segments[0].text);
-                self.w.push_str("::");
-                self.w.push_str(&f.field.text);
-                return;
+            if qn.segments.len() == 1 {
+                let bare = &qn.segments[0].text;
+                // Direct FQN match (single-package programs and
+                // explicitly-FQN'd uses).
+                if self.symbols.enums.contains_key(bare) {
+                    self.w.push_str(bare);
+                    self.w.push_str("::");
+                    self.w.push_str(&f.field.text);
+                    return;
+                }
+                // Bare-name reference to an enum imported from
+                // another package: scan all enum FQNs and pick one
+                // whose last segment matches. Same shape the
+                // class- and interface-FQN walks use elsewhere.
+                for enum_fqn in self.symbols.enums.keys() {
+                    let last = enum_fqn.rsplit('.').next().unwrap_or(enum_fqn.as_str());
+                    if last == bare.as_str() {
+                        self.w.push_str(bare);
+                        self.w.push_str("::");
+                        self.w.push_str(&f.field.text);
+                        return;
+                    }
+                }
             }
         }
         // Static-field access: `ClassName.X` (or `pkg.Cls.X`) where

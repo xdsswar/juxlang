@@ -1,0 +1,39 @@
+// shop.catalog — item taxonomy as an enum with payloads.
+// Tests enums + payload patterns + cross-package types in
+// variant payloads (Money from shop.money).
+
+package shop.catalog;
+
+import shop.money.Money;
+
+public enum Item {
+    Book(String, Money),
+    Apparel(String, Money, String),    // title, price, size
+    Subscription(String, Money, int),  // name, monthlyPrice, months
+}
+
+public class CatalogOps {
+    public static int describedCount = 0;
+
+    public static String describe(Item item) {
+        // Bare-name compound write — exercises mutable-static deadlock fix.
+        describedCount = describedCount + 1;
+
+        return switch (item) {
+            case Item.Book(var title, var price)
+                -> $"book ${title} @ ${price}";
+            case Item.Apparel(var title, var price, var size)
+                -> $"apparel ${title} (${size}) @ ${price}";
+            case Item.Subscription(var name, var monthly, var months)
+                -> $"subscription ${name}: ${monthly}/mo x ${months}";
+        };
+    }
+
+    public static Money price(Item item) {
+        return switch (item) {
+            case Item.Book(var bt, var p)            -> p;
+            case Item.Apparel(var at, var p, var sz) -> p;
+            case Item.Subscription(var sn, var m, var n) -> m.times(n);
+        };
+    }
+}

@@ -173,10 +173,28 @@ impl SymbolTable {
         // interface, so call-site emission can still find the
         // method's signature; the backend's trait-dispatch
         // emission picks up the default body.
+        //
+        // The implements list stores the user's written name (often
+        // a bare segment like `Loggable` after `import …`), while
+        // the interfaces table is keyed by FQN
+        // (`shop.users.Loggable`). When the bare name doesn't match
+        // a key directly, fall back to scanning for an interface
+        // whose FQN's last segment matches. Multiple matches across
+        // packages are a future ambiguity to diagnose; for now we
+        // pick the first hit.
         for iface_name in implements_chain {
             if let Some((iface_key, iface)) = self.interfaces.get_key_value(iface_name) {
                 if let Some(m) = iface.methods.get(method_name) {
                     return Some((m, iface_key.as_str()));
+                }
+                continue;
+            }
+            for (iface_key, iface) in &self.interfaces {
+                let last = iface_key.rsplit('.').next().unwrap_or(iface_key.as_str());
+                if last == iface_name {
+                    if let Some(m) = iface.methods.get(method_name) {
+                        return Some((m, iface_key.as_str()));
+                    }
                 }
             }
         }

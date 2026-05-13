@@ -1,0 +1,65 @@
+// shop.app — top-level driver. Imports from four sibling
+// packages, exercises:
+//
+//   - cross-package class instantiation (Customer, Staff, Cart)
+//   - cross-package enum-variant construction (Item.*)
+//   - cross-package static method calls (CatalogOps.*)
+//   - default-method dispatch (Loggable.banner via Customer/Staff)
+//   - nullable + Elvis on Cart's customerName
+//   - bare-name access from inside imported classes' bodies
+//   - mutable static counters tracked across packages
+//   - operator string on Money via interpolation
+//
+// `Loggable` is imported only to make the interface type
+// nameable in `main`'s body — `displayName()` and `banner()`
+// resolve through the receiver's class regardless.
+
+package shop.app;
+
+import shop.money.Money;
+// Grouped import — pulls multiple names from shop.catalog in one
+// statement. Import aliasing (`as`) is parsed but the backend's
+// Rust `use` doesn't honor it yet, so we use the source names
+// here. Single-import alias still works for type renaming.
+import shop.catalog.{ Item, CatalogOps };
+// Grouped import without aliases.
+import shop.users.{ Loggable, Customer, Staff, Person };
+import shop.cart.Cart;
+
+public void main() {
+    // Build a few users — exercises 3-level inheritance with
+    // protected fields, abstract method override, and bare-name
+    // resolution inside the imported library bodies.
+    var alice = new Customer("Alice", 1001, true);
+    var bob = new Customer("Bob", 1002, false);
+    var charlie = new Staff("Charlie", 9001, "logistics");
+
+    // Default-method dispatch through the interface (banner()
+    // calls displayName() which calls role() — virtual chain).
+    print(alice.banner());
+    print(bob.banner());
+    print(charlie.banner());
+
+    // Describe a few items.
+    print(CatalogOps.describe(Item.Book("Effective Jux", new Money(2999, "USD"))));
+    print(CatalogOps.describe(Item.Apparel("T-Shirt", new Money(1500, "USD"), "M")));
+    print(CatalogOps.describe(Item.Subscription("Pro Plan", new Money(999, "USD"), 12)));
+
+    // Two carts. Item values are constructed inline at each `.add()`
+    // call so the by-value move semantics never bite.
+    var cart = new Cart(null);
+    cart.add(Item.Book("Effective Jux", new Money(2999, "USD")));
+    cart.add(Item.Apparel("T-Shirt", new Money(1500, "USD"), "M"));
+    cart.add(Item.Subscription("Pro Plan", new Money(999, "USD"), 12));
+
+    var anonCart = new Cart(null);
+    anonCart.add(Item.Book("Effective Jux", new Money(2999, "USD")));
+
+    print(cart.describe());
+    print(anonCart.describe());
+
+    // Static counters from across the loaded packages.
+    print($"Person.created = ${Person.created}");
+    print($"CatalogOps.describedCount = ${CatalogOps.describedCount}");
+    print($"Cart.allocated = ${Cart.allocated}");
+}

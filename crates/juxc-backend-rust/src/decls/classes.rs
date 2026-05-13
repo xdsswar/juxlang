@@ -419,14 +419,16 @@ impl RustEmitter {
                 .iter()
                 .filter_map(|t| t.name.segments.first().map(|s| s.text.clone()))
                 .collect();
-            // Walk parent chain by FQN-resolving each `extends`
-            // segment through the symbol table. Stop at the first
-            // missing entry (broken/unresolved chain — tycheck
-            // already surfaced that).
+            // Walk parent chain via the bare-or-FQN helper so a
+            // multi-package program (parent class keyed at its
+            // FQN, source's `extends` clause carrying only the
+            // bare name) still rolls inherited interfaces down to
+            // the concrete subclass. Stop at the first missing
+            // entry — tycheck already surfaced any broken chain.
             let mut cursor: Option<&juxc_ast::TypeRef> = class_decl.extends.as_ref();
             while let Some(parent_ref) = cursor {
                 let Some(parent_name) = parent_ref.name.segments.first() else { break };
-                let Some(parent_sig) = self.symbols.classes.get(parent_name.text.as_str())
+                let Some(parent_sig) = self.lookup_class_by_bare_or_fqn(parent_name.text.as_str())
                 else { break };
                 for inherited in &parent_sig.implements {
                     let Some(iface_seg) = inherited.name.segments.first() else { continue };
@@ -455,7 +457,9 @@ impl RustEmitter {
             // uses the class's concrete type args rather than the
             // interface's bare type parameter, which would otherwise
             // be out of scope inside `impl Trait for Class {}`.
-            let iface_sig = self.symbols.interfaces.get(iface_name.text.as_str());
+            let iface_sig = self
+                .lookup_interface_by_bare_or_fqn(iface_name.text.as_str())
+                .map(|(_, i)| i);
             let mut type_subst: std::collections::HashMap<String, juxc_ast::TypeRef> =
                 std::collections::HashMap::new();
             if let Some(iface) = iface_sig {
@@ -499,11 +503,35 @@ impl RustEmitter {
             // also drop static methods — they're emitted as free
             // functions adjacent to the trait, never as trait
             // items, so they have no place in `impl Trait for ...`.
-            let class_method_names: std::collections::HashSet<&str> = class_decl
-                .methods
-                .iter()
-                .map(|m| m.name.text.as_str())
-                .collect();
+            // Collect method names declared on this class AND on any
+            // ancestor via the `extends` chain. When the trait impl
+            // is rolled up from a parent's `implements` clause, the
+            // method body lives on the parent; we still need to emit
+            // a delegating impl on `self` (`fn x(&self) {
+            // self.x() }`) so Rust dispatches through `Deref`
+            // to the parent's inherent method. Default-only methods
+            // that nobody overrides drop through to Rust's trait
+            // default — those stay out of the retained set so the
+            // empty-impl branch below handles them.
+            let mut class_method_names: std::collections::HashSet<String> =
+                class_decl
+                    .methods
+                    .iter()
+                    .map(|m| m.name.text.clone())
+                    .collect();
+            {
+                let mut cursor: Option<&juxc_ast::TypeRef> = class_decl.extends.as_ref();
+                while let Some(parent_ref) = cursor {
+                    let Some(parent_name) = parent_ref.name.segments.first() else { break };
+                    let Some(parent_sig) =
+                        self.lookup_class_by_bare_or_fqn(parent_name.text.as_str())
+                    else { break };
+                    for m_name in parent_sig.methods.keys() {
+                        class_method_names.insert(m_name.clone());
+                    }
+                    cursor = parent_sig.extends.as_ref();
+                }
+            }
             methods.retain(|(name, sig)| {
                 !sig.is_static && class_method_names.contains(name.as_str())
             });
@@ -668,7 +696,12 @@ impl RustEmitter {
         field: &juxc_ast::FieldDecl,
     ) {
         self.w.emit_indent();
-        self.w.push_str("static ");
+        // `pub` so cross-package reads (`other_pkg.MyClass.x`) can see
+        // the module-scope static through the emitted `pub mod`
+        // package tree. Visibility checks already gate access at the
+        // Jux level (tycheck E0414/E0415/E0416); the Rust pub is
+        // the structural minimum that lets the path resolve.
+        self.w.push_str("pub static ");
         self.w.push_str(class_name);
         self.w.push('_');
         self.w.push_str(&field.name.text);

@@ -1,0 +1,32 @@
+// shop.money — Money record with operator overloads and an
+// internal precision constant. Tests records + operators +
+// final statics + interpolation inside operator body.
+
+package shop.money;
+
+// Records can't yet carry static fields (parser gap), so the
+// precision constant lives as a top-level constant. Imported
+// across packages by FQN.
+public const int CENTS_PER_UNIT = 100;
+
+public record Money(int cents, String currency) {
+    public bool isZero() {
+        return this.cents == 0;
+    }
+
+    public Money plus(Money other) {
+        return new Money(this.cents + other.cents, this.currency);
+    }
+
+    public Money times(int n) {
+        return new Money(this.cents * n, this.currency);
+    }
+
+    // operator string — used by string interpolation when the
+    // Money value is the interpolated expression.
+    public String operator string() {
+        var whole = this.cents / CENTS_PER_UNIT;
+        var fract = this.cents % CENTS_PER_UNIT;
+        return $"${whole}.${fract} ${this.currency}";
+    }
+}

@@ -111,7 +111,7 @@ impl RustEmitter {
                 let name = &qn.segments[0].text;
                 let mut on_self = false;
                 if let Some(iface_name) = &self.enclosing_interface {
-                    if let Some(iface) = self.symbols.interfaces.get(iface_name) {
+                    if let Some((_, iface)) = self.lookup_interface_by_bare_or_fqn(iface_name) {
                         if let Some(m) = iface.methods.get(name.as_str()) {
                             if !m.is_static {
                                 on_self = true;
@@ -128,7 +128,9 @@ impl RustEmitter {
                     // still gate on `!is_static`.
                     let mut cursor: Option<String> = self.enclosing_class.clone();
                     while let Some(class_name) = cursor {
-                        let Some(class) = self.symbols.classes.get(&class_name) else { break };
+                        let Some(class) = self.lookup_class_by_bare_or_fqn(&class_name) else {
+                            break;
+                        };
                         if let Some(m) = class.methods.get(name.as_str()) {
                             if !m.is_static {
                                 on_self = true;

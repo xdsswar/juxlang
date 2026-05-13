@@ -1,0 +1,16 @@
+public enum Pair2 {
+    Two(String, int),
+    None,
+}
+
+public String desc(Pair2 p) {
+    return switch (p) {
+        case Pair2.Two(var s, var n) -> $"two: ${s} ${n}";
+        case Pair2.None              -> $"none";
+    };
+}
+
+public void main() {
+    print(desc(Pair2.Two("hello", 42)));
+    print(desc(Pair2.None));
+}

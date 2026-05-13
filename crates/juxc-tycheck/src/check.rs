@@ -2196,10 +2196,20 @@ fn collect_variants_covered(
     enum_name: &str,
     out: &mut std::collections::HashSet<String>,
 ) {
+    // `enum_name` is the scrutinee's FQN (e.g. `shop.catalog.Item`),
+    // but the pattern usually quotes only the bare class name
+    // (`Item.Book`). Compare against the last segment so a
+    // cross-package switch still matches its variants.
+    let bare = enum_name
+        .rsplit('.')
+        .next()
+        .unwrap_or(enum_name);
     if let Pattern::EnumVariant { path, .. } = pattern {
         match path.segments.len() {
             // `case EnumName.Variant(...)` — qualified form.
-            2 if path.segments[0].text == enum_name => {
+            2 if path.segments[0].text == bare
+                || path.segments[0].text == enum_name =>
+            {
                 out.insert(path.segments[1].text.clone());
             }
             // `case Variant(...)` — bare form. The scrutinee's
