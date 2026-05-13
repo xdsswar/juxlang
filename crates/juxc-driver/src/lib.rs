@@ -218,7 +218,17 @@ pub fn build(
     // `lower_workspace`; here we override with the CLI-chosen
     // (or auto-derived) name so `target/debug/{name}.exe` matches
     // the user's expectation.
-    let cargo_toml = juxc_backend_rust::cargo_toml_for(crate_name);
+    //
+    // The emitted prelude unconditionally references
+    // `futures::channel::oneshot` (for the `Task<T>` / `Worker`
+    // helpers) and the async-runtime hooks (`block_on`, `join!`),
+    // so the `futures` crate is a hard dependency of every
+    // emitted Jux crate now — even ones that never touch async.
+    // The compile overhead of `futures` on a fresh build is
+    // ~3-4 seconds; subsequent builds reuse the cached artifact
+    // and pay nothing. The simplification (no conditional dep
+    // detection, no source-scanning) is worth the up-front cost.
+    let cargo_toml = juxc_backend_rust::cargo_toml_for_with(crate_name, true);
     fs::write(crate_dir.join("Cargo.toml"), &cargo_toml)
         .with_context(|| format!("writing Cargo.toml to {}", crate_dir.display()))?;
 

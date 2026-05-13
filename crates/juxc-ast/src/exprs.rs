@@ -80,6 +80,15 @@ pub enum Expr {
     /// that unify. Backend lowers to Rust's `if cond { then }
     /// else { else }` expression form.
     Ternary(TernaryExpr),
+    /// `await expr` — suspend the current async function until the
+    /// future produced by `expr` resolves, then yield its value.
+    /// Per JUX-ASYNC-ADDENDUM v2 §A.2 this is a *prefix unary form*
+    /// (the keyword sits at expression level, not statement level)
+    /// that may only appear inside an `async` function body. The
+    /// backend lowers it to Rust's postfix `.await`. The boxed
+    /// `Expr` is the awaited operand; the `Span` covers
+    /// `await expr` in source.
+    Await(Box<Expr>, Span),
 }
 
 /// Ternary expression: `condition ? then_branch : else_branch`.

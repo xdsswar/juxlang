@@ -1,0 +1,50 @@
+// Async cooperative-concurrency proof.
+//
+// This test answers the question: does `parallel(...)` really
+// interleave futures, or is it just sequential dispatch?
+//
+// The basic stress tests use futures that complete on their first
+// poll (e.g. `return 42;`), so `futures::join!` has nothing to
+// interleave — each future finishes synchronously inside the join,
+// producing output that looks identical to running them one after
+// the other.
+//
+// To OBSERVE cooperative concurrency we need yielding futures.
+// `yield_now()` is the suspension primitive: awaiting it returns
+// control to the executor, which then advances any sibling
+// futures inside the same join. Each task here yields three times
+// (with a print before and after each yield), so the output
+// reveals the round-robin scheduling: every task makes one step
+// of progress before any of them takes a second step.
+//
+// Phase-1 model: single-threaded cooperative concurrency, identical
+// in shape to JavaScript's event loop or Python's asyncio. NOT
+// true multi-core parallelism — that's the spec's `workers` story
+// in §18.2.
+
+public async int task(String tag, int reps) {
+    int n = 0;
+    int i = 0;
+    while (i < reps) {
+        print($"[${tag}] step ${i}");
+        await yield_now();
+        n = n + 1;
+        i = i + 1;
+    }
+    print($"[${tag}] done");
+    return n;
+}
+
+public async void demo() {
+    print("--- 3 yielding tasks under one parallel(...) ---");
+    final var r = await parallel(task("A", 3), task("B", 3), task("C", 3));
+    print($"results: A=${r.0}, B=${r.1}, C=${r.2}");
+    print("");
+
+    print("--- if it were truly sequential, A would finish before B started ---");
+    print("--- the interleaved output above is the proof of concurrency ---");
+}
+
+public void main() {
+    block_on(demo());
+}

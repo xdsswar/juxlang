@@ -511,6 +511,99 @@ impl RustEmitter {
         w.push_str("        }\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
+        // Async-runtime helper: `__jux_yield_now()` returns a one-
+        // shot yielding Future. On first poll it registers a
+        // wake-up and returns `Poll::Pending`; on second poll it
+        // returns `Poll::Ready(())`. Awaiting this in the middle
+        // of an async function surrenders the polling slot back to
+        // the executor — the scheduler then advances any sibling
+        // futures inside the same `futures::join!` group before
+        // returning to this task.
+        //
+        // The helper is always emitted (gated behind
+        // `#[allow(dead_code)]` from the attribute block above) so
+        // programs that never call `yield_now()` don't pay any
+        // runtime cost. Inlining is left to rustc — the body is
+        // small and the call site is hot in cooperative
+        // workloads.
+        w.push_str("struct __JuxYieldNow(bool);\n");
+        w.push_str("impl std::future::Future for __JuxYieldNow {\n");
+        w.push_str(
+            "    type Output = ();\n",
+        );
+        w.push_str(
+            "    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {\n",
+        );
+        w.push_str("        if self.0 {\n");
+        w.push_str("            std::task::Poll::Ready(())\n");
+        w.push_str("        } else {\n");
+        w.push_str("            self.0 = true;\n");
+        w.push_str("            cx.waker().wake_by_ref();\n");
+        w.push_str("            std::task::Poll::Pending\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("fn __jux_yield_now() -> __JuxYieldNow { __JuxYieldNow(false) }\n\n");
+        // Worker pool — per JUX-ASYNC-ADDENDUM §18.2. `Worker.spawn(f)`
+        // runs `f` on a real OS thread from the system's thread
+        // pool and returns a `Task<T>` (a Future yielding the
+        // closure's return value). Cooperatively driven via the
+        // futures executor like any other Future, so
+        // `await task` integrates with the existing async lowering
+        // without special-casing.
+        //
+        // Channel choice: `futures::channel::oneshot` provides a
+        // single-producer single-consumer cross-thread channel
+        // whose `Receiver<T>` is itself a Future. The spawned
+        // thread sends the result through the tx end; the awaiting
+        // task polls the rx end. If the thread panics, the tx is
+        // dropped without a send, and polling the rx returns
+        // `Err(Canceled)` — the helper's poll wrapper escalates
+        // that to a panic so the failure isn't swallowed silently.
+        //
+        // Send/'static bounds on the closure mirror Rust's
+        // `std::thread::spawn` — the spec hides these behind the
+        // "transferable" terminology, but the constraints are
+        // identical at the runtime layer.
+        w.push_str("pub struct Task<T>(futures::channel::oneshot::Receiver<T>);\n");
+        w.push_str("impl<T> std::future::Future for Task<T> {\n");
+        w.push_str("    type Output = T;\n");
+        w.push_str(
+            "    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<T> {\n",
+        );
+        w.push_str(
+            "        match std::future::Future::poll(std::pin::Pin::new(&mut self.0), cx) {\n",
+        );
+        w.push_str("            std::task::Poll::Ready(Ok(v))  => std::task::Poll::Ready(v),\n");
+        w.push_str(
+            "            std::task::Poll::Ready(Err(_)) => panic!(\"worker task aborted before completion\"),\n",
+        );
+        w.push_str("            std::task::Poll::Pending       => std::task::Poll::Pending,\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("pub struct Worker;\n");
+        w.push_str("impl Worker {\n");
+        w.push_str(
+            "    pub fn spawn<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> Task<T> {\n",
+        );
+        w.push_str("        let (tx, rx) = futures::channel::oneshot::channel();\n");
+        w.push_str("        std::thread::spawn(move || { let _ = tx.send(f()); });\n");
+        w.push_str("        Task(rx)\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        // `now_ms()` helper — wall-clock reading in milliseconds
+        // since the UNIX epoch. Lives next to the worker pool
+        // because benchmarks pairing the two (timing a parallel
+        // workload) are the main reason it exists. The duration
+        // computation can panic only if the system clock is
+        // before 1970, which we treat as "return 0" to keep the
+        // helper total.
+        w.push_str("fn __jux_now_ms() -> i64 {\n");
+        w.push_str(
+            "    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)\n",
+        );
+        w.push_str("}\n\n");
         Self {
             w,
             mutated_in_fn: HashSet::new(),
@@ -658,13 +751,29 @@ impl RustEmitter {
         // (which picks one main across every unit), so this branch
         // only runs in the single-unit path.
         if has_main && !self.workspace_mode {
+            // Detect whether the user's main is `async T main()` —
+            // when so, the inner function was renamed to
+            // `__jux_async_main` by `emit_fn_decl`, and the shim
+            // must drive it through `futures::executor::block_on`.
+            let async_main = unit.items.iter().any(|item| matches!(
+                item,
+                TopLevelDecl::Function(fn_decl)
+                    if fn_decl.name.text == "main"
+                        && matches!(fn_decl.return_type, juxc_ast::ReturnType::AsyncType(_))
+            ));
             self.w.newline();
             self.w.line("fn main() {");
             self.w.indent_inc();
             self.w.emit_indent();
             let path = package.join("::");
-            self.w.push_str(&path);
-            self.w.push_str("::main();\n");
+            if async_main {
+                self.w.push_str("futures::executor::block_on(");
+                self.w.push_str(&path);
+                self.w.push_str("::__jux_async_main());\n");
+            } else {
+                self.w.push_str(&path);
+                self.w.push_str("::main();\n");
+            }
             self.w.indent_dec();
             self.w.line("}");
         }
@@ -769,29 +878,44 @@ impl RustEmitter {
     ///   builds still produce SOMETHING valid.
     pub(crate) fn emit_workspace_main_shim(&mut self, units: &[CompilationUnit]) {
         for unit in units {
-            let has_main = unit.items.iter().any(|item| {
-                matches!(item, TopLevelDecl::Function(fn_decl) if fn_decl.name.text == "main")
+            // Locate the user's `main` and remember its async-ness —
+            // async mains are emitted under `__jux_async_main` and
+            // need `futures::executor::block_on(...)` to drive.
+            let main_fn = unit.items.iter().find_map(|item| match item {
+                TopLevelDecl::Function(fn_decl) if fn_decl.name.text == "main" => Some(fn_decl),
+                _ => None,
             });
-            if !has_main {
-                continue;
-            }
+            let Some(main_fn) = main_fn else { continue };
+            let is_async_main =
+                matches!(main_fn.return_type, juxc_ast::ReturnType::AsyncType(_));
             let pkg: Vec<&str> = unit
                 .package
                 .as_ref()
                 .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect())
                 .unwrap_or_default();
+            // Sync main at crate root → no shim needed; the user's
+            // `fn main()` already serves as the binary entry point.
+            // Async main at crate root → emit_fn_decl produced its
+            // own block_on shim; nothing more to do here.
             if pkg.is_empty() {
-                // Unit's `main()` is already at the crate root —
-                // nothing to forward through, the user's `fn main()`
-                // emission IS the binary entry point.
                 return;
             }
             self.w.newline();
             self.w.line("fn main() {");
             self.w.indent_inc();
             self.w.emit_indent();
-            self.w.push_str(&pkg.join("::"));
-            self.w.push_str("::main();\n");
+            let path = pkg.join("::");
+            if is_async_main {
+                // Reach into the user's package and drive their async
+                // main via the futures executor. The user's main was
+                // renamed to `__jux_async_main` by `emit_fn_decl`.
+                self.w.push_str("futures::executor::block_on(");
+                self.w.push_str(&path);
+                self.w.push_str("::__jux_async_main());\n");
+            } else {
+                self.w.push_str(&path);
+                self.w.push_str("::main();\n");
+            }
             self.w.indent_dec();
             self.w.line("}");
             return;
@@ -924,10 +1048,23 @@ impl RustEmitter {
     }
 
     /// Wrap up: build the Cargo.toml and bundle with the emitted source.
+    ///
+    /// **Async detection.** If the emitted text contains `async fn` (or
+    /// the unit-return `async fn name(...) -> ()` shape), the user's
+    /// program uses async, and the emitted crate needs an executor +
+    /// `join!`/`join_all` helpers. `futures` (mature, std-friendly,
+    /// zero-runtime startup cost) is added as a dependency so a Jux
+    /// `main()` can call `futures::executor::block_on(...)` and
+    /// `futures::future::join_all(...)`. The detection is a simple
+    /// substring scan — no false positives in well-formed emitted
+    /// Rust (juxc never produces a literal `async fn` in any other
+    /// context).
     fn finish(self) -> RustCrate {
+        let source = self.w.into_string();
+        let uses_async = source.contains("async fn ");
         RustCrate {
-            cargo_toml: cargo_toml_for(CRATE_NAME),
-            sources: vec![("src/main.rs".to_string(), self.w.into_string())],
+            cargo_toml: cargo_toml_for_with(CRATE_NAME, uses_async),
+            sources: vec![("src/main.rs".to_string(), source)],
         }
     }
 }
@@ -1005,6 +1142,31 @@ fn render_qualified(name: &QualifiedName) -> Option<String> {
 /// it's in a workspace when it's not"). The empty table opts the emitted
 /// crate out of any enclosing workspace.
 pub fn cargo_toml_for(name: &str) -> String {
+    cargo_toml_for_with(name, false)
+}
+
+/// Variant of [`cargo_toml_for`] that includes async-runtime
+/// dependencies when `uses_async` is true.
+///
+/// The runtime is `futures` (BSD-licensed, no `Send` requirement
+/// on user futures, zero startup overhead). It provides:
+///
+/// - `futures::executor::block_on` — drive a future to completion
+///   from a synchronous context (e.g. `fn main()`).
+/// - `futures::future::join_all` — fan out a `Vec<F>` of futures
+///   and await them all *concurrently* (single-threaded
+///   cooperative interleaving). This is the Phase-1 stand-in for
+///   the spec's `parallel(...)` builtin.
+/// - `futures::join!` — variadic concurrent-await over a fixed
+///   set of futures.
+///
+/// Pinned to a `1` semver range so behavior is reproducible.
+pub fn cargo_toml_for_with(name: &str, uses_async: bool) -> String {
+    let deps = if uses_async {
+        "[dependencies]\nfutures = \"0.3\"\n\n"
+    } else {
+        ""
+    };
     format!(
         "[package]\n\
          name = \"{name}\"\n\
@@ -1012,6 +1174,7 @@ pub fn cargo_toml_for(name: &str) -> String {
          edition = \"2021\"\n\
          publish = false\n\
          \n\
+         {deps}\
          [[bin]]\n\
          name = \"{name}\"\n\
          path = \"src/main.rs\"\n\

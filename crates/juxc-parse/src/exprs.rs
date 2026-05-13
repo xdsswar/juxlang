@@ -328,6 +328,20 @@ impl<'a> Parser<'a> {
         if self.at(&TokenKind::LParen) && self.looks_like_c_style_cast() {
             return self.parse_c_style_cast();
         }
+        // `await expr` per JUX-ASYNC-ADDENDUM §A.2 — a prefix unary
+        // form at precedence level 18 (sibling to `-`, `!`, `~`).
+        // The operand is itself parsed at unary precedence so
+        // `await !flag` and `await -x` both parse correctly. The
+        // tycheck pass is responsible for enforcing that `await`
+        // appears only inside an `async` function body; the parser
+        // accepts it anywhere and lets later phases flag misuse.
+        if matches!(self.peek(), TokenKind::Kw(Keyword::Await)) {
+            let start_span = self.peek_span();
+            self.advance(); // 'await'
+            let operand = self.parse_unary()?;
+            let span = start_span.join(self.last_consumed_span());
+            return Some(Expr::Await(Box::new(operand), span));
+        }
         let start_span = self.peek_span();
         let op = match self.peek() {
             TokenKind::Minus => Some(UnaryOp::Neg),
@@ -560,12 +574,31 @@ impl<'a> Parser<'a> {
                 TokenKind::Dot => {
                     // field access: object.field (Java-style member access).
                     //
-                    // Currently the only field the backend recognizes is
-                    // `length` on array-typed expressions. Other names
-                    // will surface as "unknown method/field" once we
-                    // have a type table and member resolution.
+                    // Two forms accepted here:
+                    //   - `object.identifier` — the regular Java/C-like
+                    //     named-member access.
+                    //   - `object.0`, `object.1`, … — tuple-element
+                    //     access (per JUX-LANG-V1 tuple addendum). Rust
+                    //     uses the same `.0` spelling so the field
+                    //     stores the numeric literal text verbatim and
+                    //     the backend emits `expr.0` unchanged.
                     self.advance(); // '.'
-                    let field = self.parse_ident()?;
+                    let field = if let TokenKind::Int(_) = self.peek() {
+                        // Tuple-element access: store the digit run as
+                        // a synthetic Ident whose text is the integer
+                        // literal verbatim (e.g. "0", "1"). The backend
+                        // re-emits `expr.0` which matches Rust's tuple-
+                        // indexing syntax exactly.
+                        let span = self.peek_span();
+                        let text = match self.peek() {
+                            TokenKind::Int(raw) => raw.clone(),
+                            _ => unreachable!(),
+                        };
+                        self.advance(); // consume the int literal
+                        juxc_ast::Ident { text, span }
+                    } else {
+                        self.parse_ident()?
+                    };
                     let span = expr_span(&expr).join(field.span);
                     expr = Expr::Field(FieldExpr {
                         object: Box::new(expr),
@@ -1055,6 +1088,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::Elvis(e) => e.span,
         Expr::MethodRef(m) => m.span,
         Expr::Ternary(t) => t.span,
+        Expr::Await(_, s) => *s,
     }
 }
 

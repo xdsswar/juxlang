@@ -136,6 +136,45 @@ impl Resolver {
         // The milestone-1 built-in. Eventually this will be supplanted by
         // `import std.io.print;` and removed from here.
         builtins.insert("print");
+        // Async-runtime builtin per JUX-ASYNC-ADDENDUM-v2: `parallel`
+        // takes N async expressions and concurrently awaits them
+        // all, returning a tuple of their results. Lowers to
+        // `async { futures::join!(...) }` at the backend — i.e. a
+        // Future, so the user always writes `await parallel(...)`
+        // inside async code or `block_on(parallel(...))` from sync
+        // code. Phase-1 stand-in for the spec's
+        // `std.async.parallel` import.
+        builtins.insert("parallel");
+        // `block_on(future)` — drive a Future to completion from a
+        // synchronous context, returning the future's resolved
+        // value. Lowers to `futures::executor::block_on(...)`. Lets
+        // users keep a plain `void main()` and reach into async
+        // helpers without making the entry point itself async.
+        builtins.insert("block_on");
+        // `yield_now()` — cooperative suspension point. Lowers to
+        // a one-shot Pending future that returns Ready on the
+        // second poll. Awaiting this in the middle of an async
+        // function gives the executor a chance to make progress
+        // on sibling futures inside the same `parallel(...)` /
+        // `join!` group — proves the cooperative-interleaving
+        // behavior `parallel(...)` advertises.
+        builtins.insert("yield_now");
+        // `Worker` — opaque host-side handle to the worker thread
+        // pool. The only operation today is `Worker.spawn(closure)`,
+        // which runs the closure on a real OS thread and returns
+        // a `Task<T>` (a Future yielding T). Per JUX-ASYNC-ADDENDUM
+        // §18.2 this is the path to TRUE multi-core parallelism —
+        // `parallel(...)` is cooperative concurrency on one
+        // thread, `Worker.spawn` is real preemptive parallelism on
+        // many threads.
+        builtins.insert("Worker");
+        // `now_ms()` — monotonic clock reading in milliseconds.
+        // Lowers to the emitted `__jux_now_ms()` helper which
+        // calls `std::time::SystemTime::now()` and returns the
+        // milliseconds since the UNIX epoch as `long`. Used to
+        // self-measure timing in benchmarks / stress tests
+        // (e.g. proving Worker.spawn yields wall-clock speedup).
+        builtins.insert("now_ms");
         Self {
             builtins,
             user_names: HashSet::new(),
@@ -603,6 +642,27 @@ impl Resolver {
                     self.visit_expr(arg);
                 }
             }
+            Stmt::Throw(e, _) => self.visit_expr(e),
+            Stmt::Try(t) => {
+                // Try body in its own scope.
+                self.push_scope();
+                self.visit_block(&t.body);
+                self.pop_scope();
+                for c in &t.catches {
+                    // Each catch gets its own scope with the caught
+                    // name bound. We don't validate the catch type
+                    // (T) here — that's a tycheck concern.
+                    self.push_scope();
+                    self.declare(&c.name.text);
+                    self.visit_block(&c.body);
+                    self.pop_scope();
+                }
+                if let Some(fin) = &t.finally {
+                    self.push_scope();
+                    self.visit_block(fin);
+                    self.pop_scope();
+                }
+            }
         }
     }
 
@@ -877,6 +937,13 @@ impl Resolver {
                 self.visit_expr(&t.condition);
                 self.visit_expr(&t.then_branch);
                 self.visit_expr(&t.else_branch);
+            }
+            Expr::Await(inner, _) => {
+                // `await expr` just walks its operand — the operand
+                // is a normal expression whose names need resolving.
+                // Whether we're in an async context is the parser's
+                // / tycheck's concern.
+                self.visit_expr(inner);
             }
         }
     }

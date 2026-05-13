@@ -1366,12 +1366,45 @@ impl<'a> Parser<'a> {
         mods
     }
 
-    /// Per §A.2.4 `return-type = 'void' | type | 'async' type`.
+    /// Per §A.2.4 `return-type = 'void' | type | 'async' ( type | 'void' )`.
+    ///
+    /// `async void` is a common shape from JUX-ASYNC-ADDENDUM-v2 (fire-and-
+    /// forget async work; e.g. `async void main()`), so we accept it as a
+    /// proper return-type variant. It still lowers to `async fn name() -> ()`
+    /// in Rust — the `()` return type is represented by an `AsyncType` whose
+    /// inner `TypeRef` carries the `void` sentinel name. To keep the
+    /// downstream representation uniform with the existing `ReturnType::Void`
+    /// shape, we emit the `()` directly through a fresh `ReturnType::Void`
+    /// wrapped semantically as async via the `is_async` flag on the
+    /// surrounding `FnDecl` — but since the AST doesn't carry that flag
+    /// separately today, we synthesize a sentinel `TypeRef { name: "void" }`
+    /// that the backend's return-type emitter recognizes.
     pub(crate) fn parse_return_type(&mut self) -> Option<ReturnType> {
         if self.eat_kw(Keyword::Void) {
             return Some(ReturnType::Void);
         }
         if self.eat_kw(Keyword::Async) {
+            // `async void` → synthesize a unit-typed AsyncType so the
+            // backend's `ReturnType::AsyncType(t)` arm still emits the
+            // `async fn name() -> T` shape with T being the unit `()`.
+            if self.eat_kw(Keyword::Void) {
+                let span = self.last_consumed_span();
+                let void_ty = juxc_ast::TypeRef {
+                    name: juxc_ast::QualifiedName {
+                        segments: vec![juxc_ast::Ident {
+                            text: "void".to_string(),
+                            span,
+                        }],
+                        span,
+                    },
+                    generic_args: Vec::new(),
+                    nullable: false,
+                    array_shape: None,
+                    fn_shape: None,
+                    span,
+                };
+                return Some(ReturnType::AsyncType(void_ty));
+            }
             let ty = self.parse_type_ref()?;
             return Some(ReturnType::AsyncType(ty));
         }

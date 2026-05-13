@@ -184,13 +184,16 @@ impl TypeChecker {
         }
     }
 
-    /// Per `JUX-ENTRY-POINTS-ADDENDUM.md` §E.1.2, the entry function's
-    /// signature must be one of:
+    /// Per `JUX-ENTRY-POINTS-ADDENDUM.md` §E.1.2 / §E.1.3, the entry
+    /// function's signature must be one of:
     ///
     /// - `public void main()`
     /// - `public void main(String[] args)`
     /// - `public int main()`
     /// - `public int main(String[] args)`
+    /// - `public async void main()` — async entry per §E.1.3; the
+    ///   backend auto-wraps with `futures::executor::block_on`.
+    /// - `public async int main()` — same shape but with an exit code.
     ///
     /// Each may carry a `throws` clause; we don't restrict that. Visibility
     /// is *not* part of the check — the spec doesn't require any specific
@@ -199,7 +202,17 @@ impl TypeChecker {
         let return_ok = match &fn_decl.return_type {
             ReturnType::Void => true,
             ReturnType::Type(t) => is_int(t),
-            ReturnType::AsyncType(_) => false,
+            // `async void main()` synthesizes an AsyncType whose inner
+            // TypeRef's name is the sentinel "void". Treat that the
+            // same as `void`. `async int main()` is the int-returning
+            // async entry shape.
+            ReturnType::AsyncType(t) => {
+                let is_void_sentinel = t.name.segments.len() == 1
+                    && t.name.segments[0].text == "void"
+                    && t.generic_args.is_empty()
+                    && !t.nullable;
+                is_void_sentinel || is_int(t)
+            }
         };
         let params_ok = match fn_decl.params.as_slice() {
             [] => true,

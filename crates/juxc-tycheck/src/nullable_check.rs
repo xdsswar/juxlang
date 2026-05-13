@@ -255,6 +255,17 @@ fn check_stmt(stmt: &Stmt, diags: &mut Vec<Diagnostic>) {
                 check_expr(a, diags);
             }
         }
+        Stmt::Throw(e, _) => check_expr(e, diags),
+        Stmt::Try(t) => {
+            check_block(&t.body, diags);
+            for c in &t.catches {
+                check_type_ref(&c.ty, diags);
+                check_block(&c.body, diags);
+            }
+            if let Some(fin) = &t.finally {
+                check_block(fin, diags);
+            }
+        }
     }
 }
 
@@ -328,6 +339,11 @@ fn check_expr(e: &Expr, diags: &mut Vec<Diagnostic>) {
             check_expr(&t.condition, diags);
             check_expr(&t.then_branch, diags);
             check_expr(&t.else_branch, diags);
+        }
+        Expr::Await(inner, _) => {
+            // Walk the awaited operand; await itself imposes no
+            // nullable rules.
+            check_expr(inner, diags);
         }
     }
 }

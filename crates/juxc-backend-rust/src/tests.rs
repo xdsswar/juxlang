@@ -1861,7 +1861,7 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
         }
         "#,
     );
-    assert!(rust.contains("#[derive(Clone)]"), "derive(Clone): {rust}");
+    assert!(rust.contains("#[derive(Clone, Debug)]"), "derive(Clone, Debug): {rust}");
     assert!(rust.contains("pub struct Box<T> {"), "struct header: {rust}");
     assert!(rust.contains("value: T,"), "generic field: {rust}");
     assert!(rust.contains("impl<T: Clone> Box<T> {"), "impl bound: {rust}");

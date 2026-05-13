@@ -4,8 +4,8 @@
 //! reorganization. Behavior is identical to the original methods.
 
 use juxc_ast::{
-    ArrayShape, AssignStmt, BinaryOp, Block, ElseBranch, Expr, ForEachStmt, IfStmt,
-    NewArrayLitExpr, Stmt, TypeRef, VarDecl, WhileStmt,
+    ArrayShape, AssignStmt, BinaryOp, Block, CatchClause, ElseBranch, Expr, ForEachStmt, IfStmt,
+    NewArrayLitExpr, Stmt, TryStmt, TypeRef, VarDecl, WhileStmt,
 };
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_lex::{Keyword, TokenKind};
@@ -102,6 +102,19 @@ impl<'a> Parser<'a> {
             let switch = self.parse_switch_expr()?;
             return Some(Stmt::Expr(Expr::Switch(switch)));
         }
+        if self.at_kw(Keyword::Throw) {
+            // `throw <expr> ;` per §X.2 — raises an exception. Phase-1
+            // lowering panics with the expression's Display rendering.
+            let start = self.peek_span();
+            self.advance(); // 'throw'
+            let value = self.parse_expr()?;
+            self.expect(&TokenKind::Semicolon, "';' after `throw` expression");
+            let end = self.last_consumed_span();
+            return Some(Stmt::Throw(value, start.join(end)));
+        }
+        if self.at_kw(Keyword::Try) {
+            return Some(Stmt::Try(self.parse_try_stmt()?));
+        }
         if self.at_kw(Keyword::Super) {
             // `super(args);` — parent-constructor delegation per §7.3.1.
             // Backend lifts this out of the body into the child struct's
@@ -148,6 +161,54 @@ impl<'a> Parser<'a> {
     /// today, this parser will try to consume the `init` part as a
     /// `Type identifier :` header and emit `E0200` at the `;` it didn't
     /// expect, which surfaces the spec gap clearly.
+    /// Parse a `try { B0 } catch (T1 e1) { B1 } ... [finally { Bf }]`
+    /// per spec §X.3.1. At least one `catch` or `finally` is
+    /// required; the parser emits E0200 if both are absent.
+    pub(crate) fn parse_try_stmt(&mut self) -> Option<TryStmt> {
+        let start = self.peek_span();
+        self.expect_kw(Keyword::Try, "expected `try`");
+        let body = self.parse_block();
+        let mut catches: Vec<CatchClause> = Vec::new();
+        while self.at_kw(Keyword::Catch) {
+            let c_start = self.peek_span();
+            self.advance(); // 'catch'
+            self.expect(&TokenKind::LParen, "'(' to start catch parameter");
+            let ty = self.parse_type_ref()?;
+            let name = self.parse_ident()?;
+            self.expect(&TokenKind::RParen, "')' to close catch parameter");
+            let body = self.parse_block();
+            let end = self.last_consumed_span();
+            catches.push(CatchClause {
+                ty,
+                name,
+                body,
+                span: c_start.join(end),
+            });
+        }
+        let finally = if self.at_kw(Keyword::Finally) {
+            self.advance(); // 'finally'
+            Some(self.parse_block())
+        } else {
+            None
+        };
+        if catches.is_empty() && finally.is_none() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "a `try` statement must have at least one `catch` clause or a `finally` block",
+                )
+                .with_span(start),
+            );
+        }
+        let end = self.last_consumed_span();
+        Some(TryStmt {
+            body,
+            catches,
+            finally,
+            span: start.join(end),
+        })
+    }
+
     pub(crate) fn parse_for_each_stmt(&mut self) -> Option<ForEachStmt> {
         let start = self.peek_span();
         self.advance(); // 'for'

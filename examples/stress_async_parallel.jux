@@ -1,0 +1,51 @@
+// Parallel async — many `async` functions concurrently driven by
+// the `parallel(...)` builtin, then driven from a synchronous
+// `void main()` via `block_on(...)`.
+//
+// Per JUX-ASYNC-ADDENDUM-v2 the builtin returns a **Future** of the
+// joined-tuple shape, so it composes the same way in both async
+// and sync contexts:
+//
+//   * In an `async` helper: `await parallel(a(), b())`.
+//   * From sync main:       `block_on(parallel(a(), b()))`.
+
+public async int task(int id, int amount) {
+    print($"  [task ${id}] starting (amount=${amount})");
+    return amount * id;
+}
+
+public async String fetch(String url) {
+    print($"  [fetch] GET ${url}");
+    return $"<body of ${url}>";
+}
+
+// Async orchestrator — produces all output through one Future.
+public async void demo() {
+    print("--- batch 1: 4 integer tasks in parallel ---");
+    final var r1 = await parallel(task(1, 10), task(2, 20), task(3, 30), task(4, 40));
+    print("results:");
+    print(r1.0);
+    print(r1.1);
+    print(r1.2);
+    print(r1.3);
+
+    print("--- batch 2: 3 fetch tasks in parallel ---");
+    final var r2 = await parallel(fetch("/users"), fetch("/orders"), fetch("/sessions"));
+    print(r2.0);
+    print(r2.1);
+    print(r2.2);
+
+    print("--- batch 3: nested parallels ---");
+    final var r3a = await parallel(task(5, 50), task(6, 60));
+    final var r3b = await parallel(fetch("/a"), fetch("/b"));
+    print(r3a.0);
+    print(r3a.1);
+    print(r3b.0);
+    print(r3b.1);
+
+    print("done.");
+}
+
+public void main() {
+    block_on(demo());
+}

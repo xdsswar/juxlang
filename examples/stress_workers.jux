@@ -1,0 +1,85 @@
+// Worker pool — TRUE multi-core parallelism per JUX-ASYNC-ADDENDUM §18.2.
+//
+// `parallel(...)` from the cooperative-concurrency suite runs N
+// futures on ONE thread (interleaving at await points). That's
+// fine for I/O-bound work, useless for CPU-bound work — a busy
+// loop never yields, so the join makes no progress on its
+// siblings until the busy task is done.
+//
+// `Worker.spawn(closure)` actually puts the closure on a fresh OS
+// thread from the system pool. The returned `Task<T>` is a Future
+// that resolves to the closure's value, so the rest of the async
+// graph composes naturally — `await task` waits for the worker to
+// finish.
+//
+// This test PROVES real parallelism with wall-clock timing:
+//   1. Sequential baseline — four CPU-bound tasks back-to-back.
+//   2. Parallel run     — same four tasks via `Worker.spawn`.
+// On a multi-core machine the parallel run finishes in ~1/N of
+// the sequential time (minus thread-spawn overhead).
+
+// Pure-CPU busy work. No system calls, no allocations — the
+// optimizer can't elide it because the result feeds back into
+// the return value via the `acc` accumulator.
+public int crunch(String tag, int bigN) {
+    int acc = 0;
+    int i = 0;
+    while (i < bigN) {
+        acc = (acc + i) * 7 % 9973;
+        i = i + 1;
+    }
+    print($"  [worker ${tag}] done, acc=${acc}");
+    return acc;
+}
+
+// Drive N workers concurrently, return when all have completed.
+public async int run_parallel(int bigN) {
+    print("--- launching 4 workers ---");
+    final var t1 = Worker.spawn(() -> crunch("A", bigN));
+    final var t2 = Worker.spawn(() -> crunch("B", bigN));
+    final var t3 = Worker.spawn(() -> crunch("C", bigN));
+    final var t4 = Worker.spawn(() -> crunch("D", bigN));
+    final int a = await t1;
+    final int b = await t2;
+    final int c = await t3;
+    final int d = await t4;
+    return a + b + c + d;
+}
+
+// Same work, but called inline on the calling thread.
+public int run_sequential(int bigN) {
+    print("--- running 4 tasks sequentially on this thread ---");
+    final int a = crunch("A", bigN);
+    final int b = crunch("B", bigN);
+    final int c = crunch("C", bigN);
+    final int d = crunch("D", bigN);
+    return a + b + c + d;
+}
+
+public void main() {
+    // Tuned so a release build takes ~hundreds of ms per task.
+    final int bigN = 25_000_000;
+
+    print("=== sequential baseline ===");
+    final long seq_start = now_ms();
+    final int seq_sum = run_sequential(bigN);
+    final long seq_ms = now_ms() - seq_start;
+    print($"sequential sum   = ${seq_sum}");
+    print($"sequential time  = ${seq_ms} ms");
+    print("");
+
+    print("=== parallel workers ===");
+    final long par_start = now_ms();
+    final int par_sum = block_on(run_parallel(bigN));
+    final long par_ms = now_ms() - par_start;
+    print($"parallel sum     = ${par_sum}");
+    print($"parallel time    = ${par_ms} ms");
+    print("");
+
+    if (seq_sum == par_sum) {
+        print("OK — sequential and parallel agree on the result.");
+        print($"speedup           = ${seq_ms * 100 / par_ms} % (100% = no speedup)");
+    } else {
+        print("MISMATCH — implementation bug!");
+    }
+}

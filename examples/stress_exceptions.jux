@@ -1,0 +1,41 @@
+// Exceptions — `throw` / `try` / `catch` / `finally`.
+
+public class IOException {
+    public String message;
+    public IOException(String message) { this.message = message; }
+}
+
+public void risky(int n) {
+    if (n < 0) {
+        throw new IOException($"negative input: ${n}");
+    }
+    print($"risky(${n}) ok");
+}
+
+public void main() {
+    // 1. No throw — try body completes, finally runs.
+    try {
+        risky(7);
+    } finally {
+        print("finally block 1");
+    }
+
+    // 2. Throw caught — try body throws, catch fires, finally still runs.
+    try {
+        risky(-3);
+        print("this line never runs");
+    } catch (IOException e) {
+        print($"caught: ${e.message}");
+    } finally {
+        print("finally block 2");
+    }
+
+    // 3. Try without catch (just finally).
+    try {
+        risky(42);
+    } finally {
+        print("finally block 3");
+    }
+
+    print("after all tries");
+}

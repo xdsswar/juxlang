@@ -207,7 +207,41 @@ impl RustEmitter {
             Expr::Elvis(e) => self.emit_elvis(e),
             Expr::MethodRef(m) => self.emit_method_ref(m),
             Expr::Ternary(t) => self.emit_ternary(t),
+            Expr::Await(inner, _) => self.emit_await(inner),
         }
+    }
+
+    /// Lower `await expr` to Rust's postfix `.await`.
+    ///
+    /// Rust spells await as `expr.await`, not `await expr`, so we
+    /// emit the operand first, then the suffix. The operand is
+    /// parenthesized when it isn't already a self-delimiting
+    /// expression (path, call, field) — `await (a + b)` needs to
+    /// land as `(a + b).await`, not `a + b.await` (which Rust
+    /// parses as `a + (b.await)`).
+    pub(crate) fn emit_await(&mut self, operand: &Expr) {
+        // Self-delimiting expressions don't need wrapping parens —
+        // a path, call, field access, or this/new is already a
+        // postfix-friendly receiver. Everything else (binary,
+        // unary, range, etc.) does, since `.await` binds tightly.
+        let needs_parens = !matches!(
+            operand,
+            Expr::Path(_)
+                | Expr::Call(_)
+                | Expr::Field(_)
+                | Expr::Index(_)
+                | Expr::This(_)
+                | Expr::NewObject(_)
+                | Expr::Literal(_)
+        );
+        if needs_parens {
+            self.w.push('(');
+        }
+        self.emit_expr(operand);
+        if needs_parens {
+            self.w.push(')');
+        }
+        self.w.push_str(".await");
     }
 
     /// Lower `cond ? then : else` to Rust's `if cond { then }
@@ -465,6 +499,41 @@ impl RustEmitter {
     ///
     /// Capture semantics (borrow vs `move`) are left to Rust's own
     /// closure inference. Phase 1 doesn't insert an explicit `move`.
+    /// Emit a Jux lambda as a bare `move |args| body` Rust closure
+    /// — no `Rc<dyn Fn>` wrapper. Used by call sites like
+    /// `Worker.spawn(...)` where the closure is consumed directly
+    /// (FnOnce + Send + 'static); the wrapping `Rc` of the regular
+    /// emit path is incompatible with cross-thread transfer
+    /// because `Rc` isn't `Send`.
+    pub(crate) fn emit_bare_move_lambda(&mut self, l: &juxc_ast::LambdaExpr) {
+        self.w.push_str("move ");
+        self.w.push('|');
+        for (i, p) in l.params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(&p.name.text);
+            if let Some(t) = &p.ty {
+                self.w.push_str(": ");
+                self.emit_type_as_rust(t);
+            }
+        }
+        self.w.push_str("| ");
+        match &l.body {
+            juxc_ast::LambdaBody::Expr(e) => self.emit_expr(e),
+            juxc_ast::LambdaBody::Block(b) => {
+                self.w.push_str("{\n");
+                self.w.indent_inc();
+                for stmt in &b.statements {
+                    self.emit_stmt(stmt);
+                }
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push('}');
+            }
+        }
+    }
+
     pub(crate) fn emit_lambda(&mut self, l: &juxc_ast::LambdaExpr) {
         // `move` is unconditional: Phase-1 lambdas wrap in
         // `Rc<dyn Fn>`, which often outlives the enclosing scope
@@ -697,7 +766,14 @@ impl RustEmitter {
     /// trait) and the class-target path (where the impl block
     /// targets the synthetic struct itself).
     fn emit_anonymous_method(&mut self, method: &juxc_ast::FnDecl) {
-        self.w.push_str(" fn ");
+        // `async T` on a method in an anonymous-class body lowers to
+        // `async fn` on the synthetic struct's impl — same shape as
+        // the named-class method emitter (`decls/classes.rs`).
+        if matches!(method.return_type, juxc_ast::ReturnType::AsyncType(_)) {
+            self.w.push_str(" async fn ");
+        } else {
+            self.w.push_str(" fn ");
+        }
         self.w.push_str(&method.name.text);
         // `&mut self` — matches the receiver kind interfaces now
         // emit so trait-dispatch flows through without recursion.
@@ -715,8 +791,10 @@ impl RustEmitter {
                 self.w.push_str(" -> ");
                 self.emit_return_type_as_rust(t);
             }
-            juxc_ast::ReturnType::AsyncType(_) => {
-                self.w.push_str(" -> ()");
+            juxc_ast::ReturnType::AsyncType(t) => {
+                // `async fn name(...) -> T` — async sat ahead of `fn`.
+                self.w.push_str(" -> ");
+                self.emit_return_type_as_rust(t);
             }
         }
         self.w.push_str(" {");
@@ -762,6 +840,7 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
         Expr::Elvis(e) => e.span,
         Expr::MethodRef(m) => m.span,
         Expr::Ternary(t) => t.span,
+        Expr::Await(_, s) => *s,
     }
 }
 

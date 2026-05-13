@@ -173,6 +173,94 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
             collect_mutating_calls(&t.then_branch, out, user_mut);
             collect_mutating_calls(&t.else_branch, out, user_mut);
         }
+        // `await expr` — the operand drives evaluation, so any
+        // mutating calls inside it count just like in any other
+        // value position.
+        Expr::Await(inner, _) => {
+            collect_mutating_calls(inner, out, user_mut);
+        }
+    }
+}
+
+/// Recursively scan a Block for any direct `await` expression. Used
+/// by `emit_try` to pick the sync vs async catch_unwind lowering.
+///
+/// Walks into nested statements (if/while/for/switch/try arms) but
+/// does NOT descend into closure / lambda bodies — those introduce
+/// a new function boundary and their `.await` belongs to whatever
+/// async context wraps them, not the surrounding block.
+pub(crate) fn block_contains_await(block: &Block) -> bool {
+    block.statements.iter().any(stmt_contains_await)
+}
+
+fn stmt_contains_await(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Expr(e) | Stmt::Throw(e, _) => expr_contains_await(e),
+        Stmt::Return(Some(e)) => expr_contains_await(e),
+        Stmt::Return(None) => false,
+        Stmt::VarDecl(v) => v.init.as_ref().is_some_and(expr_contains_await),
+        Stmt::Assign(a) => expr_contains_await(&a.value) || expr_contains_await(&a.target),
+        Stmt::If(i) => if_contains_await(i),
+        Stmt::While(w) => expr_contains_await(&w.condition) || block_contains_await(&w.body),
+        Stmt::ForEach(f) => expr_contains_await(&f.iter) || block_contains_await(&f.body),
+        Stmt::Try(t) => {
+            block_contains_await(&t.body)
+                || t.catches.iter().any(|c| block_contains_await(&c.body))
+                || t.finally.as_ref().is_some_and(block_contains_await)
+        }
+        Stmt::SuperCall(args, _) => args.iter().any(expr_contains_await),
+        Stmt::Break(_) | Stmt::Continue(_) => false,
+    }
+}
+
+fn if_contains_await(i: &juxc_ast::IfStmt) -> bool {
+    expr_contains_await(&i.condition)
+        || block_contains_await(&i.then_block)
+        || match i.else_branch.as_deref() {
+            Some(ElseBranch::Block(b)) => block_contains_await(b),
+            Some(ElseBranch::If(inner)) => if_contains_await(inner),
+            None => false,
+        }
+}
+
+fn expr_contains_await(e: &Expr) -> bool {
+    match e {
+        Expr::Await(_, _) => true,
+        Expr::Call(c) => {
+            expr_contains_await(&c.callee) || c.args.iter().any(expr_contains_await)
+        }
+        Expr::Binary(b) => expr_contains_await(&b.left) || expr_contains_await(&b.right),
+        Expr::Unary(u) => expr_contains_await(&u.operand),
+        Expr::Cast(c) => expr_contains_await(&c.value),
+        Expr::Range(r) => expr_contains_await(&r.start) || expr_contains_await(&r.end),
+        Expr::Field(f) => expr_contains_await(&f.object),
+        Expr::Index(i) => expr_contains_await(&i.array) || expr_contains_await(&i.index),
+        Expr::NewArray(n) => expr_contains_await(&n.size),
+        Expr::NewArrayLit(n) => n.elements.iter().any(expr_contains_await),
+        Expr::NewObject(n) => n.args.iter().any(expr_contains_await),
+        Expr::Elvis(e) => expr_contains_await(&e.value) || expr_contains_await(&e.fallback),
+        Expr::Ternary(t) => {
+            expr_contains_await(&t.condition)
+                || expr_contains_await(&t.then_branch)
+                || expr_contains_await(&t.else_branch)
+        }
+        Expr::InterpString(s) => s.segments.iter().any(|seg| match seg {
+            juxc_ast::InterpSegment::Expr(e) => expr_contains_await(e),
+            _ => false,
+        }),
+        Expr::SizeOf(s) => expr_contains_await(&s.operand),
+        Expr::Switch(s) => {
+            expr_contains_await(&s.scrutinee)
+                || s.arms.iter().any(|a| match &a.body {
+                    juxc_ast::SwitchBody::Expr(e) => expr_contains_await(e),
+                    juxc_ast::SwitchBody::Block(b) => block_contains_await(b),
+                })
+        }
+        // Closures / lambdas open a new fn boundary — the `.await`
+        // inside belongs to the closure's own async context, not the
+        // surrounding block.
+        Expr::Lambda(_) | Expr::MethodRef(_) => false,
+        Expr::Literal(_) | Expr::Path(_) | Expr::This(_) => false,
     }
 }
 
@@ -552,6 +640,23 @@ fn stmt_calls_mut_method_on_this(stmt: &Stmt, mut_methods: &HashSet<String>) -> 
         Stmt::SuperCall(args, _) => args
             .iter()
             .any(|a| expr_calls_mut_method_on_this(a, mut_methods)),
+        Stmt::Throw(e, _) => expr_calls_mut_method_on_this(e, mut_methods),
+        Stmt::Try(t) => {
+            if body_calls_mut_method_on_this(&t.body, mut_methods) {
+                return true;
+            }
+            for c in &t.catches {
+                if body_calls_mut_method_on_this(&c.body, mut_methods) {
+                    return true;
+                }
+            }
+            if let Some(fin) = &t.finally {
+                if body_calls_mut_method_on_this(fin, mut_methods) {
+                    return true;
+                }
+            }
+            false
+        }
         Stmt::Break(_) | Stmt::Continue(_) => false,
     }
 }
@@ -600,6 +705,8 @@ fn expr_calls_mut_method_on_this(expr: &Expr, mut_methods: &HashSet<String>) -> 
             .args
             .iter()
             .any(|a| expr_calls_mut_method_on_this(a, mut_methods)),
+        // `await expr` — walk into the operand.
+        Expr::Await(inner, _) => expr_calls_mut_method_on_this(inner, mut_methods),
         _ => false,
     }
 }

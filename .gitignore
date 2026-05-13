@@ -18,3 +18,8 @@ Cargo.lock.bak
 /examples/stress_demo/target/
 /*/target/*
 /examples/stress_shop/target/
+/examples/_stress_async_advanced/target/
+/examples/_stress_async/target/
+/examples/_stress_async_parallel/target/
+/examples/_worker_smoke/target/
+/examples/_stress_workers/target/

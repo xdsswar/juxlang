@@ -1,0 +1,149 @@
+// Advanced async/await stress test — sync main + `block_on` to
+// drive one big async orchestrator.
+//
+// Covers shapes beyond the basic stress_async.jux:
+//
+//   1. Async methods that mutate `this` state.
+//   2. Async interface methods + concrete implementations + the
+//      `&mut self` cascade through trait dispatch.
+//   3. Await inside try/catch.
+//   4. Await inside for-each loops.
+//   5. Await inside ternary / conditional expressions.
+//   6. Generic-typed async return.
+//   7. Nested parallel calls.
+
+// ============================================================================
+// 1. Async + mutating method.
+// ============================================================================
+
+public class Counter {
+    public int value;
+    public Counter() { this.value = 0; }
+
+    public async int bump() {
+        this.value = this.value + 1;
+        return this.value;
+    }
+}
+
+// ============================================================================
+// 2. Async interface + concrete implementation.
+// ============================================================================
+
+public interface AsyncFetcher {
+    async String fetch(String url);
+}
+
+public class HttpFetcher implements AsyncFetcher {
+    public String prefix;
+    public HttpFetcher(String prefix) { this.prefix = prefix; }
+
+    public async String fetch(String url) {
+        return $"${this.prefix}://${url}";
+    }
+}
+
+// ============================================================================
+// 3. Exception type used by the try/catch test below.
+// ============================================================================
+
+public class IOException {
+    public String message;
+    public IOException(String message) { this.message = message; }
+}
+
+public async int might_throw(bool fail) {
+    if (fail) {
+        throw new IOException("simulated failure");
+    }
+    return 0;
+}
+
+// ============================================================================
+// 4. Plain async helpers used as building blocks.
+// ============================================================================
+
+public async int double_async(int n) {
+    return n * 2;
+}
+
+// ============================================================================
+// 5. Generic async — `T` flows through `async Box<T>`.
+// ============================================================================
+
+public class Box<T> {
+    public T inner;
+    public Box(T inner) { this.inner = inner; }
+}
+
+public async Box<int> wrap_async(int n) {
+    return new Box<int>(n + 1);
+}
+
+// ============================================================================
+// 6. Async orchestrator — every test shape runs inside this Future.
+// ============================================================================
+
+public async void run_demo() {
+    print("=== 1. mutating async method ===");
+    final Counter c = new Counter();
+    final int v1 = await c.bump();
+    final int v2 = await c.bump();
+    final int v3 = await c.bump();
+    print($"counter = ${v1}, ${v2}, ${v3}");
+
+    print("=== 2. async interface dispatch ===");
+    final HttpFetcher fetcher = new HttpFetcher("https");
+    final String url = await fetcher.fetch("example.com/api");
+    print(url);
+
+    print("=== 3. await inside try/catch ===");
+    try {
+        final int n = await might_throw(true);
+        print($"unexpected success: ${n}");
+    } catch (IOException ex) {
+        print($"caught: ${ex.message}");
+    }
+
+    print("=== 4. await inside for-each loop ===");
+    final int[] inputs = {1, 2, 3, 4};
+    int total = 0;
+    for (int x : inputs) {
+        final int doubled = await double_async(x);
+        total = total + doubled;
+    }
+    print($"loop total = ${total}");
+
+    print("=== 5. await inside ternary expression ===");
+    final bool flag = true;
+    final int chosen = flag ? (await double_async(10)) : (await double_async(99));
+    print($"chosen = ${chosen}");
+
+    print("=== 6. generic async return ===");
+    final Box<int> bx = await wrap_async(41);
+    print($"wrapped = ${bx.inner}");
+
+    print("=== 7. nested parallel ===");
+    final var batch1 = await parallel(double_async(1), double_async(2));
+    final var batch2 = await parallel(double_async(3), double_async(4));
+    final var top    = await parallel(double_async(100), double_async(200));
+    print($"batch1 = ${batch1.0}, ${batch1.1}");
+    print($"batch2 = ${batch2.0}, ${batch2.1}");
+    print($"top    = ${top.0}, ${top.1}");
+
+    print("=== 8. parallel of async methods on instances ===");
+    final HttpFetcher f2 = new HttpFetcher("http");
+    final var pair = await parallel(f2.fetch("a"), f2.fetch("b"));
+    print(pair.0);
+    print(pair.1);
+
+    print("done.");
+}
+
+// ============================================================================
+// Sync entry point — opt into the async runtime via block_on.
+// ============================================================================
+
+public void main() {
+    block_on(run_demo());
+}

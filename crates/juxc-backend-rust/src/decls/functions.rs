@@ -26,6 +26,21 @@ impl RustEmitter {
         // `?` in a param position becomes a fresh `__Wn` generic on
         // this function with the matching bound. Phase-1 PECS
         // lowering — mirrors Java's compile-time wildcard erasure.
+        //
+        // **Async-main shim.** Rust requires the binary entry point
+        // to be a synchronous `fn main()`. When the user wrote
+        // `async void main()` / `async T main()`, we (a) rename
+        // their function to `__jux_async_main` so the async body
+        // still emits, and (b) append a sync `fn main()` shim that
+        // calls `futures::executor::block_on(__jux_async_main())`.
+        // The shim is appended after the user's body, both at the
+        // same scope. For multi-unit/packaged workspaces, the
+        // workspace-shim path (`emit_workspace_main_shim`) routes
+        // through `__jux_async_main` instead of `main` when it sees
+        // an async-typed entry — but the rename happens here so the
+        // emitted symbol matches in either mode.
+        let is_async_main = fn_decl.name.text == "main"
+            && matches!(fn_decl.return_type, ReturnType::AsyncType(_));
         let mut lifter = crate::analysis::WildcardLifter::new();
         let lifted_param_tys: Vec<juxc_ast::TypeRef> = fn_decl
             .params
@@ -52,8 +67,19 @@ impl RustEmitter {
         if !self.symbols.package.is_empty() {
             self.emit_visibility(fn_decl.visibility);
         }
+        // `async T` return type in Jux maps to a Rust `async fn`
+        // returning `T`. The keyword sits BEFORE `fn` per Rust
+        // syntax, so we emit it ahead of the function header.
+        if matches!(fn_decl.return_type, ReturnType::AsyncType(_)) {
+            self.w.push_str("async ");
+        }
         self.w.push_str("fn ");
-        self.w.push_str(&fn_decl.name.text);
+        // Async-main rename — see `is_async_main` comment above.
+        if is_async_main {
+            self.w.push_str("__jux_async_main");
+        } else {
+            self.w.push_str(&fn_decl.name.text);
+        }
         // Use the combined generics list so synthetic params land on
         // the signature. `<__W0: AnimalKind + Clone, …>` is emitted
         // through the same bound-aware helper used for user params,
@@ -80,11 +106,11 @@ impl RustEmitter {
                 self.w.push_str(" -> ");
                 self.emit_return_type_as_rust(t);
             }
-            ReturnType::AsyncType(_) => {
-                // TODO: async lowering — needs a real runtime story per §15.
-                // Placeholder: emit `()` so the resulting Rust at least
-                // parses. (No Jux program in flight actually uses this.)
-                self.w.push_str(" -> ()");
+            ReturnType::AsyncType(t) => {
+                // `async fn name(...) -> T` — the `async` was
+                // emitted ahead of `fn` (see the header above).
+                self.w.push_str(" -> ");
+                self.emit_return_type_as_rust(t);
             }
         }
 
@@ -120,6 +146,37 @@ impl RustEmitter {
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();
+
+        // Append the sync `fn main()` shim for an async main entry.
+        // The user's `async void main()` was emitted under
+        // `__jux_async_main` above; rustc needs a sync `fn main()`
+        // at the crate root to launch the binary, so we drive the
+        // user's body through `futures::executor::block_on`.
+        //
+        // Two cases to handle:
+        //
+        //   - **No package** — the user's main sits at the crate
+        //     root and the shim goes right after it, same level.
+        //   - **Packaged** — the user's main is inside `pub mod
+        //     a::b::…`; the shim is emitted at the crate root by
+        //     `emit_workspace_main_shim` instead (it knows how to
+        //     prepend the module path). Skip the local shim here
+        //     so we don't produce a duplicate.
+        //
+        // The check uses the *current unit's* package (held in
+        // `symbols.package`) rather than the workspace flag,
+        // because the workspace driver sets `workspace_mode = true`
+        // unconditionally even for single-file inputs.
+        if is_async_main && self.symbols.package.is_empty() {
+            self.w.line("fn main() {");
+            self.w.indent_inc();
+            self.w.emit_indent();
+            self.w
+                .push_str("futures::executor::block_on(__jux_async_main());\n");
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.newline();
+        }
     }
 
     /// Emit a function's body block with **trailing-return elision** —

@@ -371,6 +371,23 @@ impl RustEmitter {
     /// readability and to leave room for a future divergence (e.g.
     /// borrow-thread `&'a str` returns when borrow inference lands).
     pub(crate) fn emit_return_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
+        // `async void` synthesizes a sentinel `void`-named TypeRef in
+        // `parse_return_type` — emit Rust's unit `()` so the produced
+        // signature is `async fn name(...) -> ()`. Without this
+        // shortcut the type emitter would treat `void` as a user-
+        // defined class name and emit it literally.
+        if ty.array_shape.is_none()
+            && !ty.nullable
+            && ty.generic_args.is_empty()
+            && ty.fn_shape.is_none()
+        {
+            if let Some(seg) = ty.name.segments.last() {
+                if seg.text == "void" {
+                    self.w.push_str("()");
+                    return;
+                }
+            }
+        }
         // Interface-typed return position needs `impl Trait` (or a
         // boxed trait object) because Rust can't return a bare
         // trait. We pick `impl Trait` — works for factories that

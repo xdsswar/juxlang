@@ -53,7 +53,12 @@ impl RustEmitter {
         // generic impls (and the auto-`.clone()` injected on field
         // reads) keeps working when the user nests classes — `Box<User>`
         // needs `User: Clone`, which falls out for free here.
-        self.w.line("#[derive(Clone)]");
+        // Debug joins Clone so `format!("{:?}", obj)` works for any
+        // class — used by `throw` lowering (panic-payload format)
+        // and by user code that wants a quick diagnostic dump.
+        // Classes whose fields don't implement Debug will surface
+        // a clean rustc error pointing at the offending field.
+        self.w.line("#[derive(Clone, Debug)]");
         // pub struct Name<T, U> { …fields… }
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
@@ -675,6 +680,16 @@ impl RustEmitter {
             self.w.indent_inc();
             for (method_name, method) in &methods {
                 self.w.emit_indent();
+                // `async fn` rollup: the trait method may have been
+                // declared `async T` — re-emit the keyword on the
+                // delegating impl so the trait/impl signatures stay
+                // structurally aligned. The body is a plain
+                // synchronous call into the inherent method, so the
+                // future the trait method returns just awaits to
+                // the inherent's value.
+                if matches!(method.return_type, ReturnType::AsyncType(_)) {
+                    self.w.push_str("async ");
+                }
                 self.w.push_str("fn ");
                 self.w.push_str(method_name);
                 // Match the interface's declared receiver: always
@@ -704,8 +719,14 @@ impl RustEmitter {
                         let subst = substitute_type_ref(t, &type_subst);
                         self.emit_return_type_as_rust(&subst);
                     }
-                    ReturnType::AsyncType(_) => {
-                        self.w.push_str(" -> ()");
+                    ReturnType::AsyncType(t) => {
+                        // `async T` trait method → `async fn (...) -> T`.
+                        // The `async` keyword sat in front of `fn`
+                        // earlier in this loop; here we only need the
+                        // return-type tail.
+                        self.w.push_str(" -> ");
+                        let subst = substitute_type_ref(t, &type_subst);
+                        self.emit_return_type_as_rust(&subst);
                     }
                 }
                 // Delegating body. Two shapes per the method_targets
@@ -723,6 +744,12 @@ impl RustEmitter {
                 self.w.indent_inc();
                 self.w.emit_indent();
                 let target = method_targets.get(method_name.as_str()).cloned().flatten();
+                // `async` trait methods need the inherent call to be
+                // awaited so the rollup yields the trait's declared
+                // value type (not the inner Future). The enclosing
+                // method header was emitted as `async fn`, so the
+                // `.await` is legal here.
+                let is_async = matches!(method.return_type, ReturnType::AsyncType(_));
                 match target {
                     Some(ref fqn) if !fqn.is_empty() => {
                         // Cross-package: FQN-rooted path, `crate::`
@@ -741,6 +768,9 @@ impl RustEmitter {
                             self.w.push_str(&param.name);
                         }
                         self.w.push(')');
+                        if is_async {
+                            self.w.push_str(".await");
+                        }
                     }
                     _ => {
                         // Inherent on this class — emit as an
@@ -762,6 +792,9 @@ impl RustEmitter {
                             self.w.push_str(&param.name);
                         }
                         self.w.push(')');
+                        if is_async {
+                            self.w.push_str(".await");
+                        }
                     }
                 }
                 self.w.push('\n');
@@ -920,6 +953,12 @@ impl RustEmitter {
         self.w.indent_inc();
         self.w.emit_indent();
         self.emit_visibility(method.visibility);
+        // `async T` method → `async fn`. Same rule as `emit_fn_decl`:
+        // Rust's `async` keyword sits before `fn`, so we prepend it
+        // when the declared return type is async.
+        if matches!(method.return_type, ReturnType::AsyncType(_)) {
+            self.w.push_str("async ");
+        }
         self.w.push_str("fn ");
         self.w.push_str(&method.name.text);
         // Method's own generic parameters plus any synthetic wildcards.
@@ -961,8 +1000,11 @@ impl RustEmitter {
                 self.w.push_str(" -> ");
                 self.emit_return_type_as_rust(t);
             }
-            ReturnType::AsyncType(_) => {
-                self.w.push_str(" -> ()");
+            ReturnType::AsyncType(t) => {
+                // `async T` → `async fn (...) -> T`. The `async`
+                // keyword was already emitted ahead of `fn`.
+                self.w.push_str(" -> ");
+                self.emit_return_type_as_rust(t);
             }
         }
         self.w.push_str(" {\n");

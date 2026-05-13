@@ -99,6 +99,119 @@ impl RustEmitter {
                 return self.emit_print_call(call);
             }
         }
+        // `parallel(a, b, c, ...)` — async-runtime builtin per
+        // JUX-ASYNC-ADDENDUM-v2. Wraps `futures::join!(...)` in an
+        // `async { ... }` block, so the call evaluates to a **Future**
+        // yielding the tuple `(R_a, R_b, R_c, …)`. Uniform shape:
+        //
+        //   - In async context: `await parallel(a, b)` resolves to
+        //     the tuple after both futures complete.
+        //   - From sync code:   `block_on(parallel(a, b))` drives
+        //     the Future to completion via the executor.
+        //
+        // The `move` on the async block captures the argument
+        // expressions by value (matches Rust's default for async
+        // blocks and keeps lifetimes happy when the Future is
+        // shuttled across `block_on`).
+        if let Expr::Path(qn) = &*call.callee {
+            if qn.segments.len() == 1 && qn.segments[0].text == "parallel" {
+                self.w.push_str("async move { futures::join!(");
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                for (i, arg) in call.args.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str(", ");
+                    }
+                    self.emit_expr(arg);
+                }
+                self.emitting_format_arg = prev;
+                self.w.push_str(") }");
+                return;
+            }
+        }
+        // `block_on(future)` — async-runtime builtin: drive a Future
+        // to completion synchronously, returning its resolved value.
+        // Lowers to `futures::executor::block_on(future)`. The user
+        // is responsible for ensuring the argument really is a
+        // Future (i.e. the result of an `async` call or
+        // `parallel(...)`); calling `block_on` on a non-Future
+        // surfaces as a rustc type-mismatch at the emit site.
+        if let Expr::Path(qn) = &*call.callee {
+            if qn.segments.len() == 1 && qn.segments[0].text == "block_on" {
+                self.w.push_str("futures::executor::block_on(");
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                if let Some(arg) = call.args.first() {
+                    self.emit_expr(arg);
+                }
+                self.emitting_format_arg = prev;
+                self.w.push(')');
+                return;
+            }
+        }
+        // `yield_now()` — cooperative suspension point. Lowers to a
+        // call into the emitted runtime helper (`__jux_yield_now()`,
+        // defined in the prelude when async is detected). The
+        // helper returns a Future; the caller is expected to
+        // `await` it (`await yield_now()`), which is how the spec
+        // shape reads.
+        if let Expr::Path(qn) = &*call.callee {
+            if qn.segments.len() == 1 && qn.segments[0].text == "yield_now" {
+                self.w.push_str("__jux_yield_now()");
+                return;
+            }
+        }
+        // `now_ms()` — monotonic-ish clock reading. Lowers to the
+        // emitted `__jux_now_ms()` helper (defined in the prelude
+        // whenever async support is active, since timing is
+        // commonly needed alongside async work). Returns the
+        // milliseconds since the UNIX epoch as `i64` — `long` at
+        // the Jux level.
+        if let Expr::Path(qn) = &*call.callee {
+            if qn.segments.len() == 1 && qn.segments[0].text == "now_ms" {
+                self.w.push_str("__jux_now_ms()");
+                return;
+            }
+        }
+        // `Worker.spawn(lambda)` — true multi-thread parallelism
+        // per JUX-ASYNC-ADDENDUM §18.2. Runs the closure on the
+        // OS thread pool, returns a `Task<T>` that can be `await`-ed
+        // for the closure's value.
+        //
+        // Special-case the closure emit: the regular `emit_lambda`
+        // wraps every Jux closure in `Rc<dyn Fn>` (so it can be
+        // stored / passed around freely), but `Rc` isn't `Send`,
+        // so a wrapped closure can't be shipped to a worker
+        // thread. Here we strip the wrapper and emit a bare
+        // `move || body` closure directly — `Worker::spawn` takes
+        // an `FnOnce + Send + 'static`, which a `move ||` closure
+        // capturing Send/'static values satisfies natively.
+        if let Expr::Field(f) = &*call.callee {
+            if let Expr::Path(qn) = &*f.object {
+                if qn.segments.len() == 1
+                    && qn.segments[0].text == "Worker"
+                    && f.field.text == "spawn"
+                {
+                    self.w.push_str("Worker::spawn(");
+                    let prev = self.emitting_format_arg;
+                    self.emitting_format_arg = false;
+                    if let Some(arg) = call.args.first() {
+                        match arg {
+                            Expr::Lambda(l) => self.emit_bare_move_lambda(l),
+                            // Anything else (method ref, named fn,
+                            // path) goes through as-is — the user
+                            // gets a clear rustc error if the
+                            // value doesn't satisfy Worker.spawn's
+                            // `FnOnce + Send + 'static` bound.
+                            _ => self.emit_expr(arg),
+                        }
+                    }
+                    self.emitting_format_arg = prev;
+                    self.w.push(')');
+                    return;
+                }
+            }
+        }
         // Bare-name method-call rewrite inside a class/interface body.
         // `foo(args)` inside `class C` or `interface I` should resolve
         // to `self.foo(args)` when `foo` is a non-static method on

@@ -1,0 +1,92 @@
+// Async/await stress test — JUX-ASYNC-ADDENDUM v2 Phase 1.
+//
+// Demonstrates the full async lowering pipeline FROM A SYNC MAIN:
+//
+//   - `async T` return types on free functions and methods.
+//   - `await expr` inside async helpers — postfix `.await` lowering.
+//   - The `parallel(a, b, c, …)` builtin — concurrent join over N
+//     futures, returning a tuple of their resolved values. Returns a
+//     **Future**, so it composes cleanly with `await` (in async
+//     context) or `block_on` (from sync code).
+//   - The `block_on(future)` builtin — driver that runs a Future to
+//     completion synchronously, letting a plain `void main()` reach
+//     into the async graph without becoming async itself.
+
+// ============================================================================
+// Independent async producers.
+// ============================================================================
+
+public async int fetch_user_count() {
+    return 42;
+}
+
+public async int fetch_order_count() {
+    return 117;
+}
+
+public async int fetch_session_count() {
+    return 9;
+}
+
+public async String greet_async(String who) {
+    return $"hello, ${who}";
+}
+
+// ============================================================================
+// Async method on a class.
+// ============================================================================
+
+public class Loader {
+    public String name;
+
+    public Loader(String name) {
+        this.name = name;
+    }
+
+    public async String describe() {
+        return $"loader[${this.name}]";
+    }
+}
+
+// ============================================================================
+// An async orchestrator. We call this from sync `main()` via
+// `block_on(...)`. Sequential awaits, chained awaits, async method
+// dispatch, and a `parallel(...)` fan-out all run inside this one
+// Future.
+// ============================================================================
+
+public async void run_demo() {
+    final int users = await fetch_user_count();
+    print($"users      = ${users}");
+
+    final var counts = await parallel(fetch_user_count(), fetch_order_count(), fetch_session_count());
+    print("parallel ints:");
+    print(counts.0);
+    print(counts.1);
+    print(counts.2);
+
+    final var greetings = await parallel(greet_async("alice"), greet_async("bob"), greet_async("carol"));
+    print("parallel strings:");
+    print(greetings.0);
+    print(greetings.1);
+    print(greetings.2);
+
+    final int doubled = await fetch_user_count();
+    print($"doubled (seq)  = ${doubled * 2}");
+
+    final Loader loader = new Loader("jux-runtime");
+    final String desc = await loader.describe();
+    print($"loader         = ${desc}");
+
+    print("done.");
+}
+
+// ============================================================================
+// Sync entry point. The user explicitly opts into the async runtime
+// via `block_on(...)` — `main()` itself stays a regular
+// synchronous function.
+// ============================================================================
+
+public void main() {
+    block_on(run_demo());
+}

@@ -137,6 +137,14 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // the emitted `if`. Generic / numeric coercion across
         // branches is a future tycheck refinement.
         Expr::Ternary(t) => infer_expr(&t.then_branch, env, symbols),
+        // `await expr` resolves to the operand's value type. In a
+        // proper Future model the operand would be `Future<T>` and
+        // this would unwrap to `T`; Phase 1 doesn't track Future
+        // shapes structurally — `expr` is already typed as `T` at
+        // its definition site (the `async T` return type lowers to
+        // `T` everywhere outside the emission boundary), so the
+        // operand's type is the right answer.
+        Expr::Await(inner, _) => infer_expr(inner, env, symbols),
     }
 }
 
@@ -1066,6 +1074,26 @@ fn infer_stmt(stmt: &Stmt, env: &mut TypeEnv, symbols: &SymbolTable) {
         Stmt::SuperCall(args, _) => {
             for arg in args {
                 let _ = infer_expr(arg, env, symbols);
+            }
+        }
+        Stmt::Throw(e, _) => {
+            let _ = infer_expr(e, env, symbols);
+        }
+        Stmt::Try(t) => {
+            env.push_scope();
+            infer_block(&t.body, env, symbols);
+            env.pop_scope();
+            for c in &t.catches {
+                env.push_scope();
+                let ty = ty_from_ref(&c.ty, env, symbols);
+                env.declare(&c.name.text, ty);
+                infer_block(&c.body, env, symbols);
+                env.pop_scope();
+            }
+            if let Some(fin) = &t.finally {
+                env.push_scope();
+                infer_block(fin, env, symbols);
+                env.pop_scope();
             }
         }
         Stmt::Break(_) | Stmt::Continue(_) => {}

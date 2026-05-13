@@ -49,7 +49,14 @@ impl RustEmitter {
         // Visibility intentionally drops to `pub` — the trait-impl
         // wrappers below need to call these from outside the class's
         // own module if we ever split classes into separate modules.
-        self.w.push_str("pub fn ");
+        // `async T` operator → `async fn`. Rare in practice (operators
+        // are typically pure), but the parser accepts the keyword on
+        // any return-type position, so we honor it here too.
+        if matches!(op.return_type, ReturnType::AsyncType(_)) {
+            self.w.push_str("pub async fn ");
+        } else {
+            self.w.push_str("pub fn ");
+        }
         self.w.push_str(synthetic_op_method_name(op.kind));
         self.w.push('(');
         if needs_mut_self {
@@ -70,8 +77,11 @@ impl RustEmitter {
                 self.w.push_str(" -> ");
                 self.emit_return_type_as_rust(t);
             }
-            ReturnType::AsyncType(_) => {
-                self.w.push_str(" -> ()");
+            ReturnType::AsyncType(t) => {
+                // `async T` → `async fn (...) -> T`. The `async`
+                // keyword was already emitted ahead of `fn` above.
+                self.w.push_str(" -> ");
+                self.emit_return_type_as_rust(t);
             }
         }
         self.w.push_str(" {\n");

@@ -83,6 +83,23 @@ fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
         Stmt::SuperCall(args, _) => {
             args.iter().any(|a| is_path_named(a, name) || expr_moves_path_at_top(a, name))
         }
+        Stmt::Throw(e, _) => is_path_named(e, name) || expr_moves_path_at_top(e, name),
+        Stmt::Try(t) => {
+            if body_moves_path(&t.body, name) {
+                return true;
+            }
+            for c in &t.catches {
+                if body_moves_path(&c.body, name) {
+                    return true;
+                }
+            }
+            if let Some(fin) = &t.finally {
+                if body_moves_path(fin, name) {
+                    return true;
+                }
+            }
+            false
+        }
         Stmt::Break(_) | Stmt::Continue(_) => false,
     }
 }
@@ -236,6 +253,11 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
                 || is_path_named(&t.else_branch, name)
                 || expr_moves_path_at_top(&t.else_branch, name)
         }
+        // `await expr` — the operand is the position that gets
+        // evaluated, so any move semantics flow through it.
+        Expr::Await(inner, _) => {
+            is_path_named(inner, name) || expr_moves_path_at_top(inner, name)
+        }
     }
 }
 
@@ -360,7 +382,195 @@ impl RustEmitter {
                 // matching; emitting nothing keeps generated Rust
                 // valid even if a future refactor leaves one behind.
             }
+            Stmt::Throw(e, _) => {
+                // Typed payload: the thrown value goes through
+                // `std::panic::panic_any` with its concrete type
+                // preserved. The catch_unwind in any enclosing
+                // `try` block downcasts the payload to the catch
+                // clause's declared type (`Box<dyn Any +
+                // Send>.downcast::<T>()`), so `catch (T ex)` binds
+                // `ex` as the actual `T` instance — fields and
+                // methods on it work as written.
+                //
+                // For panic-aborted binaries the rendered panic
+                // header still needs a printable representation;
+                // every user class derives `Debug` so the
+                // default-hook output reads like the value's
+                // `{:?}` form. We don't synthesize an extra
+                // String payload here — the typed object IS the
+                // payload, and the catch-site recovers it
+                // verbatim.
+                self.w.push_str("std::panic::panic_any(");
+                self.emit_expr(e);
+                self.w.push_str(");\n");
+            }
+            Stmt::Try(t) => self.emit_try(t),
         }
+    }
+
+    /// Lower a Jux `try / catch / finally` statement to Rust using
+    /// `std::panic::catch_unwind` as the unwinding mechanism. The
+    /// shape per spec §X.3.2:
+    ///
+    /// ```text
+    /// try B0 catch (T1 e1) B1 ... finally Bf
+    /// ```
+    ///
+    /// becomes:
+    ///
+    /// ```text
+    /// {
+    ///     let __jux_try_result = std::panic::catch_unwind(
+    ///         std::panic::AssertUnwindSafe(|| { B0 })
+    ///     );
+    ///     match __jux_try_result {
+    ///         Ok(_) => {}
+    ///         Err(__payload) => {
+    ///             let e1: String = /* downcast __payload to String */;
+    ///             B1
+    ///         }
+    ///     }
+    ///     Bf
+    /// }
+    /// ```
+    ///
+    /// **Phase-1 caveat.** The caught name is bound as `String`
+    /// regardless of the declared catch type — the full
+    /// typed-exception story lands when the Result-mode pass
+    /// arrives. Single catch only in this shape; multi-catch and
+    /// per-type filtering chain as `else if`/`match` arms.
+    pub(crate) fn emit_try(&mut self, t: &juxc_ast::TryStmt) {
+        // Two lowering shapes, chosen by whether the try body
+        // contains an `await`:
+        //
+        //   - **Sync**: `std::panic::catch_unwind(AssertUnwindSafe(||
+        //     { body }))`. The closure captures locals by
+        //     reference; `body` mutations on outer vars
+        //     propagate.
+        //   - **Async**: `AssertUnwindSafe(async move { body })
+        //     .catch_unwind().await` (from `futures::FutureExt`).
+        //     The async block captures locals by move, so try
+        //     bodies that need to mutate outer state in an async
+        //     context must thread the value out via the result
+        //     instead.
+        //
+        // Both paths produce `Result<(), Box<dyn Any + Send>>`,
+        // so the catch / finally machinery downstream is shared.
+        let is_async = crate::analysis::block_contains_await(&t.body);
+        // Wrap the whole thing in a block so locals introduced by
+        // the lowering don't leak.
+        self.w.push_str("{\n");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("let __jux_try_result: std::thread::Result<()> = ");
+        if is_async {
+            // `futures::FutureExt::catch_unwind(...)` is fully
+            // qualified so we don't need a `use` statement at the
+            // emit site. `AssertUnwindSafe<Fut>` impls `Future +
+            // UnwindSafe`, satisfying the extension trait's bound.
+            self.w.push_str(
+                "futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async move {\n",
+            );
+            self.w.indent_inc();
+            self.emit_block_contents(&t.body);
+            self.w.indent_dec();
+            self.w.emit_indent();
+            self.w.push_str("})).await;\n");
+        } else {
+            self.w
+                .push_str("std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
+            self.w.indent_inc();
+            self.emit_block_contents(&t.body);
+            self.w.indent_dec();
+            self.w.emit_indent();
+            self.w.push_str("}));\n");
+        }
+        // Match on the result and run the appropriate catch.
+        self.w.emit_indent();
+        self.w.push_str("match __jux_try_result {\n");
+        self.w.indent_inc();
+        self.w.line("Ok(_) => {}");
+        self.w.emit_indent();
+        self.w.push_str("Err(__jux_payload) => {\n");
+        self.w.indent_inc();
+        // Typed-payload dispatch: try each catch clause in source
+        // order. Each clause attempts `downcast::<T>()`; on success
+        // it binds the catch name to the recovered typed value and
+        // breaks out of the labelled block. On failure, the payload
+        // threads through to the next clause. If no clause matches
+        // we resume the panic so an outer handler / runtime hook
+        // can deal with it (mirrors Java's "uncaught propagates").
+        //
+        // A labelled block (`'__jux_catch: { ... break '__jux_catch;
+        // ... }`) is the cleanest way to express "stop dispatch
+        // after the first match" without nesting matches arbitrarily
+        // deep.
+        if t.catches.is_empty() {
+            // No catch clauses (try/finally form). Drop the payload
+            // silently — `finally` still runs below.
+            self.w.line("let _ = __jux_payload;");
+        } else {
+            // Fully qualify `::std::boxed::Box` so a user class
+            // named `Box` doesn't shadow it. `std::panic::catch_unwind`
+            // hands back the typed-erased payload as `Box<dyn Any +
+            // Send>`; we keep the same Box type to feed back into
+            // `resume_unwind` if no catch matches.
+            self.w.line(
+                "let mut __jux_payload_slot: Option<::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>> = Some(__jux_payload);",
+            );
+            self.w.line("'__jux_catch: {");
+            self.w.indent_inc();
+            for clause in &t.catches {
+                // Pull the payload back out, try the downcast, and
+                // either run the body (consuming the value) or thread
+                // the unrecovered payload back to the slot.
+                self.w
+                    .line("if let Some(__jux_p) = __jux_payload_slot.take() {");
+                self.w.indent_inc();
+                self.w.emit_indent();
+                self.w.push_str("match __jux_p.downcast::<");
+                self.emit_type_as_rust(&clause.ty);
+                self.w.push_str(">() {\n");
+                self.w.indent_inc();
+                self.w.emit_indent();
+                self.w.push_str("Ok(__jux_boxed) => {\n");
+                self.w.indent_inc();
+                self.w.emit_indent();
+                self.w.push_str("let ");
+                self.w.push_str(&clause.name.text);
+                self.w.push_str(" = *__jux_boxed;\n");
+                self.emit_block_contents(&clause.body);
+                self.w.line("break '__jux_catch;");
+                self.w.indent_dec();
+                self.w.line("}");
+                self.w
+                    .line("Err(__jux_rest) => { __jux_payload_slot = Some(__jux_rest); }");
+                self.w.indent_dec();
+                self.w.line("}");
+                self.w.indent_dec();
+                self.w.line("}");
+            }
+            // No clause matched — resume the panic so it
+            // propagates to whoever was waiting on this future /
+            // call.
+            self.w.line(
+                "if let Some(__jux_unhandled) = __jux_payload_slot.take() { std::panic::resume_unwind(__jux_unhandled); }",
+            );
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.line("}");
+        // Finally: emit its body verbatim after the match. Runs
+        // in both success and failure paths.
+        if let Some(fin) = &t.finally {
+            self.emit_block_contents(fin);
+        }
+        self.w.indent_dec();
+        self.w.emit_indent();
+        self.w.push_str("}\n");
     }
 
     /// Lower `for (var name : iter) { body }` to Rust's `for name in iter { body }`.
@@ -818,5 +1028,7 @@ pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::Break(s) => *s,
         Stmt::Continue(s) => *s,
         Stmt::SuperCall(_, s) => *s,
+        Stmt::Throw(_, s) => *s,
+        Stmt::Try(t) => t.span,
     }
 }

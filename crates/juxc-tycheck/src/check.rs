@@ -96,9 +96,12 @@ use crate::ty::{
 // ============================================================================
 
 /// Single-segment names treated as "built-in function — accepts any args,
-/// returns Unknown". `print` is the obvious one; if/when more built-ins
-/// land (`assert`, `panic`, …) they go here.
-const BUILTINS: &[&str] = &["print"];
+/// returns Unknown". `print` is the obvious one; `parallel` is the
+/// async-runtime concurrent-await builtin (JUX-ASYNC-ADDENDUM-v2),
+/// `block_on` is the sync-side driver for awaiting a Future from a
+/// non-async context. If/when more built-ins land (`assert`, `panic`,
+/// …) they go here.
+const BUILTINS: &[&str] = &["print", "parallel", "block_on", "yield_now", "Worker", "now_ms"];
 
 /// Methods we let through on **any array receiver** without checking
 /// against a class signature. These are the Vec/array methods the
@@ -684,6 +687,31 @@ impl<'a> Checker<'a> {
 
             Stmt::SuperCall(args, span) => self.check_super_call(args, *span),
 
+            Stmt::Throw(e, _) => {
+                // Type-check the thrown expression. Full spec
+                // demands the value be `Exception` or a subclass;
+                // Phase-1 lets any value through (the lowering
+                // calls `format!("{:?}", v)` to render it for
+                // panic, so any Debug-shaped value works).
+                self.check_expr(e);
+            }
+
+            Stmt::Try(t) => {
+                self.check_block(&t.body);
+                for c in &t.catches {
+                    self.env.push_scope();
+                    // Bind the caught name with the declared type
+                    // so the body sees `e` as a normal local.
+                    let ty = ty_from_ref(&c.ty, &self.env, self.symbols);
+                    self.env.declare(&c.name.text, ty);
+                    self.check_block(&c.body);
+                    self.env.pop_scope();
+                }
+                if let Some(fin) = &t.finally {
+                    self.check_block(fin);
+                }
+            }
+
             Stmt::Break(_) | Stmt::Continue(_) => {}
         }
     }
@@ -927,6 +955,19 @@ impl<'a> Checker<'a> {
                         .with_span(expr_span(&t.condition)),
                     );
                 }
+            }
+            Expr::Await(inner, _) => {
+                // `await expr` — walk the operand for sub-expression
+                // diagnostics. The async-context check (must appear
+                // only inside `async T` function bodies) is the
+                // parser/resolver's job; tycheck currently relies on
+                // rustc's `.await outside async fn` error for the
+                // ultimate guard. The expression's static type is
+                // taken to be the operand's type (so a `Future<T>`
+                // shape unwraps to `T` in inference); the formal
+                // Future-typing lands when we model async types in
+                // the type-checker properly.
+                self.check_expr(inner);
             }
         }
     }
@@ -2195,6 +2236,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::Elvis(e) => e.span,
         Expr::MethodRef(m) => m.span,
         Expr::Ternary(t) => t.span,
+        Expr::Await(_, s) => *s,
     }
 }
 

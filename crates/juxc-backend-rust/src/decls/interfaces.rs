@@ -55,7 +55,16 @@ impl RustEmitter {
                 continue;
             }
             self.w.emit_indent();
-            self.w.push_str("fn ");
+            // `async T` interface methods become `async fn` on the
+            // trait. Rust supports async fns in traits since 1.75
+            // (stabilized RFC 3185), so this lowers directly without
+            // needing `#[async_trait]` shims. The default-body and
+            // signature-only paths both honor the prefix the same way.
+            if matches!(method.return_type, ReturnType::AsyncType(_)) {
+                self.w.push_str("async fn ");
+            } else {
+                self.w.push_str("fn ");
+            }
             self.w.push_str(&method.name.text);
             self.emit_generic_params(&method.generic_params);
             // `&mut self` — Java semantics make every `this` mutable,
@@ -83,8 +92,11 @@ impl RustEmitter {
                     self.w.push_str(" -> ");
                     self.emit_return_type_as_rust(t);
                 }
-                ReturnType::AsyncType(_) => {
-                    self.w.push_str(" -> ()");
+                ReturnType::AsyncType(t) => {
+                    // `async T` → `async fn (...) -> T`. The keyword
+                    // was already prepended above.
+                    self.w.push_str(" -> ");
+                    self.emit_return_type_as_rust(t);
                 }
             }
             // Two shapes: abstract signature (`;`) vs. default
@@ -141,7 +153,14 @@ impl RustEmitter {
             }
             self.w.emit_indent();
             self.emit_visibility(interface.visibility);
-            self.w.push_str("fn ");
+            // Static interface methods may carry `async` too — the
+            // emitted free function (named `<Iface>_<method>`) becomes
+            // an `async fn`, callable as `Iface_method(args).await`.
+            if matches!(method.return_type, ReturnType::AsyncType(_)) {
+                self.w.push_str("async fn ");
+            } else {
+                self.w.push_str("fn ");
+            }
             self.w.push_str(&interface.name.text);
             self.w.push('_');
             self.w.push_str(&method.name.text);
@@ -162,8 +181,11 @@ impl RustEmitter {
                     self.w.push_str(" -> ");
                     self.emit_return_type_as_rust(t);
                 }
-                ReturnType::AsyncType(_) => {
-                    self.w.push_str(" -> ()");
+                ReturnType::AsyncType(t) => {
+                    // `async T` static interface method → `async fn …
+                    // -> T`. The keyword sat ahead of `fn` above.
+                    self.w.push_str(" -> ");
+                    self.emit_return_type_as_rust(t);
                 }
             }
             if let Some(body) = &method.body {
