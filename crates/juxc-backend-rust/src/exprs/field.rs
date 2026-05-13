@@ -30,6 +30,35 @@ impl RustEmitter {
             self.emit_safe_field(f);
             return;
         }
+        // **Expression-bodied property rewrite.** When `f.field`
+        // names a method declared with the property shape
+        // (`T name => expr;`), emit `obj.name()` instead of the
+        // raw `obj.name`. Detection uses the receiver's inferred
+        // type (looked up in `expr_types`) → class → method
+        // signature. Falls through to the regular field path
+        // when the receiver isn't a class or the name isn't a
+        // property.
+        if let Some(recv_ty) = self
+            .expr_types
+            .get(&crate::exprs::expr_span_of(&f.object))
+            .cloned()
+        {
+            if let juxc_tycheck::Ty::User { name, .. } = &recv_ty {
+                let bare = name.rsplit('.').next().unwrap_or(name);
+                let is_property = self
+                    .lookup_class_by_bare_or_fqn(bare)
+                    .and_then(|c| c.methods.get(f.field.text.as_str()).cloned())
+                    .map(|m| m.is_property)
+                    .unwrap_or(false);
+                if is_property {
+                    self.emit_expr(&f.object);
+                    self.w.push('.');
+                    self.w.push_str(&f.field.text);
+                    self.w.push_str("()");
+                    return;
+                }
+            }
+        }
         if f.field.text == "length" {
             // `xs.length` → `xs.len() as isize`. Wrap the receiver
             // in parens only when its shape might otherwise bind

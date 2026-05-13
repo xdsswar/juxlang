@@ -140,6 +140,42 @@ impl RustEmitter {
         self.w.line("}");
         self.w.newline();
 
+        // Auto-`From<Sub> for Parent` for **non-sealed open
+        // hierarchies**. Extracts the parent slice from the
+        // subclass via `__parent`, giving the user a working
+        // `void greet(Animal a) { } ;  greet(new Dog(...))` shape
+        // at the cost of dropping the subclass's identity at the
+        // upcast boundary. Phase-1 limitation: methods overridden
+        // in the subclass DO NOT fire after upcasting through
+        // this conversion — Java's virtual dispatch through value
+        // types isn't expressible without dyn dispatch, which is
+        // a larger refactor (each class's marker trait would have
+        // to carry method signatures).
+        //
+        // **Recommended idiom for full polymorphism: declare the
+        // parent `sealed` and list permits.** That path uses the
+        // enum lowering and preserves subclass identity.
+        if let Some(parent_ty) = &class_decl.extends {
+            if !parent_is_sealed {
+                if let Some(parent_bare) = parent_ty
+                    .name
+                    .segments
+                    .last()
+                    .map(|s| s.text.as_str())
+                {
+                    self.w.emit_indent();
+                    self.w.push_str("impl From<");
+                    self.w.push_str(&class_decl.name.text);
+                    self.emit_generic_params_as_args(&class_decl.generic_params);
+                    self.w.push_str("> for ");
+                    self.w.push_str(parent_bare);
+                    self.w.push_str(" { fn from(v: ");
+                    self.w.push_str(&class_decl.name.text);
+                    self.emit_generic_params_as_args(&class_decl.generic_params);
+                    self.w.push_str(") -> Self { v.__parent } }\n");
+                }
+            }
+        }
         // Emit Deref + DerefMut impls for child classes so inherited
         // methods and field access flow through Rust's auto-deref —
         // `child.method()` finds methods on the parent transparently,

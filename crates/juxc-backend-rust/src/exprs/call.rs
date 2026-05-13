@@ -725,10 +725,15 @@ impl RustEmitter {
         let is_array = matches!(&recv_ty, juxc_tycheck::Ty::Array { .. });
         let is_string =
             matches!(&recv_ty, juxc_tycheck::Ty::String);
-        if !is_array && !is_string {
+        let is_map = matches!(
+            &recv_ty,
+            juxc_tycheck::Ty::User { name, .. }
+                if name.rsplit('.').next().unwrap_or(name) == "Map"
+        );
+        if !is_array && !is_string && !is_map {
             return false;
         }
-        // From here, we know the receiver is a typed array/String.
+        // From here, we know the receiver is a typed array/String/Map.
         // Each method gets a custom Rust emission.
         if is_array {
             return self.emit_array_stdlib_method(call, method);
@@ -736,7 +741,87 @@ impl RustEmitter {
         if is_string {
             return self.emit_string_stdlib_method(call, method);
         }
+        if is_map {
+            return self.emit_map_stdlib_method(call, method);
+        }
         false
+    }
+
+    /// Emit the Rust equivalent of a Jux `Map<K, V>` method call.
+    /// Returns `true` when the method was handled.
+    fn emit_map_stdlib_method(&mut self, call: &CallExpr, method: &str) -> bool {
+        let Expr::Field(f) = &*call.callee else {
+            return false;
+        };
+        let receiver = &*f.object;
+        match method {
+            // `m.put(k, v)` → `m.insert(k, v)`. Rust returns the old
+            // value as `Option<V>`; Jux currently ignores the
+            // return value, so we don't unwrap.
+            "put" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".insert(");
+                self.emit_call_args(call);
+                self.w.push(')');
+                true
+            }
+            // `m.get(k)` → `m.get(&k).cloned().unwrap()`. The
+            // `.unwrap()` panics on a missing key, matching Java's
+            // `Map.get` returning null but Jux's lack of nullable
+            // primitives.
+            "get" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".get(&(");
+                self.emit_call_args(call);
+                self.w.push_str(")).cloned().unwrap()");
+                true
+            }
+            // `m.contains(k)` → `m.contains_key(&k)` — Rust uses
+            // `contains_key`; Java/Jux just use `contains`.
+            "contains" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".contains_key(&(");
+                self.emit_call_args(call);
+                self.w.push_str("))");
+                true
+            }
+            // `m.remove(k)` → drop entry, return removed value.
+            "remove" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".remove(&(");
+                self.emit_call_args(call);
+                self.w.push_str(")).unwrap()");
+                true
+            }
+            "size" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".len() as isize");
+                true
+            }
+            "isEmpty" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".is_empty()");
+                true
+            }
+            "clear" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".clear()");
+                true
+            }
+            "keys" => {
+                self.emit_expr(receiver);
+                self.w
+                    .push_str(".keys().cloned().collect::<Vec<_>>()");
+                true
+            }
+            "values" => {
+                self.emit_expr(receiver);
+                self.w
+                    .push_str(".values().cloned().collect::<Vec<_>>()");
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Emit the Rust equivalent of a Jux `List<T>` / array method

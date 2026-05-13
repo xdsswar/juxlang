@@ -109,6 +109,17 @@ impl SymbolTable {
             || self.aliases.contains_key(name)
     }
 
+    /// Same as [`Self::is_type_name`] but also returns true for
+    /// the Phase-1 stdlib container types (`Map`, `List`). Used
+    /// by `ty_from_ref` so the type-position references resolve
+    /// even though no declaration backs them. Kept separate from
+    /// `is_type_name` so the symbol-table builder's uniqueness
+    /// check doesn't reject a user `class List<T>` against the
+    /// builtin alias.
+    pub fn is_type_name_or_stdlib(&self, name: &str) -> bool {
+        self.is_type_name(name) || matches!(name, "Map" | "List")
+    }
+
     /// Walk `class_name`'s `extends` chain looking for a method named
     /// `method_name`. Returns the matching [`MethodSig`] **and** the
     /// name of the class that actually declared it.
@@ -341,6 +352,12 @@ pub struct MethodSig {
     /// `obj.method()` resolution split and the `&self` omission in
     /// backend emission.
     pub is_static: bool,
+    /// True when this `MethodSig` was synthesized from an
+    /// expression-bodied property (per JUX-MISSING-DEFS §M.7.4).
+    /// The backend's field-access path checks this flag to rewrite
+    /// `obj.name` as `obj.name()` so the call syntax stays
+    /// Java-shaped at the use site.
+    pub is_property: bool,
     /// Method-level generic parameters, if any.
     pub generic_params: Vec<TypeParam>,
     /// Formal parameters in declaration order.
@@ -2100,6 +2117,7 @@ fn method_sig(method: &FnDecl) -> MethodSig {
         visibility: method.visibility,
         annotations: method.annotations.clone(),
         is_abstract: method.body.is_none(),
+        is_property: method.is_property,
         is_final: method
             .modifiers
             .iter()

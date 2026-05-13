@@ -173,6 +173,25 @@ const BUILTIN_STRING_METHODS: &[&str] = &[
     "substring", "charAt", "isEmpty",
 ];
 
+/// Methods we let through on **a Map receiver** without checking
+/// against a class signature. Maps to Rust `HashMap` operations:
+///
+/// | Jux            | Rust equivalent              |
+/// |----------------|------------------------------|
+/// | `.put(k, v)`   | `.insert(k, v)`              |
+/// | `.get(k)`      | `.get(&k).cloned().unwrap()` |
+/// | `.contains(k)` | `.contains_key(&k)`          |
+/// | `.remove(k)`   | `.remove(&k)`                |
+/// | `.size()`      | `.len() as isize`            |
+/// | `.isEmpty()`   | `.is_empty()`                |
+/// | `.clear()`     | `.clear()`                   |
+/// | `.keys()`      | `.keys().cloned().collect()` |
+/// | `.values()`    | `.values().cloned().collect()` |
+const BUILTIN_MAP_METHODS: &[&str] = &[
+    "put", "get", "contains", "remove", "size", "isEmpty",
+    "clear", "keys", "values",
+];
+
 /// Field/property names we allow on **any array receiver** without a
 /// class lookup. Today just `length`; the typechecker treats it as `Int`.
 const BUILTIN_ARRAY_FIELDS: &[&str] = &["length"];
@@ -1342,6 +1361,18 @@ impl<'a> Checker<'a> {
                     );
                     return;
                 }
+                // Expression-bodied property — `T name => expr;` —
+                // is stored as a method with `is_property = true`.
+                // From the user's perspective `obj.name` is a
+                // field-shaped read; allow it here so tycheck
+                // doesn't fire E0412.
+                if let Some((method, _decl)) =
+                    self.symbols.lookup_method(name, field_name)
+                {
+                    if method.is_property {
+                        return;
+                    }
+                }
                 // Records: check components directly. Record
                 // components are always public per the spec (records
                 // are simple data carriers), so no visibility check.
@@ -1601,6 +1632,18 @@ impl<'a> Checker<'a> {
                 }
                 if let Ty::String = &receiver_ty {
                     if BUILTIN_STRING_METHODS.contains(&method_name) {
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
+                }
+                // Map-typed receivers: short-circuit method-call
+                // verification through the stdlib allowlist. Same
+                // shape as the array / String path above.
+                if let Ty::User { name, .. } = &receiver_ty {
+                    let bare = name.rsplit('.').next().unwrap_or(name);
+                    if bare == "Map" && BUILTIN_MAP_METHODS.contains(&method_name) {
                         for arg in &c.args {
                             self.check_expr(arg);
                         }
@@ -2363,10 +2406,17 @@ fn collect_sealed_subclasses_covered(
     pattern: &Pattern,
     out: &mut std::collections::HashSet<String>,
 ) {
-    if let Pattern::EnumVariant { path, .. } = pattern {
-        if path.segments.len() == 1 {
+    match pattern {
+        Pattern::EnumVariant { path, .. } if path.segments.len() == 1 => {
             out.insert(path.segments[0].text.clone());
         }
+        // `case Sub ident -> ...` also covers Sub — the binder
+        // captures the matched value while still narrowing the
+        // arm to exactly the named subclass.
+        Pattern::TypeBind { type_name, .. } => {
+            out.insert(type_name.text.clone());
+        }
+        _ => {}
     }
 }
 

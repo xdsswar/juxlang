@@ -431,6 +431,25 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         }
     }
 
+    // Phase-1 stdlib container shortcuts. `List<T>` is structurally
+    // identical to `T[]` (Rust `Vec<T>`), so we lower it directly
+    // to `Ty::Array { kind: Dynamic }` here — UNLESS the user has
+    // declared their own `class List<T>` (the symbol table is the
+    // source of truth; classes win over the stdlib alias).
+    if t.name.segments.len() == 1
+        && t.name.segments[0].text == "List"
+        && t.generic_args.len() == 1
+        && !symbols.classes.contains_key("List")
+        && !symbols.records.contains_key("List")
+    {
+        if let juxc_ast::GenericArg::Type(inner) = &t.generic_args[0] {
+            return Ty::Array {
+                element: Box::new(ty_from_ref(inner, env, symbols)),
+                kind: ArrayKind::Dynamic,
+            };
+        }
+    }
+
     // 5. User-defined type — single-segment name. Two paths:
     //    (a) the bare name resolves through the unit's resolver
     //        (`env.unqualified`) to an FQN; we use that FQN.
@@ -439,7 +458,7 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
     if t.name.segments.len() == 1 {
         let bare = &t.name.segments[0].text;
         if let Some(fqn) = env.unqualified.get(bare) {
-            if symbols.is_type_name(fqn) {
+            if symbols.is_type_name_or_stdlib(fqn) {
                 if let Some(expanded) = expand_alias(fqn, &t.generic_args, env, symbols)
                 {
                     return expanded;
@@ -455,7 +474,7 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
                 };
             }
         }
-        if symbols.is_type_name(bare) {
+        if symbols.is_type_name_or_stdlib(bare) {
             if let Some(expanded) = expand_alias(bare, &t.generic_args, env, symbols) {
                 return expanded;
             }
@@ -482,7 +501,7 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
             .map(|s| s.text.as_str())
             .collect::<Vec<_>>()
             .join(".");
-        if symbols.is_type_name(&fqn) {
+        if symbols.is_type_name_or_stdlib(&fqn) {
             if let Some(expanded) = expand_alias(&fqn, &t.generic_args, env, symbols) {
                 return expanded;
             }

@@ -142,6 +142,42 @@ impl RustEmitter {
             return;
         }
 
+        // Stdlib container types — `Map<K, V>` and `List<T>` get
+        // surfaced as Rust's native std collections. The Jux user
+        // writes Java-shaped names; the emitted Rust uses the
+        // standard library equivalents.
+        //
+        // Generic args recurse through `emit_type_as_rust`, so a
+        // `Map<String, List<int>>` lowers as
+        // `std::collections::HashMap<String, Vec<isize>>`
+        // automatically.
+        if let Some(seg) = ty.name.segments.last() {
+            let bare = seg.text.as_str();
+            match bare {
+                "Map" if ty.generic_args.len() == 2 => {
+                    self.w.push_str("std::collections::HashMap<");
+                    for (i, arg) in ty.generic_args.iter().enumerate() {
+                        if i > 0 {
+                            self.w.push_str(", ");
+                        }
+                        if let juxc_ast::GenericArg::Type(t) = arg {
+                            self.emit_type_as_rust(t);
+                        }
+                    }
+                    self.w.push('>');
+                    return;
+                }
+                "List" if ty.generic_args.len() == 1 => {
+                    self.w.push_str("Vec<");
+                    if let Some(juxc_ast::GenericArg::Type(t)) = ty.generic_args.first() {
+                        self.emit_type_as_rust(t);
+                    }
+                    self.w.push('>');
+                    return;
+                }
+                _ => {}
+            }
+        }
         if let Some(rust_ty) = jux_primitive_to_rust(ty) {
             // Const-context override: a `const`/`static` decl can't
             // run `.to_string()` at init time, so `String` lowers to

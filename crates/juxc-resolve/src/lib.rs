@@ -179,6 +179,13 @@ impl Resolver {
         // Backend recognizes `File.readText(path)` and
         // `File.writeText(path, body)` and lowers to `std::fs::*`.
         builtins.insert("File");
+        // `Map` and `List` — stdlib container constructors. The
+        // type emitter rewrites `Map<K, V>` → `std::collections::
+        // HashMap<K, V>` and `List<T>` → `Vec<T>`; this
+        // registration lets the resolver accept the type-position
+        // / `new` uses without an explicit `import`.
+        builtins.insert("Map");
+        builtins.insert("List");
         Self {
             builtins,
             user_names: HashSet::new(),
@@ -247,12 +254,18 @@ impl Resolver {
     fn declare_pattern_bindings(&mut self, pattern: &juxc_ast::Pattern) {
         match pattern {
             juxc_ast::Pattern::Wildcard(_)
-            | juxc_ast::Pattern::Literal(_, _) => {}
+            | juxc_ast::Pattern::Literal(_, _)
+            | juxc_ast::Pattern::Range { .. } => {}
             juxc_ast::Pattern::Bind(name) => self.declare(&name.text),
             juxc_ast::Pattern::EnumVariant { args, .. } => {
                 for sub in args {
                     self.declare_pattern_bindings(sub);
                 }
+            }
+            juxc_ast::Pattern::TypeBind { binder, .. } => {
+                // `case Type ident -> ...` introduces `ident` as
+                // a binding scoped to the arm's body.
+                self.declare(&binder.text);
             }
         }
     }

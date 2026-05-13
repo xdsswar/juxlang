@@ -574,6 +574,14 @@ pub struct FnDecl {
     pub throws: Vec<QualifiedName>,
     /// Body block, or `None` for `abstract`/`native` declarations.
     pub body: Option<Block>,
+    /// True when this `FnDecl` was synthesized from an expression-
+    /// bodied property declaration (`T name => expr;` per
+    /// JUX-MISSING-DEFS §M.7.4). The method is callable like any
+    /// other method, but the field-access site (`obj.name`)
+    /// recognizes the flag and emits `obj.name()` so the user
+    /// sees Java-style property-read syntax. Plain methods keep
+    /// `is_property = false`.
+    pub is_property: bool,
     /// Span covering the entire declaration.
     pub span: Span,
 }

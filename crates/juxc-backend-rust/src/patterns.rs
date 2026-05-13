@@ -110,6 +110,47 @@ impl RustEmitter {
                 }
             }
             juxc_ast::Pattern::Bind(name) => self.w.push_str(&name.text),
+            juxc_ast::Pattern::Range { start, end, inclusive, .. } => {
+                // Rust supports `start..=end` and `start..end` in
+                // match patterns as long as both endpoints are
+                // literals. Emit the captured literals through the
+                // regular literal-pattern path so the produced
+                // Rust matches `0..=10` exactly.
+                self.emit_literal(start);
+                self.w.push_str(if *inclusive { "..=" } else { ".." });
+                self.emit_literal(end);
+            }
+            juxc_ast::Pattern::TypeBind { type_name, binder, .. } => {
+                // `case Type ident ->` — shorthand for
+                // `case Type(var ident) ->`. We rewrite into the
+                // same shape the sealed-subclass EnumVariant path
+                // handles below, but bind the WHOLE variant value
+                // rather than destructuring fields. Output shape:
+                // `Sealed::Type(ident)` so the user can call
+                // `ident.method(...)` directly on the subclass.
+                let parent_fqn = self
+                    .lookup_class_by_bare_or_fqn(&type_name.text)
+                    .and_then(|sub| sub.extends_fqn.clone())
+                    .unwrap_or_default();
+                let parent_bare = parent_fqn
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(parent_fqn.as_str())
+                    .to_string();
+                if parent_bare.is_empty() {
+                    // No sealed parent — emit as a bare bind.
+                    // (Rust will fail to type-check; the diagnostic
+                    // points at the source.)
+                    self.w.push_str(&binder.text);
+                } else {
+                    self.w.push_str(&parent_bare);
+                    self.w.push_str("::");
+                    self.w.push_str(&type_name.text);
+                    self.w.push('(');
+                    self.w.push_str(&binder.text);
+                    self.w.push(')');
+                }
+            }
             juxc_ast::Pattern::EnumVariant { path, args, .. } => {
                 // Three shapes to handle:
                 //

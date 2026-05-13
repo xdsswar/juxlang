@@ -272,6 +272,12 @@ pub(crate) fn is_mutating_method(name: &str) -> bool {
         name,
         "push" | "pop" | "clear" | "insert" | "remove" | "extend" | "truncate"
         | "swap" | "reverse" | "sort"
+        // Jux-spec method names: List<T> and Map<K, V> both
+        // mutate through `add`/`put` and various others. Listing
+        // them here lets `let` → `let mut` promotion kick in for
+        // `var xs = new List<int>(); xs.add(1);` without forcing
+        // the user to write a manual `mut` annotation.
+        | "add" | "put" | "set"
     )
 }
 
@@ -1154,9 +1160,6 @@ impl crate::RustEmitter {
         let Some(parent_class) = self.lookup_class_by_bare_or_fqn(target_bare) else {
             return false;
         };
-        if !parent_class.is_sealed {
-            return false;
-        }
         let arg_span = crate::exprs::expr_span_of(expr);
         let Some(arg_ty) = self.expr_types.get(&arg_span) else {
             return false;
@@ -1168,7 +1171,29 @@ impl crate::RustEmitter {
         if arg_bare == target_bare {
             return false;
         }
-        parent_class.permits.iter().any(|p| p.as_str() == arg_bare)
+        // Sealed parent: arg must be in the explicit `permits`
+        // list. The `From<Sub> for Sealed` impl wraps the
+        // subclass into the matching enum variant.
+        if parent_class.is_sealed {
+            return parent_class.permits.iter().any(|p| p.as_str() == arg_bare);
+        }
+        // Non-sealed open parent: the auto-emitted
+        // `From<Sub> for Parent` impl (see `emit_class_decl`)
+        // extracts the parent slice via `.__parent`. Phase-1
+        // caveat — this drops subclass identity at the boundary,
+        // so an overridden method on the subclass doesn't fire
+        // after the upcast. Use a sealed hierarchy for full
+        // virtual dispatch.
+        if let Some(arg_class) = self.lookup_class_by_bare_or_fqn(arg_bare) {
+            if let Some(extends_fqn) = arg_class.extends_fqn.as_deref() {
+                let parent_seg = extends_fqn
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(extends_fqn);
+                return parent_seg == target_bare;
+            }
+        }
+        false
     }
 
     /// True when the enclosing function's return type is a sealed
@@ -1207,43 +1232,10 @@ impl crate::RustEmitter {
         let Some(param_ty) = self.callee_param_type(callee, arg_idx) else {
             return false;
         };
-        let Some(param_bare) = param_ty.name.segments.last().map(|s| s.text.as_str())
-        else {
-            return false;
-        };
-        // Param must be a sealed user class.
-        let Some(parent_class) = self.lookup_class_by_bare_or_fqn(param_bare) else {
-            return false;
-        };
-        if !parent_class.is_sealed {
-            return false;
-        }
-        // Walk the arg's inferred type and check it's a permitted
-        // subclass of the param. The expr_types map is keyed by
-        // span; the arg expression's span tells us its inferred
-        // shape.
-        let arg_span = crate::exprs::expr_span_of(arg);
-        let Some(arg_ty) = self.expr_types.get(&arg_span) else {
-            return false;
-        };
-        // Extract a bare class name from the arg's inferred type.
-        let arg_bare = match arg_ty {
-            juxc_tycheck::Ty::User { name, .. } => name.split('.').next_back().unwrap_or(name),
-            _ => return false,
-        };
-        // Same class → no upcast needed (blanket From<T> for T
-        // still works but emitting `.into()` for same-type is just
-        // noise).
-        if arg_bare == param_bare {
-            return false;
-        }
-        // Check `permits` list. Phase-1 sealed lowering only ever
-        // accepts direct permits members (no transitive
-        // subclassing through a non-sealed intermediate).
-        parent_class
-            .permits
-            .iter()
-            .any(|p| p.as_str() == arg_bare)
+        // Delegate to the general "param-typed slot wants `.into()`"
+        // predicate, which now handles both sealed (variant wrap)
+        // and non-sealed (`__parent` extraction) upcasts.
+        self.expr_needs_sealed_upcast_to(&param_ty, arg)
     }
 
     /// Wrap `arg` in `Some(arg)` if the target slot wants a

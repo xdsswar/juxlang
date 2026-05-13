@@ -105,6 +105,35 @@ impl RustEmitter {
                 self.emit_anonymous_class(n);
             }
             Expr::NewObject(n) => {
+                // `new Map<K, V>()` / `new List<T>()` — stdlib
+                // container constructors. Lower to the matching
+                // Rust std::collections type's `new()`. Generic
+                // args are emitted via the type emitter to handle
+                // nested shapes (`new Map<String, List<int>>()`).
+                if n.class_name.segments.len() == 1 {
+                    let bare = n.class_name.segments[0].text.as_str();
+                    if bare == "Map" && n.generic_args.len() == 2 {
+                        self.w.push_str("std::collections::HashMap::<");
+                        let args: Vec<juxc_ast::TypeRef> = n.generic_args.clone();
+                        for (i, arg) in args.iter().enumerate() {
+                            if i > 0 {
+                                self.w.push_str(", ");
+                            }
+                            self.emit_type_as_rust(arg);
+                        }
+                        self.w.push_str(">::new()");
+                        // Stdlib constructors take no Jux args.
+                        return;
+                    }
+                    if bare == "List" && n.generic_args.len() == 1 {
+                        self.w.push_str("Vec::<");
+                        if let Some(arg) = n.generic_args.first() {
+                            self.emit_type_as_rust(arg);
+                        }
+                        self.w.push_str(">::new()");
+                        return;
+                    }
+                }
                 // `new Foo(args)`              → `Foo::new(args)`.
                 // `new com.lib.Foo(args)`      → `crate::com::lib::Foo::new(args)`.
                 // `new Foo<int>(args)`         → `Foo::<isize>::new(args)`

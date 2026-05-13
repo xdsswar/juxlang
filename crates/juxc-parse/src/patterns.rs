@@ -220,7 +220,7 @@ impl<'a> Parser<'a> {
     fn try_parse_range_tail(
         &mut self,
         start_lit: &Literal,
-        start_span: Span,
+        start_span: juxc_source::Span,
     ) -> Option<Pattern> {
         let inclusive = match self.peek() {
             TokenKind::DotDot => false,
