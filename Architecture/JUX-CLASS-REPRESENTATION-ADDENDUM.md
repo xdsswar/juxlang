@@ -298,6 +298,48 @@ inheritance, not memory layout. `sealed interface I permits A, B`
 fixes the set of possible types behind a `dyn I`, but the dispatch
 mechanism is the same and the rep still rolls up to Arc.
 
+### §CR.5.7. Static fields
+
+A class field declared `static` lives on the class, not on
+instances. Two lowering shapes by immutability:
+
+| Form                              | Rust shape                                                              | Access lowering                                       |
+|-----------------------------------|-------------------------------------------------------------------------|-------------------------------------------------------|
+| `static final T x = init;`        | `pub const x: T = init;` inside the class's inherent `impl` block.      | `C.x` → `C::x`                                        |
+| `static final T x = init;` *(const synonym)* | same as above                                                          | same as above                                         |
+| `static T x = init;`              | `static C_x: LazyLock<Mutex<T>> = LazyLock::new(\|\| Mutex::new(init));` at module scope. | Read: `C.x`     → `C_x.lock().unwrap().clone()`<br>Write: `C.x = e` → `*C_x.lock().unwrap() = e` |
+
+**Why split the shape.** Rust forbids `static` items inside `impl`
+blocks. The compile-time-evaluable `final` path stays as a `pub const`
+associated item (zero runtime cost). Mutable statics need both a
+runtime initializer (so `new Foo(...)` and other allocations work) and
+`Sync` for global mutable state — `LazyLock<Mutex<T>>` satisfies both
+in one shape, at the cost of one lock acquisition per access. The
+const-emission `T` in field-position type-mapping (`String` →
+`&'static str`) doesn't apply here — the inner storage owns its data
+just like a regular instance field, so `String` stays `String`.
+
+**Type mapping.** Field-position type rules apply inside the
+`Mutex<T>` slot (`String` → `String`, `int` → `isize`, etc.) so reads
+return owned values that match instance-field semantics.
+
+**Generic classes.** A generic class cannot reference its own type
+parameter in a static field (matches Java; `T` isn't in scope on a
+class-level static). Generic classes therefore can't carry mutable
+statics that mention `T`; the backend skips the mutable-static
+emission for any class with a non-empty `generic_params` list.
+
+**Concurrency.** The `Mutex` wrap makes mutable statics safe to share
+across threads. This is stricter than Java, which leaves mutable
+statics thread-unsafe by default — Jux's spec discipline (no
+`synchronized`, see `feedback-no-native-synchronized`) means
+synchronization has to happen at the lowering layer instead.
+
+**Reassignment vs final-binding.** A `final` static is a Rust
+`pub const` and cannot be reassigned (`Test.a = …;` is a tycheck
+error against the modifier). A non-final static accepts reassignment
+through the `*C_x.lock().unwrap() = e` shape above.
+
 ---
 
 ## §CR.6 — Rust Lowering Rules

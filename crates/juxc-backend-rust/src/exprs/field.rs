@@ -64,17 +64,42 @@ impl RustEmitter {
             }
         }
         // Static-field access: `ClassName.X` (or `pkg.Cls.X`) where
-        // the path resolves to a known class lowers to Rust's
-        // `Path::X` form. Cross-package paths get the same
-        // `crate::` rooting `new` uses.
+        // the path resolves to a known class. Two emission shapes:
+        //
+        //   - `final` static  → Rust associated const inside the
+        //     inherent impl, accessed as `Path::X`. Cross-package
+        //     paths get the same `crate::`-rooting `new` uses.
+        //   - Plain `static`  → module-scope `LazyLock<Mutex<T>>`
+        //     named `Class_X` (see `emit_mutable_static_field`).
+        //     Lvalue context emits `*Class_X.lock().unwrap()` so
+        //     the surrounding `=` produces a valid place
+        //     expression; rvalue context emits
+        //     `Class_X.lock().unwrap().clone()` to materialize an
+        //     owned value before the guard drops.
         if let Expr::Path(qn) = &*f.object {
             if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
                 let cls = self.symbols.classes.get(&class_fqn);
                 if let Some(field) = cls.and_then(|c| c.fields.get(f.field.text.as_str())) {
                     if field.is_static {
-                        self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
-                        self.w.push_str("::");
-                        self.w.push_str(&f.field.text);
+                        if field.is_final {
+                            self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                            self.w.push_str("::");
+                            self.w.push_str(&f.field.text);
+                            return;
+                        }
+                        // Mutable static — guarded `LazyLock<Mutex<T>>`.
+                        if self.emitting_lvalue {
+                            self.w.push('*');
+                            self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                            self.w.push('_');
+                            self.w.push_str(&f.field.text);
+                            self.w.push_str(".lock().unwrap()");
+                        } else {
+                            self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                            self.w.push('_');
+                            self.w.push_str(&f.field.text);
+                            self.w.push_str(".lock().unwrap().clone()");
+                        }
                         return;
                     }
                 }

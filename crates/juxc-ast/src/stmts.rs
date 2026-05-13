@@ -70,8 +70,9 @@ pub enum Stmt {
 ///              ( '=' expression )? ';'
 /// ```
 ///
-/// For now we only model the `var name = expr` form. `final var`, the
-/// Java-style `Type name`, and uninitialized declarations come later.
+/// Both inferred (`var name = expr`) and typed (`Type name [= expr]`)
+/// forms are modeled by this single shape; the `ty` field distinguishes
+/// them. A leading `final` or `const` modifier sets [`Self::is_final`].
 #[derive(Debug, Clone)]
 pub struct VarDecl {
     /// Variable name.
@@ -83,7 +84,14 @@ pub struct VarDecl {
     /// not yet by us; once we support it, definite-assignment analysis
     /// in a later phase enforces use-before-assign.
     pub init: Option<Expr>,
-    /// Span covering `var … ;`.
+    /// `true` when the declaration carried a leading `final` or `const`
+    /// modifier (per `JUX-LANG-V1.md` §549–565). Reassignment of a
+    /// `final` local should be a tycheck error; enforcement lands in
+    /// tycheck once this bit is consumed there. `const` currently
+    /// parses identically to `final` — the compile-time-constant
+    /// distinction is deferred until we need it.
+    pub is_final: bool,
+    /// Span covering `[modifier] (type | 'var') name [= init] ;`.
     pub span: Span,
 }
 

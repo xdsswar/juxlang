@@ -194,11 +194,20 @@ pub struct BuildArtifact {
 /// Existing files in `crate_dir` are overwritten — the driver assumes
 /// it owns this directory.
 ///
+/// When `release` is `true`, the inner `cargo build` is invoked with
+/// `--release`, and the returned `binary_path` points at
+/// `target/release/{name}` instead of `target/debug/{name}`.
+///
 /// On `cargo build` failure, returns `Err` with the captured stderr from
 /// cargo so callers can surface it to the user. The juxc-emitted Rust
 /// should always compile cleanly; if it doesn't, that's a juxc bug, not
 /// a user error.
-pub fn build(crate_: &RustCrate, crate_dir: &Path, crate_name: &str) -> Result<BuildArtifact> {
+pub fn build(
+    crate_: &RustCrate,
+    crate_dir: &Path,
+    crate_name: &str,
+    release: bool,
+) -> Result<BuildArtifact> {
     // Ensure the destination directory and any intermediate `src/`
     // subdirectories exist before writing.
     fs::create_dir_all(crate_dir.join("src"))
@@ -238,10 +247,15 @@ pub fn build(crate_: &RustCrate, crate_dir: &Path, crate_name: &str) -> Result<B
 
     // Run cargo build inside the emitted crate. `--quiet` suppresses
     // cargo's "compiling/finished" lines; we surface anything that
-    // actually went wrong via the captured stderr.
-    let output = Command::new("cargo")
-        .arg("build")
-        .arg("--quiet")
+    // actually went wrong via the captured stderr. When `release` is
+    // set we also pass `--release` so the emitted program is built
+    // with optimizations (and lands under `target/release/`).
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build").arg("--quiet");
+    if release {
+        cmd.arg("--release");
+    }
+    let output = cmd
         .current_dir(crate_dir)
         .output()
         .with_context(|| format!("invoking `cargo build` in {}", crate_dir.display()))?;
@@ -267,11 +281,13 @@ pub fn build(crate_: &RustCrate, crate_dir: &Path, crate_name: &str) -> Result<B
         );
     }
 
-    // Compute the binary path. Cargo's default debug target dir is
-    // `target/debug/{name}{exe-suffix}`.
+    // Compute the binary path. Cargo's default target dir is
+    // `target/debug/{name}{exe-suffix}` (or `target/release/...`
+    // when `--release` was passed).
+    let profile_dir = if release { "release" } else { "debug" };
     let binary_path = crate_dir
         .join("target")
-        .join("debug")
+        .join(profile_dir)
         .join(format!("{crate_name}{}", std::env::consts::EXE_SUFFIX));
 
     Ok(BuildArtifact { crate_dir: crate_dir.to_path_buf(), binary_path })

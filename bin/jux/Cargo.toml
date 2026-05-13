@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "The Jux project tool. Reads jux.toml, resolves dependencies, dispatches juxc."
+build = "build.rs"
 
 [[bin]]
 name = "jux"
@@ -16,3 +19,9 @@ juxc-source      = { workspace = true }
 juxc-diagnostics = { workspace = true }
 anyhow           = { workspace = true }
 clap             = { workspace = true }
+
+# Embed Windows resources (icon + VERSIONINFO with product name,
+# company, copyright, file/product version). Only active on the
+# MSVC/mingw toolchain — `build.rs` is a no-op elsewhere.
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"

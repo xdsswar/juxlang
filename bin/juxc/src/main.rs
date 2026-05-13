@@ -55,6 +55,13 @@ struct Cli {
     /// stderr and the exit code. Implies `--build`.
     #[arg(long)]
     run: bool,
+
+    /// Build the emitted program in release mode (forwards `--release`
+    /// to the inner `cargo build`). The produced binary lands under
+    /// `target/release/` instead of `target/debug/`. Has no effect
+    /// without `--build` or `--run`.
+    #[arg(long)]
+    release: bool,
 }
 
 fn main() -> Result<ExitCode> {
@@ -129,7 +136,7 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
         .clone()
         .unwrap_or_else(|| default_crate_name(&cli.inputs, &files[0]));
 
-    let artifact = juxc_driver::build(&crate_, &emit_dir, &crate_name)?;
+    let artifact = juxc_driver::build(&crate_, &emit_dir, &crate_name, cli.release)?;
     eprintln!("juxc: built {}", artifact.binary_path.display());
 
     if cli.run {

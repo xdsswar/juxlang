@@ -169,6 +169,12 @@ pub enum Code {
     /// breaks Liskov substitutability — callers holding the
     /// parent type can't reach the override.
     E0433_OverrideNarrowsAccess,
+    /// E0434 — A class's `extends` chain forms a cycle (direct
+    /// `class A extends A` or transitive `A extends B extends A`).
+    /// Per `classes-rules.md` §1.2 inheritance must be a DAG. The
+    /// pre-fix symptom was a runtime OOM in the backend's ancestor
+    /// walk; with this code the cycle is caught at tycheck.
+    E0434_CyclicInheritance,
     /// E0440 — A `switch` over a sealed type (enum or sealed
     /// class) doesn't cover every variant / permitted subclass
     /// and has no wildcard arm. Per `JUX-DIAGNOSTICS-ADDENDUM.md`
@@ -243,6 +249,7 @@ impl Code {
             Code::E0431_InvalidMethodModifiers   => "E0431",
             Code::E0432_InvalidTopLevelVisibility => "E0432",
             Code::E0433_OverrideNarrowsAccess    => "E0433",
+            Code::E0434_CyclicInheritance        => "E0434",
             Code::E0440_NotExhaustive            => "E0440",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",

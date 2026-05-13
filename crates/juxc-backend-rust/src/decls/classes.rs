@@ -137,18 +137,22 @@ impl RustEmitter {
         self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(" {\n");
 
-        // Static fields land as associated constants inside the
-        // inherent impl so `Foo::X` works in Rust. `final` (or
-        // `const`) static fields emit as `pub const`; mutable
-        // statics emit as a `pub static` (which Rust requires to
-        // be Sync — generic-aware mutable statics are a Phase-2
-        // concern, so we only emit `pub static` here for trivial
-        // types).
+        // Static fields split two ways:
+        //
+        //   - `final` / `const` static → emitted as `pub const`
+        //     inside this inherent impl, so `Foo::X` works in Rust.
+        //   - Plain `static` (mutable) → lifted out and emitted at
+        //     module scope as `LazyLock<Mutex<T>>` after the impl
+        //     block, because Rust forbids `static` items inside
+        //     `impl` blocks. See `emit_mutable_static_field` and
+        //     the matching access path in `emit_field`.
         for field in &class_decl.fields {
             if !field.is_static {
                 continue;
             }
-            self.emit_static_field(field);
+            if field.is_final {
+                self.emit_static_field(field);
+            }
         }
         // Constructor → `pub fn new(args) -> Self` with the __self pattern.
         for ctor in &class_decl.constructors {
@@ -171,6 +175,22 @@ impl RustEmitter {
         }
         self.w.line("}");
         self.w.newline();
+
+        // Mutable static fields — emitted at module scope as
+        // `LazyLock<Mutex<T>>` because Rust forbids `static` items
+        // inside `impl` blocks and unsynchronized mutable global
+        // state requires `Sync`. Field access (`Foo.x` /
+        // `Foo.x = …`) is routed to these in `emit_field` /
+        // `emit_assign`. Generic classes are skipped — Java forbids
+        // a generic class's static field from referencing the class's
+        // type parameter, and we follow that rule here.
+        if class_decl.generic_params.is_empty() {
+            for field in &class_decl.fields {
+                if field.is_static && !field.is_final {
+                    self.emit_mutable_static_field(&class_decl.name.text, field);
+                }
+            }
+        }
 
         // Trait-impl block per recognized operator. Only a handful of
         // operators have a direct Rust-trait counterpart in this
@@ -571,6 +591,53 @@ impl RustEmitter {
         self.emitting_const_context = false;
         self.w.push_str(";\n");
         self.w.indent_dec();
+    }
+
+    /// Emit a non-`final` `static` class field as a module-scope
+    /// `LazyLock<Mutex<T>>` named `<Class>_<field>`.
+    ///
+    /// Rust forbids `static` items inside `impl` blocks and requires
+    /// any global mutable state to be `Sync`. `LazyLock<Mutex<T>>`
+    /// satisfies both: the `LazyLock` defers initializer evaluation
+    /// to first access (so runtime-allocated initializers like
+    /// `new Foo()` work), and the `Mutex` provides interior
+    /// mutability with `Sync` for free. The cost is one lock per
+    /// access, which is acceptable for Phase-1 — perf-sensitive
+    /// users have `final` for the const path.
+    ///
+    /// **Access pattern (mirrored in `emit_field` / `emit_assign`):**
+    ///
+    /// - Read  (`Foo.x`)   → `Foo_x.lock().unwrap().clone()`
+    /// - Write (`Foo.x = e`) → `*Foo_x.lock().unwrap() = e`
+    ///
+    /// Caller-positioned at depth 0; this emits the declaration at
+    /// depth 0 too (module scope, not nested in any impl).
+    pub(crate) fn emit_mutable_static_field(
+        &mut self,
+        class_name: &str,
+        field: &juxc_ast::FieldDecl,
+    ) {
+        self.w.emit_indent();
+        self.w.push_str("static ");
+        self.w.push_str(class_name);
+        self.w.push('_');
+        self.w.push_str(&field.name.text);
+        self.w.push_str(": std::sync::LazyLock<std::sync::Mutex<");
+        // Field-position type mapping (`String` → owned `String`) —
+        // we want the inner storage to own its data, just like a
+        // regular instance field would.
+        self.emit_field_type_as_rust(&field.ty);
+        self.w.push_str(">> = std::sync::LazyLock::new(|| std::sync::Mutex::new(");
+        if let Some(init) = &field.default {
+            // Not in const-context here — runtime allocation is fine
+            // because the closure runs on first access, not at link
+            // time. So `String` literals can keep their normal
+            // `.to_string()` wrap and `new Foo(…)` works as expected.
+            self.emit_expr(init);
+        } else {
+            self.emit_field_default_value_for(&field.ty);
+        }
+        self.w.push_str("));\n");
     }
 
     pub(crate) fn emit_method(&mut self, method: &FnDecl) {

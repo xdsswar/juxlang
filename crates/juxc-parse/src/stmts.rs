@@ -50,6 +50,23 @@ impl<'a> Parser<'a> {
         if self.at_kw(Keyword::Return) {
             return Some(self.parse_return_stmt());
         }
+        // Leading `final` or `const` modifier on a local declaration
+        // (per `JUX-LANG-V1.md` §549–565). Both forms are accepted in
+        // statement position; we consume the modifier here, set the
+        // `is_final` flag, and dispatch to either `parse_var_decl`
+        // (when followed by `var`) or `parse_typed_local` (when
+        // followed by a type name).
+        if self.at_kw(Keyword::Final) || self.at_kw(Keyword::Const) {
+            self.advance(); // 'final' | 'const'
+            if self.at_kw(Keyword::Var) {
+                return self.parse_var_decl_with(true).map(Stmt::VarDecl);
+            }
+            // Otherwise the declaration must take the typed form
+            // `Type name [= init];`. We unconditionally dispatch
+            // because no other statement form may follow a leading
+            // `final`/`const` keyword.
+            return self.parse_typed_local_with(true).map(Stmt::VarDecl);
+        }
         if self.at_kw(Keyword::Var) {
             return self.parse_var_decl().map(Stmt::VarDecl);
         }
@@ -240,10 +257,18 @@ impl<'a> Parser<'a> {
     }
 
     /// `var name = expr ;` — the inferred-type local-decl form per §A.2.8.
-    ///
-    /// Milestone-2 scope: we don't yet handle `final var` or
-    /// uninitialized declarations.
+    /// Equivalent to [`Self::parse_var_decl_with`] with `is_final = false`.
     pub(crate) fn parse_var_decl(&mut self) -> Option<VarDecl> {
+        self.parse_var_decl_with(false)
+    }
+
+    /// Underlying parser for `[final|const] var name = expr ;`.
+    ///
+    /// `is_final` reflects whether the caller already consumed a
+    /// `final` or `const` modifier. The span on the returned
+    /// [`VarDecl`] starts at the `var` token regardless — the
+    /// modifier's span is folded in by the dispatcher when needed.
+    pub(crate) fn parse_var_decl_with(&mut self, is_final: bool) -> Option<VarDecl> {
         let start = self.peek_span();
         self.advance(); // 'var'
         let name = self.parse_ident()?;
@@ -255,6 +280,7 @@ impl<'a> Parser<'a> {
             name,
             ty: None,
             init,
+            is_final,
             span: start.join(end),
         })
     }
@@ -334,7 +360,15 @@ impl<'a> Parser<'a> {
     /// caller has confirmed via [`Self::looks_like_typed_local`] that
     /// the lookahead fits the shape — including any optional `[…]`
     /// array dimensions, which we delegate to [`Self::parse_type_ref`].
+    /// Equivalent to [`Self::parse_typed_local_with`] with `is_final = false`.
     pub(crate) fn parse_typed_local(&mut self) -> Option<VarDecl> {
+        self.parse_typed_local_with(false)
+    }
+
+    /// Underlying parser for `[final|const] Type name [= expr] ;`.
+    /// `is_final` reflects whether the caller already consumed a
+    /// `final`/`const` modifier.
+    pub(crate) fn parse_typed_local_with(&mut self, is_final: bool) -> Option<VarDecl> {
         let ty_start = self.peek_span();
         let ty = self.parse_type_ref()?;
         let name = self.parse_ident()?;
@@ -355,7 +389,7 @@ impl<'a> Parser<'a> {
         };
         self.expect(&TokenKind::Semicolon, "';' after typed local declaration");
         let end = self.last_consumed_span();
-        Some(VarDecl { name, ty: Some(ty), init, span: ty_start.join(end) })
+        Some(VarDecl { name, ty: Some(ty), init, is_final, span: ty_start.join(end) })
     }
 
     /// Parse a bare `{a, b, c}` array initializer in typed-local RHS

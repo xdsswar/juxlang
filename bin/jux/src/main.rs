@@ -63,6 +63,10 @@ enum CliCommand {
         /// `<input-parent>/target/.rust-build/`.
         #[arg(long)]
         emit_dir: Option<PathBuf>,
+        /// Build the emitted program with optimizations
+        /// (forwards `--release` to the inner `cargo build`).
+        #[arg(long)]
+        release: bool,
     },
     /// Build and run the project (or a single file). (§B.15 — `jux run`.)
     Run {
@@ -73,6 +77,10 @@ enum CliCommand {
         /// `<input-parent>/target/.rust-build/`.
         #[arg(long)]
         emit_dir: Option<PathBuf>,
+        /// Build the emitted program with optimizations
+        /// (forwards `--release` to the inner `cargo build`).
+        #[arg(long)]
+        release: bool,
     },
     /// Run tests. (§B.15 — `jux test`.)
     Test,
@@ -84,13 +92,13 @@ fn main() -> Result<ExitCode> {
         CliCommand::New { name } => not_yet_implemented(format!("jux new {name}")),
         CliCommand::Test         => not_yet_implemented("jux test"),
         CliCommand::Check { file } => {
-            run_single_or_project(file, Action::Check, None)
+            run_single_or_project(file, Action::Check, None, false)
         }
-        CliCommand::Build { file, emit_dir } => {
-            run_single_or_project(file, Action::Build, emit_dir)
+        CliCommand::Build { file, emit_dir, release } => {
+            run_single_or_project(file, Action::Build, emit_dir, release)
         }
-        CliCommand::Run { file, emit_dir } => {
-            run_single_or_project(file, Action::Run, emit_dir)
+        CliCommand::Run { file, emit_dir, release } => {
+            run_single_or_project(file, Action::Run, emit_dir, release)
         }
     }
 }
@@ -113,9 +121,10 @@ fn run_single_or_project(
     file: Option<PathBuf>,
     action: Action,
     emit_dir: Option<PathBuf>,
+    release: bool,
 ) -> Result<ExitCode> {
     match file {
-        Some(path) => run_single_file(&path, action, emit_dir),
+        Some(path) => run_single_file(&path, action, emit_dir, release),
         None => not_yet_implemented(match action {
             Action::Check => "jux check (project mode)",
             Action::Build => "jux build (project mode)",
@@ -135,6 +144,7 @@ fn run_single_file(
     input: &Path,
     action: Action,
     emit_dir_override: Option<PathBuf>,
+    release: bool,
 ) -> Result<ExitCode> {
     // Phase 1–N: lex/parse/resolve/typecheck/lower via the shared driver.
     let contents = std::fs::read_to_string(input)
@@ -175,6 +185,7 @@ fn run_single_file(
                 &crate_,
                 &emit_dir,
                 juxc_driver::DEFAULT_CRATE_NAME,
+                release,
             )?;
             eprintln!("jux: built {}", artifact.binary_path.display());
 
