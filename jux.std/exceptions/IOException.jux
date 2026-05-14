@@ -1,0 +1,20 @@
+/**
+ * jux.std.exceptions.IOException
+ *
+ * I/O failure — file not found, permission denied, broken
+ * pipe, socket reset. Mirrors `java.io.IOException` (Java
+ * keeps it under `java.io`; we group it under
+ * `jux.std.exceptions` so every error type lives in one
+ * place).
+ */
+package jux.std.exceptions;
+
+public class IOException extends Exception {
+    /**
+     * Construct an IOException describing the I/O failure
+     * (path, system error message, etc.).
+     */
+    public IOException(String message) {
+        super(message);
+    }
+}

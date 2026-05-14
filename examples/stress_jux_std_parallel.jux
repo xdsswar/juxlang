@@ -1,0 +1,62 @@
+/**
+ * Multi-core parallel demo on top of `jux.std`.
+ *
+ * Fans out CPU-bound work across `Worker.spawn` threads, then
+ * gathers the partial results into a `HashMap<String, int>` for
+ * a per-worker breakdown. Exercises:
+ *
+ *   - jux.std.collections.HashMap (intrinsic-templated)
+ *   - jux.std.time.Clock (`nowMs()` for wall-clock timing)
+ *   - Worker.spawn + Task.await (true preemptive parallelism)
+ *
+ * Phase-1 caveat: `Worker.spawn` lives in
+ * `jux.std.concurrent.Worker` but is still backend-special-cased
+ * (closures need the bare `move ||` shape, not the `Rc<dyn Fn>`
+ * wrap regular lambdas get).
+ */
+
+public int crunch(String tag, int iters) {
+    print($"  [worker ${tag}] start");
+    int acc = 0;
+    int i = 0;
+    while (i < iters) {
+        acc = (acc + i) * 7 % 9973;
+        i = i + 1;
+    }
+    print($"  [worker ${tag}] done  acc=${acc}");
+    return acc;
+}
+
+public async HashMap<String, int> run_parallel(int iters) {
+    final var ta = Worker.spawn(() -> crunch("A", iters));
+    final var tb = Worker.spawn(() -> crunch("B", iters));
+    final var tc = Worker.spawn(() -> crunch("C", iters));
+    final var td = Worker.spawn(() -> crunch("D", iters));
+
+    final int a = await ta;
+    final int b = await tb;
+    final int c = await tc;
+    final int d = await td;
+
+    final HashMap<String, int> results = new HashMap<String, int>();
+    results.put("A", a);
+    results.put("B", b);
+    results.put("C", c);
+    results.put("D", d);
+    return results;
+}
+
+public void main() {
+    final int iters = 25_000_000;
+    final long t0 = Clock.nowMs();
+    final HashMap<String, int> results = block_on(run_parallel(iters));
+    final long elapsed = Clock.nowMs() - t0;
+
+    print("");
+    print($"results.size = ${results.size()}");
+    print($"  A = ${results.get("A")}");
+    print($"  B = ${results.get("B")}");
+    print($"  C = ${results.get("C")}");
+    print($"  D = ${results.get("D")}");
+    print($"elapsed = ${elapsed} ms (4 workers × ${iters} iters)");
+}

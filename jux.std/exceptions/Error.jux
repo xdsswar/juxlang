@@ -1,0 +1,18 @@
+/**
+ * jux.std.exceptions.Error
+ *
+ * Unrecoverable failure — out-of-memory, stack overflow,
+ * internal invariant violations. Distinct from `Exception` so
+ * that `catch (Exception e)` doesn't swallow runtime
+ * catastrophes. Mirrors `java.lang.Error`.
+ */
+package jux.std.exceptions;
+
+public class Error extends Throwable {
+    /**
+     * Construct an Error with the given diagnostic message.
+     */
+    public Error(String message) {
+        super(message);
+    }
+}

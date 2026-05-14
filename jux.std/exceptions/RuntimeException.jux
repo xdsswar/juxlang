@@ -1,0 +1,20 @@
+/**
+ * jux.std.exceptions.RuntimeException
+ *
+ * Unchecked exceptions — bugs that the program *could* catch
+ * but usually shouldn't. Mirrors `java.lang.RuntimeException`.
+ * Parent of `NullPointerException`,
+ * `IndexOutOfBoundsException`, `IllegalArgumentException`,
+ * `ArithmeticException`, etc.
+ */
+package jux.std.exceptions;
+
+public class RuntimeException extends Exception {
+    /**
+     * Construct a RuntimeException with the given diagnostic
+     * message.
+     */
+    public RuntimeException(String message) {
+        super(message);
+    }
+}

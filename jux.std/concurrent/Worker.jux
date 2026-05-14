@@ -1,0 +1,22 @@
+/**
+ * jux.std.concurrent.Worker
+ *
+ * Entry point for true multi-core parallelism per
+ * JUX-ASYNC-ADDENDUM §18.2. `Worker.spawn(closure)` runs the
+ * closure on a fresh OS thread from the system pool and
+ * returns a `Task<T>` (a Future yielding the closure's return
+ * value).
+ *
+ * **Implementation status.** `Worker.spawn` is a compiler
+ * primitive — the backend special-cases the call (closures
+ * need a bare `move ||` shape that doesn't fit the generic
+ * lambda emit path) and generates the `std::thread::spawn(...)`
+ * plus `futures::channel::oneshot` plumbing in the prelude.
+ *
+ * Package name is `concurrent` (not `async`) because `async`
+ * is a reserved keyword in Jux for async-function declarations.
+ */
+package jux.std.concurrent;
+
+public class Worker {
+}

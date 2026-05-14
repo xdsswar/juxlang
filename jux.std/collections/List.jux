@@ -1,0 +1,79 @@
+/**
+ * jux.std.collections.List<T>
+ *
+ * Ordered, indexed collection. Mirrors `java.util.List<T>`.
+ *
+ * Java parallel: any `class Foo<T> implements List<T> { … }`
+ * works the same way `class MyList implements
+ * java.util.List<T>` does in Java. The concrete `ArrayList<T>`
+ * is the Vec-backed default; users may swap in their own
+ * (linked-list, ring buffer, memory-mapped, etc.).
+ */
+package jux.std.collections;
+
+public interface List<T> extends Collection<T> {
+    /**
+     * Element at position `index`.
+     *
+     * @throws IndexOutOfBoundsException when `index` is outside
+     *         `[0, size())`.
+     */
+    T get(int index);
+
+    /**
+     * Replace the element at `index`.
+     *
+     * @return the old value at that position.
+     * @throws IndexOutOfBoundsException on out-of-range index.
+     */
+    T set(int index, T value);
+
+    /**
+     * Insert `value` at `index`, shifting later elements right.
+     *
+     * @throws IndexOutOfBoundsException when `index < 0` or
+     *         `index > size()`.
+     */
+    void insert(int index, T value);
+
+    /**
+     * Locate the first index of `value`.
+     *
+     * @return matching index, or -1 when not present.
+     */
+    int indexOf(T value);
+
+    /**
+     * First element of the list.
+     *
+     * @throws NoSuchElementException on an empty list.
+     */
+    T first();
+
+    /**
+     * Last element of the list.
+     *
+     * @throws NoSuchElementException on an empty list.
+     */
+    T last();
+
+    /**
+     * Reverse the list in place.
+     */
+    void reverse();
+
+    /**
+     * Sort the list in place using the element type's natural
+     * ordering. Custom comparators land with `Comparator<T>`
+     * in Phase-2.
+     */
+    void sort();
+
+    /**
+     * Concatenate every element with `sep` between adjacent
+     * pairs. Defined on the interface so any `List<String>`
+     * implementation gets it for free; non-string element types
+     * need a Phase-2 `String.format` path.
+     */
+    String join(String sep);
+}

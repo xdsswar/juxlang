@@ -1,0 +1,17 @@
+/**
+ * jux.std.exceptions.FileNotFoundException
+ *
+ * Specialization of `IOException` for the "file doesn't
+ * exist" case. Mirrors `java.io.FileNotFoundException`.
+ */
+package jux.std.exceptions;
+
+public class FileNotFoundException extends IOException {
+    /**
+     * Construct a FileNotFoundException naming the missing
+     * path.
+     */
+    public FileNotFoundException(String message) {
+        super(message);
+    }
+}

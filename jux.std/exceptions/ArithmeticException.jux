@@ -1,0 +1,17 @@
+/**
+ * jux.std.exceptions.ArithmeticException
+ *
+ * Numeric overflow, divide-by-zero, modulo-by-zero. Mirrors
+ * `java.lang.ArithmeticException`.
+ */
+package jux.std.exceptions;
+
+public class ArithmeticException extends RuntimeException {
+    /**
+     * Construct an ArithmeticException with a message
+     * describing the arithmetic failure.
+     */
+    public ArithmeticException(String message) {
+        super(message);
+    }
+}

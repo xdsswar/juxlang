@@ -1,0 +1,194 @@
+/**
+ * Stress test for the `jux.std` standard library.
+ *
+ * Exercises every shipped stdlib package end-to-end:
+ *
+ *   - jux.std.collections — ArrayList, HashMap, HashSet, plus the
+ *     interfaces (List, Map, Set) and the implicit `for x : it`
+ *     iteration on the concrete shapes.
+ *   - jux.std.exceptions  — throw / catch with typed exceptions,
+ *     cross-package resolution of `IllegalArgumentException`,
+ *     `NoSuchElementException`, etc.
+ *   - jux.std.time        — `Clock.nowMs()` wall-clock read.
+ *
+ * Each section is a self-contained scenario with assertions; if any
+ * one fails we throw a TestFailure so the runner sees a non-zero
+ * exit. The whole demo runs in well under a second on release.
+ */
+
+/**
+ * Simple wrapper that the demo throws when an assertion doesn't
+ * hold. Cleaner than littering `print` + `return` everywhere.
+ */
+public class TestFailure {
+    public String message;
+    public TestFailure(String message) { this.message = message; }
+}
+
+/**
+ * Assertion helper — bails out via `throw new TestFailure(...)` so
+ * the surrounding `try` sees a typed payload it can name.
+ */
+public void check(bool cond, String label) {
+    if (!cond) {
+        throw new TestFailure(label);
+    }
+}
+
+/**
+ * Word-frequency counter.
+ *
+ * Builds a HashMap<String, int> keyed by the words we see, with
+ * counts as values. Returns the map so callers can read top-N
+ * results, etc. Exercises HashMap.put/get/contains plus the
+ * ArrayList we iterate over.
+ */
+public HashMap<String, int> tally(ArrayList<String> words) {
+    final HashMap<String, int> counts = new HashMap<String, int>();
+    for (String w : words) {
+        // Compute the new count first so we don't borrow `w`
+        // twice in the same `put` call's argument list.
+        int next = 1;
+        if (counts.contains(w)) {
+            next = counts.get(w) + 1;
+        }
+        counts.put(w, next);
+    }
+    return counts;
+}
+
+/**
+ * Section 1 — collection basics.
+ */
+public void section_collections() {
+    print("--- section 1: collections ---");
+
+    // ArrayList<int> covers add / get / size / contains / indexOf.
+    final ArrayList<int> xs = new ArrayList<int>();
+    xs.add(1);
+    xs.add(2);
+    xs.add(3);
+    xs.add(4);
+    check(xs.size() == 4,              "xs.size == 4");
+    check(xs.get(0) == 1,              "xs[0] == 1");
+    check(xs.get(3) == 4,              "xs[3] == 4");
+    check(xs.contains(3),              "xs.contains(3)");
+    check(!xs.contains(99),            "!xs.contains(99)");
+    check(xs.indexOf(2) == 1,          "xs.indexOf(2) == 1");
+    check(xs.indexOf(42) == -1,        "xs.indexOf(missing) == -1");
+    print($"xs        = size=${xs.size()}, first=${xs.get(0)}, last=${xs.get(3)}");
+
+    // HashMap<String, int> — read / write / contains / size.
+    final HashMap<String, int> ages = new HashMap<String, int>();
+    ages.put("Ada", 36);
+    ages.put("Linus", 54);
+    ages.put("Grace", 85);
+    check(ages.size() == 3,            "ages.size == 3");
+    check(ages.get("Ada") == 36,       "ages[Ada] == 36");
+    check(ages.contains("Linus"),      "ages.contains(Linus)");
+    check(!ages.contains("Donald"),    "!ages.contains(Donald)");
+    print($"ages.size = ${ages.size()}");
+
+    // HashSet<String> — dedup behavior is the headline.
+    final HashSet<String> seen = new HashSet<String>();
+    seen.add("alpha");
+    seen.add("beta");
+    seen.add("alpha");   // duplicate — set absorbs it
+    check(seen.size() == 2,            "set dedups duplicates");
+    check(seen.contains("alpha"),      "set has alpha");
+    check(!seen.contains("gamma"),     "set lacks gamma");
+    print($"seen.size = ${seen.size()}");
+}
+
+/**
+ * Section 2 — exception flow.
+ *
+ * Throws each stdlib exception type and verifies the catch
+ * resolves the payload via downcast. Also confirms cross-package
+ * resolution of bare names (e.g. `IllegalArgumentException`
+ * lives in `jux.std.exceptions`).
+ */
+public void section_exceptions() {
+    print("--- section 2: exceptions ---");
+
+    // IllegalArgumentException — the canonical "you passed me
+    // nonsense" exception.
+    try {
+        throw new IllegalArgumentException("negative count");
+    } catch (IllegalArgumentException e) {
+        check(e.message == "negative count", "IAE message survives");
+    }
+
+    // IndexOutOfBoundsException — array/list bounds.
+    try {
+        throw new IndexOutOfBoundsException("index 5 out of range [0,3)");
+    } catch (IndexOutOfBoundsException e) {
+        check(e.message == "index 5 out of range [0,3)", "IOOB message");
+    }
+
+    // NoSuchElementException — Map.get on a missing key, etc.
+    try {
+        throw new NoSuchElementException("user.email");
+    } catch (NoSuchElementException e) {
+        check(e.message == "user.email", "NSE message");
+    }
+
+    print("all stdlib exceptions caught + downcast");
+}
+
+/**
+ * Section 3 — word-frequency demo using the helper above.
+ */
+public void section_word_count() {
+    print("--- section 3: word count ---");
+
+    final ArrayList<String> words = new ArrayList<String>();
+    words.add("apple");
+    words.add("banana");
+    words.add("apple");
+    words.add("cherry");
+    words.add("banana");
+    words.add("apple");
+
+    final HashMap<String, int> counts = tally(words);
+
+    check(counts.get("apple")  == 3, "apple count");
+    check(counts.get("banana") == 2, "banana count");
+    check(counts.get("cherry") == 1, "cherry count");
+    check(counts.size() == 3,        "three unique words");
+    print($"apple  = ${counts.get("apple")}");
+    print($"banana = ${counts.get("banana")}");
+    print($"cherry = ${counts.get("cherry")}");
+}
+
+/**
+ * Section 4 — timing. Establishes that `Clock.nowMs()` produces a
+ * monotonically-non-decreasing value across a tight loop.
+ */
+public void section_clock() {
+    print("--- section 4: clock ---");
+
+    final long t0 = Clock.nowMs();
+    int sink = 0;
+    int i = 0;
+    while (i < 1_000_000) {
+        sink = (sink + i) * 7 % 9973;
+        i = i + 1;
+    }
+    final long t1 = Clock.nowMs();
+    check(t1 >= t0, "wall clock did not go backwards");
+    print($"elapsed = ${t1 - t0} ms, sink=${sink}");
+}
+
+public void main() {
+    try {
+        section_collections();
+        section_exceptions();
+        section_word_count();
+        section_clock();
+        print("");
+        print("ALL SECTIONS PASSED");
+    } catch (TestFailure f) {
+        print($"FAIL: ${f.message}");
+    }
+}

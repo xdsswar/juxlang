@@ -1,0 +1,44 @@
+/**
+ * jux.std.io.File
+ *
+ * Static-method entry point for file I/O. Mirrors a subset of
+ * Java's `java.nio.file.Files` (with the cleaner naming of
+ * `java.io.File`'s utility methods).
+ *
+ * **Implementation status.** File's static methods are
+ * compiler primitives — the backend recognizes
+ * `File.readText`, `File.writeText`, `File.exists` and emits
+ * the matching `std::fs::*` calls. Body stubs are unreachable.
+ *
+ * Phase-1 I/O is synchronous and panics on failure (no
+ * `Result<T, IOException>` wiring yet). Use `File.exists` to
+ * guard before reading where appropriate.
+ */
+package jux.std.io;
+
+import jux.std.exceptions.UnsupportedOperationException;
+
+public class File {
+    /**
+     * Read the entire file at `path` into a `String`, assuming
+     * UTF-8 encoding.
+     */
+    public static String readText(String path) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+
+    /**
+     * Write `content` to the file at `path`, replacing any
+     * existing contents.
+     */
+    public static void writeText(String path, String content) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+
+    /**
+     * Cheap existence probe.
+     */
+    public static bool exists(String path) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+}

@@ -1,0 +1,50 @@
+/**
+ * jux.std.collections.HashMap<K, V>
+ *
+ * Hash-backed concrete `Map<K, V>` — the default associative
+ * container. Mirrors `java.util.HashMap<K, V>`.
+ *
+ * **Implementation status.** HashMap is a "compiler primitive"
+ * — the backend knows the FQN `jux.std.collections.HashMap`
+ * and routes every type position, `new` expression, and method
+ * call to Rust's `std::collections::HashMap<K, V>`. Method
+ * bodies below are unreachable; they exist so tycheck has a
+ * concrete contract that matches the `Map<K, V>` interface.
+ */
+package jux.std.collections;
+
+import jux.std.exceptions.UnsupportedOperationException;
+
+public class HashMap<K, V> implements Map<K, V> {
+    /**
+     * Construct an empty map.
+     */
+    public HashMap() {}
+
+    /** Number of (key, value) entries. */
+    public int size() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** True iff `size() == 0`. */
+    public bool isEmpty() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** True iff `key` is bound in this map. */
+    public bool contains(K key) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Read the value bound to `key`. Panics on missing key. */
+    public V get(K key) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Insert or overwrite the binding for `key`. */
+    public V put(K key, V value) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Drop the binding for `key`. */
+    public V remove(K key) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Snapshot list of keys. */
+    public List<K> keys() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Snapshot list of values. */
+    public List<V> values() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Drop every entry. */
+    public void clear() { throw new UnsupportedOperationException("intrinsic"); }
+}

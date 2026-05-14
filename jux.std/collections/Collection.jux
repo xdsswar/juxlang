@@ -1,0 +1,57 @@
+/**
+ * jux.std.collections.Collection<T>
+ *
+ * Common operations on any group of `T`-valued items. Sits
+ * between `Iterable<T>` and the concrete collection types
+ * (`List<T>`, `Set<T>`, `Queue<T>`, …).
+ *
+ * Mirrors `java.util.Collection<T>` minus the bulk-operation
+ * variants (`addAll`, `removeAll`, `retainAll`) — those land
+ * when the stream / functional pipeline lands.
+ */
+package jux.std.collections;
+
+public interface Collection<T> extends Iterable<T> {
+    /**
+     * Number of elements currently in the collection.
+     *
+     * @return non-negative count.
+     */
+    int size();
+
+    /**
+     * Convenience test against `size()`.
+     *
+     * @return true iff `size() == 0`.
+     */
+    bool isEmpty();
+
+    /**
+     * Membership test using element equality.
+     *
+     * @return true iff at least one element equals `value`.
+     */
+    bool contains(T value);
+
+    /**
+     * Add `value` to the collection.
+     *
+     * @return true when the collection changed (lists always do;
+     *         sets may return false when value was already
+     *         present).
+     */
+    bool add(T value);
+
+    /**
+     * Remove the first occurrence of `value`.
+     *
+     * @return true when a removal happened, false otherwise.
+     */
+    bool remove(T value);
+
+    /**
+     * Drop every element. After this returns, `isEmpty()` is
+     * true.
+     */
+    void clear();
+}

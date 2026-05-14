@@ -1,0 +1,20 @@
+/**
+ * jux.std.exceptions.NoSuchElementException
+ *
+ * Iterator exhausted, or `Map.get` / `List.first` / `List.last`
+ * called on a collection with no matching element. Mirrors
+ * `java.util.NoSuchElementException` (Java puts it in
+ * `java.util` because the iterator interface lives there; we
+ * collapse the tree under `jux.std.exceptions`).
+ */
+package jux.std.exceptions;
+
+public class NoSuchElementException extends RuntimeException {
+    /**
+     * Construct a NoSuchElementException with a message
+     * naming the missing element / iteration state.
+     */
+    public NoSuchElementException(String message) {
+        super(message);
+    }
+}

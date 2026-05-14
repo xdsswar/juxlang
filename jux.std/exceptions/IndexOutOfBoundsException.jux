@@ -1,0 +1,18 @@
+/**
+ * jux.std.exceptions.IndexOutOfBoundsException
+ *
+ * Array / list / string index outside the valid `[0, length)`
+ * range. Mirrors `java.lang.IndexOutOfBoundsException`.
+ */
+package jux.std.exceptions;
+
+public class IndexOutOfBoundsException extends RuntimeException {
+    /**
+     * Construct an IndexOutOfBoundsException with the given
+     * diagnostic message (typically including the offending
+     * index and the valid range).
+     */
+    public IndexOutOfBoundsException(String message) {
+        super(message);
+    }
+}

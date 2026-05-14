@@ -1,0 +1,27 @@
+/**
+ * jux.std.exceptions.Throwable
+ *
+ * Root of the exception hierarchy. Every value that can flow
+ * through a `throw` statement extends `Throwable`. Mirrors
+ * `java.lang.Throwable`.
+ *
+ * Phase-1 model: carries a message string. Cause chains and
+ * stack traces land in a follow-up addendum.
+ */
+package jux.std.exceptions;
+
+public class Throwable {
+    /**
+     * Human-readable description of the failure.
+     */
+    public String message;
+
+    /**
+     * Construct a Throwable with the given diagnostic message.
+     *
+     * @param message text shown in the default panic hook.
+     */
+    public Throwable(String message) {
+        this.message = message;
+    }
+}

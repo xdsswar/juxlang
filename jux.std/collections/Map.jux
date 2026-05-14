@@ -1,0 +1,76 @@
+/**
+ * jux.std.collections.Map<K, V>
+ *
+ * Key/value associative container. Mirrors `java.util.Map<K, V>`.
+ *
+ * Implementable — `class MyMap<K, V> implements Map<K, V> { … }`
+ * is the supported way to write a custom Map. The default
+ * implementation is `HashMap<K, V>` (hash-backed; lowers to
+ * Rust's `std::collections::HashMap` at the backend).
+ */
+package jux.std.collections;
+
+public interface Map<K, V> {
+    /**
+     * Number of (key, value) entries currently in the map.
+     *
+     * @return non-negative count.
+     */
+    int size();
+
+    /**
+     * Convenience test against `size()`.
+     *
+     * @return true iff `size() == 0`.
+     */
+    bool isEmpty();
+
+    /**
+     * Check whether `key` is present.
+     *
+     * @return true iff an entry with key equal to `key` exists.
+     */
+    bool contains(K key);
+
+    /**
+     * Read the value bound to `key`. Pair with `contains` for
+     * a guarded read.
+     *
+     * @return the bound value.
+     * @throws NoSuchElementException when `key` is not present.
+     */
+    V get(K key);
+
+    /**
+     * Insert or overwrite the binding for `key`.
+     *
+     * @return the previous value, or throws when there wasn't
+     *         one (Phase-1 limitation — until `V?` is wired,
+     *         missing-key returns can't be expressed in the
+     *         signature).
+     */
+    V put(K key, V value);
+
+    /**
+     * Drop the binding for `key`.
+     *
+     * @return the removed value.
+     * @throws NoSuchElementException when `key` was not bound.
+     */
+    V remove(K key);
+
+    /**
+     * Snapshot list of every key. Order is unspecified.
+     */
+    List<K> keys();
+
+    /**
+     * Snapshot list of every value. Order is unspecified.
+     */
+    List<V> values();
+
+    /**
+     * Drop every entry. After this returns, `isEmpty()` is true.
+     */
+    void clear();
+}
