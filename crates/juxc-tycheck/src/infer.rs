@@ -557,7 +557,7 @@ fn infer_stdlib_method(
         },
         // `Map<K, V>` — stdlib HashMap. Method return shapes
         // mirror the spec's expected behavior.
-        Ty::User { name, generic_args } if name.rsplit('.').next().unwrap_or(name) == "Map" => {
+        Ty::User { name, generic_args } if name.rsplit('.').next().unwrap_or(name) == "HashMap" => {
             let key_ty = generic_args.first().cloned().unwrap_or(Ty::Unknown);
             let value_ty = generic_args.get(1).cloned().unwrap_or(Ty::Unknown);
             match method_name {
@@ -573,6 +573,20 @@ fn infer_stdlib_method(
                     element: Box::new(value_ty),
                     kind: crate::ty::ArrayKind::Dynamic,
                 }),
+                _ => None,
+            }
+        }
+        // `HashSet<T>` — stdlib hash-backed set. Same dispatch
+        // shape as HashMap; methods that mutate return Unknown
+        // because Phase-1 doesn't carry their meaningful return
+        // values through.
+        Ty::User { name, .. } if name.rsplit('.').next().unwrap_or(name) == "HashSet" => {
+            match method_name {
+                "size" => Some(Ty::Primitive(Primitive::Int)),
+                "isEmpty" | "contains" | "add" | "remove" => {
+                    Some(Ty::Primitive(Primitive::Bool))
+                }
+                "clear" => Some(Ty::Unknown),
                 _ => None,
             }
         }
@@ -691,17 +705,16 @@ fn infer_new_object(n: &NewObjectExpr, env: &TypeEnv, symbols: &SymbolTable) -> 
     // verbatim as a dot-joined FQN. Falls back to the bare name
     // when neither resolves.
     let name = resolve_class_name(&n.class_name, env, symbols);
-    // Stdlib container short-circuit: `new List<T>()` returns
-    // `Ty::Array { kind: Dynamic }` so it unifies with `List<T>`-
-    // declared LHS slots (which `ty_from_ref` also lowers to
-    // `Ty::Array`). Skipped when the user declared their own
-    // `class List<T>` — same precedence as `ty_from_ref`'s
-    // matching short-circuit.
+    // Stdlib container short-circuit: `new ArrayList<T>()`
+    // returns `Ty::Array { kind: Dynamic }` so it unifies with
+    // `ArrayList<T>`-declared LHS slots (which `ty_from_ref`
+    // also lowers to `Ty::Array`) AND with `List<T>` slots
+    // through the upcast machinery. The interface `List<T>`
+    // declared in `jux.std.collections.List` stays as a regular
+    // `Ty::User`.
     if n.class_name.segments.len() == 1
-        && n.class_name.segments[0].text == "List"
+        && n.class_name.segments[0].text == "ArrayList"
         && n.generic_args.len() == 1
-        && !symbols.classes.contains_key("List")
-        && !symbols.records.contains_key("List")
     {
         let element = ty_from_ref(&n.generic_args[0], env, symbols);
         return Ty::Array {
@@ -832,6 +845,15 @@ fn resolve_class_name(
             } else {
                 bare.clone()
             }
+        } else if symbols.is_type_name(bare) {
+            // Direct hit: the bare name is itself a registered FQN
+            // (no-package class, or same-unit declaration).
+            bare.clone()
+        } else if let Some(fqn) = symbols.find_fqn_by_bare(bare) {
+            // Implicit auto-import: bare name matches the last
+            // segment of a known FQN. Mirrors Java's `java.lang.*`
+            // rule applied across the whole stdlib tree.
+            fqn
         } else {
             bare.clone()
         }

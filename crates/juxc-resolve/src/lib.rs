@@ -179,13 +179,38 @@ impl Resolver {
         // Backend recognizes `File.readText(path)` and
         // `File.writeText(path, body)` and lowers to `std::fs::*`.
         builtins.insert("File");
-        // `Map` and `List` — stdlib container constructors. The
-        // type emitter rewrites `Map<K, V>` → `std::collections::
-        // HashMap<K, V>` and `List<T>` → `Vec<T>`; this
-        // registration lets the resolver accept the type-position
-        // / `new` uses without an explicit `import`.
-        builtins.insert("Map");
+        // `jux.std` types — auto-resolvable bare names so user
+        // code doesn't have to `import jux.std.collections.…` for
+        // every reference. Mirrors Java's implicit `java.lang.*`
+        // visibility. The list is hardcoded against what the
+        // stdlib actually ships; adding a new stdlib type means
+        // adding a line here.
+        //
+        // Collections (interfaces and concretes).
+        builtins.insert("Iterable");
+        builtins.insert("Iterator");
+        builtins.insert("Collection");
         builtins.insert("List");
+        builtins.insert("Map");
+        builtins.insert("Set");
+        builtins.insert("ArrayList");
+        builtins.insert("HashMap");
+        builtins.insert("HashSet");
+        // Exceptions.
+        builtins.insert("Throwable");
+        builtins.insert("Exception");
+        builtins.insert("Error");
+        builtins.insert("RuntimeException");
+        builtins.insert("NullPointerException");
+        builtins.insert("IndexOutOfBoundsException");
+        builtins.insert("IllegalArgumentException");
+        builtins.insert("IllegalStateException");
+        builtins.insert("UnsupportedOperationException");
+        builtins.insert("ArithmeticException");
+        builtins.insert("NoSuchElementException");
+        builtins.insert("ClassCastException");
+        builtins.insert("IOException");
+        builtins.insert("FileNotFoundException");
         Self {
             builtins,
             user_names: HashSet::new(),

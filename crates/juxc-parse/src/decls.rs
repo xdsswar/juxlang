@@ -572,6 +572,20 @@ impl<'a> Parser<'a> {
         self.expect_kw(Keyword::Interface, "expected `interface` keyword");
         let name = self.parse_ident()?;
         let generic_params = self.parse_generic_params();
+        // Optional `extends Parent, Parent2, …` — interface
+        // inheritance per Java. Each entry is a TypeRef so generic
+        // parents (`extends Collection<T>`) carry their args.
+        let mut extends: Vec<juxc_ast::TypeRef> = Vec::new();
+        if self.eat_kw(Keyword::Extends) {
+            loop {
+                if let Some(t) = self.parse_type_ref() {
+                    extends.push(t);
+                }
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
         self.expect(&TokenKind::LBrace, "'{' to start interface body");
 
         let mut methods = Vec::new();
@@ -779,6 +793,7 @@ impl<'a> Parser<'a> {
             visibility,
             name,
             generic_params,
+            extends,
             methods,
             fields,
             span: start.join(end),

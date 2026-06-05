@@ -1,0 +1,388 @@
+//! The `LanguageServer` implementation — request routing and the document
+//! store.
+//!
+//! Phase-1/2 capabilities (§L.5): full-document sync, push diagnostics, hover
+//! (expression type under the cursor), and completion (keywords + in-scope
+//! type names). Goto-definition, references, and rename are advertised off
+//! until the AST cross-reference index lands.
+
+use dashmap::DashMap;
+use tower_lsp::jsonrpc::Result;
+use tower_lsp::lsp_types::*;
+use tower_lsp::{Client, LanguageServer};
+
+use crate::analysis::analyze;
+use crate::doc::Document;
+use crate::position::{position_to_offset, span_to_range};
+
+/// Jux keywords offered by completion. Java-shaped by design — this is the set
+/// an editor colours and suggests. Kept in sync with the lexer's keyword
+/// table (`JUX-GRAMMAR-ADDENDUM.md` §A; the lexer is the normative source).
+/// Built-in type names offered by completion in every context (a type can name
+/// a field, a return type, a local, a cast, …). Coloured as types in the editor.
+const PRIMITIVES: &[&str] = &[
+    "bool", "char", "byte", "short", "int", "long", "float", "double", "ubyte", "ushort", "uint",
+    "ulong", "never", "String", "void",
+];
+
+/// Literal constants — only meaningful in expressions (statement context).
+const CONSTANTS: &[&str] = &["true", "false", "null"];
+
+/// Keywords valid at the **top level** of a file (package / imports / type
+/// declarations and their modifiers).
+const TOPLEVEL_KEYWORDS: &[&str] = &[
+    "package", "import", "public", "private", "protected", "internal", "abstract", "final",
+    "sealed", "static", "const", "class", "interface", "enum", "struct", "record", "annotation",
+    "type", "async", "native", "operator", "permits", "extends", "implements",
+];
+
+/// Keywords valid inside a **type body** (member declarations + modifiers). No
+/// statement keywords, no `print`.
+const MEMBER_KEYWORDS: &[&str] = &[
+    "public", "private", "protected", "internal", "static", "final", "abstract", "const", "async",
+    "operator", "default", "throws", "extends", "implements", "permits",
+];
+
+/// Keywords valid inside a **function / method body** (statements & expressions).
+const STATEMENT_KEYWORDS: &[&str] = &[
+    "var", "return", "if", "else", "for", "while", "do", "switch", "case", "default", "break",
+    "continue", "new", "this", "super", "throw", "try", "catch", "finally", "await", "yield", "is",
+    "as", "in", "sizeof", "unsafe", "move", "drop",
+];
+
+/// Snippets offered at the top level / in a type body (declaration templates).
+const DECL_SNIPPETS: &[(&str, &str)] = &[
+    ("class", "public class ${1:Name} {\n    $0\n}"),
+    ("interface", "public interface ${1:Name} {\n    $0\n}"),
+    ("enum", "public enum ${1:Name} {\n    $0\n}"),
+    ("struct", "public struct ${1:Name} {\n    $0\n}"),
+    ("record", "public record ${1:Name}(${2}) {\n    $0\n}"),
+    ("main", "public void main() {\n    $0\n}"),
+];
+
+/// Snippets offered inside a function / method body (statement templates).
+const STMT_SNIPPETS: &[(&str, &str)] = &[
+    ("print", "print($0);"),
+    ("if", "if ($1) {\n    $0\n}"),
+    ("ifelse", "if ($1) {\n    $2\n} else {\n    $0\n}"),
+    ("for", "for (int ${1:i} = 0; $1 < ${2:n}; $1++) {\n    $0\n}"),
+    ("while", "while ($1) {\n    $0\n}"),
+    ("switch", "switch ($1) {\n    $0\n}"),
+    ("return", "return $0;"),
+];
+
+/// Where the cursor sits, structurally — drives which completions are offered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CtxKind {
+    /// Outside any braces — package/imports/type declarations.
+    TopLevel,
+    /// Inside a `class`/`interface`/`enum`/… body — member declarations.
+    TypeBody,
+    /// Inside a function/method body or nested block — statements.
+    Statement,
+}
+
+/// Classify the cursor context from the document text **before** the cursor.
+///
+/// Lightweight and PSI-free: it scans the prefix (skipping comments, strings,
+/// and char literals) tracking a stack of brace "headers". The header that
+/// precedes each `{` tells us whether that block is a type body (its header
+/// names a `class`/`interface`/…) or a function/statement block. The innermost
+/// open block decides the context; no open block means top level.
+fn analyze_context(prefix: &str) -> CtxKind {
+    // Each stack entry: was the opening brace a type body?
+    let mut stack: Vec<bool> = Vec::new();
+    let mut seg = String::new();
+    let mut chars = prefix.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '/' => match chars.peek() {
+                Some('/') => {
+                    for c2 in chars.by_ref() {
+                        if c2 == '\n' {
+                            break;
+                        }
+                    }
+                    seg.clear();
+                }
+                Some('*') => {
+                    chars.next();
+                    let mut prev = ' ';
+                    for c2 in chars.by_ref() {
+                        if prev == '*' && c2 == '/' {
+                            break;
+                        }
+                        prev = c2;
+                    }
+                    seg.push(' ');
+                }
+                _ => seg.push(c),
+            },
+            '"' => {
+                while let Some(c2) = chars.next() {
+                    if c2 == '\\' {
+                        chars.next();
+                    } else if c2 == '"' {
+                        break;
+                    }
+                }
+                seg.push('"');
+            }
+            '\'' => {
+                while let Some(c2) = chars.next() {
+                    if c2 == '\\' {
+                        chars.next();
+                    } else if c2 == '\'' {
+                        break;
+                    }
+                }
+                seg.push('\'');
+            }
+            '{' => {
+                stack.push(header_is_type(&seg));
+                seg.clear();
+            }
+            '}' => {
+                stack.pop();
+                seg.clear();
+            }
+            ';' => seg.clear(),
+            _ => seg.push(c),
+        }
+    }
+
+    match stack.last() {
+        None => CtxKind::TopLevel,
+        Some(true) => CtxKind::TypeBody,
+        Some(false) => CtxKind::Statement,
+    }
+}
+
+/// True if a brace's preceding header declares a type (so the block is a type
+/// body), e.g. `public class Foo<T>`. A function header like
+/// `public void main()` has no type keyword and is treated as a statement block.
+fn header_is_type(seg: &str) -> bool {
+    const TYPE_KW: &[&str] = &["class", "interface", "enum", "struct", "record", "annotation"];
+    seg.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|w| TYPE_KW.contains(&w))
+}
+
+/// The language server backend: an `LspService`-managed handler plus the
+/// in-memory document store.
+pub struct Backend {
+    client: Client,
+    /// One [`Document`] per open buffer. `DashMap` gives concurrent access
+    /// without a global lock (§L "Re-analysis Model").
+    docs: DashMap<Url, Document>,
+}
+
+impl Backend {
+    /// Construct the backend with its LSP client handle. Matches the
+    /// `Fn(Client) -> Backend` shape `LspService::new` expects.
+    pub fn new(client: Client) -> Self {
+        Self { client, docs: DashMap::new() }
+    }
+
+    /// Re-analyse `text` for `uri`, cache the result, and publish diagnostics.
+    /// Called on open and on every change (full-document sync).
+    ///
+    /// The analysis (lex → parse → resolve → tycheck over the whole stdlib + the
+    /// document) is CPU-bound and runs on **every** keystroke, so we hand it to
+    /// `spawn_blocking`. That keeps it off the async worker threads and stops a
+    /// burst of edits from stalling the server (which the editor perceives as a
+    /// UI freeze while it waits for diagnostics/completion).
+    async fn refresh(&self, uri: Url, text: &str, version: i32) {
+        let rope = Rope::from_str(text);
+
+        // Clone the (cheap, copy-on-write) rope + uri into the blocking task.
+        let task_uri = uri.clone();
+        let task_rope = rope.clone();
+        let analysis = match tokio::task::spawn_blocking(move || analyze(&task_uri, &task_rope)).await
+        {
+            Ok(a) => a,
+            Err(_) => return, // the blocking task panicked; skip this revision
+        };
+
+        let doc = Document {
+            rope,
+            version,
+            expr_types: analysis.expr_types,
+            type_names: analysis.type_names,
+        };
+        self.docs.insert(uri.clone(), doc);
+        self.client
+            .publish_diagnostics(uri, analysis.diagnostics, Some(version))
+            .await;
+    }
+}
+
+#[tower_lsp::async_trait]
+impl LanguageServer for Backend {
+    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+        Ok(InitializeResult {
+            server_info: Some(ServerInfo {
+                name: "juxc-lsp".to_string(),
+                version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            }),
+            capabilities: ServerCapabilities {
+                // Full-document sync keeps the skeleton simple: each change
+                // ships the whole buffer. Incremental sync is a later
+                // optimization (§L.5).
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::FULL,
+                )),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
+                completion_provider: Some(CompletionOptions {
+                    // `.` member access, `:` path, `@` annotation (§L.5).
+                    trigger_characters: Some(vec![".".into(), ":".into(), "@".into()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        })
+    }
+
+    async fn initialized(&self, _: InitializedParams) {
+        self.client
+            .log_message(MessageType::INFO, "juxc-lsp ready")
+            .await;
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let doc = params.text_document;
+        self.refresh(doc.uri, &doc.text, doc.version).await;
+    }
+
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        // Full sync: the last content change carries the entire new text.
+        if let Some(change) = params.content_changes.into_iter().last() {
+            self.refresh(
+                params.text_document.uri,
+                &change.text,
+                params.text_document.version,
+            )
+            .await;
+        }
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        self.docs.remove(&params.text_document.uri);
+        // Clear diagnostics for the now-closed file.
+        self.client
+            .publish_diagnostics(params.text_document.uri, Vec::new(), None)
+            .await;
+    }
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+        let Some(doc) = self.docs.get(&uri) else {
+            return Ok(None);
+        };
+        let offset = position_to_offset(&doc.rope, pos);
+        let Some((span, ty)) = doc.type_at(offset) else {
+            return Ok(None);
+        };
+        // Render the inferred type as a Jux code block so editors syntax-
+        // colour it.
+        Ok(Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: format!("```jux\n{ty}\n```"),
+            }),
+            range: Some(span_to_range(&doc.rope, span)),
+        }))
+    }
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let pos = params.text_document_position.position;
+
+        let Some(doc) = self.docs.get(&uri) else {
+            return Ok(Some(CompletionResponse::Array(Vec::new())));
+        };
+
+        // Classify the cursor context from the text before it, so we only
+        // offer relevant completions (e.g. `print` / statements only inside a
+        // function body; `class` / modifiers only at the top level).
+        let offset = position_to_offset(&doc.rope, pos);
+        let prefix: String = doc.rope.slice(..doc.rope.byte_to_char(offset.min(doc.rope.len_bytes()))).to_string();
+        let ctx = analyze_context(&prefix);
+
+        let mut items: Vec<CompletionItem> = Vec::new();
+
+        // Snippets (sorted to the top) — declaration templates at top level /
+        // type body, statement templates inside a function body.
+        let snippets: &[(&str, &str)] = match ctx {
+            CtxKind::Statement => STMT_SNIPPETS,
+            CtxKind::TopLevel | CtxKind::TypeBody => DECL_SNIPPETS,
+        };
+        for (label, body) in snippets {
+            items.push(CompletionItem {
+                label: (*label).to_string(),
+                kind: Some(CompletionItemKind::SNIPPET),
+                detail: Some("snippet".to_string()),
+                insert_text: Some((*body).to_string()),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                sort_text: Some(format!("0_{label}")),
+                ..Default::default()
+            });
+        }
+
+        // Keywords for this context.
+        let keywords: &[&str] = match ctx {
+            CtxKind::TopLevel => TOPLEVEL_KEYWORDS,
+            CtxKind::TypeBody => MEMBER_KEYWORDS,
+            CtxKind::Statement => STATEMENT_KEYWORDS,
+        };
+        for kw in keywords {
+            items.push(CompletionItem {
+                label: (*kw).to_string(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                sort_text: Some(format!("3_{kw}")),
+                ..Default::default()
+            });
+        }
+
+        // Built-in types — useful in every context.
+        for ty in PRIMITIVES {
+            items.push(CompletionItem {
+                label: (*ty).to_string(),
+                kind: Some(CompletionItemKind::STRUCT),
+                detail: Some("built-in type".to_string()),
+                sort_text: Some(format!("2_{ty}")),
+                ..Default::default()
+            });
+        }
+
+        // Literal constants — expressions only.
+        if ctx == CtxKind::Statement {
+            for c in CONSTANTS {
+                items.push(CompletionItem {
+                    label: (*c).to_string(),
+                    kind: Some(CompletionItemKind::CONSTANT),
+                    sort_text: Some(format!("2_{c}")),
+                    ..Default::default()
+                });
+            }
+        }
+
+        // In-scope type names from the last analysis — usable everywhere a
+        // type can appear.
+        for name in &doc.type_names {
+            items.push(CompletionItem {
+                label: name.clone(),
+                kind: Some(CompletionItemKind::CLASS),
+                sort_text: Some(format!("1_{name}")),
+                ..Default::default()
+            });
+        }
+
+        Ok(Some(CompletionResponse::Array(items)))
+    }
+}

@@ -28,3 +28,5 @@ Cargo.lock.bak
 */target
 /*/target
 /examples/*/target/
+/ide/intellij-plugin/gradle/wrapper/gradle-wrapper.properties
+/ide/intellij-plugin/gradle/

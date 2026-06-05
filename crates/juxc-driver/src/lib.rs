@@ -42,6 +42,7 @@ use juxc_source::SourceFile;
 pub const DEFAULT_CRATE_NAME: &str = CRATE_NAME;
 
 mod source_map;
+mod stdlib;
 
 /// Top-level compile result.
 ///
@@ -71,6 +72,16 @@ pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
     if sources.is_empty() {
         return Ok(CompileResult { crate_: None, diagnostics });
     }
+
+    // Auto-prepend `jux.std/*` sources so user code sees the
+    // stdlib's `Map`/`List`/`Throwable`/etc. types without having
+    // to import them by full path. Mirrors Java's implicit
+    // `java.lang.*` rule. Stdlib sources go first so their
+    // package modules exist by the time user units reference
+    // their types.
+    let mut all_sources = stdlib::load_std_sources();
+    all_sources.extend(sources);
+    let sources = all_sources;
 
     // Phase 1+2 per source — lex and parse independently.
     let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
@@ -127,6 +138,12 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
     if sources.is_empty() {
         return Ok(CompileResult { crate_: None, diagnostics });
     }
+    // Stdlib auto-prepend (see `compile_workspace` for the
+    // rationale) — same shape for the test runner so `@Test`
+    // bodies can use `Map`, `Throwable`, etc.
+    let mut all_sources = stdlib::load_std_sources();
+    all_sources.extend(sources);
+    let sources = all_sources;
     let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
     for source in &sources {
         let lex_result = juxc_lex::lex(source);
@@ -162,55 +179,84 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
 /// invariant violation). User-facing errors are reported via
 /// [`CompileResult::diagnostics`], not via `Result::Err`.
 pub fn compile(source: SourceFile) -> Result<CompileResult> {
+    // Route single-source compile through the workspace path so
+    // the stdlib auto-loader fires uniformly. The historical
+    // single-file shape stays callable but every user now gets
+    // `jux.std.*` types in scope without any explicit imports.
+    compile_workspace(vec![source])
+}
+
+// ============================================================================
+// Check-only analysis (tooling / LSP)
+// ============================================================================
+
+/// Result of a backend-free [`check`] pass.
+///
+/// This is what editor tooling (`juxc-lsp`, per `JUX-LSP-SERVER-ADDENDUM.md`)
+/// consumes: it stops after type checking, so no Rust source is generated and
+/// no `cargo` is invoked. Alongside the diagnostics it returns the merged
+/// [`SymbolTable`](juxc_tycheck::SymbolTable) and the per-expression type map,
+/// which the language server uses to answer hover / completion / goto-def.
+pub struct CheckResult {
+    /// Diagnostics from lex, parse, resolve, and tycheck — in pipeline order.
+    pub diagnostics: Vec<Diagnostic>,
+    /// Merged workspace symbol table (includes the auto-loaded stdlib).
+    pub symbols: juxc_tycheck::SymbolTable,
+    /// Per-expression inferred type, keyed by the expression's source span.
+    pub expr_types: std::collections::HashMap<juxc_source::Span, juxc_tycheck::Ty>,
+}
+
+/// Run the front end (lex → parse → resolve → tycheck) over `sources`
+/// **without** lowering to Rust. Intended for interactive tooling that
+/// re-analyses on every edit and must not pay for codegen or `cargo`.
+///
+/// Like [`compile_workspace`], this auto-prepends the `jux.std.*` sources so
+/// user code sees `Map` / `List` / `String` / `Throwable` in scope without an
+/// explicit import. Because the stdlib is error-free by construction, every
+/// diagnostic returned here originates in `sources`; the language server can
+/// therefore attribute them to the open document(s).
+///
+/// `sources` may be empty, in which case only the stdlib is analysed (and the
+/// diagnostics should be empty).
+pub fn check_workspace(sources: Vec<SourceFile>) -> CheckResult {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
-    // Phase 1 — lex.
-    let lex_result = juxc_lex::lex(&source);
-    diagnostics.extend(lex_result.diagnostics);
+    // Same stdlib auto-prepend as the compile path: stdlib units go
+    // first so their package modules exist when user units reference
+    // their types.
+    let mut all_sources = stdlib::load_std_sources();
+    all_sources.extend(sources);
+    let sources = all_sources;
 
-    // Phase 2 — parse. Takes a token slice; we forward the lexer's
-    // `tokens` vector.
-    let parsed = juxc_parse::parse(&lex_result.tokens);
-    diagnostics.extend(parsed.diagnostics);
+    // Lex + parse + resolve each unit independently. Cross-file name
+    // resolution happens through the merged symbol table in tycheck.
+    let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
+    for source in &sources {
+        let lex_result = juxc_lex::lex(source);
+        diagnostics.extend(lex_result.diagnostics);
+        let parsed = juxc_parse::parse(&lex_result.tokens);
+        diagnostics.extend(parsed.diagnostics);
+        let resolved = juxc_resolve::resolve(&parsed.ast);
+        diagnostics.extend(resolved.diagnostics);
+        units.push(parsed.ast);
+    }
 
-    // Phase 4 — resolve names.
-    let resolved = juxc_resolve::resolve(&parsed.ast);
-    diagnostics.extend(resolved.diagnostics);
-
-    // Phases 6–9 — type checking.
-    let typed = juxc_tycheck::typecheck(&parsed.ast);
+    // Tycheck against the merged workspace. We keep `symbols` and
+    // `expr_types` so the LSP can serve hover/completion/goto without
+    // re-running the front end.
+    let typed = juxc_tycheck::typecheck_workspace(&units);
     diagnostics.extend(typed.diagnostics);
 
-    // If any phase produced an error, skip lowering. The user can still
-    // see all the diagnostics that did fire; we just don't waste cycles
-    // generating Rust source from an invalid program.
-    let has_errors = diagnostics.iter().any(|d| matches!(d.severity, Severity::Error));
+    CheckResult {
+        diagnostics,
+        symbols: typed.symbols,
+        expr_types: typed.expr_types,
+    }
+}
 
-    let crate_ = if has_errors {
-        None
-    } else {
-        // Phase 19 — emit Rust source. This is the Phase 1 strategy of the
-        // overall language plan (per JUX-LANG-V1 §2.2).
-        //
-        // Reuse the tycheck-built symbol table AND the per-expression
-        // type map (Phase H). The backend consults `expr_types` for
-        // its String / generic-field coercion decisions instead of
-        // running its own name-based heuristic pre-passes.
-        // Pass the original `SourceFile` so the backend can emit
-        // `// JUX:file:line:col` markers throughout the generated
-        // Rust. Lets rustc errors on the emitted crate map back to
-        // the user's `.jux` source (audit Tier 2.2). Existing test
-        // suites that call `lower_with_types` directly stay
-        // marker-free, preserving their snapshot stability.
-        Some(juxc_backend_rust::lower_with_source(
-            &parsed.ast,
-            &typed.symbols,
-            &typed.expr_types,
-            Some(&source),
-        ))
-    };
-
-    Ok(CompileResult { crate_, diagnostics })
+/// Single-document convenience wrapper over [`check_workspace`].
+pub fn check(source: SourceFile) -> CheckResult {
+    check_workspace(vec![source])
 }
 
 // ============================================================================

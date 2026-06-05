@@ -1,0 +1,98 @@
+<idea-plugin>
+  <id>dev.jux.intellij</id>
+  <name>Jux Language</name>
+  <vendor email="contact@xdsswar.dev" url="https://github.com/xdsswar/juxlang">
+    XTREME SOFTWARE SOLUTIONS
+  </vendor>
+
+  <description><![CDATA[
+    Language support for <b>Jux</b> — Java-shaped syntax that lowers to Rust.
+    <ul>
+      <li>Native Java-like syntax highlighting (keywords, types, strings, comments, annotations) with a customizable color scheme</li>
+      <li><b>New → Jux Project</b>, <b>New → Jux File</b> (Class / Interface / Enum / Struct / Record / Annotation), and <b>New → Jux Package</b></li>
+      <li>Automatic <code>package</code> inference from the file's source-root-relative path</li>
+      <li>Run any file with a <code>main</code>; diagnostics, hover types, completion and auto-import through the <code>juxc-lsp</code> language server</li>
+    </ul>
+  ]]></description>
+
+  <!-- Platform-only dependency: the plugin loads in every IntelliJ-platform
+       IDE (IDEA, CLion, GoLand, PyCharm, RustRover, …). -->
+  <depends>com.intellij.modules.platform</depends>
+
+  <!-- Native LSP client (diagnostics/hover/completion/auto-import from
+       juxc-lsp). The lsp.xml extensions load only when the Ultimate module is
+       present, so the LSP classes are inert on Community-only IDEs (§I.6). -->
+  <depends optional="true" config-file="lsp.xml">com.intellij.modules.ultimate</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <fileType
+        name="Jux File"
+        implementationClass="dev.jux.intellij.JuxFileType"
+        fieldName="INSTANCE"
+        language="Jux"
+        extensions="jux"/>
+
+    <!-- Internal templates backing the New → Jux File kinds (§I.5). The
+         registered name must match the `.ft` filename stem. -->
+    <internalFileTemplate name="Jux File"/>
+    <internalFileTemplate name="Jux Class"/>
+    <internalFileTemplate name="Jux Interface"/>
+    <internalFileTemplate name="Jux Enum"/>
+    <internalFileTemplate name="Jux Struct"/>
+    <internalFileTemplate name="Jux Record"/>
+    <internalFileTemplate name="Jux Annotation"/>
+
+    <!-- Native syntax highlighting + a customizable color page (§I.3). -->
+    <lang.syntaxHighlighterFactory
+        language="Jux"
+        implementationClass="dev.jux.intellij.highlight.JuxSyntaxHighlighterFactory"/>
+    <colorSettingsPage
+        implementation="dev.jux.intellij.highlight.JuxColorSettingsPage"/>
+
+    <!-- Editor behaviour: auto-close quotes, match/auto-close brackets, and
+         Java-like Enter/auto-indent. -->
+    <lang.quoteHandler
+        language="Jux"
+        implementationClass="dev.jux.intellij.editor.JuxQuoteHandler"/>
+    <lang.braceMatcher
+        language="Jux"
+        implementationClass="dev.jux.intellij.editor.JuxBraceMatcher"/>
+    <lang.commenter
+        language="Jux"
+        implementationClass="dev.jux.intellij.editor.JuxCommenter"/>
+    <enterHandlerDelegate
+        implementation="dev.jux.intellij.editor.JuxEnterHandler"/>
+
+    <!-- New Project / New Module support: the "Jux" generator scaffolds a
+         jux.toml + src/main.jux project (§I — project model). -->
+    <moduleType
+        id="JUX_MODULE_TYPE"
+        implementationClass="dev.jux.intellij.project.JuxModuleType"/>
+
+    <!-- Run support: a "Jux" run-configuration type plus a context producer
+         that autodetects `main` and enables the toolbar/right-click Run. -->
+    <configurationType
+        implementation="dev.jux.intellij.run.JuxRunConfigurationType"/>
+    <runConfigurationProducer
+        implementation="dev.jux.intellij.run.JuxRunConfigurationProducer"/>
+  </extensions>
+
+  <actions>
+    <!-- A single "Jux File" entry under New, anchored before the generic
+         "New File". Its dialog offers the class/interface/enum/record/
+         annotation kinds, each with an icon — the Kotlin-plugin idiom. -->
+    <action id="Jux.NewFile"
+            class="dev.jux.intellij.actions.NewJuxFileAction"
+            text="Jux File"
+            description="Create a new Jux file">
+      <add-to-group group-id="NewGroup" anchor="before" relative-to-action="NewFile"/>
+    </action>
+    <!-- New → Jux Package (nested directories from a dotted name). -->
+    <action id="Jux.NewPackage"
+            class="dev.jux.intellij.actions.NewJuxPackageAction"
+            text="Jux Package"
+            description="Create a new Jux package (nested directories)">
+      <add-to-group group-id="NewGroup" anchor="after" relative-to-action="Jux.NewFile"/>
+    </action>
+  </actions>
+</idea-plugin>

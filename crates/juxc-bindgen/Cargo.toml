@@ -1,0 +1,15 @@
+[package]
+name = "juxc-bindgen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Generates Jux-syntax interface stubs (.jux.d) from foreign APIs — per JUX-BINDGEN-ADDENDUM.md §G."
+
+[dependencies]
+# Typed schema for `rustdoc --output-format json`, the source of truth for a
+# Rust crate's public API (§G.6.1). Only the `ingest` module touches it; the
+# rest of the crate works on the language-agnostic stub IR.
+rustdoc-types = { workspace = true }
+# Reads the rustdoc JSON file off disk.
+serde_json    = { workspace = true }

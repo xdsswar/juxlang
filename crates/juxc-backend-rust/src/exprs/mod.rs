@@ -105,14 +105,16 @@ impl RustEmitter {
                 self.emit_anonymous_class(n);
             }
             Expr::NewObject(n) => {
-                // `new Map<K, V>()` / `new List<T>()` — stdlib
-                // container constructors. Lower to the matching
-                // Rust std::collections type's `new()`. Generic
-                // args are emitted via the type emitter to handle
-                // nested shapes (`new Map<String, List<int>>()`).
+                // **Stdlib compiler primitives** — `new HashMap()`
+                // / `new HashSet()` / `new ArrayList()` lower
+                // directly to the Rust std container's `new()`
+                // with turbofish-spliced generic args. The Jux
+                // source files document the API; the compiler
+                // knows the mapping by bare name (same small
+                // fixed set as the type-position rule above).
                 if n.class_name.segments.len() == 1 {
                     let bare = n.class_name.segments[0].text.as_str();
-                    if bare == "Map" && n.generic_args.len() == 2 {
+                    if bare == "HashMap" && n.generic_args.len() == 2 {
                         self.w.push_str("std::collections::HashMap::<");
                         let args: Vec<juxc_ast::TypeRef> = n.generic_args.clone();
                         for (i, arg) in args.iter().enumerate() {
@@ -122,11 +124,18 @@ impl RustEmitter {
                             self.emit_type_as_rust(arg);
                         }
                         self.w.push_str(">::new()");
-                        // Stdlib constructors take no Jux args.
                         return;
                     }
-                    if bare == "List" && n.generic_args.len() == 1 {
+                    if bare == "ArrayList" && n.generic_args.len() == 1 {
                         self.w.push_str("Vec::<");
+                        if let Some(arg) = n.generic_args.first() {
+                            self.emit_type_as_rust(arg);
+                        }
+                        self.w.push_str(">::new()");
+                        return;
+                    }
+                    if bare == "HashSet" && n.generic_args.len() == 1 {
+                        self.w.push_str("std::collections::HashSet::<");
                         if let Some(arg) = n.generic_args.first() {
                             self.emit_type_as_rust(arg);
                         }
@@ -150,14 +159,47 @@ impl RustEmitter {
                 // unit's `use` statements (or same-package
                 // visibility) for resolution, so they're emitted
                 // bare.
-                let path = n
-                    .class_name
-                    .segments
-                    .iter()
-                    .map(|s| s.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("::");
-                if n.class_name.segments.len() > 1 {
+                // Cross-package auto-import lookup: single-segment
+                // names that resolve to an FQN in a different
+                // package get the fully-qualified `crate::a::b::…`
+                // form. Same-package single-segment names stay
+                // bare. Mirrors the type-position rule in
+                // `emit_type_as_rust`.
+                let (path, prepend_crate) = if n.class_name.segments.len() == 1 {
+                    let bare = n.class_name.segments[0].text.as_str();
+                    if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
+                        if fqn.contains('.') {
+                            let cur_pkg = self.symbols.package.join(".");
+                            let fqn_pkg = fqn
+                                .rsplit_once('.')
+                                .map(|(p, _)| p.to_string())
+                                .unwrap_or_default();
+                            if fqn_pkg != cur_pkg {
+                                let joined = fqn
+                                    .split('.')
+                                    .collect::<Vec<_>>()
+                                    .join("::");
+                                (joined, true)
+                            } else {
+                                (bare.to_string(), false)
+                            }
+                        } else {
+                            (bare.to_string(), false)
+                        }
+                    } else {
+                        (bare.to_string(), false)
+                    }
+                } else {
+                    let joined = n
+                        .class_name
+                        .segments
+                        .iter()
+                        .map(|s| s.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("::");
+                    (joined, true)
+                };
+                if prepend_crate {
                     self.w.push_str("crate::");
                 }
                 self.w.push_str(&path);

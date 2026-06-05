@@ -161,6 +161,21 @@ impl RustEmitter {
                 return;
             }
         }
+        // `Clock.nowMs()` — stdlib wall-clock reading. Routes
+        // through the same `__jux_now_ms()` helper as the bare
+        // `now_ms()` builtin; the class-qualified form is the
+        // Java-shaped entry point per JUX-CORE-LIB-ADDENDUM.
+        if let Expr::Field(f) = &*call.callee {
+            if let Expr::Path(qn) = &*f.object {
+                if qn.segments.len() == 1
+                    && qn.segments[0].text == "Clock"
+                    && f.field.text == "nowMs"
+                {
+                    self.w.push_str("__jux_now_ms()");
+                    return;
+                }
+            }
+        }
         // `now_ms()` — monotonic-ish clock reading. Lowers to the
         // emitted `__jux_now_ms()` helper (defined in the prelude
         // whenever async support is active, since timing is
@@ -212,15 +227,11 @@ impl RustEmitter {
                 }
             }
         }
-        // `File.readText(path)` / `File.writeText(path, body)` —
-        // stdlib I/O per JUX-CORE-LIB-ADDENDUM. Lowers to
-        // `std::fs::read_to_string(path)` and
-        // `std::fs::write(path, body)`. Phase-1 chooses panic-on-
-        // error (`.unwrap()`) over Result-mode to keep the
-        // surface synchronous and match the spec's
-        // "throws IOException" implicit contract — when typed
-        // exceptions land, we'll swap to `?` and lift the
-        // `std::io::Error` into a Jux IOException.
+        // `File.readText(path)` / `File.writeText(path, body)`
+        // / `File.exists(path)` — stdlib I/O entry points per
+        // JUX-CORE-LIB-ADDENDUM. Lowers to `std::fs::*` calls;
+        // Phase-1 panic-on-error (no Result<T, IOException>
+        // wiring yet).
         if let Expr::Field(f) = &*call.callee {
             if let Expr::Path(qn) = &*f.object {
                 if qn.segments.len() == 1 && qn.segments[0].text == "File" {
@@ -249,17 +260,13 @@ impl RustEmitter {
                 }
             }
         }
-        // Stdlib method dispatch — `xs.add(v)`, `s.toUpperCase()`,
-        // etc. These call sites look like a regular
-        // `Field { receiver, method }(args)` to the AST but the
-        // backend rewrites them into the Rust equivalent (snake_case
-        // method name, argument shape coercion). The receiver's
-        // *inferred* type (looked up in `expr_types`) drives the
-        // dispatch: arrays/Vec take the `BUILTIN_ARRAY_METHODS`
-        // path, `String` takes `BUILTIN_STRING_METHODS`. Same
-        // ground rules as the existing `.length` field-side
-        // rewrite — the type info is best-effort, so the helper
-        // returns `false` to fall through when it can't decide.
+        // Stdlib method dispatch — rewrites Jux's Java-spec
+        // method names (`xs.add(v)`, `s.toUpperCase()`,
+        // `m.contains(k)`, …) into the matching Rust shape
+        // (`xs.push(v)`, `s.to_uppercase()`,
+        // `m.contains_key(&k)`, …). Receiver-type drives the
+        // routing — arrays / String / HashMap / HashSet each
+        // get a bespoke emit function.
         if self.try_emit_stdlib_method(call) {
             return;
         }
@@ -704,21 +711,38 @@ impl RustEmitter {
             return false;
         };
         let method = f.field.text.as_str();
-        // Receiver-type lookup. Two paths:
-        //   1. `expr_types` map (the normal route — typed by the
+        // Receiver-type lookup. Three paths:
+        //   1. `local_types` map for Path receivers — keyed by
+        //      name, immune to span collisions inside interp
+        //      strings.
+        //   2. `expr_types` map (the normal route — typed by the
         //      inference pass for paths, calls, fields).
-        //   2. Literal short-circuit — literal expressions have
+        //   3. Literal short-circuit — literal expressions have
         //      `Span::DUMMY`, so they never appear in the map. We
         //      special-case string and array literals here.
         let recv_span = crate::exprs::expr_span_of(&f.object);
-        let recv_ty = self.expr_types.get(&recv_span).cloned().or_else(|| {
-            match &*f.object {
+        let recv_ty_from_locals: Option<juxc_tycheck::Ty> =
+            if let Expr::Path(qn) = &*f.object {
+                if qn.segments.len() == 1 {
+                    let bare = qn.segments[0].text.as_str();
+                    self.local_types
+                        .iter()
+                        .rev()
+                        .find_map(|scope| scope.get(bare).cloned())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+        let recv_ty = recv_ty_from_locals
+            .or_else(|| self.expr_types.get(&recv_span).cloned())
+            .or_else(|| match &*f.object {
                 Expr::Literal(juxc_ast::Literal::String(_)) => {
                     Some(juxc_tycheck::Ty::String)
                 }
                 _ => None,
-            }
-        });
+            });
         let Some(recv_ty) = recv_ty else {
             return false;
         };
@@ -728,13 +752,16 @@ impl RustEmitter {
         let is_map = matches!(
             &recv_ty,
             juxc_tycheck::Ty::User { name, .. }
-                if name.rsplit('.').next().unwrap_or(name) == "Map"
+                if name.rsplit('.').next().unwrap_or(name) == "HashMap"
         );
-        if !is_array && !is_string && !is_map {
+        let is_set = matches!(
+            &recv_ty,
+            juxc_tycheck::Ty::User { name, .. }
+                if name.rsplit('.').next().unwrap_or(name) == "HashSet"
+        );
+        if !is_array && !is_string && !is_map && !is_set {
             return false;
         }
-        // From here, we know the receiver is a typed array/String/Map.
-        // Each method gets a custom Rust emission.
         if is_array {
             return self.emit_array_stdlib_method(call, method);
         }
@@ -744,20 +771,20 @@ impl RustEmitter {
         if is_map {
             return self.emit_map_stdlib_method(call, method);
         }
+        if is_set {
+            return self.emit_set_stdlib_method(call, method);
+        }
         false
     }
 
-    /// Emit the Rust equivalent of a Jux `Map<K, V>` method call.
-    /// Returns `true` when the method was handled.
+    /// Emit the Rust equivalent of a Jux `HashMap<K, V>` method
+    /// call. Returns `true` when the method was handled.
     fn emit_map_stdlib_method(&mut self, call: &CallExpr, method: &str) -> bool {
         let Expr::Field(f) = &*call.callee else {
             return false;
         };
         let receiver = &*f.object;
         match method {
-            // `m.put(k, v)` → `m.insert(k, v)`. Rust returns the old
-            // value as `Option<V>`; Jux currently ignores the
-            // return value, so we don't unwrap.
             "put" => {
                 self.emit_expr(receiver);
                 self.w.push_str(".insert(");
@@ -765,10 +792,6 @@ impl RustEmitter {
                 self.w.push(')');
                 true
             }
-            // `m.get(k)` → `m.get(&k).cloned().unwrap()`. The
-            // `.unwrap()` panics on a missing key, matching Java's
-            // `Map.get` returning null but Jux's lack of nullable
-            // primitives.
             "get" => {
                 self.emit_expr(receiver);
                 self.w.push_str(".get(&(");
@@ -776,8 +799,6 @@ impl RustEmitter {
                 self.w.push_str(")).cloned().unwrap()");
                 true
             }
-            // `m.contains(k)` → `m.contains_key(&k)` — Rust uses
-            // `contains_key`; Java/Jux just use `contains`.
             "contains" => {
                 self.emit_expr(receiver);
                 self.w.push_str(".contains_key(&(");
@@ -785,7 +806,6 @@ impl RustEmitter {
                 self.w.push_str("))");
                 true
             }
-            // `m.remove(k)` → drop entry, return removed value.
             "remove" => {
                 self.emit_expr(receiver);
                 self.w.push_str(".remove(&(");
@@ -818,6 +838,53 @@ impl RustEmitter {
                 self.emit_expr(receiver);
                 self.w
                     .push_str(".values().cloned().collect::<Vec<_>>()");
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Emit the Rust equivalent of a Jux `HashSet<T>` method call.
+    fn emit_set_stdlib_method(&mut self, call: &CallExpr, method: &str) -> bool {
+        let Expr::Field(f) = &*call.callee else {
+            return false;
+        };
+        let receiver = &*f.object;
+        match method {
+            "add" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".insert(");
+                self.emit_call_args(call);
+                self.w.push(')');
+                true
+            }
+            "contains" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".contains(&(");
+                self.emit_call_args(call);
+                self.w.push_str("))");
+                true
+            }
+            "remove" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".remove(&(");
+                self.emit_call_args(call);
+                self.w.push_str("))");
+                true
+            }
+            "size" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".len() as isize");
+                true
+            }
+            "isEmpty" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".is_empty()");
+                true
+            }
+            "clear" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".clear()");
                 true
             }
             _ => false,

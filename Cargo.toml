@@ -10,6 +10,8 @@ members = [
     "crates/juxc-tycheck",
     "crates/juxc-backend-rust",
     "crates/juxc-driver",
+    "crates/juxc-lsp",
+    "crates/juxc-bindgen",
     "bin/juxc",
     "bin/jux",
 ]
@@ -33,6 +35,8 @@ juxc-resolve       = { path = "crates/juxc-resolve",       version = "0.0.1" }
 juxc-tycheck       = { path = "crates/juxc-tycheck",       version = "0.0.1" }
 juxc-backend-rust  = { path = "crates/juxc-backend-rust",  version = "0.0.1" }
 juxc-driver        = { path = "crates/juxc-driver",        version = "0.0.1" }
+juxc-lsp           = { path = "crates/juxc-lsp",           version = "0.0.1" }
+juxc-bindgen       = { path = "crates/juxc-bindgen",       version = "0.0.1" }
 
 # Shared external dependencies. Keep this list short and intentional.
 anyhow      = "1"
@@ -41,6 +45,18 @@ clap        = { version = "4", features = ["derive"] }
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
 toml        = "0.8"
+
+# Language-server stack (juxc-lsp). Pinned per JUX-LSP-SERVER-ADDENDUM.md §L.4.
+tower-lsp   = "0.20"
+tokio       = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
+dashmap     = "6"
+ropey       = "1"
+
+# Foreign-binding generator (juxc-bindgen). `rustdoc-types` is the typed
+# schema for `rustdoc --output-format json` (JUX-BINDGEN-ADDENDUM §G.6.1).
+# Its FORMAT_VERSION is coupled to the rustdoc that produced the JSON — pin
+# and bump together (see §G.13 open question on stub staleness).
+rustdoc-types = "0.57"
 
 [profile.release]
 lto = "thin"

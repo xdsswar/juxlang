@@ -688,6 +688,21 @@ impl RustEmitter {
     /// infer it. Once tycheck carries a real type for each `VarDecl`, we
     /// can emit explicit annotations here.
     pub(crate) fn emit_var_decl(&mut self, var: &VarDecl) {
+        // Record the local's declared type in the backend's
+        // `local_types` map so `@Intrinsic` dispatch can resolve
+        // the receiver class when `expr_types` lookups are
+        // unreliable (interp-string synthetic-source collisions).
+        // Falls back to `Ty::Unknown` for the `var x = …` form
+        // where no type was written.
+        if let Some(ty_ref) = &var.ty {
+            let ty = juxc_tycheck::ty_from_ref_in_env(
+                ty_ref,
+                &self.symbols,
+            );
+            if let Some(scope) = self.local_types.last_mut() {
+                scope.insert(var.name.text.clone(), ty);
+            }
+        }
         self.w.push_str("let ");
         if self.mutated_in_fn.contains(&var.name.text) {
             self.w.push_str("mut ");

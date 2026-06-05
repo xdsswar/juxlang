@@ -253,15 +253,36 @@ fn default_crate_name(inputs: &[PathBuf], first_file: &Path) -> String {
     out
 }
 
-/// Default emit directory: `<input parent>/target/.rust-build/`.
+/// Default emit directory: `<project root>/target/.rust-build/`.
 ///
-/// Putting it under `target/` makes Cargo's `.gitignore` rule
-/// automatically cover the generated files. The `.rust-build/`
-/// suffix matches what the build-system addendum §B.15.4 names
-/// for Phase 1 emissions.
+/// The project root is the nearest ancestor of the input that contains a
+/// `jux.toml` (the project manifest, §B.2). This keeps the generated `target/`
+/// at the project root — outside `src/` — so running `src/main.jux` doesn't
+/// scatter a `target/` inside the source tree. When no `jux.toml` is found
+/// (a loose file compiled outside any project), we fall back to the input
+/// file's own directory.
+///
+/// Putting it under `target/` makes the standard ignore rule cover the
+/// generated files. The `.rust-build/` suffix matches what the build-system
+/// addendum §B.15.4 names for Phase 1 emissions.
 fn default_emit_dir(input: &Path) -> PathBuf {
     let parent = input.parent().unwrap_or_else(|| Path::new("."));
-    parent.join("target").join(".rust-build")
+    let root = find_project_root(parent).unwrap_or_else(|| parent.to_path_buf());
+    root.join("target").join(".rust-build")
+}
+
+/// Walk upward from `start` looking for the nearest directory that contains a
+/// `jux.toml`. Returns that directory (the project root), or `None` if none is
+/// found before reaching the filesystem root.
+fn find_project_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = Some(start);
+    while let Some(d) = dir {
+        if d.join("jux.toml").is_file() {
+            return Some(d.to_path_buf());
+        }
+        dir = d.parent();
+    }
+    None
 }
 
 /// Pretty-print one diagnostic per line in a stable, line-oriented format.

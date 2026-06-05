@@ -187,9 +187,31 @@ const BUILTIN_STRING_METHODS: &[&str] = &[
 /// | `.clear()`     | `.clear()`                   |
 /// | `.keys()`      | `.keys().cloned().collect()` |
 /// | `.values()`    | `.values().cloned().collect()` |
+/// Methods we let through on **a HashMap receiver** without
+/// checking against a class signature. Maps to Rust `HashMap`
+/// operations:
+///
+/// | Jux            | Rust equivalent              |
+/// |----------------|------------------------------|
+/// | `.put(k, v)`   | `.insert(k, v)`              |
+/// | `.get(k)`      | `.get(&k).cloned().unwrap()` |
+/// | `.contains(k)` | `.contains_key(&k)`          |
+/// | `.remove(k)`   | `.remove(&k)`                |
+/// | `.size()`      | `.len() as isize`            |
+/// | `.isEmpty()`   | `.is_empty()`                |
+/// | `.clear()`     | `.clear()`                   |
+/// | `.keys()`      | `.keys().cloned().collect()` |
+/// | `.values()`    | `.values().cloned().collect()` |
 const BUILTIN_MAP_METHODS: &[&str] = &[
     "put", "get", "contains", "remove", "size", "isEmpty",
     "clear", "keys", "values",
+];
+
+/// Methods we let through on **a HashSet receiver** without
+/// checking against a class signature. Maps to Rust `HashSet`
+/// operations.
+const BUILTIN_SET_METHODS: &[&str] = &[
+    "add", "contains", "remove", "size", "isEmpty", "clear",
 ];
 
 /// Field/property names we allow on **any array receiver** without a
@@ -1641,9 +1663,22 @@ impl<'a> Checker<'a> {
                 // Map-typed receivers: short-circuit method-call
                 // verification through the stdlib allowlist. Same
                 // shape as the array / String path above.
+                // HashMap / HashSet method short-circuit. These
+                // stdlib types are compiler primitives — tycheck
+                // accepts their method names from a small
+                // hardcoded list without walking class-method
+                // tables. The backend's `emit_map_stdlib_method`
+                // / `emit_set_stdlib_method` produce the matching
+                // Rust expressions.
                 if let Ty::User { name, .. } = &receiver_ty {
                     let bare = name.rsplit('.').next().unwrap_or(name);
-                    if bare == "Map" && BUILTIN_MAP_METHODS.contains(&method_name) {
+                    if bare == "HashMap" && BUILTIN_MAP_METHODS.contains(&method_name) {
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
+                    if bare == "HashSet" && BUILTIN_SET_METHODS.contains(&method_name) {
                         for arg in &c.args {
                             self.check_expr(arg);
                         }

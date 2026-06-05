@@ -51,7 +51,7 @@ pub mod ty;
 pub use env::TypeEnv;
 pub use infer::{infer_block, infer_expr};
 pub use symbol_table::SymbolTable;
-pub use ty::{ArrayKind, Primitive, Ty};
+pub use ty::{ty_from_ref_in_env, ArrayKind, Primitive, Ty};
 
 /// Output of [`typecheck`]. Empty `diagnostics` means everything checked.
 pub struct TypeCheckResult {

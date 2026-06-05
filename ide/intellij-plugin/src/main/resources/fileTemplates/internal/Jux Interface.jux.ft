@@ -1,0 +1,6 @@
+#parse("Jux File Header.jux")
+#if (${PACKAGE} && ${PACKAGE} != "")package ${PACKAGE};
+
+#end
+public interface ${NAME} {
+}

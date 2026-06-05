@@ -142,19 +142,16 @@ impl RustEmitter {
             return;
         }
 
-        // Stdlib container types — `Map<K, V>` and `List<T>` get
-        // surfaced as Rust's native std collections. The Jux user
-        // writes Java-shaped names; the emitted Rust uses the
-        // standard library equivalents.
-        //
-        // Generic args recurse through `emit_type_as_rust`, so a
-        // `Map<String, List<int>>` lowers as
-        // `std::collections::HashMap<String, Vec<isize>>`
-        // automatically.
+        // **Stdlib compiler primitives.** ArrayList / HashMap /
+        // HashSet lower directly to their Rust std counterparts.
+        // The Jux source files under `jux.std/collections/`
+        // document the API contract; the compiler knows the
+        // mapping by FQN (a small fixed set, on par with how
+        // `int` and `String` are also hardcoded primitives).
         if let Some(seg) = ty.name.segments.last() {
             let bare = seg.text.as_str();
             match bare {
-                "Map" if ty.generic_args.len() == 2 => {
+                "HashMap" if ty.generic_args.len() == 2 => {
                     self.w.push_str("std::collections::HashMap<");
                     for (i, arg) in ty.generic_args.iter().enumerate() {
                         if i > 0 {
@@ -167,7 +164,15 @@ impl RustEmitter {
                     self.w.push('>');
                     return;
                 }
-                "List" if ty.generic_args.len() == 1 => {
+                "HashSet" if ty.generic_args.len() == 1 => {
+                    self.w.push_str("std::collections::HashSet<");
+                    if let Some(juxc_ast::GenericArg::Type(t)) = ty.generic_args.first() {
+                        self.emit_type_as_rust(t);
+                    }
+                    self.w.push('>');
+                    return;
+                }
+                "ArrayList" if ty.generic_args.len() == 1 => {
                     self.w.push_str("Vec<");
                     if let Some(juxc_ast::GenericArg::Type(t)) = ty.generic_args.first() {
                         self.emit_type_as_rust(t);
@@ -191,15 +196,42 @@ impl RustEmitter {
             self.w.push_str(rust_ty);
             return;
         }
-        // Fall back to a verbatim path emission. Generic args and
-        // nullability aren't surfaced yet.
-        let path = ty
-            .name
-            .segments
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect::<Vec<_>>()
-            .join("::");
+        // Cross-package bare-name reference — when a single
+        // segment like `IllegalArgumentException` resolves to an
+        // FQN in a different package than the current unit's,
+        // emit the fully-qualified `crate::a::b::Name` form so
+        // Rust's name resolver finds it through the emitted
+        // `pub mod` tree. Same-package references stay bare —
+        // they reach their sibling through normal Rust module
+        // visibility.
+        let path = if ty.name.segments.len() == 1 {
+            let bare = ty.name.segments[0].text.as_str();
+            let mut resolved_path: Option<String> = None;
+            if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
+                if fqn.contains('.') {
+                    let cur_pkg = self.symbols.package.join(".");
+                    let fqn_pkg = fqn
+                        .rsplit_once('.')
+                        .map(|(p, _)| p.to_string())
+                        .unwrap_or_default();
+                    if fqn_pkg != cur_pkg {
+                        let joined = fqn
+                            .split('.')
+                            .collect::<Vec<_>>()
+                            .join("::");
+                        resolved_path = Some(format!("crate::{joined}"));
+                    }
+                }
+            }
+            resolved_path.unwrap_or_else(|| bare.to_string())
+        } else {
+            ty.name
+                .segments
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join("::")
+        };
         self.w.push_str(&path);
         // Emit any generic args attached to this type — `Box<int>`
         // lowers to `Box<isize>` after the path. Recursive: each arg
@@ -431,7 +463,11 @@ impl RustEmitter {
         // factories that conditionally return different concrete
         // impls of the same interface would need `Box<dyn Trait>`
         // and can lift to that explicitly when needed.
-        if ty.array_shape.is_none() && !ty.nullable && ty.generic_args.is_empty() {
+        //
+        // Generic interfaces (`Iterator<T>`) ALSO need the wrap —
+        // earlier revisions required `generic_args.is_empty()`
+        // which incorrectly skipped them.
+        if ty.array_shape.is_none() && !ty.nullable {
             if let Some(seg) = ty.name.segments.last() {
                 let bare = seg.text.as_str();
                 let is_iface = self

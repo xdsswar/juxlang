@@ -510,6 +510,21 @@ struct RustEmitter {
     /// (`lower_with_source`, `lower`, etc.) leave this `false` so
     /// existing behavior is preserved unchanged.
     workspace_mode: bool,
+    /// `use` statements already emitted in the current `pub mod`
+    /// block. Two units that live in the same package can carry
+    /// the same `import` clause without realizing it (e.g. both
+    /// `jux.std.collections.ArrayList` and `jux.std.collections.
+    /// HashMap` import `UnsupportedOperationException`); the
+    /// `emit_imports` skip-on-duplicate-line path keys off this
+    /// set. Reset when entering / leaving a `pub mod`.
+    emitted_uses_in_module: std::collections::HashSet<String>,
+    /// Local variable → declared type, scoped. Mirrors tycheck's
+    /// `TypeEnv` but lives at the backend layer so receiver-type
+    /// lookups for `@Intrinsic` dispatch can find the right class
+    /// even when `expr_types` is unreliable (spans collide across
+    /// interp-string synthetic sources). Push on function/block
+    /// entry, pop on exit, `declare` on each `Stmt::VarDecl`.
+    local_types: Vec<std::collections::HashMap<String, juxc_tycheck::Ty>>,
     /// When `true`, the emitter is producing a `jux test` binary:
     /// the workspace shim is a test runner that invokes every
     /// `@Test`-annotated function instead of the user's `main()`.
@@ -695,6 +710,8 @@ impl RustEmitter {
             symbols: symbols.clone(),
             expr_types,
             workspace_mode: false,
+            emitted_uses_in_module: std::collections::HashSet::new(),
+            local_types: vec![std::collections::HashMap::new()],
             test_mode: false,
             current_unit_idx: None,
             anonymous_class_counter: 0,
@@ -875,13 +892,20 @@ impl RustEmitter {
             self.emit_compilation_unit(&units[idx]);
         }
         // Then each top-level package, with its descendants nested.
+        // Per-module dedupe of `use` lines: each `pub mod` opens a
+        // fresh Rust namespace, so the emitted-uses set is saved
+        // before recursing and restored after — that way nested
+        // packages don't accidentally suppress imports their
+        // parent already emitted (and vice versa).
         for (name, child) in &tree.children {
             self.w.emit_indent();
             self.w.push_str("pub mod ");
             self.w.push_str(name);
             self.w.push_str(" {\n");
             self.w.indent_inc();
+            let saved_uses = std::mem::take(&mut self.emitted_uses_in_module);
             self.emit_package_node_body(child, units, sources);
+            self.emitted_uses_in_module = saved_uses;
             self.w.indent_dec();
             self.w.line("}");
         }
@@ -930,7 +954,9 @@ impl RustEmitter {
             self.w.push_str(name);
             self.w.push_str(" {\n");
             self.w.indent_inc();
+            let saved_uses = std::mem::take(&mut self.emitted_uses_in_module);
             self.emit_package_node_body(child, units, sources);
+            self.emitted_uses_in_module = saved_uses;
             self.w.indent_dec();
             self.w.line("}");
         }
@@ -1138,6 +1164,15 @@ impl RustEmitter {
         let mut emitted_any = false;
         for import in imports {
             if let Some(line) = render_use(&import.spec, inside_package_mod) {
+                // Per-module dedupe: when two units in the same
+                // package both import the same name, we'd
+                // otherwise emit `use foo;` twice in the same
+                // `pub mod` and Rust rejects it as `E0252`. The
+                // emitted-uses set is reset whenever we enter or
+                // leave a `pub mod` (see `emit_package_node_body`).
+                if !self.emitted_uses_in_module.insert(line.clone()) {
+                    continue;
+                }
                 self.w.line(&line);
                 emitted_any = true;
             }
@@ -1250,8 +1285,38 @@ impl RustEmitter {
     /// Rust (juxc never produces a literal `async fn` in any other
     /// context).
     fn finish(self) -> RustCrate {
-        let source = self.w.into_string();
+        let mut source = self.w.into_string();
         let uses_async = source.contains("async fn ");
+        // **Silent panic hook for try/throw programs.** When the
+        // user's code throws and catches typed exceptions, the
+        // emitted `panic_any` triggers the default Rust panic
+        // hook on every throw — printing "thread 'main' panicked
+        // at … Box<dyn Any>" to stderr even when `catch_unwind`
+        // immediately recovers. This noise drowns out real output
+        // for any program that uses try/catch as an error-flow
+        // primitive (which Jux programs do by design, since the
+        // language doesn't have Result<T, E> yet).
+        //
+        // Detection: a substring scan for `panic_any` or
+        // `catch_unwind` in the emitted source. When present, we
+        // prepend a `std::panic::set_hook(Box::new(|_| {}))` to
+        // every `fn main()` definition.
+        let uses_panics =
+            source.contains("panic_any") || source.contains("catch_unwind");
+        if uses_panics {
+            // Replace each `fn main() {\n` opener with a variant
+            // that begins by installing the silent hook. Splice
+            // covers both the sync `fn main()` and the workspace
+            // shim that delegates into the user's packaged main.
+            // Use the fully-qualified `::std::boxed::Box` so a
+            // user-declared `class Box` (some test programs do
+            // this) doesn't shadow std's Box at the
+            // `set_hook(Box::new(...))` call site.
+            source = source.replace(
+                "fn main() {\n",
+                "fn main() {\n    std::panic::set_hook(::std::boxed::Box::new(|_| {}));\n",
+            );
+        }
         RustCrate {
             cargo_toml: cargo_toml_for_with(CRATE_NAME, uses_async),
             sources: vec![("src/main.rs".to_string(), source)],

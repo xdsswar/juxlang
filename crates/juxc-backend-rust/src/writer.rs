@@ -19,6 +19,7 @@
 /// Construct with [`Writer::new`], emit text through the various
 /// `push_*` / `line` / `newline` methods, then consume via
 /// [`Writer::into_string`] at the end of compilation.
+#[derive(Default)]
 pub(crate) struct Writer {
     /// The accumulated Rust source.
     buf: String,

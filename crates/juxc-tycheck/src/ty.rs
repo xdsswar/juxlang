@@ -360,6 +360,16 @@ fn primitive_name(p: Primitive) -> &'static str {
 ///    each generic-arg recursively resolved.
 /// 6. Anything else → [`Ty::Unknown`]. **No diagnostic is emitted.**
 ///    Phase D will surface unresolved-name errors at use sites.
+/// Convenience entry point that doesn't require a `TypeEnv`. Builds
+/// a fresh empty env, then defers to [`ty_from_ref`]. Used by the
+/// backend's `local_types` tracking — the emitter doesn't carry a
+/// `TypeEnv` and a fresh one is sufficient for the bare-name /
+/// implicit-import lookups the backend cares about.
+pub fn ty_from_ref_in_env(t: &TypeRef, symbols: &SymbolTable) -> Ty {
+    let env = TypeEnv::new();
+    ty_from_ref(t, &env, symbols)
+}
+
 pub fn ty_from_ref(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     let inner = ty_from_ref_unnullable(t, env, symbols);
     // Wrap in `Ty::Nullable` when the source `TypeRef` carries
@@ -431,16 +441,22 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         }
     }
 
-    // Phase-1 stdlib container shortcuts. `List<T>` is structurally
-    // identical to `T[]` (Rust `Vec<T>`), so we lower it directly
-    // to `Ty::Array { kind: Dynamic }` here — UNLESS the user has
-    // declared their own `class List<T>` (the symbol table is the
-    // source of truth; classes win over the stdlib alias).
+    // Phase-1 stdlib concrete-collection shortcut. `ArrayList<T>`
+    // is structurally identical to `T[]` (Rust `Vec<T>`), so we
+    // lower it to `Ty::Array { kind: Dynamic }` here. This makes
+    // the existing `BUILTIN_ARRAY_METHODS` dispatch (push/get/
+    // contains/…) fire on `ArrayList<T>` receivers without
+    // duplicating the table. `List<T>` (the interface) keeps its
+    // `Ty::User` shape — users implement it with their own classes
+    // or with the stdlib `ArrayList<T>`.
+    //
+    // The shortcut is suppressed when the user has declared their
+    // own `class ArrayList<T>` (symbol-table evidence wins).
     if t.name.segments.len() == 1
-        && t.name.segments[0].text == "List"
+        && t.name.segments[0].text == "ArrayList"
         && t.generic_args.len() == 1
-        && !symbols.classes.contains_key("List")
-        && !symbols.records.contains_key("List")
+        && !symbols.classes.contains_key("ArrayList")
+        && !symbols.records.contains_key("ArrayList")
     {
         if let juxc_ast::GenericArg::Type(inner) = &t.generic_args[0] {
             return Ty::Array {
@@ -450,11 +466,20 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         }
     }
 
-    // 5. User-defined type — single-segment name. Two paths:
-    //    (a) the bare name resolves through the unit's resolver
-    //        (`env.unqualified`) to an FQN; we use that FQN.
-    //    (b) failing the resolver, the bare name itself is a key
-    //        (no-package classes) — `is_type_name` still passes.
+    // 5. User-defined type — single-segment name. Three paths,
+    //    tried in order:
+    //
+    //    (a) Explicit import → `env.unqualified[bare] = FQN`.
+    //        The user wrote `import a.b.Foo;`; bare `Foo` means
+    //        `a.b.Foo`.
+    //    (b) The bare name itself is a registered key in
+    //        `symbols.*` (no-package classes; same compilation
+    //        unit; etc.). Resolve to itself.
+    //    (c) Implicit auto-import — the bare name matches the
+    //        last segment of some registered FQN (`Map` matches
+    //        `jux.std.collections.Map`). Resolve to the matching
+    //        FQN. This is the "java.lang.* is auto-imported"
+    //        rule applied to every stdlib package.
     if t.name.segments.len() == 1 {
         let bare = &t.name.segments[0].text;
         if let Some(fqn) = env.unqualified.get(bare) {
@@ -474,7 +499,7 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
                 };
             }
         }
-        if symbols.is_type_name_or_stdlib(bare) {
+        if symbols.is_type_name(bare) {
             if let Some(expanded) = expand_alias(bare, &t.generic_args, env, symbols) {
                 return expanded;
             }
@@ -485,6 +510,22 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
                 .collect();
             return Ty::User {
                 name: bare.clone(),
+                generic_args,
+            };
+        }
+        // Implicit auto-import: walk every known FQN looking
+        // for one whose last segment matches `bare`.
+        if let Some(fqn) = symbols.find_fqn_by_bare(bare) {
+            if let Some(expanded) = expand_alias(&fqn, &t.generic_args, env, symbols) {
+                return expanded;
+            }
+            let generic_args = t
+                .generic_args
+                .iter()
+                .map(|g| lower_generic_arg(g, env, symbols))
+                .collect();
+            return Ty::User {
+                name: fqn,
                 generic_args,
             };
         }

@@ -160,6 +160,12 @@ pub struct InterfaceDecl {
     /// Type parameters in declaration order, e.g. `<T>` in
     /// `interface Comparable<T>`. Empty for non-generic interfaces.
     pub generic_params: Vec<TypeParam>,
+    /// Parent interfaces this one extends. Mirrors Java's
+    /// `interface Foo extends A, B { … }` form. Each entry is a
+    /// `TypeRef` so generic parents (`extends Comparable<Foo>`)
+    /// carry their type arguments through. Empty when no
+    /// `extends` clause is present.
+    pub extends: Vec<TypeRef>,
     /// Method signatures. Each `FnDecl` here has `body: None`. The
     /// parser enforces signature-only form for Turn 1.
     pub methods: Vec<FnDecl>,

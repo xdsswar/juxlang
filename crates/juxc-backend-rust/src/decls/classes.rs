@@ -40,6 +40,54 @@ impl RustEmitter {
     /// `emit_assign` produces for `this.field = …` patterns. Plain locals
     /// in the body still drive `let mut` promotion as before.
     pub(crate) fn emit_class_decl(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        // **Stdlib intrinsic skip.** The Jux source files under
+        // `jux.std/collections/` declare `ArrayList<T>` and
+        // `HashMap<K, V>` as ordinary classes, but their bodies
+        // are placeholders — every method is replaced by the
+        // backend's existing `BUILTIN_ARRAY_METHODS` /
+        // `BUILTIN_MAP_METHODS` dispatch, which lowers operations
+        // onto Rust's `Vec` / `HashMap` directly. Suppress the
+        // struct emission for these so we don't end up with two
+        // competing definitions, and the user gets the std
+        // container's full API via the dispatch table.
+        //
+        // The check uses the FQN form `jux.std.collections.X`
+        // built from the unit's package + class name. Single-
+        // segment names (without a `package` declaration) can't
+        // collide with the stdlib so they fall through normally.
+        // **Stdlib intrinsic skip.** A small fixed set of stdlib
+        // class names lower to Rust std containers — the Jux
+        // source files under `jux.std/*` document their API but
+        // the compiler owns the actual implementation. Suppress
+        // struct emission for those so we don't end up with a
+        // duplicate definition next to the std container.
+        if class_decl.name.text == "ArrayList"
+            || class_decl.name.text == "HashMap"
+            || class_decl.name.text == "HashSet"
+        {
+            let pkg = self.symbols.package.join(".");
+            if pkg == "jux.std.collections" {
+                return;
+            }
+        }
+        if class_decl.name.text == "File" {
+            let pkg = self.symbols.package.join(".");
+            if pkg == "jux.std.io" {
+                return;
+            }
+        }
+        if class_decl.name.text == "Worker" || class_decl.name.text == "Task" {
+            let pkg = self.symbols.package.join(".");
+            if pkg == "jux.std.concurrent" {
+                return;
+            }
+        }
+        if class_decl.name.text == "Clock" || class_decl.name.text == "Instant" {
+            let pkg = self.symbols.package.join(".");
+            if pkg == "jux.std.time" {
+                return;
+            }
+        }
         // **Sealed-class lowering.** A `sealed class Light permits
         // Red, Yellow, Green {}` becomes a Rust enum whose variants
         // wrap each permitted subclass struct:

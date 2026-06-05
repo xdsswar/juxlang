@@ -109,15 +109,51 @@ impl SymbolTable {
             || self.aliases.contains_key(name)
     }
 
-    /// Same as [`Self::is_type_name`] but also returns true for
-    /// the Phase-1 stdlib container types (`Map`, `List`). Used
-    /// by `ty_from_ref` so the type-position references resolve
-    /// even though no declaration backs them. Kept separate from
-    /// `is_type_name` so the symbol-table builder's uniqueness
-    /// check doesn't reject a user `class List<T>` against the
-    /// builtin alias.
+    /// Same as [`Self::is_type_name`] but ALSO accepts a bare name
+    /// that matches the last segment of any known FQN. Lets user
+    /// code reference stdlib types (`Map<K, V>`, `Throwable`, etc.)
+    /// without writing the full `jux.std.…` path — same shape as
+    /// Java's implicit `java.lang.*` rule.
+    ///
+    /// Kept separate from `is_type_name` so the symbol-table
+    /// builder's uniqueness check doesn't reject a user `class
+    /// Foo` against an unrelated stdlib FQN whose last segment
+    /// happens to be `Foo`.
     pub fn is_type_name_or_stdlib(&self, name: &str) -> bool {
-        self.is_type_name(name) || matches!(name, "Map" | "List")
+        self.is_type_name(name) || self.find_fqn_by_bare(name).is_some()
+    }
+
+    /// Look up a bare type name (e.g. `Map`) against every FQN in
+    /// the symbol table, returning the first FQN whose last
+    /// segment matches. Drives the "implicit `jux.std.*` import"
+    /// rule — user code can spell `Map<K, V>` and have it resolve
+    /// to `jux.std.collections.Map`. Returns `None` when no FQN
+    /// matches.
+    ///
+    /// Precedence (when multiple FQNs share a last segment):
+    /// classes > records > enums > interfaces > aliases. Order
+    /// inside each category is HashMap-iteration which is stable
+    /// per session.
+    pub fn find_fqn_by_bare(&self, name: &str) -> Option<String> {
+        let matches_last = |fqn: &String| -> bool {
+            fqn.rsplit('.').next().is_some_and(|seg| seg == name)
+        };
+        if let Some(k) = self.classes.keys().find(|k| matches_last(k)) {
+            return Some(k.clone());
+        }
+        if let Some(k) = self.records.keys().find(|k| matches_last(k)) {
+            return Some(k.clone());
+        }
+        if let Some(k) = self.enums.keys().find(|k| matches_last(k)) {
+            return Some(k.clone());
+        }
+        if let Some(k) = self.interfaces.keys().find(|k| matches_last(k)) {
+            return Some(k.clone());
+        }
+        if let Some(k) = self.aliases.keys().find(|k| matches_last(k)) {
+            return Some(k.clone());
+        }
+        None
     }
 
     /// Walk `class_name`'s `extends` chain looking for a method named
