@@ -6,6 +6,9 @@
 //! type names). Goto-definition, references, and rename are advertised off
 //! until the AST cross-reference index lands.
 
+use std::collections::HashMap;
+use std::sync::RwLock;
+
 use dashmap::DashMap;
 use ropey::Rope;
 use tower_lsp::jsonrpc::Result;
@@ -15,6 +18,7 @@ use tower_lsp::{Client, LanguageServer};
 use crate::analysis::analyze;
 use crate::doc::Document;
 use crate::position::{position_to_offset, span_to_range};
+use crate::workspace::Workspace;
 
 /// Jux keywords offered by completion. Java-shaped by design — this is the set
 /// an editor colours and suggests. Kept in sync with the lexer's keyword
@@ -208,13 +212,49 @@ pub struct Backend {
     /// One [`Document`] per open buffer. `DashMap` gives concurrent access
     /// without a global lock (§L "Re-analysis Model").
     docs: DashMap<Url, Document>,
+    /// Project-wide index (root + all module type names) for completion.
+    workspace: RwLock<Workspace>,
 }
 
 impl Backend {
     /// Construct the backend with its LSP client handle. Matches the
     /// `Fn(Client) -> Backend` shape `LspService::new` expects.
     pub fn new(client: Client) -> Self {
-        Self { client, docs: DashMap::new() }
+        Self {
+            client,
+            docs: DashMap::new(),
+            workspace: RwLock::new(Workspace::default()),
+        }
+    }
+
+    /// Re-scan every `.jux` file in the project and refresh the workspace
+    /// type-name index used by completion. Runs the (heavy) analysis on a
+    /// blocking thread; cheap to call on open/save. No-op until a root is set.
+    async fn reindex(&self) {
+        let root = match self.workspace.read() {
+            Ok(ws) => ws.root.clone(),
+            Err(_) => return,
+        };
+        let Some(root) = root else { return };
+
+        // Snapshot live editor text for open buffers so the index reflects
+        // unsaved edits.
+        let mut overrides: HashMap<std::path::PathBuf, String> = HashMap::new();
+        for entry in self.docs.iter() {
+            if let Ok(path) = entry.key().to_file_path() {
+                overrides.insert(path, entry.value().rope.to_string());
+            }
+        }
+
+        let index =
+            tokio::task::spawn_blocking(move || crate::workspace::index_workspace(&root, &overrides))
+                .await
+                .unwrap_or_default();
+
+        if let Ok(mut ws) = self.workspace.write() {
+            ws.type_names = index.type_names;
+            ws.member_names = index.member_names;
+        }
     }
 
     /// Re-analyse `text` for `uri`, cache the result, and publish diagnostics.
@@ -271,6 +311,19 @@ impl LanguageServer for Backend {
             });
         }
 
+        // Record the project root (for workspace indexing): prefer the first
+        // workspace folder, then the legacy `rootUri`.
+        let root = params
+            .workspace_folders
+            .as_ref()
+            .and_then(|folders| folders.first())
+            .map(|f| f.uri.clone())
+            .or(params.root_uri)
+            .and_then(|uri| uri.to_file_path().ok());
+        if let (Some(root), Ok(mut ws)) = (root, self.workspace.write()) {
+            ws.root = Some(root);
+        }
+
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "juxc-lsp".to_string(),
@@ -298,6 +351,8 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "juxc-lsp ready")
             .await;
+        // Build the initial project-wide index (all classes/types/members).
+        self.reindex().await;
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -307,6 +362,16 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let doc = params.text_document;
         self.refresh(doc.uri, &doc.text, doc.version).await;
+        // A newly opened file may belong to a not-yet-indexed module.
+        self.reindex().await;
+    }
+
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        // Saving a file may add/rename types or members anywhere — refresh the
+        // cross-module index. (Per-keystroke changes don't trigger this; the
+        // open buffer's own names come from its live single-file analysis.)
+        let _ = params;
+        self.reindex().await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -423,15 +488,52 @@ impl LanguageServer for Backend {
             }
         }
 
-        // In-scope type names from the last analysis — usable everywhere a
-        // type can appear.
+        // Track labels already added so the workspace index doesn't duplicate
+        // the open file's own names.
+        let mut seen: std::collections::HashSet<String> =
+            items.iter().map(|i| i.label.clone()).collect();
+
+        // In-scope type names from the open file's live analysis (fresh,
+        // includes types just typed but not yet saved).
         for name in &doc.type_names {
-            items.push(CompletionItem {
-                label: name.clone(),
-                kind: Some(CompletionItemKind::CLASS),
-                sort_text: Some(format!("1_{name}")),
-                ..Default::default()
-            });
+            if seen.insert(name.clone()) {
+                items.push(CompletionItem {
+                    label: name.clone(),
+                    kind: Some(CompletionItemKind::CLASS),
+                    sort_text: Some(format!("1_{name}")),
+                    ..Default::default()
+                });
+            }
+        }
+
+        // Project-wide index: every class/type and every function/method/field
+        // from all `.jux` modules (refreshed on open/save).
+        if let Ok(ws) = self.workspace.read() {
+            for name in &ws.type_names {
+                if seen.insert(name.clone()) {
+                    items.push(CompletionItem {
+                        label: name.clone(),
+                        kind: Some(CompletionItemKind::CLASS),
+                        detail: Some("project type".to_string()),
+                        sort_text: Some(format!("1_{name}")),
+                        ..Default::default()
+                    });
+                }
+            }
+            // Members only make sense in expression position (a function body).
+            if ctx == CtxKind::Statement {
+                for name in &ws.member_names {
+                    if seen.insert(name.clone()) {
+                        items.push(CompletionItem {
+                            label: name.clone(),
+                            kind: Some(CompletionItemKind::FUNCTION),
+                            detail: Some("project member".to_string()),
+                            sort_text: Some(format!("4_{name}")),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
         }
 
         Ok(Some(CompletionResponse::Array(items)))

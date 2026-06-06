@@ -14,6 +14,7 @@ mod diagnostics;
 mod doc;
 mod position;
 mod server;
+mod workspace;
 
 use server::Backend;
 use tower_lsp::{LspService, Server};
