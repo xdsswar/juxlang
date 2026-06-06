@@ -181,7 +181,7 @@ impl RustEmitter {
             self.w.push_str(&field.name.text);
             self.w.push_str(": ");
             // Field-position type mapping (String → owned `String`).
-            self.emit_field_type_as_rust(&field.ty);
+            self.emit_field_type_as_rust(&juxc_tycheck::resolved_field_type(field));
             self.w.push_str(",\n");
         }
         self.w.indent_dec();
@@ -402,7 +402,7 @@ impl RustEmitter {
             .collect();
         for field in &class_decl.fields {
             if field.is_static && !field.is_final {
-                if type_ref_mentions_any(&field.ty, &generic_param_names) {
+                if type_ref_mentions_any(&juxc_tycheck::resolved_field_type(field), &generic_param_names) {
                     continue;
                 }
                 self.emit_mutable_static_field(&class_decl.name.text, field);
@@ -977,7 +977,7 @@ impl RustEmitter {
         // const-evaluatable. See `emit_const_decl` for the
         // top-level mirror.
         self.emitting_const_context = true;
-        self.emit_field_type_as_rust(&field.ty);
+        self.emit_field_type_as_rust(&juxc_tycheck::resolved_field_type(field));
         self.w.push_str(" = ");
         if let Some(init) = &field.default {
             self.emit_expr(init);
@@ -985,7 +985,7 @@ impl RustEmitter {
             // No initializer — Rust requires one at the const/static
             // site. Emit a placeholder so the build fails with a
             // clear error rather than silently producing wrong code.
-            self.emit_field_default_value_for(&field.ty);
+            self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
         }
         self.emitting_const_context = false;
         self.w.push_str(";\n");
@@ -1030,7 +1030,7 @@ impl RustEmitter {
         // Field-position type mapping (`String` → owned `String`) —
         // we want the inner storage to own its data, just like a
         // regular instance field would.
-        self.emit_field_type_as_rust(&field.ty);
+        self.emit_field_type_as_rust(&juxc_tycheck::resolved_field_type(field));
         self.w.push_str(">> = std::sync::LazyLock::new(|| std::sync::Mutex::new(");
         if let Some(init) = &field.default {
             // Not in const-context here — runtime allocation is fine
@@ -1039,7 +1039,7 @@ impl RustEmitter {
             // `.to_string()` wrap and `new Foo(…)` works as expected.
             self.emit_expr(init);
         } else {
-            self.emit_field_default_value_for(&field.ty);
+            self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
         }
         self.w.push_str("));\n");
     }

@@ -7,6 +7,7 @@
 //! until the AST cross-reference index lands.
 
 use dashmap::DashMap;
+use ropey::Rope;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -168,6 +169,38 @@ fn header_is_type(seg: &str) -> bool {
         .any(|w| TYPE_KW.contains(&w))
 }
 
+/// Is the process with id `pid` still alive? Used by the parent-process
+/// heartbeat. Dependency-free: on Windows it queries the process exit code via
+/// `kernel32`; elsewhere it conservatively returns `true` (those platforms
+/// rely on the stdin-EOF exit path instead).
+#[cfg(windows)]
+fn parent_alive(pid: u32) -> bool {
+    use std::os::raw::c_void;
+    // Minimal kernel32 bindings — avoids pulling in a winapi crate.
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+        fn GetExitCodeProcess(handle: *mut c_void, code: *mut u32) -> i32;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false; // can't open → treat as gone
+        }
+        let mut code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut code);
+        CloseHandle(handle);
+        ok != 0 && code == STILL_ACTIVE
+    }
+}
+
+#[cfg(not(windows))]
+fn parent_alive(_pid: u32) -> bool {
+    true
+}
+
 /// The language server backend: an `LspService`-managed handler plus the
 /// in-memory document store.
 pub struct Backend {
@@ -219,7 +252,25 @@ impl Backend {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        // Heartbeat: watch the IDE's process id and exit if it dies. The LSP
+        // spec recommends this — if the parent goes away (crash, kill, or a
+        // dropped connection that didn't EOF our stdin), the server must not
+        // linger. Combined with the stdin-EOF exit in `main`, this guarantees
+        // `juxc-lsp` stops whenever the IDE does.
+        if let Some(pid) = params.process_id {
+            let pid = pid as u32;
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(3));
+                loop {
+                    tick.tick().await;
+                    if !parent_alive(pid) {
+                        std::process::exit(0);
+                    }
+                }
+            });
+        }
+
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "juxc-lsp".to_string(),

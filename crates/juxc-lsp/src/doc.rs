@@ -30,17 +30,6 @@ pub struct Document {
 }
 
 impl Document {
-    /// Build a document from initial text and version. Caches are empty until
-    /// the first [`crate::analysis::analyze`] populates them.
-    pub fn new(text: &str, version: i32) -> Self {
-        Self {
-            rope: Rope::from_str(text),
-            version,
-            expr_types: Vec::new(),
-            type_names: Vec::new(),
-        }
-    }
-
     /// Smallest cached expression type whose span contains `offset`.
     ///
     /// "Smallest" so that hovering inside a nested expression reports the

@@ -949,7 +949,7 @@ fn insert_const(
         fqn,
         ConstSig {
             visibility: decl.visibility,
-            ty: decl.ty.clone(),
+            ty: resolve_decl_type(decl.ty.as_ref(), Some(&decl.value), decl.span),
             span: decl.span,
         },
     );
@@ -2142,9 +2142,65 @@ fn field_sig(field: &FieldDecl) -> FieldSig {
         visibility: field.visibility,
         is_static: field.is_static,
         is_final: field.is_final,
-        ty: field.ty.clone(),
+        // Resolved type: the written type, or one inferred from the
+        // initializer when the field omits it (`const I = 2;` → `int`).
+        ty: resolve_decl_type(field.ty.as_ref(), field.default.as_ref(), field.span),
         default: field.default.clone(),
         span: field.span,
+    }
+}
+
+/// Resolve a field/const's type: use the written type if present, otherwise
+/// infer it from the (literal) initializer. Falls back to `int` only when an
+/// inferred declaration has no usable initializer — that case is reported as a
+/// type error elsewhere; the placeholder just keeps the table well-formed.
+pub(crate) fn resolve_decl_type(
+    declared: Option<&TypeRef>,
+    init: Option<&juxc_ast::Expr>,
+    span: Span,
+) -> TypeRef {
+    if let Some(t) = declared {
+        return t.clone();
+    }
+    infer_decl_type(init, span).unwrap_or_else(|| synth_type_ref("int", span))
+}
+
+/// Infer a [`TypeRef`] from a literal initializer (`2` → `int`, `"x"` →
+/// `String`, …). Returns `None` for a missing or non-literal initializer.
+fn infer_decl_type(init: Option<&juxc_ast::Expr>, span: Span) -> Option<TypeRef> {
+    match init {
+        Some(juxc_ast::Expr::Literal(lit)) => {
+            ty_to_type_ref(&crate::infer::infer_literal(lit), span)
+        }
+        _ => None,
+    }
+}
+
+/// Map a simple inferred [`crate::ty::Ty`] (primitive or `String`) to a
+/// synthetic single-segment [`TypeRef`].
+fn ty_to_type_ref(ty: &crate::ty::Ty, span: Span) -> Option<TypeRef> {
+    use crate::ty::Ty;
+    let name = match ty {
+        Ty::Primitive(p) => crate::ty::primitive_name(*p),
+        Ty::String => "String",
+        _ => return None,
+    };
+    Some(synth_type_ref(name, span))
+}
+
+/// Build a single-segment named [`TypeRef`] (no generics, not nullable, not an
+/// array) — used to materialize an inferred primitive/`String` type.
+fn synth_type_ref(name: &str, span: Span) -> TypeRef {
+    TypeRef {
+        name: juxc_ast::QualifiedName {
+            segments: vec![juxc_ast::Ident { text: name.to_string(), span }],
+            span,
+        },
+        generic_args: Vec::new(),
+        nullable: false,
+        array_shape: None,
+        fn_shape: None,
+        span,
     }
 }
 

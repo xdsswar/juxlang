@@ -62,6 +62,8 @@
         implementationClass="dev.jux.intellij.editor.JuxCommenter"/>
     <enterHandlerDelegate
         implementation="dev.jux.intellij.editor.JuxEnterHandler"/>
+    <lineIndentProvider
+        implementation="dev.jux.intellij.editor.JuxLineIndentProvider"/>
 
     <!-- New Project / New Module support: the "Jux" generator scaffolds a
          jux.toml + src/main.jux project (§I — project model). -->

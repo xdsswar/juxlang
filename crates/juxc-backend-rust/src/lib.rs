@@ -1244,7 +1244,7 @@ impl RustEmitter {
         // wrap when this flag is set, so the value text and type
         // line up.
         self.emitting_const_context = true;
-        self.emit_type_as_rust(&decl.ty);
+        self.emit_type_as_rust(&juxc_tycheck::resolved_const_type(decl));
         self.w.push_str(" = ");
         self.emit_expr(&decl.value);
         self.emitting_const_context = false;

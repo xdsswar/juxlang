@@ -48,7 +48,7 @@ toml        = "0.8"
 
 # Language-server stack (juxc-lsp). Pinned per JUX-LSP-SERVER-ADDENDUM.md §L.4.
 tower-lsp   = "0.20"
-tokio       = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
+tokio       = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "time"] }
 dashmap     = "6"
 ropey       = "1"
 

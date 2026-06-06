@@ -222,7 +222,7 @@ impl RustEmitter {
             self.w.push_str(&field.name.text);
             self.w.push_str(": ");
             self.emitting_const_context = true;
-            self.emit_field_type_as_rust(&field.ty);
+            self.emit_field_type_as_rust(&juxc_tycheck::resolved_field_type(field));
             self.w.push_str(" = ");
             if let Some(init) = &field.default {
                 self.emit_expr(init);

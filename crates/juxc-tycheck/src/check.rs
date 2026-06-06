@@ -345,20 +345,25 @@ impl<'a> Checker<'a> {
                 // resolver already walked the initializer for
                 // name-resolution errors.
                 TopLevelDecl::Const(c) => {
-                    let expected = ty_from_ref(&c.ty, &self.env, self.symbols);
                     let found = self.infer_and_record(&c.value);
                     self.check_expr(&c.value);
-                    if !compatible(&expected, &found, self.symbols) {
-                        self.diagnostics.push(
-                            Diagnostic::error(
-                                code::Code::E0410_TypeMismatch,
-                                format!(
-                                    "constant `{}`: expected {}, found {}",
-                                    c.name.text, expected, found,
-                                ),
-                            )
-                            .with_span(expr_span(&c.value)),
-                        );
+                    // When the type is written, check the initializer matches.
+                    // When it's omitted (inferred), the initializer's type IS
+                    // the constant's type — nothing to compare against.
+                    if let Some(decl_ty) = &c.ty {
+                        let expected = ty_from_ref(decl_ty, &self.env, self.symbols);
+                        if !compatible(&expected, &found, self.symbols) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0410_TypeMismatch,
+                                    format!(
+                                        "constant `{}`: expected {}, found {}",
+                                        c.name.text, expected, found,
+                                    ),
+                                )
+                                .with_span(expr_span(&c.value)),
+                            );
+                        }
                     }
                 }
             }

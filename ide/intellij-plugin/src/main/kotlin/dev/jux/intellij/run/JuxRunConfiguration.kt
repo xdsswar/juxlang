@@ -67,19 +67,45 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
             @Throws(ExecutionException::class)
             override fun startProcess(): ProcessHandler {
                 val file = File(filePath)
+                // Compile the whole source tree the file belongs to (juxc walks
+                // a directory recursively), so cross-file `import`s resolve.
+                // Passing just the one file would leave its imported types
+                // uncompiled → "could not find module" errors.
+                val target = compileTarget(file)
                 val exe = JuxToolchain.resolveJuxc(juxcPath)
                 val cmd = GeneralCommandLine()
                     .withExePath(exe)
-                    .withParameters(file.absolutePath, "--run")
+                    .withParameters(target.absolutePath, "--run")
                     .withCharset(StandardCharsets.UTF_8)
-                // Run from the file's directory when we can; harmless otherwise.
-                file.parentFile?.let { parent ->
-                    if (parent.isDirectory) cmd.withWorkDirectory(parent)
-                }
+                val workDir = if (target.isDirectory) target else target.parentFile
+                workDir?.let { if (it.isDirectory) cmd.withWorkDirectory(it) }
                 val handler = OSProcessHandler(cmd)
                 ProcessTerminatedListener.attach(handler)
                 return handler
             }
         }
+    }
+
+    /**
+     * The compile target for `file`: the **source root** of its package tree,
+     * so the whole project compiles together. The source root is the file's
+     * directory with its package path (`package a.b.c;` → 3 levels) stripped
+     * off. A file with no package compiles on its own.
+     */
+    private fun compileTarget(file: File): File {
+        return try {
+            val pkg = PACKAGE_RE.find(file.readText())?.groupValues?.get(1)?.trim().orEmpty()
+            if (pkg.isEmpty()) return file
+            val segments = pkg.split('.').count { it.isNotBlank() }
+            var dir: File? = file.parentFile
+            repeat(segments) { dir = dir?.parentFile }
+            dir?.takeIf { it.isDirectory } ?: file
+        } catch (_: Exception) {
+            file
+        }
+    }
+
+    private companion object {
+        val PACKAGE_RE = Regex("""(?m)^\s*package\s+([A-Za-z_][\w.]*)\s*;""")
     }
 }

@@ -474,7 +474,14 @@ impl<'a> Parser<'a> {
         used_final_keyword: bool,
     ) -> Option<juxc_ast::ConstDecl> {
         let start = self.peek_span();
-        let ty = self.parse_type_ref()?;
+        // Type may be omitted for inference: `const PI = 3.14;`. Detected by
+        // `IDENT =` (the identifier is the name, with no preceding type token).
+        let no_type = matches!(self.peek(), TokenKind::Ident(_))
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Eq)
+            );
+        let ty = if no_type { None } else { Some(self.parse_type_ref()?) };
         let name = self.parse_ident()?;
         self.expect(&TokenKind::Eq, "'=' in const declaration");
         let value = self.parse_expr()?;
@@ -822,7 +829,18 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        let ty = self.parse_type_ref()?;
+        // Type may be omitted for inference: `const I = 2;` / `x = 5;`. We
+        // detect it by peeking for `IDENT =` or `IDENT ;` (an identifier that
+        // is immediately the field name, with no type token before it). A real
+        // typed field is `Type Name …`, where the token after the first
+        // identifier is another identifier or a type continuation (`<`, `[`,
+        // `.`, `?`), never `=`/`;`.
+        let no_type = matches!(self.peek(), TokenKind::Ident(_))
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Eq) | Some(TokenKind::Semicolon)
+            );
+        let ty = if no_type { None } else { Some(self.parse_type_ref()?) };
         let name = self.parse_ident()?;
         // **C#-style property body** per JUX-MISSING-DEFS §M.7. A
         // `{ get; set; }` or similar suffix between the name and

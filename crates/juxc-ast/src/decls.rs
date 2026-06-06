@@ -66,9 +66,9 @@ pub struct ConstDecl {
     /// `true` if the user wrote `final`; `false` if they wrote
     /// `const`. The two are synonymous everywhere else.
     pub used_final_keyword: bool,
-    /// Declared type — required (no inference for top-level
-    /// constants, matching the spec's grammar).
-    pub ty: TypeRef,
+    /// Declared type, or `None` when **inferred** from the initializer
+    /// (`const PI = 3.14;` → `double`). Tycheck resolves the inferred type.
+    pub ty: Option<TypeRef>,
     /// Constant's identifier — UPPER_SNAKE_CASE conventionally,
     /// not enforced by the parser.
     pub name: Ident,
@@ -520,12 +520,18 @@ pub struct FieldDecl {
     /// it picks the `pub const` over `pub static` shape in the
     /// emitted Rust.
     pub is_final: bool,
-    /// Declared type.
-    pub ty: TypeRef,
+    /// Declared type, or `None` when the type is **inferred** from the
+    /// initializer (`const I = 2;` → `int`). Inference requires an
+    /// initializer; a type-less field with no initializer is an error.
+    /// Tycheck resolves the inferred type and records it in the symbol
+    /// table's `FieldSig`; the backend reads the resolved type from there
+    /// when this is `None`.
+    pub ty: Option<TypeRef>,
     /// Field name.
     pub name: Ident,
     /// Optional default initializer (`= expr`). When absent, the backend
-    /// zero/empty-initializes per the type's natural default.
+    /// zero/empty-initializes per the type's natural default. Required when
+    /// [`ty`](Self::ty) is `None` (inference needs a value).
     pub default: Option<Expr>,
     /// Span covering the whole field declaration including the `;`.
     pub span: Span,

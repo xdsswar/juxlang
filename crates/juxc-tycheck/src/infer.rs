@@ -156,7 +156,7 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
 /// - **String**: always `Ty::String`.
 /// - **Bool**: `Ty::Primitive(Bool)`.
 /// - **Null**: `Unknown` — Jux doesn't have a first-class null type.
-fn infer_literal(lit: &Literal) -> Ty {
+pub(crate) fn infer_literal(lit: &Literal) -> Ty {
     match lit {
         Literal::Int(IntLit { kind, .. }) => Ty::Primitive(primitive_from_int_kind(*kind)),
         Literal::Float(FloatLit { kind, .. }) => Ty::Primitive(primitive_from_float_kind(*kind)),

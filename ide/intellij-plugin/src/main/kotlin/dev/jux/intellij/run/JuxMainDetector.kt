@@ -3,19 +3,20 @@ package dev.jux.intellij.run
 /**
  * Lightweight detection of a Jux entry point.
  *
- * Phase-1 detection is a text scan (no PSI): it looks for a top-level function
- * named `main` whose return type is `void` or `int`, optionally `public` and/or
- * `async`, matching the accepted entry-point shapes from
- * `JUX-ENTRY-POINTS-ADDENDUM.md` (the same set `juxc-tycheck` enforces). This
- * is good enough to decide whether a file is runnable; the compiler does the
- * authoritative signature check at build time.
+ * Phase-1 detection is a text scan (no PSI): it looks for a function named
+ * `main` whose return type is `void` or `int`, preceded by any number of
+ * modifiers in any order (`public`, `static`, `async`, …). This matches both a
+ * free `main` (no class) and a `static main` inside a class, so the Run option
+ * shows up for either. A false positive only means an extra Run option; the
+ * compiler does the authoritative signature check at build time.
  */
 object JuxMainDetector {
-    // ^(public)? (async)? (void|int) main ( ...
-    // MULTILINE so `^` matches each line start; we don't try to skip comments
-    // or strings in Phase 1 — a false positive only means an extra Run option.
+    // ^  [modifiers...]  (void|int)  main  (
+    // Modifiers are an unordered, possibly-empty run of known keywords — this
+    // is what makes `static void main`, `public static void main`, and a bare
+    // `void main` all match. MULTILINE so `^` matches each line start.
     private val MAIN = Regex(
-        """(?m)^\s*(public\s+|private\s+|protected\s+)?(async\s+)?(void|int)\s+main\s*\(""",
+        """(?m)^\s*(?:(?:public|private|protected|internal|static|final|abstract|async|native)\s+)*(?:void|int)\s+main\s*\(""",
     )
 
     /** True if `text` appears to declare a runnable `main`. */

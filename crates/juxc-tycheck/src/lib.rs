@@ -53,6 +53,20 @@ pub use infer::{infer_block, infer_expr};
 pub use symbol_table::SymbolTable;
 pub use ty::{ty_from_ref_in_env, ArrayKind, Primitive, Ty};
 
+/// Resolve a field's type the way the symbol table does: the written type if
+/// present, otherwise inferred from its (literal) initializer. The backend
+/// calls this for fields that omit their type (`const I = 2;`), so its emitted
+/// Rust uses the inferred type. Mirrors the resolution recorded in `FieldSig`.
+pub fn resolved_field_type(field: &juxc_ast::FieldDecl) -> juxc_ast::TypeRef {
+    symbol_table::resolve_decl_type(field.ty.as_ref(), field.default.as_ref(), field.span)
+}
+
+/// Resolve a top-level constant's type — the written type, or one inferred
+/// from its initializer (`const PI = 3.14;` → `double`).
+pub fn resolved_const_type(decl: &juxc_ast::ConstDecl) -> juxc_ast::TypeRef {
+    symbol_table::resolve_decl_type(decl.ty.as_ref(), Some(&decl.value), decl.span)
+}
+
 /// Output of [`typecheck`]. Empty `diagnostics` means everything checked.
 pub struct TypeCheckResult {
     /// Type-check diagnostics (E0323_… and friends).

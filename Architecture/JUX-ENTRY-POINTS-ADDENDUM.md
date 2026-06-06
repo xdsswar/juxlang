@@ -37,20 +37,51 @@ The compiler wraps top-level statements in a synthetic `main` and emits the prog
 The entry file may instead declare a `main` function. The compiler accepts any of these signatures, picking the first match in declaration order:
 
 ```java
-public void main()                            // no args, no exit code
-public void main(String[] args)               // args, no exit code
-public int main()                             // exit code
-public int main(String[] args)                // args and exit code
+void main()                            // no args, no exit code
+void main(String[] args)               // args, no exit code
+void main(String... args)              // varargs form of the above (§E.1.2.1)
+int main()                             // exit code
+int main(String[] args)                // args and exit code
+int main(String... args)               // args and exit code, varargs form
 ```
 
 Each signature may optionally declare `throws E` for any checked exception type `E`:
 
 ```java
-public void main(String[] args) throws IOError {
+void main(String[] args) throws IOError {
     var contents = readFile(args[0]);
     print(contents);
 }
 ```
+
+#### E.1.2.1. Argument forms — `String[]` and `String...`
+
+The `args` parameter may be written either as an array (`String[] args`) or as a
+**varargs** parameter (`String... args`). The two are the same type at the entry
+boundary — `String...` *is* `String[]` inside the body. The general varargs rule
+applies: a `T...` parameter is sugar for `T[]` and **must be the last parameter**
+of the function (an earlier `T...` is a compile error). For `main`, `args` is the
+only parameter, so the constraint is trivially met.
+
+#### E.1.2.2. Modifiers — where `main` may live
+
+`main` may be declared as a **top-level (free) function** or as a **`static`
+method of a class**. The required modifiers differ by location:
+
+| Location of `main` | `static` | `public` | Example |
+|--------------------|----------|----------|---------|
+| Top level (free function) | not allowed / not needed | not required | `void main(String[] args) { … }` |
+| Inside a `class`   | **required** | not required | `class App { static void main(String[] args) { … } }` |
+
+- A free `main` needs **no** `static` and **no** `public` — visibility and
+  static-ness are not part of the entry-point match for a free function.
+- A `main` inside a class **must be `static`** (it has no receiver — the runtime
+  invokes it without an instance), and `public` is **not** required.
+- A non-`static` `main` inside a class is **not** an entry point; it is an
+  ordinary method, and if no other valid entry exists the build fails with
+  `E0326` (`class main must be static`).
+- When both a free `main` and a class `static main` are visible in the entry
+  file, that is an ambiguous entry point (`E0320`).
 
 ### E.1.3. Rules and Semantics
 
@@ -215,9 +246,16 @@ Each `path` must contain exactly one entry (per §E.1.3 / §E.2).
 | `E0320` | Entry file contains both top-level statements and a `main` function        |
 | `E0321` | Multiple functions carry `@entry` in the same binary                       |
 | `E0322` | `@entry(convention = "...")` is unsupported on the current target          |
-| `E0323` | `main`'s signature does not match any accepted form                        |
+| `E0323` | `main`'s signature does not match any accepted form (§E.1.2)               |
 | `E0324` | `@entry` function's signature is incompatible with its `symbol`'s ABI      |
 | `E0325` | `freestanding = true` but no `@entry` function is declared                 |
+| `E0326` | A class member named `main` with an entry-shaped signature is not `static` (§E.1.2.2) |
+
+A varargs parameter that is not the last parameter of its function is rejected
+with **`E0212`** (a general declaration-syntax error, allocated in
+`JUX-DIAGNOSTICS-ADDENDUM.md` §D.4, not specific to `main`). Each diagnostic must
+carry an actionable `help:` line — e.g. `E0326` suggests "add `static`", and
+`E0212` suggests "move `T... name` to the end of the parameter list".
 
 ---
 

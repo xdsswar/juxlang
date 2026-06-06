@@ -1559,7 +1559,7 @@ fn generic_class_decl_captures_type_parameter() {
     // The field's type is a single-segment path "T" — same shape as
     // primitives; the backend identifies it as generic via the
     // class's params list.
-    assert_eq!(c.fields[0].ty.name.segments[0].text, "T");
+    assert_eq!(c.fields[0].ty.as_ref().unwrap().name.segments[0].text, "T");
 }
 
 /// Multi-parameter generic classes parse: `class Map<K, V> { … }`.

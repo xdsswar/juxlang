@@ -42,7 +42,9 @@ pub(crate) fn check_nullable_primitives(unit: &CompilationUnit, diags: &mut Vec<
             TopLevelDecl::Enum(enum_decl) => check_enum_decl(enum_decl, diags),
             TopLevelDecl::Interface(iface) => check_interface_decl(iface, diags),
             TopLevelDecl::Const(const_decl) => {
-                check_type_ref(&const_decl.ty, diags);
+                if let Some(ty) = &const_decl.ty {
+                    check_type_ref(ty, diags);
+                }
                 check_expr(&const_decl.value, diags);
             }
             TopLevelDecl::TypeAlias(alias) => {
@@ -115,7 +117,9 @@ fn check_interface_decl(iface: &InterfaceDecl, diags: &mut Vec<Diagnostic>) {
 }
 
 fn check_field_decl(field: &FieldDecl, diags: &mut Vec<Diagnostic>) {
-    check_type_ref(&field.ty, diags);
+    if let Some(ty) = &field.ty {
+        check_type_ref(ty, diags);
+    }
     if let Some(init) = &field.default {
         check_expr(init, diags);
     }

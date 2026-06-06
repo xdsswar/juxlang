@@ -44,8 +44,8 @@ class JuxEnterHandler : EnterHandlerDelegateAdapter() {
 
             // Case 1: caret immediately after "/**" → expand the doc skeleton.
             if (trimmed == "/**") {
-                val rest = chars.subSequence(offset, document.textLength).toString()
-                if (!rest.trimStart().startsWith("*/")) {
+                // Bounded look-ahead (never scan the whole file on the UI thread).
+                if (!isClosedAhead(chars, offset, document.textLength)) {
                     val insertion = "\n$indent * \n$indent */"
                     document.insertString(offset, insertion)
                     val caret = offset + 1 + indent.length + 3 // "\n" + indent + " * "
@@ -70,5 +70,17 @@ class JuxEnterHandler : EnterHandlerDelegateAdapter() {
             // Never break the Enter key.
         }
         return EnterHandlerDelegate.Result.Continue
+    }
+
+    /**
+     * Is the next non-whitespace run after `from` the comment-closing sequence
+     * (star then slash)? Scans at most a small window so this stays O(1) on the
+     * UI thread regardless of file size.
+     */
+    private fun isClosedAhead(chars: CharSequence, from: Int, end: Int): Boolean {
+        val limit = minOf(end, from + 64)
+        var i = from
+        while (i < limit && chars[i].isWhitespace()) i++
+        return i + 1 < end && chars[i] == '*' && chars[i + 1] == '/'
     }
 }

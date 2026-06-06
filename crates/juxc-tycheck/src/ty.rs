@@ -314,7 +314,7 @@ impl fmt::Display for Ty {
 /// The source-level spelling of a primitive. Used by [`Ty::Display`] and
 /// by future diagnostics that want to print a type the way the user
 /// would have written it.
-fn primitive_name(p: Primitive) -> &'static str {
+pub(crate) fn primitive_name(p: Primitive) -> &'static str {
     match p {
         Primitive::Int => "int",
         Primitive::Uint => "uint",
