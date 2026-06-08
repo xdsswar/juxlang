@@ -126,20 +126,10 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
         .emit_dir
         .unwrap_or_else(|| default_emit_dir(&files[0]));
 
-    // Decide the produced binary's name. `--name` wins. Otherwise:
-    // - For a single source `foo.jux`, use `foo`.
-    // - For a directory input `showcase/`, use `showcase`.
-    // - Multi-file workspace fed individually: fall back to the
-    //   first file's stem.
-    let crate_name = cli
-        .name
-        .clone()
-        .unwrap_or_else(|| default_crate_name(&cli.inputs, &files[0]));
-
     // Discover the project root (nearest ancestor with a `jux.toml`)
     // starting from the first input's directory, and load its
-    // `[package]` metadata. `None` when the input is a loose file
-    // outside any project — in which case the build emits the default,
+    // manifest. `None` when the input is a loose file outside any
+    // project — in which case the build emits the default,
     // metadata-free Cargo.toml exactly as before.
     let project_root = files[0]
         .parent()
@@ -147,6 +137,23 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
     let manifest = project_root
         .as_deref()
         .and_then(juxc_driver::Manifest::load);
+
+    // Decide the produced binary's name. Priority:
+    // 1. `--name` (explicit one-off override).
+    // 2. The manifest's first `[[bin]].name` — the manifest-driven
+    //    name (so a `[[bin]] name="myapp"` project emits `myapp.exe`,
+    //    not the legacy stem-derived name). §B.2 Phase 1.
+    // 3. The input's file-stem / directory name (loose-file default).
+    let crate_name = cli
+        .name
+        .clone()
+        .or_else(|| {
+            manifest
+                .as_ref()
+                .and_then(|m| m.bins.first())
+                .map(|b| b.name.clone())
+        })
+        .unwrap_or_else(|| default_crate_name(&cli.inputs, &files[0]));
 
     let artifact = juxc_driver::build_with_manifest(
         &crate_,

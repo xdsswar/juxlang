@@ -196,11 +196,14 @@ fn read_manifest(path: &Path) -> Result<ProjectManifest> {
 }
 
 /// `jux build`/`run`/`check` without an explicit file: project
-/// mode. Reads `./jux.toml`, walks `./src/`, compiles every
-/// `.jux` file through the workspace driver.
+/// mode. Reads `./jux.toml`. When the manifest declares a
+/// `[workspace]`, every member is built in dependency order
+/// (§B.7). Otherwise the single package's `[lib]`/`[[bin]]`
+/// targets are built per the manifest (§B.2). The produced
+/// binaries are named from `[[bin]].name`.
 fn run_project(
     action: Action,
-    emit_dir_override: Option<PathBuf>,
+    _emit_dir_override: Option<PathBuf>,
     release: bool,
 ) -> Result<ExitCode> {
     let cwd = std::env::current_dir().context("getting current directory")?;
@@ -212,38 +215,28 @@ fn run_project(
         );
         return Ok(ExitCode::from(1));
     }
-    let manifest = read_manifest(&manifest_path)?;
-    // Binary name: last segment of the reverse-DNS package name
-    // (`com.example.myapp` → `myapp`). Falls back to the whole
-    // name when the package isn't dotted.
-    let binary_name = manifest
-        .name
-        .rsplit('.')
-        .next()
-        .unwrap_or(manifest.name.as_str())
-        .to_string();
-    let src_dir = cwd.join("src");
-    if !src_dir.exists() {
+    let Some(manifest) = juxc_driver::Manifest::load(&cwd) else {
+        eprintln!("jux: failed to load {}", manifest_path.display());
+        return Ok(ExitCode::from(1));
+    };
+
+    // ---- Workspace mode -------------------------------------------------
+    if !manifest.workspace_members.is_empty() {
+        return run_workspace(&manifest, action, release);
+    }
+
+    // ---- Single-package mode --------------------------------------------
+    if manifest.lib.is_none() && manifest.bins.is_empty() {
         eprintln!(
-            "jux: src/ directory not found in {} — nothing to build",
+            "jux: manifest declares no [lib] or [[bin]] target, and no src/lib.jux or src/main.jux exists in {}",
             cwd.display(),
         );
         return Ok(ExitCode::from(1));
     }
-    // Drive the workspace compile through `juxc-driver`. Same
-    // pipeline juxc uses when fed a directory.
-    let sources = collect_project_sources(&src_dir)?;
-    if sources.is_empty() {
-        eprintln!("jux: no .jux sources under {}", src_dir.display());
-        return Ok(ExitCode::from(1));
-    }
-    let result = juxc_driver::compile_workspace(sources)?;
-    print_diagnostics(&result.diagnostics, &result.sources);
-    let any_error = result
-        .diagnostics
-        .iter()
-        .any(|d| matches!(d.severity, Severity::Error));
-    if any_error {
+    let emit_root = cwd.join("target").join(".rust-build");
+    let build = juxc_driver::project::build_package(&manifest, &[], &[], &emit_root, release)?;
+    print_diagnostics(&build.diagnostics, &build.sources);
+    if build.has_errors() {
         return Ok(ExitCode::from(1));
     }
     match action {
@@ -251,31 +244,73 @@ fn run_project(
             eprintln!("jux: check ok");
             Ok(ExitCode::SUCCESS)
         }
-        Action::Build | Action::Run => {
-            let Some(crate_) = result.crate_ else {
-                eprintln!("jux: nothing to build");
+        Action::Build => {
+            if let Some(lib) = &build.library {
+                eprintln!("jux: built library crate at {}", lib.crate_dir.display());
+            }
+            for bin in &build.binaries {
+                eprintln!("jux: built {}", bin.binary_path.display());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Action::Run => {
+            let Some(bin) = build.binaries.first() else {
+                eprintln!("jux: nothing to run (no [[bin]] target)");
                 return Ok(ExitCode::SUCCESS);
             };
-            let emit_dir = emit_dir_override
-                .unwrap_or_else(|| cwd.join("target").join(".rust-build"));
-            let artifact = juxc_driver::build(
-                &crate_,
-                &emit_dir,
-                &binary_name,
-                release,
-            )?;
-            eprintln!("jux: built {}", artifact.binary_path.display());
-            if matches!(action, Action::Run) {
-                let status = Command::new(&artifact.binary_path).status().with_context(|| {
-                    format!("running {}", artifact.binary_path.display())
-                })?;
-                let code = status.code().unwrap_or(1) as u8;
-                Ok(ExitCode::from(code))
-            } else {
-                Ok(ExitCode::SUCCESS)
-            }
+            eprintln!("jux: built {}", bin.binary_path.display());
+            let status = Command::new(&bin.binary_path).status().with_context(|| {
+                format!("running {}", bin.binary_path.display())
+            })?;
+            let code = status.code().unwrap_or(1) as u8;
+            Ok(ExitCode::from(code))
         }
     }
+}
+
+/// `jux build`/`run`/`check` for a `[workspace]`-root manifest. Builds
+/// every member in dependency order via the driver's project
+/// orchestration, then (for `run`) executes the first binary of the last
+/// member built.
+fn run_workspace(
+    root: &juxc_driver::Manifest,
+    action: Action,
+    release: bool,
+) -> Result<ExitCode> {
+    if matches!(action, Action::Check) {
+        // Check still goes through the full build path (compile only,
+        // then report). For brevity we reuse build_workspace and just
+        // skip running.
+    }
+    let ws = juxc_driver::project::build_workspace(root, release)?;
+    for (name, build) in &ws.members {
+        print_diagnostics(&build.diagnostics, &build.sources);
+        if build.has_errors() {
+            eprintln!("jux: member `{name}` failed to build");
+            return Ok(ExitCode::from(1));
+        }
+        if let Some(lib) = &build.library {
+            eprintln!("jux: [{name}] built library crate at {}", lib.crate_dir.display());
+        }
+        for bin in &build.binaries {
+            eprintln!("jux: [{name}] built {}", bin.binary_path.display());
+        }
+    }
+    if matches!(action, Action::Run) {
+        // Run the first binary of the last member (the workspace's
+        // "application" sits at the top of the topological order).
+        if let Some((_, build)) = ws.members.last() {
+            if let Some(bin) = build.binaries.first() {
+                let status = Command::new(&bin.binary_path).status().with_context(|| {
+                    format!("running {}", bin.binary_path.display())
+                })?;
+                let code = status.code().unwrap_or(1) as u8;
+                return Ok(ExitCode::from(code));
+            }
+        }
+        eprintln!("jux: no runnable [[bin]] target in the workspace");
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// `jux test` — discover `@Test`-annotated free functions

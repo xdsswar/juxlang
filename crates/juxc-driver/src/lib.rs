@@ -42,6 +42,7 @@ use juxc_source::SourceFile;
 pub const DEFAULT_CRATE_NAME: &str = CRATE_NAME;
 
 pub mod manifest;
+pub mod project;
 mod source_map;
 mod stdlib;
 
@@ -76,6 +77,27 @@ pub struct CompileResult {
 /// `sources` must be non-empty. Passing exactly one source produces
 /// the same result as the legacy [`compile`] entry point.
 pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
+    compile_workspace_as(sources, juxc_backend_rust::lower_workspace)
+}
+
+/// Generic core of [`compile_workspace`]: runs the full front end over
+/// `sources` (with the stdlib auto-prepended) and, on success, lowers the
+/// typed units to a [`RustCrate`] using the caller-supplied `lower`
+/// function.
+///
+/// This lets the project/workspace build path choose between
+/// [`juxc_backend_rust::lower_workspace`] (binary crate) and
+/// [`juxc_backend_rust::lower_workspace_lib`] (library crate) without
+/// duplicating the lex/parse/resolve/tycheck plumbing.
+pub fn compile_workspace_as<F>(sources: Vec<SourceFile>, lower: F) -> Result<CompileResult>
+where
+    F: FnOnce(
+        &[juxc_ast::CompilationUnit],
+        &juxc_tycheck::SymbolTable,
+        &std::collections::HashMap<juxc_source::Span, juxc_tycheck::Ty>,
+        &[SourceFile],
+    ) -> RustCrate,
+{
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     if sources.is_empty() {
         return Ok(CompileResult { crate_: None, diagnostics, sources: Vec::new() });
@@ -131,12 +153,7 @@ pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
         // wrapped in its package modules. The first source file's
         // path drives source-map markers for the `main` unit; the
         // others get their own markers via per-unit source refs.
-        Some(juxc_backend_rust::lower_workspace(
-            &units,
-            &typed.symbols,
-            &typed.expr_types,
-            &sources,
-        ))
+        Some(lower(&units, &typed.symbols, &typed.expr_types, &sources))
     };
 
     Ok(CompileResult { crate_, diagnostics, sources })
@@ -473,6 +490,155 @@ pub fn build_with_manifest(
         .join(format!("{crate_name}{}", std::env::consts::EXE_SUFFIX));
 
     Ok(BuildArtifact { crate_dir: crate_dir.to_path_buf(), binary_path })
+}
+
+/// Materialize and build a [`RustCrate`] for a specific
+/// [`juxc_backend_rust::CrateTarget`] — the manifest-driven build path for
+/// the multi-module project model.
+///
+/// Unlike [`build_with_manifest`] (which always emits a single binary named
+/// `crate_name`), this:
+///
+/// - emits the `Cargo.toml` via
+///   [`juxc_backend_rust::cargo_toml_for_target`], so a
+///   [`CrateTarget::Bin`](juxc_backend_rust::CrateTarget::Bin) produces a
+///   `[[bin]]` literally named from the target (Phase 1 proof: a
+///   `[[bin]] name="myapp"` project produces `myapp(.exe)`), and a
+///   [`CrateTarget::Lib`](juxc_backend_rust::CrateTarget::Lib) produces a
+///   `[lib]` with the requested `crate-type` and **no** binary;
+/// - threads `path_deps` into `[dependencies]` so an emitted crate can
+///   path-depend on a sibling emitted crate (workspace linking seam);
+/// - sets `in_workspace` to omit the per-crate `[workspace]` opt-out when
+///   the crate is a member of an emitted Cargo workspace.
+///
+/// The returned [`BuildArtifact::binary_path`] points at the produced
+/// executable for a `Bin` target; for a `Lib` target it points at the
+/// emitted crate dir's expected library artifact under `target/<profile>/`
+/// (the file name follows Cargo's `lib<name>` convention, but callers
+/// usually only need to know the build succeeded).
+pub fn build_emitted_crate(
+    crate_: &RustCrate,
+    crate_dir: &Path,
+    target: &juxc_backend_rust::CrateTarget,
+    release: bool,
+    manifest: Option<&Manifest>,
+    path_deps: &[juxc_backend_rust::PathDep],
+    in_workspace: bool,
+) -> Result<BuildArtifact> {
+    fs::create_dir_all(crate_dir.join("src"))
+        .with_context(|| format!("creating emitted crate dir {}", crate_dir.display()))?;
+
+    // The emitted prelude unconditionally references
+    // `futures::channel::oneshot` (for the `Task<T>` / `Worker` helpers),
+    // so `futures` is a hard dependency of every emitted Jux crate — even
+    // ones that never use async. This mirrors the legacy
+    // `build_with_manifest`, which passes `uses_async = true` to the
+    // Cargo.toml emitter unconditionally. The ~3-4s one-time `futures`
+    // compile is cached across builds.
+    let uses_async = true;
+
+    let cargo_meta = manifest
+        .map(|m| m.package.to_cargo_meta())
+        .unwrap_or_default();
+    let cargo_toml = juxc_backend_rust::cargo_toml_for_target(
+        target,
+        uses_async,
+        &cargo_meta,
+        path_deps,
+        in_workspace,
+    );
+    fs::write(crate_dir.join("Cargo.toml"), &cargo_toml)
+        .with_context(|| format!("writing Cargo.toml to {}", crate_dir.display()))?;
+
+    // Windows-resource build script (icon / version-info) — same logic as
+    // the legacy path. Only fires when the metadata calls for it.
+    if cargo_meta.needs_build_script() {
+        let icon_in_crate = if let Some(m) = manifest {
+            copy_icon_into_crate(m, crate_dir)?
+        } else {
+            None
+        };
+        // ProductName for a lib falls back to the lib name; for a bin to
+        // the binary name. Use the target's name.
+        let target_name = match target {
+            juxc_backend_rust::CrateTarget::Bin { name } => name.as_str(),
+            juxc_backend_rust::CrateTarget::Lib { name, .. } => name.as_str(),
+        };
+        let build_rs = generate_build_rs(&cargo_meta, target_name, icon_in_crate.as_deref());
+        fs::write(crate_dir.join("build.rs"), &build_rs)
+            .with_context(|| format!("writing build.rs to {}", crate_dir.display()))?;
+    } else {
+        let stale = crate_dir.join("build.rs");
+        if stale.exists() {
+            let _ = fs::remove_file(stale);
+        }
+    }
+
+    // Write each emitted source file.
+    let mut written_rs: Vec<PathBuf> = Vec::with_capacity(crate_.sources.len());
+    for (rel_path, content) in &crate_.sources {
+        let full = crate_dir.join(rel_path);
+        if let Some(parent) = full.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("creating parent dir for {}", full.display()))?;
+        }
+        fs::write(&full, content)
+            .with_context(|| format!("writing source file {}", full.display()))?;
+        if rel_path.ends_with(".rs") {
+            written_rs.push(full);
+        }
+    }
+
+    run_rustfmt(&written_rs);
+
+    // Run `cargo build`.
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build").arg("--quiet");
+    if release {
+        cmd.arg("--release");
+    }
+    let output = cmd
+        .current_dir(crate_dir)
+        .output()
+        .with_context(|| format!("invoking `cargo build` in {}", crate_dir.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Map emitted-Rust anchors back to `.jux` sites via markers in the
+        // primary emitted file (main.rs for bins, lib.rs for libs).
+        let primary = crate_
+            .sources
+            .iter()
+            .find(|(p, _)| p == "src/main.rs" || p == "src/lib.rs")
+            .map(|(_, c)| c.as_str())
+            .unwrap_or("");
+        let map = source_map::MarkerMap::from_emitted_source(primary);
+        let rewritten = source_map::rewrite_rustc_output(&stderr, &map);
+        anyhow::bail!(
+            "`cargo build` failed for the emitted Rust crate (this is a juxc bug):\n{rewritten}",
+        );
+    }
+
+    // Compute the produced-artifact path.
+    let profile_dir = if release { "release" } else { "debug" };
+    let out_dir = crate_dir.join("target").join(profile_dir);
+    let binary_path = match target {
+        juxc_backend_rust::CrateTarget::Bin { name } => {
+            out_dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+        }
+        juxc_backend_rust::CrateTarget::Lib { name, .. } => {
+            // Best-effort: the rlib Cargo produces is `lib<name>.rlib`.
+            // Callers usually only check that the build succeeded.
+            out_dir.join(format!("lib{}.rlib", sanitize_crate(name)))
+        }
+    };
+
+    Ok(BuildArtifact { crate_dir: crate_dir.to_path_buf(), binary_path })
+}
+
+/// Sanitize a name for use in a Cargo library file-name lookup: Cargo
+/// lower-cases nothing but replaces `-` with `_` in the produced rlib name.
+fn sanitize_crate(name: &str) -> String {
+    name.replace('-', "_")
 }
 
 /// Copy the manifest's `icon` (a `.ico` resolved against the project

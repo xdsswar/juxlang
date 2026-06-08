@@ -3980,3 +3980,48 @@ fn static_property_uses_class_path_accessors() {
     assert!(rust.contains("P::Count()"), "static getter call missing: {rust}");
     assert!(rust.contains("P::__set_Count("), "static setter call missing: {rust}");
 }
+
+// ===========================================================================
+// Multi-module project model — Cargo.toml target emission (§B.2)
+// ===========================================================================
+
+#[test]
+fn cargo_toml_bin_target_uses_manifest_name() {
+    let target = CrateTarget::Bin { name: "myapp".to_string() };
+    let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &[], false);
+    // The [[bin]] name is the manifest-driven name, not `jux_emitted`.
+    assert!(toml.contains("[[bin]]\nname = \"myapp\""), "{toml}");
+    assert!(toml.contains("path = \"src/main.rs\""), "{toml}");
+    assert!(!toml.contains("[lib]"), "{toml}");
+    // Stand-alone crate gets the [workspace] opt-out.
+    assert!(toml.contains("[workspace]"), "{toml}");
+}
+
+#[test]
+fn cargo_toml_lib_target_emits_crate_type() {
+    let target = CrateTarget::Lib {
+        name: "mylib".to_string(),
+        crate_type: vec!["lib".to_string(), "cdylib".to_string()],
+    };
+    let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &[], false);
+    assert!(toml.contains("[lib]\npath = \"src/lib.rs\""), "{toml}");
+    assert!(toml.contains("crate-type = [\"lib\", \"cdylib\"]"), "{toml}");
+    // A library target emits no [[bin]].
+    assert!(!toml.contains("[[bin]]"), "{toml}");
+}
+
+#[test]
+fn cargo_toml_path_dep_and_workspace_member() {
+    let target = CrateTarget::Bin { name: "app".to_string() };
+    let deps = vec![PathDep {
+        crate_name: "greeter".to_string(),
+        rel_path: "../lib-greeter".to_string(),
+    }];
+    // in_workspace = true → the per-crate [workspace] opt-out is omitted.
+    let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &deps, true);
+    assert!(
+        toml.contains("greeter = { path = \"../lib-greeter\" }"),
+        "{toml}"
+    );
+    assert!(!toml.contains("\n[workspace]\n"), "{toml}");
+}

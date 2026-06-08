@@ -256,6 +256,36 @@ pub fn lower_workspace(
     e.finish()
 }
 
+/// Library variant of [`lower_workspace`].
+///
+/// Lowers the units exactly as [`lower_workspace`] does (same package-tree
+/// wrapping, same wrapper-class analysis) but produces a **library** crate:
+/// the emitted Rust lands in `src/lib.rs` and **no** `fn main()` shim is
+/// emitted (a library has no entry point). This is the Phase-1 `[lib]`
+/// target — its `pub mod <pkg>` tree exposes the package's public items so
+/// a dependent crate could `use <libcrate>::<pkg>::Type` against it.
+///
+/// Used by the project/workspace build path; loose-file compiles continue
+/// to use the binary-producing [`lower_workspace`].
+pub fn lower_workspace_lib(
+    units: &[CompilationUnit],
+    symbols: &SymbolTable,
+    expr_types: &HashMap<Span, Ty>,
+    sources: &[SourceFile],
+) -> RustCrate {
+    // Reuse the binary lowering, then re-key its single source file from
+    // `src/main.rs` to `src/lib.rs`. Because a library has no `main()`,
+    // `emit_workspace_main_shim` already emitted nothing, so the content
+    // is exactly the package-module tree — valid as a `lib.rs`.
+    let mut produced = lower_workspace(units, symbols, expr_types, sources);
+    for (path, _content) in &mut produced.sources {
+        if path == "src/main.rs" {
+            *path = "src/lib.rs".to_string();
+        }
+    }
+    produced
+}
+
 /// Same as [`lower_workspace`], but emits a **test-runner main**
 /// instead of the regular `void main()` shim.
 ///
@@ -2455,6 +2485,158 @@ pub fn cargo_toml_for_with_meta(name: &str, uses_async: bool, meta: &CargoMeta) 
          \n\
          [workspace]\n",
     )
+}
+
+/// Describes the target shape of an emitted crate: a single binary, or a
+/// library with a chosen `crate-type`. Drives [`cargo_toml_for_target`].
+///
+/// This is the Phase-1 manifest-driven extension: a `[[bin]] name="myapp"`
+/// project emits a `[[bin]]` whose `name` is literally `myapp`, and a
+/// `[lib]` project emits `[lib]` with the requested `crate-type`.
+#[derive(Debug, Clone)]
+pub enum CrateTarget {
+    /// A single executable. The crate's source root is `src/main.rs` and
+    /// the produced binary is named `name`.
+    Bin {
+        /// Binary (and produced-file) name.
+        name: String,
+    },
+    /// A library. The crate's source root is `src/lib.rs`. `crate_type` is
+    /// the Cargo `crate-type` list (e.g. `["lib"]`, `["cdylib"]`); empty
+    /// means the Cargo default (`["lib"]`).
+    Lib {
+        /// Library crate name (the `[package] name`).
+        name: String,
+        /// Cargo `crate-type` list. Empty → omitted (Cargo default `lib`).
+        crate_type: Vec<String>,
+    },
+}
+
+/// A single path-dependency line for the emitted `[dependencies]` table:
+/// a crate name and the relative path to the sibling emitted crate.
+#[derive(Debug, Clone)]
+pub struct PathDep {
+    /// The Rust crate name the dependency was emitted as.
+    pub crate_name: String,
+    /// Relative path (from this crate's dir) to the dependency crate dir.
+    pub rel_path: String,
+}
+
+/// Build the `Cargo.toml` for an emitted crate of a given [`CrateTarget`],
+/// with optional package metadata and path-dependencies.
+///
+/// This is the manifest-driven successor to [`cargo_toml_for_with_meta`]:
+///
+/// - [`CrateTarget::Bin`] emits a `[[bin]]` whose `name` is the requested
+///   binary name and whose `path` is `src/main.rs`.
+/// - [`CrateTarget::Lib`] emits a `[lib]` block (`path = "src/lib.rs"`,
+///   plus `crate-type` when non-empty). No `[[bin]]` is emitted.
+///
+/// `path_deps` produces `name = { path = "..." }` lines under
+/// `[dependencies]`, used by workspace path-dependencies so an emitted
+/// `app` crate links against an emitted `greeter` crate.
+///
+/// `in_workspace` controls the trailing `[workspace]` opt-out table:
+/// stand-alone emitted crates need the empty `[workspace]` to escape any
+/// enclosing Cargo workspace, but a member of an *emitted* Cargo workspace
+/// must NOT carry its own `[workspace]` (cargo rejects nested workspaces).
+#[allow(clippy::too_many_arguments)]
+pub fn cargo_toml_for_target(
+    target: &CrateTarget,
+    uses_async: bool,
+    meta: &CargoMeta,
+    path_deps: &[PathDep],
+    in_workspace: bool,
+) -> String {
+    let pkg_name = match target {
+        CrateTarget::Bin { name } => name,
+        CrateTarget::Lib { name, .. } => name,
+    };
+    let version = meta.version.as_deref().unwrap_or("0.0.0");
+    let mut pkg = format!(
+        "[package]\n\
+         name = \"{name}\"\n\
+         version = \"{version}\"\n\
+         edition = \"2021\"\n\
+         publish = false\n",
+        name = escape_toml(pkg_name),
+        version = escape_toml(version),
+    );
+    if !meta.authors.is_empty() {
+        let list = meta
+            .authors
+            .iter()
+            .map(|a| format!("\"{}\"", escape_toml(a)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        pkg.push_str(&format!("authors = [{list}]\n"));
+    }
+    if let Some(desc) = &meta.description {
+        pkg.push_str(&format!("description = \"{}\"\n", escape_toml(desc)));
+    }
+    if let Some(lic) = &meta.license {
+        pkg.push_str(&format!("license = \"{}\"\n", escape_toml(lic)));
+    }
+    if let Some(hp) = &meta.homepage {
+        pkg.push_str(&format!("homepage = \"{}\"\n", escape_toml(hp)));
+    }
+    if let Some(repo) = &meta.repository {
+        pkg.push_str(&format!("repository = \"{}\"\n", escape_toml(repo)));
+    }
+    if meta.needs_build_script() {
+        pkg.push_str("build = \"build.rs\"\n");
+    }
+
+    // [dependencies] — futures (when async is used) plus any path deps.
+    let mut deps = String::new();
+    if uses_async || !path_deps.is_empty() {
+        deps.push_str("[dependencies]\n");
+        if uses_async {
+            deps.push_str("futures = \"0.3\"\n");
+        }
+        for d in path_deps {
+            deps.push_str(&format!(
+                "{} = {{ path = \"{}\" }}\n",
+                d.crate_name,
+                escape_toml(&d.rel_path),
+            ));
+        }
+        deps.push('\n');
+    }
+
+    let build_deps = if meta.needs_build_script() {
+        "[build-dependencies]\nwinresource = \"0.1\"\n\n"
+    } else {
+        ""
+    };
+
+    // The target block: [[bin]] or [lib].
+    let target_block = match target {
+        CrateTarget::Bin { name } => format!(
+            "[[bin]]\nname = \"{}\"\npath = \"src/main.rs\"\n\n",
+            escape_toml(name),
+        ),
+        CrateTarget::Lib { crate_type, .. } => {
+            let mut b = String::from("[lib]\npath = \"src/lib.rs\"\n");
+            if !crate_type.is_empty() {
+                let list = crate_type
+                    .iter()
+                    .map(|t| format!("\"{}\"", escape_toml(t)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                b.push_str(&format!("crate-type = [{list}]\n"));
+            }
+            b.push('\n');
+            b
+        }
+    };
+
+    // A stand-alone emitted crate needs the empty `[workspace]` opt-out so
+    // cargo doesn't try to attach it to an enclosing workspace. A member of
+    // an emitted workspace must omit it.
+    let workspace_tail = if in_workspace { "" } else { "[workspace]\n" };
+
+    format!("{pkg}\n{deps}{build_deps}{target_block}{workspace_tail}")
 }
 
 /// Escape a string for safe inclusion inside a double-quoted TOML basic
