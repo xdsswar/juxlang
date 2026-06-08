@@ -473,7 +473,19 @@ impl RustEmitter {
         // exists up the chain (`legs` field + `legs()` method).
         let prev_callee = self.emitting_call_callee;
         self.emitting_call_callee = true;
+        // Clear the borrow-context flags while emitting the callee. The
+        // *receiver* of a method call (`recv.method()`) is a fresh
+        // evaluation, never a Display/comparison slot itself — only the
+        // call's RESULT flows into the surrounding format-arg /
+        // comparison position. Leaving these set would wrongly suppress
+        // the statement-scoped clone on a wrapper-borrowed field receiver
+        // (`$"${this.item.greet()}"` → the `.item` read through
+        // `.0.borrow()` must clone out before `.greet()` takes `&mut`).
+        let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
+        let prev_cmp = std::mem::take(&mut self.emitting_comparison_operand);
         self.emit_expr(&call.callee);
+        self.emitting_format_arg = prev_fmt;
+        self.emitting_comparison_operand = prev_cmp;
         self.emitting_call_callee = prev_callee;
         self.w.push('(');
         // Same flag discipline as above: a regular call's args

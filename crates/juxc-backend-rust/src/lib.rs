@@ -745,9 +745,13 @@ pub(crate) fn compute_wrapper_classes(
             if cd.is_sealed || !cd.permits.is_empty() {
                 return false;
             }
-            if !cd.generic_params.is_empty() {
-                return false;
-            }
+            // Generic classes ARE wrappable now (Phase A GENERICS pass):
+            // the generic params + their `T: Clone` bound thread onto the
+            // `C_Inner<T>` struct, the `C<T>` newtype, and every `impl<T:
+            // Clone>` block (see `emit_wrapper_class_decl`). We no longer
+            // exclude on a non-empty `generic_params` list — only sealed,
+            // intrinsic, subclass-of-sealed, and exception/Throwable-chain
+            // classes stay on the legacy path.
             if is_intrinsic_class(pkg, &cd.name.text) {
                 return false;
             }

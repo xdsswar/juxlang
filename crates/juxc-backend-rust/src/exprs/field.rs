@@ -270,7 +270,25 @@ impl RustEmitter {
         //   `PartialOrd`, so the clone is redundant.
         let in_borrow_context =
             self.emitting_format_arg || self.emitting_comparison_operand;
-        if !self.emitting_lvalue && !in_borrow_context && self.field_read_needs_clone(f) {
+        // **Wrapper-borrow clone (statement-scoped borrow discipline).**
+        // When the read went through a `.0.borrow()` guard, the field
+        // value lives inside a temporary `Ref` that drops at the end of
+        // the statement. A non-`Copy` field used as a method-call
+        // *receiver* (`a.f.g()`) — or any owning position — must be
+        // cloned OUT of the guard so the `.g()` call (which may need
+        // `&mut`) operates on an owned value, not through the immutable
+        // `Ref`. The span-keyed `field_read_needs_clone` can miss the
+        // type when the receiver is `this` (no `expr_types` entry), so
+        // we additionally resolve the field's declared type through the
+        // owning class chain here. This is exactly the `a.f.g()` →
+        // "clone `f`, drop the guard, then `.g()`" rule from §CR.4.1.
+        let wrapper_borrow_clone = wrapper_depth.is_some()
+            && !self.emitting_lvalue
+            && !in_borrow_context
+            && self.wrapper_field_read_needs_clone(&f.object, &f.field.text);
+        if wrapper_borrow_clone
+            || (!self.emitting_lvalue && !in_borrow_context && self.field_read_needs_clone(f))
+        {
             self.w.push_str(".clone()");
         }
     }
@@ -440,6 +458,57 @@ impl RustEmitter {
             depth += 1;
         }
         None
+    }
+
+    /// True when an instance field named `field_name` on the wrapper
+    /// class that `recv` evaluates to is non-`Copy` (so a read through a
+    /// `.0.borrow()` guard must be cloned out — §CR.4.1 statement-scoped
+    /// borrow discipline). Resolves the owning class the same way
+    /// [`Self::wrapper_field_parent_depth`] does — `this`/`self` map to
+    /// `enclosing_class`, everything else to the receiver's recorded
+    /// type — then walks the `extends` chain to find the field's declared
+    /// [`Ty`] (generic-params-aware, so a `T`-typed field lands as
+    /// [`Ty::Param`]). This complements the span-keyed
+    /// [`Self::field_read_needs_clone`], which can miss when the receiver
+    /// is `this` (no `expr_types` entry for the `This` node).
+    pub(crate) fn wrapper_field_read_needs_clone(&self, recv: &Expr, field_name: &str) -> bool {
+        let class_bare: Option<String> = if matches!(recv, Expr::This(_)) {
+            self.enclosing_class.clone()
+        } else {
+            self.receiver_class_bare(recv)
+        };
+        let Some(start) = class_bare else { return false };
+        // Walk `start`'s extends chain for the field, mapping a
+        // type-parameter field to `Ty::Param` via the owning class's
+        // generic-params list.
+        let mut cursor: Option<String> = Some(start);
+        let mut depth = 0usize;
+        while let Some(name) = cursor {
+            if depth > 64 {
+                return false;
+            }
+            let Some(sig) = self.lookup_class_by_bare_or_fqn(&name) else {
+                return false;
+            };
+            if let Some(field) = sig.fields.get(field_name) {
+                if field.is_static {
+                    return false;
+                }
+                let params: std::collections::HashSet<&str> = sig
+                    .generic_params
+                    .iter()
+                    .map(|p| p.name.text.as_str())
+                    .collect();
+                let ty = crate::exprs::ty_kind_from_ref_with_params(&field.ty, &params);
+                return self.ty_needs_clone_on_field_read(&ty);
+            }
+            cursor = sig
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            depth += 1;
+        }
+        false
     }
 
     pub(crate) fn emit_safe_field(&mut self, f: &FieldExpr) {

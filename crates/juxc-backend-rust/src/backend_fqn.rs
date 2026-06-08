@@ -250,11 +250,18 @@ impl crate::RustEmitter {
             // 2. Fallback suffix scan — works for same-package
             //    siblings and any class whose bare name matches
             //    the source token (the common single-file or
-            //    no-alias case).
-            for fqn in self.symbols.classes.keys() {
-                if fqn_bare(fqn) == bare.as_str() {
-                    return Some(fqn.clone());
-                }
+            //    no-alias case). Pick the lexicographically smallest
+            //    match: `classes` is a `HashMap`, so returning "the
+            //    first match" would be non-deterministic across runs
+            //    on a bare-name collision (flaky codegen).
+            if let Some(fqn) = self
+                .symbols
+                .classes
+                .keys()
+                .filter(|fqn| fqn_bare(fqn) == bare.as_str())
+                .min()
+            {
+                return Some(fqn.clone());
             }
         }
         None

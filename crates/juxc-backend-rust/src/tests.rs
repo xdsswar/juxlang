@@ -1873,9 +1873,12 @@ fn generic_record_emits_clone_bound_and_generic_fields() {
 // Generics (Turn 1) — generic class declarations + uses
 // ----------------------------------------------------------------------
 
-/// `class Box<T> { T value; … }` lowers to a Rust struct with the
-/// declared parameter list, a Clone derive, and a `T: Clone`-bounded
-/// impl block. The generic-typed field uses Rust's `T` directly.
+/// `class Box<T> { T value; … }` lowers to the shared-mutation
+/// **wrapper** shape (class-representation Phase A GENERICS pass): a
+/// `Box_Inner<T: Clone>` struct holding the field, a
+/// `Box<T: Clone>(Rc<RefCell<Box_Inner<T>>>)` newtype, and a
+/// `T: Clone`-bounded inherent `impl`. The generic-typed field read
+/// goes through the statement-scoped `self.0.borrow().value.clone()`.
 #[test]
 fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
     let rust = emit(
@@ -1892,11 +1895,57 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
         "#,
     );
     assert!(rust.contains("#[derive(Clone, Debug)]"), "derive(Clone, Debug): {rust}");
-    assert!(rust.contains("pub struct Box<T> {"), "struct header: {rust}");
+    // Inner struct carries the generic params + the Clone bound.
+    assert!(rust.contains("pub struct Box_Inner<T: Clone> {"), "inner header: {rust}");
     assert!(rust.contains("value: T,"), "generic field: {rust}");
+    // Newtype wraps the generic inner in Rc<RefCell<…>>, threading args.
+    assert!(
+        rust.contains("pub struct Box<T: Clone>(std::rc::Rc<std::cell::RefCell<Box_Inner<T>>>);"),
+        "newtype: {rust}",
+    );
     assert!(rust.contains("impl<T: Clone> Box<T> {"), "impl bound: {rust}");
-    // Method body auto-clones the generic field on read.
-    assert!(rust.contains("self.value.clone()"), "generic-field clone: {rust}");
+    // `new_inner` return type threads the generic args.
+    assert!(rust.contains("pub fn new_inner(value: T) -> Box_Inner<T>"), "new_inner ret: {rust}");
+    // Method body reads the generic field through a scoped borrow + clone.
+    assert!(rust.contains("self.0.borrow().value.clone()"), "scoped-borrow read: {rust}");
+}
+
+/// A generic wrapper class shares mutation through its `Rc<RefCell>`:
+/// `var y = x` clones the `Rc` (refcount bump), so a `set` through one
+/// alias is observable through the other. This nails down the Java
+/// reference-semantics contract for generic classes — the whole point
+/// of routing them through the wrapper shape.
+#[test]
+fn generic_class_alias_shares_mutation_through_rc_refcell() {
+    let rust = emit(
+        r#"
+        public class Holder<T> {
+            private T v;
+            public Holder(T v) { this.v = v; }
+            public T get() { return this.v; }
+            public void set(T v) { this.v = v; }
+        }
+        public void main() {
+            var x = new Holder<int>(1);
+            var y = x;
+            y.set(9);
+            print(x.get());
+        }
+        "#,
+    );
+    // Newtype + inner are the wrapper shape (shared cell).
+    assert!(
+        rust.contains("pub struct Holder<T: Clone>(std::rc::Rc<std::cell::RefCell<Holder_Inner<T>>>);"),
+        "newtype: {rust}",
+    );
+    // `var y = x` aliases through the newtype's derived Clone — the
+    // `.clone()` bumps the shared `Rc` refcount (it does NOT deep-copy
+    // the cell), so both names point at one `RefCell`. (`y` is promoted
+    // to `let mut` because `y.set(...)` calls a mutating method.)
+    assert!(rust.contains("y = x.clone()"), "alias rebind via Rc clone: {rust}");
+    // The setter writes through a scoped `borrow_mut()`, so the mutation
+    // lands in the shared cell and is visible through `x`.
+    assert!(rust.contains("borrow_mut()"), "scoped write: {rust}");
 }
 
 /// Explicit construction `new Box<int>(7)` lowers to the Rust

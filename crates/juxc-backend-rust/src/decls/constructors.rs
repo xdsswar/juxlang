@@ -364,6 +364,12 @@ impl RustEmitter {
         }
         self.w.push_str(") -> ");
         self.w.push_str(&inner);
+        // Thread the class's generic params onto the inner return type:
+        // `pub fn new_inner(value: T) -> Box_Inner<T>`. `T` is in scope
+        // because the enclosing `impl<T: Clone> Box<T>` declares it. The
+        // `C_Inner { … }` literal in the body needs no turbofish — Rust
+        // infers the args from the field initializers.
+        self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(" {\n");
         self.w.indent_inc();
 
@@ -565,6 +571,9 @@ impl RustEmitter {
         self.w.emit_indent();
         self.w.push_str("pub fn new_inner() -> ");
         self.w.push_str(&inner);
+        // Thread generic params onto the inner return type, same as the
+        // explicit-ctor path (`pub fn new_inner() -> Box_Inner<T>`).
+        self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.w.emit_indent();

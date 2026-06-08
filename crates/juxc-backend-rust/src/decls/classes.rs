@@ -537,8 +537,17 @@ impl RustEmitter {
         // The inner struct is `pub` so the wrapper (and any
         // same-crate path) can name it; the user-facing visibility
         // lives on the newtype below.
+        //
+        // **Generics (Phase A GENERICS pass).** A generic class
+        // `class Box<T> { T value; }` lowers its inner to
+        // `pub struct Box_Inner<T: Clone> { value: T }`. The `T: Clone`
+        // bound mirrors the legacy generic-class path — reads of a
+        // generic-typed field auto-`.clone()`, so the param has to carry
+        // the bound (a `#[derive(Clone)]` on a generic struct only Clones
+        // when its params do). Non-generic classes emit no `<…>` at all.
         self.w.push_str("pub struct ");
         self.w.push_str(&inner);
+        self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         // **Inheritance embed (§CR.3.5 / §CR.5.1).** When this wrapper
@@ -555,7 +564,15 @@ impl RustEmitter {
                 self.w.emit_indent();
                 self.w.push_str("__parent: ");
                 self.w.push_str(&seg.text);
-                self.w.push_str("_Inner,\n");
+                self.w.push_str("_Inner");
+                // Thread the parent's generic args onto its inner type
+                // (`extends Container<int>` → `__parent: Container_Inner<isize>`).
+                // Without this, a child that binds its parent's type
+                // parameter to a concrete type (`IntBox extends
+                // Container<int>`) would reference a bare `Container_Inner`
+                // and rustc would demand the missing `<…>`.
+                self.emit_parent_inner_generic_args(parent_ty);
+                self.w.push_str(",\n");
             }
         }
         for field in &class_decl.fields {
@@ -576,21 +593,32 @@ impl RustEmitter {
         self.w.line("}");
         self.w.newline();
 
-        // ---- the newtype handle: C(Rc<RefCell<C_Inner>>) ----
+        // ---- the newtype handle: C<T>(Rc<RefCell<C_Inner<T>>>) ----
+        // The newtype declares the generic params (with the `T: Clone`
+        // bound so the derived `Clone` resolves) and threads them onto
+        // the inner type inside the `Rc<RefCell<…>>`. `Debug` is *not*
+        // bounded here — it flows through `Rc<RefCell<C_Inner<T>>>: Debug`
+        // whenever `C_Inner<T>: Debug`, which holds when `T: Debug`; the
+        // derive emits the right `where` clause for us.
         self.w.line("#[derive(Clone, Debug)]");
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("struct ");
         self.w.push_str(name);
+        self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
         self.w.push_str("(std::rc::Rc<std::cell::RefCell<");
         self.w.push_str(&inner);
+        self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(">>);\n");
         self.w.newline();
 
-        // ---- impl C { … } ----
+        // ---- impl[<T: Clone>] C<T> { … } ----
         self.w.emit_indent();
-        self.w.push_str("impl ");
+        self.w.push_str("impl");
+        self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+        self.w.push(' ');
         self.w.push_str(name);
+        self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(" {\n");
 
         // Static `final` fields → `pub const` associated items, same
@@ -648,13 +676,25 @@ impl RustEmitter {
         if let Some(parent_ty) = &class_decl.extends {
             if let Some(parent_bare) = parent_ty.name.segments.last().map(|s| s.text.as_str()) {
                 if self.wrapper_classes.contains(parent_bare) {
+                    // `impl[<T: Clone>] From<Child<T>> for Parent<pargs> { … }`.
+                    // The child's own generic params (with the Clone bound)
+                    // travel onto the impl header and onto `Child<T>`; the
+                    // PARENT's type args come from the `extends` clause
+                    // (`extends Container<int>` → `for Container<isize>`),
+                    // so a child that binds its parent's `T` to a concrete
+                    // type upcasts into the right monomorphization.
                     self.w.emit_indent();
-                    self.w.push_str("impl From<");
+                    self.w.push_str("impl");
+                    self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+                    self.w.push_str(" From<");
                     self.w.push_str(name);
+                    self.emit_generic_params_as_args(&class_decl.generic_params);
                     self.w.push_str("> for ");
                     self.w.push_str(parent_bare);
+                    self.emit_parent_newtype_generic_args(parent_ty);
                     self.w.push_str(" { fn from(v: ");
                     self.w.push_str(name);
+                    self.emit_generic_params_as_args(&class_decl.generic_params);
                     self.w.push_str(") -> Self { ");
                     self.w.push_str(parent_bare);
                     self.w.push_str(
@@ -678,29 +718,77 @@ impl RustEmitter {
         // reuse the existing emitters unchanged — they delegate to the
         // inherent methods we just emitted on the newtype, and the
         // newtype is the only `C` Rust knows about.
-        for op in &class_decl.operators {
-            self.emit_operator_trait_impl(name, op);
-        }
-        let has_eq = class_decl
-            .operators
-            .iter()
-            .any(|o| o.kind == OperatorKind::Eq);
-        let has_hash = class_decl
-            .operators
-            .iter()
-            .any(|o| o.kind == OperatorKind::Hash);
-        let has_cmp = class_decl
-            .operators
-            .iter()
-            .any(|o| o.kind == OperatorKind::Cmp);
-        if has_cmp && !has_eq {
-            self.emit_partial_eq_from_cmp(name);
-        }
-        if has_eq && has_hash {
-            self.emit_eq_marker(name);
+        //
+        // **Non-generic gate on operator trait impls.** Same as the
+        // legacy path (`emit_class_decl`): `emit_operator_trait_impl` /
+        // `emit_partial_eq_from_cmp` / `emit_eq_marker` don't yet
+        // propagate the `T: PartialEq` / `T: Hash` bounds a generic
+        // operator overload would need, so they're emitted only for
+        // non-generic classes. A generic class with operators keeps its
+        // inherent `__op_*` methods (emitted above) but no trait bridge —
+        // matching the deferral the legacy path documents.
+        if class_decl.generic_params.is_empty() {
+            for op in &class_decl.operators {
+                self.emit_operator_trait_impl(name, op);
+            }
+            let has_eq = class_decl
+                .operators
+                .iter()
+                .any(|o| o.kind == OperatorKind::Eq);
+            let has_hash = class_decl
+                .operators
+                .iter()
+                .any(|o| o.kind == OperatorKind::Hash);
+            let has_cmp = class_decl
+                .operators
+                .iter()
+                .any(|o| o.kind == OperatorKind::Cmp);
+            if has_cmp && !has_eq {
+                self.emit_partial_eq_from_cmp(name);
+            }
+            if has_eq && has_hash {
+                self.emit_eq_marker(name);
+            }
         }
         self.emit_class_trait_impls(class_decl);
         self.emit_class_marker_trait(class_decl);
+    }
+
+    /// Emit the parent's generic args as a `<…>` suffix on its **inner**
+    /// type — used for the `__parent: Parent_Inner<…>` embed in a wrapper
+    /// child's `C_Inner`. The args come straight from the `extends`
+    /// clause (`extends Container<int>` carries `generic_args = [int]`),
+    /// so a child that binds its parent's type parameter to a concrete
+    /// type pins the right `Parent_Inner` monomorphization. A child that
+    /// passes its OWN type parameter through (`class Wrap<T> extends
+    /// Container<T>`) emits `Container_Inner<T>`, which resolves because
+    /// `T` is in scope on the child's inner struct. No-op when the parent
+    /// has no generic args.
+    ///
+    /// Field-position arg mapping is used (Jux `String` → owned Rust
+    /// `String`) so a stored `__parent` slot doesn't carry an elided
+    /// lifetime — same rule the field-type emitter applies.
+    fn emit_parent_inner_generic_args(&mut self, parent_ty: &juxc_ast::TypeRef) {
+        if parent_ty.generic_args.is_empty() {
+            return;
+        }
+        self.w.push('<');
+        for (i, arg) in parent_ty.generic_args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.emit_generic_arg_type_as_rust(arg);
+        }
+        self.w.push('>');
+    }
+
+    /// Emit the parent's generic args as a `<…>` suffix on its **newtype**
+    /// — used in the `From<Child<…>> for Parent<…>` upcast header. Same
+    /// args and same mapping as [`Self::emit_parent_inner_generic_args`];
+    /// kept as a separate seam so the two call sites read clearly even
+    /// though their bodies coincide today.
+    fn emit_parent_newtype_generic_args(&mut self, parent_ty: &juxc_ast::TypeRef) {
+        self.emit_parent_inner_generic_args(parent_ty);
     }
 
     /// Copy every concrete (non-abstract, non-static) inherited method
@@ -723,6 +811,19 @@ impl RustEmitter {
             .map(|m| m.name.text.clone())
             .collect();
         let mut cursor: Option<juxc_ast::TypeRef> = class_decl.extends.clone();
+        // **Generic-substitution accumulator (§CR.5.3).** When a child
+        // binds its parent's type parameter to a concrete type
+        // (`IntBox extends Container<int>`) the inherited method
+        // `name(&self) -> T` must lower as `-> isize`, NOT `-> T` (which
+        // isn't in scope on the non-generic child's impl). We walk the
+        // chain composing a `parent-param → concrete-type` map: at each
+        // ancestor, zip the ancestor's declared `generic_params` with the
+        // `extends`-clause `generic_args` that reach it, then apply the
+        // accumulated map to every copied method's signature. A child
+        // that threads its OWN param through (`class Wrap<U> extends
+        // Container<U>`) maps `T → U`, which stays in scope on `Wrap`.
+        let mut subst: std::collections::HashMap<String, juxc_ast::TypeRef> =
+            std::collections::HashMap::new();
         while let Some(parent_ref) = cursor {
             let Some(seg) = parent_ref.name.segments.first() else { break };
             let bare = seg.text.as_str();
@@ -737,6 +838,21 @@ impl RustEmitter {
                         .map(|(_, v)| v.clone())
                 });
             let Some(parent) = parent_decl else { break };
+            // Extend the substitution with this ancestor's bindings. The
+            // `generic_args` from the `extends` clause are themselves
+            // first run through the *current* subst so a child param
+            // threaded up two levels resolves to its concrete root
+            // (`A extends B<U>`, `B<X> extends C<X>` → `C`'s `X ↦ U`).
+            for (param, arg) in parent
+                .generic_params
+                .iter()
+                .zip(parent_ref.generic_args.iter())
+            {
+                if let juxc_ast::GenericArg::Type(arg_ty) = arg {
+                    let resolved = substitute_type_ref(arg_ty, &subst);
+                    subst.insert(param.name.text.clone(), resolved);
+                }
+            }
             let parent_methods = parent.methods.clone();
             let parent_extends = parent.extends.clone();
             for m in &parent_methods {
@@ -753,7 +869,16 @@ impl RustEmitter {
                     continue; // statics aren't instance methods
                 }
                 own_method_names.insert(m.name.text.clone());
-                self.emit_method(m);
+                // Apply the accumulated parent-param → concrete-type
+                // substitution to the copied method's signature so its
+                // return / param types read in the child's scope. No-op
+                // when `subst` is empty (non-generic parent).
+                if subst.is_empty() {
+                    self.emit_method(m);
+                } else {
+                    let substituted = substitute_fn_signature(m, &subst);
+                    self.emit_method(&substituted);
+                }
             }
             cursor = parent_extends;
         }
@@ -853,19 +978,17 @@ impl RustEmitter {
     /// during some isolated unit tests that bypass the symbol-
     /// table build.
     fn classsig_lookup_fqn(&self, bare: &str) -> Option<String> {
-        for (fqn, sig) in &self.symbols.classes {
-            if crate::backend_fqn::fqn_bare(fqn) == bare {
-                // Phase 1 simplification: pick the first match. The
-                // grammar caps `public` types per file so this only
-                // disambiguates across package boundaries, which the
-                // current emit doesn't yet need precisely (the
-                // marker walk only consults FQNs that came from the
-                // pre-resolved `extends_fqn`).
-                let _ = sig;
-                return Some(fqn.clone());
-            }
-        }
-        None
+        // Pick the lexicographically smallest matching FQN. `classes` is a
+        // `HashMap`, so iterating it directly and returning "the first match"
+        // is non-deterministic across runs when two packages share a bare
+        // name — that surfaced as flaky codegen (e.g. `stress_exceptions`
+        // sometimes building, sometimes not). `min()` makes the choice stable.
+        self.symbols
+            .classes
+            .keys()
+            .filter(|fqn| crate::backend_fqn::fqn_bare(fqn) == bare)
+            .min()
+            .cloned()
     }
 
     /// Emit one `impl Interface for Class { … delegating methods … }`
@@ -1737,6 +1860,78 @@ fn type_ref_mentions_any(
         }
     }
     false
+}
+
+/// Clone a method declaration with its **signature types** rewritten
+/// through `subst` (a `parent-type-param → concrete-type` map). Used by
+/// the wrapper inherited-method inlining pass so a generic parent's
+/// `name(&self) -> T` lowers as `-> isize` when copied into a child that
+/// bound `T` to `int` via `extends Container<int>`.
+///
+/// Only the return type and parameter types are substituted — the body
+/// is left verbatim. The body's `this.field` reads resolve through the
+/// `__parent`-walk + field-type lookup (which already monomorphizes the
+/// field's declared type), and value expressions inside it are emitted
+/// by the regular expression walkers, so a textual type-param rewrite of
+/// the body isn't needed for the signature to type-check.
+///
+/// A method that declares its OWN generic params shadowing a parent
+/// param keeps them: those names are dropped from the effective subst so
+/// the method-local parameter isn't accidentally replaced.
+fn substitute_fn_signature(
+    m: &juxc_ast::FnDecl,
+    subst: &std::collections::HashMap<String, juxc_ast::TypeRef>,
+) -> juxc_ast::FnDecl {
+    // Drop any subst entry shadowed by the method's own type params.
+    let effective: std::collections::HashMap<String, juxc_ast::TypeRef> = if m
+        .generic_params
+        .is_empty()
+    {
+        subst.clone()
+    } else {
+        let shadow: std::collections::HashSet<&str> = m
+            .generic_params
+            .iter()
+            .map(|p| p.name.text.as_str())
+            .collect();
+        subst
+            .iter()
+            .filter(|(k, _)| !shadow.contains(k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    };
+    let return_type = match &m.return_type {
+        juxc_ast::ReturnType::Void => juxc_ast::ReturnType::Void,
+        juxc_ast::ReturnType::Type(t) => {
+            juxc_ast::ReturnType::Type(substitute_type_ref(t, &effective))
+        }
+        juxc_ast::ReturnType::AsyncType(t) => {
+            juxc_ast::ReturnType::AsyncType(substitute_type_ref(t, &effective))
+        }
+    };
+    let params = m
+        .params
+        .iter()
+        .map(|p| juxc_ast::Param {
+            name: p.name.clone(),
+            ty: substitute_type_ref(&p.ty, &effective),
+            default: p.default.clone(),
+            span: p.span,
+        })
+        .collect();
+    juxc_ast::FnDecl {
+        annotations: m.annotations.clone(),
+        visibility: m.visibility,
+        modifiers: m.modifiers.clone(),
+        return_type,
+        name: m.name.clone(),
+        generic_params: m.generic_params.clone(),
+        params,
+        throws: m.throws.clone(),
+        body: m.body.clone(),
+        is_property: m.is_property,
+        span: m.span,
+    }
 }
 
 fn substitute_type_ref(
