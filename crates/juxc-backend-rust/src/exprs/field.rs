@@ -282,15 +282,68 @@ impl RustEmitter {
         // we additionally resolve the field's declared type through the
         // owning class chain here. This is exactly the `a.f.g()` →
         // "clone `f`, drop the guard, then `.g()`" rule from §CR.4.1.
+        // **Method-call callee guard (field-vs-method name collision).**
+        // When this `Field` is the callee of a method call
+        // (`obj.method(args)`) AND `f.field` also names a non-static
+        // method on the receiver's class chain, the `.field` here is the
+        // METHOD, not an instance field — even if a same-named field
+        // exists up the chain (e.g. `private String label;` plus
+        // `public String label()`). In that case we must NOT auto-clone:
+        // `obj.label.clone()` followed by the call's `()` would emit the
+        // nonsensical `obj.label.clone()()`. Suppress the clone so the
+        // callee reads `obj.label` and `emit_call` appends `(...)`.
+        let callee_is_method = is_call_callee
+            && self.field_names_method_on_receiver(&f.object, &f.field.text);
         let wrapper_borrow_clone = wrapper_depth.is_some()
             && !self.emitting_lvalue
             && !in_borrow_context
             && self.wrapper_field_read_needs_clone(&f.object, &f.field.text);
-        if wrapper_borrow_clone
-            || (!self.emitting_lvalue && !in_borrow_context && self.field_read_needs_clone(f))
+        if !callee_is_method
+            && (wrapper_borrow_clone
+                || (!self.emitting_lvalue && !in_borrow_context && self.field_read_needs_clone(f)))
         {
             self.w.push_str(".clone()");
         }
+    }
+
+    /// True iff `field_name` resolves to a non-static **method** on the
+    /// receiver expression's class type (walking the `extends` chain).
+    /// Used by [`Self::emit_field`] to disambiguate a method-call callee
+    /// (`obj.method(args)`) from a same-named field read when both a
+    /// field and a method share the name — the method always wins as a
+    /// call callee, and must not pick up the field auto-`.clone()`.
+    fn field_names_method_on_receiver(
+        &self,
+        receiver: &juxc_ast::Expr,
+        field_name: &str,
+    ) -> bool {
+        let Some(Ty::User { name, .. }) =
+            self.expr_types.get(&expr_span_of(receiver))
+        else {
+            return false;
+        };
+        // Resolve the receiver's class (FQN or bare), then walk its
+        // `extends` chain looking for a non-static method by name.
+        let bare = name.rsplit('.').next().unwrap_or(name.as_str());
+        let mut cursor: Option<String> = Some(bare.to_string());
+        let mut depth = 0usize;
+        while let Some(cname) = cursor {
+            if depth > 64 {
+                break;
+            }
+            let Some(class) = self.lookup_class_by_bare_or_fqn(&cname) else {
+                break;
+            };
+            if let Some(m) = class.methods.get(field_name) {
+                return !m.is_static;
+            }
+            cursor = class
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            depth += 1;
+        }
+        false
     }
 
     /// Lower `obj?.field` to a closure that runs only when the

@@ -413,7 +413,52 @@ impl RustEmitter {
                 self.emit_bound_type(bound);
                 self.w.push_str(" + ");
             }
-            self.w.push_str("Clone");
+            // `Clone` for the auto-`.clone()` on generic field reads,
+            // plus `std::fmt::Debug` so generic structs whose marker
+            // trait now carries a `Debug` supertrait (see
+            // `emit_class_marker_trait`) satisfy `<Class><T>: Debug`.
+            // Every Jux type derives `Debug`, so the extra bound is
+            // always satisfiable and keeps `#[derive(Debug)]` on
+            // generic containers (and their marker impls) sound —
+            // including storage-position wildcards that erase a
+            // generic arg to `Box<dyn …Kind>`.
+            self.w.push_str("Clone + std::fmt::Debug");
+        }
+        self.w.push('>');
+    }
+
+    /// Like [`Self::emit_generic_params_with_clone_bound`] but adds a
+    /// `+ std::fmt::Display` bound to every param whose name is in
+    /// `display_params`. Used on a generic class's **inherent impl**
+    /// when a method formats a value of that type parameter (Jux
+    /// `toString`/interpolation semantics — `$"…${this.left}…"` on an
+    /// `A`-typed field requires `A: Display`). We bound only the
+    /// params actually formatted so a generic class that merely
+    /// *stores* a non-`Display` value stays usable.
+    pub(crate) fn emit_generic_params_with_clone_bound_plus_display(
+        &mut self,
+        params: &[juxc_ast::TypeParam],
+        display_params: &std::collections::HashSet<String>,
+    ) {
+        if params.is_empty() {
+            return;
+        }
+        self.w.push('<');
+        for (i, p) in params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(&p.name.text);
+            self.w.push_str(": ");
+            let user_bounds: Vec<juxc_ast::TypeRef> = p.bounds.clone();
+            for bound in &user_bounds {
+                self.emit_bound_type(bound);
+                self.w.push_str(" + ");
+            }
+            self.w.push_str("Clone + std::fmt::Debug");
+            if display_params.contains(&p.name.text) {
+                self.w.push_str(" + std::fmt::Display");
+            }
         }
         self.w.push('>');
     }

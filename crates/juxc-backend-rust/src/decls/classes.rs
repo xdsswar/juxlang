@@ -297,7 +297,16 @@ impl RustEmitter {
         // proper user-declared bounds once `<T extends Animal>` lands.
         self.w.emit_indent();
         self.w.push_str("impl");
-        self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+        // A generic param that's formatted in a method body
+        // (interpolation / print / concat) additionally needs
+        // `std::fmt::Display` on the inherent impl so the emitted
+        // `format!`/`println!` type-checks. Only the formatted params
+        // pick up the bound; purely-stored params keep `Clone + Debug`.
+        let displayed = self.class_displayed_generic_params(class_decl);
+        self.emit_generic_params_with_clone_bound_plus_display(
+            &class_decl.generic_params,
+            &displayed,
+        );
         self.w.push(' ');
         self.w.push_str(&class_decl.name.text);
         self.emit_generic_params_as_args(&class_decl.generic_params);
@@ -615,7 +624,17 @@ impl RustEmitter {
         // ---- impl[<T: Clone>] C<T> { … } ----
         self.w.emit_indent();
         self.w.push_str("impl");
-        self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+        // Generic params formatted in a method body (interpolation /
+        // print / concat) additionally get a `std::fmt::Display` bound
+        // so the emitted `format!`/`println!` type-checks — Jux
+        // toString/interpolation semantics require a printed generic
+        // field's instantiated type to be `Display`. Purely-stored
+        // params keep only `Clone + Debug`.
+        let displayed = self.class_displayed_generic_params(class_decl);
+        self.emit_generic_params_with_clone_bound_plus_display(
+            &class_decl.generic_params,
+            &displayed,
+        );
         self.w.push(' ');
         self.w.push_str(name);
         self.emit_generic_params_as_args(&class_decl.generic_params);
@@ -884,6 +903,207 @@ impl RustEmitter {
         }
     }
 
+    /// Compute the set of this class's generic type-parameter names
+    /// that get **formatted** somewhere in its own body — i.e. a value
+    /// of that parameter's type flows into a `$"…${…}…"` interpolation,
+    /// a `print(…)`, or a string-concat (`"…" + x`) position. Those
+    /// params need a `std::fmt::Display` bound on the inherent impl so
+    /// the emitted `format!`/`println!` type-checks (Jux toString /
+    /// interpolation semantics — a generic field is printable iff its
+    /// instantiated type is).
+    ///
+    /// Detection is conservative-by-inclusion but type-driven: we map
+    /// each instance field whose declared type is a single generic
+    /// param to that param, then scan every method / constructor /
+    /// operator body for a format-position read of such a field
+    /// (`this.field`, or a bare `field` reference inside the body).
+    /// Anything we can't resolve simply isn't added — the param keeps
+    /// only its `Clone + Debug` bound, matching the prior behavior.
+    pub(crate) fn class_displayed_generic_params(
+        &self,
+        class_decl: &juxc_ast::ClassDecl,
+    ) -> HashSet<String> {
+        let mut displayed: HashSet<String> = HashSet::new();
+        if class_decl.generic_params.is_empty() {
+            return displayed;
+        }
+        let param_names: HashSet<&str> = class_decl
+            .generic_params
+            .iter()
+            .map(|p| p.name.text.as_str())
+            .collect();
+        // field name -> generic-param name (only fields typed as a bare
+        // generic param of THIS class).
+        let mut generic_fields: std::collections::HashMap<&str, &str> =
+            std::collections::HashMap::new();
+        for field in &class_decl.fields {
+            if let Some(ty) = &field.ty {
+                if ty.array_shape.is_none()
+                    && ty.generic_args.is_empty()
+                    && ty.fn_shape.is_none()
+                    && ty.name.segments.len() == 1
+                {
+                    let seg = ty.name.segments[0].text.as_str();
+                    if param_names.contains(seg) {
+                        generic_fields.insert(field.name.text.as_str(), seg);
+                    }
+                }
+            }
+        }
+        if generic_fields.is_empty() {
+            return displayed;
+        }
+        // Walk every body's format positions.
+        for m in &class_decl.methods {
+            if let Some(body) = &m.body {
+                Self::scan_block_for_displayed_fields(body, &generic_fields, &mut displayed);
+            }
+        }
+        for ctor in &class_decl.constructors {
+            Self::scan_block_for_displayed_fields(&ctor.body, &generic_fields, &mut displayed);
+        }
+        for op in &class_decl.operators {
+            if let Some(body) = &op.body {
+                Self::scan_block_for_displayed_fields(body, &generic_fields, &mut displayed);
+            }
+        }
+        displayed
+    }
+
+    /// Walk a block looking for **format-position** reads of a
+    /// generic-typed field (see [`Self::class_displayed_generic_params`]).
+    /// Recurses into nested blocks and the format-bearing expression
+    /// shapes (interpolated strings, `print(…)` calls, string concats).
+    fn scan_block_for_displayed_fields(
+        block: &juxc_ast::Block,
+        generic_fields: &std::collections::HashMap<&str, &str>,
+        out: &mut HashSet<String>,
+    ) {
+        use juxc_ast::{Expr, Stmt};
+        // Record a param as displayed if `e` reads a generic field.
+        fn mark_field_read(
+            e: &Expr,
+            generic_fields: &std::collections::HashMap<&str, &str>,
+            out: &mut HashSet<String>,
+        ) {
+            match e {
+                // `this.field`
+                Expr::Field(f) => {
+                    if matches!(&*f.object, Expr::This(_)) {
+                        if let Some(param) = generic_fields.get(f.field.text.as_str()) {
+                            out.insert((*param).to_string());
+                        }
+                    }
+                    mark_field_read(&f.object, generic_fields, out);
+                }
+                // bare `field` (implicit this inside the body)
+                Expr::Path(qn) => {
+                    if qn.segments.len() == 1 {
+                        if let Some(param) = generic_fields.get(qn.segments[0].text.as_str()) {
+                            out.insert((*param).to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Scan a single expression for format positions.
+        fn scan_expr(
+            e: &Expr,
+            generic_fields: &std::collections::HashMap<&str, &str>,
+            out: &mut HashSet<String>,
+        ) {
+            match e {
+                Expr::InterpString(s) => {
+                    for seg in &s.segments {
+                        if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                            mark_field_read(inner, generic_fields, out);
+                            scan_expr(inner, generic_fields, out);
+                        }
+                    }
+                }
+                Expr::Call(c) => {
+                    // `print(arg)` formats its args.
+                    if let Expr::Path(qn) = &*c.callee {
+                        if qn.segments.len() == 1 && qn.segments[0].text == "print" {
+                            for a in &c.args {
+                                mark_field_read(a, generic_fields, out);
+                            }
+                        }
+                    }
+                    scan_expr(&c.callee, generic_fields, out);
+                    for a in &c.args {
+                        scan_expr(a, generic_fields, out);
+                    }
+                }
+                Expr::Binary(b) => {
+                    // String concat — `"…" + x` or `x + "…"`. We can't
+                    // easily know the static type here, so be inclusive:
+                    // if either operand is a string literal, the other
+                    // formatted operand's generic field is displayed.
+                    let lhs_lit = matches!(&*b.left, Expr::Literal(juxc_ast::Literal::String(_)));
+                    let rhs_lit = matches!(&*b.right, Expr::Literal(juxc_ast::Literal::String(_)));
+                    if b.op == juxc_ast::BinaryOp::Add && (lhs_lit || rhs_lit) {
+                        mark_field_read(&b.left, generic_fields, out);
+                        mark_field_read(&b.right, generic_fields, out);
+                    }
+                    scan_expr(&b.left, generic_fields, out);
+                    scan_expr(&b.right, generic_fields, out);
+                }
+                Expr::Field(f) => scan_expr(&f.object, generic_fields, out),
+                Expr::Unary(u) => scan_expr(&u.operand, generic_fields, out),
+                _ => {}
+            }
+        }
+        for stmt in &block.statements {
+            match stmt {
+                Stmt::Expr(e) => scan_expr(e, generic_fields, out),
+                Stmt::Return(Some(e)) => scan_expr(e, generic_fields, out),
+                Stmt::VarDecl(v) => {
+                    if let Some(init) = &v.init {
+                        scan_expr(init, generic_fields, out);
+                    }
+                }
+                Stmt::Assign(a) => scan_expr(&a.value, generic_fields, out),
+                Stmt::If(if_stmt) => {
+                    scan_expr(&if_stmt.condition, generic_fields, out);
+                    Self::scan_block_for_displayed_fields(
+                        &if_stmt.then_block,
+                        generic_fields,
+                        out,
+                    );
+                    if let Some(eb) = if_stmt.else_branch.as_deref() {
+                        match eb {
+                            juxc_ast::ElseBranch::Block(b) => {
+                                Self::scan_block_for_displayed_fields(b, generic_fields, out);
+                            }
+                            juxc_ast::ElseBranch::If(inner) => {
+                                let synth = juxc_ast::Block {
+                                    statements: vec![Stmt::If(inner.clone())],
+                                    span: juxc_source::Span::DUMMY,
+                                };
+                                Self::scan_block_for_displayed_fields(
+                                    &synth,
+                                    generic_fields,
+                                    out,
+                                );
+                            }
+                        }
+                    }
+                }
+                Stmt::While(w) => {
+                    scan_expr(&w.condition, generic_fields, out);
+                    Self::scan_block_for_displayed_fields(&w.body, generic_fields, out);
+                }
+                Stmt::ForEach(f) => {
+                    scan_expr(&f.iter, generic_fields, out);
+                    Self::scan_block_for_displayed_fields(&f.body, generic_fields, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Emit a class's marker trait and the transitive marker impls
     /// covering its parent chain. Marker traits are empty (`{}`) —
     /// they exist purely to let generic bounds reference Jux classes
@@ -893,15 +1113,26 @@ impl RustEmitter {
     /// interface that re-declares them.
     pub(crate) fn emit_class_marker_trait(&mut self, class_decl: &juxc_ast::ClassDecl) {
         // (Migrated to Writer indent-aware API)
-        // pub trait <Name>Kind {} — no `Clone` supertrait so the
-        // trait is dyn-compatible. Generic bounds add `+ Clone`
-        // explicitly at use sites via
+        // pub trait <Name>Kind: std::fmt::Debug {} — no `Clone`
+        // supertrait so the trait stays dyn-compatible (Clone's
+        // `Self: Sized` would forbid `Box<dyn …Kind>`). Generic
+        // bounds add `+ Clone` explicitly at use sites via
         // `emit_generic_params_with_clone_bound`.
+        //
+        // **`Debug` supertrait.** Every Jux class struct derives
+        // `Debug`, so this bound always holds, and it makes
+        // `dyn <Name>Kind` itself `Debug`. That lets a
+        // `#[derive(Debug)]` container holding a `Box<dyn …Kind>`
+        // (storage-position wildcards — `Box1<? extends Animal>`
+        // erasing to `Box1<Box<dyn AnimalKind>>`) derive `Debug`
+        // without a "doesn't implement Debug" error. `Debug` is
+        // object-safe (no `Self: Sized`), so the trait stays usable
+        // as a trait object.
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("trait ");
         self.w.push_str(&class_decl.name.text);
-        self.w.push_str("Kind {}\n");
+        self.w.push_str("Kind: std::fmt::Debug {}\n");
         // impl<T: Clone, …> <Name>Kind for <Name><T, …> {}
         //
         // The class's own generic params (with their full bound list)
@@ -1704,6 +1935,48 @@ impl RustEmitter {
         self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(" {}\n");
         self.w.newline();
+        // **Static fields (§CR static-field rule).** A sealed class can
+        // still declare statics — `public static int allocated = 0;` on
+        // `Shape`. The value-class path emits these too; the sealed
+        // (enum) lowering must mirror it or a bare-name access
+        // (`allocated = allocated + 1` inside the constructor, which
+        // lowers to `Shape_allocated`) dangles with no definition
+        // (E0425). Two shapes, same as the value-class path:
+        //
+        //   - `static final` → an associated `const` on the enum's
+        //     inherent impl (`Shape::CONST`).
+        //   - non-`final static` (mutable) → a module-scope
+        //     `LazyLock<Mutex<T>>` named `<Class>_<field>`, which the
+        //     bare-name rewrite and `emit_assign` already target.
+        let has_final_static = class_decl
+            .fields
+            .iter()
+            .any(|f| f.is_static && f.is_final);
+        if has_final_static {
+            self.w.emit_indent();
+            self.w.push_str("impl");
+            self.emit_generic_params(&class_decl.generic_params);
+            self.w.push(' ');
+            self.w.push_str(&class_decl.name.text);
+            self.emit_generic_params_as_args(&class_decl.generic_params);
+            self.w.push_str(" {\n");
+            for field in &class_decl.fields {
+                if field.is_static && field.is_final {
+                    self.emit_static_field(field);
+                }
+            }
+            self.w.line("}");
+            self.w.newline();
+        }
+        // Mutable statics at module scope. A generic sealed class can't
+        // have a static field mentioning its own type params (Java's
+        // rule), so the value-class guard isn't needed here — sealed
+        // statics are always concretely typed.
+        for field in &class_decl.fields {
+            if field.is_static && !field.is_final {
+                self.emit_mutable_static_field(&class_decl.name.text, field);
+            }
+        }
         // Match-dispatching impl block for the sealed parent's
         // own instance methods. Each method emits as
         //   `fn name(&self, args) -> R { match self { Shape::Circle(c)

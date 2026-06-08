@@ -1523,7 +1523,7 @@ fn interface_bound_lowers_to_trait_bound_directly() {
     );
     // Interface bound flows verbatim through the impl bound list.
     assert!(
-        rust.contains("impl<T: Drawable + Clone> Wrapper<T> {"),
+        rust.contains("impl<T: Drawable + Clone + std::fmt::Debug> Wrapper<T> {"),
         "bound: {rust}",
     );
 }
@@ -1544,11 +1544,11 @@ fn class_bound_uses_marker_trait_kind() {
         "#,
     );
     // Marker trait + impl emitted for Animal.
-    assert!(rust.contains("pub trait AnimalKind {}"), "marker decl: {rust}");
+    assert!(rust.contains("pub trait AnimalKind: std::fmt::Debug {}"), "marker decl: {rust}");
     assert!(rust.contains("impl AnimalKind for Animal {}"), "marker impl: {rust}");
     // The bound on Carrier uses AnimalKind, not Animal directly.
     assert!(
-        rust.contains("impl<T: AnimalKind + Clone> Carrier<T> {"),
+        rust.contains("impl<T: AnimalKind + Clone + std::fmt::Debug> Carrier<T> {"),
         "marker bound: {rust}",
     );
 }
@@ -1574,7 +1574,7 @@ fn multi_bound_with_class_and_interface_combines() {
         "#,
     );
     assert!(
-        rust.contains("impl<T: AnimalKind + Greeter + Clone> Holder<T> {"),
+        rust.contains("impl<T: AnimalKind + Greeter + Clone + std::fmt::Debug> Holder<T> {"),
         "combined bound: {rust}",
     );
     // Transitive marker impl — Polite implements AnimalKind because
@@ -1861,7 +1861,7 @@ fn generic_record_emits_clone_bound_and_generic_fields() {
     );
     assert!(rust.contains("pub struct Pair<A, B> {"), "generic header: {rust}");
     assert!(rust.contains("pub first: A,"), "generic field: {rust}");
-    assert!(rust.contains("impl<A: Clone, B: Clone> Pair<A, B> {"), "bound: {rust}");
+    assert!(rust.contains("impl<A: Clone + std::fmt::Debug, B: Clone + std::fmt::Debug> Pair<A, B> {"), "bound: {rust}");
     // Generic-component read in format-arg context borrows, no clone.
     assert!(
         rust.contains(r#"println!("{}", p.first)"#),
@@ -1896,14 +1896,14 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
     );
     assert!(rust.contains("#[derive(Clone, Debug)]"), "derive(Clone, Debug): {rust}");
     // Inner struct carries the generic params + the Clone bound.
-    assert!(rust.contains("pub struct Box_Inner<T: Clone> {"), "inner header: {rust}");
+    assert!(rust.contains("pub struct Box_Inner<T: Clone + std::fmt::Debug> {"), "inner header: {rust}");
     assert!(rust.contains("value: T,"), "generic field: {rust}");
     // Newtype wraps the generic inner in Rc<RefCell<…>>, threading args.
     assert!(
-        rust.contains("pub struct Box<T: Clone>(std::rc::Rc<std::cell::RefCell<Box_Inner<T>>>);"),
+        rust.contains("pub struct Box<T: Clone + std::fmt::Debug>(std::rc::Rc<std::cell::RefCell<Box_Inner<T>>>);"),
         "newtype: {rust}",
     );
-    assert!(rust.contains("impl<T: Clone> Box<T> {"), "impl bound: {rust}");
+    assert!(rust.contains("impl<T: Clone + std::fmt::Debug> Box<T> {"), "impl bound: {rust}");
     // `new_inner` return type threads the generic args.
     assert!(rust.contains("pub fn new_inner(value: T) -> Box_Inner<T>"), "new_inner ret: {rust}");
     // Method body reads the generic field through a scoped borrow + clone.
@@ -1935,7 +1935,7 @@ fn generic_class_alias_shares_mutation_through_rc_refcell() {
     );
     // Newtype + inner are the wrapper shape (shared cell).
     assert!(
-        rust.contains("pub struct Holder<T: Clone>(std::rc::Rc<std::cell::RefCell<Holder_Inner<T>>>);"),
+        rust.contains("pub struct Holder<T: Clone + std::fmt::Debug>(std::rc::Rc<std::cell::RefCell<Holder_Inner<T>>>);"),
         "newtype: {rust}",
     );
     // `var y = x` aliases through the newtype's derived Clone — the

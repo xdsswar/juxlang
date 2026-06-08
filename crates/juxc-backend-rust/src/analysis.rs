@@ -26,6 +26,156 @@ pub(crate) fn collect_mutated_names(
     out: &mut HashSet<String>,
     user_mut: &HashSet<String>,
 ) {
+    // Pre-scan for locals bound to an anonymous-class instance
+    // (`var w = new Widget() { … };`). Anonymous-class methods always
+    // lower with a `&mut self` receiver (matching the interface
+    // trait-dispatch convention), so calling ANY method on such a local
+    // takes `&mut`, which requires the binding to be `let mut`. We
+    // collect these names so `collect_mutating_calls` can promote a
+    // plain `obj.method()` call on them even when `method` isn't in the
+    // mutating-method set.
+    let mut anon_locals: HashSet<String> = HashSet::new();
+    collect_anon_bound_locals(block, &mut anon_locals);
+    // Promote any anon-bound local on which a method is invoked. We pass
+    // the anon set in as extra `user_mut`-equivalent context: a method
+    // call on an anon local mutates it regardless of the method name.
+    collect_anon_method_calls(block, out, &anon_locals);
+    collect_mutated_names_real(block, out, user_mut);
+}
+
+/// Walk `block` (recursively) and add to `out` any anon-bound local in
+/// `anon_locals` on which a method is called (`w.render()`), since
+/// anonymous-class methods lower with `&mut self`.
+fn collect_anon_method_calls(
+    block: &Block,
+    out: &mut HashSet<String>,
+    anon_locals: &HashSet<String>,
+) {
+    fn walk_expr(e: &Expr, out: &mut HashSet<String>, anon_locals: &HashSet<String>) {
+        if let Expr::Call(c) = e {
+            if let Expr::Field(f) = &*c.callee {
+                if let Expr::Path(qn) = &*f.object {
+                    if qn.segments.len() == 1
+                        && anon_locals.contains(&qn.segments[0].text)
+                    {
+                        out.insert(qn.segments[0].text.clone());
+                    }
+                }
+            }
+        }
+        // Recurse into the immediate sub-expressions that can carry a
+        // call. Reuse the existing structural walk by re-running on
+        // children via a small manual descent for the common shapes.
+        match e {
+            Expr::Call(c) => {
+                walk_expr(&c.callee, out, anon_locals);
+                for a in &c.args {
+                    walk_expr(a, out, anon_locals);
+                }
+            }
+            Expr::Field(f) => walk_expr(&f.object, out, anon_locals),
+            Expr::Binary(b) => {
+                walk_expr(&b.left, out, anon_locals);
+                walk_expr(&b.right, out, anon_locals);
+            }
+            Expr::Unary(u) => walk_expr(&u.operand, out, anon_locals),
+            Expr::InterpString(s) => {
+                for seg in &s.segments {
+                    if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                        walk_expr(inner, out, anon_locals);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    fn walk_block(block: &Block, out: &mut HashSet<String>, anon_locals: &HashSet<String>) {
+        for stmt in &block.statements {
+            match stmt {
+                Stmt::Expr(e) => walk_expr(e, out, anon_locals),
+                Stmt::Assign(a) => walk_expr(&a.value, out, anon_locals),
+                Stmt::VarDecl(v) => {
+                    if let Some(init) = &v.init {
+                        walk_expr(init, out, anon_locals);
+                    }
+                }
+                Stmt::Return(Some(e)) => walk_expr(e, out, anon_locals),
+                Stmt::If(if_stmt) => {
+                    walk_expr(&if_stmt.condition, out, anon_locals);
+                    walk_block(&if_stmt.then_block, out, anon_locals);
+                    if let Some(eb) = if_stmt.else_branch.as_deref() {
+                        match eb {
+                            ElseBranch::Block(b) => walk_block(b, out, anon_locals),
+                            ElseBranch::If(inner) => {
+                                let synth = Block {
+                                    statements: vec![Stmt::If(inner.clone())],
+                                    span: Span::DUMMY,
+                                };
+                                walk_block(&synth, out, anon_locals);
+                            }
+                        }
+                    }
+                }
+                Stmt::While(w) => {
+                    walk_expr(&w.condition, out, anon_locals);
+                    walk_block(&w.body, out, anon_locals);
+                }
+                Stmt::ForEach(f) => {
+                    walk_expr(&f.iter, out, anon_locals);
+                    walk_block(&f.body, out, anon_locals);
+                }
+                _ => {}
+            }
+        }
+    }
+    walk_block(block, out, anon_locals);
+}
+
+/// Collect every local-variable name in `block` (recursively) whose
+/// initializer is an anonymous-class instantiation
+/// (`new T() { … }`). Used by [`collect_mutated_names`] to promote
+/// those bindings to `let mut` when a method is called on them, since
+/// anonymous-class methods lower with `&mut self`.
+fn collect_anon_bound_locals(block: &Block, out: &mut HashSet<String>) {
+    for stmt in &block.statements {
+        match stmt {
+            Stmt::VarDecl(v) => {
+                if let Some(Expr::NewObject(n)) = v.init.as_ref() {
+                    if n.anonymous_body.is_some() {
+                        out.insert(v.name.text.clone());
+                    }
+                }
+            }
+            Stmt::If(if_stmt) => {
+                collect_anon_bound_locals(&if_stmt.then_block, out);
+                if let Some(eb) = if_stmt.else_branch.as_deref() {
+                    match eb {
+                        ElseBranch::Block(b) => collect_anon_bound_locals(b, out),
+                        ElseBranch::If(inner) => {
+                            let synth = Block {
+                                statements: vec![Stmt::If(inner.clone())],
+                                span: Span::DUMMY,
+                            };
+                            collect_anon_bound_locals(&synth, out);
+                        }
+                    }
+                }
+            }
+            Stmt::While(w) => collect_anon_bound_locals(&w.body, out),
+            Stmt::ForEach(f) => collect_anon_bound_locals(&f.body, out),
+            _ => {}
+        }
+    }
+}
+
+/// Original reassignment/mutating-call walker, split out from
+/// [`collect_mutated_names`] so the public entry point can run the
+/// anonymous-class pre-passes first.
+fn collect_mutated_names_real(
+    block: &Block,
+    out: &mut HashSet<String>,
+    user_mut: &HashSet<String>,
+) {
     for stmt in &block.statements {
         match stmt {
             Stmt::Assign(a) => {
@@ -1129,6 +1279,8 @@ impl crate::RustEmitter {
             }
         }
         if let juxc_ast::Expr::Field(f) = callee {
+            // Static method call: `ClassName.method(args)` — the
+            // receiver path resolves to a class.
             if let juxc_ast::Expr::Path(qn) = &*f.object {
                 if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
                     if let Some(class) = self.symbols.classes.get(&class_fqn) {
@@ -1136,6 +1288,36 @@ impl crate::RustEmitter {
                             return m.params.get(arg_idx).map(|p| p.ty.clone());
                         }
                     }
+                }
+            }
+            // Instance method call: `recv.method(args)` where `recv`
+            // is a value of some user class (`t.step(new Red(30))`).
+            // Resolve the receiver's inferred type to its class, then
+            // walk the `extends` chain for the method — so the param
+            // type drives a sealed-upcast `.into()` wrap on the arg.
+            // This is the path that fixes passing a permitted subclass
+            // value (`Red`) into a sealed-parent param (`Light`).
+            if let Some(juxc_tycheck::Ty::User { name, .. }) =
+                self.expr_types.get(&crate::exprs::expr_span_of(&f.object))
+            {
+                let bare = name.rsplit('.').next().unwrap_or(name.as_str());
+                let mut cursor: Option<String> = Some(bare.to_string());
+                let mut depth = 0usize;
+                while let Some(cname) = cursor {
+                    if depth > 64 {
+                        break;
+                    }
+                    let Some(class) = self.lookup_class_by_bare_or_fqn(&cname) else {
+                        break;
+                    };
+                    if let Some(m) = class.methods.get(f.field.text.as_str()) {
+                        return m.params.get(arg_idx).map(|p| p.ty.clone());
+                    }
+                    cursor = class
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+                    depth += 1;
                 }
             }
         }
