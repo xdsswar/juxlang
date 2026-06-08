@@ -81,7 +81,7 @@ impl RustEmitter {
                 if i > 0 {
                     self.w.push_str(", ");
                 }
-                self.emit_expr(elem);
+                self.emit_array_element(elem);
             }
             self.w.push(']');
             return;
@@ -101,8 +101,22 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.emit_expr(elem);
+            self.emit_array_element(elem);
         }
         self.w.push(']');
+    }
+
+    /// Emit one element of an array/collection literal in **value/move
+    /// position**. A wrapped-class place element (`vec![c]` where `c`
+    /// names a wrapper class) gets a trailing `.clone()` so the stored
+    /// slot holds a SHARED `Rc` handle instead of moving the source out
+    /// (§CR.4.1) — a bare move would leave `c` invalidated after the
+    /// literal and break Java reference semantics. A `Field` element
+    /// already self-clones in `emit_field`, so the helper excludes it.
+    fn emit_array_element(&mut self, elem: &Expr) {
+        self.emit_expr(elem);
+        if self.wrapper_value_needs_clone(elem) {
+            self.w.push_str(".clone()");
+        }
     }
 }

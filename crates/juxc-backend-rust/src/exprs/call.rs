@@ -452,6 +452,11 @@ impl RustEmitter {
                             self.emit_arg_with_nullable_wrap(arg, nullable);
                             if upcast {
                                 self.w.push_str(".into()");
+                            } else if !nullable && self.wrapper_value_needs_clone(arg) {
+                                // Wrapper-class share-on-pass (§CR.4.1) —
+                                // same shared-handle rule as the generic
+                                // call path, for `Class.staticMethod(arg)`.
+                                self.w.push_str(".clone()");
                             }
                         }
                         self.emitting_format_arg = prev;
@@ -510,6 +515,16 @@ impl RustEmitter {
                 self.w.push_str(".into()");
             } else {
                 self.emit_arg_with_nullable_wrap(arg, nullable);
+                // **Wrapper-class share-on-pass (§CR.4.1).** A wrapped
+                // place passed as an argument hands the callee a SHARED
+                // handle — append the cheap `Rc` refcount-bump clone so
+                // the caller's binding stays live and both point at the
+                // same `RefCell` (mutation through the param is observed
+                // by the caller). Skipped under nullable/upcast wraps,
+                // which never carry a bare wrapped place.
+                if !nullable && self.wrapper_value_needs_clone(arg) {
+                    self.w.push_str(".clone()");
+                }
             }
         }
         self.emitting_format_arg = prev;

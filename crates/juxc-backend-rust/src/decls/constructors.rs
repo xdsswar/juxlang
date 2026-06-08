@@ -225,6 +225,12 @@ impl RustEmitter {
                             self.w.push_str(", ");
                         }
                         self.emit_expr(arg);
+                        // Wrapper-class share-on-pass (§CR.4.1): a wrapped
+                        // place forwarded into `super(...)` shares the
+                        // instance with the parent slot.
+                        if self.wrapper_value_needs_clone(arg) {
+                            self.w.push_str(".clone()");
+                        }
                     }
                 }
                 self.w.push_str("),\n");
@@ -411,6 +417,12 @@ impl RustEmitter {
                                 self.w.push_str(", ");
                             }
                             self.emit_expr(&arg);
+                            // Wrapper-class share-on-pass (§CR.4.1): a
+                            // wrapped place forwarded into the parent's
+                            // `new_inner(...)` shares the instance.
+                            if self.wrapper_value_needs_clone(arg) {
+                                self.w.push_str(".clone()");
+                            }
                         }
                     }
                     self.w.push_str("),\n");

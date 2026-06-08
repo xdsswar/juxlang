@@ -203,7 +203,11 @@ pub fn lower_workspace(
     // parent chains and copy inherited concrete method bodies
     // down. The FQN is `<package>.<class>` (empty package → bare
     // name), matching how the symbol table keys class entries.
-    e.wrapper_classes = compute_wrapper_classes(units);
+    //
+    // Phase B (§CR.3.3): only wrap classes that are BOTH wrap-eligible
+    // AND provably aliased — non-aliased eligible classes demote to the
+    // legacy plain-struct ("Inline") shape via `compute_wrapped_set`.
+    e.wrapper_classes = compute_wrapped_set(units, &e.expr_types);
     for unit in units {
         let pkg: Vec<String> = unit
             .package
@@ -283,7 +287,9 @@ pub fn lower_workspace_test(
         let unit_set = collect_user_mut_methods(unit);
         e.user_mut_methods.extend(unit_set);
     }
-    e.wrapper_classes = compute_wrapper_classes(units);
+    // Phase B (§CR.3.3): wrap only wrap-eligible AND aliased classes;
+    // non-aliased eligible classes demote to the legacy Inline shape.
+    e.wrapper_classes = compute_wrapped_set(units, &e.expr_types);
     for unit in units {
         let pkg: Vec<String> = unit
             .package
@@ -836,6 +842,444 @@ pub(crate) fn compute_wrapper_classes(
     wrapper
 }
 
+/// Phase B — the **escape-analysis "fast tier"** selector
+/// (`Architecture/JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.3.2 /
+/// §CR.3.3 / §CR.4.1).
+///
+/// Computes the conservative `aliased` property per class over the
+/// WHOLE workspace and returns the **bare names** of every class that
+/// must STAY wrapped (`Rc<RefCell<…>>`). A class NOT in the returned
+/// set has been proven never aliased/escaping and may be demoted to the
+/// legacy plain-struct ("Inline") shape — the caller intersects this
+/// set with [`compute_wrapper_classes`] so only classes that are BOTH
+/// wrap-eligible AND aliased keep the wrapper.
+///
+/// ## The invariant (correctness over completeness)
+///
+/// A class MUST stay wrapped if any instance could ever be observed as
+/// shared. We only demote when we can PROVE the class is never
+/// aliased/stored/passed/returned anywhere in the program. **When in
+/// doubt we keep it wrapped** — a wrong demotion silently turns Java
+/// shared-mutation into copy semantics (a silent correctness bug),
+/// which is far worse than a missed optimization.
+///
+/// ## What marks a class `aliased`
+///
+/// An instance of class `C` (identified by its tycheck type via
+/// `expr_types`) is aliased when, ANYWHERE in the program, it is:
+///
+/// 1. **bound to a new name from an existing place** — `var y = <expr>`
+///    (or `C y = <expr>`) where `<expr>` is NOT a fresh `new C(...)`
+///    (a Path / field / index / call-result / `this` of type `C`) →
+///    a second live reference to the same object.
+/// 2. **stored into a heap-rooted slot** — assigned to a field of
+///    another object (`obj.f = c`), pushed into an array literal, or
+///    assigned to a static. (Collection `add`/`put` is an ordinary
+///    method call and is therefore covered by rule 3.)
+/// 3. **passed as an ARGUMENT** to any function / method / constructor
+///    (`foo(c)`, `obj.m(c)`, `new X(c)`) — the callee may retain it.
+///    A method CALL *on* the instance (`c.method()`) is a borrow, not a
+///    pass, and does NOT alias — only `c`-as-argument counts.
+/// 4. **returned from a function** (`return <expr>` whose value has type
+///    `C`) — the instance escapes its introducing scope. Inline can't
+///    escape, so any escape keeps the class wrapped.
+///
+/// Additionally, a class is forced aliased (kept wrapped) when it is in
+/// an `extends` relationship with an aliased class: per §CR.3.5 a whole
+/// connected inheritance component rolls up to one representation, so if
+/// ANY member of the component is aliased the entire component stays
+/// wrapped.
+///
+/// Generic classes are handled conservatively by the same rules — any
+/// flow of a `C<…>` instance through 1–4 marks the bare name `C`.
+///
+/// ## Keying
+///
+/// Results are keyed by **bare name** (the last `.`-segment of the
+/// tycheck type's name), matching the scheme [`compute_wrapper_classes`]
+/// and the emit-time `wrapper_classes.contains(name)` gate use.
+pub(crate) fn compute_aliased_classes(
+    units: &[juxc_ast::CompilationUnit],
+    expr_types: &HashMap<Span, Ty>,
+) -> HashSet<String> {
+    use juxc_ast::{Expr, Stmt};
+
+    // The accumulating set of bare class names proven to be aliased
+    // (and therefore kept wrapped). Unioned across every body.
+    let mut aliased: HashSet<String> = HashSet::new();
+
+    // Bare class name of an expression's tycheck type, if it is a user
+    // class. `Ty::User.name` may be a bare name OR an FQN
+    // (`jux.std.collections.ArrayList`); we take the last `.`-segment so
+    // the key matches `compute_wrapper_classes`'s bare-name scheme.
+    // Nullable / array wrappers around a user type also count — a
+    // `C?` or `C[]` element binding still aliases the underlying `C`.
+    fn class_name_of_ty(ty: &Ty) -> Option<String> {
+        match ty {
+            Ty::User { name, .. } => {
+                Some(name.rsplit('.').next().unwrap_or(name).to_string())
+            }
+            Ty::Nullable(inner) => class_name_of_ty(inner),
+            _ => None,
+        }
+    }
+
+    // The bare class name an expression evaluates to, when that type is
+    // a user class. Looks the expression's span up in `expr_types`.
+    let class_of_expr = |e: &Expr| -> Option<String> {
+        expr_types
+            .get(&exprs::expr_span_of(e))
+            .and_then(class_name_of_ty)
+    };
+
+    // True when `e` is a *fresh* allocation — `new C(...)`. Binding a
+    // fresh value to a name is NOT aliasing (it's the unique owner);
+    // every other place-shaped RHS is.
+    fn is_fresh_new(e: &Expr) -> bool {
+        matches!(e, Expr::NewObject(_))
+    }
+
+    // Mark the class an expression evaluates to (if any) as aliased.
+    let mut mark = |e: &Expr, aliased: &mut HashSet<String>| {
+        if let Some(c) = class_of_expr(e) {
+            aliased.insert(c);
+        }
+    };
+
+    // Walk an expression for ARGUMENT-passing (rule 3): every call,
+    // method-call, constructor, and array-literal element that carries a
+    // place of class type aliases that class. The receiver of a method
+    // call is a borrow, NOT a pass — so for `recv.m(args)` (a `Call`
+    // whose callee is a `Field`) we DON'T mark the receiver, only the
+    // args. We still recurse into the receiver expression to catch
+    // nested calls (`a.m(x).n(y)`).
+    fn walk_expr(
+        e: &Expr,
+        aliased: &mut HashSet<String>,
+        mark: &mut dyn FnMut(&Expr, &mut HashSet<String>),
+    ) {
+        match e {
+            Expr::Call(c) => {
+                // Each argument is passed by value → the callee may
+                // retain it → alias the arg's class (fresh or not; a
+                // freshly-`new`'d arg can still be stored by the callee).
+                for a in &c.args {
+                    mark(a, aliased);
+                    walk_expr(a, aliased, mark);
+                }
+                // Recurse into the callee, but a method-call receiver
+                // (`recv.m`) is a borrow, not an alias — so we descend
+                // without marking the receiver itself. `expr_span_of`
+                // marking only happens through `mark` at arg/store/return
+                // sites, never on a bare callee, so plain recursion here
+                // is already borrow-safe.
+                walk_expr(&c.callee, aliased, mark);
+            }
+            Expr::NewObject(n) => {
+                for a in &n.args {
+                    mark(a, aliased);
+                    walk_expr(a, aliased, mark);
+                }
+            }
+            Expr::NewArrayLit(n) => {
+                // Array-literal elements live in a heap-rooted slot
+                // (rule 2) — every class-typed element aliases.
+                for el in &n.elements {
+                    mark(el, aliased);
+                    walk_expr(el, aliased, mark);
+                }
+            }
+            Expr::NewArray(n) => walk_expr(&n.size, aliased, mark),
+            Expr::Binary(b) => {
+                walk_expr(&b.left, aliased, mark);
+                walk_expr(&b.right, aliased, mark);
+            }
+            Expr::Unary(u) => walk_expr(&u.operand, aliased, mark),
+            Expr::Range(r) => {
+                walk_expr(&r.start, aliased, mark);
+                walk_expr(&r.end, aliased, mark);
+            }
+            Expr::Cast(c) => walk_expr(&c.value, aliased, mark),
+            Expr::SizeOf(s) => walk_expr(&s.operand, aliased, mark),
+            Expr::Index(i) => {
+                walk_expr(&i.array, aliased, mark);
+                walk_expr(&i.index, aliased, mark);
+            }
+            Expr::Field(f) => walk_expr(&f.object, aliased, mark),
+            Expr::InterpString(s) => {
+                for seg in &s.segments {
+                    if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                        walk_expr(inner, aliased, mark);
+                    }
+                }
+            }
+            Expr::Elvis(el) => {
+                walk_expr(&el.value, aliased, mark);
+                walk_expr(&el.fallback, aliased, mark);
+            }
+            Expr::Ternary(t) => {
+                walk_expr(&t.condition, aliased, mark);
+                walk_expr(&t.then_branch, aliased, mark);
+                walk_expr(&t.else_branch, aliased, mark);
+            }
+            Expr::Await(inner, _) => walk_expr(inner, aliased, mark),
+            Expr::Lambda(l) => {
+                // A class captured by a lambda escapes its enclosing
+                // scope (it may outlive the frame). Be conservative and
+                // walk the body for stores/passes/returns; a bare capture
+                // is handled by whatever store/pass uses it. The
+                // lambda's own body statements are walked here.
+                match &l.body {
+                    juxc_ast::LambdaBody::Expr(b) => walk_expr(b, aliased, mark),
+                    juxc_ast::LambdaBody::Block(blk) => walk_block(blk, aliased, mark),
+                }
+            }
+            Expr::Switch(s) => {
+                walk_expr(&s.scrutinee, aliased, mark);
+                for arm in &s.arms {
+                    match &arm.body {
+                        juxc_ast::SwitchBody::Expr(b) => walk_expr(b, aliased, mark),
+                        juxc_ast::SwitchBody::Block(blk) => {
+                            walk_block(blk, aliased, mark)
+                        }
+                    }
+                }
+            }
+            // Leaves — no sub-expressions that can carry a place-pass.
+            Expr::Literal(_)
+            | Expr::Path(_)
+            | Expr::This(_)
+            | Expr::MethodRef(_) => {}
+        }
+    }
+
+    fn walk_block(
+        b: &juxc_ast::Block,
+        aliased: &mut HashSet<String>,
+        mark: &mut dyn FnMut(&Expr, &mut HashSet<String>),
+    ) {
+        for s in &b.statements {
+            walk_stmt(s, aliased, mark);
+        }
+    }
+
+    fn walk_else(
+        branch: Option<&juxc_ast::ElseBranch>,
+        aliased: &mut HashSet<String>,
+        mark: &mut dyn FnMut(&Expr, &mut HashSet<String>),
+    ) {
+        match branch {
+            Some(juxc_ast::ElseBranch::If(inner)) => {
+                walk_expr(&inner.condition, aliased, mark);
+                walk_block(&inner.then_block, aliased, mark);
+                walk_else(inner.else_branch.as_deref(), aliased, mark);
+            }
+            Some(juxc_ast::ElseBranch::Block(b)) => walk_block(b, aliased, mark),
+            None => {}
+        }
+    }
+
+    fn walk_stmt(
+        s: &Stmt,
+        aliased: &mut HashSet<String>,
+        mark: &mut dyn FnMut(&Expr, &mut HashSet<String>),
+    ) {
+        match s {
+            Stmt::Expr(e) => walk_expr(e, aliased, mark),
+            Stmt::Return(opt) => {
+                if let Some(e) = opt {
+                    // Rule 4: any class-typed return escapes the function.
+                    // Inline can't escape, so keep the class wrapped
+                    // whether the returned value is a place or a fresh
+                    // `new C(...)` (Phase B has no Box tier yet).
+                    mark(e, aliased);
+                    walk_expr(e, aliased, mark);
+                }
+            }
+            Stmt::VarDecl(v) => {
+                if let Some(init) = &v.init {
+                    // Rule 1: binding a *place* of class type to a new
+                    // name creates a second live reference. A fresh
+                    // `new C(...)` RHS is the unique owner and does NOT
+                    // alias.
+                    if !is_fresh_new(init) {
+                        mark(init, aliased);
+                    }
+                    walk_expr(init, aliased, mark);
+                }
+            }
+            Stmt::Assign(a) => {
+                // Rule 2: assigning a class-typed value into a heap-rooted
+                // slot aliases. A field target (`obj.f = c`) or a static
+                // /path target both root the value where it can be read
+                // back later. We conservatively mark the RHS class for
+                // ANY assignment target that is a Field or Index (heap
+                // slot) — and also for a bare Path target, since a Path
+                // could name a static field or an outer-scope binding
+                // (cheap to be conservative; a local-to-local reassign is
+                // already an alias anyway).
+                mark(&a.value, aliased);
+                walk_expr(&a.value, aliased, mark);
+                // Walk the target for nested calls/indexes too.
+                walk_expr(&a.target, aliased, mark);
+            }
+            Stmt::Throw(e, _) => walk_expr(e, aliased, mark),
+            Stmt::SuperCall(args, _) => {
+                // `super(args)` passes each arg to the parent constructor
+                // (rule 3).
+                for a in args {
+                    mark(a, aliased);
+                    walk_expr(a, aliased, mark);
+                }
+            }
+            Stmt::If(i) => {
+                walk_expr(&i.condition, aliased, mark);
+                walk_block(&i.then_block, aliased, mark);
+                walk_else(i.else_branch.as_deref(), aliased, mark);
+            }
+            Stmt::While(w) => {
+                walk_expr(&w.condition, aliased, mark);
+                walk_block(&w.body, aliased, mark);
+            }
+            Stmt::ForEach(f) => {
+                walk_expr(&f.iter, aliased, mark);
+                walk_block(&f.body, aliased, mark);
+            }
+            Stmt::Try(t) => {
+                walk_block(&t.body, aliased, mark);
+                for c in &t.catches {
+                    walk_block(&c.body, aliased, mark);
+                }
+                if let Some(fin) = &t.finally {
+                    walk_block(fin, aliased, mark);
+                }
+            }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
+        }
+    }
+
+    // Drive the walk over every body in the workspace: free functions,
+    // class methods, constructors, and operator overloads.
+    for unit in units {
+        for item in &unit.items {
+            match item {
+                juxc_ast::TopLevelDecl::Function(f) => {
+                    if let Some(body) = &f.body {
+                        walk_block(body, &mut aliased, &mut mark);
+                    }
+                }
+                juxc_ast::TopLevelDecl::Class(cd) => {
+                    for m in &cd.methods {
+                        if let Some(body) = &m.body {
+                            walk_block(body, &mut aliased, &mut mark);
+                        }
+                    }
+                    for ctor in &cd.constructors {
+                        walk_block(&ctor.body, &mut aliased, &mut mark);
+                    }
+                    for op in &cd.operators {
+                        if let Some(body) = &op.body {
+                            walk_block(body, &mut aliased, &mut mark);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Conservative generic-inheritance guard (§CR.3.4 — "conservative
+    // when in doubt" on generics; §CR.3.5 roll-up). A class that
+    // **extends a generic parent** (`class IntBox extends Container<int>`)
+    // is forced aliased so the whole hierarchy stays on the wrapper
+    // shape. The legacy Inline `From`-upcast emitter doesn't thread the
+    // parent's generic argument onto the `impl From<Child> for Parent`
+    // header (it emits `impl From<Label> for Container` instead of
+    // `Container<String>`), so demoting a generic-base hierarchy to
+    // Inline would emit ill-typed Rust. The wrapper path handles the
+    // generic upcast correctly, so we keep these wrapped — a missed
+    // optimization, never a correctness bug. (A plain generic *leaf*
+    // class like `Box<T>` with no children is unaffected and still
+    // demotes when never aliased.)
+    for unit in units {
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                let extends_generic = cd
+                    .extends
+                    .as_ref()
+                    .map(|t| !t.generic_args.is_empty())
+                    .unwrap_or(false);
+                if extends_generic {
+                    aliased.insert(cd.name.text.clone());
+                    // Also keep the named generic parent wrapped — the
+                    // roll-up below propagates through the component, but
+                    // seeding the parent directly handles the case where
+                    // the parent is only referenced through this child.
+                    if let Some(parent) = cd
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+                    {
+                        aliased.insert(parent);
+                    }
+                }
+            }
+        }
+    }
+
+    // §CR.3.5 inheritance roll-up: a connected `extends` component shares
+    // one representation. If ANY class in a component is aliased, the
+    // whole component stays wrapped. Build the bidirectional extends
+    // adjacency (bare names) and flood `aliased` across it to a
+    // fixed point.
+    let mut adj: HashMap<String, Vec<String>> = HashMap::new();
+    for unit in units {
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                if let Some(parent) = cd
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+                {
+                    let child = cd.name.text.clone();
+                    adj.entry(child.clone()).or_default().push(parent.clone());
+                    adj.entry(parent).or_default().push(child);
+                }
+            }
+        }
+    }
+    // Flood-fill: starting from every currently-aliased class, mark every
+    // class reachable through the extends graph as aliased too.
+    let seeds: Vec<String> = aliased.iter().cloned().collect();
+    let mut stack = seeds;
+    while let Some(name) = stack.pop() {
+        if let Some(neighbors) = adj.get(&name) {
+            for n in neighbors {
+                if aliased.insert(n.clone()) {
+                    stack.push(n.clone());
+                }
+            }
+        }
+    }
+
+    aliased
+}
+
+/// Intersect the wrap-eligible set with the aliased set: a class is
+/// emitted with the `Rc<RefCell>` wrapper **only** when it is both
+/// wrap-eligible ([`compute_wrapper_classes`]) AND provably aliased
+/// ([`compute_aliased_classes`]). Wrap-eligible-but-non-aliased classes
+/// fall through to the legacy plain-struct ("Inline") emission — the
+/// Phase B "fast tier" demotion (§CR.3.3).
+pub(crate) fn compute_wrapped_set(
+    units: &[juxc_ast::CompilationUnit],
+    expr_types: &HashMap<Span, Ty>,
+) -> HashSet<String> {
+    let eligible = compute_wrapper_classes(units);
+    let aliased = compute_aliased_classes(units, expr_types);
+    eligible.intersection(&aliased).cloned().collect()
+}
+
 /// Collect the **bare names of every class that is `throw`n or named
 /// in a `catch`** across a workspace.
 ///
@@ -1221,8 +1665,10 @@ impl RustEmitter {
             // Merge this unit's wrapper classes into the running set.
             // Single-unit mode emits each unit independently, so we
             // union rather than overwrite (`lower_with_source` may feed
-            // several units one at a time).
-            for w in compute_wrapper_classes(std::slice::from_ref(unit)) {
+            // several units one at a time). Phase B (§CR.3.3): only the
+            // wrap-eligible AND aliased classes wrap — non-aliased
+            // eligible classes demote to the legacy Inline shape.
+            for w in compute_wrapped_set(std::slice::from_ref(unit), &self.expr_types) {
                 self.wrapper_classes.insert(w);
             }
             for item in &unit.items {

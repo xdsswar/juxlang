@@ -365,6 +365,18 @@ impl RustEmitter {
                         self.w.push_str("Some(");
                     }
                     self.emit_expr(e);
+                    // **Wrapper-class share-on-return (§CR.4.1).** A
+                    // `return <wrapped place>;` (a `Path`/`this` local or
+                    // an `xs[i]` index read of a wrapped class) must hand
+                    // the caller a SHARED handle, not move out of the
+                    // place — append the cheap `Rc` refcount-bump clone.
+                    // Skipped under `Some(...)`/upcast wraps, which only
+                    // fire for nullable / sealed shapes (never a bare
+                    // wrapped place) — the helper would return false there
+                    // anyway, but gating keeps the emit unambiguous.
+                    if !wrap_some && !wrap_upcast && self.wrapper_value_needs_clone(e) {
+                        self.w.push_str(".clone()");
+                    }
                     if wrap_upcast {
                         self.w.push_str(".into()");
                     }
@@ -769,17 +781,10 @@ impl RustEmitter {
             //
             // A `Field` read of a wrapper-class field already gets its
             // `.clone()` from `emit_field`'s class-field auto-clone, so
-            // we only add it here for the bare-`Path` / `this` cases
-            // the field path doesn't cover.
-            if !wrap_some && matches!(init, Expr::Path(_) | Expr::This(_)) {
-                if let Some(juxc_tycheck::Ty::User { name, .. }) =
-                    self.expr_types.get(&expr_span_of(init))
-                {
-                    let bare = name.rsplit('.').next().unwrap_or(name);
-                    if self.wrapper_classes.contains(bare) {
-                        self.w.push_str(".clone()");
-                    }
-                }
+            // the shared helper covers only the bare-`Path` / `this` and
+            // index-read (`var r = xs[0]`) places the field path doesn't.
+            if !wrap_some && self.wrapper_value_needs_clone(init) {
+                self.w.push_str(".clone()");
             }
             if wrap_some {
                 self.w.push(')');
@@ -914,6 +919,11 @@ impl RustEmitter {
                 let assign_nullable =
                     a.op.is_none() && self.assign_target_is_nullable(&a.target);
                 self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
+                // Wrapper-class share-on-store: a wrapped place stored
+                // into a field hands the field a SHARED handle (§CR.4.1).
+                if !assign_nullable && self.wrapper_value_needs_clone(&a.value) {
+                    self.w.push_str(".clone()");
+                }
                 self.w.push_str("; ");
                 // LHS place expression with a MUTABLE borrow.
                 self.emit_expr(&tf.object);
@@ -960,6 +970,16 @@ impl RustEmitter {
         // no sensible meaning and rustc will surface the misuse.
         let assign_nullable = !is_compound && self.assign_target_is_nullable(&a.target);
         self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
+        // Wrapper-class share-on-assign (§CR.4.1): when the RHS is a
+        // wrapped place (`Path`/`this` local or `xs[i]` index read), the
+        // assignment must SHARE the same instance — append the cheap `Rc`
+        // refcount-bump clone instead of moving out of the place. Skipped
+        // for compound forms (`x += y` has no wrapped-place meaning) and
+        // when the value was lifted into `Some(...)` (a nullable field
+        // never takes a bare wrapped place; the helper returns false too).
+        if !is_compound && !assign_nullable && self.wrapper_value_needs_clone(&a.value) {
+            self.w.push_str(".clone()");
+        }
         self.w.push_str(";\n");
     }
 

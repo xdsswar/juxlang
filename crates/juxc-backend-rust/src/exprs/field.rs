@@ -564,6 +564,83 @@ impl RustEmitter {
         false
     }
 
+    /// **Wrapper-class share-on-read (§CR.4.1, generalized).** True when
+    /// `expr` is a **place of wrapped-class type** that, when emitted in
+    /// a value/move position (array element, call argument, `return`,
+    /// assignment RHS, …), must get a trailing `.clone()` so the move
+    /// becomes a cheap `Rc` refcount bump (a SHARED reference to the same
+    /// `RefCell`) instead of a destructive move out of the place.
+    ///
+    /// Recognized places — each must resolve (via `expr_types` / the
+    /// symbol-table class chain, bare-last-segment keyed) to a class in
+    /// the emitter's [`wrapper set`](RustEmitter::wrapper_classes):
+    ///
+    /// - **`Path`** naming a wrapped-class local/param (`x` in
+    ///   `vec![x]`).
+    /// - **`This`** inside a wrapped-class body (`vec![this]`).
+    /// - **`Index`** read whose array's element type is a wrapped class
+    ///   (`xs[0]` in `var r = xs[0]`). Resolved through the array
+    ///   expression's recorded [`Ty::Array`] element.
+    ///
+    /// **Excluded by construction.** A `Field` access of a wrapped class
+    /// already gets its `.clone()` from [`Self::emit_field`]'s class-field
+    /// auto-clone, so it is NOT reported here (a value-position caller
+    /// must not double-clone). Method-call *receivers* and lvalues never
+    /// flow through the value-position callers that consult this helper,
+    /// so they're excluded too — only owning positions ask.
+    ///
+    /// The callers append the `.clone()` AFTER emitting `expr`; this
+    /// helper makes no decision about borrow-context flags (those callers
+    /// are already in a move position by definition).
+    pub(crate) fn wrapper_value_needs_clone(&self, expr: &Expr) -> bool {
+        match expr {
+            // Bare local/param reference of wrapped-class type.
+            Expr::Path(_) | Expr::This(_) => {
+                if matches!(expr, Expr::This(_)) {
+                    // `this` is a wrapped place only inside a wrapped
+                    // class's own (non-constructor) body — reuse the
+                    // same gate `receiver_is_wrapper_class` uses.
+                    return self.receiver_is_wrapper_class(expr);
+                }
+                if let Some(juxc_tycheck::Ty::User { name, .. }) =
+                    self.expr_types.get(&expr_span_of(expr))
+                {
+                    let bare = name.rsplit('.').next().unwrap_or(name);
+                    return self.wrapper_classes.contains(bare);
+                }
+                // Span-collision fallback: a bare `Path` local that the
+                // span-keyed `expr_types` missed (interp-string reparse)
+                // still resolves through the name-keyed `local_types`
+                // that `receiver_class_bare` consults first.
+                if let Some(bare) = self.receiver_class_bare(expr) {
+                    return self.wrapper_classes.contains(&bare);
+                }
+                false
+            }
+            // Index read whose element type is a wrapped class.
+            Expr::Index(i) => self.index_element_is_wrapper_class(&i.array),
+            _ => false,
+        }
+    }
+
+    /// True iff `array_expr` has a recorded array type whose element is a
+    /// wrapped-shape class. Drives the index-read `.clone()` decision in
+    /// [`Self::wrapper_value_needs_clone`]: `xs[i]` reads a SHARED handle
+    /// out of `Vec<C>` / `[C; N]`, so a value-position use must clone it
+    /// (a move would be `E0507 cannot move out of index`).
+    fn index_element_is_wrapper_class(&self, array_expr: &Expr) -> bool {
+        let Some(juxc_tycheck::Ty::Array { element, .. }) =
+            self.expr_types.get(&expr_span_of(array_expr))
+        else {
+            return false;
+        };
+        if let juxc_tycheck::Ty::User { name, .. } = element.as_ref() {
+            let bare = name.rsplit('.').next().unwrap_or(name);
+            return self.wrapper_classes.contains(bare);
+        }
+        false
+    }
+
     pub(crate) fn emit_safe_field(&mut self, f: &FieldExpr) {
         let needs_parens = receiver_needs_parens(&f.object);
         if needs_parens {

@@ -1409,6 +1409,13 @@ fn pop_method_call_promotes_receiver_to_let_mut() {
 /// auto-clone so the field isn't moved out of `u`; reads in
 /// **format-arg positions** skip the clone since `format!`/
 /// `println!` borrow via `Display`.
+///
+/// Phase B note: `User` here is purely local (created, field-read,
+/// dropped — never aliased / stored / passed / returned), so it
+/// demotes to the legacy Inline plain-struct shape (§CR.3.3). Field
+/// reads are direct `self.name` / `u.name` with no `.0.borrow()`
+/// wrapper — the auto-`.clone()` discipline still fires on
+/// value-consuming reads.
 #[test]
 fn string_field_lowers_to_owned_string_with_plain_move_init() {
     let rust = emit(
@@ -1424,33 +1431,35 @@ fn string_field_lowers_to_owned_string_with_plain_move_init() {
         }
         "#,
     );
-    // Wrapper shape (§CR.4.1): the instance field lives inside
-    // `User_Inner`, still typed as owned `String`.
+    // Inline (demoted) shape: a plain field struct, no inner newtype,
+    // owned `String` field.
+    assert!(rust.contains("pub struct User {"), "inline plain struct: {rust}");
+    assert!(!rust.contains("User_Inner"), "no inner newtype when Inline: {rust}");
     assert!(rust.contains("name: String,"), "field type: {rust}");
     assert!(rust.contains("pub fn new(name: String)"), "param: {rust}");
-    // Rust struct field shorthand kicks in when init expr matches
-    // the field name — the inner literal reads `User_Inner { name }`.
-    assert!(rust.contains("User_Inner { name }"), "ctor init shorthand: {rust}");
+    // Rust struct field shorthand kicks in when init expr matches the
+    // field name — the (raw, pre-rustfmt) literal reads `Self {\n name,\n}`.
+    assert!(rust.contains("Self {"), "inline self literal: {rust}");
     assert!(!rust.contains("name: name"), "no longhand: {rust}");
-    // Value-consuming context — `return this.name;` — reads through
-    // the scoped `borrow()` and still clones so the field doesn't
-    // move out of the temporary `Ref` / `&self`.
+    assert!(!rust.contains("name: self"), "no longhand: {rust}");
+    // Value-consuming context — `return this.name;` — reads `self.name`
+    // directly and clones so the field doesn't move out of `&self`.
     assert!(
-        rust.contains("self.0.borrow().name.clone()"),
+        rust.contains("self.name.clone()"),
         "value-position read should still clone: {rust}",
     );
-    // Format-arg context — `println!("{}", u.name)` — borrows, no
-    // clone needed.
-    // Format-arg read goes through the scoped `borrow()` but does
-    // NOT clone — `println!` borrows via `Display`.
+    // Format-arg context — `println!("{}", u.name)` — borrows direct
+    // field, no clone needed.
     assert!(
-        rust.contains(r#"println!("{}", u.0.borrow().name)"#),
+        rust.contains(r#"println!("{}", u.name)"#),
         "format-arg read should NOT clone: {rust}",
     );
     assert!(
-        !rust.contains("u.0.borrow().name.clone()"),
+        !rust.contains("u.name.clone()"),
         "stale clone in format arg: {rust}",
     );
+    // No interior-mutability wrapper in the Inline shape.
+    assert!(!rust.contains(".0.borrow()"), "no borrow when Inline: {rust}");
 }
 
 // ----------------------------------------------------------------------
@@ -1873,12 +1882,15 @@ fn generic_record_emits_clone_bound_and_generic_fields() {
 // Generics (Turn 1) — generic class declarations + uses
 // ----------------------------------------------------------------------
 
-/// `class Box<T> { T value; … }` lowers to the shared-mutation
-/// **wrapper** shape (class-representation Phase A GENERICS pass): a
-/// `Box_Inner<T: Clone>` struct holding the field, a
-/// `Box<T: Clone>(Rc<RefCell<Box_Inner<T>>>)` newtype, and a
-/// `T: Clone`-bounded inherent `impl`. The generic-typed field read
-/// goes through the statement-scoped `self.0.borrow().value.clone()`.
+/// `class Box<T> { T value; … }` whose instance is purely local
+/// (created, method-called, dropped — never aliased / stored / passed /
+/// returned) demotes to the legacy **Inline** plain-struct shape
+/// (Phase B fast tier, §CR.3.3). The struct holds the generic field
+/// directly, the inherent `impl` carries the `T: Clone + Debug` bound,
+/// and the generic-typed field read is a direct `self.value.clone()`
+/// with no interior-mutability wrapper. (The aliased generic case —
+/// `generic_class_alias_shares_mutation_through_rc_refcell` — keeps the
+/// `Rc<RefCell>` wrapper.)
 #[test]
 fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
     let rust = emit(
@@ -1895,19 +1907,25 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
         "#,
     );
     assert!(rust.contains("#[derive(Clone, Debug)]"), "derive(Clone, Debug): {rust}");
-    // Inner struct carries the generic params + the Clone bound.
-    assert!(rust.contains("pub struct Box_Inner<T: Clone + std::fmt::Debug> {"), "inner header: {rust}");
-    assert!(rust.contains("value: T,"), "generic field: {rust}");
-    // Newtype wraps the generic inner in Rc<RefCell<…>>, threading args.
+    // Inline plain struct holds the generic field directly — no inner
+    // newtype, no `Rc<RefCell>` wrapper.
+    assert!(rust.contains("pub struct Box<T> {"), "inline struct header: {rust}");
+    assert!(!rust.contains("Box_Inner"), "no inner newtype when Inline: {rust}");
     assert!(
-        rust.contains("pub struct Box<T: Clone + std::fmt::Debug>(std::rc::Rc<std::cell::RefCell<Box_Inner<T>>>);"),
-        "newtype: {rust}",
+        !rust.contains("std::cell::RefCell"),
+        "no RefCell wrapper when Inline: {rust}",
     );
+    assert!(rust.contains("value: T,"), "generic field: {rust}");
+    // The inherent impl carries the `T: Clone + Debug` bound.
     assert!(rust.contains("impl<T: Clone + std::fmt::Debug> Box<T> {"), "impl bound: {rust}");
-    // `new_inner` return type threads the generic args.
-    assert!(rust.contains("pub fn new_inner(value: T) -> Box_Inner<T>"), "new_inner ret: {rust}");
-    // Method body reads the generic field through a scoped borrow + clone.
-    assert!(rust.contains("self.0.borrow().value.clone()"), "scoped-borrow read: {rust}");
+    assert!(rust.contains("pub fn new(value: T) -> Self {"), "inline new: {rust}");
+    // Field shorthand (raw emit is multi-line; rustfmt collapses to
+    // `Self { value }`).
+    assert!(rust.contains("Self {"), "inline self literal: {rust}");
+    assert!(!rust.contains("value: value"), "no longhand: {rust}");
+    // Method body reads the generic field directly + clones.
+    assert!(rust.contains("self.value.clone()"), "direct field read+clone: {rust}");
+    assert!(!rust.contains(".0.borrow()"), "no borrow when Inline: {rust}");
 }
 
 /// A generic wrapper class shares mutation through its `Rc<RefCell>`:
@@ -1975,11 +1993,12 @@ fn generic_new_object_emits_turbofish_when_args_explicit() {
 /// build the inner struct directly — no `__self` builder, no
 /// `Default`-based initialization.
 ///
-/// Post class-representation Phase A, a simple class lowers to the
-/// shared-mutation wrapper shape (§CR.4.1). The ctor splits into
-/// `new_inner(...) -> Pair_Inner` (builds the inner struct literal
-/// with Rust's field shorthand) and a thin `new(...) -> Self` that
-/// wraps `Self::new_inner(...)` in `Rc::new(RefCell::new(...))`.
+/// Post class-representation Phase B (§CR.3.3), a class whose instances
+/// are never aliased / stored / passed / returned demotes back to the
+/// legacy plain-struct **Inline** shape (the escape-analysis "fast
+/// tier"). Here `Pair` is created, read via a field access, and dropped
+/// — purely local — so it lowers to `pub struct Pair { … }` with a
+/// direct `Self { a, b }` constructor and NO `Rc<RefCell<…>>` wrapper.
 #[test]
 fn simple_constructor_emits_direct_self_literal() {
     let rust = emit(
@@ -1995,21 +2014,28 @@ fn simple_constructor_emits_direct_self_literal() {
         }
         "#,
     );
-    // No `__self` builder — the simple-ctor path emits the inner
-    // literal directly.
+    // Inline (demoted) shape: a plain field struct, no inner newtype.
+    assert!(
+        rust.contains("pub struct Pair {"),
+        "inline plain struct: {rust}",
+    );
+    assert!(!rust.contains("Pair_Inner"), "no inner newtype when Inline: {rust}");
+    assert!(
+        !rust.contains("std::rc::Rc::new(std::cell::RefCell::new"),
+        "no Rc<RefCell> wrapper when Inline: {rust}",
+    );
+    // No `__self` builder — the simple-ctor path emits the literal
+    // directly with field shorthand.
     assert!(!rust.contains("__self"), "should not use __self pattern: {rust}");
-    // `new_inner` returns the inner struct literal directly.
     assert!(
-        rust.contains("pub fn new_inner(a: isize, b: isize) -> Pair_Inner {"),
-        "new_inner signature: {rust}",
+        rust.contains("pub fn new(a: isize, b: isize) -> Self {"),
+        "inline new signature: {rust}",
     );
-    assert!(rust.contains("Pair_Inner { a, b }"), "inner literal shorthand: {rust}");
-    // Public `new` wraps `new_inner` in Rc<RefCell<…>>.
-    assert!(
-        rust.contains("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner(a, b))))"),
-        "wrapper new delegates to new_inner: {rust}",
-    );
+    // Inline struct literal with field shorthand (the raw emit is
+    // multi-line; rustfmt collapses it to `Self { a, b }`).
+    assert!(rust.contains("Self {"), "inline self literal: {rust}");
     assert!(!rust.contains("a: a"), "no longhand: {rust}");
+    assert!(!rust.contains("a: self"), "no longhand: {rust}");
 }
 
 // ----------------------------------------------------------------------
@@ -2117,13 +2143,16 @@ fn wrapper_method_call_is_not_borrow_wrapped() {
     );
 }
 
-/// A non-sealed `extends` hierarchy lowers to the wrapper shape with
-/// the whole chain rolled up into ONE `Rc<RefCell<_>>` per handle
-/// (§CR.3.5 / §CR.5.1). An **inherited method inlined into the child**
-/// addresses inherited fields by walking `__parent`: a field declared
-/// one ancestor up emits `self.0.borrow().__parent.<field>`. This is
-/// the mechanism that makes shared mutation visible through every alias
-/// of an instance, even across the inheritance boundary.
+/// A non-sealed `extends` hierarchy whose instance is **aliased**
+/// (`var e = d;`) stays on the wrapper shape with the whole chain
+/// rolled up into ONE `Rc<RefCell<_>>` per handle (§CR.3.5 / §CR.5.1).
+/// An **inherited method inlined into the child** addresses inherited
+/// fields by walking `__parent`: a field declared one ancestor up emits
+/// `self.0.borrow().__parent.<field>`. This is the mechanism that makes
+/// shared mutation visible through every alias of an instance, even
+/// across the inheritance boundary. (The `var e = d;` alias is what
+/// keeps the hierarchy wrapped under the Phase B selector — without it
+/// the purely-local instance would demote to Inline.)
 #[test]
 fn wrapper_hierarchy_inherited_field_walks_parent() {
     let rust = emit(
@@ -2137,7 +2166,7 @@ fn wrapper_hierarchy_inherited_field_walks_parent() {
             public String name;
             public Dog(String name, int age) { super(age); this.name = name; }
         }
-        public void main() { var d = new Dog("Rex", 3); d.birthday(); }
+        public void main() { var d = new Dog("Rex", 3); var e = d; e.birthday(); }
         "#,
     );
     // Child inner embeds the parent's INNER as `__parent`.
@@ -2180,7 +2209,10 @@ fn wrapper_hierarchy_inherited_field_walks_parent() {
 /// TWO `__parent` hops for a field declared on the grandparent. This
 /// locks in the depth indexing for inlined inherited methods: `Dog`'s
 /// copy of `Animal::name()` (which reads `this.name`) emits
-/// `self.0.borrow().__parent.__parent.name`.
+/// `self.0.borrow().__parent.__parent.name`. The `var e = d;` alias is
+/// what keeps the chain wrapped under the Phase B selector (§CR.3.3) —
+/// the whole connected component rolls up to `Rc<RefCell>` because one
+/// member is aliased (§CR.3.5).
 #[test]
 fn wrapper_three_level_hierarchy_walks_two_parents() {
     let rust = emit(
@@ -2197,7 +2229,7 @@ fn wrapper_three_level_hierarchy_walks_two_parents() {
         public final class Dog extends Mammal {
             public Dog(String name) { super(name, 4); }
         }
-        public void main() { var d = new Dog("Rex"); print(d.name()); }
+        public void main() { var d = new Dog("Rex"); var e = d; print(e.name()); }
         "#,
     );
     // `Dog_Inner` embeds `Mammal_Inner`, which embeds `Animal_Inner`.
@@ -2223,6 +2255,58 @@ fn wrapper_three_level_hierarchy_walks_two_parents() {
     assert!(
         rust.contains("__parent: Animal::new_inner(name)"),
         "Mammal ctor chains Animal::new_inner: {rust}",
+    );
+}
+
+/// **Wrapper-class share through a collection (§CR.4.1, generalized).**
+/// A wrapped-class value stored into an array literal and later read
+/// back out by index must round-trip through `.clone()` at BOTH ends:
+///
+/// - The store `new Cell[]{ c }` emits `vec![c.clone()]` — a SHARED
+///   `Rc` handle goes into the Vec, NOT a destructive move of `c`
+///   (which would leave the later `c.get()` reading a moved value:
+///   `E0382`).
+/// - The index read `var r = xs[0]` emits `xs[0].clone()` — reading a
+///   shared handle OUT of the Vec, NOT moving out of it (`E0507 cannot
+///   move out of index`).
+///
+/// Both ends pointing at the same `RefCell` is what makes `r.set(42)`
+/// observable through `c.get()`. The class is kept wrapped because it
+/// escapes into the collection and is aliased through the index read.
+#[test]
+fn wrapper_array_store_and_index_read_clone() {
+    let rust = emit(
+        r#"
+        public class Cell {
+            int v;
+            public Cell(int v) { this.v = v; }
+            public void set(int v) { this.v = v; }
+            public int get() { return this.v; }
+        }
+        public void main() {
+            var c = new Cell(1);
+            var xs = new Cell[]{ c };
+            var r = xs[0];
+            r.set(42);
+            print(c.get());
+        }
+        "#,
+    );
+    // Store: the element clones into the Vec (shared handle in).
+    assert!(
+        rust.contains("vec![c.clone()]"),
+        "array-store element clones (shared handle into Vec): {rust}",
+    );
+    // Index read: the value clones out of the Vec (shared handle out).
+    assert!(
+        rust.contains("xs[0].clone()"),
+        "index-read clones out of the Vec: {rust}",
+    );
+    // The method-call receiver `r.set(...)` must NOT clone (it borrows
+    // the shared handle — cloning here would mutate a throwaway copy).
+    assert!(
+        !rust.contains("r.clone().set("),
+        "method receiver must not clone: {rust}",
     );
 }
 
@@ -2371,13 +2455,15 @@ fn string_returning_method_returns_owned_with_field_clone() {
         rust.contains("pub fn getName(&self) -> String {"),
         "return type should be owned String: {rust}",
     );
-    // Wrapper shape (§CR.4.1): `this.name` reads through a
-    // statement-scoped `self.0.borrow()`, then auto-clones the
-    // String so the value outlives the borrow and `&self`.
+    // Phase B: `User` is purely local (`u.getName()` is a borrow, never
+    // aliased / stored / passed / returned), so it demotes to the
+    // Inline plain-struct shape (§CR.3.3). `this.name` reads `self.name`
+    // directly and auto-clones the String so it outlives `&self`.
     assert!(
-        rust.contains("self.0.borrow().name.clone()"),
-        "wrapper field clone missing: {rust}",
+        rust.contains("self.name.clone()"),
+        "inline field clone missing: {rust}",
     );
+    assert!(!rust.contains(".0.borrow()"), "no borrow when Inline: {rust}");
 }
 
 /// A program that never calls a mutating method on `xs` keeps it

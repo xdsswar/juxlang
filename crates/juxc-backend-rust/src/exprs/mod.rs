@@ -270,6 +270,13 @@ impl RustEmitter {
                     }
                     let nullable = ctor_nullable_flags.get(i).copied().unwrap_or(false);
                     self.emit_arg_with_nullable_wrap(arg, nullable);
+                    // Wrapper-class share-on-pass (§CR.4.1): a wrapped
+                    // place handed to `new C(arg)` shares the instance —
+                    // append the `Rc` refcount-bump clone so the
+                    // constructor stores a shared handle, not a move.
+                    if !nullable && self.wrapper_value_needs_clone(arg) {
+                        self.w.push_str(".clone()");
+                    }
                 }
                 self.emitting_format_arg = prev;
                 self.w.push(')');
