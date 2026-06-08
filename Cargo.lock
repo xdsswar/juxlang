@@ -523,6 +523,7 @@ name = "juxc-lsp"
 version = "0.0.1"
 dependencies = [
  "dashmap 6.2.1",
+ "juxc-ast",
  "juxc-diagnostics",
  "juxc-driver",
  "juxc-source",

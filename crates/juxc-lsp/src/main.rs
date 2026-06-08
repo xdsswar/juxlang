@@ -12,6 +12,7 @@
 mod analysis;
 mod diagnostics;
 mod doc;
+mod intel;
 mod position;
 mod server;
 mod workspace;

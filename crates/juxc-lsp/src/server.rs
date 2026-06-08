@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use dashmap::DashMap;
+use juxc_source::Span;
 use ropey::Rope;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -17,6 +18,7 @@ use tower_lsp::{Client, LanguageServer};
 
 use crate::analysis::{analyze_single, analyze_workspace};
 use crate::doc::Document;
+use crate::intel;
 use crate::position::{position_to_offset, span_to_range};
 use crate::workspace::Workspace;
 
@@ -173,6 +175,170 @@ fn header_is_type(seg: &str) -> bool {
         .any(|w| TYPE_KW.contains(&w))
 }
 
+/// An identifier found in the source text, with its byte range.
+struct Word {
+    /// The identifier text.
+    text: String,
+    /// Inclusive start byte offset.
+    start: usize,
+    /// Exclusive end byte offset.
+    end: usize,
+}
+
+/// True for a byte that can appear in a Jux identifier.
+fn is_ident_byte(b: u8) -> bool {
+    b == b'_' || b.is_ascii_alphanumeric()
+}
+
+/// Extract the identifier whose span contains `offset` (or that ends exactly at
+/// `offset`, so a cursor parked just after a name still resolves it). Returns
+/// `None` when `offset` isn't inside / adjacent to an identifier. ASCII-only
+/// boundary scan — adequate for Jux identifiers, which are ASCII.
+fn word_at(text: &str, offset: usize) -> Option<Word> {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    if offset > len {
+        return None;
+    }
+    // The cursor may sit just past the identifier's last byte; step back one
+    // when the byte at `offset` isn't an identifier byte but the previous is.
+    let probe = if offset < len && is_ident_byte(bytes[offset]) {
+        offset
+    } else if offset > 0 && is_ident_byte(bytes[offset - 1]) {
+        offset - 1
+    } else {
+        return None;
+    };
+    let mut start = probe;
+    while start > 0 && is_ident_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    let mut end = probe;
+    while end < len && is_ident_byte(bytes[end]) {
+        end += 1;
+    }
+    // An identifier can't start with a digit — if it does, the cursor is on a
+    // numeric literal, not a name.
+    if bytes[start].is_ascii_digit() {
+        return None;
+    }
+    Some(Word { text: text[start..end].to_string(), start, end })
+}
+
+/// The start offset of the identifier run that ends at `offset` (the partial
+/// word the user is typing). Returns `offset` unchanged when the byte before
+/// the cursor isn't an identifier byte (e.g. the cursor is right after a `.`).
+fn ident_start_before(text: &str, offset: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut start = offset.min(bytes.len());
+    while start > 0 && is_ident_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    start
+}
+
+/// If the identifier starting at `ident_start` is the member half of a
+/// `receiver.member` access, return the byte offset of the receiver's last
+/// byte (i.e. the `.`'s offset) so the receiver expression's span — which ends
+/// there — can be looked up. Skips ASCII whitespace between the `.` and the
+/// identifier. Returns `None` when there's no preceding `.` (a plain name) or
+/// the `.` is part of a number / float.
+fn receiver_dot_before(text: &str, ident_start: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut i = ident_start;
+    while i > 0 && (bytes[i - 1] as char).is_ascii_whitespace() {
+        i -= 1;
+    }
+    if i == 0 || bytes[i - 1] != b'.' {
+        return None;
+    }
+    let dot = i - 1;
+    // `1.0` style float: a `.` preceded by a digit isn't a member access.
+    if dot > 0 && bytes[dot - 1].is_ascii_digit() {
+        return None;
+    }
+    // The receiver expression's span ends at the `.`'s offset (exclusive end).
+    Some(dot)
+}
+
+/// Extract the first line of a `///` or `/** … */` doc comment immediately
+/// preceding the declaration whose name starts at `name_start`.
+///
+/// The AST doesn't carry doc comments, so we recover them from source: scan the
+/// line(s) above the declaration. We walk backwards over blank lines and the
+/// modifier/keyword run on the declaration's own line, then read a contiguous
+/// run of `///` lines (or a single `/** … */`). Returns the first non-empty doc
+/// line, trimmed, or `None` when there's no doc comment.
+fn doc_comment_before(text: &str, name_start: usize) -> Option<String> {
+    // Find the start of the line the name sits on.
+    let line_start = text[..name_start].rfind('\n').map(|p| p + 1).unwrap_or(0);
+    // Walk upward, collecting `///` lines, until a non-doc line.
+    let mut cursor = line_start;
+    let mut doc_lines: Vec<String> = Vec::new();
+    while cursor > 0 {
+        // Previous line's range [prev_start, cursor-1) (cursor-1 is its '\n').
+        let prev_nl = text[..cursor - 1].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        let line = text[prev_nl..cursor - 1].trim();
+        if let Some(rest) = line.strip_prefix("///") {
+            doc_lines.push(rest.trim().to_string());
+            cursor = prev_nl;
+            continue;
+        }
+        // A single-line block doc `/** text */`.
+        if line.starts_with("/**") && line.ends_with("*/") {
+            let inner = line
+                .trim_start_matches("/**")
+                .trim_end_matches("*/")
+                .trim()
+                .to_string();
+            doc_lines.push(inner);
+        }
+        break;
+    }
+    // `doc_lines` is bottom-up; the first source line is last.
+    doc_lines.into_iter().rev().find(|l| !l.is_empty())
+}
+
+/// True when `text` already imports `fqn` (`import a.b.C;`, possibly with extra
+/// whitespace or a trailing `as` alias on the same line). Used to dedupe the
+/// auto-import edit so re-running the action is a no-op.
+fn already_imports(text: &str, fqn: &str) -> bool {
+    for line in text.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("import") else { continue };
+        let rest = rest.trim().trim_end_matches(';').trim();
+        // Match the exact path, or `a.b.C as X`.
+        if rest == fqn || rest.starts_with(&format!("{fqn} ")) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Build the [`TextEdit`] that inserts `import <fqn>;` at the right place:
+/// immediately after the `package …;` line when present, else at the very top
+/// of the file. The edit is a zero-width insertion (start == end) of a full
+/// line. Returns `None` when `text` already imports `fqn`.
+fn import_edit(rope: &Rope, fqn: &str) -> Option<TextEdit> {
+    let text = rope.to_string();
+    if already_imports(&text, fqn) {
+        return None;
+    }
+    // Find the line index just after the `package` declaration (if any).
+    let mut insert_line: usize = 0;
+    for (i, line) in text.lines().enumerate() {
+        if line.trim_start().starts_with("package") {
+            insert_line = i + 1;
+            break;
+        }
+    }
+    let pos = Position::new(insert_line as u32, 0);
+    Some(TextEdit {
+        range: Range::new(pos, pos),
+        new_text: format!("import {fqn};\n"),
+    })
+}
+
 /// Is the process with id `pid` still alive? Used by the parent-process
 /// heartbeat. Dependency-free: on Windows it queries the process exit code via
 /// `kernel32`; elsewhere it conservatively returns `true` (those platforms
@@ -261,6 +427,7 @@ impl Backend {
         if let Ok(mut ws) = self.workspace.write() {
             ws.type_names = index.type_names;
             ws.member_names = index.member_names;
+            ws.type_packages = index.type_packages;
         }
     }
 
@@ -301,6 +468,7 @@ impl Backend {
             version,
             expr_types: analysis.expr_types,
             type_names: analysis.type_names,
+            symbols: analysis.symbols,
         };
         self.docs.insert(uri.clone(), doc);
 
@@ -391,6 +559,10 @@ impl LanguageServer for Backend {
                     trigger_characters: Some(vec![".".into(), ":".into(), "@".into()]),
                     ..Default::default()
                 }),
+                // Auto-import quick-fixes for unresolved-but-known types
+                // (FEATURE 3). Advertised as a simple boolean provider; the
+                // handler filters to the import action itself.
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 ..Default::default()
             },
         })
@@ -450,11 +622,49 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let offset = position_to_offset(&doc.rope, pos);
+        let text = doc.rope.to_string();
+
+        // FEATURE 1 — declaration-signature hover. If the cursor sits on an
+        // identifier that resolves to a KNOWN symbol (a type name, a free
+        // function, or a member reached via the receiver's inferred type),
+        // render that declaration's signature in Jux syntax plus its first-line
+        // doc comment. Falls back to the expr-type hover below otherwise.
+        if let Some(word) = word_at(&text, offset) {
+            let resolved = if let Some(recv_end) = receiver_dot_before(&text, word.start) {
+                // `recv.member` — resolve `recv`'s type, then look up the member.
+                doc.type_ending_at(recv_end)
+                    .and_then(|ty| intel::resolve_member(&doc.symbols, ty, &word.text))
+            } else {
+                None
+            };
+            // Plain identifier: try a type name, then a free function.
+            let resolved = resolved
+                .or_else(|| intel::resolve_type(&doc.symbols, &word.text))
+                .or_else(|| intel::resolve_function(&doc.symbols, &word.text));
+
+            if let Some(resolved) = resolved {
+                let mut value = format!("```jux\n{}\n```", resolved.signature());
+                if let Some(doc_line) = doc_comment_before(&text, word.start) {
+                    value.push_str("\n\n");
+                    value.push_str(&doc_line);
+                }
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value,
+                    }),
+                    range: Some(span_to_range(
+                        &doc.rope,
+                        Span::new(word.start as u32, word.end as u32),
+                    )),
+                }));
+            }
+        }
+
+        // Fallback: the inferred type at the cursor, as a Jux code block.
         let Some((span, ty)) = doc.type_at(offset) else {
             return Ok(None);
         };
-        // Render the inferred type as a Jux code block so editors syntax-
-        // colour it.
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
@@ -478,6 +688,48 @@ impl LanguageServer for Backend {
         let offset = position_to_offset(&doc.rope, pos);
         let prefix: String = doc.rope.slice(..doc.rope.byte_to_char(offset.min(doc.rope.len_bytes()))).to_string();
         let ctx = analyze_context(&prefix);
+
+        // FEATURE 2 — receiver-aware member completion. When the cursor sits in
+        // a `<expr>.` context, resolve `<expr>`'s inferred type and offer ONLY
+        // that type's methods + fields (walking the extends/implements chain).
+        // The cursor's offset is just past the `.` (plus any partial member
+        // name already typed); `member_start` is where that partial name began,
+        // which is exactly where `receiver_dot_before` looks for the `.`.
+        let text = doc.rope.to_string();
+        let member_start = ident_start_before(&text, offset);
+        if let Some(recv_end) = receiver_dot_before(&text, member_start) {
+            if let Some(ty) = doc.type_ending_at(recv_end) {
+                let members = intel::members_of(&doc.symbols, ty);
+                if !members.is_empty() {
+                    let items: Vec<CompletionItem> = members
+                        .into_iter()
+                        .map(|m| {
+                            if m.is_method {
+                                CompletionItem {
+                                    label: format!("{}()", m.name),
+                                    kind: Some(CompletionItemKind::METHOD),
+                                    detail: Some(m.detail),
+                                    insert_text: Some(format!("{}()", m.name)),
+                                    sort_text: Some(format!("0_{}", m.name)),
+                                    ..Default::default()
+                                }
+                            } else {
+                                CompletionItem {
+                                    label: m.name.clone(),
+                                    kind: Some(CompletionItemKind::FIELD),
+                                    detail: Some(m.detail),
+                                    sort_text: Some(format!("0_{}", m.name)),
+                                    ..Default::default()
+                                }
+                            }
+                        })
+                        .collect();
+                    // Return ONLY the receiver's members — no globals/keywords
+                    // leak into a member-access completion.
+                    return Ok(Some(CompletionResponse::Array(items)));
+                }
+            }
+        }
 
         let mut items: Vec<CompletionItem> = Vec::new();
 
@@ -560,11 +812,31 @@ impl LanguageServer for Backend {
         if let Ok(ws) = self.workspace.read() {
             for name in &ws.type_names {
                 if seen.insert(name.clone()) {
+                    // FEATURE 3 — auto-import on accept. If this project type
+                    // lives in a package not yet imported by the open file,
+                    // attach the `import pkg.Name;` edit as `additionalTextEdits`
+                    // so accepting the completion also inserts the import. When
+                    // the bare name has exactly one declaring package we can pick
+                    // it unambiguously; ambiguous names are left to the explicit
+                    // code action.
+                    let import_edit = ws
+                        .type_packages
+                        .get(name)
+                        .filter(|pkgs| pkgs.len() == 1)
+                        .and_then(|pkgs| {
+                            let fqn = format!("{}.{name}", pkgs[0]);
+                            import_edit(&doc.rope, &fqn)
+                        });
+                    let detail = match &import_edit {
+                        Some(_) => Some(format!("project type — auto-imports {name}")),
+                        None => Some("project type".to_string()),
+                    };
                     items.push(CompletionItem {
                         label: name.clone(),
                         kind: Some(CompletionItemKind::CLASS),
-                        detail: Some("project type".to_string()),
+                        detail,
                         sort_text: Some(format!("1_{name}")),
+                        additional_text_edits: import_edit.map(|e| vec![e]),
                         ..Default::default()
                     });
                 }
@@ -586,5 +858,211 @@ impl LanguageServer for Backend {
         }
 
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let uri = params.text_document.uri;
+        let Some(doc) = self.docs.get(&uri) else {
+            return Ok(None);
+        };
+        let text = doc.rope.to_string();
+
+        // FEATURE 3 — auto-import quick-fix. For every resolution diagnostic
+        // (E03xx) the editor passed in `context.diagnostics`, extract the
+        // identifier it points at; if that bare name is a known workspace type
+        // whose package isn't yet imported, offer an `import pkg.Name;` action.
+        let mut actions: Vec<CodeActionOrCommand> = Vec::new();
+        let mut offered: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        let Ok(ws) = self.workspace.read() else {
+            return Ok(None);
+        };
+
+        for diag in &params.context.diagnostics {
+            // Only resolution-phase diagnostics (`E03xx`) name an unresolved
+            // type; skip everything else.
+            let is_resolution = matches!(
+                &diag.code,
+                Some(NumberOrString::String(c)) if c.starts_with("E03")
+            );
+            if !is_resolution {
+                continue;
+            }
+            // The identifier the diagnostic points at — take the word at the
+            // diagnostic range's start.
+            let start_off = position_to_offset(&doc.rope, diag.range.start);
+            let Some(word) = word_at(&text, start_off) else { continue };
+
+            let Some(pkgs) = ws.type_packages.get(&word.text) else { continue };
+            for pkg in pkgs {
+                let fqn = format!("{pkg}.{}", word.text);
+                if !offered.insert(fqn.clone()) {
+                    continue;
+                }
+                let Some(edit) = import_edit(&doc.rope, &fqn) else { continue };
+                let mut changes = HashMap::new();
+                changes.insert(uri.clone(), vec![edit]);
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: format!("Import `{fqn}`"),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![diag.clone()]),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some(changes),
+                        ..Default::default()
+                    }),
+                    is_preferred: Some(true),
+                    ..Default::default()
+                }));
+            }
+        }
+
+        Ok(Some(actions))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::analyze_workspace;
+    use crate::workspace::index_workspace;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("juxc_lsp_srv_test_{}_{}", std::process::id(), tag));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp root");
+        dir
+    }
+
+    // ---- text-scanning helpers ----
+
+    #[test]
+    fn word_at_finds_identifier_and_handles_trailing_cursor() {
+        let text = "var f = greet;";
+        // Cursor inside `greet`.
+        let w = word_at(text, 9).unwrap();
+        assert_eq!(w.text, "greet");
+        // Cursor just past the end of `greet` still resolves it.
+        let w2 = word_at(text, 13).unwrap();
+        assert_eq!(w2.text, "greet");
+    }
+
+    #[test]
+    fn receiver_dot_before_detects_member_access() {
+        let text = "f.greet";
+        // `greet` starts at offset 2; the `.` is at offset 1.
+        assert_eq!(receiver_dot_before(text, 2), Some(1));
+        // A float `1.0` is not a member access.
+        let f = "1.0";
+        assert_eq!(receiver_dot_before(f, 2), None);
+    }
+
+    #[test]
+    fn doc_comment_before_reads_first_line() {
+        let text = "/// Greets someone.\npublic class Greeter {}";
+        let name_start = text.find("Greeter").unwrap();
+        assert_eq!(
+            doc_comment_before(text, name_start).as_deref(),
+            Some("Greets someone.")
+        );
+    }
+
+    // ---- auto-import edit construction ----
+
+    #[test]
+    fn import_edit_inserts_after_package_line_and_dedupes() {
+        let rope = Rope::from_str("package shop;\npublic class A {}\n");
+        let edit = import_edit(&rope, "a.b.C").expect("should produce an edit");
+        assert_eq!(edit.new_text, "import a.b.C;\n");
+        // Inserted at the start of line 1 (just after the package line).
+        assert_eq!(edit.range.start.line, 1);
+        assert_eq!(edit.range.start.character, 0);
+
+        // Already-imported → no edit.
+        let rope2 = Rope::from_str("package shop;\nimport a.b.C;\nclass A {}\n");
+        assert!(import_edit(&rope2, "a.b.C").is_none());
+    }
+
+    #[test]
+    fn import_edit_inserts_at_top_without_package() {
+        let rope = Rope::from_str("public class A {}\n");
+        let edit = import_edit(&rope, "a.b.C").unwrap();
+        assert_eq!(edit.range.start.line, 0);
+        assert_eq!(edit.new_text, "import a.b.C;\n");
+    }
+
+    // ---- FEATURE 2: member completion uses the receiver's inferred type ----
+
+    /// End-to-end: a local typed `SomeClass` produces a `Ty::User` whose span
+    /// ends at the `.`, and `members_of` returns that class's members only.
+    #[test]
+    fn member_completion_resolves_receiver_type() {
+        let root = temp_root("member_completion");
+        let src = "package shop;\n\
+            public class Greeter {\n\
+                public String greet(String who) { return who; }\n\
+                int count;\n\
+            }\n\
+            public void run() { var g = new Greeter(); g.greet(\"hi\"); }\n";
+        let file = root.join("Greeter.jux");
+        fs::write(&file, src).unwrap();
+        let uri = Url::from_file_path(&file).unwrap();
+        let rope = Rope::from_str(src);
+        let analysis = analyze_workspace(&root, &uri, &rope);
+
+        let doc = Document {
+            rope: rope.clone(),
+            version: 1,
+            expr_types: analysis.expr_types,
+            type_names: analysis.type_names,
+            symbols: analysis.symbols,
+        };
+
+        // Find the `.` of `g.greet` in the source and resolve the receiver `g`.
+        let dot = src.rfind("g.greet").unwrap() + 1; // offset of `.`
+        let ty = doc
+            .type_ending_at(dot)
+            .expect("receiver `g` must have an inferred type");
+        let members = crate::intel::members_of(&doc.symbols, ty);
+        let names: Vec<&str> = members.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"greet"), "expected greet, got {names:?}");
+        assert!(names.contains(&"count"), "expected count, got {names:?}");
+        assert!(!names.contains(&"run"), "unrelated `run` leaked: {names:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // ---- FEATURE 3: auto-import maps a known type to its package ----
+
+    /// A workspace-known type carries its declaring package, and the import edit
+    /// for it inserts `import a.b.C;`.
+    #[test]
+    fn workspace_index_carries_type_package_for_auto_import() {
+        let root = temp_root("auto_import");
+        // The type to import lives in package `a.b`.
+        fs::write(
+            root.join("Widget.jux"),
+            "package a.b; public class Widget { public void use() {} }",
+        )
+        .unwrap();
+        // A consumer file that references `Widget` WITHOUT importing it.
+        let main = root.join("main.jux");
+        fs::write(&main, "package app; public void run() { var w = new Widget(); }").unwrap();
+
+        let index = index_workspace(&root, &Default::default());
+        let pkgs = index
+            .type_packages
+            .get("Widget")
+            .expect("Widget must carry a declaring package");
+        assert_eq!(pkgs, &vec!["a.b".to_string()]);
+
+        // The import edit for the consumer file inserts the right line.
+        let rope = Rope::from_str("package app; public void run() {}");
+        let edit = import_edit(&rope, "a.b.Widget").expect("should produce an edit");
+        assert_eq!(edit.new_text, "import a.b.Widget;\n");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

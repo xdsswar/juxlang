@@ -22,6 +22,11 @@ juxc-source      = { workspace = true }
 juxc-diagnostics = { workspace = true }
 juxc-tycheck     = { workspace = true }
 juxc-driver      = { workspace = true }
+# Needed by the IDE-intelligence layer (`intel.rs`) to render declaration
+# signatures: the `*Sig` types in `juxc-tycheck` expose `juxc-ast` pieces
+# (`TypeRef`, `ReturnType`, `Visibility`, `GenericArg`, …) in their public
+# fields, which hover/completion render back to Jux source.
+juxc-ast         = { workspace = true }
 
 # LSP scaffolding (§L.4). We re-export lsp types through `tower_lsp::lsp_types`
 # so the LSP type version always matches `tower-lsp`'s.

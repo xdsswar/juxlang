@@ -5,8 +5,10 @@
 //! the last analysis pass that hover/completion read from — so those requests
 //! never re-run the front end.
 
+use std::sync::Arc;
+
 use juxc_source::Span;
-use juxc_tycheck::Ty;
+use juxc_tycheck::{SymbolTable, Ty};
 use ropey::Rope;
 
 /// A tracked open document and its last-analysis caches.
@@ -27,6 +29,9 @@ pub struct Document {
     /// In-scope type names (last segment of each known FQN) offered by
     /// completion alongside the keyword list.
     pub type_names: Vec<String>,
+    /// The merged workspace symbol table from the same analysis pass. Hover and
+    /// member completion resolve the hovered/receiver identifier against this.
+    pub symbols: Arc<SymbolTable>,
 }
 
 impl Document {
@@ -40,5 +45,22 @@ impl Document {
             .filter(|(s, _)| (s.start as usize) <= offset && offset < (s.end as usize))
             .min_by_key(|(s, _)| s.len())
             .map(|(s, t)| (*s, t))
+    }
+
+    /// The inferred type of the receiver expression that *ends* at `offset`.
+    ///
+    /// Used for member completion after `<expr>.`: the cursor sits just past
+    /// the `.`, so the receiver expression's span ends at the `.`'s offset
+    /// (i.e. one byte before the cursor). We pick the LARGEST such span so a
+    /// chained receiver like `a.b().c` resolves to the whole `a.b().c`
+    /// expression's type rather than the inner `a`. Returns `None` when no
+    /// expression ends there (the receiver type couldn't be inferred), so the
+    /// caller falls back to the flat completion bag.
+    pub fn type_ending_at(&self, offset: usize) -> Option<&Ty> {
+        self.expr_types
+            .iter()
+            .filter(|(s, _)| s.end as usize == offset)
+            .max_by_key(|(s, _)| s.len())
+            .map(|(_, t)| t)
     }
 }

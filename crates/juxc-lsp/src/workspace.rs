@@ -24,6 +24,11 @@ pub struct Workspace {
     /// Bare names of every callable/member: free functions, methods, fields,
     /// enum variants, and record components.
     pub member_names: Vec<String>,
+    /// Bare type name → declaring **package** (the FQN minus its last segment),
+    /// powering auto-import. A bare name with multiple declaring packages keeps
+    /// every candidate so the code action can offer each `import` choice.
+    /// No-package (bare-FQN) types don't appear — there's nothing to import.
+    pub type_packages: HashMap<String, Vec<String>>,
 }
 
 /// The result of one workspace scan.
@@ -31,6 +36,8 @@ pub struct Workspace {
 pub struct WorkspaceIndex {
     pub type_names: Vec<String>,
     pub member_names: Vec<String>,
+    /// Bare type name → declaring package(s). See [`Workspace::type_packages`].
+    pub type_packages: HashMap<String, Vec<String>>,
 }
 
 /// Recursively collect `.jux` files under `root`, skipping build output and
@@ -89,6 +96,7 @@ pub fn index_workspace(root: &Path, overrides: &HashMap<PathBuf, String>) -> Wor
 fn collect_index(symbols: &SymbolTable) -> WorkspaceIndex {
     let mut types: Vec<String> = Vec::new();
     let mut members: Vec<String> = Vec::new();
+    let mut type_packages: HashMap<String, Vec<String>> = HashMap::new();
 
     let bare = |fqn: &str| fqn.rsplit('.').next().unwrap_or(fqn).to_string();
     let push = |v: &mut Vec<String>, name: String| {
@@ -96,19 +104,40 @@ fn collect_index(symbols: &SymbolTable) -> WorkspaceIndex {
             v.push(name);
         }
     };
+    // Record the declaring package for a type FQN. `a.b.C` → bare `C` maps to
+    // package `a.b`; a no-package bare FQN (`C`) contributes nothing (nothing
+    // to import). Multiple distinct packages for the same bare name are all
+    // kept so the auto-import action can offer each choice.
+    let record_pkg = |fqn: &str, type_packages: &mut HashMap<String, Vec<String>>| {
+        if let Some((pkg, name)) = fqn.rsplit_once('.') {
+            // Stdlib (`jux.std.*`) is auto-imported implicitly — never offer an
+            // explicit `import` for it (matches Java's `java.lang.*` rule).
+            if pkg == "jux.std" || pkg.starts_with("jux.std.") {
+                return;
+            }
+            let entry = type_packages.entry(name.to_string()).or_default();
+            if !entry.iter().any(|p| p == pkg) {
+                entry.push(pkg.to_string());
+            }
+        }
+    };
 
     // Types.
     for k in symbols.classes.keys() {
         push(&mut types, bare(k));
+        record_pkg(k, &mut type_packages);
     }
     for k in symbols.records.keys() {
         push(&mut types, bare(k));
+        record_pkg(k, &mut type_packages);
     }
     for k in symbols.enums.keys() {
         push(&mut types, bare(k));
+        record_pkg(k, &mut type_packages);
     }
     for k in symbols.interfaces.keys() {
         push(&mut types, bare(k));
+        record_pkg(k, &mut type_packages);
     }
 
     // Free functions.
@@ -147,5 +176,8 @@ fn collect_index(symbols: &SymbolTable) -> WorkspaceIndex {
 
     types.sort();
     members.sort();
-    WorkspaceIndex { type_names: types, member_names: members }
+    for pkgs in type_packages.values_mut() {
+        pkgs.sort();
+    }
+    WorkspaceIndex { type_names: types, member_names: members, type_packages }
 }

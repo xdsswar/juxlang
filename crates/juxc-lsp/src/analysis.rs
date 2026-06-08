@@ -40,6 +40,12 @@ pub struct Analysis {
     pub expr_types: Vec<(Span, Ty)>,
     /// In-scope type names for completion (from the merged symbol table).
     pub type_names: Vec<String>,
+    /// The merged workspace symbol table (stdlib + every project unit). Hover
+    /// and member-completion resolve the identifier under the cursor against
+    /// this — a type name, free function, or a member reached via a receiver's
+    /// inferred [`Ty`]. Wrapped in `Arc` so the (potentially large) table can be
+    /// cheaply shared into the cached [`crate::doc::Document`].
+    pub symbols: std::sync::Arc<SymbolTable>,
 }
 
 /// Analyse the open document at `uri` (current text `rope`) **in the context
@@ -130,7 +136,12 @@ fn analyze_sources(open_uri: &Url, open_rope: &Rope, sources: Vec<SourceFile>) -
     let mut type_names = Vec::new();
     collect_type_names(&result.symbols, &mut type_names);
 
-    Analysis { diagnostics_by_uri: by_uri, expr_types, type_names }
+    Analysis {
+        diagnostics_by_uri: by_uri,
+        expr_types,
+        type_names,
+        symbols: std::sync::Arc::new(result.symbols),
+    }
 }
 
 /// Resolve a checked `SourceFile` to the `Url` we publish diagnostics under.
@@ -271,5 +282,82 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // ====================================================================
+    // FEATURE 1 — hover signatures over known symbols
+    // ====================================================================
+
+    /// A small one-file workspace exercising type / method resolution. The
+    /// `Greeter` class has a `greet` method with a typed param + return so the
+    /// rendered signature is non-trivial.
+    const GREETER: &str = "package shop;\n\
+        public class Greeter {\n\
+            public String greet(String who) { return who; }\n\
+            int count;\n\
+        }\n";
+
+    fn analyze_one(tag: &str, name: &str, text: &str) -> (Analysis, Url, Rope) {
+        let root = temp_root(tag);
+        let file = root.join(name);
+        fs::write(&file, text).unwrap();
+        let uri = Url::from_file_path(&file).unwrap();
+        let rope = Rope::from_str(text);
+        let analysis = analyze_workspace(&root, &uri, &rope);
+        (analysis, uri, rope)
+    }
+
+    /// Hovering a TYPE name resolves to its class-declaration signature.
+    #[test]
+    fn hover_type_renders_class_signature() {
+        let (analysis, _uri, _rope) = analyze_one("hover_type", "Greeter.jux", GREETER);
+        let resolved = crate::intel::resolve_type(&analysis.symbols, "Greeter")
+            .expect("Greeter must resolve to a type");
+        let sig = resolved.signature();
+        assert!(
+            sig.contains("class Greeter"),
+            "expected a class signature, got: {sig}"
+        );
+        assert!(sig.contains("public"), "expected visibility, got: {sig}");
+    }
+
+    /// Hovering a METHOD name (resolved by name in the symbol table) renders its
+    /// full signature: return type, name, and typed params.
+    #[test]
+    fn hover_method_renders_signature_with_params() {
+        let (analysis, _uri, _rope) = analyze_one("hover_method", "Greeter.jux", GREETER);
+        // Resolve `greet` as a member of a `Greeter`-typed receiver.
+        let recv = Ty::User { name: "shop.Greeter".to_string(), generic_args: vec![] };
+        let resolved = crate::intel::resolve_member(&analysis.symbols, &recv, "greet")
+            .expect("greet must resolve on Greeter");
+        let sig = resolved.signature();
+        assert!(sig.contains("greet"), "missing method name: {sig}");
+        assert!(sig.contains("String"), "missing return/param type: {sig}");
+        assert!(sig.contains("(String who)"), "missing typed params: {sig}");
+    }
+
+    // ====================================================================
+    // FEATURE 2 — receiver members come from the receiver's type only
+    // ====================================================================
+
+    /// `members_of` on a `Greeter` receiver lists exactly Greeter's own
+    /// method/field names — and nothing unrelated.
+    #[test]
+    fn members_of_lists_receiver_members_only() {
+        let (analysis, _uri, _rope) = analyze_one("members", "Greeter.jux", GREETER);
+        let recv = Ty::User { name: "shop.Greeter".to_string(), generic_args: vec![] };
+        let members = crate::intel::members_of(&analysis.symbols, &recv);
+        let names: Vec<&str> = members.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"greet"), "expected greet, got {names:?}");
+        assert!(names.contains(&"count"), "expected count, got {names:?}");
+        // No unrelated global leaks in (e.g. stdlib `print` / `main`).
+        assert!(
+            !names.contains(&"print") && !names.contains(&"main"),
+            "unrelated globals leaked into members: {names:?}"
+        );
+        // The method member is rendered with parameters for the `()` insert.
+        let greet = members.iter().find(|m| m.name == "greet").unwrap();
+        assert!(greet.is_method, "greet should be a method");
+        assert!(greet.detail.contains("(String who)"), "detail: {}", greet.detail);
     }
 }
