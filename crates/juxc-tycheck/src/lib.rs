@@ -117,8 +117,17 @@ pub fn typecheck(unit: &CompilationUnit) -> TypeCheckResult {
 /// occurrence.
 pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     let mut tc = TypeChecker::new();
+    // `build_workspace` may emit cross-unit symbol-table diagnostics
+    // (e.g. a duplicate declaration spanning two units) that can't be
+    // cleanly attributed to a single source; those stay `file: None`.
     let symbols = symbol_table::build_workspace(units, &mut tc.diagnostics);
-    for unit in units {
+    // The unit index here is the SAME index the driver uses for its
+    // `sources` list (stdlib units first, then user units, in order).
+    // We tag each unit's diagnostics with that index via a length-delta:
+    // record `len()` before the unit's checks, set `.file` on everything
+    // appended after.
+    for (idx, unit) in units.iter().enumerate() {
+        let before = tc.diagnostics.len();
         tc.check_unit(unit);
         // Reject `T?` where T is a non-nullable value-type primitive
         // (`int?`, `bool?`, `double?`, …). Per spec, only reference
@@ -127,9 +136,13 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
         // value types that always have a meaningful default and
         // never hold null.
         nullable_check::check_nullable_primitives(unit, &mut tc.diagnostics);
+        for d in &mut tc.diagnostics[before..] {
+            d.file = Some(idx);
+        }
     }
     let mut all_expr_types = std::collections::HashMap::new();
     for (idx, unit) in units.iter().enumerate() {
+        let before = tc.diagnostics.len();
         let mut checker = check::Checker::new(&symbols, &mut tc.diagnostics);
         // Seed the checker's TypeEnv with the per-unit context built
         // during workspace symbol-table construction. This is how
@@ -140,6 +153,9 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
         }
         checker.check_unit(unit);
         all_expr_types.extend(checker.into_expr_types());
+        for d in &mut tc.diagnostics[before..] {
+            d.file = Some(idx);
+        }
     }
     TypeCheckResult {
         diagnostics: tc.diagnostics,

@@ -15,7 +15,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
-use crate::analysis::analyze;
+use crate::analysis::{analyze_single, analyze_workspace};
 use crate::doc::Document;
 use crate::position::{position_to_offset, span_to_range};
 use crate::workspace::Workspace;
@@ -214,6 +214,12 @@ pub struct Backend {
     docs: DashMap<Url, Document>,
     /// Project-wide index (root + all module type names) for completion.
     workspace: RwLock<Workspace>,
+    /// URIs we last published a non-empty diagnostic set for. A workspace
+    /// check reports diagnostics for *several* files at once; when a later
+    /// check finds a file clean, we must publish an empty list to clear it.
+    /// We track the previously-dirty set so we can clear exactly those URIs
+    /// the new pass didn't re-report.
+    published: DashMap<Url, ()>,
 }
 
 impl Backend {
@@ -224,6 +230,7 @@ impl Backend {
             client,
             docs: DashMap::new(),
             workspace: RwLock::new(Workspace::default()),
+            published: DashMap::new(),
         }
     }
 
@@ -268,10 +275,22 @@ impl Backend {
     async fn refresh(&self, uri: Url, text: &str, version: i32) {
         let rope = Rope::from_str(text);
 
+        // Determine the workspace root captured at `initialize`. With a root
+        // we check the WHOLE workspace together (so cross-file imported types
+        // carry their real method tables and the false `[E0413]` is gone);
+        // without one we fall back to single-file behavior.
+        let root = self.workspace.read().ok().and_then(|ws| ws.root.clone());
+
         // Clone the (cheap, copy-on-write) rope + uri into the blocking task.
+        // The front end is CPU-bound and runs on every keystroke, so it goes
+        // on a blocking thread to keep the async workers responsive.
         let task_uri = uri.clone();
         let task_rope = rope.clone();
-        let analysis = match tokio::task::spawn_blocking(move || analyze(&task_uri, &task_rope)).await
+        let analysis = match tokio::task::spawn_blocking(move || match root {
+            Some(root) => analyze_workspace(&root, &task_uri, &task_rope),
+            None => analyze_single(&task_uri, &task_rope),
+        })
+        .await
         {
             Ok(a) => a,
             Err(_) => return, // the blocking task panicked; skip this revision
@@ -284,9 +303,39 @@ impl Backend {
             type_names: analysis.type_names,
         };
         self.docs.insert(uri.clone(), doc);
-        self.client
-            .publish_diagnostics(uri, analysis.diagnostics, Some(version))
-            .await;
+
+        // Publish diagnostics PER FILE. A workspace check can surface errors
+        // in files other than the open one, so we publish each file's group
+        // under its own URI. We also clear any file we previously reported
+        // dirty that this pass found clean (or didn't analyse): publishing an
+        // empty list is how LSP clears.
+        let mut now_dirty: Vec<Url> = Vec::new();
+        for (file_uri, diags) in analysis.diagnostics_by_uri {
+            if !diags.is_empty() {
+                now_dirty.push(file_uri.clone());
+            }
+            // Version only applies to the open document; other files get None.
+            let ver = if file_uri == uri { Some(version) } else { None };
+            self.client
+                .publish_diagnostics(file_uri, diags, ver)
+                .await;
+        }
+
+        // Clear files that were dirty before but aren't in this pass's output.
+        let stale: Vec<Url> = self
+            .published
+            .iter()
+            .map(|e| e.key().clone())
+            .filter(|u| !now_dirty.contains(u))
+            .collect();
+        for u in stale {
+            self.published.remove(&u);
+            self.client.publish_diagnostics(u, Vec::new(), None).await;
+        }
+        // Record the new dirty set.
+        for u in now_dirty {
+            self.published.insert(u, ());
+        }
     }
 }
 

@@ -92,7 +92,7 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
 
     // Surface diagnostics. We print to stderr so stdout stays clean
     // (important when --run forwards the user program's output).
-    print_diagnostics(&result.diagnostics);
+    print_diagnostics(&result.diagnostics, &result.sources);
 
     // If any error fired, bail out with a non-success exit code. The
     // emitted crate (if any) is not produced when errors are present.
@@ -286,10 +286,35 @@ fn find_project_root(start: &Path) -> Option<PathBuf> {
 }
 
 /// Pretty-print one diagnostic per line in a stable, line-oriented format.
-/// Format: `[E0xxx] error: message at file:line:col`.
-fn print_diagnostics(diagnostics: &[juxc_diagnostics::Diagnostic]) {
+///
+/// When a diagnostic carries a `file` index (into `sources`) and a primary
+/// span, we render `path:line:col: [Code] severity: message` so the user can
+/// jump straight to the offending file — important in multi-file workspaces
+/// where the same message could come from any unit. Diagnostics without file
+/// identity or a span fall back to the bare `[Code] severity: message` form.
+fn print_diagnostics(
+    diagnostics: &[juxc_diagnostics::Diagnostic],
+    sources: &[juxc_source::SourceFile],
+) {
     for d in diagnostics {
-        eprintln!("[{}] {}: {}", d.code, severity_label(d.severity), d.message);
+        match (d.file, d.primary_span) {
+            (Some(i), Some(span)) if i < sources.len() => {
+                let src = &sources[i];
+                let (line, col) = src.line_col(span.start as usize);
+                eprintln!(
+                    "{}:{}:{}: [{}] {}: {}",
+                    src.path().display(),
+                    line,
+                    col,
+                    d.code,
+                    severity_label(d.severity),
+                    d.message,
+                );
+            }
+            _ => {
+                eprintln!("[{}] {}: {}", d.code, severity_label(d.severity), d.message);
+            }
+        }
     }
 }
 

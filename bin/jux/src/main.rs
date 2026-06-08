@@ -238,7 +238,7 @@ fn run_project(
         return Ok(ExitCode::from(1));
     }
     let result = juxc_driver::compile_workspace(sources)?;
-    print_diagnostics(&result.diagnostics);
+    print_diagnostics(&result.diagnostics, &result.sources);
     let any_error = result
         .diagnostics
         .iter()
@@ -317,7 +317,7 @@ fn cmd_test() -> Result<ExitCode> {
         return Ok(ExitCode::from(1));
     }
     let result = juxc_driver::compile_workspace_test(sources)?;
-    print_diagnostics(&result.diagnostics);
+    print_diagnostics(&result.diagnostics, &result.sources);
     let any_error = result
         .diagnostics
         .iter()
@@ -390,7 +390,7 @@ fn run_single_file(
     let source = juxc_source::SourceFile::new(input.to_path_buf(), contents);
     let result = juxc_driver::compile(source)?;
 
-    print_diagnostics(&result.diagnostics);
+    print_diagnostics(&result.diagnostics, &result.sources);
 
     let any_error = result.diagnostics.iter().any(|d| matches!(d.severity, Severity::Error));
     if any_error {
@@ -450,10 +450,31 @@ fn default_emit_dir(input: &Path) -> PathBuf {
     parent.join("target").join(".rust-build")
 }
 
-/// Pretty-print one diagnostic per line: `[E0xxx] level: message`.
-fn print_diagnostics(diagnostics: &[Diagnostic]) {
+/// Pretty-print one diagnostic per line. When the diagnostic carries a `file`
+/// index (into `sources`) and a primary span, render
+/// `path:line:col: [E0xxx] level: message` so the user can jump straight to
+/// the offending file in a multi-file workspace. Otherwise fall back to the
+/// bare `[E0xxx] level: message` form.
+fn print_diagnostics(diagnostics: &[Diagnostic], sources: &[juxc_source::SourceFile]) {
     for d in diagnostics {
-        eprintln!("[{}] {}: {}", d.code, severity_label(d.severity), d.message);
+        match (d.file, d.primary_span) {
+            (Some(i), Some(span)) if i < sources.len() => {
+                let src = &sources[i];
+                let (line, col) = src.line_col(span.start as usize);
+                eprintln!(
+                    "{}:{}:{}: [{}] {}: {}",
+                    src.path().display(),
+                    line,
+                    col,
+                    d.code,
+                    severity_label(d.severity),
+                    d.message,
+                );
+            }
+            _ => {
+                eprintln!("[{}] {}: {}", d.code, severity_label(d.severity), d.message);
+            }
+        }
     }
 }
 

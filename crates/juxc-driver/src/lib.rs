@@ -52,8 +52,13 @@ mod stdlib;
 pub struct CompileResult {
     /// Generated Rust crate, or `None` if compilation produced any errors.
     pub crate_: Option<RustCrate>,
-    /// All diagnostics from every phase, in pipeline order.
+    /// All diagnostics from every phase, in pipeline order. Each diagnostic's
+    /// `file` field (when set) indexes into [`CompileResult::sources`].
     pub diagnostics: Vec<Diagnostic>,
+    /// The full workspace source list (stdlib units first, then user units),
+    /// in the same order the diagnostics' `file` indices reference. Consumers
+    /// map `diagnostic.file` → `sources[i].path()` + `line_col`.
+    pub sources: Vec<SourceFile>,
 }
 
 /// Compile a workspace of one-or-more source files together.
@@ -70,7 +75,7 @@ pub struct CompileResult {
 pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     if sources.is_empty() {
-        return Ok(CompileResult { crate_: None, diagnostics });
+        return Ok(CompileResult { crate_: None, diagnostics, sources: Vec::new() });
     }
 
     // Auto-prepend `jux.std/*` sources so user code sees the
@@ -83,9 +88,13 @@ pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
     all_sources.extend(sources);
     let sources = all_sources;
 
-    // Phase 1+2 per source — lex and parse independently.
+    // Phase 1+2 per source — lex and parse independently. Each source's
+    // diagnostics are tagged with that source's index (a length-delta:
+    // record `len()` before, set `.file` on everything appended after) so
+    // consumers can map a diagnostic back to the file that produced it.
     let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
-    for source in &sources {
+    for (idx, source) in sources.iter().enumerate() {
+        let before = diagnostics.len();
         let lex_result = juxc_lex::lex(source);
         diagnostics.extend(lex_result.diagnostics);
         let parsed = juxc_parse::parse(&lex_result.tokens);
@@ -94,13 +103,17 @@ pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
         // through the merged symbol table during tycheck.
         let resolved = juxc_resolve::resolve(&parsed.ast);
         diagnostics.extend(resolved.diagnostics);
+        for d in &mut diagnostics[before..] {
+            d.file = Some(idx);
+        }
         units.push(parsed.ast);
     }
 
     // Phase 6+ — tycheck against the merged workspace. We build one
     // SymbolTable that contains every class/record/enum/interface/
     // function from every unit, then run the per-expression type
-    // walker against each unit using that shared table.
+    // walker against each unit using that shared table. tycheck tags its
+    // own diagnostics with the matching unit/source index.
     let typed = juxc_tycheck::typecheck_workspace(&units);
     diagnostics.extend(typed.diagnostics);
 
@@ -123,7 +136,7 @@ pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
         ))
     };
 
-    Ok(CompileResult { crate_, diagnostics })
+    Ok(CompileResult { crate_, diagnostics, sources })
 }
 
 /// `compile_workspace` variant that emits a `jux test` binary
@@ -136,7 +149,7 @@ pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
 pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult> {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     if sources.is_empty() {
-        return Ok(CompileResult { crate_: None, diagnostics });
+        return Ok(CompileResult { crate_: None, diagnostics, sources: Vec::new() });
     }
     // Stdlib auto-prepend (see `compile_workspace` for the
     // rationale) — same shape for the test runner so `@Test`
@@ -145,13 +158,17 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
     all_sources.extend(sources);
     let sources = all_sources;
     let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
-    for source in &sources {
+    for (idx, source) in sources.iter().enumerate() {
+        let before = diagnostics.len();
         let lex_result = juxc_lex::lex(source);
         diagnostics.extend(lex_result.diagnostics);
         let parsed = juxc_parse::parse(&lex_result.tokens);
         diagnostics.extend(parsed.diagnostics);
         let resolved = juxc_resolve::resolve(&parsed.ast);
         diagnostics.extend(resolved.diagnostics);
+        for d in &mut diagnostics[before..] {
+            d.file = Some(idx);
+        }
         units.push(parsed.ast);
     }
     let typed = juxc_tycheck::typecheck_workspace(&units);
@@ -169,7 +186,7 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
             &sources,
         ))
     };
-    Ok(CompileResult { crate_, diagnostics })
+    Ok(CompileResult { crate_, diagnostics, sources })
 }
 
 /// Compile a single source file through every phase that's currently
@@ -199,11 +216,18 @@ pub fn compile(source: SourceFile) -> Result<CompileResult> {
 /// which the language server uses to answer hover / completion / goto-def.
 pub struct CheckResult {
     /// Diagnostics from lex, parse, resolve, and tycheck — in pipeline order.
+    /// Each diagnostic's `file` field (when set) indexes into
+    /// [`CheckResult::sources`].
     pub diagnostics: Vec<Diagnostic>,
     /// Merged workspace symbol table (includes the auto-loaded stdlib).
     pub symbols: juxc_tycheck::SymbolTable,
     /// Per-expression inferred type, keyed by the expression's source span.
     pub expr_types: std::collections::HashMap<juxc_source::Span, juxc_tycheck::Ty>,
+    /// The full workspace source list (stdlib units first, then user units),
+    /// in the same order the diagnostics' `file` indices reference. The LSP
+    /// maps `diagnostic.file` → `sources[i].path()` → `Url` to publish
+    /// per-file diagnostics, and resolves spans against the right file's text.
+    pub sources: Vec<SourceFile>,
 }
 
 /// Run the front end (lex → parse → resolve → tycheck) over `sources`
@@ -230,20 +254,27 @@ pub fn check_workspace(sources: Vec<SourceFile>) -> CheckResult {
 
     // Lex + parse + resolve each unit independently. Cross-file name
     // resolution happens through the merged symbol table in tycheck.
+    // Each source's diagnostics are tagged with its index (length-delta)
+    // so the LSP can publish per-file diagnostics against the right Url.
     let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
-    for source in &sources {
+    for (idx, source) in sources.iter().enumerate() {
+        let before = diagnostics.len();
         let lex_result = juxc_lex::lex(source);
         diagnostics.extend(lex_result.diagnostics);
         let parsed = juxc_parse::parse(&lex_result.tokens);
         diagnostics.extend(parsed.diagnostics);
         let resolved = juxc_resolve::resolve(&parsed.ast);
         diagnostics.extend(resolved.diagnostics);
+        for d in &mut diagnostics[before..] {
+            d.file = Some(idx);
+        }
         units.push(parsed.ast);
     }
 
     // Tycheck against the merged workspace. We keep `symbols` and
     // `expr_types` so the LSP can serve hover/completion/goto without
-    // re-running the front end.
+    // re-running the front end. tycheck tags its own diagnostics with the
+    // matching unit/source index.
     let typed = juxc_tycheck::typecheck_workspace(&units);
     diagnostics.extend(typed.diagnostics);
 
@@ -251,6 +282,7 @@ pub fn check_workspace(sources: Vec<SourceFile>) -> CheckResult {
         diagnostics,
         symbols: typed.symbols,
         expr_types: typed.expr_types,
+        sources,
     }
 }
 

@@ -57,6 +57,13 @@ pub struct Diagnostic {
     /// The primary span the diagnostic points at, if any. Synthesized
     /// diagnostics (no source to point at) leave this `None`.
     pub primary_span: Option<Span>,
+    /// Index of the source file this diagnostic belongs to, within the
+    /// workspace source list (stdlib units first, then user units — the
+    /// same ordering the driver/tycheck use). `None` when the diagnostic
+    /// cannot be attributed to a single source (e.g. a cross-unit
+    /// symbol-table conflict). [`Span`] itself is file-relative and
+    /// carries no file id, so this is the only place file identity lives.
+    pub file: Option<usize>,
     /// Secondary spans with explanatory captions. Per the spec these are
     /// the "labels" surfaced under the underline.
     pub labels: Vec<Label>,
@@ -101,6 +108,7 @@ impl Diagnostic {
             severity: Severity::Error,
             message: message.into(),
             primary_span: None,
+            file: None,
             labels: Vec::new(),
             help: Vec::new(),
             notes: Vec::new(),
@@ -110,6 +118,14 @@ impl Diagnostic {
     /// Attach the primary span the diagnostic points at.
     pub fn with_span(mut self, span: Span) -> Self {
         self.primary_span = Some(span);
+        self
+    }
+
+    /// Attach the workspace source index this diagnostic belongs to. The
+    /// driver/tycheck tag freshly-produced diagnostics with this so
+    /// consumers (CLI, LSP) can map index → path + compute line:col.
+    pub fn with_file(mut self, file: usize) -> Self {
+        self.file = Some(file);
         self
     }
 
