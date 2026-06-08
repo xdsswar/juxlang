@@ -208,6 +208,22 @@ pub enum Code {
     /// diagnostic — most commonly seen as `print($"$myToken")` after
     /// `OpaqueToken` deleted `operator string`.
     E0935_DeletedOperator,
+
+    // ---- Properties (E0970–E0979) — JUX-MISSING-DEFS §M.7 ----
+    /// E0970 — Write to a read-only or `init`-only property outside
+    /// the place where it's settable. Per §M.7.2, a `{ get; }`
+    /// property is settable only inside the declaring type's
+    /// constructor, and a `{ get; init; }` property only during
+    /// construction (`new`, or a record `with(...)`). An assignment
+    /// reaching this code is a post-construction write, which the
+    /// property forbids.
+    E0970_PropertyNotWritable,
+    /// E0972 — Property accessor visibility violation. Per §M.7.2 /
+    /// §M.7.7, writing through a property whose `set` / `init`
+    /// accessor is more restrictive than the access site allows
+    /// (e.g. a `{ get; private set; }` property written from outside
+    /// the declaring class) fires this code.
+    E0972_PropertyAccessorVisibility,
 }
 
 impl Code {
@@ -254,6 +270,8 @@ impl Code {
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",
+            Code::E0970_PropertyNotWritable      => "E0970",
+            Code::E0972_PropertyAccessorVisibility => "E0972",
         }
     }
 }

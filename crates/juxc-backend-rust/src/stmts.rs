@@ -833,6 +833,38 @@ impl RustEmitter {
     /// `emit_literal`; identifiers refer to `String`-typed bindings).
     /// No `.to_string()` injection is needed here anymore.
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
+        // **Property-setter routing (JUX-MISSING-DEFS §M.7).** When the
+        // target is `obj.Prop` and `Prop` names a property with a
+        // settable accessor (`set` / `init`), lower the write to a call
+        // on the synthesized setter: `obj.__set_Prop(value)`. This runs
+        // BEFORE the wrapper-field-write branch so custom setters (with
+        // validation) actually fire instead of the write hitting the
+        // backing field directly. Constructor bodies don't reach here
+        // for auto-properties — the desugarer rewrote `this.AutoProp`
+        // to the backing field `this.__prop_AutoProp` before emission.
+        // Plain `=` only (compound `+=` on a property isn't in §M.7).
+        if a.op.is_none() {
+            if let Expr::Field(tf) = &a.target {
+                if !tf.safe {
+                    if let Some(prop) =
+                        self.property_on_receiver(&tf.object, &tf.field.text).cloned()
+                    {
+                        if prop.setter.is_some() {
+                            self.emit_property_setter_call(&tf.object, &tf.field.text, &a.value);
+                            return;
+                        }
+                        // Read-only property write outside the ctor —
+                        // tycheck already fired the diagnostic; fall
+                        // through to a backing-field write so the
+                        // emitted Rust still type-checks (best-effort).
+                        if prop.has_backing_field {
+                            self.emit_property_backing_write(&tf.object, &tf.field.text, a);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         // String `+=` special-case: Rust's `String + String` and
         // `String += String` aren't implemented (only the
         // `&str`-RHS variants exist), and emitting the regular
@@ -981,6 +1013,82 @@ impl RustEmitter {
             self.w.push_str(".clone()");
         }
         self.w.push_str(";\n");
+    }
+
+    /// Emit a property write as a call to the synthesized setter
+    /// (`obj.__set_Prop(value)` for an instance property, or
+    /// `Class::__set_Prop(value)` for a static one). The value is
+    /// emitted as a regular call argument so String literals coerce
+    /// and wrapper-class places share correctly.
+    pub(crate) fn emit_property_setter_call(
+        &mut self,
+        receiver: &Expr,
+        prop_name: &str,
+        value: &Expr,
+    ) {
+        let setter = juxc_ast::desugar_static_setter_name(prop_name);
+        // Static property: `Class.Prop = v` where `Class` is a path
+        // resolving to a class → `Class::__set_Prop(v)`.
+        if let Expr::Path(qn) = receiver {
+            if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                self.w.push_str("::");
+                self.w.push_str(&setter);
+                self.w.push('(');
+                self.emit_property_setter_arg(value);
+                self.w.push_str(");\n");
+                return;
+            }
+        }
+        // Instance property: `obj.__set_Prop(v)`. The setter is an
+        // inherent `&self` method on the (possibly wrapper) newtype;
+        // its body takes the statement-scoped `borrow_mut()`.
+        self.emit_expr(receiver);
+        // Wrapper-class share-on-receiver isn't needed — a method call
+        // borrows the receiver, it doesn't move it.
+        self.w.push('.');
+        self.w.push_str(&setter);
+        self.w.push('(');
+        self.emit_property_setter_arg(value);
+        self.w.push_str(");\n");
+    }
+
+    /// Emit a single setter argument, applying the same value-position
+    /// coercions a normal call argument gets (wrapper-class share).
+    fn emit_property_setter_arg(&mut self, value: &Expr) {
+        self.emit_expr(value);
+        if self.wrapper_value_needs_clone(value) {
+            self.w.push_str(".clone()");
+        }
+    }
+
+    /// Best-effort fallback write of a read-only auto-property's
+    /// backing field, used only when tycheck has *already* fired the
+    /// access-control diagnostic (so the program won't actually build,
+    /// but the emitted Rust stays well-formed). Mirrors the regular
+    /// field-write path against the `__prop_<Name>` backing slot.
+    pub(crate) fn emit_property_backing_write(
+        &mut self,
+        receiver: &Expr,
+        prop_name: &str,
+        a: &AssignStmt,
+    ) {
+        let backing = juxc_ast::desugar_backing_field_name(prop_name);
+        let synthetic_target = Expr::Field(juxc_ast::FieldExpr {
+            object: Box::new(receiver.clone()),
+            field: juxc_ast::Ident { text: backing, span: juxc_source::Span::DUMMY },
+            safe: false,
+            span: juxc_source::Span::DUMMY,
+        });
+        let rewritten = AssignStmt {
+            target: synthetic_target,
+            op: a.op,
+            value: a.value.clone(),
+            span: a.span,
+        };
+        // Re-enter the regular assign path; the synthetic target names
+        // a real backing field, so no property routing re-fires.
+        self.emit_assign(&rewritten);
     }
 
     /// True iff the assignment target resolves to a non-`final`

@@ -35,6 +35,7 @@
 mod common;
 mod compilation;
 mod decls;
+mod desugar;
 mod exprs;
 mod literals;
 mod patterns;
@@ -44,10 +45,14 @@ mod types;
 pub use common::{Ident, QualifiedName, Visibility};
 pub use compilation::{CompilationUnit, ImportDecl, ImportItem, ImportSpec, PackageDecl};
 pub use decls::{
-    Annotation, AnnotationArg, ClassDecl, ConstDecl, ConstructorDecl, EnumDecl, EnumPayload,
-    EnumVariant, FieldDecl, FnDecl, FnModifier, InterfaceDecl, OperatorDecl,
-    OperatorKind, Param, RecordComponent, RecordDecl, ReturnType,
-    TopLevelDecl, TypeAliasDecl, TypeParam,
+    AccessorBody, Annotation, AnnotationArg, ClassDecl, ConstDecl, ConstructorDecl, EnumDecl,
+    EnumPayload, EnumVariant, FieldDecl, FnDecl, FnModifier, InterfaceDecl, OperatorDecl,
+    OperatorKind, Param, PropertyAccessor, PropertyDecl, PropertySetter, RecordComponent,
+    RecordDecl, ReturnType, TopLevelDecl, TypeAliasDecl, TypeParam,
+};
+pub use desugar::{
+    backing_field_name as desugar_backing_field_name, desugar_properties,
+    setter_method_name as desugar_static_setter_name,
 };
 pub use exprs::{
     AnonymousBody, BinaryExpr, BinaryOp, CallExpr, CastExpr, ElvisExpr, Expr, FieldExpr,

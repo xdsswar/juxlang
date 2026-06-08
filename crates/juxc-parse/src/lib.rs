@@ -75,7 +75,13 @@ pub struct ParseResult {
 /// [`TokenKind::Eof`] token (the lexer guarantees this).
 pub fn parse(tokens: &[Token]) -> ParseResult {
     let mut p = Parser::new(tokens);
-    let ast = p.parse_compilation_unit();
+    let mut ast = p.parse_compilation_unit();
+    // Desugar C#-style properties (JUX-MISSING-DEFS §M.7) into backing
+    // fields + getter / setter methods so every downstream phase
+    // (resolve, tycheck, backend) reuses the existing field / method
+    // machinery. The original `PropertyDecl` list stays on each class
+    // for tycheck access-control and backend setter routing.
+    juxc_ast::desugar_properties(&mut ast);
     ParseResult { ast, diagnostics: p.diagnostics }
 }
 

@@ -316,12 +316,12 @@ binding-immut     = 'const' | 'final'                      -- synonyms; either d
 
 property-decl     = modifier* type identifier property-body? property-init? ';'?
 property-body     = '{' accessor-list '}'
-                  | '=>' expression                           -- expression-bodied read-only
+                  | '->' expression                           -- expression-bodied read-only ('->', not '=>': '=>' is instanceof)
 accessor-list     = accessor (accessor)*
 accessor          = visibility? accessor-kind accessor-body
 accessor-kind     = 'get' | 'set' | 'init'
 accessor-body     = ';'                                       -- auto: synthesize body
-                  | '=>' expression ';'                       -- expression-bodied
+                  | '->' expression ';'                       -- expression-bodied
                   | block                                      -- full body
 property-init     = '=' expression                            -- field-initializer
 

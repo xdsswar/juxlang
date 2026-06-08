@@ -98,6 +98,18 @@ fn match_null_comparison<'a>(b: &'a BinaryExpr) -> Option<(&'a Expr, bool)> {
     }
 }
 
+/// True iff a [`juxc_ast::TypeRef`] is the bare `String` type (no
+/// generics, array shape, nullability, or fn-shape). Used to detect a
+/// `String`-typed property for the string-concat trigger.
+fn type_ref_is_string(ty: &juxc_ast::TypeRef) -> bool {
+    !ty.nullable
+        && ty.array_shape.is_none()
+        && ty.fn_shape.is_none()
+        && ty.generic_args.is_empty()
+        && ty.name.segments.len() == 1
+        && ty.name.segments[0].text == "String"
+}
+
 /// Same shape as `field::receiver_needs_parens` (kept local so we
 /// don't cross-module-import a tiny helper). True when emitting
 /// `expr.method()` would require wrapping `expr` in parens —
@@ -137,6 +149,32 @@ impl RustEmitter {
     /// based concat trigger misses inside `if (b != null)` blocks
     /// where `b` is now effectively `String`.
     fn operand_is_string_typed(&self, e: &Expr) -> bool {
+        // A nested string-concat (`(a + " ") + b`) is itself a
+        // `String` — recurse so the OUTER `+` is recognized as concat
+        // and the whole chain folds into one `format!`. Without this,
+        // `First + " " + Last` would emit `format!("{} ", ..) + Last`,
+        // which is the invalid Rust `String + String`.
+        if let Expr::Binary(b) = e {
+            if b.op == BinaryOp::Add
+                && (is_string_literal(&b.left)
+                    || is_string_literal(&b.right)
+                    || self.operand_is_string_typed(&b.left)
+                    || self.operand_is_string_typed(&b.right))
+            {
+                return true;
+            }
+        }
+        // A property getter read (`obj.Prop` / bare `Prop` desugared to
+        // `this.Prop`) whose declared property type is `String`. The
+        // getter call's value is owned `String`, so it participates in
+        // concat. Resolved through the receiver's class properties.
+        if let Expr::Field(f) = e {
+            if let Some(prop) = self.property_on_receiver(&f.object, &f.field.text) {
+                if prop.getter.is_some() && type_ref_is_string(&prop.ty) {
+                    return true;
+                }
+            }
+        }
         let recorded = self.expr_types.get(&crate::exprs::expr_span_of(e));
         let unwrapped = self.unwrap_for_smart_cast(e, recorded);
         matches!(unwrapped, Some(juxc_tycheck::Ty::String))

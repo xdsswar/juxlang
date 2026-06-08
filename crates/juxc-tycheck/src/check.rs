@@ -675,6 +675,15 @@ impl<'a> Checker<'a> {
                 // Walk both sides for nested checks first.
                 self.check_expr(&a.target);
                 self.check_expr(&a.value);
+                // **Property write-access enforcement (§M.7.2).** A
+                // write to `obj.Prop` / `Class.Prop` where `Prop` is a
+                // read-only / init-only / restricted-visibility property
+                // is rejected here. The legitimate constructor write was
+                // already lowered (by the parser's desugarer) to a
+                // direct backing-field write, so any property-named
+                // assignment reaching tycheck is a post-construction or
+                // out-of-scope write.
+                self.check_property_write(&a.target);
                 let target_ty = infer_expr(&a.target, &self.env, self.symbols);
                 let value_ty = infer_expr(&a.value, &self.env, self.symbols);
                 if !compatible(&target_ty, &value_ty, self.symbols) {
@@ -1101,6 +1110,149 @@ impl<'a> Checker<'a> {
     /// `member_kind` is the human-readable phrase used in the
     /// emitted diagnostic — `"field"`, `"method"`, or
     /// `"constructor"`.
+    /// Enforce property write-access rules (§M.7.2) on an assignment
+    /// target. Recognizes both instance (`obj.Prop`) and static
+    /// (`Class.Prop`) property writes. Fires:
+    ///
+    /// - **E0970** when the property is read-only (`{ get; }`) or
+    ///   `init`-only and the write is post-construction. (The
+    ///   constructor write is legal but was already desugared into a
+    ///   direct backing-field write, so anything reaching here is an
+    ///   illegal post-construction / external write.)
+    /// - **E0972** when the property's `set` accessor is more
+    ///   restrictive than the access site permits (e.g. a
+    ///   `{ get; private set; }` written from outside the class).
+    fn check_property_write(&mut self, target: &juxc_ast::Expr) {
+        use juxc_ast::Expr;
+        let Expr::Field(f) = target else { return };
+        if f.safe {
+            return;
+        }
+        let prop_name = f.field.text.as_str();
+        // Resolve the declaring class: static (`Class.Prop`) or
+        // instance (`obj.Prop`).
+        let class_fqn: Option<String> = if let Expr::Path(qn) = f.object.as_ref() {
+            crate::infer::path_resolves_to_class(qn, &self.env, self.symbols)
+                .or_else(|| match infer_expr(&f.object, &self.env, self.symbols) {
+                    Ty::User { name, .. } => self.resolve_class_fqn(&name),
+                    _ => None,
+                })
+        } else {
+            match infer_expr(&f.object, &self.env, self.symbols) {
+                Ty::User { name, .. } => self.resolve_class_fqn(&name),
+                _ => None,
+            }
+        };
+        let Some(class_fqn) = class_fqn else { return };
+        let Some(prop) = self
+            .symbols
+            .classes
+            .get(&class_fqn)
+            .and_then(|c| c.properties.get(prop_name))
+            .cloned()
+        else {
+            return;
+        };
+        // Read-only / init-only writes reaching here are illegal.
+        if prop.is_read_only {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0970_PropertyNotWritable,
+                    format!(
+                        "cannot assign to read-only property `{prop_name}` of `{class_fqn}` — it has no `set` accessor (settable only in the constructor)",
+                    ),
+                )
+                .with_span(f.span),
+            );
+            return;
+        }
+        if prop.is_init_only {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0970_PropertyNotWritable,
+                    format!(
+                        "cannot assign to init-only property `{prop_name}` of `{class_fqn}` after construction — `init` accessors are settable only during construction",
+                    ),
+                )
+                .with_span(f.span),
+            );
+            return;
+        }
+        // Setter visibility (§M.7.7). Reuse the standard visibility
+        // machinery so private / protected / package rules match the
+        // rest of the language, but route the diagnostic through the
+        // property-specific E0972 code.
+        if let Some(set_vis) = prop.setter_visibility {
+            if !self.write_visibility_allowed(set_vis, &class_fqn) {
+                let word = match set_vis {
+                    juxc_ast::Visibility::Private => "private",
+                    juxc_ast::Visibility::Protected => "protected",
+                    _ => "restricted",
+                };
+                let ctx = match self.env.current_class.as_deref() {
+                    Some(a) => format!("from `{a}`"),
+                    None => "from top-level code".to_string(),
+                };
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0972_PropertyAccessorVisibility,
+                        format!(
+                            "cannot write property `{prop_name}` of `{class_fqn}` {ctx} — its setter is `{word}`",
+                        ),
+                    )
+                    .with_span(f.span),
+                );
+            }
+        }
+    }
+
+    /// True iff a write through an accessor of visibility `vis` on
+    /// `declaring_class` is permitted from the current accessor
+    /// context. Mirrors the allow-rules in [`Self::check_visibility`]
+    /// without emitting a diagnostic.
+    fn write_visibility_allowed(
+        &self,
+        vis: juxc_ast::Visibility,
+        declaring_class: &str,
+    ) -> bool {
+        use juxc_ast::Visibility;
+        let accessor = self.env.current_class.as_deref();
+        match vis {
+            Visibility::Public => true,
+            Visibility::Private => accessor == Some(declaring_class),
+            Visibility::Protected => accessor.map_or(false, |a| {
+                a == declaring_class
+                    || crate::ty::walk_extends_reaches(a, declaring_class, self.symbols)
+            }),
+            Visibility::Package | Visibility::Internal => {
+                let declaring_pkg: &[String] = self
+                    .symbols
+                    .classes
+                    .get(declaring_class)
+                    .map(|c| c.package.as_slice())
+                    .unwrap_or(&[]);
+                let accessor_pkg: &[String] = accessor
+                    .and_then(|name| self.symbols.classes.get(name))
+                    .map(|c| c.package.as_slice())
+                    .unwrap_or(&[]);
+                declaring_pkg == accessor_pkg
+            }
+        }
+    }
+
+    /// Resolve a (possibly bare) class name to its FQN key in the
+    /// symbol table. Direct hit first, then a last-segment scan.
+    fn resolve_class_fqn(&self, name: &str) -> Option<String> {
+        if self.symbols.classes.contains_key(name) {
+            return Some(name.to_string());
+        }
+        self.symbols
+            .classes
+            .keys()
+            .find(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == name)
+            .cloned()
+    }
+
     fn check_visibility(
         &mut self,
         vis: juxc_ast::Visibility,
@@ -1309,6 +1461,26 @@ impl<'a> Checker<'a> {
                         );
                     }
                     return;
+                }
+                // Static property read (`Class.Prop`) — the getter is
+                // a static method with `is_property = true`. Allow it
+                // and enforce the getter's visibility.
+                if let Some(method) = self
+                    .symbols
+                    .classes
+                    .get(&class_fqn)
+                    .and_then(|c| c.methods.get(field_name))
+                {
+                    if method.is_property {
+                        self.check_visibility(
+                            method.visibility,
+                            &class_fqn,
+                            field_name,
+                            "property",
+                            f.span,
+                        );
+                        return;
+                    }
                 }
                 // No such field — surface E0412 against the class.
                 self.diagnostics.push(
@@ -3647,6 +3819,103 @@ mod tests {
         assert!(
             !d.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
             "List<?> should accept anything: {d:?}",
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // C#-style property access control (JUX-MISSING-DEFS §M.7.2)
+    // ----------------------------------------------------------------
+
+    /// A read-write auto-property may be freely read and written.
+    #[test]
+    fn property_read_write_is_ok() {
+        let d = run(
+            r#"
+            public class P { public String Name { get; set; } }
+            public void main() {
+                var p = new P();
+                p.Name = "Bob";
+                print(p.Name);
+            }
+            "#,
+        );
+        assert!(
+            !has(&d, code::Code::E0970_PropertyNotWritable)
+                && !has(&d, code::Code::E0972_PropertyAccessorVisibility),
+            "read/write property should be clean: {d:?}",
+        );
+    }
+
+    /// Writing a read-only property (`{ get; }`) outside the
+    /// constructor fires E0970.
+    #[test]
+    fn write_readonly_property_outside_ctor_errors() {
+        let d = run(
+            r#"
+            public class P {
+                public int Id { get; }
+                public P() { this.Id = 7; }
+            }
+            public void main() { var p = new P(); p.Id = 1; }
+            "#,
+        );
+        assert!(has(&d, code::Code::E0970_PropertyNotWritable), "expected E0970: {d:?}");
+    }
+
+    /// Writing an init-only property after construction fires E0970.
+    #[test]
+    fn write_init_property_after_construction_errors() {
+        let d = run(
+            r#"
+            public class P {
+                public String Code { get; init; }
+                public P(String c) { this.Code = c; }
+            }
+            public void main() { var p = new P("a"); p.Code = "x"; }
+            "#,
+        );
+        assert!(has(&d, code::Code::E0970_PropertyNotWritable), "expected E0970: {d:?}");
+    }
+
+    /// Writing a `{ get; private set; }` property from outside the
+    /// declaring class fires E0972.
+    #[test]
+    fn write_private_set_property_from_outside_errors() {
+        let d = run(
+            r#"
+            public class P {
+                public String Token { get; private set; }
+                public P() { this.Token = "t"; }
+            }
+            public void main() { var p = new P(); p.Token = "y"; }
+            "#,
+        );
+        assert!(
+            has(&d, code::Code::E0972_PropertyAccessorVisibility),
+            "expected E0972: {d:?}",
+        );
+    }
+
+    /// The constructor may set read-only / init / private-set
+    /// properties — the desugarer lowers those to backing-field writes,
+    /// so no access-control diagnostic fires.
+    #[test]
+    fn ctor_may_set_restricted_properties() {
+        let d = run(
+            r#"
+            public class P {
+                public int Id { get; }
+                public String Code { get; init; }
+                public String Token { get; private set; }
+                public P(String c) { this.Id = 1; this.Code = c; this.Token = "t"; }
+            }
+            public void main() { var p = new P("a"); print(p.Id); }
+            "#,
+        );
+        assert!(
+            !has(&d, code::Code::E0970_PropertyNotWritable)
+                && !has(&d, code::Code::E0972_PropertyAccessorVisibility),
+            "ctor writes to restricted props should be clean: {d:?}",
         );
     }
 }

@@ -3863,3 +3863,120 @@ fn deep_package_path_nests_module_per_segment() {
         "crate-root shim path: {rust}",
     );
 }
+
+// ---------------------------------------------------------------------
+// C#-style properties (JUX-MISSING-DEFS §M.7)
+// ---------------------------------------------------------------------
+
+/// An auto-property `T Name { get; set; }` lowers to a private backing
+/// field plus a getter (`fn Name(&self) -> T`) and a setter
+/// (`fn __set_Name(&self, value: T)`); reads emit `obj.Name()` and
+/// writes emit `obj.__set_Name(v)`.
+#[test]
+fn auto_property_lowers_to_backing_field_and_accessors() {
+    let rust = emit(
+        r#"
+        public class P {
+            public int Score { get; set; } = 0;
+        }
+        public void main() {
+            var p = new P();
+            p.Score = 5;
+            print(p.Score);
+        }
+        "#,
+    );
+    // Backing field inside the inner struct.
+    assert!(rust.contains("__prop_Score"), "missing backing field: {rust}");
+    // Getter method named after the property.
+    assert!(rust.contains("fn Score("), "missing getter: {rust}");
+    // Setter method.
+    assert!(rust.contains("fn __set_Score("), "missing setter: {rust}");
+    // Read site is a getter call.
+    assert!(rust.contains("p.Score()"), "read should be a getter call: {rust}");
+    // Write site routes through the setter.
+    assert!(rust.contains("__set_Score("), "write should route to setter: {rust}");
+}
+
+/// A read-only auto-property `{ get; }` set in the constructor lowers
+/// the ctor write to a direct backing-field assignment (no setter
+/// exists for it).
+#[test]
+fn readonly_property_ctor_write_targets_backing_field() {
+    let rust = emit(
+        r#"
+        public class P {
+            public int Id { get; }
+            public P() { this.Id = 7; }
+        }
+        public void main() { var p = new P(); print(p.Id); }
+        "#,
+    );
+    assert!(rust.contains("__prop_Id"), "missing backing field: {rust}");
+    // No public setter for a read-only property.
+    assert!(!rust.contains("fn __set_Id"), "read-only must not get a setter: {rust}");
+    // The read is still a getter call.
+    assert!(rust.contains("p.Id()"), "read should be a getter call: {rust}");
+}
+
+/// An expression-bodied read-only property `T Name -> expr;` lowers to
+/// a getter whose body returns the expression; bare member references
+/// inside resolve through implicit-`this`. (Jux uses `->`, not C#'s `=>`,
+/// since `=>` is the instanceof operator.)
+#[test]
+fn expression_bodied_property_resolves_implicit_this() {
+    let rust = emit(
+        r#"
+        public class P {
+            public String First { get; set; }
+            public String Last { get; set; }
+            public String FullName -> First + " " + Last;
+        }
+        public void main() {
+            var p = new P();
+            p.First = "Ada"; p.Last = "Lovelace";
+            print(p.FullName);
+        }
+        "#,
+    );
+    assert!(rust.contains("fn FullName("), "missing computed getter: {rust}");
+    // Bare `First` / `Last` became getter calls through `self`.
+    assert!(rust.contains("self.First()"), "implicit-this getter call missing: {rust}");
+    assert!(rust.contains("self.Last()"), "implicit-this getter call missing: {rust}");
+    // FullName itself has no backing field (computed).
+    assert!(!rust.contains("__prop_FullName"), "computed prop must have no backing field: {rust}");
+}
+
+/// A full-bodied accessor with the implicit `value` parameter lowers
+/// with the user's body verbatim and `value` typed as the property.
+#[test]
+fn full_bodied_setter_uses_value_param() {
+    let rust = emit(
+        r#"
+        public class P {
+            private int _age;
+            public int Age { get { return _age; } set { _age = value < 0 ? 0 : value; } }
+        }
+        public void main() { var p = new P(); p.Age = -5; print(p.Age); }
+        "#,
+    );
+    assert!(rust.contains("fn __set_Age("), "missing setter: {rust}");
+    assert!(rust.contains("value"), "setter should mention `value`: {rust}");
+}
+
+/// A static property `static T Name { get; set; }` lowers to a static
+/// backing field and static accessors, accessed as `Class::Name()` /
+/// `Class::__set_Name(v)`.
+#[test]
+fn static_property_uses_class_path_accessors() {
+    let rust = emit(
+        r#"
+        public class P {
+            public static int Count { get; set; }
+        }
+        public void main() { P.Count = 3; print(P.Count); }
+        "#,
+    );
+    assert!(rust.contains("P::Count()"), "static getter call missing: {rust}");
+    assert!(rust.contains("P::__set_Count("), "static setter call missing: {rust}");
+}

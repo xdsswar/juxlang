@@ -151,6 +151,32 @@ impl RustEmitter {
         //     `Class_X.lock().unwrap().clone()` to materialize an
         //     owned value before the guard drops.
         if let Expr::Path(qn) = &*f.object {
+            // **Static property read (§M.7.9).** `Class.Prop` where
+            // `Prop` is a static property → call the static getter
+            // `Class::Prop()`. Suppressed in lvalue position so a
+            // `Class.Prop = v` write still reaches the setter-routing
+            // path in `emit_assign` (which handles the static case).
+            if !self.emitting_lvalue && !is_call_callee {
+                if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                    let is_static_prop = self
+                        .lookup_class_ast_by_bare_or_fqn(
+                            crate::backend_fqn::fqn_bare(&class_fqn),
+                        )
+                        .map(|c| {
+                            c.properties
+                                .iter()
+                                .any(|p| p.name.text == f.field.text && p.is_static)
+                        })
+                        .unwrap_or(false);
+                    if is_static_prop {
+                        self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                        self.w.push_str("::");
+                        self.w.push_str(&f.field.text);
+                        self.w.push_str("()");
+                        return;
+                    }
+                }
+            }
             if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
                 let cls = self.symbols.classes.get(&class_fqn);
                 if let Some(field) = cls.and_then(|c| c.fields.get(f.field.text.as_str())) {
@@ -639,6 +665,69 @@ impl RustEmitter {
             return self.wrapper_classes.contains(bare);
         }
         false
+    }
+
+    /// Resolve the [`juxc_ast::ClassDecl`] (from `class_asts`) a
+    /// receiver expression evaluates to, by bare or FQN name. `this`
+    /// maps to the `enclosing_class`. Used by the property-write path
+    /// to find a property's accessor metadata.
+    pub(crate) fn receiver_class_ast(
+        &self,
+        recv: &Expr,
+    ) -> Option<&juxc_ast::ClassDecl> {
+        let bare = if matches!(recv, Expr::This(_)) {
+            self.enclosing_class.clone()?
+        } else {
+            self.receiver_class_bare(recv)?
+        };
+        self.lookup_class_ast_by_bare_or_fqn(&bare)
+    }
+
+    /// Bare-or-FQN lookup into `class_asts` (the AST `ClassDecl`s the
+    /// backend cached up front). Direct key hit first, then a
+    /// last-segment scan — mirroring `lookup_class_by_bare_or_fqn`.
+    pub(crate) fn lookup_class_ast_by_bare_or_fqn(
+        &self,
+        name: &str,
+    ) -> Option<&juxc_ast::ClassDecl> {
+        if let Some(c) = self.class_asts.get(name) {
+            return Some(c);
+        }
+        self.class_asts
+            .iter()
+            .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == name)
+            .map(|(_, c)| c)
+    }
+
+    /// Find a property named `prop_name` declared on the class that
+    /// `recv` evaluates to. Returns the `PropertyDecl` so callers can
+    /// consult its accessor shape (read-only / settable / init-only).
+    /// Does not walk the `extends` chain today — properties on a base
+    /// class are accessed through the subclass's flattened inner, but
+    /// the property-write rewrite only needs the declaring class's own
+    /// list (Phase-1 scope, matching the field-write path).
+    pub(crate) fn property_on_receiver(
+        &self,
+        recv: &Expr,
+        prop_name: &str,
+    ) -> Option<&juxc_ast::PropertyDecl> {
+        // Static receiver: `Class.Prop` where `Class` is a path
+        // resolving to a known class. The property's accessors are
+        // static methods on that class.
+        if let Expr::Path(qn) = recv {
+            if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                if let Some(class) = self.lookup_class_ast_by_bare_or_fqn(
+                    crate::backend_fqn::fqn_bare(&class_fqn),
+                ) {
+                    return class
+                        .properties
+                        .iter()
+                        .find(|p| p.name.text == prop_name && p.is_static);
+                }
+            }
+        }
+        let class = self.receiver_class_ast(recv)?;
+        class.properties.iter().find(|p| p.name.text == prop_name)
     }
 
     pub(crate) fn emit_safe_field(&mut self, f: &FieldExpr) {

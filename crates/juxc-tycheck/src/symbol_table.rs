@@ -341,7 +341,42 @@ pub struct ClassSig {
     /// "Binary or unary" but doesn't say a single class can declare
     /// both at once, so we keep the simpler keying for now.
     pub operators: HashMap<OperatorKind, OperatorSig>,
+    /// C#-style property metadata, indexed by property name
+    /// (JUX-MISSING-DEFS §M.7). The property's getter / setter are
+    /// *also* present in [`Self::methods`] (the parser desugared them),
+    /// but this map preserves the write-access shape — read-only /
+    /// init-only / per-accessor visibility — so tycheck can enforce
+    /// §M.7.2 access control on `obj.Prop = v` writes. Empty for
+    /// classes with no properties.
+    pub properties: HashMap<String, PropertySig>,
     /// Span of the whole class declaration.
+    pub span: Span,
+}
+
+/// Write-access metadata for one C#-style property (§M.7.2). The
+/// getter / setter bodies live in [`ClassSig::methods`]; this captures
+/// only what the access-control checks need.
+#[derive(Debug, Clone)]
+pub struct PropertySig {
+    /// The property's outer visibility.
+    pub visibility: Visibility,
+    /// True when the property is `static`.
+    pub is_static: bool,
+    /// True when the property has *no* settable accessor — read-only
+    /// (`{ get; }` / `T Name => e;`). Writable only inside the
+    /// declaring constructor (which the parser already lowered to a
+    /// direct backing-field write).
+    pub is_read_only: bool,
+    /// True when the writable accessor is `init` (settable during
+    /// construction only). Like read-only for post-construction
+    /// writes; the legitimate ctor write was already desugared.
+    pub is_init_only: bool,
+    /// The setter / init accessor's effective visibility, when the
+    /// property is writable. `None` for read-only properties.
+    pub setter_visibility: Option<Visibility>,
+    /// Declared property type.
+    pub ty: TypeRef,
+    /// Span of the property declaration.
     pub span: Span,
 }
 
@@ -1877,6 +1912,28 @@ fn insert_class(
         diagnostics,
     );
 
+    // Property write-access metadata (§M.7.2). The getter / setter
+    // already landed in `methods` via desugaring; here we record only
+    // the access shape (read-only / init-only / setter visibility).
+    let mut properties: HashMap<String, PropertySig> = HashMap::new();
+    for prop in &class_decl.properties {
+        let setter_visibility = prop.setter.as_ref().map(|s| {
+            s.visibility.unwrap_or(prop.visibility)
+        });
+        properties.insert(
+            prop.name.text.clone(),
+            PropertySig {
+                visibility: prop.visibility,
+                is_static: prop.is_static,
+                is_read_only: prop.setter.is_none(),
+                is_init_only: prop.setter.as_ref().map_or(false, |s| s.is_init),
+                setter_visibility,
+                ty: prop.ty.clone(),
+                span: prop.span,
+            },
+        );
+    }
+
     table.classes.insert(
         fqn,
         ClassSig {
@@ -1900,6 +1957,7 @@ fn insert_class(
             constructors,
             methods,
             operators,
+            properties,
             span: class_decl.span,
         },
     );

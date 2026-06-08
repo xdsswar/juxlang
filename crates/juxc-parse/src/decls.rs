@@ -71,6 +71,7 @@ impl<'a> Parser<'a> {
         let mut constructors = Vec::new();
         let mut methods = Vec::new();
         let mut operators = Vec::new();
+        let mut properties: Vec<juxc_ast::PropertyDecl> = Vec::new();
         let mut nested_types: Vec<juxc_ast::TopLevelDecl> = Vec::new();
 
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
@@ -297,11 +298,15 @@ impl<'a> Parser<'a> {
                     false
                 }
             };
-            // Expression-bodied property check: scan past
-            // `type name` and see whether `=>` follows. Mirrors the
-            // shape `T name => expr;` from JUX-MISSING-DEFS §M.7.4.
-            // Lookahead is non-consuming; the actual parse happens
-            // in `parse_expression_bodied_property`.
+            // **C#-style property check** (JUX-MISSING-DEFS §M.7).
+            // Scan past `[modifiers] type name` and see whether the
+            // next token opens a property body — `=>` (expression-
+            // bodied read-only) or `{` (accessor block). Both shapes
+            // route to `parse_property_decl`, which produces a
+            // lossless `PropertyDecl`. Lookahead is non-consuming.
+            // (A plain field is `type name [= …] ;`; a method is
+            // `type name (`. Neither can be followed by `=>` / `{`,
+            // so this discriminator is unambiguous.)
             let lookahead_is_property = {
                 let mut i = self.pos;
                 // Skip leading modifiers (same shape as field/method).
@@ -349,10 +354,16 @@ impl<'a> Parser<'a> {
                     if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Question)) {
                         i += 1;
                     }
-                    // Now expect Ident + `=>` for the property shape.
+                    // Now expect Ident + (`->` | `{`) for a property.
+                    // NB: Jux uses `->` (not C#'s `=>`) for expression-bodied
+                    // property/accessor bodies, because `=>` is the type-test
+                    // (instanceof) operator in Jux and must stay unambiguous.
                     if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
                         i += 1;
-                        matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::FatArrow))
+                        matches!(
+                            self.tokens.get(i).map(|t| &t.kind),
+                            Some(TokenKind::Arrow) | Some(TokenKind::LBrace),
+                        )
                     } else {
                         false
                     }
@@ -364,10 +375,8 @@ impl<'a> Parser<'a> {
                 let method = self.parse_fn_decl(member_anns, member_vis)?;
                 methods.push(method);
             } else if lookahead_is_property {
-                if let Some(method) =
-                    self.parse_expression_bodied_property(member_anns, member_vis)
-                {
-                    methods.push(method);
+                if let Some(prop) = self.parse_property_decl(member_anns, member_vis) {
+                    properties.push(prop);
                 }
             } else {
                 let field = self.parse_field_decl(member_anns, member_vis)?;
@@ -392,6 +401,7 @@ impl<'a> Parser<'a> {
             constructors,
             methods,
             operators,
+            properties,
             nested_types,
             span: start.join(end),
         })
@@ -842,40 +852,16 @@ impl<'a> Parser<'a> {
             );
         let ty = if no_type { None } else { Some(self.parse_type_ref()?) };
         let name = self.parse_ident()?;
-        // **C#-style property body** per JUX-MISSING-DEFS §M.7. A
-        // `{ get; set; }` or similar suffix between the name and
-        // the optional `= init` declares a property — Phase-1
-        // lowers auto-properties to plain public fields. Read-only
-        // shapes (`{ get; }` and `{ get; init; }`) flip `is_final`
-        // on so reassignment is rejected at tycheck. Custom
-        // accessor bodies aren't supported yet; the parser eats
-        // the tokens but the emit treats the property as if it
-        // were a plain field.
-        let had_property_body = if self.at(&TokenKind::LBrace) {
-            let has_setter = self.parse_property_body_for_field(&mut is_final);
-            // If `{ get; }` (no set / init), the field is final.
-            // For `{ get; set; }` keep `is_final` as the user
-            // declared (typically false).
-            let _ = has_setter;
-            true
-        } else {
-            false
-        };
+        // C#-style property bodies (`{ get; set; }` / `=> expr`) are
+        // routed to `parse_property_decl` by the class-member
+        // dispatcher *before* reaching here, so a plain field never
+        // sees a `{` / `=>` suffix — it's always `type name [= expr] ;`.
         let default = if self.eat(&TokenKind::Eq) {
             self.parse_expr()
         } else {
             None
         };
-        // Properties allow an OPTIONAL trailing `;` per §M.7.1's
-        // grammar `property-decl = ... property-body? property-init? ';'?`.
-        // Plain fields still REQUIRE the `;`.
-        if had_property_body {
-            // Soft-consume the trailing `;` when present; don't
-            // emit a diagnostic when it's absent.
-            let _ = self.eat(&TokenKind::Semicolon);
-        } else {
-            self.expect(&TokenKind::Semicolon, "';' to end field declaration");
-        }
+        self.expect(&TokenKind::Semicolon, "';' to end field declaration");
         let end = self.last_consumed_span();
         Some(FieldDecl {
             annotations,
@@ -889,131 +875,247 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse an expression-bodied property — `T name => expr;` per
-    /// JUX-MISSING-DEFS §M.7.4. Synthesizes a `FnDecl` shaped
-    /// like `T name() { return expr; }` with `is_property = true`.
-    /// The backend's field-access path consults the flag and
-    /// emits `obj.name()` so the read-side syntax stays
-    /// Java-shaped.
-    pub(crate) fn parse_expression_bodied_property(
+    /// Parse a C#-style property declaration per JUX-MISSING-DEFS
+    /// §M.7. Handles every accessor form losslessly into a
+    /// [`juxc_ast::PropertyDecl`]:
+    ///
+    /// - `T Name { get; set; } [= init] ;?` — accessor block (auto /
+    ///   expression-bodied / full-block accessors, per-accessor
+    ///   visibility, `init`-only setters),
+    /// - `T Name => expr ;?` — expression-bodied read-only property.
+    ///
+    /// The caller's dispatcher has already confirmed (via lookahead)
+    /// that `[modifiers] type name` is followed by `{` or `=>`.
+    /// Desugaring into backing field + getter / setter methods runs
+    /// later in [`juxc_ast::desugar_properties`].
+    pub(crate) fn parse_property_decl(
         &mut self,
         annotations: Vec<juxc_ast::Annotation>,
         visibility: Visibility,
-    ) -> Option<juxc_ast::FnDecl> {
+    ) -> Option<juxc_ast::PropertyDecl> {
+        use juxc_ast::{AccessorBody, PropertyAccessor, PropertyDecl, PropertySetter};
         let start = self.peek_span();
-        // Skip leading modifiers (static / final / const). We
-        // accept but don't carry static-ness onto the synthesized
-        // method — read-only computed properties are by their
-        // nature always instance-bound in Phase 1.
+        // Modifiers — `static` is meaningful (§M.7.9); `final` /
+        // `const` are accepted but don't change the property shape
+        // (a read-only property is already non-reassignable).
+        let mut is_static = false;
         loop {
-            if self.eat_kw(Keyword::Static)
-                || self.eat_kw(Keyword::Final)
-                || self.eat_kw(Keyword::Const)
-            {
-                continue;
+            if self.eat_kw(Keyword::Static) {
+                is_static = true;
+            } else if self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const) {
+                // accepted, no-op for properties
+            } else {
+                break;
             }
-            break;
         }
         let ty = self.parse_type_ref()?;
         let name = self.parse_ident()?;
-        self.expect(&TokenKind::FatArrow, "'=>' for expression-bodied property");
-        let expr = self.parse_expr()?;
-        let body_span = self.last_consumed_span();
-        // Optional trailing `;` per spec §M.7.1 grammar.
+
+        let mut getter: Option<PropertyAccessor> = None;
+        let mut setter: Option<PropertySetter> = None;
+        let mut has_backing_field = false;
+
+        if self.eat(&TokenKind::Arrow) {
+            // Expression-bodied read-only property: `T Name -> expr;`.
+            // Equivalent to `{ get -> expr; }` — no setter, no backing
+            // field (the expression is a computed value). Jux uses `->`,
+            // not C#'s `=>`, because `=>` is the instanceof operator.
+            let expr_start = self.peek_span();
+            let expr = self.parse_expr()?;
+            let expr_span = expr_start.join(self.last_consumed_span());
+            let _ = self.eat(&TokenKind::Semicolon);
+            getter = Some(PropertyAccessor {
+                visibility: None,
+                body: AccessorBody::Expr(expr),
+                span: expr_span,
+            });
+        } else {
+            // Accessor block: `{ accessor+ }`.
+            self.expect(&TokenKind::LBrace, "'{' to start property body");
+            while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+                let acc_start = self.peek_span();
+                // Optional per-accessor visibility (`private set;`).
+                let acc_vis = self.parse_accessor_visibility();
+                // Accessor kind: `get` / `set` (contextual idents) or
+                // the `init` keyword.
+                enum Kind {
+                    Get,
+                    Set,
+                    Init,
+                }
+                let kind = match self.peek() {
+                    TokenKind::Ident(s) if s == "get" => Some(Kind::Get),
+                    TokenKind::Ident(s) if s == "set" => Some(Kind::Set),
+                    TokenKind::Kw(Keyword::Init) => Some(Kind::Init),
+                    _ => None,
+                };
+                let Some(kind) = kind else {
+                    let here = self.peek_span();
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "expected `get`, `set`, or `init` inside property body",
+                        )
+                        .with_span(here),
+                    );
+                    break;
+                };
+                self.advance(); // consume the accessor keyword/ident
+                let is_setter = matches!(kind, Kind::Set | Kind::Init);
+                // Accessor body: `;` (auto) | `=> expr ;` | block.
+                let (body, is_auto) = if self.eat(&TokenKind::Semicolon) {
+                    (AccessorBody::Auto, true)
+                } else if self.eat(&TokenKind::Arrow) {
+                    // Accessor arrow body uses `->` (Jux), e.g. `get -> e;`
+                    // / `set -> _x = value;`. Setter `->` bodies may be an
+                    // assignment — assignment is a statement in Jux, so the
+                    // setter arrow body is parsed as a statement, not a bare
+                    // expression.
+                    let b = self.parse_accessor_arrow_body(is_setter)?;
+                    (b, false)
+                } else if self.at(&TokenKind::LBrace) {
+                    let b = self.parse_block();
+                    (AccessorBody::Block(b), false)
+                } else {
+                    let here = self.peek_span();
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "expected `;`, `=> expr;`, or `{ … }` for accessor body",
+                        )
+                        .with_span(here),
+                    );
+                    (AccessorBody::Auto, true)
+                };
+                let acc_span = acc_start.join(self.last_consumed_span());
+                match kind {
+                    Kind::Get => {
+                        // An auto getter implies a backing field.
+                        if is_auto {
+                            has_backing_field = true;
+                        }
+                        getter = Some(PropertyAccessor {
+                            visibility: acc_vis,
+                            body,
+                            span: acc_span,
+                        });
+                    }
+                    Kind::Set | Kind::Init => {
+                        if is_auto {
+                            has_backing_field = true;
+                        }
+                        setter = Some(PropertySetter {
+                            visibility: acc_vis,
+                            is_init: matches!(kind, Kind::Init),
+                            body,
+                            span: acc_span,
+                        });
+                    }
+                }
+            }
+            self.expect(&TokenKind::RBrace, "'}' to close property body");
+        }
+
+        // Optional `= init` field-initializer (auto-properties).
+        let initializer = if self.eat(&TokenKind::Eq) {
+            self.parse_expr()
+        } else {
+            None
+        };
+        // Optional trailing `;` per §M.7.1's
+        // `property-decl = ... property-body? property-init? ';'?`.
         let _ = self.eat(&TokenKind::Semicolon);
         let end = self.last_consumed_span();
-        // Wrap the expression in a `return expr;` so the method's
-        // tail-elision pass produces a Rust function that yields
-        // `expr` as its value.
-        let return_stmt = juxc_ast::Stmt::Return(Some(expr));
-        let body = juxc_ast::Block {
-            statements: vec![return_stmt],
-            span: body_span,
-        };
-        Some(juxc_ast::FnDecl {
+        Some(PropertyDecl {
             annotations,
             visibility,
-            modifiers: Vec::new(),
-            return_type: juxc_ast::ReturnType::Type(ty),
+            is_static,
+            ty,
             name,
-            generic_params: Vec::new(),
-            params: Vec::new(),
-            throws: Vec::new(),
-            body: Some(body),
-            is_property: true,
+            getter,
+            setter,
+            initializer,
+            has_backing_field,
             span: start.join(end),
         })
     }
 
-    /// Parse a `{ get; set; }` / `{ get; }` / `{ get; init; }`
-    /// property accessor block. Sets `*is_final` to `true` when
-    /// the property has no public setter (i.e. read-only or
-    /// init-only). Phase-1 ignores accessor-level visibility
-    /// modifiers (`private set;`, `protected init;`) and treats
-    /// the whole thing as a public field for emit purposes.
+    /// Parse the body following a `=>` in a property accessor. The
+    /// leading `=>` has already been consumed.
     ///
-    /// Returns `true` when a `set` accessor was seen (so the
-    /// caller knows whether the field is mutable beyond
-    /// construction). The current implementation only consumes
-    /// auto-style accessors (`get;`, `set;`, `init;`); custom
-    /// bodies aren't supported and would be a parse error here.
-    fn parse_property_body_for_field(&mut self, is_final: &mut bool) -> bool {
-        self.expect(&TokenKind::LBrace, "'{' to start property body");
-        let mut has_setter = false;
-        let mut has_init = false;
-        let mut has_getter = false;
-        while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
-            // Optional accessor visibility — `private set;`,
-            // `protected init;`. We accept but ignore in Phase 1.
-            let _ = self.eat_kw(Keyword::Public);
-            let _ = self.eat_kw(Keyword::Private);
-            let _ = self.eat_kw(Keyword::Protected);
-            let _ = self.eat_kw(Keyword::Internal);
-            // Accessor kind. Each one is a bare ident plus a `;`
-            // terminator (auto-accessor) for Phase 1.
-            let kind = match self.peek() {
-                TokenKind::Ident(s) if s == "get" => Some("get"),
-                TokenKind::Ident(s) if s == "set" => Some("set"),
-                TokenKind::Kw(Keyword::Init) => Some("init"),
-                _ => None,
-            };
-            let Some(kind) = kind else {
-                // Bail on unknown accessor token to avoid an
-                // infinite loop; surface the error.
-                let here = self.peek_span();
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        code::Code::E0200_UnexpectedToken,
-                        "expected `get`, `set`, or `init` inside property body",
-                    )
-                    .with_span(here),
-                );
-                break;
-            };
-            self.advance(); // consume the accessor keyword
-            match kind {
-                "get" => has_getter = true,
-                "set" => has_setter = true,
-                "init" => has_init = true,
-                _ => unreachable!(),
+    /// - **Getter** (`is_setter == false`) → an [`AccessorBody::Expr`]
+    ///   holding the value expression.
+    /// - **Setter** (`is_setter == true`) → the body may be a side-
+    ///   effecting assignment (`set => _x = value;`). Assignment is a
+    ///   statement in Jux, so a setter arrow body is parsed as one
+    ///   `Stmt` and wrapped in an [`AccessorBody::Block`]. A non-
+    ///   assignment setter expression (`set => list.reserve(value);`)
+    ///   is wrapped as an expression statement.
+    fn parse_accessor_arrow_body(
+        &mut self,
+        is_setter: bool,
+    ) -> Option<juxc_ast::AccessorBody> {
+        use juxc_ast::AccessorBody;
+        let body_start = self.peek_span();
+        let expr = self.parse_expr()?;
+        if is_setter {
+            // Detect an assignment / compound-assignment tail.
+            let assign_op = self.assignment_op_at_cursor();
+            if assign_op.is_some() || self.at(&TokenKind::Eq) {
+                let stmt = self.parse_assignment_tail(expr, assign_op)?;
+                let span = body_start.join(self.last_consumed_span());
+                return Some(AccessorBody::Block(juxc_ast::Block {
+                    statements: vec![stmt],
+                    span,
+                }));
             }
-            // Auto-accessor terminator. Custom bodies / `=> expr`
-            // would land here in a future revision.
-            self.expect(&TokenKind::Semicolon, "';' after auto-accessor");
+            // Plain side-effecting expression — wrap as an Expr stmt
+            // inside a block so the value is discarded.
+            self.expect(&TokenKind::Semicolon, "';' after expression-bodied accessor");
+            let span = body_start.join(self.last_consumed_span());
+            return Some(AccessorBody::Block(juxc_ast::Block {
+                statements: vec![juxc_ast::Stmt::Expr(expr)],
+                span,
+            }));
         }
-        self.expect(&TokenKind::RBrace, "'}' to close property body");
-        // Read-only or init-only → final (no post-construction
-        // writes). The synthetic-field representation doesn't
-        // distinguish init from final at the storage layer; the
-        // distinction is one tycheck pass away.
-        let _ = has_getter; // currently unused; future tycheck reads it
-        if !has_setter && (has_init || !has_init) && !has_setter {
-            // Phase-1 rule: any property without a `set` accessor
-            // is treated as final. `{ get; init; }` and `{ get; }`
-            // both land here.
-            *is_final = true;
+        // Getter — value expression.
+        self.expect(&TokenKind::Semicolon, "';' after expression-bodied accessor");
+        Some(AccessorBody::Expr(expr))
+    }
+
+    /// If the cursor is at a compound-assignment operator
+    /// (`+=`, `-=`, …), return the corresponding [`juxc_ast::BinaryOp`]
+    /// WITHOUT consuming it; otherwise `None`. A plain `=` returns
+    /// `None` too (the caller checks for it separately, since it
+    /// carries no `BinaryOp`).
+    fn assignment_op_at_cursor(&self) -> Option<juxc_ast::BinaryOp> {
+        use juxc_ast::BinaryOp;
+        match self.peek() {
+            TokenKind::PlusEq => Some(BinaryOp::Add),
+            TokenKind::MinusEq => Some(BinaryOp::Sub),
+            TokenKind::StarEq => Some(BinaryOp::Mul),
+            TokenKind::SlashEq => Some(BinaryOp::Div),
+            TokenKind::PercentEq => Some(BinaryOp::Rem),
+            _ => None,
         }
-        has_setter
+    }
+
+    /// Parse an optional per-accessor visibility modifier
+    /// (`public` / `private` / `protected` / `internal`) preceding a
+    /// property accessor. Returns `None` when no modifier is present
+    /// (the accessor inherits the property's outer visibility).
+    fn parse_accessor_visibility(&mut self) -> Option<Visibility> {
+        if self.eat_kw(Keyword::Public) {
+            Some(Visibility::Public)
+        } else if self.eat_kw(Keyword::Private) {
+            Some(Visibility::Private)
+        } else if self.eat_kw(Keyword::Protected) {
+            Some(Visibility::Protected)
+        } else if self.eat_kw(Keyword::Internal) {
+            Some(Visibility::Internal)
+        } else {
+            None
+        }
     }
 
     /// Parse a constructor: `Name(params) { body }`. The leading

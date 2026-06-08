@@ -477,7 +477,12 @@ Open-ended range patterns (`x..`, `..x`, `..=x`) are permitted in patterns only,
 
 ## §M.7 — Properties (C#-style)
 
-Jux properties use **the C# syntax, identical**. `{ get; set; }` blocks, `init`-only setters, expression-bodied properties (`=> expr`), expression-bodied accessors (`get => expr`), full accessor bodies, and the implicit `value` parameter in setters.
+Jux properties use **the C# property syntax, with one deliberate divergence:
+expression bodies use `->`, not C#'s `=>`** — because `=>` is Jux's type-test
+(instanceof) operator (`a => Type`) and must stay unambiguous. So: `{ get; set; }`
+blocks, `init`-only setters, expression-bodied properties (`-> expr`),
+expression-bodied accessors (`get -> expr`), full accessor bodies, and the
+implicit `value` parameter in setters.
 
 This supersedes the earlier shorthand syntax (`public get String name`) referenced in JUX-LANG-V1 §7.3 — that form is removed.
 
@@ -487,14 +492,14 @@ This supersedes the earlier shorthand syntax (`public get String name`) referenc
 property-decl     = modifier* type identifier property-body? property-init? ';'?
 
 property-body     = '{' accessor-list '}'
-                  | '=>' expression                          -- expression-bodied (read-only)
+                  | '->' expression                          -- expression-bodied (read-only)
 
 accessor-list     = accessor (accessor)*
 
 accessor          = visibility? accessor-kind accessor-body
 accessor-kind     = 'get' | 'set' | 'init'
 accessor-body     = ';'                                       -- auto: synthesize body
-                  | '=>' expression ';'                       -- expression-bodied
+                  | '->' expression ';'                       -- expression-bodied
                   | block                                      -- full body
 
 property-init     = '=' expression                            -- field-initializer for auto-property
@@ -505,7 +510,7 @@ modifier          = visibility | 'static' | binding-immut | 'volatile'
 A property may have:
 - No body (`public String email;`) — a plain mutable field. The compiler treats this exactly like a public field; the property syntax is only relevant when one wants accessor control.
 - A `{ get; set; }` body — auto-property with synthesized backing field.
-- A `=> expr` body — expression-bodied read-only computed property.
+- A `-> expr` body — expression-bodied read-only computed property.
 - A `{ get-or-set blocks }` body — full custom accessors.
 
 Inside a setter or `init` accessor body, the parameter is implicitly named **`value`** (C# convention). It has the property's declared type.
@@ -557,16 +562,16 @@ public class Config {
 
 ### M.7.4. Expression-Bodied Properties
 
-For computed read-only properties, `=> expression` is a shorthand for `{ get => expression; }`:
+For computed read-only properties, `-> expression` is a shorthand for `{ get -> expression; }`:
 
 ```jux
 public class Person {
     public String firstName { get; init; }
     public String lastName { get; init; }
 
-    public String fullName => firstName + " " + lastName;       // shorthand
+    public String fullName -> firstName + " " + lastName;       // shorthand
     // Equivalent verbose form:
-    // public String fullName { get => firstName + " " + lastName; }
+    // public String fullName { get -> firstName + " " + lastName; }
 }
 ```
 
@@ -574,15 +579,15 @@ The expression-bodied form is read-only by definition — there is no setter.
 
 ### M.7.5. Expression-Bodied Accessors
 
-Either accessor can use `=> expression` instead of a `{ ... }` block, when the body is a single expression:
+Either accessor can use `-> expression` instead of a `{ ... }` block, when the body is a single expression:
 
 ```jux
 public class Counter {
     private List<int> items = new List<>();
 
     public int count {
-        get => items.size();
-        set => items.reserve(value);
+        get -> items.size();
+        set -> items.reserve(value);
     }
 }
 ```
@@ -627,7 +632,7 @@ The two accessors can use different body forms:
 
 ```jux
 public double celsius {
-    get => kelvin - 273.15;             // expression-bodied
+    get -> kelvin - 273.15;             // expression-bodied
     set { kelvin = value + 273.15; }    // full body
 }
 ```
@@ -639,7 +644,7 @@ Properties can be `static`, with the same body forms:
 ```jux
 public class Config {
     public static String version { get; } = "1.0.0";
-    public static Path home => Environment.getHome();
+    public static Path home -> Environment.getHome();
 }
 ```
 
@@ -652,8 +657,8 @@ Records auto-derive `{ get; init; }` for every component — that's what makes t
 ```jux
 public record Vector3(double x, double y, double z) {
     // x, y, z are auto-properties with { get; init; } from the record components
-    public double magnitudeSquared => x*x + y*y + z*z;
-    public double magnitude => sqrt(magnitudeSquared);
+    public double magnitudeSquared -> x*x + y*y + z*z;
+    public double magnitude -> sqrt(magnitudeSquared);
 }
 ```
 
@@ -692,7 +697,7 @@ public class Temperature {
     }
 
     public double kelvin {
-        get => _kelvin;
+        get -> _kelvin;
         set {
             if (value < 0) throw new IllegalArgumentException("negative kelvin");
             _kelvin = value;
@@ -700,16 +705,16 @@ public class Temperature {
     }
 
     public double celsius {
-        get => _kelvin - 273.15;
-        set => kelvin = value + 273.15;          // delegates through kelvin's setter (validation reused)
+        get -> _kelvin - 273.15;
+        set -> kelvin = value + 273.15;          // delegates through kelvin's setter (validation reused)
     }
 
     public double fahrenheit {
-        get => celsius * 9.0/5.0 + 32.0;
-        set => celsius = (value - 32.0) * 5.0/9.0;
+        get -> celsius * 9.0/5.0 + 32.0;
+        set -> celsius = (value - 32.0) * 5.0/9.0;
     }
 
-    public bool isFreezing => celsius <= 0.0;     // expression-bodied read-only
+    public bool isFreezing -> celsius <= 0.0;     // expression-bodied read-only
 }
 
 var t = new Temperature(300.0);

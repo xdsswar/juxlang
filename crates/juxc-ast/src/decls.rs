@@ -376,8 +376,108 @@ pub struct ClassDecl {
     /// the Java-style `Outer.Inner` access path round-trips
     /// through the FQN-resolver.
     pub nested_types: Vec<crate::TopLevelDecl>,
+    /// C#-style property declarations per JUX-MISSING-DEFS §M.7.
+    ///
+    /// Parsed losslessly into [`PropertyDecl`] nodes, then *desugared*
+    /// (by [`crate::desugar_properties`], run at the end of parsing)
+    /// into a private backing field plus a getter / setter [`FnDecl`]
+    /// that land in [`Self::fields`] / [`Self::methods`]. This list is
+    /// retained so tycheck and the backend can still see the property
+    /// shape — which accessors exist, their per-accessor visibility,
+    /// and whether the property is read-only / init-only — to enforce
+    /// §M.7.2 access control and route `obj.Prop = v` writes through
+    /// the synthesized setter. Empty for classes with no properties.
+    pub properties: Vec<PropertyDecl>,
     /// Span covering the whole `class Name { … }` declaration.
     pub span: Span,
+}
+
+/// A C#-style property declaration per JUX-MISSING-DEFS §M.7.
+///
+/// Captures every accessor form losslessly:
+/// - auto (`get;` / `set;` / `init;`) → synthesized body over a
+///   private backing field,
+/// - expression-bodied (`get => e` / `set => e`),
+/// - full block (`get { … }` / `set { … }`),
+/// - expression-bodied read-only property (`T Name => e;`) — modeled
+///   as a getter whose body is the expression, with no setter.
+///
+/// Desugaring ([`crate::desugar_properties`]) turns this into a
+/// backing field + getter / setter [`FnDecl`]s so the rest of the
+/// pipeline reuses the existing field / method machinery; the
+/// `PropertyDecl` itself is kept on [`ClassDecl::properties`] for
+/// tycheck access-control and backend setter routing.
+#[derive(Debug, Clone)]
+pub struct PropertyDecl {
+    /// Annotations attached to the property.
+    pub annotations: Vec<Annotation>,
+    /// The property's outer visibility.
+    pub visibility: Visibility,
+    /// True when the property is declared `static` (class-scoped).
+    pub is_static: bool,
+    /// Declared property type.
+    pub ty: TypeRef,
+    /// Property name — the user-visible member accessed as `obj.Name`.
+    pub name: Ident,
+    /// The getter accessor. Always present in practice (a property
+    /// with only a setter is rejected by the parser), but `Option`
+    /// keeps the shape uniform with [`Self::setter`].
+    pub getter: Option<PropertyAccessor>,
+    /// The setter / init accessor, when the property is writable.
+    /// `None` for read-only properties (`{ get; }`, `T Name => e;`).
+    pub setter: Option<PropertySetter>,
+    /// Optional `= expr` initializer (auto-property default). Lowered
+    /// into the backing field's default so it runs during construction.
+    pub initializer: Option<Expr>,
+    /// True when this property was synthesized from a backing field
+    /// the user can't name (auto-property `get;`/`set;`/`init;`). The
+    /// desugarer emits the backing field only in this case; computed
+    /// properties (expression / block bodies with no auto accessor)
+    /// read existing fields and need no backing storage.
+    pub has_backing_field: bool,
+    /// Span covering the whole property declaration.
+    pub span: Span,
+}
+
+/// One accessor (getter or setter) of a [`PropertyDecl`].
+#[derive(Debug, Clone)]
+pub struct PropertyAccessor {
+    /// Per-accessor visibility, when the user wrote one (e.g. the
+    /// `private` in `{ get; private set; }`). `None` means the
+    /// accessor inherits the property's outer visibility.
+    pub visibility: Option<Visibility>,
+    /// The accessor's body form.
+    pub body: AccessorBody,
+    /// Span of the accessor.
+    pub span: Span,
+}
+
+/// The setter accessor of a [`PropertyDecl`], carrying whether it's a
+/// plain `set` or an `init`-only setter (settable during construction
+/// only, per §M.7.2).
+#[derive(Debug, Clone)]
+pub struct PropertySetter {
+    /// Per-accessor visibility, when written (`{ get; private set; }`).
+    pub visibility: Option<Visibility>,
+    /// `true` when this is an `init` accessor (write only during
+    /// construction), `false` for a plain `set`.
+    pub is_init: bool,
+    /// The setter's body form. The implicit parameter is named `value`.
+    pub body: AccessorBody,
+    /// Span of the accessor.
+    pub span: Span,
+}
+
+/// The body of a property accessor per §M.7.1's `accessor-body`.
+#[derive(Debug, Clone)]
+pub enum AccessorBody {
+    /// `;` — auto accessor; the desugarer synthesizes the body over a
+    /// private backing field.
+    Auto,
+    /// `=> expr ;` — expression-bodied accessor.
+    Expr(Expr),
+    /// `{ … }` — full block body.
+    Block(Block),
 }
 
 /// `operator-decl` per `JUX-OPERATORS-ADDENDUM.md` §O.2 — an operator
