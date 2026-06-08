@@ -2316,23 +2316,151 @@ pub fn cargo_toml_for(name: &str) -> String {
 ///
 /// Pinned to a `1` semver range so behavior is reproducible.
 pub fn cargo_toml_for_with(name: &str, uses_async: bool) -> String {
+    // Delegate to the metadata-aware emitter with an empty `CargoMeta`.
+    // An empty meta carries no version override (so the historical
+    // `version = "0.0.0"` default is used), no resource fields, and no
+    // icon — which means no `build = "build.rs"` line and no
+    // `[build-dependencies]` are emitted. The output is byte-for-byte
+    // identical to the legacy template, so the no-manifest path
+    // (loose `.jux` files, the example corpus) is unchanged.
+    cargo_toml_for_with_meta(name, uses_async, &CargoMeta::default())
+}
+
+/// Binary-resource / package metadata threaded from a project's
+/// `jux.toml` `[package]` table into the emitted `Cargo.toml`.
+///
+/// Every field is optional. When all are absent (the [`CargoMeta::default`]
+/// shape), [`cargo_toml_for_with_meta`] emits exactly the legacy template:
+/// `version = "0.0.0"`, no resource keys, no build script. As soon as any
+/// version-info field *or* an icon is present, the emitter additionally
+/// wires `build = "build.rs"` plus a `[build-dependencies]` entry for the
+/// Windows-resource compiler, and the driver writes the matching
+/// `build.rs`/`app.ico` into the crate dir.
+#[derive(Debug, Default, Clone)]
+pub struct CargoMeta {
+    /// SemVer string for `[package] version`. When `None`, the emitter
+    /// falls back to `"0.0.0"` (the historical default).
+    pub version: Option<String>,
+    /// `authors = [...]` list. Empty → key omitted.
+    pub authors: Vec<String>,
+    /// One-line `description`. Doubles as the `FileDescription`
+    /// version-info resource in the generated build script.
+    pub description: Option<String>,
+    /// SPDX `license` identifier.
+    pub license: Option<String>,
+    /// Project `homepage` URL.
+    pub homepage: Option<String>,
+    /// Source `repository` URL.
+    pub repository: Option<String>,
+    /// `CompanyName` version-info resource (Windows). Not a Cargo key;
+    /// only flows into `build.rs`. Defaults to the joined authors there.
+    pub company: Option<String>,
+    /// `LegalCopyright` version-info resource (Windows).
+    pub copyright: Option<String>,
+    /// Whether an executable icon was supplied. The icon file itself is
+    /// copied into the crate dir by the driver as `app.ico`; this flag
+    /// only tells the emitter to wire the build script + dependency.
+    pub has_icon: bool,
+}
+
+impl CargoMeta {
+    /// True when any field that requires a Windows-resource build script
+    /// is set: an icon, or any version-info resource (version, company,
+    /// copyright, description). Authors/license/homepage/repository alone
+    /// are plain Cargo manifest keys and do **not** force a `build.rs`.
+    pub fn needs_build_script(&self) -> bool {
+        self.has_icon
+            || self.version.is_some()
+            || self.company.is_some()
+            || self.copyright.is_some()
+            || self.description.is_some()
+            || !self.authors.is_empty()
+    }
+}
+
+/// Metadata-aware variant of [`cargo_toml_for_with`].
+///
+/// Emits the `[package]` table using `meta.version` (default `"0.0.0"`)
+/// and adds `authors`/`description`/`license`/`homepage`/`repository`
+/// keys when present. When [`CargoMeta::needs_build_script`] holds, it
+/// also emits `build = "build.rs"` and a `[build-dependencies]` block
+/// pulling in the Windows-resource compiler crate — `winresource`
+/// (winres's maintained fork). The driver is responsible for writing the
+/// matching `build.rs` and copying the icon next to it.
+///
+/// `escape_toml` is used on every interpolated value so quotes/backslashes
+/// in user metadata can't corrupt the emitted manifest.
+pub fn cargo_toml_for_with_meta(name: &str, uses_async: bool, meta: &CargoMeta) -> String {
+    let version = meta.version.as_deref().unwrap_or("0.0.0");
+    let mut pkg = format!(
+        "[package]\n\
+         name = \"{name}\"\n\
+         version = \"{version}\"\n\
+         edition = \"2021\"\n\
+         publish = false\n",
+        version = escape_toml(version),
+    );
+    if !meta.authors.is_empty() {
+        let list = meta
+            .authors
+            .iter()
+            .map(|a| format!("\"{}\"", escape_toml(a)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        pkg.push_str(&format!("authors = [{list}]\n"));
+    }
+    if let Some(desc) = &meta.description {
+        pkg.push_str(&format!("description = \"{}\"\n", escape_toml(desc)));
+    }
+    if let Some(lic) = &meta.license {
+        pkg.push_str(&format!("license = \"{}\"\n", escape_toml(lic)));
+    }
+    if let Some(hp) = &meta.homepage {
+        pkg.push_str(&format!("homepage = \"{}\"\n", escape_toml(hp)));
+    }
+    if let Some(repo) = &meta.repository {
+        pkg.push_str(&format!("repository = \"{}\"\n", escape_toml(repo)));
+    }
+    // A Windows-resource build script is wired in only when there's
+    // actually metadata or an icon to embed; loose-file builds keep the
+    // clean, dependency-free manifest.
+    if meta.needs_build_script() {
+        pkg.push_str("build = \"build.rs\"\n");
+    }
+
     let deps = if uses_async {
         "[dependencies]\nfutures = \"0.3\"\n\n"
     } else {
         ""
     };
+
+    // The Windows-resource compiler dependency. `winresource` is the
+    // maintained fork of `winres`; it is a build-dependency only and a
+    // no-op when the target OS isn't Windows (our generated `build.rs`
+    // additionally gates on `CARGO_CFG_TARGET_OS`).
+    let build_deps = if meta.needs_build_script() {
+        "[build-dependencies]\nwinresource = \"0.1\"\n\n"
+    } else {
+        ""
+    };
+
     format!(
-        "[package]\n\
-         name = \"{name}\"\n\
-         version = \"0.0.0\"\n\
-         edition = \"2021\"\n\
-         publish = false\n\
+        "{pkg}\
          \n\
          {deps}\
+         {build_deps}\
          [[bin]]\n\
          name = \"{name}\"\n\
          path = \"src/main.rs\"\n\
          \n\
          [workspace]\n",
     )
+}
+
+/// Escape a string for safe inclusion inside a double-quoted TOML basic
+/// string: backslashes and double-quotes are the only characters that can
+/// break out of the literal. Newlines/control characters aren't expected
+/// in manifest metadata, so we keep this minimal.
+fn escape_toml(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }

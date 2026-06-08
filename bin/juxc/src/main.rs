@@ -136,7 +136,25 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
         .clone()
         .unwrap_or_else(|| default_crate_name(&cli.inputs, &files[0]));
 
-    let artifact = juxc_driver::build(&crate_, &emit_dir, &crate_name, cli.release)?;
+    // Discover the project root (nearest ancestor with a `jux.toml`)
+    // starting from the first input's directory, and load its
+    // `[package]` metadata. `None` when the input is a loose file
+    // outside any project — in which case the build emits the default,
+    // metadata-free Cargo.toml exactly as before.
+    let project_root = files[0]
+        .parent()
+        .and_then(find_project_root);
+    let manifest = project_root
+        .as_deref()
+        .and_then(juxc_driver::Manifest::load);
+
+    let artifact = juxc_driver::build_with_manifest(
+        &crate_,
+        &emit_dir,
+        &crate_name,
+        cli.release,
+        manifest.as_ref(),
+    )?;
     eprintln!("juxc: built {}", artifact.binary_path.display());
 
     if cli.run {

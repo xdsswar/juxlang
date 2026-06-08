@@ -118,6 +118,29 @@ readme = "README.md"                    # Optional. Path.
 keywords = ["cli", "tool"]              # Optional. Up to 5 strings.
 categories = ["command-line-utilities"] # Optional. Registry categories.
 
+# Binary resource metadata. `[package]` `version`/`authors`/`description`/
+# `license`/`homepage` flow into every emitted target's resource block.
+# Executables additionally embed an icon and a Windows version-info resource
+# (CompanyName, FileVersion, ProductVersion, FileDescription, LegalCopyright)
+# via the compiler-generated build script. Per-target overrides live on the
+# `[lib]` / `[[bin]]` block.
+icon = "assets/app.ico"                 # Optional. Windows executable icon (.ico).
+company = "XTREME SOFTWARE SOLUTIONS"   # Optional. CompanyName resource (defaults to authors).
+copyright = "© 2026 XSS"                # Optional. LegalCopyright resource.
+
+# Code signing (optional). Reserved so an executable target can be signed as a
+# post-build step when required — e.g. Authenticode on Windows (signtool /
+# osslsigncode) or codesign on macOS. The toolchain runs the configured signer
+# on the produced binary after `cargo build`; absence of `[package.sign]` (or
+# `[[bin]].sign`) means no signing. Per-target overrides on `[lib]` / `[[bin]]`.
+[package.sign]
+# enabled    = false                    # Default. Set true to sign the produced exe.
+# tool       = "signtool"               # or "osslsigncode" / "codesign" / a custom command.
+# certificate = "path/to/cert.pfx"      # or a store identity / thumbprint.
+# timestamp-url = "http://timestamp..." # Optional RFC-3161 timestamp authority.
+# Credentials (e.g. the .pfx password) come from the environment, never the
+# manifest. This block is a reserved seam; the signing step is a later addendum.
+
 [lib]
 # A library target. Optional; absent for executable-only projects.
 path = "src/lib.jux"                    # Optional. Default: src/lib.jux if exists.

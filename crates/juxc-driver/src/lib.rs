@@ -41,8 +41,11 @@ use juxc_source::SourceFile;
 /// caller-derived name (e.g. from the input file's stem).
 pub const DEFAULT_CRATE_NAME: &str = CRATE_NAME;
 
+pub mod manifest;
 mod source_map;
 mod stdlib;
+
+pub use manifest::Manifest;
 
 /// Top-level compile result.
 ///
@@ -326,6 +329,27 @@ pub fn build(
     crate_name: &str,
     release: bool,
 ) -> Result<BuildArtifact> {
+    // No-manifest convenience: same behavior as the historical `build`,
+    // emitting the default Cargo.toml with no resource metadata.
+    build_with_manifest(crate_, crate_dir, crate_name, release, None)
+}
+
+/// Metadata-aware variant of [`build`]. When `manifest` is `Some`, the
+/// project's `[package]` metadata is woven into the emitted `Cargo.toml`
+/// (version, authors, description, …) and — for the version-info / icon
+/// subset — a `build.rs` is generated and the icon `.ico` copied into the
+/// crate dir so the produced executable carries a Windows resource block.
+///
+/// When `manifest` is `None`, the emitted manifest is byte-identical to
+/// the legacy template and no `build.rs` is written — exactly the path
+/// loose `.jux` files and the example corpus take.
+pub fn build_with_manifest(
+    crate_: &RustCrate,
+    crate_dir: &Path,
+    crate_name: &str,
+    release: bool,
+    manifest: Option<&Manifest>,
+) -> Result<BuildArtifact> {
     // Ensure the destination directory and any intermediate `src/`
     // subdirectories exist before writing.
     fs::create_dir_all(crate_dir.join("src"))
@@ -346,9 +370,39 @@ pub fn build(
     // ~3-4 seconds; subsequent builds reuse the cached artifact
     // and pay nothing. The simplification (no conditional dep
     // detection, no source-scanning) is worth the up-front cost.
-    let cargo_toml = juxc_backend_rust::cargo_toml_for_with(crate_name, true);
+    // Project the manifest's `[package]` metadata into the backend's
+    // `CargoMeta` shape. No manifest → empty meta → legacy Cargo.toml.
+    let cargo_meta = manifest
+        .map(|m| m.package.to_cargo_meta())
+        .unwrap_or_default();
+    let cargo_toml =
+        juxc_backend_rust::cargo_toml_for_with_meta(crate_name, true, &cargo_meta);
     fs::write(crate_dir.join("Cargo.toml"), &cargo_toml)
         .with_context(|| format!("writing Cargo.toml to {}", crate_dir.display()))?;
+
+    // When the metadata calls for a Windows-resource build script, write
+    // `build.rs` and copy the icon (if any) next to it. This is a no-op
+    // for the no-manifest path (and for manifests that carry only Cargo
+    // keys with no resource fields), keeping those crates clean.
+    if cargo_meta.needs_build_script() {
+        let icon_in_crate = if let Some(m) = manifest {
+            copy_icon_into_crate(m, crate_dir)?
+        } else {
+            None
+        };
+        let build_rs =
+            generate_build_rs(&cargo_meta, crate_name, icon_in_crate.as_deref());
+        fs::write(crate_dir.join("build.rs"), &build_rs)
+            .with_context(|| format!("writing build.rs to {}", crate_dir.display()))?;
+    } else {
+        // Defensive: if a previous run for this emit dir wrote a
+        // build.rs (e.g. the manifest used to have metadata), remove the
+        // stale script so the now-clean crate doesn't try to compile it.
+        let stale = crate_dir.join("build.rs");
+        if stale.exists() {
+            let _ = fs::remove_file(stale);
+        }
+    }
 
     // Write each source file. The backend uses `src/main.rs` for the
     // single binary right now; future emissions may add library crates
@@ -419,6 +473,140 @@ pub fn build(
         .join(format!("{crate_name}{}", std::env::consts::EXE_SUFFIX));
 
     Ok(BuildArtifact { crate_dir: crate_dir.to_path_buf(), binary_path })
+}
+
+/// Copy the manifest's `icon` (a `.ico` resolved against the project
+/// root) into the emitted crate dir as `app.ico`, returning the
+/// in-crate file name (`"app.ico"`) the generated `build.rs` should
+/// reference. Returns `Ok(None)` when the manifest carries no icon.
+///
+/// A missing icon *file* (manifest names one but it isn't on disk) is a
+/// soft failure: we warn and proceed without an icon rather than failing
+/// the whole build over a resource asset. The build script gates its
+/// `set_icon` on the file's presence too, so a stray reference can't
+/// break compilation.
+fn copy_icon_into_crate(manifest: &Manifest, crate_dir: &Path) -> Result<Option<String>> {
+    let Some(src) = &manifest.package.icon else {
+        return Ok(None);
+    };
+    if !src.is_file() {
+        eprintln!(
+            "juxc: warning: icon `{}` not found; building without an executable icon",
+            src.display()
+        );
+        return Ok(None);
+    }
+    let dest_name = "app.ico";
+    let dest = crate_dir.join(dest_name);
+    fs::copy(src, &dest).with_context(|| {
+        format!("copying icon {} -> {}", src.display(), dest.display())
+    })?;
+    Ok(Some(dest_name.to_string()))
+}
+
+/// Generate the contents of `build.rs` for the emitted crate.
+///
+/// The script is gated to Windows targets via `CARGO_CFG_TARGET_OS`, so
+/// it's a complete no-op when cross-compiling (or building) for any other
+/// platform — the `winresource` dependency is build-only and harmless
+/// elsewhere. On Windows it builds a `WindowsResource`, sets the
+/// version-info fields (CompanyName / FileDescription / ProductName /
+/// LegalCopyright + File/Product version derived from the package
+/// version), optionally attaches the copied icon, and `.compile()`s the
+/// resource into the executable.
+///
+/// `company` defaults to the joined `authors` when not given explicitly,
+/// matching the spec's "defaults to authors" note. All interpolated
+/// strings are escaped for a Rust string literal so quotes/backslashes in
+/// metadata can't break the generated source.
+fn generate_build_rs(
+    meta: &juxc_backend_rust::CargoMeta,
+    crate_name: &str,
+    icon_in_crate: Option<&str>,
+) -> String {
+    // ProductName falls back to the crate name; CompanyName falls back to
+    // the joined authors (per spec) and then to an empty string.
+    let product_name = crate_name.to_string();
+    let company = meta
+        .company
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| meta.authors.join(", "));
+    let description = meta.description.clone().unwrap_or_default();
+    let copyright = meta.copyright.clone().unwrap_or_default();
+    let version = meta.version.clone().unwrap_or_else(|| "0.0.0".to_string());
+
+    // Build the chain of `.set(...)` calls. We only set fields that have
+    // content so we don't stamp empty strings into the resource.
+    let mut sets = String::new();
+    if !company.is_empty() {
+        sets.push_str(&format!(
+            "        res.set(\"CompanyName\", \"{}\");\n",
+            escape_rs(&company)
+        ));
+    }
+    if !description.is_empty() {
+        sets.push_str(&format!(
+            "        res.set(\"FileDescription\", \"{}\");\n",
+            escape_rs(&description)
+        ));
+    }
+    sets.push_str(&format!(
+        "        res.set(\"ProductName\", \"{}\");\n",
+        escape_rs(&product_name)
+    ));
+    if !copyright.is_empty() {
+        sets.push_str(&format!(
+            "        res.set(\"LegalCopyright\", \"{}\");\n",
+            escape_rs(&copyright)
+        ));
+    }
+    // FileVersion / ProductVersion. winresource derives these from
+    // CARGO_PKG_VERSION automatically, but we set them explicitly so the
+    // produced resource is independent of how cargo is invoked.
+    sets.push_str(&format!(
+        "        res.set(\"FileVersion\", \"{v}\");\n        res.set(\"ProductVersion\", \"{v}\");\n",
+        v = escape_rs(&version)
+    ));
+
+    // Icon block — only emitted when an icon was copied in. We re-check
+    // the file at build time so a deleted asset degrades to no-icon
+    // rather than a hard compile error.
+    let icon_block = match icon_in_crate {
+        Some(name) => format!(
+            "        if std::path::Path::new(\"{n}\").exists() {{\n\
+             \x20           res.set_icon(\"{n}\");\n\
+             \x20       }}\n",
+            n = escape_rs(name)
+        ),
+        None => String::new(),
+    };
+
+    // Assemble the full source. Note the doc comment marking this as
+    // generated, and the Windows gate.
+    format!(
+        "// Generated by juxc — do not edit.\n\
+         //\n\
+         // Embeds Windows version-info + icon resources into the produced\n\
+         // executable from the project's `jux.toml` `[package]` metadata.\n\
+         // No-op on non-Windows targets.\n\
+         fn main() {{\n\
+         \x20   if std::env::var(\"CARGO_CFG_TARGET_OS\").as_deref() == Ok(\"windows\") {{\n\
+         \x20       let mut res = winresource::WindowsResource::new();\n\
+         {sets}\
+         {icon_block}\
+         \x20       if let Err(e) = res.compile() {{\n\
+         \x20           println!(\"cargo:warning=winresource compile failed: {{e}}\");\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         }}\n",
+    )
+}
+
+/// Escape a string for inclusion inside a double-quoted Rust string
+/// literal in generated `build.rs` source: backslashes and double-quotes.
+fn escape_rs(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Invoke `rustfmt --edition=2021 <file>` on every emitted Rust file
