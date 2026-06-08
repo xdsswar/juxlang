@@ -239,6 +239,120 @@ addresses would change).
 
 ---
 
+## §CR.4.1 — Shared Mutation (Interior Mutability) — AMENDMENT
+
+**This subsection supersedes the clone-on-write (`Rc::make_mut` /
+`Arc::make_mut`) mutation rule stated in §CR.6.3, §CR.6.4, and §CR.8.5.**
+
+### Rationale
+
+Jux class objects are shared references **with shared mutation, exactly like
+Java**: mutating through any alias is observable through every other alias. The
+canonical case:
+
+```jux
+var x = new Box(1);
+list.add(x);
+var r = list.get(0);   // r and x are the SAME object
+r.set(9);
+print(x.get());        // prints 9 — mutation is shared
+```
+
+The clone-on-write model (`make_mut`) **forks** the data on the first write once
+the refcount is > 1, so `r.set(9)` would mutate a *copy* and `x` would still read
+`1`. That violates the language's reference semantics and is hereby replaced for
+any class the selector marks `mutated` (below).
+
+### New selector property (extends §CR.3.2)
+
+| Property  | Meaning |
+|-----------|---------|
+| `mutated` | The class has at least one instance-field write reachable through a binding — an instance method that writes `this.f = …` (already computed by the receiver-mutation analysis / `&mut self` selection), or an external `obj.f = …`. A class that is never mutated after construction is **not** `mutated`. |
+
+### Representation refinement (extends §CR.2 / decision table §CR.3.3)
+
+The `aliased`/`cross_thread` rows split on `mutated`:
+
+| aliased | cross_thread | mutated | → Rep |
+|---------|--------------|---------|-------|
+| true    | false        | false   | `Rc<C_Inner>`            (read-only sharing — cheap, no cell) |
+| true    | false        | true    | `Rc<RefCell<C_Inner>>`   (shared mutation, single-thread)    |
+| true/esc| true         | false   | `Arc<C_Inner>`           (read-only sharing across threads)  |
+| true/esc| true         | true    | `Arc<Mutex<C_Inner>>`    (shared mutation across threads)    |
+
+**Inline and Box are unchanged** — those reps are chosen only when the class is
+*not* aliased, so the owner has exclusive access and `&mut` works directly with
+zero interior-mutability cost. Interior mutability is paid **only** for classes
+that are *both aliased and mutated* — i.e. exactly when Java's shared-mutation
+behaviour is observable. This preserves the "fast optimized" guarantee
+(§CR.1): pure-local objects stay stack structs; read-only-shared objects stay
+plain `Rc`/`Arc`; the `RefCell`/`Mutex` appears only where it must.
+
+### Lowering (supersedes §CR.6.3 / §CR.6.4 `make_mut` shapes)
+
+For the interior-mutable reps:
+
+```rust
+// Rc<RefCell<…>>
+#[derive(Clone)]
+pub struct C(std::rc::Rc<std::cell::RefCell<C_Inner>>);
+// Arc<Mutex<…>>
+#[derive(Clone)]
+pub struct C(std::sync::Arc<std::sync::Mutex<C_Inner>>);
+```
+
+- **Field read** `obj.f` → `obj.0.borrow().f` (Rc) / `obj.0.lock().unwrap().f`
+  (Arc), with the existing auto-`.clone()` injection on `String`/generic fields.
+- **Field write** `obj.f = v` → `obj.0.borrow_mut().f = v` /
+  `obj.0.lock().unwrap().f = v`.
+- **`&self` methods** take a shared borrow (`borrow()` / `lock()`); **`&mut self`
+  methods** take a mutable borrow (`borrow_mut()` / `lock()`). No `make_mut`.
+- **`===`** stays pointer identity: `Rc::ptr_eq` / `Arc::ptr_eq`.
+- **Inheritance** (§CR.8.5): the `__parent` slot lives inside `C_Inner`, so the
+  cell wraps the whole inner (including the parent embed); `Deref` exposes the
+  wrapper as before, and mutation goes through `borrow_mut()` rather than
+  `make_mut`.
+
+### Borrow discipline — statement-scoped borrows (NORMATIVE)
+
+`RefCell`/`Mutex` move borrow checking to **runtime**, so a `borrow_mut()` held
+across a call that re-enters the same object panics (`already borrowed`). To make
+those panics **unreachable in well-formed Jux**, the backend MUST lower with
+**statement-scoped, short-lived borrows**: every field access borrows, touches
+the field, and drops the guard within a single statement — a borrow is **never
+held across a method call or across statements**.
+
+- Read `a.f.g()` → borrow `a` to pull `f` (clone if non-`Copy`), drop the guard,
+  *then* call `.g()`. Never `a.borrow().f.g()` (guard alive during `g`).
+- Write `a.f = expr` → evaluate `expr` first, then take a one-statement
+  `borrow_mut()` to store it (same scoped-temp shape already used for mutable
+  statics in §CR.5.7's deadlock-avoidance rule).
+- A method body borrows `self` per field-access, not once for the whole method,
+  so calling another method on `this` mid-body can't double-borrow.
+
+This is the single discipline that keeps shared mutation sound without surfacing
+Rust borrow panics to the Jux user. It is the deliberate, bounded cost of
+Java-faithful shared mutation; the escape-analysis selector (which demotes
+non-aliased classes to Inline/Box) is what claws the cost back where sharing
+isn't needed.
+
+### Java-fidelity pillars (non-normative summary)
+
+The shared-mutation model sits inside a coherent Java-on-Rust mapping:
+
+| Java pillar | Rust technique | Status |
+|-------------|----------------|--------|
+| Uniform refs + shared mutation | `Rc<RefCell>` / `Arc<Mutex>`, statement-scoped borrows | this addendum |
+| Escape-analysis "fast tier" | selector demotes to Inline / `Box` when not aliased | §CR.3 |
+| GC of cycles | `Weak` back-edges now (documented leak on uncollected cycles); arena or trial-deletion collector later | §CR.5.5, future |
+| Dynamic dispatch / inheritance | `dyn Trait` behind `Arc<dyn>`; `Deref` to `__parent`; sealed→enum for closed hierarchies | §CR.5.1–5.2 |
+| Reflection | compile-time type-descriptor table + registry (future) | future |
+| `null` | `T?` → `Option<T>`, non-null by default | `JUX-LANG-V1.md` §5.3 |
+| Exceptions | `Result<T,E>` + `?`-propagation; `throws` → error type | exceptions addendum |
+| `==` vs `===` | `operator==` or identity; `Rc::ptr_eq`/`Arc::ptr_eq` | §CR.4 |
+
+---
+
 ## §CR.5 — Interaction with Other Features
 
 ### §CR.5.1. Inheritance
@@ -626,40 +740,49 @@ calls `Rc::make_mut` automatically.
 
 ## §CR.9 — Implementation Phasing
 
-The audit identified this addendum as **Tier 1** — to be written
-**before** more backend code calcifies the current "always Arc" (or
-in Phase 1's case, "always Inline-shaped without identity") choice.
-The implementation itself can land in phases:
+**Ordering principle (AMENDED): correct first, fast later.** Land the
+Java-faithful shared-mutation default *first* so the language behaves
+like Java today; then layer the escape-analysis selector to claw back
+cost where sharing isn't needed. (This supersedes the original
+"Phase 1 = no change" framing.)
 
-### Phase 1 (today, no change)
+### Phase A — Java-correct default (`Rc<RefCell>` / `Arc<Mutex>`)
 
-Every class lowers to plain `struct C` + `Clone`. The user's
-"reference semantics" promise is mostly violated (`===` doesn't work
-properly, assignment copies rather than shares for non-`Clone`
-fields). But Phase 1 programs don't observably rely on it.
+1. Lower **every** class to the wrapped, interior-mutable shape: a
+   `pub struct C(Rc<RefCell<C_Inner>>)` (single-thread default), with
+   `C_Inner` holding the fields, constructors returning the wrapped
+   value, and **statement-scoped** `borrow()`/`borrow_mut()` at every
+   field access (§CR.4.1). `Arc<Mutex<…>>` when the class is provably
+   cross-thread (captured by `spawn`).
+2. `===` → `Rc::ptr_eq`/`Arc::ptr_eq`; inheritance `__parent` lives
+   inside `C_Inner`; operators borrow rather than `make_mut`.
+3. Outcome: `var x = f`, collection aliasing, and shared mutation all
+   behave like Java. The 193 backend tests + ~185 examples get their
+   expected emission updated to the wrapped shape as the safety net.
 
-### Phase 2 — Selector implementation
+### Phase B — Escape-analysis selector (the "fast tier")
 
-1. Collect per-class properties (§CR.3.2) in a new analysis pass
-   between tycheck and lowering.
-2. Apply the decision table (§CR.3.3) to pick a rep per class.
-3. Extend the backend's `emit_class_decl` to branch on the selected
-   rep and emit one of the four shapes (§CR.6.1–§CR.6.4).
-4. Update the field-access, method-call, and `===` emitters to
-   thread the rep through.
+1. New per-class analysis pass between tycheck and lowering: collect
+   `escapes` / `aliased` / `mutated` / `cross_thread` (§CR.3.2, §CR.4.1).
+2. Apply the decision table (§CR.3.3 + §CR.4.1) to pick a rep per class;
+   **demote** non-aliased classes to Inline / `Box`, and aliased-but-
+   immutable to plain `Rc`/`Arc` (no cell). Default stays Phase-A's
+   interior-mutable rep when in doubt.
+3. Branch `emit_class_decl` + the field/method/`===` emitters on the rep.
 
-### Phase 3 — Optimization
+### Phase C — Cycles
 
-- Per-instantiation rep selection for generics.
-- Cycle auto-detection and `Weak` insertion.
-- Inline classes that escape ONE scope (return + immediate consume)
-  could stay Inline if the return is to a known caller — interproc
-  analysis.
+- `Weak` back-edges for known parent↔child cycles; **document that
+  uncollected cycles leak** (acceptable interim, like early
+  refcounted languages). A trial-deletion / arena collector is the
+  later full-GC-fidelity option.
 
-### Phase 4 — Polish
+### Phase D — Polish
 
+- Per-instantiation rep selection for generics; interproc escape for
+  return-then-consume.
 - `E0950` / `E0951` / `E0952` diagnostic surfaces.
-- `// JUX:rep=arc` comment in emitted Rust so users debugging
+- `// JUX:rep=rc-refcell` comment in emitted Rust so users debugging
   generated code know which lowering they're looking at.
 
 ---

@@ -9,3 +9,5 @@ description = "Phase 1 — lexer for the Jux compiler (per JUX-COMPILER-PIPELINE
 [dependencies]
 juxc-source      = { workspace = true }
 juxc-diagnostics = { workspace = true }
+serde            = { workspace = true }
+serde_json       = { workspace = true }

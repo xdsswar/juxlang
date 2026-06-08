@@ -26,6 +26,22 @@ fn init_is_same_named_ident(init_expr: &Expr, field_name: &str) -> bool {
     false
 }
 
+/// Return the argument list of a `super(...)` call appearing anywhere
+/// in `ctor`'s body, if present. Used by the wrapper-class
+/// `new_inner` fallback path to forward super args into the parent's
+/// `new_inner(...)`. The simple-ctor fast path reads `super_args` off
+/// [`SimpleCtorInits`] instead; this helper covers the non-simple
+/// (mixed-statement) body. A constructor may legally hold at most one
+/// `super(...)` (tycheck enforces this), so the first match wins.
+fn extract_super_args(ctor: &juxc_ast::ConstructorDecl) -> Option<Vec<Expr>> {
+    for stmt in &ctor.body.statements {
+        if let juxc_ast::Stmt::SuperCall(args, _) = stmt {
+            return Some(args.clone());
+        }
+    }
+    None
+}
+
 impl RustEmitter {
     /// Emit a user-declared constructor as `pub fn new(...) -> Self`.
     /// Caller (`emit_class_decl`) has the writer at level 0; the ctor
@@ -252,6 +268,355 @@ impl RustEmitter {
         }
         self.w.indent_dec();
         self.w.line("}");
+    }
+
+    /// Emit a user-declared constructor for a **wrapper-shape** class
+    /// (§CR.4.1 / §CR.6.4). Same signature as the legacy ctor
+    /// (`pub fn new(args) -> Self`), but the body builds the inner
+    /// struct and wraps it:
+    ///
+    /// ```text
+    /// pub fn new(v: isize) -> Self {
+    ///     Self(std::rc::Rc::new(std::cell::RefCell::new(C_Inner { v })))
+    /// }
+    /// ```
+    ///
+    /// The `C_Inner { … }` literal is produced by the same
+    /// simple-ctor / `__self`-builder machinery the legacy path uses;
+    /// we just emit a different struct name (`C_Inner`, not `Self`)
+    /// and wrap the result. Constructor bodies operate on a plain
+    /// `C_Inner` (`__self`), so the interior-mutability `borrow`
+    /// rewrite is suppressed for the duration of the body — the
+    /// field writes target `__self.field` directly.
+    pub(crate) fn emit_wrapper_constructor(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+        ctor: &juxc_ast::ConstructorDecl,
+    ) {
+        // Emit two functions for each wrapper constructor:
+        //
+        //   - `new_inner(args) -> C_Inner` — builds the flattened inner
+        //     struct. For a child class the `__parent` slot is built by
+        //     recursively calling `Parent::new_inner(super_args)`, so a
+        //     whole `extends` chain materializes one nested inner value
+        //     in a single allocation (§CR.3.5).
+        //   - `new(args) -> Self` — the public ctor; wraps the inner in
+        //     `Rc::new(RefCell::new(...))`.
+        //
+        // Splitting them lets a subclass build its parent slice WITHOUT
+        // double-wrapping (the parent's own `Rc<RefCell>` would split
+        // identity). For a leaf simple class with no `extends`, the two
+        // collapse to the obvious shape.
+        self.emit_wrapper_inner_constructor(class_decl, ctor);
+
+        // Thin public `new` delegating to `new_inner`.
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.emit_visibility(ctor.visibility);
+        self.w.push_str("fn new(");
+        for (i, param) in ctor.params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(&param.name.text);
+            self.w.push_str(": ");
+            self.emit_type_as_rust(&param.ty);
+        }
+        self.w.push_str(") -> Self {\n");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner(");
+        for (i, param) in ctor.params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(&param.name.text);
+        }
+        self.w.push_str("))))\n");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+        self.w.indent_dec();
+    }
+
+    /// Emit `fn new_inner(args) -> C_Inner` for a wrapper class — the
+    /// function that builds the flattened inner struct (parent slice +
+    /// own fields). See [`Self::emit_wrapper_constructor`] for why this
+    /// is split out from the public `new`.
+    fn emit_wrapper_inner_constructor(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+        ctor: &juxc_ast::ConstructorDecl,
+    ) {
+        let inner = format!("{}_Inner", class_decl.name.text);
+        self.w.indent_inc();
+        self.w.emit_indent();
+        // `pub` so a subclass in another package can call
+        // `Parent::new_inner(...)` to build its `__parent` slot.
+        self.w.push_str("pub fn new_inner(");
+        for (i, param) in ctor.params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(&param.name.text);
+            self.w.push_str(": ");
+            self.emit_type_as_rust(&param.ty);
+        }
+        self.w.push_str(") -> ");
+        self.w.push_str(&inner);
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+
+        // Inside the ctor body the receiver is a plain `C_Inner`
+        // (`__self`) — direct field access, NOT through `.0.borrow()`.
+        // Suppress the wrapper rewrite so `this.f = v` lowers to
+        // `__self.f = v`.
+        let prev_wrapper = self.emitting_wrapper_class;
+        self.emitting_wrapper_class = false;
+
+        if let Some(simple) = extract_simple_ctor_inits(ctor) {
+            // `C_Inner { __parent: Parent::new_inner(super_args), … }`.
+            self.w.emit_indent();
+            self.emit_wrapper_simple_ctor_inner(class_decl, &inner, &simple);
+            self.w.push('\n');
+        } else {
+            // Fallback `__self`-builder. The `__parent` slot (when this
+            // class extends another wrapper) is seeded with the parent's
+            // `new_inner` so the parent slice is fully built before the
+            // body's `this.field = …` writes run. Without an explicit
+            // `super(...)` in the body, the parent ctor is called with
+            // no args (works for parameterless parents; a clear Rust
+            // error otherwise).
+            self.w.emit_indent();
+            self.w.push_str("let mut __self = ");
+            self.w.push_str(&inner);
+            self.w.push_str(" {\n");
+            self.w.indent_inc();
+            if let Some(parent_ty) = &class_decl.extends {
+                if let Some(seg) = parent_ty.name.segments.first() {
+                    self.w.emit_indent();
+                    self.w.push_str("__parent: ");
+                    self.w.push_str(&seg.text);
+                    self.w.push_str("::new_inner(");
+                    // Lift `super(args)` if present in the body.
+                    if let Some(super_args) = extract_super_args(ctor) {
+                        for (i, arg) in super_args.iter().enumerate() {
+                            if i > 0 {
+                                self.w.push_str(", ");
+                            }
+                            self.emit_expr(&arg);
+                        }
+                    }
+                    self.w.push_str("),\n");
+                }
+            }
+            for field in &class_decl.fields {
+                if field.is_static {
+                    continue;
+                }
+                self.w.emit_indent();
+                self.w.push_str(&field.name.text);
+                self.w.push_str(": ");
+                if let Some(default) = &field.default {
+                    self.emit_expr(default);
+                } else {
+                    self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
+                }
+                self.w.push_str(",\n");
+            }
+            self.w.indent_dec();
+            self.w.line("};");
+
+            self.this_alias = Some("__self".to_string());
+            let mut muts = HashSet::new();
+            collect_mutated_names(&ctor.body, &mut muts, &self.user_mut_methods);
+            self.mutated_in_fn = muts;
+            self.nullable_locals.clear();
+            for p in &ctor.params {
+                if p.ty.nullable {
+                    self.nullable_locals.insert(p.name.text.clone());
+                }
+            }
+            for stmt in &ctor.body.statements {
+                self.emit_source_marker(stmt_span(stmt));
+                self.w.emit_indent();
+                self.emit_stmt(stmt);
+            }
+            self.this_alias = None;
+            self.w.line("__self");
+        }
+
+        self.emitting_wrapper_class = prev_wrapper;
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+        self.w.indent_dec();
+    }
+
+    /// Emit the `C_Inner { field: expr, … }` literal for a simple
+    /// wrapper-class constructor. Mirrors [`Self::emit_simple_ctor_body`]
+    /// but writes the inner struct name and never has a `__parent`
+    /// slot (wrapper classes are simple — no inheritance). Side-effect
+    /// statements in the ctor body aren't supported on the simple
+    /// path (the simple-ctor extractor only matches pure
+    /// `this.field = expr;` sequences), so this is purely the literal.
+    fn emit_wrapper_simple_ctor_inner(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+        inner: &str,
+        simple: &SimpleCtorInits,
+    ) {
+        let mut chosen: std::collections::HashMap<&str, &juxc_ast::Expr> =
+            std::collections::HashMap::new();
+        for (name, expr) in &simple.inits {
+            chosen.insert(name.as_str(), expr);
+        }
+        // Side-effect statements (e.g. a static-counter bump) run
+        // before the literal — same ordering as the legacy
+        // `emit_simple_ctor_body`. They're wrapped in a block that
+        // yields the inner literal so the whole thing stays an
+        // expression inside `RefCell::new(...)`.
+        let has_side_effects = !simple.side_effects.is_empty();
+        if has_side_effects {
+            self.w.push_str("{ ");
+            let side_effects = simple.side_effects.clone();
+            for stmt in &side_effects {
+                self.emit_stmt(stmt);
+            }
+        }
+        self.w.push_str(inner);
+        self.w.push_str(" {");
+        let mut first = true;
+        // `__parent: Parent::new_inner(super_args)` first when this
+        // wrapper class extends another wrapper class (§CR.3.5). The
+        // parent slice is built recursively so the whole chain lands in
+        // one flattened inner. `super_args` come from the simple-ctor
+        // extractor's lifted `super(...)` call; absent → no-arg parent
+        // ctor (valid for parameterless parents).
+        if let Some(parent_ty) = &class_decl.extends {
+            if let Some(seg) = parent_ty.name.segments.first() {
+                self.w.push_str(" __parent: ");
+                self.w.push_str(&seg.text);
+                self.w.push_str("::new_inner(");
+                if let Some(super_args) = &simple.super_args {
+                    let super_args = super_args.clone();
+                    for (i, arg) in super_args.iter().enumerate() {
+                        if i > 0 {
+                            self.w.push_str(", ");
+                        }
+                        self.emit_expr(&arg);
+                    }
+                }
+                self.w.push_str(")");
+                first = false;
+            }
+        }
+        for field in &class_decl.fields {
+            if field.is_static {
+                continue;
+            }
+            if first {
+                self.w.push(' ');
+            } else {
+                self.w.push_str(", ");
+            }
+            first = false;
+            if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
+                if init_is_same_named_ident(init_expr, &field.name.text) {
+                    self.w.push_str(&field.name.text);
+                    continue;
+                }
+                self.w.push_str(&field.name.text);
+                self.w.push_str(": ");
+                self.emit_expr(init_expr);
+            } else if let Some(default) = &field.default {
+                self.w.push_str(&field.name.text);
+                self.w.push_str(": ");
+                self.emit_expr(default);
+            } else {
+                self.w.push_str(&field.name.text);
+                self.w.push_str(": ");
+                self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
+            }
+        }
+        if first {
+            // No instance fields — emit `C_Inner {}`.
+            self.w.push_str("}");
+        } else {
+            self.w.push_str(" }");
+        }
+        if has_side_effects {
+            self.w.push_str(" }");
+        }
+    }
+
+    /// Synthesize a zero-arg default constructor for a wrapper-shape
+    /// class that declared none. Builds an empty/`default`-filled
+    /// `C_Inner` and wraps it.
+    pub(crate) fn emit_wrapper_synthetic_default_constructor(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+    ) {
+        let inner = format!("{}_Inner", class_decl.name.text);
+        // `new_inner() -> C_Inner` — builds the empty/`default`-filled
+        // inner. A `__parent` slot (when the class extends another
+        // wrapper) is seeded with the parent's no-arg `new_inner()`.
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("pub fn new_inner() -> ");
+        self.w.push_str(&inner);
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str(&inner);
+        self.w.push_str(" {");
+        let mut first = true;
+        if let Some(parent_ty) = &class_decl.extends {
+            if let Some(seg) = parent_ty.name.segments.first() {
+                self.w.push_str(" __parent: ");
+                self.w.push_str(&seg.text);
+                self.w.push_str("::new_inner()");
+                first = false;
+            }
+        }
+        for field in &class_decl.fields {
+            if field.is_static {
+                continue;
+            }
+            if first {
+                self.w.push(' ');
+            } else {
+                self.w.push_str(", ");
+            }
+            first = false;
+            self.w.push_str(&field.name.text);
+            self.w.push_str(": ");
+            if let Some(default) = &field.default {
+                self.emit_expr(default);
+            } else {
+                self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
+            }
+        }
+        if first {
+            self.w.push_str("}");
+        } else {
+            self.w.push_str(" }");
+        }
+        self.w.push('\n');
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+        self.w.indent_dec();
+
+        // Thin public `new()` → wrap `new_inner()`.
+        self.w.indent_inc();
+        self.w.line("pub fn new() -> Self {");
+        self.w.indent_inc();
+        self.w.line("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner())))");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+        self.w.indent_dec();
     }
 
     /// Synthesize a zero-argument default constructor when the class

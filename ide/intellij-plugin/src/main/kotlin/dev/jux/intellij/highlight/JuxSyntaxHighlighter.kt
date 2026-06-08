@@ -8,20 +8,30 @@ import com.intellij.openapi.fileTypes.SyntaxHighlighterBase
 import com.intellij.psi.tree.IElementType
 
 /**
- * Maps [JuxLexer] tokens to colour attribute keys. Each key inherits from a
- * `DefaultLanguageHighlighterColors` base, so Jux follows the active theme out
- * of the box and stays customizable in **Settings → Editor → Color Scheme →
+ * Maps the [JuxLexer]'s fine-grained tokens to colour attribute keys. Each key
+ * inherits from a `DefaultLanguageHighlighterColors` base, so Jux follows the
+ * active theme and stays customizable in **Settings → Editor → Color Scheme →
  * Jux** (see [JuxColorSettingsPage]).
+ *
+ * This is the lexer-level (syntactic) layer. Role-sensitive colouring —
+ * primitive type names, annotations, declarations vs references — is added by
+ * the PSI-based semantic highlighter once the parser lands.
  */
 class JuxSyntaxHighlighter : SyntaxHighlighterBase() {
     override fun getHighlightingLexer(): Lexer = JuxLexer()
 
     override fun getTokenHighlights(tokenType: IElementType): Array<TextAttributesKey> =
-        KEYS[tokenType]?.let { arrayOf(it) } ?: EMPTY
+        SyntaxHighlighterBase.pack(KEYS[tokenType])
 
     companion object {
         val KEYWORD = key("JUX_KEYWORD", D.KEYWORD)
+        // Set by the PSI semantic highlighter ([dev.jux.intellij.highlight.JuxAnnotator]):
+        // primitive type names are identifiers at the lexer level, so they (and
+        // declaration names) are coloured from the parse tree, not the lexer.
         val TYPE = key("JUX_TYPE", D.KEYWORD)
+        val CLASS_NAME = key("JUX_CLASS_NAME", D.CLASS_NAME)
+        val METHOD_DECLARATION = key("JUX_METHOD_DECLARATION", D.FUNCTION_DECLARATION)
+        val FIELD = key("JUX_FIELD", D.INSTANCE_FIELD)
         val CONSTANT = key("JUX_CONSTANT", D.KEYWORD)
         val STRING = key("JUX_STRING", D.STRING)
         val CHAR = key("JUX_CHAR", D.STRING)
@@ -39,33 +49,33 @@ class JuxSyntaxHighlighter : SyntaxHighlighterBase() {
         val DOT = key("JUX_DOT", D.DOT)
         val IDENTIFIER = key("JUX_IDENTIFIER", D.IDENTIFIER)
 
-        private val EMPTY = emptyArray<TextAttributesKey>()
-
         private fun key(externalName: String, base: TextAttributesKey) =
             createTextAttributesKey(externalName, base)
 
-        private val KEYS: Map<IElementType, TextAttributesKey> = mapOf(
-            JuxTokenTypes.KEYWORD to KEYWORD,
-            JuxTokenTypes.TYPE to TYPE,
-            JuxTokenTypes.CONSTANT to CONSTANT,
-            JuxTokenTypes.STRING to STRING,
-            JuxTokenTypes.CHAR to CHAR,
-            JuxTokenTypes.NUMBER to NUMBER,
-            JuxTokenTypes.LINE_COMMENT to LINE_COMMENT,
-            JuxTokenTypes.BLOCK_COMMENT to BLOCK_COMMENT,
-            JuxTokenTypes.DOC_COMMENT to DOC_COMMENT,
-            JuxTokenTypes.ANNOTATION to ANNOTATION,
-            JuxTokenTypes.OPERATOR to OPERATOR,
-            JuxTokenTypes.LBRACE to BRACES,
-            JuxTokenTypes.RBRACE to BRACES,
-            JuxTokenTypes.LBRACKET to BRACKETS,
-            JuxTokenTypes.RBRACKET to BRACKETS,
-            JuxTokenTypes.LPAREN to PARENS,
-            JuxTokenTypes.RPAREN to PARENS,
-            JuxTokenTypes.SEMICOLON to SEMICOLON,
-            JuxTokenTypes.COMMA to COMMA,
-            JuxTokenTypes.DOT to DOT,
-            JuxTokenTypes.IDENTIFIER to IDENTIFIER,
-        )
+        private val KEYS: Map<IElementType, TextAttributesKey> = buildMap {
+            fun fill(set: com.intellij.psi.tree.TokenSet, value: TextAttributesKey) {
+                for (t in set.types) put(t, value)
+            }
+            fill(JuxTokenTypes.KEYWORDS, KEYWORD)
+            fill(JuxTokenTypes.OPERATORS, OPERATOR)
+            fill(JuxTokenTypes.STRING_LITERALS, STRING)
+            // Char literals share the string colour family but keep a distinct key.
+            put(JuxTokenTypes.CHAR_LITERAL, CHAR)
+            put(JuxTokenTypes.INT_LITERAL, NUMBER)
+            put(JuxTokenTypes.FLOAT_LITERAL, NUMBER)
+            put(JuxTokenTypes.BOOL_LITERAL, CONSTANT)
+            put(JuxTokenTypes.NULL_LITERAL, CONSTANT)
+            put(JuxTokenTypes.LINE_COMMENT, LINE_COMMENT)
+            put(JuxTokenTypes.BLOCK_COMMENT, BLOCK_COMMENT)
+            put(JuxTokenTypes.DOC_COMMENT, DOC_COMMENT)
+            put(JuxTokenTypes.AT, ANNOTATION)
+            fill(JuxTokenTypes.BRACES, BRACES)
+            fill(JuxTokenTypes.BRACKETS, BRACKETS)
+            fill(JuxTokenTypes.PARENS, PARENS)
+            put(JuxTokenTypes.SEMICOLON, SEMICOLON)
+            put(JuxTokenTypes.COMMA, COMMA)
+            put(JuxTokenTypes.DOT, DOT)
+            put(JuxTokenTypes.IDENTIFIER, IDENTIFIER)
+        }
     }
 }

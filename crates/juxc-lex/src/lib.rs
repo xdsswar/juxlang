@@ -32,8 +32,38 @@
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_source::{SourceFile, Span};
 
+pub mod grammar_spec;
 pub mod token;
 pub use token::{Keyword, Token, TokenKind};
+
+/// Jux's blessed primitive type names, per `JUX-LANG-V1.md` §5.
+///
+/// These are *not* reserved keywords — they lex as ordinary identifiers and
+/// are resolved by name — but the parser's C-style-cast lookahead recognizes
+/// them without help from name resolution, and the editor tooling colors them
+/// as types. This is the single source of truth shared by:
+///
+/// - `juxc-parse`'s `is_known_primitive_type_name` (cast disambiguation), and
+/// - the IntelliJ plugin's primitive set (emitted via [`grammar_spec`]).
+///
+/// Covers the Java-family names (`int`, `long`, `String`, …) and the
+/// width-explicit synonyms (`i8`…`f64`). `void` and `Self` are deliberately
+/// excluded — they aren't legal cast targets.
+pub const PRIMITIVE_TYPE_NAMES: &[&str] = &[
+    "bool",
+    "byte", "ubyte",
+    "short", "ushort",
+    "int", "uint",
+    "long", "ulong",
+    "float", "double",
+    "char",
+    "String",
+    "i8", "u8",
+    "i16", "u16",
+    "i32", "u32",
+    "i64", "u64",
+    "f32", "f64",
+];
 
 /// Output of [`lex`].
 ///

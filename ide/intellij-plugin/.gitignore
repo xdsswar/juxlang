@@ -3,3 +3,7 @@ build/
 .idea/
 *.iml
 out/
+# IntelliJ Platform Gradle Plugin caches (downloaded IDE deps, sandbox)
+.intellijPlatform/
+# Kotlin incremental-compile cache
+.kotlin/

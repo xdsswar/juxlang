@@ -42,6 +42,43 @@
     <internalFileTemplate name="Jux Record"/>
     <internalFileTemplate name="Jux Annotation"/>
 
+    <!-- PSI: lexer + recursive-descent parser building a real syntax tree
+         (declaration-level today, full grammar in progress). Unlocks Structure
+         View, folding, navigation, and PSI-based inspections. -->
+    <lang.parserDefinition
+        language="Jux"
+        implementationClass="dev.jux.intellij.psi.JuxParserDefinition"/>
+
+    <!-- PSI-driven editor features: outline (Structure View / Ctrl+F12) and
+         code folding of bodies and comments. -->
+    <lang.psiStructureViewFactory
+        language="Jux"
+        implementationClass="dev.jux.intellij.structure.JuxStructureViewFactory"/>
+    <lang.foldingBuilder
+        language="Jux"
+        implementationClass="dev.jux.intellij.folding.JuxFoldingBuilder"/>
+
+    <!-- PSI semantic highlighting: primitive type names, annotation names,
+         declaration names (decl-vs-reference colouring lands with Phase 5). -->
+    <annotator
+        language="Jux"
+        implementationClass="dev.jux.intellij.highlight.JuxAnnotator"/>
+
+    <!-- IDE-side resolution: in-file Go-to-Declaration, Find Usages, and
+         Rename for Jux declarations. Cross-file / std symbols defer to juxc-lsp. -->
+    <psi.referenceContributor
+        language="Jux"
+        implementation="dev.jux.intellij.resolve.JuxReferenceContributor"/>
+    <lang.findUsagesProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.resolve.JuxFindUsagesProvider"/>
+    <lang.namesValidator
+        language="Jux"
+        implementationClass="dev.jux.intellij.resolve.JuxNamesValidator"/>
+    <completion.contributor
+        language="Jux"
+        implementationClass="dev.jux.intellij.completion.JuxCompletionContributor"/>
+
     <!-- Native syntax highlighting + a customizable color page (§I.3). -->
     <lang.syntaxHighlighterFactory
         language="Jux"

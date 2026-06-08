@@ -1327,7 +1327,7 @@ fn check_abstract_methods_implemented(
             let Some(iface_name) = iface_ty.name.segments.last().map(|s| s.text.as_str()) else {
                 continue;
             };
-            let Some(iface) = table.interfaces.get(iface_name) else {
+            let Some(iface) = resolve_interface(table, iface_name) else {
                 continue;
             };
             for (m_name, m_sig) in &iface.methods {
@@ -1410,6 +1410,22 @@ fn check_abstract_methods_implemented(
 
 /// True if `class_name` (or one of its ancestor classes) has an
 /// own (non-abstract) method named `method_name`.
+/// Resolve a written interface name (often a bare segment like `Infer` after an
+/// `import`) to its signature. Tries a direct key hit first, then falls back to
+/// matching an FQN-keyed interface (`xss.it.follow.Infer`) by its last segment —
+/// the same fallback [`SymbolTable::lookup_method`] uses. Without this, the
+/// completeness checks silently skip cross-package interfaces and the error
+/// leaks to rustc as `E0046`.
+fn resolve_interface<'a>(table: &'a SymbolTable, written_name: &str) -> Option<&'a InterfaceSig> {
+    if let Some(iface) = table.interfaces.get(written_name) {
+        return Some(iface);
+    }
+    table.interfaces.iter().find_map(|(key, iface)| {
+        let last = key.rsplit('.').next().unwrap_or(key.as_str());
+        (last == written_name).then_some(iface)
+    })
+}
+
 fn class_provides_method(
     table: &SymbolTable,
     class_name: &str,
@@ -1456,7 +1472,7 @@ fn implements_provides_default(
         let Some(iface_name) = iface_ty.name.segments.last().map(|s| s.text.as_str()) else {
             continue;
         };
-        let Some(iface) = table.interfaces.get(iface_name) else {
+        let Some(iface) = resolve_interface(table, iface_name) else {
             continue;
         };
         if let Some(m) = iface.methods.get(method_name) {
@@ -1493,7 +1509,7 @@ fn check_diamond_default_conflicts(
             let Some(iface_name) = iface_ty.name.segments.last().map(|s| s.text.as_str()) else {
                 continue;
             };
-            let Some(iface) = table.interfaces.get(iface_name) else {
+            let Some(iface) = resolve_interface(table, iface_name) else {
                 continue;
             };
             for (m_name, m_sig) in &iface.methods {
@@ -2642,6 +2658,28 @@ mod tests {
         assert_eq!(class.methods.len(), 1);
         assert!(class.methods.contains_key("sum"));
         assert_eq!(class.constructors.len(), 1);
+    }
+
+    /// Regression: a class implementing a same-package interface (so the
+    /// interface is FQN-keyed `xss.it.follow.Infer` while `implements` writes
+    /// the bare `Infer`) without supplying the abstract method must fire
+    /// `E0429` — previously the simple-name lookup missed it and the error
+    /// leaked to rustc as `E0046`.
+    #[test]
+    fn abstract_method_unimplemented_in_package_fires_e0429() {
+        let (_table, diags) = build_table(
+            r#"
+            package xss.it.follow;
+            public interface Infer { void call(); }
+            public class Follow implements Infer {
+                public void printVal() { }
+            }
+            "#,
+        );
+        assert!(
+            diags.iter().any(|d| d.code.as_str() == "E0429"),
+            "expected E0429, got: {diags:?}",
+        );
     }
 
     /// Two `class Foo`s in the same unit → E0400 on the second.

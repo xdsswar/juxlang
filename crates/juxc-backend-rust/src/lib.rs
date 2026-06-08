@@ -203,6 +203,7 @@ pub fn lower_workspace(
     // parent chains and copy inherited concrete method bodies
     // down. The FQN is `<package>.<class>` (empty package → bare
     // name), matching how the symbol table keys class entries.
+    e.wrapper_classes = compute_wrapper_classes(units);
     for unit in units {
         let pkg: Vec<String> = unit
             .package
@@ -282,6 +283,7 @@ pub fn lower_workspace_test(
         let unit_set = collect_user_mut_methods(unit);
         e.user_mut_methods.extend(unit_set);
     }
+    e.wrapper_classes = compute_wrapper_classes(units);
     for unit in units {
         let pkg: Vec<String> = unit
             .package
@@ -551,6 +553,443 @@ struct RustEmitter {
     /// when called on a Player, rather than Entity's abstract
     /// stub via Deref).
     pub(crate) class_asts: std::collections::HashMap<String, juxc_ast::ClassDecl>,
+    /// Bare names of classes lowered to the **shared-mutation wrapper
+    /// shape** — `pub struct C(Rc<RefCell<C_Inner>>)` — per the
+    /// class-representation addendum's Phase A (§CR.4.1 / §CR.6). A
+    /// class lands here when it's "simple": no `extends`, no
+    /// `sealed permits`, no generics, not abstract, and not a stdlib
+    /// intrinsic. Field reads/writes on a value whose type is one of
+    /// these names route through `.0.borrow()` / `.0.borrow_mut()`
+    /// (see `emit_field` / `emit_assign`), and `this.f` inside such a
+    /// class's methods reads via `self.0.borrow()`.
+    ///
+    /// Populated upfront — same place as `class_asts` — so the
+    /// field-access emitters (which only know a receiver's *type
+    /// name*, not its decl) can recognize a wrapper receiver. Keyed
+    /// by bare class name; cross-package collisions are accepted for
+    /// Phase A (the simple-class set rarely collides, and a false
+    /// positive just adds a `.borrow()` that wouldn't compile, which
+    /// surfaces clearly).
+    pub(crate) wrapper_classes: std::collections::HashSet<String>,
+    /// True while emitting the body of a constructor / method /
+    /// operator that belongs to a **wrapper-shape** class (one in
+    /// [`Self::wrapper_classes`]). Drives the interior-mutability
+    /// lowering: `this.f` reads via `self.0.borrow().f`, field writes
+    /// go through the scoped `self.0.borrow_mut()` temp shape, and the
+    /// constructor wraps its `C_Inner { … }` in
+    /// `C(Rc::new(RefCell::new(…)))`. `false` everywhere else, so the
+    /// legacy plain-struct emitters keep their original behavior.
+    pub(crate) emitting_wrapper_class: bool,
+    /// Set for the duration of emitting a method-call **callee**
+    /// (`recv.method` in `recv.method(args)`). The outermost `Field`
+    /// node of such a callee names a METHOD, which lives on the wrapper
+    /// newtype — not inside `C_Inner` — so its `.0.borrow()` rewrite
+    /// must be suppressed even when a same-named instance field exists
+    /// somewhere up the `extends` chain (e.g. a `legs` field plus a
+    /// `legs()` method on `Mammal`). `emit_field` takes-and-clears this
+    /// flag on entry so only the outermost field sees it; a nested
+    /// field receiver (`obj.field.method()`) still borrows correctly.
+    pub(crate) emitting_call_callee: bool,
+}
+
+/// True when a class declaration should lower to the shared-mutation
+/// **wrapper shape** (`pub struct C(Rc<RefCell<C_Inner>>)`) rather
+/// than the legacy plain-struct shape.
+///
+/// Phase A scope (per the class-representation addendum): only
+/// **simple** classes take the wrapper path. A class is simple when
+/// it has no `extends`, no `sealed permits`, no generic parameters,
+/// and isn't `abstract`. Inheritance, sealed enums, and generics keep
+/// the existing emission for now — those are follow-up passes. The
+/// stdlib-intrinsic skip and the sealed-enum branch in
+/// `emit_class_decl` run *before* this gate, so a class reaching it
+/// is already known to be a normal struct-shaped declaration.
+///
+/// **Superseded** by [`compute_wrapper_classes`] for the actual
+/// emission gate (which now also admits non-sealed `extends`
+/// hierarchies). Retained as a single-class predicate for reference.
+#[allow(dead_code)]
+pub(crate) fn class_decl_uses_wrapper(cd: &juxc_ast::ClassDecl) -> bool {
+    cd.extends.is_none()
+        && cd.permits.is_empty()
+        && cd.generic_params.is_empty()
+        && !cd.is_abstract
+}
+
+/// Compute the **global wrapper-class set** for a workspace.
+///
+/// Phase A (§CR.4.1 / §CR.5.1) — two families of class take the
+/// shared-mutation wrapper shape:
+///
+///   1. **Leaf simple classes** — no `extends`, `sealed`, generics,
+///      or `abstract` (the original Phase-A set).
+///   2. **Non-sealed `extends` hierarchies** — every class in a
+///      connected inheritance component lowers to the wrapper shape so
+///      inherited fields/methods + shared mutation work (§CR.3.5 rolls
+///      the whole chain up to one representation). Abstract parents are
+///      *included* here (they're still real structs in the chain),
+///      unlike the leaf rule which excludes `abstract`.
+///
+/// A connected hierarchy is wrapped **only if every class in it** is:
+///   - non-sealed and not a subclass-of-sealed (sealed parents lower
+///     as Rust enums; their subclasses are variants),
+///   - non-generic (generic-class lowering is out of scope),
+///   - not an intrinsic stdlib class (those suppress struct emission),
+///   - **not an exception type** — any class whose `extends` chain
+///     reaches `Throwable`. Exceptions are thrown via `panic_any`,
+///     which needs `Send`, and `Rc<RefCell<_>>` is `!Send`. To keep
+///     correctness over completeness, the whole `Throwable` chain stays
+///     on the legacy plain-struct path for now (the safe fallback the
+///     phasing notes call out).
+///
+/// When any class in a component fails a check, the *entire* component
+/// stays on the legacy path — a wrapper parent with a plain-struct
+/// child (or vice-versa) would break `__parent` embedding and upcasts.
+pub(crate) fn compute_wrapper_classes(
+    units: &[juxc_ast::CompilationUnit],
+) -> std::collections::HashSet<String> {
+    use std::collections::{HashMap, HashSet};
+
+    // Bare-name → (ClassDecl, package) for every class across the
+    // workspace (including stdlib units). Bare names are the join key
+    // because `extends` clauses in source carry only the bare name.
+    //
+    // **Bare-name multimap.** The emit-time wrapper gate keys on the
+    // class's bare name (`wrapper_classes.contains(name)`), and a
+    // program can legally declare the same bare name in two packages
+    // (e.g. a user `IOException` in the default package alongside the
+    // stdlib `jux.std.exceptions.IOException`). We therefore decide
+    // wrappability **per bare name**, conservatively: a bare name is
+    // wrappable only if *every* declaration sharing it is wrappable.
+    // This also makes a user class that collides with an exception name
+    // fall back to legacy — the safe choice, since the user's class may
+    // itself be thrown (`!Send` `Rc<RefCell>` would break `panic_any`).
+    let mut by_name: HashMap<String, Vec<(&juxc_ast::ClassDecl, String)>> = HashMap::new();
+    for unit in units {
+        let pkg: Vec<String> = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
+            .unwrap_or_default();
+        let pkg_str = pkg.join(".");
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                by_name
+                    .entry(cd.name.text.clone())
+                    .or_default()
+                    .push((cd, pkg_str.clone()));
+            }
+        }
+    }
+
+    // The set of bare names extended by *some* declaration of `name`.
+    let parents_of = |name: &str| -> Vec<String> {
+        by_name
+            .get(name)
+            .map(|decls| {
+                decls
+                    .iter()
+                    .filter_map(|(cd, _)| {
+                        cd.extends
+                            .as_ref()
+                            .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    // **Thrown/caught class names.** A class that is `throw`n (or named
+    // in a `catch`) is panicked through `std::panic::panic_any`, which
+    // requires the payload to be `Send`. `Rc<RefCell<_>>` (the wrapper
+    // rep) is `!Send`, so any thrown class — even one that does NOT
+    // extend `Throwable` — must stay on the legacy plain-struct path.
+    // We scan every function/method/constructor body for `throw new
+    // X(...)` targets and `catch (X e)` types. This is the safe
+    // fallback the phasing notes call out (correctness over
+    // completeness): a thrown wrapper would fail to compile.
+    let thrown = collect_thrown_class_names(units);
+
+    // Exception detection: a bare name is exception-tainted iff *any*
+    // declaration sharing it transitively extends `Throwable` (or is
+    // `Throwable` itself), OR the name is thrown/caught anywhere. Walks
+    // the union of every declaration's parents so a collision with the
+    // stdlib exception chain taints the name.
+    let is_exception = |start: &str| -> bool {
+        let mut stack = vec![start.to_string()];
+        let mut seen: HashSet<String> = HashSet::new();
+        while let Some(name) = stack.pop() {
+            if name == "Throwable" || thrown.contains(&name) {
+                return true;
+            }
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            for p in parents_of(&name) {
+                stack.push(p);
+            }
+        }
+        false
+    };
+
+    // True when *every* declaration sharing the bare `name` is
+    // wrappable in isolation: non-sealed, non-generic, non-intrinsic,
+    // and not a subclass-of-sealed. A name with no visible declaration
+    // (an `extends` target we can't see) is NOT ok — the chain falls
+    // back to legacy.
+    let name_ok = |name: &str| -> bool {
+        let Some(decls) = by_name.get(name) else {
+            return false;
+        };
+        decls.iter().all(|(cd, pkg)| {
+            if cd.is_sealed || !cd.permits.is_empty() {
+                return false;
+            }
+            if !cd.generic_params.is_empty() {
+                return false;
+            }
+            if is_intrinsic_class(pkg, &cd.name.text) {
+                return false;
+            }
+            // Subclass-of-sealed: parent is a sealed class → enum
+            // variant, not an embedded struct.
+            if let Some(parent) = cd
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+            {
+                let parent_sealed = by_name
+                    .get(&parent)
+                    .map(|ds| ds.iter().any(|(pcd, _)| pcd.is_sealed))
+                    .unwrap_or(true); // unseen parent → treat as unsafe
+                if parent_sealed {
+                    return false;
+                }
+            }
+            true
+        })
+    };
+
+    // A bare name is a wrapper iff it AND its whole transitive `extends`
+    // closure (ancestors) are wrappable and exception-free. We don't
+    // need to walk *descendants*: a child whose parent is excluded gets
+    // excluded on its own ancestor walk, and a parent stays wrappable
+    // independently (the parent's own struct shape doesn't depend on
+    // its children — only the child embeds the parent's inner). This is
+    // a slight relaxation of the strict whole-component roll-up, but is
+    // sound here because excluded children simply fall back to legacy
+    // plain-struct + `From`/`Deref`, which still upcast into a wrapper
+    // parent through the parent's own `From`. To stay fully consistent
+    // with §CR.3.5 we additionally require every *descendant* to be
+    // wrappable too, so a mixed hierarchy never arises.
+    //
+    // Build child→parents adjacency for the descendant check.
+    let mut children_of: HashMap<String, Vec<String>> = HashMap::new();
+    for (name, decls) in &by_name {
+        for (cd, _) in decls {
+            if let Some(parent) = cd
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+            {
+                children_of.entry(parent).or_default().push(name.clone());
+            }
+        }
+    }
+
+    // Collect the full connected component (ancestors + descendants)
+    // reachable from `start` through the extends graph (both
+    // directions), then require every member to be `name_ok` and
+    // exception-free.
+    let component_wrappable = |start: &str| -> bool {
+        let mut stack = vec![start.to_string()];
+        let mut seen: HashSet<String> = HashSet::new();
+        while let Some(name) = stack.pop() {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            if !name_ok(&name) || is_exception(&name) {
+                return false;
+            }
+            for p in parents_of(&name) {
+                stack.push(p);
+            }
+            if let Some(kids) = children_of.get(&name) {
+                for k in kids {
+                    stack.push(k.clone());
+                }
+            }
+        }
+        true
+    };
+
+    let mut wrapper: HashSet<String> = HashSet::new();
+    for name in by_name.keys() {
+        if component_wrappable(name) {
+            wrapper.insert(name.clone());
+        }
+    }
+    wrapper
+}
+
+/// Collect the **bare names of every class that is `throw`n or named
+/// in a `catch`** across a workspace.
+///
+/// Thrown classes become `panic_any` payloads, which must be `Send`;
+/// the wrapper rep (`Rc<RefCell<_>>`) is `!Send`, so these classes
+/// (and, via the caller's chain walk, their hierarchies) must stay on
+/// the legacy plain-struct path. Detection sources:
+///
+///   - `throw new X(...)` → the `NewObjectExpr`'s class name.
+///   - `throw <bare path>` → that name (covers `throw cachedError;`).
+///   - `catch (X e)` → the catch clause's declared type.
+///
+/// The walker descends through every nested block (if / while / for /
+/// try) of every top-level function, class method, and constructor.
+fn collect_thrown_class_names(
+    units: &[juxc_ast::CompilationUnit],
+) -> std::collections::HashSet<String> {
+    use juxc_ast::{Stmt, TopLevelDecl};
+    let mut out = std::collections::HashSet::new();
+
+    fn bare_of(qn: &juxc_ast::QualifiedName) -> Option<String> {
+        qn.segments.last().map(|s| s.text.clone())
+    }
+    fn ty_bare(t: &juxc_ast::TypeRef) -> Option<String> {
+        t.name.segments.last().map(|s| s.text.clone())
+    }
+
+    fn walk_block(block: &juxc_ast::Block, out: &mut std::collections::HashSet<String>) {
+        for stmt in &block.statements {
+            walk_stmt(stmt, out);
+        }
+    }
+
+    fn walk_else(
+        branch: Option<&juxc_ast::ElseBranch>,
+        out: &mut std::collections::HashSet<String>,
+    ) {
+        match branch {
+            Some(juxc_ast::ElseBranch::If(inner)) => {
+                walk_block(&inner.then_block, out);
+                walk_else(inner.else_branch.as_deref(), out);
+            }
+            Some(juxc_ast::ElseBranch::Block(b)) => walk_block(b, out),
+            None => {}
+        }
+    }
+
+    fn walk_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<String>) {
+        match stmt {
+            Stmt::Throw(expr, _) => match expr {
+                juxc_ast::Expr::NewObject(n) => {
+                    if let Some(b) = bare_of(&n.class_name) {
+                        out.insert(b);
+                    }
+                }
+                juxc_ast::Expr::Path(qn) => {
+                    if let Some(b) = bare_of(qn) {
+                        out.insert(b);
+                    }
+                }
+                _ => {}
+            },
+            Stmt::Try(t) => {
+                walk_block(&t.body, out);
+                for c in &t.catches {
+                    if let Some(b) = ty_bare(&c.ty) {
+                        out.insert(b);
+                    }
+                    walk_block(&c.body, out);
+                }
+                if let Some(fin) = &t.finally {
+                    walk_block(fin, out);
+                }
+            }
+            Stmt::If(s) => {
+                walk_block(&s.then_block, out);
+                walk_else(s.else_branch.as_deref(), out);
+            }
+            Stmt::While(s) => walk_block(&s.body, out),
+            Stmt::ForEach(s) => walk_block(&s.body, out),
+            _ => {}
+        }
+    }
+
+    for unit in units {
+        for item in &unit.items {
+            match item {
+                TopLevelDecl::Function(f) => {
+                    if let Some(body) = &f.body {
+                        walk_block(body, &mut out);
+                    }
+                }
+                TopLevelDecl::Class(cd) => {
+                    for m in &cd.methods {
+                        if let Some(body) = &m.body {
+                            walk_block(body, &mut out);
+                        }
+                    }
+                    for ctor in &cd.constructors {
+                        walk_block(&ctor.body, &mut out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    out
+}
+
+/// Collect the **bare names of every class that some other class
+/// extends** across a set of units. A class that is a parent in any
+/// hierarchy must NOT take the Phase-A wrapper shape: the whole
+/// inheritance chain has to roll up to a single representation
+/// (§CR.3.5), and the `__parent`-embedding / `Deref` machinery the
+/// child classes use assumes the legacy plain-struct parent shape.
+/// Mixing a wrapper parent with a plain-struct child would break
+/// `Deref`, upcasts, and (for thrown exception hierarchies) the
+/// `Send` bound `panic_any` needs. Excluding extended classes keeps
+/// Phase A to genuinely-leaf simple classes.
+///
+/// **Superseded** by [`compute_wrapper_classes`], which now performs a
+/// whole-component analysis (parents AND children roll up together).
+/// Kept for reference / potential reuse.
+#[allow(dead_code)]
+pub(crate) fn collect_extended_class_names(
+    units: &[juxc_ast::CompilationUnit],
+) -> std::collections::HashSet<String> {
+    let mut extended = std::collections::HashSet::new();
+    for unit in units {
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                if let Some(parent) = &cd.extends {
+                    if let Some(seg) = parent.name.segments.last() {
+                        extended.insert(seg.text.clone());
+                    }
+                }
+            }
+        }
+    }
+    extended
+}
+
+/// True when `(package, class_name)` names one of the stdlib classes
+/// whose struct emission is *suppressed* in `emit_class_decl` (the
+/// compiler owns the real implementation, lowering it onto a Rust std
+/// container or runtime helper). Such names must NOT be registered as
+/// wrapper classes — they never emit a `C_Inner` newtype, so routing
+/// a field access through `.0.borrow()` would dangle. Mirrors the
+/// early-return guards at the top of `emit_class_decl`.
+pub(crate) fn is_intrinsic_class(pkg: &str, name: &str) -> bool {
+    match (pkg, name) {
+        ("jux.std.collections", "ArrayList" | "HashMap" | "HashSet") => true,
+        ("jux.std.io", "File") => true,
+        ("jux.std.concurrent", "Worker" | "Task") => true,
+        ("jux.std.time", "Clock" | "Instant") => true,
+        _ => false,
+    }
 }
 
 impl RustEmitter {
@@ -716,6 +1155,9 @@ impl RustEmitter {
             current_unit_idx: None,
             anonymous_class_counter: 0,
             class_asts: std::collections::HashMap::new(),
+            wrapper_classes: std::collections::HashSet::new(),
+            emitting_wrapper_class: false,
+            emitting_call_callee: false,
         }
     }
 
@@ -772,6 +1214,13 @@ impl RustEmitter {
                 .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
                 .unwrap_or_default();
             let pkg_str = pkg.join(".");
+            // Merge this unit's wrapper classes into the running set.
+            // Single-unit mode emits each unit independently, so we
+            // union rather than overwrite (`lower_with_source` may feed
+            // several units one at a time).
+            for w in compute_wrapper_classes(std::slice::from_ref(unit)) {
+                self.wrapper_classes.insert(w);
+            }
             for item in &unit.items {
                 if let TopLevelDecl::Class(cd) = item {
                     let fqn = if pkg_str.is_empty() {

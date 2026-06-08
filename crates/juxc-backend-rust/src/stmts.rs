@@ -702,6 +702,23 @@ impl RustEmitter {
             if let Some(scope) = self.local_types.last_mut() {
                 scope.insert(var.name.text.clone(), ty);
             }
+        } else if let Some(init) = &var.init {
+            // `var x = init;` carries no written type — recover one from
+            // the initializer's inferred type so name-keyed receiver
+            // resolution (`local_types`) still works for inferred locals.
+            // This is what makes the wrapper-class `.0.borrow()` rewrite
+            // fire for `var i = new Inner(...); print($"${i.field}")`,
+            // where the interpolated `i`'s span collides in `expr_types`
+            // but its NAME reliably maps to the right class here. Only a
+            // `Ty::User` is worth recording (it's the only kind the
+            // wrapper / stdlib-dispatch receiver lookups consult).
+            if let Some(ty @ juxc_tycheck::Ty::User { .. }) =
+                self.expr_types.get(&expr_span_of(init)).cloned()
+            {
+                if let Some(scope) = self.local_types.last_mut() {
+                    scope.insert(var.name.text.clone(), ty);
+                }
+            }
         }
         self.w.push_str("let ");
         if self.mutated_in_fn.contains(&var.name.text) {
@@ -740,6 +757,30 @@ impl RustEmitter {
                 self.w.push_str("Some(");
             }
             self.emit_expr(init);
+            // **Wrapper-class share-on-assignment (§CR.4.1).** When the
+            // init re-reads an existing wrapper-class binding
+            // (`var y = x;`, `var y = obj.child;`, `var y = this;`),
+            // the two bindings must SHARE the same instance — Java
+            // reference semantics. A bare move would invalidate the
+            // source. Append `.clone()` (a cheap `Rc` refcount bump)
+            // so both handles stay live and point at the same
+            // `RefCell`. Fresh values (`new C(...)`, a call result)
+            // are already owned handles and don't need the clone.
+            //
+            // A `Field` read of a wrapper-class field already gets its
+            // `.clone()` from `emit_field`'s class-field auto-clone, so
+            // we only add it here for the bare-`Path` / `this` cases
+            // the field path doesn't cover.
+            if !wrap_some && matches!(init, Expr::Path(_) | Expr::This(_)) {
+                if let Some(juxc_tycheck::Ty::User { name, .. }) =
+                    self.expr_types.get(&expr_span_of(init))
+                {
+                    let bare = name.rsplit('.').next().unwrap_or(name);
+                    if self.wrapper_classes.contains(bare) {
+                        self.w.push_str(".clone()");
+                    }
+                }
+            }
             if wrap_some {
                 self.w.push(')');
             }
@@ -841,6 +882,57 @@ impl RustEmitter {
             }
             self.w.push_str("; }\n");
             return;
+        }
+        // Wrapper-class field write (§CR.4.1): `obj.f = v` where `obj`
+        // is a wrapper-shape class. Field state lives inside
+        // `Rc<RefCell<C_Inner>>`, so we evaluate the RHS into a
+        // statement-scoped temp first (releasing any `borrow()` the
+        // RHS itself takes — `obj.f = obj.g` must not deadlock the
+        // RefCell), then take a one-statement `borrow_mut()` for the
+        // write:
+        //
+        //   { let __jux_v = <rhs>; obj.0.borrow_mut().f = __jux_v; }
+        //
+        // Compound forms (`obj.f += rhs`) use the same wrap so
+        // `obj.f += obj.f` releases the read borrow before the
+        // write borrow is taken. This mirrors the mutable-static
+        // scoped-temp shape above (§CR.5.7).
+        if let Expr::Field(tf) = &a.target {
+            if !tf.safe && self.receiver_is_wrapper_class(&tf.object) {
+                // Walk the `__parent` chain to the slot that actually
+                // declares the field — inherited-field writes
+                // (`child.parentField = v`) land deeper in the inner
+                // (`child.0.borrow_mut().__parent.field = v`). A `None`
+                // depth (no such instance field) shouldn't reach here
+                // for a wrapper receiver, but fall back to depth 0 so
+                // the emitted Rust still type-checks against the
+                // receiver's own class.
+                let depth = self
+                    .wrapper_field_parent_depth(&tf.object, &tf.field.text)
+                    .unwrap_or(0);
+                self.w.push_str("{ let __jux_v = ");
+                let assign_nullable =
+                    a.op.is_none() && self.assign_target_is_nullable(&a.target);
+                self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
+                self.w.push_str("; ");
+                // LHS place expression with a MUTABLE borrow.
+                self.emit_expr(&tf.object);
+                self.w.push_str(".0.borrow_mut()");
+                for _ in 0..depth {
+                    self.w.push_str(".__parent");
+                }
+                self.w.push('.');
+                self.w.push_str(&tf.field.text);
+                if let Some(op) = a.op {
+                    self.w.push(' ');
+                    self.w.push_str(op.as_rust_str());
+                    self.w.push_str("= __jux_v");
+                } else {
+                    self.w.push_str(" = __jux_v");
+                }
+                self.w.push_str("; }\n");
+                return;
+            }
         }
         // LHS: emit with the lvalue flag set so `emit_field` skips its
         // String-read `.clone()` insertion.

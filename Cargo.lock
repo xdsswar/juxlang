@@ -514,6 +514,8 @@ version = "0.0.1"
 dependencies = [
  "juxc-diagnostics",
  "juxc-source",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

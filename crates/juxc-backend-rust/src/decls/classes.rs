@@ -127,6 +127,23 @@ impl RustEmitter {
         // nested-class scenarios (Phase-2) compose correctly.
         let prev_enclosing = self.enclosing_class.take();
         self.enclosing_class = Some(class_decl.name.text.clone());
+        // **Wrapper-shape branch (Phase A, §CR.4.1 / §CR.5.1 / §CR.6).**
+        // Classes in `wrapper_classes` lower to the shared-mutation,
+        // interior-mutable wrapper shape so Jux gets Java reference
+        // semantics: every alias of an instance shares one
+        // `Rc<RefCell<C_Inner>>`, and a mutation through any handle is
+        // visible through all of them. The set is computed globally by
+        // `compute_wrapper_classes`, which already excludes sealed /
+        // generic / exception / intrinsic classes and rolls each
+        // non-sealed `extends` hierarchy up as a unit — so member ship
+        // is the only gate needed here. Both leaf simple classes AND
+        // hierarchy members (incl. abstract parents) flow into
+        // `emit_wrapper_class_decl`, which branches on `extends`.
+        if self.wrapper_classes.contains(&class_decl.name.text) {
+            self.emit_wrapper_class_decl(class_decl);
+            self.enclosing_class = prev_enclosing;
+            return;
+        }
         // Derive Clone unconditionally so the `T: Clone` bound used on
         // generic impls (and the auto-`.clone()` injected on field
         // reads) keeps working when the user nests classes — `Box<User>`
@@ -479,6 +496,269 @@ impl RustEmitter {
         self.enclosing_class = prev_enclosing;
     }
 
+    /// Emit a **simple** class in the shared-mutation wrapper shape
+    /// (class-representation addendum §CR.4.1 / §CR.6).
+    ///
+    /// Output shape for `class C { int v; C(int v){…} void set(int v){…} }`:
+    ///
+    /// ```text
+    /// #[derive(Clone, Debug)]
+    /// pub struct C_Inner { pub v: isize }
+    /// #[derive(Clone, Debug)]
+    /// pub struct C(std::rc::Rc<std::cell::RefCell<C_Inner>>);
+    /// impl C {
+    ///     pub fn new(v: isize) -> C {
+    ///         C(std::rc::Rc::new(std::cell::RefCell::new(C_Inner { v })))
+    ///     }
+    ///     pub fn set(&self, v: isize) { self.0.borrow_mut().v = v; }
+    /// }
+    /// ```
+    ///
+    /// The `C` newtype IS the user-visible class type, so every
+    /// `C`-typed field / param / return / local stays spelled `C`
+    /// (type emission is unchanged). `#[derive(Clone)]` on the
+    /// newtype is the cheap `Rc` refcount bump that gives "assignment
+    /// shares" semantics; `Debug` flows through `Rc<RefCell<T>>: Debug`
+    /// when `C_Inner: Debug`.
+    ///
+    /// Phase A only handles simple classes — the caller
+    /// ([`Self::emit_class_decl`]) gates entry on
+    /// [`crate::class_decl_uses_wrapper`], so there's no `extends`,
+    /// `sealed`, generic, or abstract handling here.
+    pub(crate) fn emit_wrapper_class_decl(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        let name = &class_decl.name.text;
+        let inner = format!("{name}_Inner");
+
+        // ---- C_Inner: the instance fields ----
+        // Debug joins Clone so the newtype's derived Debug resolves
+        // (`Rc<RefCell<C_Inner>>: Debug` requires `C_Inner: Debug`).
+        self.w.line("#[derive(Clone, Debug)]");
+        self.w.emit_indent();
+        // The inner struct is `pub` so the wrapper (and any
+        // same-crate path) can name it; the user-facing visibility
+        // lives on the newtype below.
+        self.w.push_str("pub struct ");
+        self.w.push_str(&inner);
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        // **Inheritance embed (§CR.3.5 / §CR.5.1).** When this wrapper
+        // class extends another wrapper class, embed the parent's
+        // *inner* struct as `__parent` — NOT the parent's wrapper
+        // newtype. Embedding the inner means a `Child` handle's single
+        // `Rc<RefCell<Child_Inner>>` owns the whole flattened state
+        // (parent slice + child fields) in one cell, so a mutation
+        // through any alias is visible through all of them and through
+        // inherited-field access. (Embedding the wrapper would give the
+        // parent slice its OWN `Rc<RefCell<...>>`, splitting identity.)
+        if let Some(parent_ty) = &class_decl.extends {
+            if let Some(seg) = parent_ty.name.segments.last() {
+                self.w.emit_indent();
+                self.w.push_str("__parent: ");
+                self.w.push_str(&seg.text);
+                self.w.push_str("_Inner,\n");
+            }
+        }
+        for field in &class_decl.fields {
+            // Static fields live on the class, not the instance — they
+            // emit as `pub const` / module-scope `LazyLock<Mutex<T>>`
+            // below, same as the legacy path.
+            if field.is_static {
+                continue;
+            }
+            self.w.emit_indent();
+            self.emit_visibility(field.visibility);
+            self.w.push_str(&field.name.text);
+            self.w.push_str(": ");
+            self.emit_field_type_as_rust(&juxc_tycheck::resolved_field_type(field));
+            self.w.push_str(",\n");
+        }
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+
+        // ---- the newtype handle: C(Rc<RefCell<C_Inner>>) ----
+        self.w.line("#[derive(Clone, Debug)]");
+        self.w.emit_indent();
+        self.emit_visibility(class_decl.visibility);
+        self.w.push_str("struct ");
+        self.w.push_str(name);
+        self.w.push_str("(std::rc::Rc<std::cell::RefCell<");
+        self.w.push_str(&inner);
+        self.w.push_str(">>);\n");
+        self.w.newline();
+
+        // ---- impl C { … } ----
+        self.w.emit_indent();
+        self.w.push_str("impl ");
+        self.w.push_str(name);
+        self.w.push_str(" {\n");
+
+        // Static `final` fields → `pub const` associated items, same
+        // as the legacy path.
+        for field in &class_decl.fields {
+            if field.is_static && field.is_final {
+                self.emit_static_field(field);
+            }
+        }
+
+        // Constructors / methods / operators run with the wrapper flag
+        // set so their bodies adopt the interior-mutability lowering.
+        let prev_wrapper = self.emitting_wrapper_class;
+        self.emitting_wrapper_class = true;
+        for ctor in &class_decl.constructors {
+            self.emit_wrapper_constructor(class_decl, ctor);
+        }
+        if class_decl.constructors.is_empty() {
+            self.emit_wrapper_synthetic_default_constructor(class_decl);
+        }
+        for method in &class_decl.methods {
+            self.emit_method(method);
+        }
+        // **Inherited-method inlining (§CR.5.1).** Same pass the legacy
+        // path runs: walk the `extends` chain and copy every concrete
+        // (non-abstract, non-static) inherited method this class
+        // doesn't override into its own inherent impl. Because the
+        // wrapper hierarchy has NO `Deref` (the `__parent` slot is the
+        // parent's inner struct, not a wrapper to deref *to*), this
+        // copy is what makes `child.inheritedMethod()` resolve at all.
+        // The copied body's `this`/`self` field accesses walk the
+        // `__parent` chain via the depth logic in `emit_field` /
+        // `emit_assign` (keyed on the current `enclosing_class`).
+        if !class_decl.is_abstract {
+            self.emit_inherited_wrapper_methods(class_decl);
+        }
+        for op in &class_decl.operators {
+            self.emit_operator_as_method(op);
+        }
+        self.emitting_wrapper_class = prev_wrapper;
+        self.w.line("}");
+        self.w.newline();
+
+        // **Upcast `From<Child> for Parent` (§CR.3.5).** Clone the
+        // parent slice out of the child's inner and wrap it in a fresh
+        // `Parent(Rc::new(RefCell::new(child.0.borrow().__parent.clone())))`.
+        // This makes `greet(new Dog(...))` work where `greet` takes the
+        // parent type — at the cost of LOSING subclass identity at the
+        // upcast boundary (the new parent handle is a distinct cell, so
+        // later mutations through the child don't reflect into the
+        // upcast copy and vice-versa). That's the same Phase-1
+        // limitation the legacy path documents; the identity-preserving
+        // route is a `sealed` parent. We only emit this when the parent
+        // is itself a wrapper class (the only shape `__parent` embeds).
+        if let Some(parent_ty) = &class_decl.extends {
+            if let Some(parent_bare) = parent_ty.name.segments.last().map(|s| s.text.as_str()) {
+                if self.wrapper_classes.contains(parent_bare) {
+                    self.w.emit_indent();
+                    self.w.push_str("impl From<");
+                    self.w.push_str(name);
+                    self.w.push_str("> for ");
+                    self.w.push_str(parent_bare);
+                    self.w.push_str(" { fn from(v: ");
+                    self.w.push_str(name);
+                    self.w.push_str(") -> Self { ");
+                    self.w.push_str(parent_bare);
+                    self.w.push_str(
+                        "(std::rc::Rc::new(std::cell::RefCell::new(v.0.borrow().__parent.clone()))) } }\n",
+                    );
+                    self.w.newline();
+                }
+            }
+        }
+
+        // Mutable static fields — module-scope `LazyLock<Mutex<T>>`,
+        // identical to the legacy path (statics live on the class,
+        // not the instance, so the wrapper shape doesn't touch them).
+        for field in &class_decl.fields {
+            if field.is_static && !field.is_final {
+                self.emit_mutable_static_field(name, field);
+            }
+        }
+
+        // Operator trait impls + interface trait impls + marker trait
+        // reuse the existing emitters unchanged — they delegate to the
+        // inherent methods we just emitted on the newtype, and the
+        // newtype is the only `C` Rust knows about.
+        for op in &class_decl.operators {
+            self.emit_operator_trait_impl(name, op);
+        }
+        let has_eq = class_decl
+            .operators
+            .iter()
+            .any(|o| o.kind == OperatorKind::Eq);
+        let has_hash = class_decl
+            .operators
+            .iter()
+            .any(|o| o.kind == OperatorKind::Hash);
+        let has_cmp = class_decl
+            .operators
+            .iter()
+            .any(|o| o.kind == OperatorKind::Cmp);
+        if has_cmp && !has_eq {
+            self.emit_partial_eq_from_cmp(name);
+        }
+        if has_eq && has_hash {
+            self.emit_eq_marker(name);
+        }
+        self.emit_class_trait_impls(class_decl);
+        self.emit_class_marker_trait(class_decl);
+    }
+
+    /// Copy every concrete (non-abstract, non-static) inherited method
+    /// this class doesn't override into its inherent impl, for the
+    /// **wrapper-hierarchy** path. Mirrors the inlining pass baked into
+    /// [`Self::emit_class_decl`], but is a standalone method so
+    /// [`Self::emit_wrapper_class_decl`] can reuse it.
+    ///
+    /// The caller has `enclosing_class` set to THIS class and
+    /// `emitting_wrapper_class` true, so each copied body's
+    /// `this.field` access resolves against the child's flattened
+    /// inner via the `__parent`-walk depth logic in `emit_field` /
+    /// `emit_assign`. A copied parent method that reads `this.name`
+    /// (declared two ancestors up) emits
+    /// `self.0.borrow().__parent.__parent.name`.
+    fn emit_inherited_wrapper_methods(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        let mut own_method_names: std::collections::HashSet<String> = class_decl
+            .methods
+            .iter()
+            .map(|m| m.name.text.clone())
+            .collect();
+        let mut cursor: Option<juxc_ast::TypeRef> = class_decl.extends.clone();
+        while let Some(parent_ref) = cursor {
+            let Some(seg) = parent_ref.name.segments.first() else { break };
+            let bare = seg.text.as_str();
+            let parent_decl: Option<juxc_ast::ClassDecl> = self
+                .class_asts
+                .get(bare)
+                .cloned()
+                .or_else(|| {
+                    self.class_asts
+                        .iter()
+                        .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+                        .map(|(_, v)| v.clone())
+                });
+            let Some(parent) = parent_decl else { break };
+            let parent_methods = parent.methods.clone();
+            let parent_extends = parent.extends.clone();
+            for m in &parent_methods {
+                if own_method_names.contains(&m.name.text) {
+                    continue; // overridden by a closer class
+                }
+                if m.body.is_none() {
+                    continue; // abstract — concrete subclass overrides
+                }
+                if m.modifiers
+                    .iter()
+                    .any(|mo| matches!(mo, juxc_ast::FnModifier::Static))
+                {
+                    continue; // statics aren't instance methods
+                }
+                own_method_names.insert(m.name.text.clone());
+                self.emit_method(m);
+            }
+            cursor = parent_extends;
+        }
+    }
+
     /// Emit a class's marker trait and the transitive marker impls
     /// covering its parent chain. Marker traits are empty (`{}`) —
     /// they exist purely to let generic bounds reference Jux classes
@@ -778,7 +1058,22 @@ impl RustEmitter {
                         cursor = parent_sig.extends.as_ref();
                     }
                     if let Some(fqn) = found {
-                        method_targets.insert(name.clone(), Some(fqn));
+                        // **Wrapper hierarchies inline ancestor methods.**
+                        // For a wrapper class, `emit_inherited_wrapper_methods`
+                        // already copied the concrete ancestor body into
+                        // THIS class's inherent impl, so the method
+                        // resolves on `Self` directly. Use the inherent
+                        // (empty) target — an `<Ancestor>::method(self, …)`
+                        // call would pass `&mut Child` where the ancestor
+                        // wants `&Ancestor`, and the wrapper path has no
+                        // `Deref` to bridge that (E0308). The legacy path
+                        // keeps the ancestor-FQN form (Deref coercion
+                        // carries `&mut Child` → `&Ancestor`).
+                        if self.wrapper_classes.contains(&class_decl.name.text) {
+                            method_targets.insert(name.clone(), Some(String::new()));
+                        } else {
+                            method_targets.insert(name.clone(), Some(fqn));
+                        }
                     }
                 }
                 // Default interface method that nobody overrides:
@@ -1060,12 +1355,17 @@ impl RustEmitter {
         // methods: interface methods all emit as `&mut self` now,
         // so any method that calls a trait method on `self.field`
         // propagates the mut-self requirement up.
-        let needs_mut_self = body
-            .map(|b| {
-                body_writes_to_this(b)
-                    || crate::analysis::body_calls_mut_method_on_this(b, &self.user_mut_methods)
-            })
-            .unwrap_or(false);
+        // Wrapper-shape classes (§CR.4.1) always take `&self`:
+        // interior mutability through `Rc<RefCell<C_Inner>>` means a
+        // field write doesn't need a mutable receiver. Mutation goes
+        // through `self.0.borrow_mut()` inside the body instead.
+        let needs_mut_self = !self.emitting_wrapper_class
+            && body
+                .map(|b| {
+                    body_writes_to_this(b)
+                        || crate::analysis::body_calls_mut_method_on_this(b, &self.user_mut_methods)
+                })
+                .unwrap_or(false);
 
         // Wildcard-lift pre-pass (same rule as `emit_fn_decl`):
         // promote each `? extends T` / `? super T` / `?` in a param

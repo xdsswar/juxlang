@@ -273,6 +273,69 @@ pub enum Keyword {
 }
 
 impl Keyword {
+    /// Every keyword variant, in the same alphabetical order as the enum.
+    ///
+    /// Used by the grammar-spec emitter (`grammar_spec`) to enumerate the
+    /// reserved-word set without reflection, and by its completeness test to
+    /// catch a variant that was added to the enum but forgotten here.
+    pub const ALL: &'static [Keyword] = &[
+        Keyword::Abstract,
+        Keyword::Annotation,
+        Keyword::As,
+        Keyword::Async,
+        Keyword::Await,
+        Keyword::Break,
+        Keyword::Case,
+        Keyword::Catch,
+        Keyword::Class,
+        Keyword::Const,
+        Keyword::Continue,
+        Keyword::Default,
+        Keyword::Do,
+        Keyword::Drop,
+        Keyword::Else,
+        Keyword::Enum,
+        Keyword::Extends,
+        Keyword::Final,
+        Keyword::Finally,
+        Keyword::For,
+        Keyword::If,
+        Keyword::Implements,
+        Keyword::Import,
+        Keyword::Init,
+        Keyword::Interface,
+        Keyword::Internal,
+        Keyword::Move,
+        Keyword::Native,
+        Keyword::New,
+        Keyword::Operator,
+        Keyword::Package,
+        Keyword::Permits,
+        Keyword::Private,
+        Keyword::Protected,
+        Keyword::Public,
+        Keyword::Record,
+        Keyword::Return,
+        Keyword::Sealed,
+        Keyword::Sizeof,
+        Keyword::Static,
+        Keyword::Struct,
+        Keyword::Super,
+        Keyword::Switch,
+        Keyword::This,
+        Keyword::Throw,
+        Keyword::Throws,
+        Keyword::Try,
+        Keyword::Type,
+        Keyword::Unsafe,
+        Keyword::Var,
+        Keyword::Void,
+        Keyword::Volatile,
+        Keyword::When,
+        Keyword::While,
+        Keyword::Yield,
+    ];
+
     /// The source spelling. Round-trippable:
     /// `Keyword::lookup(kw.as_str()) == Some(kw)`.
     ///

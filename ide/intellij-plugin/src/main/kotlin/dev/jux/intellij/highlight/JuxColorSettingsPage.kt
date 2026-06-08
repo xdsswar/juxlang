@@ -24,7 +24,10 @@ class JuxColorSettingsPage : ColorSettingsPage {
     companion object {
         private val DESCRIPTORS = arrayOf(
             AttributesDescriptor("Keyword", JuxSyntaxHighlighter.KEYWORD),
-            AttributesDescriptor("Type", JuxSyntaxHighlighter.TYPE),
+            AttributesDescriptor("Type//Primitive type", JuxSyntaxHighlighter.TYPE),
+            AttributesDescriptor("Type//Class declaration name", JuxSyntaxHighlighter.CLASS_NAME),
+            AttributesDescriptor("Type//Method declaration name", JuxSyntaxHighlighter.METHOD_DECLARATION),
+            AttributesDescriptor("Type//Field name", JuxSyntaxHighlighter.FIELD),
             AttributesDescriptor("Constant", JuxSyntaxHighlighter.CONSTANT),
             AttributesDescriptor("String", JuxSyntaxHighlighter.STRING),
             AttributesDescriptor("Char", JuxSyntaxHighlighter.CHAR),

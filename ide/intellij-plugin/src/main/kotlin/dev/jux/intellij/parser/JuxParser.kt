@@ -1,0 +1,333 @@
+package dev.jux.intellij.parser
+
+import com.intellij.lang.ASTNode
+import com.intellij.lang.PsiBuilder
+import com.intellij.lang.PsiParser
+import com.intellij.psi.tree.IElementType
+import com.intellij.psi.tree.TokenSet
+import dev.jux.intellij.highlight.JuxTokenTypes as T
+import dev.jux.intellij.psi.JuxElementTypes as E
+
+/**
+ * Recursive-descent parser for Jux, built against the platform [PsiBuilder]
+ * marker API exactly as IntelliJ's Java parser is.
+ *
+ * **Scope (current):** the *declaration level* — compilation unit, imports,
+ * type declarations and their headers (generics, extends/implements/permits,
+ * record components), and members (fields, methods, constructors, enum
+ * constants) with full signatures. Method bodies, field initializers, and
+ * other expression/statement text are captured as opaque, brace-balanced runs
+ * (e.g. [E.CODE_BLOCK]); the full statement/expression grammar replaces those
+ * in the next pass. This already yields a tree rich enough for Structure View,
+ * folding, and declaration navigation.
+ *
+ * Recovery never throws: unexpected tokens become error nodes or are skipped,
+ * and the parse always reaches EOF.
+ */
+class JuxParser : PsiParser {
+    override fun parse(root: IElementType, builder: PsiBuilder): ASTNode {
+        val rootMarker = builder.mark()
+        parseFile(builder)
+        rootMarker.done(root)
+        return builder.treeBuilt
+    }
+
+    // ---- compilation unit -------------------------------------------------
+
+    private fun parseFile(b: PsiBuilder) {
+        if (b.at(T.PACKAGE_KW)) parsePackage(b)
+        while (!b.eof()) {
+            when {
+                b.at(T.IMPORT_KW) -> parseImport(b)
+                isDeclarationStart(b) -> parseDeclaration(b)
+                else -> {
+                    // Unexpected top-level token — flag and skip one to recover.
+                    val m = b.mark()
+                    b.advanceLexer()
+                    m.error("unexpected token")
+                }
+            }
+        }
+    }
+
+    private fun parsePackage(b: PsiBuilder) {
+        val m = b.mark()
+        b.advanceLexer() // `package`
+        parseQualifiedName(b)
+        b.semicolon()
+        m.done(E.PACKAGE_STATEMENT)
+    }
+
+    private fun parseImport(b: PsiBuilder) {
+        val m = b.mark()
+        b.advanceLexer() // `import`
+        parseQualifiedName(b)
+        // Wildcard `.*`, grouped `.{ a, b as c }`, or alias `as Name`.
+        if (b.at(T.DOT)) {
+            b.advanceLexer()
+            if (b.at(T.STAR)) b.advanceLexer()
+            else if (b.at(T.LBRACE)) consumeBraceBalanced(b)
+        }
+        if (b.at(T.AS_KW)) {
+            b.advanceLexer()
+            b.expectOrError(T.IDENTIFIER, "import alias expected")
+        }
+        b.semicolon()
+        m.done(E.IMPORT_STATEMENT)
+    }
+
+    // ---- declarations -----------------------------------------------------
+
+    private fun isDeclarationStart(b: PsiBuilder): Boolean =
+        b.at(T.AT) || b.atAny(JUX_MODIFIERS) || b.atAny(JUX_TYPE_DECL_KEYWORDS) ||
+            b.at(T.TYPE_KW) || b.at(T.IDENTIFIER) || b.at(T.VOID_KW) ||
+            b.at(T.NEW_KW) || b.at(T.OPERATOR_KW)
+
+    /** Top-level or nested declaration: annotations, modifiers, then a body. */
+    private fun parseDeclaration(b: PsiBuilder) {
+        val decl = b.mark()
+        parseAnnotations(b)
+        parseModifierList(b)
+        when {
+            b.atAny(JUX_TYPE_DECL_KEYWORDS) -> parseTypeDeclaration(b, decl)
+            b.at(T.TYPE_KW) -> parseTypeAlias(b, decl)
+            b.at(T.NEW_KW) -> parseConstructor(b, decl)
+            b.at(T.OPERATOR_KW) -> parseOperator(b, decl)
+            b.at(T.LBRACE) -> { parseCodeBlock(b); decl.done(E.INIT_BLOCK) }
+            b.at(T.DROP_KW) -> { b.advanceLexer(); parseCodeBlock(b); decl.done(E.DROP_BLOCK) }
+            else -> parseMethodOrField(b, decl)
+        }
+    }
+
+    private fun parseAnnotations(b: PsiBuilder) {
+        while (b.at(T.AT)) {
+            val m = b.mark()
+            b.advanceLexer() // `@`
+            parseQualifiedName(b)
+            if (b.at(T.LPAREN)) consumeParenBalanced(b)
+            m.done(E.ANNOTATION)
+        }
+    }
+
+    private fun parseModifierList(b: PsiBuilder) {
+        if (!b.atAny(JUX_MODIFIERS)) return
+        val m = b.mark()
+        while (b.atAny(JUX_MODIFIERS)) b.advanceLexer()
+        m.done(E.MODIFIER_LIST)
+    }
+
+    private fun parseTypeDeclaration(b: PsiBuilder, decl: PsiBuilder.Marker) {
+        val kind = b.tokenType
+        b.advanceLexer() // the type keyword
+        b.expectOrError(T.IDENTIFIER, "type name expected")
+        if (b.at(T.LT)) parseTypeParameters(b)
+        if (kind === T.RECORD_KW && b.at(T.LPAREN)) parseRecordComponents(b)
+        parseSupertypeClauses(b)
+        if (b.at(T.LBRACE)) parseClassBody(b, isEnum = kind === T.ENUM_KW)
+        decl.done(elementForTypeKeyword(kind))
+    }
+
+    private fun parseTypeAlias(b: PsiBuilder, decl: PsiBuilder.Marker) {
+        b.advanceLexer() // `type`
+        b.expectOrError(T.IDENTIFIER, "alias name expected")
+        if (b.at(T.LT)) parseTypeParameters(b)
+        b.expectOrError(T.EQ, "'=' expected")
+        parseType(b)
+        b.semicolon()
+        decl.done(E.TYPE_ALIAS_DECLARATION)
+    }
+
+    private fun parseSupertypeClauses(b: PsiBuilder) {
+        if (b.at(T.EXTENDS_KW)) {
+            val m = b.mark()
+            b.advanceLexer()
+            parseTypeList(b)
+            m.done(E.EXTENDS_CLAUSE)
+        }
+        if (b.at(T.IMPLEMENTS_KW)) {
+            val m = b.mark()
+            b.advanceLexer()
+            parseTypeList(b)
+            m.done(E.IMPLEMENTS_CLAUSE)
+        }
+        if (b.at(T.PERMITS_KW)) {
+            val m = b.mark()
+            b.advanceLexer()
+            parseTypeList(b)
+            m.done(E.PERMITS_CLAUSE)
+        }
+    }
+
+    // ---- class body & members --------------------------------------------
+
+    private fun parseClassBody(b: PsiBuilder, isEnum: Boolean) {
+        val body = b.mark()
+        b.advanceLexer() // `{`
+        if (isEnum) parseEnumConstants(b)
+        while (!b.eof() && !b.at(T.RBRACE)) {
+            if (isMemberStart(b)) {
+                parseDeclaration(b)
+            } else {
+                val m = b.mark()
+                b.advanceLexer()
+                m.error("unexpected token in body")
+            }
+        }
+        b.expectOrError(T.RBRACE, "'}' expected")
+        body.done(E.CLASS_BODY)
+    }
+
+    private fun isMemberStart(b: PsiBuilder): Boolean =
+        b.at(T.AT) || b.atAny(JUX_MODIFIERS) || b.atAny(JUX_TYPE_DECL_KEYWORDS) ||
+            b.at(T.NEW_KW) || b.at(T.OPERATOR_KW) || b.at(T.DROP_KW) ||
+            b.at(T.IDENTIFIER) || b.at(T.VOID_KW)
+
+    private fun parseEnumConstants(b: PsiBuilder) {
+        while (!b.eof() && b.at(T.IDENTIFIER)) {
+            val c = b.mark()
+            b.advanceLexer() // name
+            if (b.at(T.LPAREN)) consumeParenBalanced(b)        // payload variant
+            else if (b.at(T.EQ)) { b.advanceLexer(); b.consumeBalancedUntil(ENUM_SEP) } // explicit discriminator
+            c.done(E.ENUM_CONSTANT)
+            if (b.at(T.COMMA)) b.advanceLexer() else break
+        }
+        if (b.at(T.SEMICOLON)) b.advanceLexer() // separator before methods
+    }
+
+    private fun parseConstructor(b: PsiBuilder, decl: PsiBuilder.Marker) {
+        b.advanceLexer() // `new`
+        if (b.at(T.LPAREN)) parseParameterList(b)
+        parseThrows(b)
+        parseBodyOrSemicolon(b)
+        decl.done(E.CONSTRUCTOR_DECLARATION)
+    }
+
+    private fun parseOperator(b: PsiBuilder, decl: PsiBuilder.Marker) {
+        b.advanceLexer() // `operator`
+        // The operator token (or `[]`/`()`/`string`/`hash`) — consume up to `(`.
+        while (!b.eof() && !b.at(T.LPAREN) && !b.at(T.LBRACE) && !b.at(T.SEMICOLON)) b.advanceLexer()
+        if (b.at(T.LPAREN)) parseParameterList(b)
+        parseThrows(b)
+        parseBodyOrSemicolon(b)
+        decl.done(E.OPERATOR_DECLARATION)
+    }
+
+    /**
+     * A member that begins with a type: either a method (`T name(...)`), a
+     * named constructor (`TypeName(...)` with no return type), or a field
+     * (`T name [= …];`).
+     */
+    private fun parseMethodOrField(b: PsiBuilder, decl: PsiBuilder.Marker) {
+        parseType(b)
+        // `ReturnType operator <op>( … )` — operator overload after the type.
+        if (b.at(T.OPERATOR_KW)) {
+            b.advanceLexer() // `operator`
+            while (!b.eof() && !b.at(T.LPAREN) && !b.at(T.LBRACE) && !b.at(T.SEMICOLON)) b.advanceLexer()
+            if (b.at(T.LPAREN)) parseParameterList(b)
+            parseThrows(b)
+            parseBodyOrSemicolon(b)
+            decl.done(E.OPERATOR_DECLARATION)
+            return
+        }
+        if (b.at(T.LPAREN)) {
+            // The "type" we read was actually the constructor name.
+            parseParameterList(b)
+            parseThrows(b)
+            parseBodyOrSemicolon(b)
+            decl.done(E.CONSTRUCTOR_DECLARATION)
+            return
+        }
+        b.expectOrError(T.IDENTIFIER, "name expected")
+        if (b.at(T.LT)) parseTypeParameters(b) // method type params after name
+        if (b.at(T.LPAREN)) {
+            parseParameterList(b)
+            parseThrows(b)
+            parseBodyOrSemicolon(b)
+            decl.done(E.METHOD_DECLARATION)
+        } else {
+            // Field or property.
+            if (b.at(T.LBRACE)) {
+                parseCodeBlock(b) // property accessor block (opaque for now)
+            } else {
+                if (b.at(T.EQ)) { b.advanceLexer(); b.parseExpression() }
+                else if (b.at(T.FAT_ARROW)) { b.advanceLexer(); b.parseExpression() }
+                b.semicolon()
+            }
+            decl.done(E.FIELD_DECLARATION)
+        }
+    }
+
+    private fun parseThrows(b: PsiBuilder) {
+        if (!b.at(T.THROWS_KW)) return
+        val m = b.mark()
+        b.advanceLexer()
+        parseTypeList(b)
+        m.done(E.THROWS_CLAUSE)
+    }
+
+    /** A `{ … }` body, a `= expr;` single-expression body, or a bare `;`. */
+    private fun parseBodyOrSemicolon(b: PsiBuilder) {
+        when {
+            b.at(T.LBRACE) -> parseCodeBlock(b)
+            b.at(T.EQ) -> { b.advanceLexer(); b.parseExpression(); b.semicolon() }
+            else -> b.semicolon()
+        }
+    }
+
+    private fun parseParameterList(b: PsiBuilder) {
+        val m = b.mark()
+        b.expectOrError(T.LPAREN, "'(' expected")
+        if (!b.at(T.RPAREN)) {
+            parseParameter(b)
+            while (b.at(T.COMMA)) { b.advanceLexer(); parseParameter(b) }
+        }
+        b.expectOrError(T.RPAREN, "')' expected")
+        m.done(E.PARAMETER_LIST)
+    }
+
+    /** `annotation* (final|const|out)? type '...'? name (= expr)?` */
+    private fun parseParameter(b: PsiBuilder) {
+        val p = b.mark()
+        parseAnnotations(b)
+        while (b.at(T.FINAL_KW) || b.at(T.CONST_KW)) b.advanceLexer()
+        if (b.at(T.IDENTIFIER) && b.tokenText == "out") b.advanceLexer() // contextual param-mode
+        b.parseType()
+        if (b.at(T.ELLIPSIS)) b.advanceLexer() // `T... name` varargs
+        b.expectOrError(T.IDENTIFIER, "parameter name expected")
+        if (b.at(T.EQ)) { b.advanceLexer(); b.parseExpression() }
+        p.done(E.PARAMETER)
+    }
+
+    /** A method / initializer body — a real statement block (see JuxStatements). */
+    private fun parseCodeBlock(b: PsiBuilder) = b.parseBlock()
+
+    private fun consumeParenBalanced(b: PsiBuilder) = b.skipMatched(T.LPAREN, T.RPAREN)
+    private fun consumeBraceBalanced(b: PsiBuilder) = b.skipMatched(T.LBRACE, T.RBRACE)
+
+    // ---- types & names (delegate to shared top-level parsers) -------------
+
+    private fun parseQualifiedName(b: PsiBuilder) = b.parseQualifiedName()
+    private fun parseType(b: PsiBuilder) = b.parseType()
+    private fun parseTypeList(b: PsiBuilder) = b.parseTypeList()
+    private fun parseTypeParameters(b: PsiBuilder) = b.parseTypeParameters()
+
+    private fun parseRecordComponents(b: PsiBuilder) {
+        val m = b.mark()
+        b.skipMatched(T.LPAREN, T.RPAREN)
+        m.done(E.RECORD_COMPONENT_LIST)
+    }
+
+    private fun elementForTypeKeyword(kw: IElementType?): IElementType = when (kw) {
+        T.CLASS_KW -> E.CLASS_DECLARATION
+        T.INTERFACE_KW -> E.INTERFACE_DECLARATION
+        T.ENUM_KW -> E.ENUM_DECLARATION
+        T.RECORD_KW -> E.RECORD_DECLARATION
+        T.STRUCT_KW -> E.STRUCT_DECLARATION
+        T.ANNOTATION_KW -> E.ANNOTATION_DECLARATION
+        else -> E.CLASS_DECLARATION
+    }
+
+    private companion object {
+        val ENUM_SEP: TokenSet = TokenSet.create(T.COMMA, T.SEMICOLON)
+    }
+}

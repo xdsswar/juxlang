@@ -1,0 +1,525 @@
+{
+  "keywords": [
+    {
+      "name": "ABSTRACT_KW",
+      "spelling": "abstract"
+    },
+    {
+      "name": "ANNOTATION_KW",
+      "spelling": "annotation"
+    },
+    {
+      "name": "AS_KW",
+      "spelling": "as"
+    },
+    {
+      "name": "ASYNC_KW",
+      "spelling": "async"
+    },
+    {
+      "name": "AWAIT_KW",
+      "spelling": "await"
+    },
+    {
+      "name": "BREAK_KW",
+      "spelling": "break"
+    },
+    {
+      "name": "CASE_KW",
+      "spelling": "case"
+    },
+    {
+      "name": "CATCH_KW",
+      "spelling": "catch"
+    },
+    {
+      "name": "CLASS_KW",
+      "spelling": "class"
+    },
+    {
+      "name": "CONST_KW",
+      "spelling": "const"
+    },
+    {
+      "name": "CONTINUE_KW",
+      "spelling": "continue"
+    },
+    {
+      "name": "DEFAULT_KW",
+      "spelling": "default"
+    },
+    {
+      "name": "DO_KW",
+      "spelling": "do"
+    },
+    {
+      "name": "DROP_KW",
+      "spelling": "drop"
+    },
+    {
+      "name": "ELSE_KW",
+      "spelling": "else"
+    },
+    {
+      "name": "ENUM_KW",
+      "spelling": "enum"
+    },
+    {
+      "name": "EXTENDS_KW",
+      "spelling": "extends"
+    },
+    {
+      "name": "FINAL_KW",
+      "spelling": "final"
+    },
+    {
+      "name": "FINALLY_KW",
+      "spelling": "finally"
+    },
+    {
+      "name": "FOR_KW",
+      "spelling": "for"
+    },
+    {
+      "name": "IF_KW",
+      "spelling": "if"
+    },
+    {
+      "name": "IMPLEMENTS_KW",
+      "spelling": "implements"
+    },
+    {
+      "name": "IMPORT_KW",
+      "spelling": "import"
+    },
+    {
+      "name": "INIT_KW",
+      "spelling": "init"
+    },
+    {
+      "name": "INTERFACE_KW",
+      "spelling": "interface"
+    },
+    {
+      "name": "INTERNAL_KW",
+      "spelling": "internal"
+    },
+    {
+      "name": "MOVE_KW",
+      "spelling": "move"
+    },
+    {
+      "name": "NATIVE_KW",
+      "spelling": "native"
+    },
+    {
+      "name": "NEW_KW",
+      "spelling": "new"
+    },
+    {
+      "name": "OPERATOR_KW",
+      "spelling": "operator"
+    },
+    {
+      "name": "PACKAGE_KW",
+      "spelling": "package"
+    },
+    {
+      "name": "PERMITS_KW",
+      "spelling": "permits"
+    },
+    {
+      "name": "PRIVATE_KW",
+      "spelling": "private"
+    },
+    {
+      "name": "PROTECTED_KW",
+      "spelling": "protected"
+    },
+    {
+      "name": "PUBLIC_KW",
+      "spelling": "public"
+    },
+    {
+      "name": "RECORD_KW",
+      "spelling": "record"
+    },
+    {
+      "name": "RETURN_KW",
+      "spelling": "return"
+    },
+    {
+      "name": "SEALED_KW",
+      "spelling": "sealed"
+    },
+    {
+      "name": "SIZEOF_KW",
+      "spelling": "sizeof"
+    },
+    {
+      "name": "STATIC_KW",
+      "spelling": "static"
+    },
+    {
+      "name": "STRUCT_KW",
+      "spelling": "struct"
+    },
+    {
+      "name": "SUPER_KW",
+      "spelling": "super"
+    },
+    {
+      "name": "SWITCH_KW",
+      "spelling": "switch"
+    },
+    {
+      "name": "THIS_KW",
+      "spelling": "this"
+    },
+    {
+      "name": "THROW_KW",
+      "spelling": "throw"
+    },
+    {
+      "name": "THROWS_KW",
+      "spelling": "throws"
+    },
+    {
+      "name": "TRY_KW",
+      "spelling": "try"
+    },
+    {
+      "name": "TYPE_KW",
+      "spelling": "type"
+    },
+    {
+      "name": "UNSAFE_KW",
+      "spelling": "unsafe"
+    },
+    {
+      "name": "VAR_KW",
+      "spelling": "var"
+    },
+    {
+      "name": "VOID_KW",
+      "spelling": "void"
+    },
+    {
+      "name": "VOLATILE_KW",
+      "spelling": "volatile"
+    },
+    {
+      "name": "WHEN_KW",
+      "spelling": "when"
+    },
+    {
+      "name": "WHILE_KW",
+      "spelling": "while"
+    },
+    {
+      "name": "YIELD_KW",
+      "spelling": "yield"
+    }
+  ],
+  "primitives": [
+    "bool",
+    "byte",
+    "ubyte",
+    "short",
+    "ushort",
+    "int",
+    "uint",
+    "long",
+    "ulong",
+    "float",
+    "double",
+    "char",
+    "String",
+    "i8",
+    "u8",
+    "i16",
+    "u16",
+    "i32",
+    "u32",
+    "i64",
+    "u64",
+    "f32",
+    "f64"
+  ],
+  "constants": [
+    "true",
+    "false",
+    "null"
+  ],
+  "literals": [
+    {
+      "name": "INT_LITERAL"
+    },
+    {
+      "name": "FLOAT_LITERAL"
+    },
+    {
+      "name": "CHAR_LITERAL"
+    },
+    {
+      "name": "STRING_LITERAL"
+    },
+    {
+      "name": "RAW_STRING_LITERAL"
+    },
+    {
+      "name": "INTERP_STRING_LITERAL"
+    },
+    {
+      "name": "INTERP_RAW_STRING_LITERAL"
+    },
+    {
+      "name": "BOOL_LITERAL"
+    },
+    {
+      "name": "NULL_LITERAL"
+    }
+  ],
+  "punctuation": [
+    {
+      "name": "LPAREN",
+      "spelling": "("
+    },
+    {
+      "name": "RPAREN",
+      "spelling": ")"
+    },
+    {
+      "name": "LBRACKET",
+      "spelling": "["
+    },
+    {
+      "name": "RBRACKET",
+      "spelling": "]"
+    },
+    {
+      "name": "LBRACE",
+      "spelling": "{"
+    },
+    {
+      "name": "RBRACE",
+      "spelling": "}"
+    },
+    {
+      "name": "COMMA",
+      "spelling": ","
+    },
+    {
+      "name": "SEMICOLON",
+      "spelling": ";"
+    },
+    {
+      "name": "COLON",
+      "spelling": ":"
+    },
+    {
+      "name": "COLON_COLON",
+      "spelling": "::"
+    },
+    {
+      "name": "DOT",
+      "spelling": "."
+    },
+    {
+      "name": "DOT_DOT",
+      "spelling": ".."
+    },
+    {
+      "name": "DOT_DOT_EQ",
+      "spelling": "..="
+    },
+    {
+      "name": "ELLIPSIS",
+      "spelling": "..."
+    },
+    {
+      "name": "QUESTION",
+      "spelling": "?"
+    },
+    {
+      "name": "QUESTION_DOT",
+      "spelling": "?."
+    },
+    {
+      "name": "QUESTION_COLON",
+      "spelling": "?:"
+    },
+    {
+      "name": "QUESTION_QUESTION",
+      "spelling": "??"
+    },
+    {
+      "name": "BANG_BANG",
+      "spelling": "!!"
+    },
+    {
+      "name": "AT",
+      "spelling": "@"
+    },
+    {
+      "name": "ARROW",
+      "spelling": "->"
+    },
+    {
+      "name": "FAT_ARROW",
+      "spelling": "=>"
+    }
+  ],
+  "operators": [
+    {
+      "name": "EQ",
+      "spelling": "="
+    },
+    {
+      "name": "EQ_EQ",
+      "spelling": "=="
+    },
+    {
+      "name": "STRICT_EQ",
+      "spelling": "==="
+    },
+    {
+      "name": "BANG",
+      "spelling": "!"
+    },
+    {
+      "name": "NOT_EQ",
+      "spelling": "!="
+    },
+    {
+      "name": "STRICT_NOT_EQ",
+      "spelling": "!=="
+    },
+    {
+      "name": "LT",
+      "spelling": "<"
+    },
+    {
+      "name": "LE",
+      "spelling": "<="
+    },
+    {
+      "name": "GT",
+      "spelling": ">"
+    },
+    {
+      "name": "GE",
+      "spelling": ">="
+    },
+    {
+      "name": "SPACESHIP",
+      "spelling": "<=>"
+    },
+    {
+      "name": "PLUS",
+      "spelling": "+"
+    },
+    {
+      "name": "MINUS",
+      "spelling": "-"
+    },
+    {
+      "name": "STAR",
+      "spelling": "*"
+    },
+    {
+      "name": "SLASH",
+      "spelling": "/"
+    },
+    {
+      "name": "PERCENT",
+      "spelling": "%"
+    },
+    {
+      "name": "PLUS_EQ",
+      "spelling": "+="
+    },
+    {
+      "name": "MINUS_EQ",
+      "spelling": "-="
+    },
+    {
+      "name": "STAR_EQ",
+      "spelling": "*="
+    },
+    {
+      "name": "SLASH_EQ",
+      "spelling": "/="
+    },
+    {
+      "name": "PERCENT_EQ",
+      "spelling": "%="
+    },
+    {
+      "name": "AND_AND",
+      "spelling": "&&"
+    },
+    {
+      "name": "OR_OR",
+      "spelling": "||"
+    },
+    {
+      "name": "AMP",
+      "spelling": "&"
+    },
+    {
+      "name": "PIPE",
+      "spelling": "|"
+    },
+    {
+      "name": "CARET",
+      "spelling": "^"
+    },
+    {
+      "name": "TILDE",
+      "spelling": "~"
+    },
+    {
+      "name": "AMP_EQ",
+      "spelling": "&="
+    },
+    {
+      "name": "PIPE_EQ",
+      "spelling": "|="
+    },
+    {
+      "name": "CARET_EQ",
+      "spelling": "^="
+    },
+    {
+      "name": "LT_LT",
+      "spelling": "<<"
+    },
+    {
+      "name": "GT_GT",
+      "spelling": ">>"
+    },
+    {
+      "name": "LT_LT_EQ",
+      "spelling": "<<="
+    },
+    {
+      "name": "GT_GT_EQ",
+      "spelling": ">>="
+    }
+  ],
+  "comments": [
+    {
+      "name": "LINE_COMMENT",
+      "spelling": "//"
+    },
+    {
+      "name": "BLOCK_COMMENT",
+      "spelling": "/*"
+    },
+    {
+      "name": "DOC_COMMENT",
+      "spelling": "/**"
+    }
+  ]
+}

@@ -467,7 +467,14 @@ impl RustEmitter {
         // unnecessary — the string-literal site self-coerces inside
         // `emit_literal` and identifier references are typed `String`
         // directly.
+        // Mark the callee so the outermost `Field` (the method name)
+        // skips the wrapper `.0.borrow()` rewrite — a method lives on
+        // the newtype, not in `C_Inner`, even when a same-named field
+        // exists up the chain (`legs` field + `legs()` method).
+        let prev_callee = self.emitting_call_callee;
+        self.emitting_call_callee = true;
         self.emit_expr(&call.callee);
+        self.emitting_call_callee = prev_callee;
         self.w.push('(');
         // Same flag discipline as above: a regular call's args
         // consume String values, so any inner string literal needs

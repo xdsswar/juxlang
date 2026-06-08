@@ -10,6 +10,13 @@ use crate::RustEmitter;
 
 impl RustEmitter {
     pub(crate) fn emit_field(&mut self, f: &FieldExpr) {
+        // Take-and-clear the method-call-callee marker on entry so
+        // ONLY this (outermost) field of a `recv.method(args)` callee
+        // sees it. Cleared before any nested `emit_expr(&f.object)`, so
+        // a field receiver in `obj.field.method()` still borrow-wraps.
+        // When set, the `.0.borrow()` wrapper rewrite below is
+        // suppressed — the `.field` here names a method on the newtype.
+        let is_call_callee = std::mem::take(&mut self.emitting_call_callee);
         // Safe-navigation field access (`obj?.field`) lowers via
         // `Option::map`: the closure runs only when the receiver
         // is `Some`, and the result is `Option<FieldType>`. We
@@ -189,7 +196,45 @@ impl RustEmitter {
         }
         // Generic member access — emit verbatim and rely on Rust to
         // resolve.
+        //
+        // **Wrapper-class interior-mutability read (§CR.4.1).** When
+        // the receiver is a value of a wrapper-shape class, the field
+        // lives inside `Rc<RefCell<C_Inner>>` — read it through a
+        // statement-scoped `.0.borrow()`: `obj.f` → `obj.0.borrow().f`.
+        // The borrow is dropped at the end of the enclosing
+        // expression statement, so we never hold it across a call.
+        // The existing auto-`.clone()` tail still fires for
+        // String / generic / class fields, which is exactly what
+        // makes the borrow statement-scoped (the cloned value
+        // outlives the temporary `Ref`).
+        //
+        // **Method-call callee guard.** `obj.method(args)` parses as a
+        // `Call` whose callee is this same `Field` node, so `emit_field`
+        // runs for it too. Methods live on the wrapper newtype `C`
+        // (called as `obj.method()`), NOT inside `C_Inner`, so the
+        // borrow must only fire when `f.field` names an actual
+        // instance FIELD of the wrapper class — not a method.
+        // `wrapper_depth` is `Some(n)` when the receiver is a wrapper
+        // class AND `f.field` names an instance field declared `n`
+        // ancestors up the `extends` chain (`0` = on the receiver's own
+        // class). The read then walks `n` `__parent` hops after the
+        // `.0.borrow()`: e.g. a field declared two ancestors up emits
+        // `recv.0.borrow().__parent.__parent.field`. `None` means
+        // either a non-wrapper receiver or a method-call callee (methods
+        // live on the wrapper newtype, never inside `C_Inner`), so no
+        // borrow rewrite fires.
+        let wrapper_depth = if !is_call_callee && self.receiver_is_wrapper_class(&f.object) {
+            self.wrapper_field_parent_depth(&f.object, &f.field.text)
+        } else {
+            None
+        };
         self.emit_expr(&f.object);
+        if let Some(depth) = wrapper_depth {
+            self.w.push_str(".0.borrow()");
+            for _ in 0..depth {
+                self.w.push_str(".__parent");
+            }
+        }
         self.w.push('.');
         self.w.push_str(&f.field.text);
         // Auto-`.clone()` on field reads in two cases:
@@ -285,6 +330,116 @@ impl RustEmitter {
             self.w.push_str(field_name);
             self.w.push_str(".lock().unwrap().clone()");
         }
+    }
+
+    /// True when `recv` evaluates to a value whose type is a
+    /// **wrapper-shape** class (one registered in
+    /// [`RustEmitter::wrapper_classes`]). Drives the `.0.borrow()` /
+    /// `.0.borrow_mut()` interior-mutability rewrites for field
+    /// access (§CR.4.1).
+    ///
+    /// Two recognition paths:
+    /// - **`this` / `self`** inside a wrapper class's own method or
+    ///   operator body — recognized via `enclosing_class` while the
+    ///   wrapper flag is set. (Constructor bodies clear the wrapper
+    ///   flag, so `this.f` there stays a direct `__self.f` write on
+    ///   the plain `C_Inner`.)
+    /// - **Any other receiver** — its inferred type (resolved by
+    ///   [`Self::receiver_class_bare`]) is a class whose bare name is a
+    ///   wrapper class.
+    pub(crate) fn receiver_is_wrapper_class(&self, recv: &Expr) -> bool {
+        if matches!(recv, Expr::This(_)) {
+            return self.emitting_wrapper_class
+                && self
+                    .enclosing_class
+                    .as_deref()
+                    .map(|c| self.wrapper_classes.contains(c))
+                    .unwrap_or(false);
+        }
+        self.receiver_class_bare(recv)
+            .map(|bare| self.wrapper_classes.contains(&bare))
+            .unwrap_or(false)
+    }
+
+    /// Resolve the bare class name a non-`this` receiver evaluates to.
+    ///
+    /// **Span-collision robustness.** For a bare-`Path` receiver (a
+    /// local variable) we consult the emitter's `local_types` map
+    /// FIRST — it's keyed by name, so it's immune to the
+    /// interpolated-string span collisions that plague `expr_types`
+    /// (inner `${expr}` exprs reparse against the segment substring and
+    /// carry spans local to it, so several interpolation sites can
+    /// alias one key). Only when the name isn't a tracked local do we
+    /// fall back to the span-keyed `expr_types`. This mirrors the same
+    /// precedence the stdlib-method dispatcher uses (`try_emit_stdlib_method`).
+    pub(crate) fn receiver_class_bare(&self, recv: &Expr) -> Option<String> {
+        // Local-variable fast path (collision-immune).
+        if let Expr::Path(qn) = recv {
+            if qn.segments.len() == 1 {
+                let bare = qn.segments[0].text.as_str();
+                if let Some(juxc_tycheck::Ty::User { name, .. }) = self
+                    .local_types
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(bare))
+                {
+                    return Some(name.rsplit('.').next().unwrap_or(name).to_string());
+                }
+            }
+        }
+        match self.expr_types.get(&expr_span_of(recv)) {
+            Some(juxc_tycheck::Ty::User { name, .. }) => {
+                Some(name.rsplit('.').next().unwrap_or(name).to_string())
+            }
+            _ => None,
+        }
+    }
+
+    /// Return how many `__parent` hops separate the wrapper class that
+    /// `recv` evaluates to from the class that declares the instance
+    /// field `field_name`. `Some(0)` = the field is on the receiver's
+    /// own class; `Some(1)` = its direct parent; and so on. `None` when
+    /// no instance field of that name exists anywhere up the chain —
+    /// which is exactly the method-call-callee case (`obj.method(...)`,
+    /// where the method lives on the wrapper newtype, not inside any
+    /// `C_Inner`), so the caller skips the `.0.borrow()` rewrite.
+    ///
+    /// The owning class is resolved the same way
+    /// [`Self::receiver_is_wrapper_class`] resolves it: `this` / `self`
+    /// map to `enclosing_class`; everything else consults `expr_types`.
+    /// The `__parent`-embedding scheme flattens the whole chain into a
+    /// single `C_Inner`, so the depth directly indexes the nested slot.
+    pub(crate) fn wrapper_field_parent_depth(&self, recv: &Expr, field_name: &str) -> Option<usize> {
+        let class_bare: Option<String> = if matches!(recv, Expr::This(_)) {
+            self.enclosing_class.clone()
+        } else {
+            // Use the collision-immune resolver so interpolated-string
+            // receivers (`${i.field}`) still walk the chain correctly.
+            self.receiver_class_bare(recv)
+        };
+        let mut cursor: Option<String> = class_bare;
+        let mut depth = 0usize;
+        while let Some(name) = cursor {
+            if depth > 64 {
+                return None;
+            }
+            let sig = self.lookup_class_by_bare_or_fqn(&name)?;
+            if let Some(field) = sig.fields.get(field_name) {
+                if !field.is_static {
+                    return Some(depth);
+                }
+                // A static field of that name lives on the class, not
+                // the instance — not a `.0.borrow()` target.
+                return None;
+            }
+            // Climb to the parent's bare name and try again.
+            cursor = sig
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            depth += 1;
+        }
+        None
     }
 
     pub(crate) fn emit_safe_field(&mut self, f: &FieldExpr) {

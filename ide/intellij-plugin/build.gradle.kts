@@ -29,7 +29,15 @@ dependencies {
         // (The separate `ideaIC` Community artifact was discontinued at
         // 2025.3; `intellijIdea(...)` is the current entry point.)
         intellijIdea(providers.gradleProperty("platformVersion").get())
+
+        // Headless platform test fixtures (ParsingTestCase et al.).
+        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
     }
+    testImplementation("junit:junit:4.13.2")
+}
+
+tasks.test {
+    useJUnit()
 }
 
 intellijPlatform {
@@ -46,4 +54,131 @@ intellijPlatform {
 // matching the IDE's JBR. foojay auto-provisions it if JDK 21 isn't installed.
 kotlin {
     jvmToolchain(21)
+}
+
+// ---------------------------------------------------------------------------
+// Token-layer single-sourcing (Phase 0 of the PSI work).
+//
+// `grammar/jux-tokens.json` is emitted from the canonical Rust lexer
+// (`juxc-lex` `grammar_spec`). This task generates the plugin's token registry
+// (`JuxTokenTypes`) and keyword/primitive sets (`JuxKeywords`) from it, so the
+// IDE's token alphabet can never drift from the compiler's. Regenerate the JSON
+// with `JUX_BLESS=1 cargo test -p juxc-lex grammar_spec`.
+// ---------------------------------------------------------------------------
+val juxTokensJson = layout.projectDirectory.file("grammar/jux-tokens.json")
+val generatedTokensDir = layout.buildDirectory.dir("generated/sources/juxTokens/kotlin/main")
+
+val generateJuxTokens by tasks.registering {
+    description = "Generates JuxTokenTypes/JuxKeywords from grammar/jux-tokens.json."
+    val input = juxTokensJson
+    val outDir = generatedTokensDir
+    inputs.file(input)
+    outputs.dir(outDir)
+
+    doLast {
+        @Suppress("UNCHECKED_CAST")
+        val spec = groovy.json.JsonSlurper().parse(input.asFile) as Map<String, Any>
+
+        fun tokens(key: String): List<Map<String, Any?>> =
+            (spec[key] as List<*>).map {
+                @Suppress("UNCHECKED_CAST") (it as Map<String, Any?>)
+            }
+        fun strings(key: String): List<String> = (spec[key] as List<*>).map { it.toString() }
+        fun names(key: String): List<String> = tokens(key).map { it["name"].toString() }
+
+        val keywords = tokens("keywords")
+        val literals = names("literals")
+        val punctuation = names("punctuation")
+        val operators = names("operators")
+        val comments = names("comments")
+        val primitives = strings("primitives")
+        val constants = strings("constants")
+        val keywordNames = keywords.map { it["name"].toString() }
+
+        val lang = "JuxLanguage"
+        fun decl(name: String) = "    val $name = IElementType(\"$name\", $lang)"
+        fun tokenSet(name: String, members: List<String>) =
+            "    val $name: TokenSet = TokenSet.create(${members.joinToString(", ")})"
+
+        val sb = StringBuilder()
+        sb.appendLine("// GENERATED — do not edit. Source: grammar/jux-tokens.json (juxc-lex grammar_spec).")
+        sb.appendLine("// Regenerate the JSON with: JUX_BLESS=1 cargo test -p juxc-lex grammar_spec")
+        sb.appendLine("package dev.jux.intellij.highlight")
+        sb.appendLine()
+        sb.appendLine("import com.intellij.psi.tree.IElementType")
+        sb.appendLine("import com.intellij.psi.tree.TokenSet")
+        sb.appendLine("import dev.jux.intellij.JuxLanguage")
+        sb.appendLine()
+        sb.appendLine("/**")
+        sb.appendLine(" * The Jux token alphabet — one [IElementType] per lexer token, generated from")
+        sb.appendLine(" * the compiler's canonical token list. Grouping [TokenSet]s drive the syntax")
+        sb.appendLine(" * highlighter, brace matcher, and parser.")
+        sb.appendLine(" */")
+        sb.appendLine("object JuxTokenTypes {")
+        sb.appendLine(decl("IDENTIFIER"))
+        sb.appendLine()
+        sb.appendLine("    // Keywords")
+        keywordNames.forEach { sb.appendLine(decl(it)) }
+        sb.appendLine()
+        sb.appendLine("    // Literals")
+        literals.forEach { sb.appendLine(decl(it)) }
+        sb.appendLine()
+        sb.appendLine("    // Punctuation")
+        punctuation.forEach { sb.appendLine(decl(it)) }
+        sb.appendLine()
+        sb.appendLine("    // Operators")
+        operators.forEach { sb.appendLine(decl(it)) }
+        sb.appendLine()
+        sb.appendLine("    // Comments")
+        comments.forEach { sb.appendLine(decl(it)) }
+        sb.appendLine()
+        sb.appendLine(tokenSet("KEYWORDS", keywordNames))
+        sb.appendLine(tokenSet("LITERALS", literals))
+        sb.appendLine(tokenSet("PUNCTUATION", punctuation))
+        sb.appendLine(tokenSet("OPERATORS", operators))
+        sb.appendLine(tokenSet("COMMENTS", comments))
+        // Stable sub-groups the editor needs by structural name.
+        val stringLits = literals.filter { it.endsWith("STRING_LITERAL") || it == "CHAR_LITERAL" }
+        sb.appendLine(tokenSet("STRING_LITERALS", stringLits))
+        sb.appendLine(tokenSet("BRACES", listOf("LBRACE", "RBRACE")))
+        sb.appendLine(tokenSet("BRACKETS", listOf("LBRACKET", "RBRACKET")))
+        sb.appendLine(tokenSet("PARENS", listOf("LPAREN", "RPAREN")))
+        sb.appendLine()
+        val mapEntries = keywords.joinToString(",\n") {
+            "        \"${it["spelling"]}\" to ${it["name"]}"
+        }
+        sb.appendLine("    private val KEYWORD_BY_TEXT: Map<String, IElementType> = mapOf(")
+        sb.appendLine(mapEntries)
+        sb.appendLine("    )")
+        sb.appendLine()
+        sb.appendLine("    /** The keyword token for [text], or null if [text] is not a reserved word. */")
+        sb.appendLine("    fun keywordType(text: String): IElementType? = KEYWORD_BY_TEXT[text]")
+        sb.appendLine("}")
+
+        val pkgDir = outDir.get().dir("dev/jux/intellij/highlight").asFile
+        pkgDir.mkdirs()
+        pkgDir.resolve("JuxTokenTypes.kt").writeText(sb.toString())
+
+        val kw = StringBuilder()
+        kw.appendLine("// GENERATED — do not edit. Source: grammar/jux-tokens.json (juxc-lex grammar_spec).")
+        kw.appendLine("// Regenerate the JSON with: JUX_BLESS=1 cargo test -p juxc-lex grammar_spec")
+        kw.appendLine("package dev.jux.intellij.highlight")
+        kw.appendLine()
+        kw.appendLine("/**")
+        kw.appendLine(" * Word sets shared with the compiler: reserved [KEYWORDS], built-in")
+        kw.appendLine(" * [PRIMITIVES] type names, and literal [CONSTANTS].")
+        kw.appendLine(" */")
+        kw.appendLine("object JuxKeywords {")
+        fun strSet(name: String, values: List<String>) =
+            "    val $name: Set<String> = setOf(${values.joinToString(", ") { "\"$it\"" }})"
+        kw.appendLine(strSet("KEYWORDS", keywords.map { it["spelling"].toString() }))
+        kw.appendLine(strSet("PRIMITIVES", primitives))
+        kw.appendLine(strSet("CONSTANTS", constants))
+        kw.appendLine("}")
+        pkgDir.resolve("JuxKeywords.kt").writeText(kw.toString())
+    }
+}
+
+kotlin.sourceSets.named("main") {
+    kotlin.srcDir(generateJuxTokens)
 }

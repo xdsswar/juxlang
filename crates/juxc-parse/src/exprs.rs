@@ -1112,20 +1112,7 @@ pub(crate) fn make_binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 /// `void` and `Self` are NOT in this set: they aren't legal cast
 /// targets in the first place.
 pub(crate) fn is_known_primitive_type_name(name: &str) -> bool {
-    matches!(
-        name,
-        "bool"
-            | "byte" | "ubyte"
-            | "short" | "ushort"
-            | "int" | "uint"
-            | "long" | "ulong"
-            | "float" | "double"
-            | "char"
-            | "String"
-            | "i8" | "u8"
-            | "i16" | "u16"
-            | "i32" | "u32"
-            | "i64" | "u64"
-            | "f32" | "f64"
-    )
+    // Single source of truth lives in `juxc-lex` so the compiler's cast
+    // lookahead and the IntelliJ plugin's primitive set can't drift apart.
+    juxc_lex::PRIMITIVE_TYPE_NAMES.contains(&name)
 }
