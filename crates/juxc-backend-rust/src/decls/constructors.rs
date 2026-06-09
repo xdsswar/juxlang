@@ -70,6 +70,9 @@ impl RustEmitter {
         }
         self.w.push_str(") -> Self {\n");
         self.w.indent_inc();
+        // First-use trigger for `static { }` blocks (§S.4.1) — construction
+        // is an observable use, so run the once-guarded static init here.
+        self.emit_static_init_trigger();
 
         // Try the **simple-ctor fast path** first: when every statement
         // in the body is `this.field = expr;` (with an optional leading
@@ -359,6 +362,7 @@ impl RustEmitter {
         }
         self.w.push_str(") -> Self {\n");
         self.w.indent_inc();
+        self.emit_static_init_trigger();
         self.w.emit_indent();
         self.w.push_str("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner(");
         for (i, param) in ctor.params.iter().enumerate() {
@@ -712,6 +716,7 @@ impl RustEmitter {
         self.w.indent_inc();
         self.w.line("pub fn new() -> Self {");
         self.w.indent_inc();
+        self.emit_static_init_trigger();
         self.w.line("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner())))");
         self.w.indent_dec();
         self.w.line("}");
@@ -728,6 +733,7 @@ impl RustEmitter {
         self.w.indent_inc();
         self.w.line("pub fn new() -> Self {");
         self.w.indent_inc();
+        self.emit_static_init_trigger();
         // A class with `init { }` blocks builds into a `let mut __self`
         // binding so the init blocks can mutate `this` (= __self) before the
         // value is returned (§M.1 / §S.4.4 step 5).

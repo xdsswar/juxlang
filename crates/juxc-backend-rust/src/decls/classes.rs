@@ -127,6 +127,8 @@ impl RustEmitter {
         // nested-class scenarios (Phase-2) compose correctly.
         let prev_enclosing = self.enclosing_class.take();
         self.enclosing_class = Some(class_decl.name.text.clone());
+        let prev_has_static_init = self.emitting_class_has_static_init;
+        self.emitting_class_has_static_init = !class_decl.static_init_blocks.is_empty();
         // **Wrapper-shape branch (Phase A, §CR.4.1 / §CR.5.1 / §CR.6).**
         // Classes in `wrapper_classes` lower to the shared-mutation,
         // interior-mutable wrapper shape so Jux gets Java reference
@@ -142,6 +144,7 @@ impl RustEmitter {
         if self.wrapper_classes.contains(&class_decl.name.text) {
             self.emit_wrapper_class_decl(class_decl);
             self.enclosing_class = prev_enclosing;
+            self.emitting_class_has_static_init = prev_has_static_init;
             return;
         }
         // Derive Clone unconditionally so the `T: Clone` bound used on
@@ -338,6 +341,8 @@ impl RustEmitter {
         if class_decl.constructors.is_empty() {
             self.emit_synthetic_default_constructor(class_decl);
         }
+        // `static { }` first-use initializer (§S.4.1), if any.
+        self.emit_static_init_fn(class_decl);
         for method in &class_decl.methods {
             self.emit_method(method);
         }
@@ -503,6 +508,7 @@ impl RustEmitter {
         // matching `take` at the top of this function for the
         // bare-static-name rewrite this powers.
         self.enclosing_class = prev_enclosing;
+        self.emitting_class_has_static_init = prev_has_static_init;
     }
 
     /// Emit a **simple** class in the shared-mutation wrapper shape
@@ -658,6 +664,8 @@ impl RustEmitter {
         if class_decl.constructors.is_empty() {
             self.emit_wrapper_synthetic_default_constructor(class_decl);
         }
+        // `static { }` first-use initializer (§S.4.1), if any.
+        self.emit_static_init_fn(class_decl);
         for method in &class_decl.methods {
             self.emit_method(method);
         }
@@ -1660,6 +1668,63 @@ impl RustEmitter {
     ///
     /// Caller-positioned at depth 0; this emits the declaration at
     /// depth 0 too (module scope, not nested in any impl).
+    /// Emit the `fn __static_init()` associated function for a class that
+    /// declares `static { }` blocks (§S.4.1). The block bodies run **once**,
+    /// guarded by a `std::sync::Once` (thread-safe, runs to completion before
+    /// any other thread observes the class as initialized). It's invoked from
+    /// the observable-use trigger points — instance construction and static
+    /// method calls — via [`Self::emit_static_init_trigger`].
+    ///
+    /// `enclosing_class` is already set by the caller, so static-field writes
+    /// inside the block lower to their module-scope `LazyLock<Mutex<T>>`.
+    pub(crate) fn emit_static_init_fn(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        if class_decl.static_init_blocks.is_empty() {
+            return;
+        }
+        use crate::analysis::collect_mutated_names;
+        use crate::stmts::stmt_span;
+        self.w.indent_inc();
+        self.w.line("fn __static_init() {");
+        self.w.indent_inc();
+        self.w
+            .line("static __JUX_STATIC_GUARD: std::sync::Once = std::sync::Once::new();");
+        self.w.line("__JUX_STATIC_GUARD.call_once(|| {");
+        self.w.indent_inc();
+        // Static context: no `this`. Collect mutated locals so reassignments
+        // inside the block promote to `let mut`.
+        let prev_this = self.this_alias.take();
+        let mut muts = std::collections::HashSet::new();
+        for block in &class_decl.static_init_blocks {
+            collect_mutated_names(block, &mut muts, &self.user_mut_methods);
+        }
+        self.mutated_in_fn = muts;
+        for block in &class_decl.static_init_blocks {
+            for stmt in &block.statements {
+                self.emit_source_marker(stmt_span(stmt));
+                self.w.emit_indent();
+                self.emit_stmt(stmt);
+            }
+        }
+        self.this_alias = prev_this;
+        self.w.indent_dec();
+        self.w.line("});");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+        self.w.indent_dec();
+    }
+
+    /// Emit the `Self::__static_init();` first-use trigger when the class
+    /// being emitted declares `static { }` blocks (per the
+    /// `emitting_class_has_static_init` flag). No-op otherwise. Called at the
+    /// top of every constructor body and every static method body. The writer
+    /// is expected to be at statement depth; `line` supplies the indent.
+    pub(crate) fn emit_static_init_trigger(&mut self) {
+        if self.emitting_class_has_static_init {
+            self.w.line("Self::__static_init();");
+        }
+    }
+
     pub(crate) fn emit_mutable_static_field(
         &mut self,
         class_name: &str,
@@ -1832,6 +1897,12 @@ impl RustEmitter {
             self.current_fn_params = method.params.iter().map(|p| p.name.text.clone()).collect();
             let saved = self.current_return_type.take();
             self.current_return_type = Some(method.return_type.clone());
+            // First-use trigger for `static { }` blocks (§S.4.1): a static
+            // method call is an observable use. (Instance methods aren't —
+            // constructing the receiver already triggered init.)
+            if is_static {
+                self.emit_static_init_trigger();
+            }
             self.emit_fn_body_at(body, &method.return_type);
             self.current_return_type = saved;
             self.current_fn_params.clear();

@@ -648,6 +648,11 @@ struct RustEmitter {
     /// `C(Rc::new(RefCell::new(…)))`. `false` everywhere else, so the
     /// legacy plain-struct emitters keep their original behavior.
     pub(crate) emitting_wrapper_class: bool,
+    /// `true` while emitting a class that declares `static { }` blocks
+    /// (§S.4.1). Drives the first-use trigger: each constructor body and each
+    /// static method body emits a `Self::__static_init();` call at its top so
+    /// the (once-guarded) static initializer runs on first observable use.
+    pub(crate) emitting_class_has_static_init: bool,
     /// Set for the duration of emitting a method-call **callee**
     /// (`recv.method` in `recv.method(args)`). The outermost `Field`
     /// node of such a callee names a METHOD, which lives on the wrapper
@@ -1670,6 +1675,7 @@ impl RustEmitter {
             class_asts: std::collections::HashMap::new(),
             wrapper_classes: std::collections::HashSet::new(),
             emitting_wrapper_class: false,
+            emitting_class_has_static_init: false,
             emitting_call_callee: false,
         }
     }
