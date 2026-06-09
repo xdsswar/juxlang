@@ -188,6 +188,13 @@ pub enum Code {
     /// for sealed-shape scrutinees so missed cases are caught at
     /// compile time, not via a runtime panic.
     E0440_NotExhaustive,
+    /// E0431 — Generic type inference has no solution. Per the type-system
+    /// addendum §T.4.2, a bare `new X<>()` whose type argument can't be
+    /// inferred from the construction site AND is never pinned by later use
+    /// (an unused, ambiguous local) fires this code — instead of leaking
+    /// `rustc`'s `E0282 type annotations needed`. Write the argument
+    /// explicitly (`new Vec<String>()`).
+    E0431_GenericInferenceNoSolution,
 
     // ---- Async / Generators (E0700–E0799) ----
     /// E0710 — `throw` of a non-`Exception` value. Per the exceptions
@@ -290,6 +297,7 @@ impl Code {
             Code::E0433_OverrideNarrowsAccess    => "E0433",
             Code::E0434_CyclicInheritance        => "E0434",
             Code::E0440_NotExhaustive            => "E0440",
+            Code::E0431_GenericInferenceNoSolution => "E0431",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0710_ThrowRequiresException   => "E0710",
             Code::E0930_OperatorConflict         => "E0930",

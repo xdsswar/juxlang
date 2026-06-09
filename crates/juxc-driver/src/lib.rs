@@ -1026,6 +1026,7 @@ mod stub_tests {
             "import rust.std.HashMap;\n\
              public void main() {\n\
                  var m = new HashMap();\n\
+                 m.insert(\"k\", 1);\n\
              }\n",
         );
         let result = crate::check_workspace(vec![main]);

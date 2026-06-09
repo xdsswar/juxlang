@@ -266,6 +266,18 @@ pub(crate) struct Checker<'a> {
     /// this is set (async addendum §18.1.2). Reset to `false` inside a
     /// constructor body and inside a non-async lambda.
     pub(crate) in_async: bool,
+    /// `var x = new X<>()` declarations whose inferred type carries an
+    /// **unresolved** generic argument (nothing at the construction site pinned
+    /// it). Flushed at the end of each function/method/constructor body: a
+    /// candidate whose name never appears in [`Self::used_names`] is genuinely
+    /// uninferable (an unused, type-ambiguous local) and gets E0431 — turning
+    /// what would be a `rustc` E0282 into a precise Jux error. A candidate that
+    /// IS referenced is left alone, since any later use can pin the parameter
+    /// (`new Vec<>(); v.push(1)` infers `Vec<int>` in the emitted Rust).
+    pub(crate) uninferable_news: Vec<(String, Span)>,
+    /// Bare local names referenced anywhere in the current body (collected as
+    /// `Expr::Path` leaves are walked). Pairs with [`Self::uninferable_news`].
+    pub(crate) used_names: std::collections::HashSet<String>,
 }
 
 impl<'a> Checker<'a> {
@@ -280,7 +292,32 @@ impl<'a> Checker<'a> {
             expr_types: HashMap::new(),
             in_static: false,
             in_async: false,
+            uninferable_news: Vec::new(),
+            used_names: std::collections::HashSet::new(),
         }
+    }
+
+    /// Emit `E0431` for every recorded `var x = new X<>()` whose `x` was never
+    /// referenced in the just-walked body (so nothing could pin its generic
+    /// argument), then clear the per-body tracking sets. Called at the end of
+    /// each function/method/constructor walk.
+    fn flush_uninferable_news(&mut self) {
+        let candidates = std::mem::take(&mut self.uninferable_news);
+        for (name, span) in candidates {
+            if !self.used_names.contains(&name) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0431_GenericInferenceNoSolution,
+                        format!(
+                            "cannot infer the type argument of `{name}`: it is never used to \
+                             pin it — write the type explicitly, e.g. `new Vec<String>()`",
+                        ),
+                    )
+                    .with_span(span),
+                );
+            }
+        }
+        self.used_names.clear();
     }
 
     /// True when `ty` is a valid `throw` operand: an `Exception` (or subclass),
@@ -486,6 +523,7 @@ impl<'a> Checker<'a> {
         let saved_async = self.in_async;
         self.in_async = Self::fn_is_async(fn_decl);
         self.check_block(body);
+        self.flush_uninferable_news();
         self.in_async = saved_async;
         self.current_return = saved;
         self.env.pop_scope();
@@ -550,6 +588,7 @@ impl<'a> Checker<'a> {
         let saved_async = self.in_async;
         self.in_async = false;
         self.check_block(&ctor.body);
+        self.flush_uninferable_news();
         self.in_async = saved_async;
         self.current_return = saved;
         self.env.pop_scope();
@@ -590,6 +629,7 @@ impl<'a> Checker<'a> {
         let saved_async = self.in_async;
         self.in_async = Self::fn_is_async(method);
         self.check_block(body);
+        self.flush_uninferable_news();
         self.in_async = saved_async;
         self.current_return = saved;
         self.in_static = saved_static;
@@ -750,6 +790,22 @@ impl<'a> Checker<'a> {
                     (None, Some(i)) => i.clone(),
                     (None, None) => Ty::Unknown,
                 };
+                // Record a `var x = new X<>()` whose inferred type still has an
+                // unresolved generic argument: if `x` is never referenced later
+                // (checked at body end) nothing can pin it → E0431.
+                if v.ty.is_none()
+                    && matches!(
+                        &v.init,
+                        Some(Expr::NewObject(n)) if n.generic_args.is_empty() && n.args.is_empty()
+                    )
+                    && matches!(
+                        &final_ty,
+                        Ty::User { generic_args, .. }
+                            if generic_args.iter().any(|a| matches!(a, Ty::Unknown))
+                    )
+                {
+                    self.uninferable_news.push((v.name.text.clone(), v.span));
+                }
                 self.env.declare(&v.name.text, final_ty);
             }
 
@@ -981,7 +1037,14 @@ impl<'a> Checker<'a> {
         // recorded when their containing check_expr recurses into them.
         let _ = self.infer_and_record(expr);
         match expr {
-            Expr::Literal(_) | Expr::Path(_) => {}
+            Expr::Literal(_) => {}
+            // Record a bare-name reference so the E0431 "uninferable `new`"
+            // flush can tell whether a `var x = new X<>()` is ever used.
+            Expr::Path(qn) => {
+                if qn.segments.len() == 1 {
+                    self.used_names.insert(qn.segments[0].text.clone());
+                }
+            }
             // `this` inside a `static` method has no receiver to
             // refer to — fire E0425 once per occurrence.
             Expr::This(span) => {
@@ -3230,6 +3293,40 @@ mod tests {
             r#"public class Exception {} public class MyErr extends Exception {} public void f(){ throw new MyErr(); }"#,
         );
         assert!(!has(&d, code::Code::E0710_ThrowRequiresException), "got: {d:?}");
+    }
+
+    // ---- uninferable empty-diamond `new` (E0431, §T.4.2) ----
+
+    /// `var b = new Box<>()` (generic class, no args) that is never referenced
+    /// can't have its type argument pinned → E0431.
+    #[test]
+    fn unused_uninferable_new_errors() {
+        let d = run(r#"public class Box<T> { public Box() {} } public void f(){ var b = new Box(); }"#);
+        assert!(has(&d, code::Code::E0431_GenericInferenceNoSolution), "got: {d:?}");
+    }
+
+    /// The same construction, but `b` is later used as a receiver — a use could
+    /// pin the argument (as the emitted Rust infers), so no E0431.
+    #[test]
+    fn used_uninferable_new_ok() {
+        let d = run(
+            r#"public class Box<T> { public Box() {} public void touch(){} } public void f(){ var b = new Box(); b.touch(); }"#,
+        );
+        assert!(!has(&d, code::Code::E0431_GenericInferenceNoSolution), "got: {d:?}");
+    }
+
+    /// An explicit type argument pins it — never flagged even if unused.
+    #[test]
+    fn explicit_type_arg_new_ok() {
+        let d = run(r#"public class Box<T> { public Box() {} } public void f(){ var b = new Box<int>(); }"#);
+        assert!(!has(&d, code::Code::E0431_GenericInferenceNoSolution), "got: {d:?}");
+    }
+
+    /// A non-generic class has no argument to infer — never flagged.
+    #[test]
+    fn non_generic_new_not_flagged() {
+        let d = run(r#"public class Plain { public Plain() {} } public void f(){ var p = new Plain(); }"#);
+        assert!(!has(&d, code::Code::E0431_GenericInferenceNoSolution), "got: {d:?}");
     }
 
     /// Assigning a String to an int local → E0410.
