@@ -860,6 +860,12 @@ mod stub_tests {
     use juxc_diagnostics::Severity;
     use juxc_source::SourceFile;
 
+    /// Serializes tests that mutate the process-global `JUX_STUBS_DIR` env var:
+    /// Rust runs tests in parallel threads in one process, so two tests touching
+    /// the same env var would otherwise race (one's `set_var` leaking into the
+    /// other's stub loading). Each such test holds this lock for its duration.
+    static STUB_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// A signature-only `.jux.d` declaration stub: a `Widget` class whose
     /// methods/ctor end in `;` (no bodies). This is exactly what
     /// `juxc bindgen` emits and what the resolver must ingest as `external`.
@@ -932,6 +938,7 @@ mod stub_tests {
     /// exercises.
     #[test]
     fn std_stub_dir_loads_clean_and_resolves() {
+        let _env = STUB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A minimal hand-rolled stub standing in for generated `rust.std`.
         let dir = std::env::temp_dir().join(format!(
             "juxc-stubdir-{}-{}",
@@ -987,6 +994,7 @@ mod stub_tests {
     /// `String`) surface in Jux syntax and that the generated stub is error-free.
     #[test]
     fn generated_rust_std_from_toolchain_resolves_collections() {
+        let _env = STUB_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Make sure no override is active; force regeneration into a temp cache.
         std::env::remove_var("JUX_STUBS_DIR");
         let stub = crate::stubs::load_std_stub_sources();

@@ -812,7 +812,84 @@ pub fn build_workspace(
     check_single_constructor(&table, diagnostics);
     check_top_level_visibility(&table, diagnostics);
     check_override_does_not_narrow_access(&table, diagnostics);
+    check_imports_resolve(units, &table, diagnostics);
     table
+}
+
+/// Validate that every `import a.b.C;` names a declaration that actually
+/// exists. A mismatched import — e.g. `import xss.it.other.Other;` when `Other`
+/// is declared in `package xss.it;` — otherwise resolves the type by *bare*
+/// name (construction works) but maps method lookups to the non-existent FQN,
+/// surfacing as a baffling "no method" error (or leaking to rustc). Flagging the
+/// import directly, with a "did you mean" pointing at the real FQN, is the
+/// user-actionable error.
+///
+/// Wildcard imports (`import a.b.*;`) name a package, not a type, and are
+/// skipped. External stub types and `jux.std` types are ordinary table entries,
+/// so a valid `import rust.std.HashMap;` passes.
+fn check_imports_resolve(
+    units: &[CompilationUnit],
+    table: &SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    use juxc_ast::ImportSpec;
+    // A top-level symbol exists under this exact FQN (any kind).
+    let exists = |fqn: &str| {
+        table.is_type_name(fqn)
+            || table.functions.contains_key(fqn)
+            || table.consts.contains_key(fqn)
+    };
+    // A "did you mean" — a known FQN with the same last segment.
+    let suggest = |bare: &str| -> Option<String> {
+        table
+            .classes
+            .keys()
+            .chain(table.records.keys())
+            .chain(table.enums.keys())
+            .chain(table.interfaces.keys())
+            .chain(table.functions.keys())
+            .find(|k| fqn_bare(k) == bare && k.contains('.'))
+            .cloned()
+    };
+    let mut report = |fqn: String, span: Span, diagnostics: &mut Vec<Diagnostic>| {
+        if exists(&fqn) {
+            return;
+        }
+        let bare = fqn_bare(&fqn).to_string();
+        let mut msg = format!("unresolved import `{fqn}`: no declaration with that fully-qualified name");
+        if let Some(real) = suggest(&bare) {
+            if real != fqn {
+                msg.push_str(&format!(" (did you mean `{real}`?)"));
+            }
+        }
+        diagnostics.push(
+            Diagnostic::error(code::Code::E0301_NameNotFound, msg).with_span(span),
+        );
+    };
+    for unit in units {
+        for import in &unit.imports {
+            match &import.spec {
+                ImportSpec::Path { name, wildcard, .. } => {
+                    if *wildcard || name.segments.is_empty() {
+                        continue;
+                    }
+                    let fqn = name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+                    report(fqn, import.span, diagnostics);
+                }
+                ImportSpec::Items { prefix, items } => {
+                    let pfx = prefix.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+                    for it in items {
+                        let fqn = if pfx.is_empty() {
+                            it.name.text.clone()
+                        } else {
+                            format!("{pfx}.{}", it.name.text)
+                        };
+                        report(fqn, import.span, diagnostics);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Insert one top-level item into the table. Factored out of
