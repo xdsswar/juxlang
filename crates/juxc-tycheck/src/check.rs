@@ -260,6 +260,12 @@ pub(crate) struct Checker<'a> {
     /// a `static` field initializer once those land). Drives the
     /// `E0425_ThisInStaticContext` diagnostic in `check_expr`.
     pub(crate) in_static: bool,
+    /// True while we're inside an **async context** — the body of an
+    /// `async` function/method, or an async lambda. Drives the
+    /// `E0700_AwaitRequiresAsyncContext` check: `await` is only legal when
+    /// this is set (async addendum §18.1.2). Reset to `false` inside a
+    /// constructor body and inside a non-async lambda.
+    pub(crate) in_async: bool,
 }
 
 impl<'a> Checker<'a> {
@@ -273,7 +279,18 @@ impl<'a> Checker<'a> {
             current_return: None,
             expr_types: HashMap::new(),
             in_static: false,
+            in_async: false,
         }
+    }
+
+    /// Is this function/method declared `async`? `async` is encoded either as
+    /// an `async T` return type or as the `async` modifier; accept both.
+    fn fn_is_async(decl: &FnDecl) -> bool {
+        matches!(decl.return_type, ReturnType::AsyncType(_))
+            || decl
+                .modifiers
+                .iter()
+                .any(|m| matches!(m, juxc_ast::FnModifier::Async))
     }
 
     /// Consume the checker, returning the per-expression type map it
@@ -412,7 +429,10 @@ impl<'a> Checker<'a> {
             &self.env,
             self.symbols,
         ));
+        let saved_async = self.in_async;
+        self.in_async = Self::fn_is_async(fn_decl);
         self.check_block(body);
+        self.in_async = saved_async;
         self.current_return = saved;
         self.env.pop_scope();
     }
@@ -471,7 +491,12 @@ impl<'a> Checker<'a> {
         }
         let saved = self.current_return.take();
         self.current_return = None; // constructors don't return values
+        // Constructors are never async (§18.1.1) — `await` in a ctor body is
+        // therefore an error. Force the async context off across the body.
+        let saved_async = self.in_async;
+        self.in_async = false;
         self.check_block(&ctor.body);
+        self.in_async = saved_async;
         self.current_return = saved;
         self.env.pop_scope();
     }
@@ -508,7 +533,10 @@ impl<'a> Checker<'a> {
             &self.env,
             self.symbols,
         ));
+        let saved_async = self.in_async;
+        self.in_async = Self::fn_is_async(method);
         self.check_block(body);
+        self.in_async = saved_async;
         self.current_return = saved;
         self.in_static = saved_static;
         // Method-local generic params would also clear here, but the
@@ -1027,10 +1055,16 @@ impl<'a> Checker<'a> {
                     self.env.declare(&p.name.text, ty);
                 }
                 let saved_return = self.current_return.take();
+                // A lambda introduces its OWN async context: an async lambda
+                // (`async (x) -> …`) permits `await`; a plain lambda inside an
+                // async function does NOT (§18.1.2).
+                let saved_async = self.in_async;
+                self.in_async = l.is_async;
                 match &l.body {
                     juxc_ast::LambdaBody::Expr(e) => self.check_expr(e),
                     juxc_ast::LambdaBody::Block(b) => self.check_block(b),
                 }
+                self.in_async = saved_async;
                 self.current_return = saved_return;
                 self.env.pop_scope();
             }
@@ -1071,17 +1105,26 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
-            Expr::Await(inner, _) => {
-                // `await expr` — walk the operand for sub-expression
-                // diagnostics. The async-context check (must appear
-                // only inside `async T` function bodies) is the
-                // parser/resolver's job; tycheck currently relies on
-                // rustc's `.await outside async fn` error for the
-                // ultimate guard. The expression's static type is
-                // taken to be the operand's type (so a `Future<T>`
-                // shape unwraps to `T` in inference); the formal
-                // Future-typing lands when we model async types in
-                // the type-checker properly.
+            Expr::Await(inner, span) => {
+                // `await` is permitted ONLY inside an async context — an
+                // `async` function/method or an async lambda (§18.1.2). Outside
+                // one (a plain function, a constructor, a non-async lambda) it's
+                // `E0700`; catching it here turns what would be rustc's cryptic
+                // `.await is only allowed inside async fn` into a precise Jux
+                // diagnostic before codegen.
+                if !self.in_async {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0700_AwaitRequiresAsyncContext,
+                            "`await` is only allowed inside an async function, method, or \
+                             lambda — mark the enclosing function `async` (e.g. `async T f()`)",
+                        )
+                        .with_span(*span),
+                    );
+                }
+                // The operand's static type is the operand's type (so a
+                // `Future<T>` shape unwraps to `T` in inference); formal
+                // Future-typing lands when async types are modelled properly.
                 self.check_expr(inner);
             }
         }
@@ -3034,6 +3077,59 @@ mod tests {
     fn null_does_not_fit_non_nullable_slot() {
         let d = run(r#"public void main() { String x = null; }"#);
         assert!(has(&d, code::Code::E0410_TypeMismatch), "got: {d:?}");
+    }
+
+    // ---- Async/await context (E0700, §18.1.2) ----
+
+    /// `await` in a plain (non-async) function → E0700.
+    #[test]
+    fn await_in_plain_function_errors() {
+        let d = run(r#"public int g(){ return 1; } public void f(){ var x = await g(); }"#);
+        assert!(has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+    }
+
+    /// `await` inside an `async` function is fine.
+    #[test]
+    fn await_in_async_function_ok() {
+        let d = run(r#"public int g(){ return 1; } public async int f(){ return await g(); }"#);
+        assert!(!has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+    }
+
+    /// Constructors are never async, so `await` in a constructor body → E0700.
+    #[test]
+    fn await_in_constructor_errors() {
+        let d = run(
+            r#"public int g(){ return 1; } public class C { public C(){ var x = await g(); } }"#,
+        );
+        assert!(has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+    }
+
+    /// `await` inside an `async` method is fine.
+    #[test]
+    fn await_in_async_method_ok() {
+        let d = run(
+            r#"public int g(){ return 1; } public class C { public async int m(){ return await g(); } }"#,
+        );
+        assert!(!has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+    }
+
+    /// A plain lambda introduces a non-async context even inside an async
+    /// function, so `await` in it → E0700.
+    #[test]
+    fn await_in_plain_lambda_inside_async_errors() {
+        let d = run(
+            r#"public int g(){ return 1; } public async void f(){ var bad = () -> { return await g(); }; }"#,
+        );
+        assert!(has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+    }
+
+    /// An async lambda permits `await`, even inside a plain function.
+    #[test]
+    fn await_in_async_lambda_ok() {
+        let d = run(
+            r#"public int g(){ return 1; } public void f(){ var ok = async () -> { return await g(); }; }"#,
+        );
+        assert!(!has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
     }
 
     /// Assigning a String to an int local → E0410.

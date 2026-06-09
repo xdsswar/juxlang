@@ -183,6 +183,15 @@ pub enum Code {
     /// compile time, not via a runtime panic.
     E0440_NotExhaustive,
 
+    // ---- Async / Generators (E0700–E0799) ----
+    /// E0700 — `await` used outside an async context. Per the async
+    /// addendum §18.1.2 (`JUX-ASYNC-ADDENDUM-v2.md`), `await` is only
+    /// permitted inside an `async` function/method, an async lambda, or
+    /// an `async main`. Using it in a plain function, a constructor, or a
+    /// non-async lambda fires this code — catching it here keeps the
+    /// `.await outside async fn` failure from leaking out of `rustc`.
+    E0700_AwaitRequiresAsyncContext,
+
     // ---- Operators / Auto-derivation (E0900–E0999) ----
     /// E0930 — Conflicting operator declarations. Per
     /// `JUX-OPERATORS-ADDENDUM.md` §O.2.1, defining BOTH `operator<=>`
@@ -267,6 +276,7 @@ impl Code {
             Code::E0433_OverrideNarrowsAccess    => "E0433",
             Code::E0434_CyclicInheritance        => "E0434",
             Code::E0440_NotExhaustive            => "E0440",
+            Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",
