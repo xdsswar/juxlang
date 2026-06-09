@@ -242,6 +242,53 @@ fn ident_start_before(text: &str, offset: usize) -> usize {
     start
 }
 
+/// Recover a receiver expression's type when the **live** analysis couldn't —
+/// the typical mid-edit case where the user has typed `obj.` (optionally with a
+/// partial member name) but nothing after, so the dangling member access fails
+/// to parse and the receiver is left untyped.
+///
+/// We build a patched buffer in which the `.`-through-caret slice is replaced
+/// by a single `;`, turning `… obj.<partial>` into the complete statement
+/// `… obj;`. Re-analysing that buffer types the receiver, whose expression span
+/// still ends exactly at `recv_end` (the original `.`'s offset) — so the same
+/// `end == recv_end` lookup the cache uses finds it. The reparse goes through
+/// the *workspace* path when a root is known (so a receiver of a cross-file type
+/// resolves too), else the single-file path.
+///
+/// Only the receiver's `Ty` is taken from the reparse; member resolution still
+/// runs against the stable cached symbol table, which always carries the full
+/// project + stdlib surface.
+fn receiver_type_by_reparse(
+    text: &str,
+    recv_end: usize,
+    caret: usize,
+    root: Option<&std::path::Path>,
+    uri: &Url,
+) -> Option<juxc_tycheck::Ty> {
+    // Guard the slice bounds (offsets come from byte scans, but stay defensive).
+    if recv_end > caret || caret > text.len() || !text.is_char_boundary(recv_end) || !text.is_char_boundary(caret) {
+        return None;
+    }
+    let mut patched = String::with_capacity(text.len());
+    patched.push_str(&text[..recv_end]);
+    patched.push(';');
+    patched.push_str(&text[caret..]);
+
+    let rope = Rope::from_str(&patched);
+    let analysis = match root {
+        Some(r) => analyze_workspace(r, uri, &rope),
+        None => analyze_single(uri, &rope),
+    };
+    // The receiver expression now ends at `recv_end` (the `;` we inserted sits
+    // right after it); pick the largest span ending there, as the cache does.
+    analysis
+        .expr_types
+        .iter()
+        .filter(|(s, _)| s.end as usize == recv_end)
+        .max_by_key(|(s, _)| s.len())
+        .map(|(_, t)| t.clone())
+}
+
 /// If the identifier starting at `ident_start` is the member half of a
 /// `receiver.member` access, return the byte offset of the receiver's last
 /// byte (i.e. the `.`'s offset) so the receiver expression's span — which ends
@@ -413,18 +460,40 @@ fn import_edit(rope: &Rope, fqn: &str) -> Option<TextEdit> {
     if already_imports(&text, fqn) {
         return None;
     }
-    // Find the line index just after the `package` declaration (if any).
-    let mut insert_line: usize = 0;
-    for (i, line) in text.lines().enumerate() {
-        if line.trim_start().starts_with("package") {
-            insert_line = i + 1;
-            break;
+    // Locate the `package …;` declaration line, if any.
+    let package_line = text
+        .lines()
+        .position(|line| line.trim_start().starts_with("package"));
+
+    // Decide where the import goes and whether it needs a leading blank line.
+    // Convention (Java-style): keep exactly one blank line between the
+    // `package` declaration and the import block.
+    let (insert_line, new_text) = match package_line {
+        Some(p) => {
+            // Is the line immediately after the package already blank? A
+            // missing next line (package is the file's last line) counts as
+            // "not blank" so we still insert the separating blank.
+            let next_blank = text
+                .lines()
+                .nth(p + 1)
+                .map_or(false, |l| l.trim().is_empty());
+            if next_blank {
+                // The separating blank already exists — drop the import just
+                // below it (joining any existing import block).
+                (p + 2, format!("import {fqn};\n"))
+            } else {
+                // No blank yet — insert one, then the import, so we get
+                // `package …;` / <blank> / `import …;`.
+                (p + 1, format!("\nimport {fqn};\n"))
+            }
         }
-    }
+        // Package-less file: imports go at the very top, no leading blank.
+        None => (0, format!("import {fqn};\n")),
+    };
     let pos = Position::new(insert_line as u32, 0);
     Some(TextEdit {
         range: Range::new(pos, pos),
-        new_text: format!("import {fqn};\n"),
+        new_text,
     })
 }
 
@@ -924,37 +993,49 @@ impl LanguageServer for Backend {
         let text = doc.rope.to_string();
         let member_start = ident_start_before(&text, offset);
         if let Some(recv_end) = receiver_dot_before(&text, member_start) {
-            if let Some(ty) = doc.type_ending_at(recv_end) {
+            // Resolve the receiver's type. The cached analysis is tried first;
+            // if it has no type ending at the `.` — the common mid-edit case,
+            // where a dangling `obj.` fails to parse and leaves the receiver
+            // untyped — re-analyse a patched buffer so members still appear
+            // while the user is typing.
+            let root = self.workspace.read().ok().and_then(|ws| ws.root.clone());
+            let recv_ty = doc.type_ending_at(recv_end).cloned().or_else(|| {
+                receiver_type_by_reparse(&text, recv_end, offset, root.as_deref(), &uri)
+            });
+            if let Some(ty) = &recv_ty {
                 let members = intel::members_of(&doc.symbols, ty);
-                if !members.is_empty() {
-                    let items: Vec<CompletionItem> = members
-                        .into_iter()
-                        .map(|m| {
-                            if m.is_method {
-                                CompletionItem {
-                                    label: format!("{}()", m.name),
-                                    kind: Some(CompletionItemKind::METHOD),
-                                    detail: Some(m.detail),
-                                    insert_text: Some(format!("{}()", m.name)),
-                                    sort_text: Some(format!("0_{}", m.name)),
-                                    ..Default::default()
-                                }
-                            } else {
-                                CompletionItem {
-                                    label: m.name.clone(),
-                                    kind: Some(CompletionItemKind::FIELD),
-                                    detail: Some(m.detail),
-                                    sort_text: Some(format!("0_{}", m.name)),
-                                    ..Default::default()
-                                }
+                let items: Vec<CompletionItem> = members
+                    .into_iter()
+                    .map(|m| {
+                        if m.is_method {
+                            CompletionItem {
+                                label: format!("{}()", m.name),
+                                kind: Some(CompletionItemKind::METHOD),
+                                detail: Some(m.detail),
+                                insert_text: Some(format!("{}()", m.name)),
+                                sort_text: Some(format!("0_{}", m.name)),
+                                ..Default::default()
                             }
-                        })
-                        .collect();
-                    // Return ONLY the receiver's members — no globals/keywords
-                    // leak into a member-access completion.
-                    return Ok(Some(CompletionResponse::Array(items)));
-                }
+                        } else {
+                            CompletionItem {
+                                label: m.name.clone(),
+                                kind: Some(CompletionItemKind::FIELD),
+                                detail: Some(m.detail),
+                                sort_text: Some(format!("0_{}", m.name)),
+                                ..Default::default()
+                            }
+                        }
+                    })
+                    .collect();
+                // Return ONLY the receiver's members — no globals/keywords
+                // leak into a member-access completion.
+                return Ok(Some(CompletionResponse::Array(items)));
             }
+            // A member-access context whose receiver type we couldn't resolve.
+            // Returning the statement snippet/keyword bag here is exactly the
+            // noise the user must scroll past (`for`/`if`/`print` after `obj.`),
+            // so return an empty list instead.
+            return Ok(Some(CompletionResponse::Array(Vec::new())));
         }
 
         let mut items: Vec<CompletionItem> = Vec::new();
@@ -1296,7 +1377,9 @@ mod tests {
     fn import_edit_inserts_after_package_line_and_dedupes() {
         let rope = Rope::from_str("package shop;\npublic class A {}\n");
         let edit = import_edit(&rope, "a.b.C").expect("should produce an edit");
-        assert_eq!(edit.new_text, "import a.b.C;\n");
+        // No blank after the package yet → insert one, then the import, so the
+        // result is `package shop;` / <blank> / `import a.b.C;`.
+        assert_eq!(edit.new_text, "\nimport a.b.C;\n");
         // Inserted at the start of line 1 (just after the package line).
         assert_eq!(edit.range.start.line, 1);
         assert_eq!(edit.range.start.character, 0);
@@ -1304,6 +1387,45 @@ mod tests {
         // Already-imported → no edit.
         let rope2 = Rope::from_str("package shop;\nimport a.b.C;\nclass A {}\n");
         assert!(import_edit(&rope2, "a.b.C").is_none());
+    }
+
+    #[test]
+    fn import_edit_keeps_single_blank_after_package() {
+        // A blank line already separates the package from the import block:
+        // the new import joins the block below the blank — no extra blank.
+        let rope = Rope::from_str("package shop;\n\nimport a.b.D;\nclass A {}\n");
+        let edit = import_edit(&rope, "a.b.C").expect("should produce an edit");
+        assert_eq!(edit.new_text, "import a.b.C;\n");
+        // Line 2 is the existing `import a.b.D;` — the new line lands there.
+        assert_eq!(edit.range.start.line, 2);
+
+        // Package on the file's last line → still gets the separating blank.
+        let rope2 = Rope::from_str("package shop;\n");
+        let edit2 = import_edit(&rope2, "a.b.C").expect("should produce an edit");
+        assert_eq!(edit2.new_text, "\nimport a.b.C;\n");
+        assert_eq!(edit2.range.start.line, 1);
+    }
+
+    // ---- mid-edit member completion (dangling `.`) ----
+
+    /// A dangling `f.` (nothing after) fails the normal parse, so the live
+    /// analysis never types the receiver — which is why a member completion
+    /// would otherwise fall back to the statement snippet bag. The reparse
+    /// fallback patches the buffer to `f;` and recovers `f`'s type (here a local
+    /// of an in-file class), which is what makes the class members appear.
+    #[test]
+    fn reparse_recovers_receiver_type_for_dangling_dot() {
+        let text = "public class Foo { public void bar() {} }\n\
+                    public void main() { var f = new Foo(); f. }\n";
+        let dot = text.rfind("f.").expect("dangling member access") + 1; // the `.`
+        let uri = Url::parse("file:///t.jux").unwrap();
+        let ty = receiver_type_by_reparse(text, dot, dot + 1, None, &uri)
+            .expect("receiver type recovered from the patched buffer");
+        let name = match ty {
+            juxc_tycheck::Ty::User { name, .. } => name,
+            other => panic!("expected a user type, got {other:?}"),
+        };
+        assert!(name.ends_with("Foo"), "expected the receiver to type as Foo, got {name}");
     }
 
     #[test]
@@ -1380,10 +1502,11 @@ mod tests {
             .expect("Widget must carry a declaring package");
         assert_eq!(pkgs, &vec!["a.b".to_string()]);
 
-        // The import edit for the consumer file inserts the right line.
-        let rope = Rope::from_str("package app; public void run() {}");
+        // The import edit for the consumer file inserts the right line, with a
+        // blank line separating it from the package declaration.
+        let rope = Rope::from_str("package app;\npublic void run() {}\n");
         let edit = import_edit(&rope, "a.b.Widget").expect("should produce an edit");
-        assert_eq!(edit.new_text, "import a.b.Widget;\n");
+        assert_eq!(edit.new_text, "\nimport a.b.Widget;\n");
 
         let _ = fs::remove_dir_all(&root);
     }
