@@ -589,6 +589,12 @@ struct RustEmitter {
     /// interp-string synthetic sources). Push on function/block
     /// entry, pop on exit, `declare` on each `Stmt::VarDecl`.
     local_types: Vec<std::collections::HashMap<String, juxc_tycheck::Ty>>,
+    /// The bare enum name of the scrutinee for the `switch` currently being
+    /// emitted, when it resolves to an enum. Lets bare `case Variant ->`
+    /// patterns (which parse as `Pattern::Bind`, Java-style unqualified labels)
+    /// emit the qualified `Enum::Variant` Rust pattern instead of a catch-all
+    /// binding (rustc `E0170`). `None` outside an enum switch.
+    current_switch_enum: Option<String>,
     /// When `true`, the emitter is producing a `jux test` binary:
     /// the workspace shim is a test runner that invokes every
     /// `@Test`-annotated function instead of the user's `main()`.
@@ -1656,6 +1662,7 @@ impl RustEmitter {
             workspace_mode: false,
             emitted_uses_in_module: std::collections::HashSet::new(),
             local_types: vec![std::collections::HashMap::new()],
+            current_switch_enum: None,
             test_mode: false,
             current_unit_idx: None,
             anonymous_class_counter: 0,

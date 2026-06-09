@@ -27,6 +27,10 @@ impl RustEmitter {
         let wrap_each_arm = self.emitting_nullable_target;
         let prev_nullable_target = self.emitting_nullable_target;
         self.emitting_nullable_target = false;
+        // Resolve the scrutinee's enum (if any) so bare `case Variant ->`
+        // labels qualify to `Enum::Variant`. Saved/restored for nested switches.
+        let prev_switch_enum = self.current_switch_enum.take();
+        self.current_switch_enum = self.scrutinee_enum_bare(&s.scrutinee);
         self.w.push_str("match ");
         self.emit_expr(&s.scrutinee);
         self.w.push_str(" {\n");
@@ -86,6 +90,63 @@ impl RustEmitter {
         }
         self.w.push('}');
         self.emitting_nullable_target = prev_nullable_target;
+        self.current_switch_enum = prev_switch_enum;
+    }
+
+    /// The bare enum name a switch scrutinee resolves to, or `None` when the
+    /// scrutinee isn't an enum. Consults `expr_types` (span-keyed) first, then
+    /// the name-keyed `local_types` (params/locals) for a bare path.
+    fn scrutinee_enum_bare(&self, scrutinee: &juxc_ast::Expr) -> Option<String> {
+        // Gather every type the scrutinee might carry — `expr_types` (which can
+        // be `Unknown` for a param) AND the name-keyed `local_types` — and
+        // return the first that names a known enum.
+        let mut candidates: Vec<juxc_tycheck::Ty> = Vec::new();
+        if let Some(t) = self.expr_types.get(&crate::exprs::expr_span_of(scrutinee)) {
+            candidates.push(t.clone());
+        }
+        if let juxc_ast::Expr::Path(qn) = scrutinee {
+            if qn.segments.len() == 1 {
+                if let Some(t) = self
+                    .local_types
+                    .iter()
+                    .rev()
+                    .find_map(|s| s.get(&qn.segments[0].text))
+                {
+                    candidates.push(t.clone());
+                }
+            }
+        }
+        for ty in candidates {
+            let juxc_tycheck::Ty::User { name, .. } = ty else {
+                continue;
+            };
+            let bare = name.rsplit('.').next().unwrap_or(&name).to_string();
+            let is_enum = self.symbols.enums.contains_key(&name)
+                || self
+                    .symbols
+                    .enums
+                    .keys()
+                    .any(|k| k.rsplit('.').next() == Some(bare.as_str()));
+            if is_enum {
+                return Some(bare);
+            }
+        }
+        None
+    }
+
+    /// True when `name` is a variant of the enum currently being switched on.
+    fn is_current_switch_variant(&self, name: &str) -> bool {
+        let Some(enum_bare) = &self.current_switch_enum else {
+            return false;
+        };
+        // Find the enum's signature (by FQN or bare) and check its variants.
+        self.symbols
+            .enums
+            .iter()
+            .find(|(k, _)| {
+                k.as_str() == enum_bare || k.rsplit('.').next() == Some(enum_bare.as_str())
+            })
+            .is_some_and(|(_, sig)| sig.variants.contains_key(name))
     }
 
     /// Emit a single pattern in Rust source. Recursive for variant
@@ -109,7 +170,19 @@ impl RustEmitter {
                     self.emit_literal(lit);
                 }
             }
-            juxc_ast::Pattern::Bind(name) => self.w.push_str(&name.text),
+            juxc_ast::Pattern::Bind(name) => {
+                // A bare `case Variant ->` (Java-style unqualified enum label)
+                // parses as a Bind. When the switch scrutinee is an enum and
+                // this name is one of its variants, emit the qualified
+                // `Enum::Variant` pattern; otherwise it's a genuine binding.
+                if self.is_current_switch_variant(&name.text) {
+                    if let Some(enum_bare) = self.current_switch_enum.clone() {
+                        self.w.push_str(&enum_bare);
+                        self.w.push_str("::");
+                    }
+                }
+                self.w.push_str(&name.text);
+            }
             juxc_ast::Pattern::Range { start, end, inclusive, .. } => {
                 // Rust supports `start..=end` and `start..end` in
                 // match patterns as long as both endpoints are
@@ -267,7 +340,19 @@ impl RustEmitter {
                     self.w.push(')');
                     return;
                 }
-                // Shape 1 / 3: rewrite `.` to `::` verbatim.
+                // Shape 1 / 3: rewrite `.` to `::` verbatim. A bare
+                // single-segment variant (Java-style `case Pending ->`, no
+                // `Enum.` prefix) is qualified with the switch's enum so Rust
+                // matches the variant instead of treating it as a catch-all
+                // binding (E0170).
+                if path.segments.len() == 1
+                    && self.is_current_switch_variant(&path.segments[0].text)
+                {
+                    if let Some(enum_bare) = self.current_switch_enum.clone() {
+                        self.w.push_str(&enum_bare);
+                        self.w.push_str("::");
+                    }
+                }
                 let segs: Vec<&str> =
                     path.segments.iter().map(|s| s.text.as_str()).collect();
                 self.w.push_str(&segs.join("::"));

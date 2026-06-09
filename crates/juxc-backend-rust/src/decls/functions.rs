@@ -143,6 +143,18 @@ impl RustEmitter {
                     self.nullable_locals.insert(p.name.text.clone());
                 }
             }
+            // Register each parameter's type in `local_types` so name-keyed
+            // receiver resolution works on params too — wrapper-class field
+            // access (`s.field`), stdlib-dispatch, and enum-switch scrutinee
+            // qualification all consult this when `expr_types` is unreliable.
+            for p in &fn_decl.params {
+                let ty = juxc_tycheck::ty_from_ref_in_env(&p.ty, &self.symbols);
+                if matches!(ty, juxc_tycheck::Ty::User { .. }) {
+                    if let Some(scope) = self.local_types.last_mut() {
+                        scope.insert(p.name.text.clone(), ty);
+                    }
+                }
+            }
             // Save/restore around the body so `return "lit";` inside
             // a `String`-returning fn picks up `.to_string()` while
             // tail-position emission is consulting `current_return_type`.

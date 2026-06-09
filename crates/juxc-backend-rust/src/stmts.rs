@@ -681,10 +681,37 @@ impl RustEmitter {
         }
         self.w.push_str(" {\n");
         self.w.indent_inc();
+        // Register the loop variable's element type in `local_types` for the
+        // body, so a wrapper-class element (`for (var t : todos)` over a
+        // `Vec<Todo>`) resolves `t.title` to the `t.0.borrow().title` deref
+        // instead of a bare `t.title` (rustc "no field on &Todo"). Pushed as
+        // its own scope so it doesn't leak past the loop.
+        let elem_ty = self.for_each_element_ty(&f.iter);
+        self.local_types.push(std::collections::HashMap::new());
+        if let Some(ty @ Ty::User { .. }) = &elem_ty {
+            if let Some(scope) = self.local_types.last_mut() {
+                scope.insert(f.var_name.text.clone(), ty.clone());
+            }
+        }
         self.emit_block_contents(&f.body);
+        self.local_types.pop();
         self.w.indent_dec();
         self.w.emit_indent();
         self.w.push_str("}\n");
+    }
+
+    /// The element type of a for-each iterable: the element of an array, or the
+    /// first generic argument of a `Vec<T>` / `HashSet<T>` / `List<T>` receiver.
+    /// `None` when the iterable's type wasn't recorded or carries no element
+    /// type. Drives the loop-variable [`Self::local_types`] registration above.
+    fn for_each_element_ty(&self, iter: &Expr) -> Option<Ty> {
+        match self.expr_types.get(&expr_span_of(iter)) {
+            Some(Ty::Array { element, .. }) => Some((**element).clone()),
+            Some(Ty::User { generic_args, .. }) if !generic_args.is_empty() => {
+                Some(generic_args[0].clone())
+            }
+            _ => None,
+        }
     }
 
     /// Lower `var name = init ;` to `let name = init ;` (or `let mut`
