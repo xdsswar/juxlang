@@ -284,6 +284,12 @@ pub(crate) struct Checker<'a> {
     /// Bare local names referenced anywhere in the current body (collected as
     /// `Expr::Path` leaves are walked). Pairs with [`Self::uninferable_news`].
     pub(crate) used_names: std::collections::HashSet<String>,
+    /// Bare names of polymorphic-base classes (Stage-2 virtual dispatch — see
+    /// [`crate::symbol_table::polymorphic_base_bare_names`]). Precomputed once
+    /// at construction. Drives the `E0437` field-through-base diagnostic: a
+    /// data field accessed through a base-typed reference would hit the
+    /// `Rc<dyn …Kind>` representation, which can't expose struct fields.
+    pub(crate) poly_bases: std::collections::HashSet<String>,
 }
 
 impl<'a> Checker<'a> {
@@ -301,6 +307,7 @@ impl<'a> Checker<'a> {
             in_unsafe: false,
             uninferable_news: Vec::new(),
             used_names: std::collections::HashSet::new(),
+            poly_bases: crate::symbol_table::polymorphic_base_bare_names(symbols),
         }
     }
 
@@ -518,9 +525,11 @@ impl<'a> Checker<'a> {
         // Declare each parameter into the new scope so name lookups
         // inside the body resolve.
         for param in &fn_decl.params {
+            self.check_iface_value_type(&param.ty);
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
         }
+        self.check_iface_return_type(&fn_decl.return_type);
         let saved = self.current_return.take();
         self.current_return = Some(return_type_to_ty(
             &fn_decl.return_type,
@@ -567,6 +576,14 @@ impl<'a> Checker<'a> {
                 .collect(),
         };
 
+        // Field slots are value positions — an interface-typed field lowers
+        // to a `Rc<dyn Trait>` struct member, so reject the non-dispatchable
+        // forms before the backend emits a broken field type.
+        for field in &class.fields {
+            if let Some(fty) = &field.ty {
+                self.check_iface_value_type(fty);
+            }
+        }
         for ctor in &class.constructors {
             self.check_constructor(ctor, &this_ty);
         }
@@ -640,9 +657,11 @@ impl<'a> Checker<'a> {
             self.env.add_generic_param(&tp.name.text);
         }
         for param in &method.params {
+            self.check_iface_value_type(&param.ty);
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
         }
+        self.check_iface_return_type(&method.return_type);
         let saved = self.current_return.take();
         self.current_return = Some(return_type_to_ty(
             &method.return_type,
@@ -665,6 +684,72 @@ impl<'a> Checker<'a> {
         // accept the over-broadening (no method-local generics in any
         // existing example).
         self.env.pop_scope();
+    }
+
+    /// Fire `E0435` when an interface type appears in a **value position**
+    /// (a variable / parameter / field / return slot — lowered to
+    /// `Rc<dyn Trait>`) in a form that can't be made into a working trait
+    /// object:
+    ///
+    /// - a **generic-method** interface (`<R> R map(...)`) — never object-safe,
+    ///   so always rejected; and
+    /// - a **generic interface used raw** (`Box b;` with no type argument) —
+    ///   `dyn Box` needs its argument (`dyn Box<int>`), so the raw form is
+    ///   rejected while `Box<int>` is allowed.
+    ///
+    /// The interface declaration itself stays perfectly valid — only this
+    /// dynamic-value use is restricted; it can still be implemented and called
+    /// through concrete classes. Catching it here keeps the emitted
+    /// `Rc<dyn Trait>` from leaking rustc's `E0038` / `E0107`.
+    fn check_iface_value_type(&mut self, tref: &juxc_ast::TypeRef) {
+        // Function-typed and pointer slots are never interface trait objects.
+        if tref.fn_shape.is_some() || tref.ptr_depth > 0 {
+            return;
+        }
+        let Some(seg) = tref.name.segments.last() else {
+            return;
+        };
+        let bare = seg.text.as_str();
+        match crate::symbol_table::interface_dyn_dispatch_support(self.symbols, bare) {
+            Some(Err(crate::symbol_table::DynDispatchBlock::GenericMethod(m))) => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0435_InterfaceNotDynDispatchable,
+                        format!(
+                            "interface `{bare}` can't be used as a dynamic value type — its \
+                             method `{m}` has generic type parameters, which makes the trait \
+                             not object-safe; call it through a concrete implementer instead",
+                        ),
+                    )
+                    .with_span(tref.span),
+                );
+            }
+            Some(Err(crate::symbol_table::DynDispatchBlock::GenericInterface(_)))
+                if tref.generic_args.is_empty() =>
+            {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0435_InterfaceNotDynDispatchable,
+                        format!(
+                            "generic interface `{bare}` used as a value type needs its type \
+                             argument(s) (e.g. `{bare}<int>`) — a raw `{bare}` value slot can't \
+                             be lowered to a trait object",
+                        ),
+                    )
+                    .with_span(tref.span),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// Run [`Self::check_iface_value_type`] on the `TypeRef` inside a
+    /// [`ReturnType`], if any (skips `void`).
+    fn check_iface_return_type(&mut self, rt: &ReturnType) {
+        match rt {
+            ReturnType::Type(t) | ReturnType::AsyncType(t) => self.check_iface_value_type(t),
+            ReturnType::Void => {}
+        }
     }
 
     /// If `receiver_ty` is a user class/record AND the matching
@@ -786,6 +871,12 @@ impl<'a> Checker<'a> {
     fn check_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::VarDecl(v) => {
+                // A declared interface-typed local lowers to `Rc<dyn Trait>`
+                // — reject the non-dispatchable forms before the backend
+                // emits a broken slot type.
+                if let Some(t) = &v.ty {
+                    self.check_iface_value_type(t);
+                }
                 // If both a declared type and an initializer are
                 // present, the two must be compatible. Otherwise the
                 // present one wins.
@@ -1137,6 +1228,36 @@ impl<'a> Checker<'a> {
                         Diagnostic::error(
                             code::Code::E0425_ThisInStaticContext,
                             "`this` cannot be used inside a `static` method (no receiver)",
+                        )
+                        .with_span(*span),
+                    );
+                }
+            }
+
+            Expr::Super(span) => {
+                // `super` is a receiver, not a value — like `this`, it's
+                // illegal in a `static` context (no instance), and only
+                // meaningful when the enclosing class has a superclass.
+                if self.in_static {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0425_ThisInStaticContext,
+                            "`super` cannot be used inside a `static` method (no receiver)",
+                        )
+                        .with_span(*span),
+                    );
+                } else if self
+                    .env
+                    .current_class
+                    .as_ref()
+                    .and_then(|c| self.symbols.classes.get(c))
+                    .and_then(|c| c.extends_fqn.as_ref())
+                    .is_none()
+                {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0413_UnresolvedMethod,
+                            "`super` is only valid inside a class that has a superclass",
                         )
                         .with_span(*span),
                     );
@@ -1831,6 +1952,33 @@ impl<'a> Checker<'a> {
                 if let Some((field, declaring_class)) =
                     self.symbols.lookup_field(name, field_name)
                 {
+                    // **Stage-2 (E0437): data-field access through a
+                    // polymorphic-base reference is deferred.** When the
+                    // receiver's static type is a polymorphic base, it lowers
+                    // to a `Rc<dyn …Kind>` trait object that can't expose the
+                    // underlying struct's fields. `this` (the concrete self
+                    // inside a method) and concrete (non-base) receivers are
+                    // unaffected — only an external base-typed reference hits
+                    // the trait-object representation.
+                    let recv_bare = name.rsplit('.').next().unwrap_or(name);
+                    if !matches!(f.object.as_ref(), Expr::This(_))
+                        && self.poly_bases.contains(recv_bare)
+                    {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0437_FieldThroughPolymorphicBase,
+                                format!(
+                                    "field `{field_name}` can't be accessed through a `{recv_bare}` \
+                                     reference — `{recv_bare}` is a polymorphic base, so the value is \
+                                     a dynamic-dispatch trait object that doesn't expose fields; add \
+                                     an accessor method on `{recv_bare}` (e.g. a getter) and call \
+                                     that, or hold the value at its concrete type",
+                                ),
+                            )
+                            .with_span(f.span),
+                        );
+                        return;
+                    }
                     let vis = field.visibility;
                     let declaring = declaring_class.to_string();
                     self.check_visibility(
@@ -2876,6 +3024,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::Field(f) => f.span,
         Expr::InterpString(s) => s.span,
         Expr::This(s) => *s,
+        Expr::Super(s) => *s,
         Expr::NewObject(n) => n.span,
         Expr::Switch(s) => s.span,
         Expr::Lambda(l) => l.span,
@@ -4449,6 +4598,168 @@ mod tests {
             !has(&d, code::Code::E0970_PropertyNotWritable)
                 && !has(&d, code::Code::E0972_PropertyAccessorVisibility),
             "ctor writes to restricted props should be clean: {d:?}",
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // E0435 — interface used as a non-dispatchable value type
+    // ----------------------------------------------------------------
+
+    // ----------------------------------------------------------------
+    // Stage-2 deferred-case diagnostics (E0437 / E0438)
+    // ----------------------------------------------------------------
+
+    /// Reading a data field through a polymorphic-base reference → E0437.
+    #[test]
+    fn field_through_polymorphic_base_emits_e0437() {
+        let d = run(
+            r#"
+            public class Animal { public String name; public Animal(String n){ this.name = n; } public String speak(){ return "..."; } }
+            public class Dog extends Animal { public Dog(String n){ super(n); } public String speak(){ return "woof"; } }
+            public void main() { Animal a = new Dog("Rex"); print(a.name); }
+            "#,
+        );
+        assert!(has(&d, code::Code::E0437_FieldThroughPolymorphicBase), "expected E0437: {d:?}");
+    }
+
+    /// Accessing a field on `this` (concrete self) or on a concrete subclass
+    /// reference must NOT trip E0437.
+    #[test]
+    fn field_on_this_or_concrete_no_e0437() {
+        let d = run(
+            r#"
+            public class Animal { public String name; public Animal(String n){ this.name = n; } public String who(){ return this.name; } public String speak(){ return "..."; } }
+            public class Dog extends Animal { public Dog(String n){ super(n); } public String speak(){ return "woof"; } }
+            public void main() { var d = new Dog("Rex"); print(d.name); }
+            "#,
+        );
+        assert!(!has(&d, code::Code::E0437_FieldThroughPolymorphicBase), "this/concrete field access must be clean: {d:?}");
+    }
+
+    /// A generic virtual method on a polymorphic base → E0438.
+    #[test]
+    fn generic_virtual_method_on_base_emits_e0438() {
+        let d = run(
+            r#"
+            public class Base { public <R> R pick(R x){ return x; } }
+            public class Sub extends Base {}
+            public void main() {}
+            "#,
+        );
+        assert!(has(&d, code::Code::E0438_GenericVirtualMethod), "expected E0438: {d:?}");
+    }
+
+    /// `super.method()` in a class with no superclass is rejected.
+    #[test]
+    fn super_without_superclass_is_rejected() {
+        let d = run(
+            r#"
+            public class Animal { public String speak() { return super.speak(); } }
+            public void main() {}
+            "#,
+        );
+        assert!(
+            d.iter().any(|x| x.message.contains("super")),
+            "expected a `super` diagnostic: {d:?}",
+        );
+    }
+
+    /// `super.method()` from a real override resolves cleanly (no error).
+    #[test]
+    fn super_call_from_override_is_ok() {
+        let d = run(
+            r#"
+            public class Animal { public String speak() { return "generic"; } }
+            public class Dog extends Animal {
+                public Dog() {}
+                public String speak() { return super.speak(); }
+            }
+            public void main() { var dog = new Dog(); print(dog.speak()); }
+            "#,
+        );
+        assert!(
+            !d.iter().any(|x| x.message.contains("super")),
+            "valid super.method() should be clean: {d:?}",
+        );
+    }
+
+    /// A generic method on a NON-extended (leaf) class is not a virtual
+    /// dispatch concern → no E0438.
+    #[test]
+    fn generic_method_on_leaf_no_e0438() {
+        let d = run(
+            r#"
+            public class Util { public <R> R pick(R x){ return x; } }
+            public void main() {}
+            "#,
+        );
+        assert!(!has(&d, code::Code::E0438_GenericVirtualMethod), "leaf generic method must be clean: {d:?}");
+    }
+
+    /// A generic-method interface used as a value-typed local can't be a
+    /// trait object (object safety) → E0435.
+    #[test]
+    fn generic_method_interface_value_local_emits_e0435() {
+        let d = run(
+            r#"
+            public interface Mapper { <R> R map(R input); }
+            public class Id implements Mapper { public <R> R map(R input) { return input; } }
+            public void main() { Mapper m = new Id(); }
+            "#,
+        );
+        assert!(
+            has(&d, code::Code::E0435_InterfaceNotDynDispatchable),
+            "expected E0435 for generic-method interface value: {d:?}",
+        );
+    }
+
+    /// A raw generic interface (no type argument) as a value type → E0435.
+    #[test]
+    fn raw_generic_interface_value_param_emits_e0435() {
+        let d = run(
+            r#"
+            public interface Box<T> { T get(); }
+            public void use(Box b) {}
+            public void main() {}
+            "#,
+        );
+        assert!(
+            has(&d, code::Code::E0435_InterfaceNotDynDispatchable),
+            "expected E0435 for raw generic interface value: {d:?}",
+        );
+    }
+
+    /// A generic interface WITH a concrete type argument is a working trait
+    /// object (`dyn Box<int>`) — must NOT trip E0435.
+    #[test]
+    fn concrete_generic_interface_value_is_ok() {
+        let d = run(
+            r#"
+            public interface Box<T> { T get(); }
+            public void use(Box<int> b) {}
+            public void main() {}
+            "#,
+        );
+        assert!(
+            !has(&d, code::Code::E0435_InterfaceNotDynDispatchable),
+            "Box<int> value type should be allowed: {d:?}",
+        );
+    }
+
+    /// A plain non-generic interface value type is the common, supported
+    /// case — never E0435.
+    #[test]
+    fn plain_interface_value_field_is_ok() {
+        let d = run(
+            r#"
+            public interface Shape { double area(); }
+            public class Holder { public Shape s; public Holder(Shape s) { this.s = s; } }
+            public void main() {}
+            "#,
+        );
+        assert!(
+            !has(&d, code::Code::E0435_InterfaceNotDynDispatchable),
+            "plain interface value field should be allowed: {d:?}",
         );
     }
 }

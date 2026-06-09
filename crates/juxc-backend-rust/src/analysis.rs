@@ -12,6 +12,56 @@ use juxc_ast::{
 };
 use juxc_source::Span;
 
+/// How a value must be adapted to fit an interface-typed (`Rc<dyn Trait>`)
+/// value slot in stage-1 interface dispatch. Produced by
+/// [`crate::RustEmitter::iface_coercion_to`].
+pub(crate) enum IfaceCoercion {
+    /// No interface coercion — the target isn't an interface slot, or the
+    /// source needs no adaptation.
+    None,
+    /// Source is a concrete class implementing the target interface — wrap it
+    /// in `Rc<dyn Trait>`. `clone_first` clones a reused wrapper place (cheap
+    /// `Rc` bump, preserves shared identity) before wrapping.
+    WrapClass { clone_first: bool },
+    /// Source is already an interface value (`Rc<dyn Trait>`) flowing into
+    /// another interface slot — clone the `Rc` handle (or move when fresh).
+    CloneDyn { clone_first: bool },
+}
+
+/// A conservative "is this expression a place (lvalue) that may be used
+/// again?" test — a bare variable / `this` / field / index read. Such a
+/// source must be `.clone()`d (not moved) when its value flows into an
+/// interface slot, so a later use doesn't hit a Rust move error. Calls and
+/// `new` produce fresh temporaries and can be moved.
+fn expr_is_place(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Path(_) | Expr::This(_) | Expr::Field(_) | Expr::Index(_)
+    )
+}
+
+/// Synthesize a bare, non-generic [`TypeRef`] naming the interface `bare`.
+/// Used where only the interface's *inferred* `Ty` is on hand (e.g. an
+/// assignment LHS) but the coercion helpers want a `TypeRef` target. The
+/// `span` is cosmetic — it never reaches a diagnostic from these paths.
+pub(crate) fn synth_iface_type_ref(bare: &str, span: Span) -> TypeRef {
+    TypeRef {
+        name: QualifiedName {
+            segments: vec![Ident {
+                text: bare.to_string(),
+                span,
+            }],
+            span,
+        },
+        generic_args: vec![],
+        nullable: false,
+        array_shape: None,
+        fn_shape: None,
+        ptr_depth: 0,
+        span,
+    }
+}
+
 /// Walk a function body and collect every name that appears as the
 /// target of an [`AssignStmt`].
 ///
@@ -362,7 +412,7 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
         // Leaves with no further sub-expressions:
         // - Literal, Path: source-level atoms.
         // - This: implicit-receiver token; no body to walk.
-        Expr::Literal(_) | Expr::Path(_) | Expr::This(_) => {}
+        Expr::Literal(_) | Expr::Path(_) | Expr::This(_) | Expr::Super(_) => {}
         // Walk the lambda body so a mutating call inside (e.g.
         // `xs -> xs.push(1)`) still marks the captured receiver.
         Expr::Lambda(l) => match &l.body {
@@ -476,7 +526,7 @@ fn expr_contains_await(e: &Expr) -> bool {
         // inside belongs to the closure's own async context, not the
         // surrounding block.
         Expr::Lambda(_) | Expr::MethodRef(_) => false,
-        Expr::Literal(_) | Expr::Path(_) | Expr::This(_) => false,
+        Expr::Literal(_) | Expr::Path(_) | Expr::This(_) | Expr::Super(_) => false,
     }
 }
 
@@ -1489,6 +1539,12 @@ impl crate::RustEmitter {
         else {
             return false;
         };
+        // A polymorphic base never takes the slicing `.into()` upcast — its
+        // value slots are `Rc<dyn …Kind>` and the wrap coercion
+        // (`iface_coercion_to`) handles the upcast, pre-empting this path.
+        if self.poly_base_classes.contains(target_bare) {
+            return false;
+        }
         let Some(parent_class) = self.lookup_class_by_bare_or_fqn(target_bare) else {
             return false;
         };
@@ -1568,6 +1624,101 @@ impl crate::RustEmitter {
         // predicate, which now handles both sealed (variant wrap)
         // and non-sealed (`__parent` extraction) upcasts.
         self.expr_needs_sealed_upcast_to(&param_ty, arg)
+    }
+
+    /// How an expression value must be adapted to fit an **interface-typed
+    /// value slot** (`Rc<dyn Trait>`). Stage-1 interface dispatch represents
+    /// every interface value as a clone-able `Rc<dyn Trait>` trait object;
+    /// concrete class values flowing into such a slot must be wrapped, and an
+    /// interface value flowing on must be `Rc`-cloned.
+    ///
+    /// See [`Self::iface_coercion_to`] / [`Self::emit_expr_coerced_to_iface`].
+    pub(crate) fn iface_coercion_to(
+        &self,
+        target_ty: &TypeRef,
+        expr: &Expr,
+    ) -> IfaceCoercion {
+        // Only a bare interface slot coerces here — array / nullable
+        // interface slots compose through their own wrappers.
+        if target_ty.array_shape.is_some() || target_ty.nullable {
+            return IfaceCoercion::None;
+        }
+        let Some(target_bare) = target_ty.name.segments.last().map(|s| s.text.as_str()) else {
+            return IfaceCoercion::None;
+        };
+        // The target slot is a dynamic-dispatch trait object — either an
+        // interface (`Rc<dyn Iface>`) or a **polymorphic base class**
+        // (`Rc<dyn <Name>Kind>`, Stage-2). Anything else stays concrete.
+        let target_is_iface = self.lookup_interface_by_bare_or_fqn(target_bare).is_some();
+        let target_is_polybase = self.poly_base_classes.contains(target_bare);
+        if !target_is_iface && !target_is_polybase {
+            return IfaceCoercion::None;
+        }
+        let Some(src_ty) = self.expr_types.get(&crate::exprs::expr_span_of(expr)) else {
+            return IfaceCoercion::None;
+        };
+        let juxc_tycheck::Ty::User { name, .. } = src_ty else {
+            return IfaceCoercion::None;
+        };
+        let src_bare = name.rsplit('.').next().unwrap_or(name);
+        // Already a trait-object value of the same type → clone the `Rc` handle.
+        if src_bare == target_bare {
+            return IfaceCoercion::CloneDyn {
+                clone_first: expr_is_place(expr),
+            };
+        }
+        // A concrete subtype flowing into the trait-object slot → wrap it:
+        //   - interface target: a class that *implements* the interface;
+        //   - polymorphic-base target: a class that *extends* the base.
+        // Try the inferred name as both an FQN key and a bare name (no-package).
+        let relates = if target_is_iface {
+            juxc_tycheck::ty::class_implements_interface(name, target_bare, &self.symbols)
+                || juxc_tycheck::ty::class_implements_interface(src_bare, target_bare, &self.symbols)
+        } else {
+            juxc_tycheck::ty::walk_extends_reaches(src_bare, target_bare, &self.symbols)
+        };
+        if relates {
+            return IfaceCoercion::WrapClass {
+                clone_first: self.wrapper_value_needs_clone(expr),
+            };
+        }
+        IfaceCoercion::None
+    }
+
+    /// Emit `expr` adapted into the interface value slot named by `target_ty`,
+    /// or plain [`Self::emit_expr`] when no interface coercion applies.
+    ///
+    /// - **WrapClass** → `(std::rc::Rc::new(<expr>[.clone()]) as Rc<dyn Trait>)`.
+    ///   The `as` performs the `Rc<C>` → `Rc<dyn Trait>` unsizing; a reused
+    ///   wrapper place is `.clone()`d first (a cheap `Rc` bump that preserves
+    ///   shared identity of the underlying object).
+    /// - **CloneDyn** → `<expr>[.clone()]` — already a trait object; clone the
+    ///   `Rc` handle when the source is a reused place.
+    pub(crate) fn emit_expr_coerced_to_iface(
+        &mut self,
+        target_ty: &TypeRef,
+        expr: &Expr,
+    ) {
+        match self.iface_coercion_to(target_ty, expr) {
+            IfaceCoercion::None => self.emit_expr(expr),
+            IfaceCoercion::WrapClass { clone_first } => {
+                self.w.push_str("(std::rc::Rc::new(");
+                self.emit_expr(expr);
+                if clone_first {
+                    self.w.push_str(".clone()");
+                }
+                self.w.push_str(") as ");
+                // Produces `std::rc::Rc<dyn Trait>` (value-position emission).
+                self.emit_value_type_as_rust(target_ty);
+                self.w.push(')');
+            }
+            IfaceCoercion::CloneDyn { clone_first } => {
+                self.emit_expr(expr);
+                if clone_first {
+                    self.w.push_str(".clone()");
+                }
+            }
+        }
     }
 
     /// Wrap `arg` in `Some(arg)` if the target slot wants a

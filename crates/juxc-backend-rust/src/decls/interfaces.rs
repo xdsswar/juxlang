@@ -36,6 +36,14 @@ impl RustEmitter {
         // imply `Clone` itself; implementing types pick up bounds as
         // needed on their own impls.
         self.emit_generic_params(&interface.generic_params);
+        // `: std::fmt::Debug` supertrait — interface values lower to
+        // `Rc<dyn Trait>`, which is held in `#[derive(Clone, Debug)]`
+        // structs (wrapper-class fields, holders). `dyn Trait` is only
+        // `Debug` if the trait requires it, so we make `Debug` a supertrait.
+        // Every implementer already derives `Debug` (wrapper, value, and
+        // sealed lowerings all carry `#[derive(…, Debug)]`), so the bound is
+        // always satisfiable.
+        self.w.push_str(": std::fmt::Debug");
         self.w.push_str(" {\n");
         self.w.indent_inc();
         for method in &interface.methods {
@@ -67,23 +75,22 @@ impl RustEmitter {
             }
             self.w.push_str(&method.name.text);
             self.emit_generic_params(&method.generic_params);
-            // `&mut self` — Java semantics make every `this` mutable,
-            // and an implementing class's method body may need to
-            // write `this.field` to satisfy its concrete behavior.
-            // Emitting the trait method as `&mut self` keeps the
-            // implementer's signature consistent so method
-            // resolution doesn't fall through to the trait method
-            // and recurse. The mutation analyzer (see
-            // `collect_user_mut_methods` + `body_writes_to_this`)
-            // is extended to follow the cascade: callers of trait
-            // methods on `this.field` get promoted to `&mut self`
-            // too.
-            self.w.push_str("(&mut self");
+            // `&self` — interface methods take a shared receiver so the
+            // interface can be used as a `dyn` value type (`Rc<dyn Trait>`,
+            // which only ever yields `&self`, never `&mut self`). This is
+            // sound because every implementer is a wrapper class
+            // (`compute_interface_forced_classes` force-wraps them): a
+            // `this.field` write goes through `self.0.borrow_mut()` interior
+            // mutability, so the concrete method needs no mutable receiver.
+            // The inherent method is likewise `&self` (wrapper rule), so
+            // method resolution prefers it and never recurses into the trait
+            // default.
+            self.w.push_str("(&self");
             for param in &method.params {
                 self.w.push_str(", ");
                 self.w.push_str(&param.name.text);
                 self.w.push_str(": ");
-                self.emit_type_as_rust(&param.ty);
+                self.emit_value_type_as_rust(&param.ty);
             }
             self.w.push(')');
             match &method.return_type {
@@ -172,7 +179,7 @@ impl RustEmitter {
                 }
                 self.w.push_str(&param.name.text);
                 self.w.push_str(": ");
-                self.emit_type_as_rust(&param.ty);
+                self.emit_value_type_as_rust(&param.ty);
             }
             self.w.push(')');
             match &method.return_type {

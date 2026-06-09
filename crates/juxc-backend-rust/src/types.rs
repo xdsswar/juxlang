@@ -273,6 +273,39 @@ impl RustEmitter {
                 .collect::<Vec<_>>()
                 .join("::")
         };
+        // **Interface in a value position → `Rc<dyn Trait>`.** When this
+        // name resolves to an interface AND we're emitting a value slot
+        // (variable / param / field / return — `in_value_type_position`),
+        // wrap the trait spelling in a clone-able `Rc<dyn …>` trait object
+        // so the slot can hold any implementer and dispatch dynamically.
+        // Trait-impl headers, generic bounds, and `From<>` headers don't set
+        // the flag, so they keep the bare name. Generic interfaces and
+        // generic-method interfaces are rejected at tycheck (E0435) before
+        // reaching here, so the produced `dyn` is always object-safe.
+        let last_seg = ty.name.segments.last().map(|s| s.text.as_str());
+        let value_iface = self.in_value_type_position
+            && last_seg
+                .map(|s| self.lookup_interface_by_bare_or_fqn(s).is_some())
+                .unwrap_or(false);
+        // **Polymorphic-base CLASS in a value position → `Rc<dyn <Name>Kind>`.**
+        // A base-typed slot holds any subclass and dispatches virtually through
+        // the populated `<Name>Kind` trait (Stage-2), NOT the class struct.
+        // Poly bases are non-generic (gated at classification), so there are no
+        // generic args to thread — emit the trait object and return.
+        let value_polybase = self.in_value_type_position
+            && !value_iface
+            && last_seg
+                .map(|s| self.poly_base_classes.contains(s))
+                .unwrap_or(false);
+        if value_polybase {
+            self.w.push_str("std::rc::Rc<dyn ");
+            self.w.push_str(&path);
+            self.w.push_str("Kind>");
+            return;
+        }
+        if value_iface {
+            self.w.push_str("std::rc::Rc<dyn ");
+        }
         self.w.push_str(&path);
         // Emit any generic args attached to this type — `Box<int>`
         // lowers to `Box<isize>` after the path. Recursive: each arg
@@ -292,6 +325,23 @@ impl RustEmitter {
             }
             self.w.push('>');
         }
+        if value_iface {
+            self.w.push('>');
+        }
+    }
+
+    /// Emit a [`TypeRef`] in **value position** — a variable / parameter /
+    /// field / return slot. Identical to [`Self::emit_type_as_rust`] except
+    /// an interface name lowers to `Rc<dyn Trait>` (a dynamic-dispatch trait
+    /// object) instead of its bare trait spelling. Use this at every site
+    /// where a value of the type is stored or passed; keep
+    /// [`Self::emit_type_as_rust`] for trait-impl headers, generic bounds,
+    /// and `From<>` headers where the bare name is required.
+    pub(crate) fn emit_value_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
+        let prev = self.in_value_type_position;
+        self.in_value_type_position = true;
+        self.emit_type_as_rust(ty);
+        self.in_value_type_position = prev;
     }
 
     /// Lower a type that appears as a generic argument (e.g. the
@@ -516,7 +566,9 @@ impl RustEmitter {
     /// behavior we want for `pub const`/`pub static` fields too,
     /// so the forwarding path is correct without any extra branch.
     pub(crate) fn emit_field_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
-        self.emit_type_as_rust(ty);
+        // Field slots are value positions: an interface-typed field lowers to
+        // `Rc<dyn Trait>` so the struct can store any implementer.
+        self.emit_value_type_as_rust(ty);
     }
 
     /// Like [`Self::emit_type_as_rust`] but for **return-type position**.
@@ -542,32 +594,15 @@ impl RustEmitter {
                 }
             }
         }
-        // Interface-typed return position needs `impl Trait` (or a
-        // boxed trait object) because Rust can't return a bare
-        // trait. We pick `impl Trait` — works for factories that
-        // return one concrete type per call site (the common case);
-        // factories that conditionally return different concrete
-        // impls of the same interface would need `Box<dyn Trait>`
-        // and can lift to that explicitly when needed.
-        //
-        // Generic interfaces (`Iterator<T>`) ALSO need the wrap —
-        // earlier revisions required `generic_args.is_empty()`
-        // which incorrectly skipped them.
-        if ty.array_shape.is_none() && !ty.nullable {
-            if let Some(seg) = ty.name.segments.last() {
-                let bare = seg.text.as_str();
-                let is_iface = self
-                    .lookup_interface_by_bare_or_fqn(bare)
-                    .is_some()
-                    || self.symbols.interfaces.contains_key(bare);
-                if is_iface {
-                    self.w.push_str("impl ");
-                    self.emit_type_as_rust(ty);
-                    return;
-                }
-            }
-        }
-        self.emit_type_as_rust(ty);
+        // A return slot is a value position: an interface-typed return
+        // lowers to `Rc<dyn Trait>` — the same trait-object representation a
+        // local / field / param uses, so a returned interface value flows
+        // into any of those slots without a representation mismatch. (An
+        // earlier revision emitted `impl Trait` here, which is incompatible
+        // with `Rc<dyn Trait>` value slots and can't carry two different
+        // concrete impls from one factory.) The `Rc<dyn …>` wrap itself is
+        // produced by the value-position path in `emit_type_as_rust`.
+        self.emit_value_type_as_rust(ty);
     }
 
     /// Pick a sensible Rust default value to fill a freshly-allocated

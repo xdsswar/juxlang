@@ -241,7 +241,7 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
             juxc_ast::LambdaBody::Block(b) => body_moves_path(b, name),
         },
         Expr::SizeOf(s) => expr_moves_path_at_top(&s.operand, name),
-        Expr::Literal(_) | Expr::Path(_) | Expr::This(_) => false,
+        Expr::Literal(_) | Expr::Path(_) | Expr::This(_) | Expr::Super(_) => false,
         // Method reference is a static expression — no sub-paths
         // referring to the loop variable.
         Expr::MethodRef(_) => false,
@@ -363,24 +363,44 @@ impl RustEmitter {
                     // through `.into()` so the auto-`From<Err> for
                     // Result` impl produces `Result::Err(err)`.
                     let wrap_upcast = self.return_needs_sealed_upcast(e);
+                    // Interface return slot: a class value is wrapped in
+                    // `Rc<dyn Trait>`, an interface value is `Rc`-cloned — so
+                    // a `Shape`-returning factory hands back the same
+                    // trait-object representation locals / params use.
+                    let ret_iface_ty = match &self.current_return_type {
+                        Some(juxc_ast::ReturnType::Type(t))
+                        | Some(juxc_ast::ReturnType::AsyncType(t))
+                            if !matches!(
+                                self.iface_coercion_to(t, e),
+                                crate::analysis::IfaceCoercion::None,
+                            ) =>
+                        {
+                            Some(t.clone())
+                        }
+                        _ => None,
+                    };
                     if wrap_some {
                         self.w.push_str("Some(");
                     }
-                    self.emit_expr(e);
-                    // **Wrapper-class share-on-return (§CR.4.1).** A
-                    // `return <wrapped place>;` (a `Path`/`this` local or
-                    // an `xs[i]` index read of a wrapped class) must hand
-                    // the caller a SHARED handle, not move out of the
-                    // place — append the cheap `Rc` refcount-bump clone.
-                    // Skipped under `Some(...)`/upcast wraps, which only
-                    // fire for nullable / sealed shapes (never a bare
-                    // wrapped place) — the helper would return false there
-                    // anyway, but gating keeps the emit unambiguous.
-                    if !wrap_some && !wrap_upcast && self.wrapper_value_needs_clone(e) {
-                        self.w.push_str(".clone()");
-                    }
-                    if wrap_upcast {
-                        self.w.push_str(".into()");
+                    if let Some(ret_ty) = ret_iface_ty {
+                        self.emit_expr_coerced_to_iface(&ret_ty, e);
+                    } else {
+                        self.emit_expr(e);
+                        // **Wrapper-class share-on-return (§CR.4.1).** A
+                        // `return <wrapped place>;` (a `Path`/`this` local or
+                        // an `xs[i]` index read of a wrapped class) must hand
+                        // the caller a SHARED handle, not move out of the
+                        // place — append the cheap `Rc` refcount-bump clone.
+                        // Skipped under `Some(...)`/upcast wraps, which only
+                        // fire for nullable / sealed shapes (never a bare
+                        // wrapped place) — the helper would return false there
+                        // anyway, but gating keeps the emit unambiguous.
+                        if !wrap_some && !wrap_upcast && self.wrapper_value_needs_clone(e) {
+                            self.w.push_str(".clone()");
+                        }
+                        if wrap_upcast {
+                            self.w.push_str(".into()");
+                        }
                     }
                     if wrap_some {
                         self.w.push(')');
@@ -837,7 +857,9 @@ impl RustEmitter {
         }
         if let Some(ty) = &var.ty {
             self.w.push_str(": ");
-            self.emit_type_as_rust(ty);
+            // A local's declared type is a value slot — an interface-typed
+            // local lowers to `Rc<dyn Trait>`.
+            self.emit_value_type_as_rust(ty);
         }
         if let Some(init) = &var.init {
             self.w.push_str(" = ");
@@ -849,23 +871,39 @@ impl RustEmitter {
             if wrap_some {
                 self.w.push_str("Some(");
             }
-            self.emit_expr(init);
-            // **Wrapper-class share-on-assignment (§CR.4.1).** When the
-            // init re-reads an existing wrapper-class binding
-            // (`var y = x;`, `var y = obj.child;`, `var y = this;`),
-            // the two bindings must SHARE the same instance — Java
-            // reference semantics. A bare move would invalidate the
-            // source. Append `.clone()` (a cheap `Rc` refcount bump)
-            // so both handles stay live and point at the same
-            // `RefCell`. Fresh values (`new C(...)`, a call result)
-            // are already owned handles and don't need the clone.
-            //
-            // A `Field` read of a wrapper-class field already gets its
-            // `.clone()` from `emit_field`'s class-field auto-clone, so
-            // the shared helper covers only the bare-`Path` / `this` and
-            // index-read (`var r = xs[0]`) places the field path doesn't.
-            if !wrap_some && self.wrapper_value_needs_clone(init) {
-                self.w.push_str(".clone()");
+            // **Interface value slot.** When the local's declared type is an
+            // interface (`Shape a = new Circle(...)`), the init must be
+            // adapted into the `Rc<dyn Trait>` representation — a class value
+            // is wrapped (`Rc::new(..) as Rc<dyn Trait>`), an interface value
+            // is `Rc`-cloned. The coercion helper folds in the share-clone,
+            // so we bypass the plain wrapper-clone path below for these.
+            let iface_target = var.ty.as_ref().filter(|t| {
+                !matches!(
+                    self.iface_coercion_to(t, init),
+                    crate::analysis::IfaceCoercion::None,
+                )
+            });
+            if let Some(decl_ty) = iface_target {
+                self.emit_expr_coerced_to_iface(&decl_ty.clone(), init);
+            } else {
+                self.emit_expr(init);
+                // **Wrapper-class share-on-assignment (§CR.4.1).** When the
+                // init re-reads an existing wrapper-class binding
+                // (`var y = x;`, `var y = obj.child;`, `var y = this;`),
+                // the two bindings must SHARE the same instance — Java
+                // reference semantics. A bare move would invalidate the
+                // source. Append `.clone()` (a cheap `Rc` refcount bump)
+                // so both handles stay live and point at the same
+                // `RefCell`. Fresh values (`new C(...)`, a call result)
+                // are already owned handles and don't need the clone.
+                //
+                // A `Field` read of a wrapper-class field already gets its
+                // `.clone()` from `emit_field`'s class-field auto-clone, so
+                // the shared helper covers only the bare-`Path` / `this` and
+                // index-read (`var r = xs[0]`) places the field path doesn't.
+                if !wrap_some && self.wrapper_value_needs_clone(init) {
+                    self.w.push_str(".clone()");
+                }
             }
             if wrap_some {
                 self.w.push(')');
@@ -1170,16 +1208,44 @@ impl RustEmitter {
         // compound forms (`obj.x += y`) because `Option<T> +=` has
         // no sensible meaning and rustc will surface the misuse.
         let assign_nullable = !is_compound && self.assign_target_is_nullable(&a.target);
-        self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
-        // Wrapper-class share-on-assign (§CR.4.1): when the RHS is a
-        // wrapped place (`Path`/`this` local or `xs[i]` index read), the
-        // assignment must SHARE the same instance — append the cheap `Rc`
-        // refcount-bump clone instead of moving out of the place. Skipped
-        // for compound forms (`x += y` has no wrapped-place meaning) and
-        // when the value was lifted into `Some(...)` (a nullable field
-        // never takes a bare wrapped place; the helper returns false too).
-        if !is_compound && !assign_nullable && self.wrapper_value_needs_clone(&a.value) {
-            self.w.push_str(".clone()");
+        // Interface-typed LHS (`s = new Square(...)` where `s: Shape`):
+        // coerce the RHS into the `Rc<dyn Trait>` representation instead of
+        // the plain value + wrapper-clone path. The target's interface name
+        // comes from its inferred type; we synthesize a bare `TypeRef` to
+        // feed the shared coercion helper.
+        let mut iface_tref: Option<juxc_ast::TypeRef> = None;
+        if !is_compound {
+            if let Some(juxc_tycheck::Ty::User { name, .. }) = self
+                .expr_types
+                .get(&crate::exprs::expr_span_of(&a.target))
+                .cloned()
+            {
+                let bare = name.rsplit('.').next().unwrap_or(&name).to_string();
+                if self.lookup_interface_by_bare_or_fqn(&bare).is_some() {
+                    let tref = crate::analysis::synth_iface_type_ref(&bare, a.span);
+                    if !matches!(
+                        self.iface_coercion_to(&tref, &a.value),
+                        crate::analysis::IfaceCoercion::None,
+                    ) {
+                        iface_tref = Some(tref);
+                    }
+                }
+            }
+        }
+        if let Some(tref) = iface_tref {
+            self.emit_expr_coerced_to_iface(&tref, &a.value);
+        } else {
+            self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
+            // Wrapper-class share-on-assign (§CR.4.1): when the RHS is a
+            // wrapped place (`Path`/`this` local or `xs[i]` index read), the
+            // assignment must SHARE the same instance — append the cheap `Rc`
+            // refcount-bump clone instead of moving out of the place. Skipped
+            // for compound forms (`x += y` has no wrapped-place meaning) and
+            // when the value was lifted into `Some(...)` (a nullable field
+            // never takes a bare wrapped place; the helper returns false too).
+            if !is_compound && !assign_nullable && self.wrapper_value_needs_clone(&a.value) {
+                self.w.push_str(".clone()");
+            }
         }
         self.w.push_str(";\n");
     }

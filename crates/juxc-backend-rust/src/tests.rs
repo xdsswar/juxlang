@@ -1625,12 +1625,16 @@ fn extends_lowers_to_wrapper_hierarchy() {
         rust.contains("pub struct Dog(std::rc::Rc<std::cell::RefCell<Dog_Inner>>);"),
         "Dog wrapper newtype: {rust}",
     );
-    // Upcast conversion clones the parent slice.
+    // Stage-2: `Animal` is a polymorphic base (extended by `Dog`), so the
+    // identity-losing slicing `From<Dog> for Animal` is GONE — a base-typed
+    // slot is `Rc<dyn AnimalKind>` and upcasts wrap (identity-preserving).
+    // `Dog` implements the `AnimalKind` trait (empty here — `Animal` declares
+    // no virtual methods).
     assert!(
-        rust.contains("impl From<Dog> for Animal")
-            && rust.contains("v.0.borrow().__parent.clone()"),
-        "upcast From: {rust}",
+        !rust.contains("impl From<Dog> for Animal"),
+        "no slicing From for a polymorphic base: {rust}",
     );
+    assert!(rust.contains("impl AnimalKind for Dog"), "Dog implements AnimalKind: {rust}");
     // No Deref for wrapper hierarchies.
     assert!(
         !rust.contains("impl std::ops::Deref for Dog"),
@@ -1721,12 +1725,16 @@ fn interface_lowers_to_pub_trait_with_method_signatures() {
         public void main() {}
         "#,
     );
-    assert!(rust.contains("pub trait Drawable {"), "trait header: {rust}");
-    // Interface methods emit as `&mut self` so implementer classes
-    // whose bodies write to `this.field` don't trip the trait-vs-
-    // inherent receiver mismatch.
-    assert!(rust.contains("fn draw(&mut self);"), "void method: {rust}");
-    assert!(rust.contains("fn weight(&mut self) -> isize;"), "int method: {rust}");
+    assert!(
+        rust.contains("pub trait Drawable: std::fmt::Debug {"),
+        "trait header: {rust}"
+    );
+    // Interface methods emit as `&self` so the interface can be used as a
+    // `dyn` value type (`Rc<dyn Trait>`). Implementers are forced wrapper
+    // classes, so a `this.field` write goes through interior `borrow_mut()`
+    // and needs no mutable receiver.
+    assert!(rust.contains("fn draw(&self);"), "void method: {rust}");
+    assert!(rust.contains("fn weight(&self) -> isize;"), "int method: {rust}");
 }
 
 /// A class implementing an interface gets two impl blocks:
@@ -2191,12 +2199,15 @@ fn wrapper_hierarchy_inherited_field_walks_parent() {
         rust.contains("__parent: Animal::new_inner(age)"),
         "ctor chains parent new_inner: {rust}",
     );
-    // Upcast clones the parent slice (identity-losing, by design).
+    // Stage-2: `Animal` is a polymorphic base, so the slicing `From<Dog> for
+    // Animal` is GONE — upcasts wrap into `Rc<dyn AnimalKind>` (identity-
+    // preserving). `Dog` implements `AnimalKind`, which carries the inherited
+    // virtual `birthday` (delegating to `Dog::birthday`).
     assert!(
-        rust.contains("impl From<Dog> for Animal")
-            && rust.contains("v.0.borrow().__parent.clone()"),
-        "upcast From: {rust}",
+        !rust.contains("impl From<Dog> for Animal"),
+        "no slicing From for a polymorphic base: {rust}",
     );
+    assert!(rust.contains("impl AnimalKind for Dog"), "Dog implements AnimalKind: {rust}");
     // No Deref/DerefMut on the wrapper hierarchy.
     assert!(
         !rust.contains("impl std::ops::Deref for Dog")

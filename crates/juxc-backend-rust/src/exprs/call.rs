@@ -172,6 +172,29 @@ impl RustEmitter {
     /// `println!(…)`. Every other callee is emitted verbatim (the
     /// resolver guarantees the name exists).
     pub(crate) fn emit_call(&mut self, call: &CallExpr) {
+        // `super.method(args)` (§6.9.4) — a STATIC call to the nearest
+        // concrete ancestor's version of `method`, bypassing virtual dispatch
+        // for this one call. We emit `<self>.__jux_super_<method>(args)`, a
+        // per-class shim carrying the ancestor's body specialized to this
+        // class (emitted by `emit_super_shims`). Other (virtual) calls inside
+        // that body still dispatch to the subclass, matching Java.
+        if let Expr::Field(f) = &*call.callee {
+            if matches!(f.object.as_ref(), Expr::Super(_)) {
+                let alias = self.this_alias.as_deref().unwrap_or("self").to_string();
+                self.w.push_str(&alias);
+                self.w.push_str(".__jux_super_");
+                self.w.push_str(&f.field.text);
+                self.w.push('(');
+                for (i, arg) in call.args.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str(", ");
+                    }
+                    self.emit_expr(arg);
+                }
+                self.w.push(')');
+                return;
+            }
+        }
         // Recognize a single-segment path `print` for the built-in.
         if let Expr::Path(qn) = &*call.callee {
             if qn.segments.len() == 1 && qn.segments[0].text == "print" {
@@ -551,6 +574,17 @@ impl RustEmitter {
                             if i > 0 {
                                 self.w.push_str(", ");
                             }
+                            // Interface-typed param slot: wrap a class value in
+                            // `Rc<dyn Trait>` / clone a dyn handle.
+                            if let Some(pty) = self.callee_param_type(&call.callee, i) {
+                                if !matches!(
+                                    self.iface_coercion_to(&pty, arg),
+                                    crate::analysis::IfaceCoercion::None,
+                                ) {
+                                    self.emit_expr_coerced_to_iface(&pty, arg);
+                                    continue;
+                                }
+                            }
                             let nullable = self.callee_param_is_nullable(&call.callee, i);
                             let upcast = self.arg_needs_sealed_upcast(&call.callee, i, arg);
                             // Foreign by-ref param (`&str`, …): re-attach the
@@ -627,6 +661,18 @@ impl RustEmitter {
         self.emitting_format_arg = false;
         for (i, arg) in call.args.iter().enumerate() {
             if i > 0 { self.w.push_str(", "); }
+            // Interface-typed param slot: wrap a class value in `Rc<dyn
+            // Trait>` / clone a dyn handle, before the sealed/nullable/by-ref
+            // paths (which never apply to an interface value slot).
+            if let Some(pty) = self.callee_param_type(&call.callee, i) {
+                if !matches!(
+                    self.iface_coercion_to(&pty, arg),
+                    crate::analysis::IfaceCoercion::None,
+                ) {
+                    self.emit_expr_coerced_to_iface(&pty, arg);
+                    continue;
+                }
+            }
             let nullable = self.callee_param_is_nullable(&call.callee, i);
             let upcast = self.arg_needs_sealed_upcast(&call.callee, i, arg);
             // §G.9.2: a borrowed parameter (`&T`) of an external method gets the

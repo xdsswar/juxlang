@@ -1058,18 +1058,30 @@ pub fn is_subtype(child: &Ty, parent: &Ty, symbols: &SymbolTable) -> bool {
             // child side. Each hop substitutes through the
             // extends-clause's generic args (composed) until we
             // either hit the parent or run out of chain.
-            walk_extends_to(cn, ca, pn, symbols).map_or(false, |composed_args| {
+            if let Some(composed_args) = walk_extends_to(cn, ca, pn, symbols) {
                 if pa.is_empty() {
                     return true;
                 }
                 if composed_args.len() != pa.len() {
                     return false;
                 }
-                composed_args
+                return composed_args
                     .iter()
                     .zip(pa.iter())
-                    .all(|(x, y)| is_subtype(x, y, symbols))
-            })
+                    .all(|(x, y)| is_subtype(x, y, symbols));
+            }
+            // Not on the extends chain — `pn` may be an interface that
+            // `cn` implements (directly, transitively through
+            // interface-extends, or via a superclass's `implements`).
+            // Generic interfaces as value types are deferred for stage-1
+            // dispatch (E0435), so the relation is keyed on the bare
+            // interface name and generic args aren't tracked here.
+            if crate::symbol_table::resolve_interface(symbols, bare_type_name(pn)).is_some()
+                && class_implements_interface(cn, pn, symbols)
+            {
+                return true;
+            }
+            false
         }
         (
             Ty::Array { element: e1, kind: k1 },
@@ -1118,6 +1130,80 @@ pub fn walk_extends_reaches(
         }
         current = symbols.classes.get(parent_name);
         depth += 1;
+    }
+    false
+}
+
+/// The bare (last-segment) form of a possibly-qualified type name —
+/// `xss.geom.Shape` → `Shape`. Class `implements` / interface `extends`
+/// `TypeRef`s aren't FQN-resolved (unlike `extends_fqn`), so the interface
+/// subtype relation is keyed on the written name's last segment.
+fn bare_type_name(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
+}
+
+/// True iff class `child_name` — or any of its superclasses — implements
+/// interface `target_iface`, following interface-extends chains
+/// transitively (`class C implements A`, `interface A extends B` ⟹
+/// `C <: B`). Matches on bare names (see [`bare_type_name`]).
+///
+/// Generic args aren't tracked: stage-1 interface dispatch defers generic
+/// interfaces as value types (E0435), so bare-name reachability is exactly
+/// what the subtype relation needs.
+pub fn class_implements_interface(
+    child_name: &str,
+    target_iface: &str,
+    symbols: &SymbolTable,
+) -> bool {
+    let target = bare_type_name(target_iface);
+    let mut cursor = symbols.classes.get(child_name);
+    let mut depth = 0usize;
+    while let Some(class) = cursor {
+        if depth > 64 {
+            return false;
+        }
+        for iface_ref in &class.implements {
+            if let Some(seg) = iface_ref.name.segments.last() {
+                if interface_extends_reaches(&seg.text, target, symbols) {
+                    return true;
+                }
+            }
+        }
+        // Climb to the superclass — a class inherits its parents'
+        // `implements` obligations, so an inherited interface counts.
+        let parent: Option<&str> = class.extends_fqn.as_deref().or_else(|| {
+            class
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+        });
+        cursor = parent.and_then(|p| symbols.classes.get(p));
+        depth += 1;
+    }
+    false
+}
+
+/// True iff interface `iface_name` is, or transitively `extends`, the
+/// interface named `target`. Walks the `InterfaceSig::extends` graph with
+/// a visited-set guard against cyclic/diamond interface hierarchies.
+fn interface_extends_reaches(iface_name: &str, target: &str, symbols: &SymbolTable) -> bool {
+    let mut stack = vec![iface_name.to_string()];
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    while let Some(name) = stack.pop() {
+        let bare = bare_type_name(&name).to_string();
+        if bare == target {
+            return true;
+        }
+        if !seen.insert(bare.clone()) {
+            continue;
+        }
+        if let Some(iface) = crate::symbol_table::resolve_interface(symbols, &bare) {
+            for parent in &iface.extends {
+                if let Some(seg) = parent.name.segments.last() {
+                    stack.push(seg.text.clone());
+                }
+            }
+        }
     }
     false
 }

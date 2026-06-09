@@ -87,6 +87,7 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             Ty::Unknown
         }
         Expr::This(_) => infer_this(env),
+        Expr::Super(_) => infer_super(env, symbols),
         Expr::Field(f) => infer_field(f, env, symbols),
         Expr::Index(i) => infer_index(i, env, symbols),
         Expr::Call(c) => infer_call(c, env, symbols),
@@ -220,6 +221,26 @@ fn infer_this(env: &TypeEnv) -> Ty {
                 generic_args,
             }
         }
+        None => Ty::Unknown,
+    }
+}
+
+/// Infer the type of `super` — the **superclass** of the enclosing class
+/// (§6.9.4). A `super.method(args)` call then resolves the method on the
+/// parent type via the ordinary call-inference path, which is exactly the
+/// static-dispatch semantics `super` requires: it picks the nearest ancestor
+/// definition regardless of the current class's override. `Unknown` outside a
+/// class or when the class has no superclass (a bare `super` there is rejected
+/// by the checker).
+fn infer_super(env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    let Some(current) = &env.current_class else {
+        return Ty::Unknown;
+    };
+    match symbols.classes.get(current).and_then(|c| c.extends_fqn.clone()) {
+        Some(parent_fqn) => Ty::User {
+            name: parent_fqn,
+            generic_args: Vec::new(),
+        },
         None => Ty::Unknown,
     }
 }

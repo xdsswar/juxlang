@@ -111,7 +111,7 @@ impl RustEmitter {
             }
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
-            self.emit_type_as_rust(&lifted_param_tys[i]);
+            self.emit_value_type_as_rust(&lifted_param_tys[i]);
         }
         self.w.push(')');
 
@@ -292,7 +292,27 @@ impl RustEmitter {
                 let wrap_some = self.return_wants_some_wrap(expr);
                 let wrap_upcast = self.return_needs_sealed_upcast(expr);
                 let is_switch = matches!(expr, juxc_ast::Expr::Switch(_));
+                // Interface return slot — same coercion the non-tail `return`
+                // arm applies: wrap a class value in `Rc<dyn Trait>` / clone a
+                // dyn handle. Mirrored here so trailing-return elision doesn't
+                // drop the coercion.
+                let ret_iface_ty = match &self.current_return_type {
+                    Some(ReturnType::Type(t)) | Some(ReturnType::AsyncType(t))
+                        if !matches!(
+                            self.iface_coercion_to(t, expr),
+                            crate::analysis::IfaceCoercion::None,
+                        ) =>
+                    {
+                        Some(t.clone())
+                    }
+                    _ => None,
+                };
                 self.w.emit_indent();
+                if let Some(ret_ty) = ret_iface_ty {
+                    self.emit_expr_coerced_to_iface(&ret_ty, expr);
+                    self.w.push('\n');
+                    return;
+                }
                 if wrap_some && !is_switch {
                     self.w.push_str("Some(");
                 }
