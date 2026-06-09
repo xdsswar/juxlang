@@ -231,16 +231,22 @@ impl RustEmitter {
                     .last()
                     .map(|s| s.text.as_str())
                 {
-                    self.w.emit_indent();
-                    self.w.push_str("impl From<");
-                    self.w.push_str(&class_decl.name.text);
-                    self.emit_generic_params_as_args(&class_decl.generic_params);
-                    self.w.push_str("> for ");
-                    self.w.push_str(parent_bare);
-                    self.w.push_str(" { fn from(v: ");
-                    self.w.push_str(&class_decl.name.text);
-                    self.emit_generic_params_as_args(&class_decl.generic_params);
-                    self.w.push_str(") -> Self { v.__parent } }\n");
+                    // Skip the slicing upcast for a **polymorphic base**: a
+                    // `Parent`-typed slot is now `Rc<dyn ParentKind>`, and the
+                    // upcast wraps (`Rc::new(child) as Rc<dyn ParentKind>`,
+                    // identity-preserving) instead of extracting `__parent`.
+                    if !self.poly_base_classes.contains(parent_bare) {
+                        self.w.emit_indent();
+                        self.w.push_str("impl From<");
+                        self.w.push_str(&class_decl.name.text);
+                        self.emit_generic_params_as_args(&class_decl.generic_params);
+                        self.w.push_str("> for ");
+                        self.w.push_str(parent_bare);
+                        self.w.push_str(" { fn from(v: ");
+                        self.w.push_str(&class_decl.name.text);
+                        self.emit_generic_params_as_args(&class_decl.generic_params);
+                        self.w.push_str(") -> Self { v.__parent } }\n");
+                    }
                 }
             }
         }
@@ -682,6 +688,10 @@ impl RustEmitter {
         if !class_decl.is_abstract {
             self.emit_inherited_wrapper_methods(class_decl);
         }
+        // `super.method()` shims (§6.9.4): for each method this class
+        // overrides, emit the nearest concrete ancestor's body under
+        // `__jux_super_<m>` so a `super.m()` call dispatches statically to it.
+        self.emit_super_shims(class_decl);
         for op in &class_decl.operators {
             self.emit_operator_as_method(op);
         }
@@ -702,7 +712,12 @@ impl RustEmitter {
         // is itself a wrapper class (the only shape `__parent` embeds).
         if let Some(parent_ty) = &class_decl.extends {
             if let Some(parent_bare) = parent_ty.name.segments.last().map(|s| s.text.as_str()) {
-                if self.wrapper_classes.contains(parent_bare) {
+                // A polymorphic base uses `Rc<dyn ParentKind>` dispatch — the
+                // identity-preserving wrap coercion replaces this slicing
+                // `From`, so don't emit it (it would be dead, confusing code).
+                if self.wrapper_classes.contains(parent_bare)
+                    && !self.poly_base_classes.contains(parent_bare)
+                {
                     // `impl[<T: Clone>] From<Child<T>> for Parent<pargs> { … }`.
                     // The child's own generic params (with the Clone bound)
                     // travel onto the impl header and onto `Child<T>`; the
@@ -911,6 +926,91 @@ impl RustEmitter {
         }
     }
 
+    /// Emit a `fn __jux_super_<m>(&self, …)` inherent shim for every method
+    /// `m` this class **overrides** that has a concrete version in an ancestor
+    /// (§6.9.4). The shim carries the *nearest* concrete ancestor's body,
+    /// emitted in THIS class's context (so `this.field` walks `__parent` and
+    /// virtual calls inside it still dispatch to the subclass), under the
+    /// reserved `__jux_super_<m>` name. A `super.m(args)` call (see
+    /// `emit_call`) lowers to `self.__jux_super_<m>(args)`, giving Java's
+    /// static-`super` semantics. No-op for classes that override nothing.
+    fn emit_super_shims(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        // Instance methods (with bodies) the class declares — each is a
+        // potential `super.<m>()` target.
+        let overridden: std::collections::HashSet<String> = class_decl
+            .methods
+            .iter()
+            .filter(|m| {
+                m.body.is_some()
+                    && !m
+                        .modifiers
+                        .iter()
+                        .any(|mo| matches!(mo, juxc_ast::FnModifier::Static))
+            })
+            .map(|m| m.name.text.clone())
+            .collect();
+        if overridden.is_empty() {
+            return;
+        }
+        // Walk ancestors (nearest first), composing the generic substitution
+        // exactly like `emit_inherited_wrapper_methods`. The first concrete
+        // version of each overridden method wins (that's what `super` names).
+        let mut shimmed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut cursor: Option<juxc_ast::TypeRef> = class_decl.extends.clone();
+        let mut subst: std::collections::HashMap<String, juxc_ast::TypeRef> =
+            std::collections::HashMap::new();
+        while let Some(parent_ref) = cursor {
+            let Some(seg) = parent_ref.name.segments.first() else { break };
+            let bare = seg.text.as_str();
+            let parent_decl: Option<juxc_ast::ClassDecl> = self
+                .class_asts
+                .get(bare)
+                .cloned()
+                .or_else(|| {
+                    self.class_asts
+                        .iter()
+                        .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+                        .map(|(_, v)| v.clone())
+                });
+            let Some(parent) = parent_decl else { break };
+            for (param, arg) in parent
+                .generic_params
+                .iter()
+                .zip(parent_ref.generic_args.iter())
+            {
+                if let juxc_ast::GenericArg::Type(arg_ty) = arg {
+                    let resolved = substitute_type_ref(arg_ty, &subst);
+                    subst.insert(param.name.text.clone(), resolved);
+                }
+            }
+            for m in &parent.methods {
+                if !overridden.contains(&m.name.text) || shimmed.contains(&m.name.text) {
+                    continue;
+                }
+                if m.body.is_none()
+                    || m.modifiers
+                        .iter()
+                        .any(|mo| matches!(mo, juxc_ast::FnModifier::Static))
+                {
+                    // Abstract / static here — keep walking for a concrete one.
+                    continue;
+                }
+                shimmed.insert(m.name.text.clone());
+                let mut renamed = if subst.is_empty() {
+                    m.clone()
+                } else {
+                    substitute_fn_signature(m, &subst)
+                };
+                renamed.name = juxc_ast::Ident {
+                    text: format!("__jux_super_{}", m.name.text),
+                    span: m.name.span,
+                };
+                self.emit_method(&renamed);
+            }
+            cursor = parent.extends.clone();
+        }
+    }
+
     /// Compute the set of this class's generic type-parameter names
     /// that get **formatted** somewhere in its own body — i.e. a value
     /// of that parameter's type flows into a `$"…${…}…"` interpolation,
@@ -1112,13 +1212,174 @@ impl RustEmitter {
         }
     }
 
+    /// The bare name of `class_bare`'s direct `extends` parent, if any.
+    /// Prefers tycheck's resolved `extends_fqn` (cross-package safe), falling
+    /// back to the source `extends` clause's last segment.
+    fn direct_parent_bare(&self, class_bare: &str) -> Option<String> {
+        let s = self.lookup_class_by_bare_or_fqn(class_bare)?;
+        s.extends_fqn
+            .as_deref()
+            .map(|f| f.rsplit('.').next().unwrap_or(f).to_string())
+            .or_else(|| {
+                s.extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|x| x.text.clone()))
+            })
+    }
+
+    /// True when `class_bare` participates in a polymorphic-base hierarchy —
+    /// it is itself a polymorphic base, or one of its ancestors is. Such a
+    /// class needs a **populated** `<Name>Kind` trait + delegating impls so
+    /// virtual dispatch works; every other class keeps the empty marker.
+    fn is_dispatch_relevant_class(&self, class_bare: &str) -> bool {
+        if self.poly_base_classes.contains(class_bare) {
+            return true;
+        }
+        let mut cursor = self.direct_parent_bare(class_bare);
+        let mut depth = 0usize;
+        while let Some(name) = cursor {
+            if depth > 64 {
+                return false;
+            }
+            if self.poly_base_classes.contains(&name) {
+                return true;
+            }
+            cursor = self.direct_parent_bare(&name);
+            depth += 1;
+        }
+        false
+    }
+
+    /// True if any strict ancestor of `class_bare` declares a method named
+    /// `method`. Used to decide which methods a class *introduces* (an
+    /// override re-declares an ancestor's method, so it belongs on the
+    /// introducing ancestor's `Kind` trait, not the override's).
+    fn ancestor_declares_method(&self, class_bare: &str, method: &str) -> bool {
+        let mut cursor = self.direct_parent_bare(class_bare);
+        let mut depth = 0usize;
+        while let Some(name) = cursor {
+            if depth > 64 {
+                return false;
+            }
+            if let Some(s) = self.lookup_class_by_bare_or_fqn(&name) {
+                if s.methods.contains_key(method) {
+                    return true;
+                }
+            }
+            cursor = self.direct_parent_bare(&name);
+            depth += 1;
+        }
+        false
+    }
+
+    /// The **introduced virtual methods** of `class_bare` — public/protected,
+    /// non-static instance methods it declares that no ancestor declares.
+    /// These belong on its own `<Name>Kind` trait (`final` is included — still
+    /// callable through a base ref; `static`/`private` are excluded — not
+    /// virtual). Sorted by name for deterministic output.
+    fn class_introduced_virtual_methods(&self, class_bare: &str) -> Vec<(String, MethodSig)> {
+        let Some(sig) = self.lookup_class_by_bare_or_fqn(class_bare) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, MethodSig)> = sig
+            .methods
+            .iter()
+            .filter(|(_, m)| {
+                !m.is_static
+                    && matches!(
+                        m.visibility,
+                        juxc_ast::Visibility::Public | juxc_ast::Visibility::Protected
+                    )
+            })
+            .filter(|(name, _)| !self.ancestor_declares_method(class_bare, name))
+            .map(|(n, m)| (n.clone(), m.clone()))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// Emit a `<Name>Kind` trait method *signature* from a [`MethodSig`]:
+    /// `fn name(&self, p: T, …) -> R;` (or `async fn …`). Param / return types
+    /// go through the value-position emitters so an interface or
+    /// polymorphic-base type renders as `Rc<dyn …>`, matching the inherent
+    /// method's signature exactly.
+    fn emit_kind_trait_method_sig(&mut self, name: &str, sig: &MethodSig) {
+        self.w.emit_indent();
+        let is_async = matches!(sig.return_type, ReturnType::AsyncType(_));
+        self.w.push_str(if is_async { "async fn " } else { "fn " });
+        self.w.push_str(name);
+        self.w.push_str("(&self");
+        for p in &sig.params {
+            self.w.push_str(", ");
+            self.w.push_str(&p.name);
+            self.w.push_str(": ");
+            self.emit_value_type_as_rust(&p.ty);
+        }
+        self.w.push(')');
+        match &sig.return_type {
+            ReturnType::Void => {}
+            ReturnType::Type(t) | ReturnType::AsyncType(t) => {
+                self.w.push_str(" -> ");
+                self.emit_return_type_as_rust(t);
+            }
+        }
+        self.w.push_str(";\n");
+    }
+
+    /// Emit a delegating `<Name>Kind` impl method that forwards to the
+    /// implementing class's inherent method:
+    /// `fn name(&self, …) -> R { Class::name(self, …) }`. The inherent always
+    /// exists — the class either overrides the method or the inherited-method
+    /// inlining pass copied the ancestor body into its inherent impl. Naming
+    /// the inherent path explicitly (`Class::name`) resolves ahead of this
+    /// trait method, so it never recurses.
+    fn emit_kind_delegating_method(&mut self, recv_class_bare: &str, name: &str, sig: &MethodSig) {
+        self.w.emit_indent();
+        let is_async = matches!(sig.return_type, ReturnType::AsyncType(_));
+        self.w.push_str(if is_async { "async fn " } else { "fn " });
+        self.w.push_str(name);
+        self.w.push_str("(&self");
+        for p in &sig.params {
+            self.w.push_str(", ");
+            self.w.push_str(&p.name);
+            self.w.push_str(": ");
+            self.emit_value_type_as_rust(&p.ty);
+        }
+        self.w.push(')');
+        match &sig.return_type {
+            ReturnType::Void => {}
+            ReturnType::Type(t) | ReturnType::AsyncType(t) => {
+                self.w.push_str(" -> ");
+                self.emit_return_type_as_rust(t);
+            }
+        }
+        self.w.push_str(" { ");
+        self.w.push_str(recv_class_bare);
+        self.w.push_str("::");
+        self.w.push_str(name);
+        self.w.push_str("(self");
+        for p in &sig.params {
+            self.w.push_str(", ");
+            self.w.push_str(&p.name);
+        }
+        self.w.push(')');
+        if is_async {
+            self.w.push_str(".await");
+        }
+        self.w.push_str(" }\n");
+    }
+
     /// Emit a class's marker trait and the transitive marker impls
-    /// covering its parent chain. Marker traits are empty (`{}`) —
-    /// they exist purely to let generic bounds reference Jux classes
-    /// in a way Rust's type system accepts. The user can't call
-    /// class-defined methods on a marker-bounded `T` (Phase-1
-    /// limitation); to expose methods, combine the class bound with an
-    /// interface that re-declares them.
+    /// covering its parent chain.
+    ///
+    /// For an ordinary class the trait is **empty** (`{}`) — it exists purely
+    /// to let generic bounds reference Jux classes in a way Rust's type system
+    /// accepts. For a **dispatch-relevant** class (a polymorphic base or a
+    /// subclass of one — see [`Self::is_dispatch_relevant_class`]) the trait is
+    /// **populated** with the base's virtual method signatures and a supertrait
+    /// chain mirroring `extends`, and each `impl <Ancestor>Kind for <Child>`
+    /// carries delegating bodies so a `Rc<dyn <Base>Kind>` value dispatches to
+    /// the concrete override (Stage-2 virtual dispatch).
     pub(crate) fn emit_class_marker_trait(&mut self, class_decl: &juxc_ast::ClassDecl) {
         // (Migrated to Writer indent-aware API)
         // pub trait <Name>Kind: std::fmt::Debug {} — no `Clone`
@@ -1136,76 +1397,139 @@ impl RustEmitter {
         // without a "doesn't implement Debug" error. `Debug` is
         // object-safe (no `Self: Sized`), so the trait stays usable
         // as a trait object.
+        let class_bare = class_decl.name.text.clone();
+        let relevant = self.is_dispatch_relevant_class(&class_bare);
+        let c_is_poly = self.poly_base_classes.contains(&class_bare);
+
+        // --- `trait <Name>Kind: <supertrait> { <method sigs?> }` ---
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("trait ");
-        self.w.push_str(&class_decl.name.text);
-        self.w.push_str("Kind: std::fmt::Debug {}\n");
-        // impl<T: Clone, …> <Name>Kind for <Name><T, …> {}
-        //
-        // The class's own generic params (with their full bound list)
-        // travel onto the marker impl so `<T: Clone>`-style traits
-        // satisfy when the class is generic. Without this, an
-        // `impl BoxKind for Box<T>` would fail to derive Clone because
-        // `Box<T>` only Clones when `T: Clone`.
-        self.w.emit_indent();
-        self.w.push_str("impl");
-        self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
-        self.w.push(' ');
-        self.w.push_str(&class_decl.name.text);
-        self.w.push_str("Kind for ");
-        self.w.push_str(&class_decl.name.text);
-        self.emit_generic_params_as_args(&class_decl.generic_params);
-        self.w.push_str(" {}\n");
+        self.w.push_str(&class_bare);
+        self.w.push_str("Kind: ");
+        // Supertrait: the parent's `Kind` when the parent is itself a
+        // polymorphic base (so `dyn ChildKind` can reach inherited methods);
+        // `std::fmt::Debug` at the root of the chain (reachable transitively
+        // either way, so `dyn …Kind` containers still derive `Debug`).
+        let parent_super: Option<String> = if relevant {
+            self.direct_parent_bare(&class_bare)
+                .filter(|p| self.poly_base_classes.contains(p))
+        } else {
+            None
+        };
+        if let Some(parent) = &parent_super {
+            self.w.push_str(parent);
+            self.w.push_str("Kind");
+        } else {
+            self.w.push_str("std::fmt::Debug");
+        }
+        let own_methods = if relevant && c_is_poly {
+            self.class_introduced_virtual_methods(&class_bare)
+        } else {
+            Vec::new()
+        };
+        if own_methods.is_empty() {
+            self.w.push_str(" {}\n");
+        } else {
+            self.w.push_str(" {\n");
+            self.w.indent_inc();
+            for (name, sig) in &own_methods {
+                self.emit_kind_trait_method_sig(name, sig);
+            }
+            self.w.indent_dec();
+            self.w.emit_indent();
+            self.w.push_str("}\n");
+        }
 
-        // Walk the ancestor chain using tycheck's pre-resolved
-        // `extends_fqn` so cross-package extends find the right
-        // parent ClassSig. For each ancestor we emit
-        //   `impl <ancestor-marker-path> for <Child> {}`
-        // where the marker path is `crate::a::b::AncestorKind` if
-        // the ancestor lives in a different package, or just
-        // `AncestorKind` for same-package (since the parent's mod
-        // has already brought it into scope via the surrounding
-        // `pub mod` nest).
-        let child_fqn = self.classsig_lookup_fqn(&class_decl.name.text);
-        let child_pkg = child_fqn
-            .as_deref()
-            .and_then(crate::backend_fqn::fqn_package)
-            .unwrap_or("");
-        let mut cursor_fqn: Option<String> = child_fqn
-            .as_deref()
-            .and_then(|f| self.symbols.classes.get(f))
-            .and_then(|c| c.extends_fqn.clone());
-        while let Some(ancestor_fqn) = cursor_fqn.clone() {
-            let ancestor_bare = crate::backend_fqn::fqn_bare(&ancestor_fqn);
-            let ancestor_pkg = crate::backend_fqn::fqn_package(&ancestor_fqn).unwrap_or("");
-
+        // --- impls ---
+        // A dispatch-relevant ABSTRACT class provides no concrete bodies, so it
+        // emits NO `impl …Kind for Self` blocks (its populated trait's required
+        // methods are satisfied by each concrete subclass instead). Every other
+        // class emits its self + ancestor impls — empty markers, or delegating
+        // bodies where the implemented trait is populated.
+        let emit_impls = !(relevant && class_decl.is_abstract);
+        if emit_impls {
+            // `impl[<T: Clone…>] <Name>Kind for <Name>[<T…>] { … }`. The class's
+            // own generic params (with bounds) travel onto the impl so a
+            // generic class's marker still satisfies (`Box<T>` only Clones when
+            // `T: Clone`).
             self.w.emit_indent();
             self.w.push_str("impl");
             self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
             self.w.push(' ');
-            if !ancestor_pkg.is_empty() && ancestor_pkg != child_pkg {
-                // Different package — anchor the marker-trait path at
-                // the crate root so it resolves through the
-                // workspace's module nest.
-                self.w.push_str("crate::");
-                for seg in ancestor_pkg.split('.') {
-                    self.w.push_str(seg);
-                    self.w.push_str("::");
-                }
-            }
-            self.w.push_str(ancestor_bare);
+            self.w.push_str(&class_bare);
             self.w.push_str("Kind for ");
-            self.w.push_str(&class_decl.name.text);
+            self.w.push_str(&class_bare);
             self.emit_generic_params_as_args(&class_decl.generic_params);
-            self.w.push_str(" {}\n");
+            if own_methods.is_empty() {
+                self.w.push_str(" {}\n");
+            } else {
+                self.w.push_str(" {\n");
+                self.w.indent_inc();
+                for (name, sig) in &own_methods {
+                    self.emit_kind_delegating_method(&class_bare, name, sig);
+                }
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push_str("}\n");
+            }
 
-            // Step up the chain.
-            cursor_fqn = self
-                .symbols
-                .classes
-                .get(&ancestor_fqn)
+            // Walk the ancestor chain via tycheck's pre-resolved `extends_fqn`
+            // (cross-package safe). For each ancestor emit
+            // `impl <ancestor-marker-path> for <Child> { … }`, populated with
+            // delegating bodies when the ancestor is a polymorphic base.
+            let child_fqn = self.classsig_lookup_fqn(&class_bare);
+            let child_pkg = child_fqn
+                .as_deref()
+                .and_then(crate::backend_fqn::fqn_package)
+                .unwrap_or("");
+            let mut cursor_fqn: Option<String> = child_fqn
+                .as_deref()
+                .and_then(|f| self.symbols.classes.get(f))
                 .and_then(|c| c.extends_fqn.clone());
+            while let Some(ancestor_fqn) = cursor_fqn.clone() {
+                let ancestor_bare = crate::backend_fqn::fqn_bare(&ancestor_fqn).to_string();
+                let ancestor_pkg = crate::backend_fqn::fqn_package(&ancestor_fqn).unwrap_or("");
+
+                self.w.emit_indent();
+                self.w.push_str("impl");
+                self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+                self.w.push(' ');
+                if !ancestor_pkg.is_empty() && ancestor_pkg != child_pkg {
+                    self.w.push_str("crate::");
+                    for seg in ancestor_pkg.split('.') {
+                        self.w.push_str(seg);
+                        self.w.push_str("::");
+                    }
+                }
+                self.w.push_str(&ancestor_bare);
+                self.w.push_str("Kind for ");
+                self.w.push_str(&class_bare);
+                self.emit_generic_params_as_args(&class_decl.generic_params);
+                let anc_methods = if self.poly_base_classes.contains(&ancestor_bare) {
+                    self.class_introduced_virtual_methods(&ancestor_bare)
+                } else {
+                    Vec::new()
+                };
+                if anc_methods.is_empty() {
+                    self.w.push_str(" {}\n");
+                } else {
+                    self.w.push_str(" {\n");
+                    self.w.indent_inc();
+                    for (name, sig) in &anc_methods {
+                        self.emit_kind_delegating_method(&class_bare, name, sig);
+                    }
+                    self.w.indent_dec();
+                    self.w.emit_indent();
+                    self.w.push_str("}\n");
+                }
+
+                cursor_fqn = self
+                    .symbols
+                    .classes
+                    .get(&ancestor_fqn)
+                    .and_then(|c| c.extends_fqn.clone());
+            }
         }
         self.w.newline();
     }
@@ -1485,12 +1809,15 @@ impl RustEmitter {
                 }
                 self.w.push_str("fn ");
                 self.w.push_str(method_name);
-                // Match the interface's declared receiver: always
-                // `&mut self` — matches the trait method's
-                // signature so an inherent `&mut self` method
-                // doesn't recurse through the trait when the
-                // rollup body says `self.method(args)`.
-                self.w.push_str("(&mut self");
+                // Match the interface's declared receiver: `&self`
+                // (stage-1 dispatch). The implementer is a forced wrapper
+                // class whose inherent method is also `&self` (mutation via
+                // interior `borrow_mut()`), and the delegating body names
+                // the inherent path explicitly (`ClassName::method(self,
+                // …)`), which resolves to the inherent impl ahead of this
+                // trait method — so `&self` here neither recurses nor needs
+                // a mutable receiver.
+                self.w.push_str("(&self");
                 // `MethodSig.params` is `Vec<ParamSig>`; ParamSig
                 // carries `name: String` (not `Ident`) and `ty: TypeRef`.
                 // Substituting the interface's type params with the
@@ -1502,7 +1829,10 @@ impl RustEmitter {
                     self.w.push_str(&param.name);
                     self.w.push_str(": ");
                     let subst = substitute_type_ref(&param.ty, &type_subst);
-                    self.emit_type_as_rust(&subst);
+                    // Value position, and it must match the trait method's
+                    // param type exactly — both render an interface param as
+                    // `Rc<dyn Trait>`.
+                    self.emit_value_type_as_rust(&subst);
                 }
                 self.w.push(')');
                 match &method.return_type {
@@ -1568,13 +1898,12 @@ impl RustEmitter {
                     _ => {
                         // Inherent on this class — emit as an
                         // explicit `ClassName::method(self, args)`
-                        // call. The trait method we're inside has
-                        // `&mut self` receiver (same as the trait
-                        // demands); Rust's method-resolution
-                        // prefers the EXACT-receiver trait match
-                        // over the inherent's auto-reborrow `&self`,
-                        // which would recurse. Naming the inherent
-                        // path explicitly bypasses that.
+                        // call. Both the trait method we're inside
+                        // and the inherent method now take `&self`,
+                        // but the fully-qualified `ClassName::method`
+                        // path resolves to the inherent impl ahead of
+                        // the trait, so this delegates without
+                        // recursing.
                         self.w.push_str(&class_decl.name.text);
                         self.emit_generic_params_as_args(&class_decl.generic_params);
                         self.w.push_str("::");
@@ -1863,7 +2192,7 @@ impl RustEmitter {
             first_param = false;
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
-            self.emit_type_as_rust(&lifted_param_tys[i]);
+            self.emit_value_type_as_rust(&lifted_param_tys[i]);
         }
         self.w.push(')');
         match &method.return_type {
@@ -2138,7 +2467,7 @@ impl RustEmitter {
             self.w.push_str(", ");
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
-            self.emit_type_as_rust(&param.ty);
+            self.emit_value_type_as_rust(&param.ty);
         }
         self.w.push(')');
         match &method.return_type {

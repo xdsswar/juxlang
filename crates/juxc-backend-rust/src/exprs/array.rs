@@ -81,7 +81,7 @@ impl RustEmitter {
                 if i > 0 {
                     self.w.push_str(", ");
                 }
-                self.emit_array_element(elem);
+                self.emit_array_element(elem, &n.element_type);
             }
             self.w.push(']');
             return;
@@ -101,7 +101,7 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.emit_array_element(elem);
+            self.emit_array_element(elem, &n.element_type);
         }
         self.w.push(']');
     }
@@ -113,7 +113,16 @@ impl RustEmitter {
     /// (§CR.4.1) — a bare move would leave `c` invalidated after the
     /// literal and break Java reference semantics. A `Field` element
     /// already self-clones in `emit_field`, so the helper excludes it.
-    fn emit_array_element(&mut self, elem: &Expr) {
+    fn emit_array_element(&mut self, elem: &Expr, element_type: &juxc_ast::TypeRef) {
+        // Interface-element array (`Shape[] = { new Circle(), … }`): each
+        // element is wrapped into the `Rc<dyn Trait>` element representation.
+        if !matches!(
+            self.iface_coercion_to(element_type, elem),
+            crate::analysis::IfaceCoercion::None,
+        ) {
+            self.emit_expr_coerced_to_iface(element_type, elem);
+            return;
+        }
         self.emit_expr(elem);
         if self.wrapper_value_needs_clone(elem) {
             self.w.push_str(".clone()");

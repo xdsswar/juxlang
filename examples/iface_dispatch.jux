@@ -1,0 +1,68 @@
+// Polymorphic dispatch THROUGH an interface reference (stage-1 interface
+// dynamic dispatch). Unlike `shapes.jux` — which only calls methods on
+// concrete `Circle` / `Square` references — every call here goes through a
+// `Shape`-typed value (`Rc<dyn Shape>` under the hood), so the override that
+// runs is selected at run time by the value's concrete type.
+
+public interface Shape {
+    double area();
+    String name();
+}
+
+public class Circle implements Shape {
+    private double radius;
+    public Circle(double radius) { this.radius = radius; }
+    public double area() { return 3.14 * this.radius * this.radius; }
+    public String name() { return $"Circle"; }
+}
+
+public class Square implements Shape {
+    private double side;
+    public Square(double side) { this.side = side; }
+    public double area() { return this.side * this.side; }
+    public String name() { return $"Square"; }
+}
+
+// Interface-typed parameter — the call dispatches dynamically.
+public void describe(Shape s) {
+    print($"${s.name()} area=${s.area()}");
+}
+
+// Interface-typed return (factory): one function, two concrete results.
+public Shape make(int kind) {
+    if (kind == 0) { return new Circle(2.0); }
+    return new Square(3.0);
+}
+
+// Interface-typed field stored in a class.
+public class Scene {
+    private Shape first;
+    public Scene(Shape first) { this.first = first; }
+    public String headline() { return this.first.name(); }
+}
+
+public void main() {
+    // Interface-typed local bound to a concrete class value.
+    Shape a = new Circle(1.0);
+    describe(a);
+
+    // Factory return flowing back into interface locals.
+    Shape b = make(0);
+    Shape c = make(1);
+    describe(b);
+    describe(c);
+
+    // Interface-typed field.
+    var scene = new Scene(make(1));
+    print($"scene starts with ${scene.headline()}");
+
+    // Array of interface values — iterate and dispatch on each.
+    Shape[] shapes = { new Circle(2.0), new Square(4.0) };
+    for (var s : shapes) {
+        describe(s);
+    }
+
+    // Reassign an interface local to a different concrete type.
+    a = new Square(5.0);
+    describe(a);
+}

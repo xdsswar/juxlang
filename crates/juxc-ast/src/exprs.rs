@@ -54,6 +54,12 @@ pub enum Expr {
     /// instance method per §7.3. Lowers to Rust `self` (in a method) or
     /// `__self` (in a constructor's struct-builder pattern).
     This(Span),
+    /// `super` — a reference to the superclass slice, valid only as the
+    /// receiver of a method call (`super.method(args)`, §6.9.4). It resolves
+    /// **statically** to the nearest concrete ancestor's version of the named
+    /// method (bypassing virtual dispatch for that one call). A bare `super`
+    /// with no `.method(...)` is rejected.
+    Super(Span),
     /// `new ClassName(args)` — class instantiation per §7.3.1. See [`NewObjectExpr`].
     NewObject(NewObjectExpr),
     /// `switch (scrutinee) { case PATTERN -> body; … }` per §A.2.8.

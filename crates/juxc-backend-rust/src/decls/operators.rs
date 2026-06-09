@@ -68,7 +68,7 @@ impl RustEmitter {
             self.w.push_str(", ");
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
-            self.emit_type_as_rust(&param.ty);
+            self.emit_value_type_as_rust(&param.ty);
         }
         self.w.push(')');
         match &op.return_type {
@@ -374,7 +374,7 @@ impl RustEmitter {
         self.w.push_str(method);
         self.w.push_str("(self, rhs: ");
         if let Some(p) = rhs_ty {
-            self.emit_type_as_rust(&p.ty);
+            self.emit_value_type_as_rust(&p.ty);
         } else {
             // Defensive — caller (`emit_operator_trait_impl`) only
             // dispatches binary wrappers when `arity == 1`, so a

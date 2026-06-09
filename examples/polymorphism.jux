@@ -1,0 +1,77 @@
+// Stage-2 polymorphism: VIRTUAL DISPATCH through a non-sealed class-hierarchy
+// reference. A `Animal`-typed value holds any subclass and the override that
+// runs is chosen at run time (lowered to `Rc<dyn AnimalKind>`). This is the
+// open-hierarchy counterpart to sealed-class `match` dispatch.
+
+public abstract class Animal {
+    private String name;
+    public Animal(String name) { this.name = name; }
+
+    // Abstract — every concrete subclass must provide it.
+    public abstract String sound();
+
+    // Concrete inherited method. `describe` calls `this.sound()`, which
+    // dispatches VIRTUALLY to the runtime subclass even when `describe` is
+    // invoked through an `Animal` reference (the classic template-method case).
+    public String describe() {
+        return $"${this.name} says ${this.sound()}";
+    }
+}
+
+// Mid-hierarchy: provides a concrete `sound` and a new virtual method `legs`.
+public abstract class Mammal extends Animal {
+    public Mammal(String name) { super(name); }
+    public String sound() { return $"some mammal noise"; }
+    public int legs() { return 4; }
+}
+
+public class Dog extends Mammal {
+    public Dog(String name) { super(name); }
+    public String sound() { return $"Woof"; }
+}
+
+public class Bat extends Mammal {
+    public Bat(String name) { super(name); }
+    public int legs() { return 2; }                       // overrides Mammal.legs
+    // `super.sound()` — static call to the nearest ancestor (Mammal) version.
+    public String sound() { return $"${super.sound()} (squeak)"; }
+}
+
+// Interface-typed parameter would be Stage 1; here the parameter is the BASE
+// CLASS — dispatch flows through `Rc<dyn AnimalKind>`.
+public void announce(Animal a) {
+    print(a.describe());
+}
+
+// Base-class return type (factory): one function, many concrete results.
+public Animal make(String kind, String name) {
+    if (kind == "dog") { return new Dog(name); }
+    return new Bat(name);
+}
+
+public void main() {
+    // Override fires through a base-typed local.
+    Animal a = new Dog("Rex");
+    announce(a);                                            // Rex says Woof
+
+    // 3-level hierarchy: Bat inherits `describe` (Animal) → calls `sound`
+    // (Bat's override, which itself calls super.sound() = Mammal's).
+    announce(new Bat("Echo"));                              // Echo says some mammal noise (squeak)
+
+    // Factory returns flow back into base locals.
+    Animal b = make("dog", "Buddy");
+    print($"${b.sound()} / legs=${mammalLegs()}");         // Woof / legs=4
+
+    // Heterogeneous base array — iterate and dispatch on each element.
+    Animal[] zoo = { new Dog("D"), new Bat("B") };
+    for (var x : zoo) {
+        print(x.sound());                                  // Woof   then   some mammal noise (squeak)
+    }
+}
+
+// Mid-hierarchy reference: a `Mammal` ref reaches both the inherited
+// `Animal`/`Mammal` methods (via the supertrait chain) and `legs`.
+public int mammalLegs() {
+    Mammal m = new Dog("tmp");      // upcast Dog -> Mammal
+    return m.legs();                // Mammal.legs (Dog doesn't override) = 4
+}

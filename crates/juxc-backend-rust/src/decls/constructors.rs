@@ -66,7 +66,7 @@ impl RustEmitter {
             }
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
-            self.emit_type_as_rust(&param.ty);
+            self.emit_value_type_as_rust(&param.ty);
         }
         self.w.push_str(") -> Self {\n");
         self.w.indent_inc();
@@ -392,7 +392,7 @@ impl RustEmitter {
             }
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
-            self.emit_type_as_rust(&param.ty);
+            self.emit_value_type_as_rust(&param.ty);
         }
         self.w.push_str(") -> Self {\n");
         self.w.indent_inc();
@@ -433,7 +433,7 @@ impl RustEmitter {
             }
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
-            self.emit_type_as_rust(&param.ty);
+            self.emit_value_type_as_rust(&param.ty);
         }
         self.w.push_str(") -> ");
         self.w.push_str(&inner);

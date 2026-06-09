@@ -189,6 +189,16 @@ impl RustEmitter {
                 let alias = self.this_alias.as_deref().unwrap_or("self");
                 self.w.push_str(alias);
             }
+            Expr::Super(_) => {
+                // `super` as a receiver lowers to the same `self` handle —
+                // the static-dispatch semantics of `super.method()` are
+                // realized in the call path (`emit_call`), which rewrites the
+                // call to a `__jux_super_<m>` shim that runs the ancestor's
+                // body. A bare `super` is rejected by tycheck; emitting the
+                // `self` alias here keeps the fallback well-formed.
+                let alias = self.this_alias.as_deref().unwrap_or("self");
+                self.w.push_str(alias);
+            }
             Expr::Switch(s) => self.emit_switch(s),
             Expr::NewObject(n) if n.anonymous_body.is_some() => {
                 self.emit_anonymous_class(n);
@@ -958,7 +968,7 @@ impl RustEmitter {
             self.w.push_str(", ");
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
-            self.emit_type_as_rust(&param.ty);
+            self.emit_value_type_as_rust(&param.ty);
         }
         self.w.push(')');
         match &method.return_type {
@@ -1010,6 +1020,7 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
         Expr::Field(f) => f.span,
         Expr::InterpString(s) => s.span,
         Expr::This(s) => *s,
+        Expr::Super(s) => *s,
         Expr::NewObject(n) => n.span,
         Expr::Switch(s) => s.span,
         Expr::Lambda(l) => l.span,

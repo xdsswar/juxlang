@@ -752,6 +752,15 @@ impl<'a> Parser<'a> {
                 self.advance();
                 return Some(Expr::This(span));
             }
+            TokenKind::Kw(Keyword::Super) => {
+                // `super` — superclass-qualified call receiver (§6.9.4). A
+                // leaf here; the postfix chain builds `super.method(args)`.
+                // tycheck rejects a bare `super` (one not followed by a
+                // `.method(...)` call).
+                let span = self.peek_span();
+                self.advance();
+                return Some(Expr::Super(span));
+            }
             TokenKind::Kw(Keyword::Switch) => {
                 // `switch (expr) { case PATTERN -> body; … }` per
                 // §A.2.8. The same expression node serves the
@@ -1089,6 +1098,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::Field(f) => f.span,
         Expr::InterpString(s) => s.span,
         Expr::This(s) => *s,
+        Expr::Super(s) => *s,
         Expr::NewObject(n) => n.span,
         Expr::Switch(s) => s.span,
         Expr::Lambda(l) => l.span,

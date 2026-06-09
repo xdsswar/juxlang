@@ -888,6 +888,11 @@ impl Resolver {
                     }
                 }
             }
+            Expr::Super(_) => {
+                // `super` resolves no names itself — it's a static receiver
+                // marker; the method named after it (`super.m`) is resolved
+                // structurally against the ancestor chain in tycheck/backend.
+            }
             Expr::This(_) => {
                 // `this` is bound at the head of each constructor /
                 // method scope by `visit_class_decl`. If we ever see

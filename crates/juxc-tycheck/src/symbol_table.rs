@@ -684,6 +684,12 @@ pub struct InterfaceSig {
     pub visibility: Visibility,
     /// Generic parameters in declaration order.
     pub generic_params: Vec<TypeParam>,
+    /// Parent interfaces from the `extends` clause (an interface can
+    /// extend multiple interfaces, `classes-rules.md` §3.2). Preserved as
+    /// written `TypeRef`s so the subtype walk can follow
+    /// interface-extends-interface chains (`class C implements A`, `A
+    /// extends B` ⟹ `C <: B`). Empty when there's no `extends` clause.
+    pub extends: Vec<TypeRef>,
     /// Method signatures indexed by name. Bodies are absent (`body:
     /// None` in the source). Duplicate names emit `E0402`.
     pub methods: HashMap<String, MethodSig>,
@@ -843,6 +849,8 @@ pub fn build_workspace(
     check_override_annotations(&table, diagnostics);
     check_abstract_methods_implemented(&table, diagnostics);
     check_diamond_default_conflicts(&table, diagnostics);
+    check_interface_on_exception_class(&table, diagnostics);
+    check_polymorphic_base_generic_methods(&table, diagnostics);
     check_method_modifier_combinations(&table, diagnostics);
     check_single_constructor(&table, diagnostics);
     check_top_level_visibility(&table, diagnostics);
@@ -1705,7 +1713,7 @@ fn check_abstract_methods_implemented(
 /// the same fallback [`SymbolTable::lookup_method`] uses. Without this, the
 /// completeness checks silently skip cross-package interfaces and the error
 /// leaks to rustc as `E0046`.
-fn resolve_interface<'a>(table: &'a SymbolTable, written_name: &str) -> Option<&'a InterfaceSig> {
+pub(crate) fn resolve_interface<'a>(table: &'a SymbolTable, written_name: &str) -> Option<&'a InterfaceSig> {
     if let Some(iface) = table.interfaces.get(written_name) {
         return Some(iface);
     }
@@ -1713,6 +1721,65 @@ fn resolve_interface<'a>(table: &'a SymbolTable, written_name: &str) -> Option<&
         let last = key.rsplit('.').next().unwrap_or(key.as_str());
         (last == written_name).then_some(iface)
     })
+}
+
+/// Why an interface can't (yet) back a **dynamically-dispatched value type**
+/// (`Rc<dyn Trait>`) in stage-1 interface dispatch. Each variant names a
+/// deliberately-deferred shape; the value-type use-site checker turns it into
+/// an [`E0435`](code::Code::E0435_InterfaceNotDynDispatchable) diagnostic
+/// instead of emitting `Rc<dyn Trait>` that rustc would reject with `E0038` /
+/// `E0107`. None of these block the interface as a *declaration* — only its
+/// use as a `dyn` value type; it can still be implemented and called through
+/// concrete classes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DynDispatchBlock {
+    /// `interface A<T>` — a `dyn` value slot needs the concrete argument
+    /// (`dyn A<int>`); threading generic args through value positions is a
+    /// later sub-stage. Carries the interface's declared arity for the message.
+    GenericInterface(usize),
+    /// The interface declares a non-`static` method with its own generic
+    /// parameters (`<R> R map(...)`), which makes the trait not object-safe in
+    /// Rust. Carries the offending method name.
+    GenericMethod(String),
+}
+
+/// Classify whether the interface named `iface_name` can back a `Rc<dyn Trait>`
+/// value type in stage-1 interface dispatch.
+///
+/// Returns:
+/// - `None` when `iface_name` doesn't resolve to an interface at all (the
+///   caller decides what a non-interface name means — typically "not our
+///   concern, fall through").
+/// - `Some(Ok(()))` when the interface is `dyn`-dispatch ready.
+/// - `Some(Err(reason))` when its shape is deferred (see [`DynDispatchBlock`]).
+///
+/// Only the interface's own signature shape is inspected. `static` methods are
+/// emitted as free functions (not trait items) so their generics never affect
+/// object safety; `default` methods are object-safe and don't block dispatch.
+pub fn interface_dyn_dispatch_support(
+    table: &SymbolTable,
+    iface_name: &str,
+) -> Option<Result<(), DynDispatchBlock>> {
+    let iface = resolve_interface(table, iface_name)?;
+    if !iface.generic_params.is_empty() {
+        return Some(Err(DynDispatchBlock::GenericInterface(
+            iface.generic_params.len(),
+        )));
+    }
+    // A non-static method with its own type parameters breaks object safety.
+    // Sort the candidates so the reported method name is deterministic — the
+    // `methods` map iterates in arbitrary order.
+    let mut generic_methods: Vec<&String> = iface
+        .methods
+        .iter()
+        .filter(|(_, m)| !m.is_static && !m.generic_params.is_empty())
+        .map(|(name, _)| name)
+        .collect();
+    generic_methods.sort();
+    if let Some(name) = generic_methods.first() {
+        return Some(Err(DynDispatchBlock::GenericMethod((*name).clone())));
+    }
+    Some(Ok(()))
 }
 
 fn class_provides_method(
@@ -1769,6 +1836,181 @@ fn implements_provides_default(
                 return true;
             }
         }
+    }
+    false
+}
+
+/// Bare names of every **polymorphic base class** — a non-sealed, non-final,
+/// non-generic class extended by ≥1 other class. Mirrors the backend's
+/// `compute_polymorphic_base_classes`: these are the classes whose value slots
+/// lower to `Rc<dyn <Name>Kind>` for Stage-2 virtual dispatch. Keyed on bare
+/// (last-segment) names to match the backend's wrapper/dispatch gates.
+pub fn polymorphic_base_bare_names(table: &SymbolTable) -> std::collections::HashSet<String> {
+    let mut candidate: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut extended: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (fqn, sig) in &table.classes {
+        let bare = fqn.rsplit('.').next().unwrap_or(fqn).to_string();
+        if !sig.is_sealed && sig.permits.is_empty() && !sig.is_final && sig.generic_params.is_empty()
+        {
+            candidate.insert(bare);
+        }
+        let parent_bare = sig
+            .extends_fqn
+            .as_deref()
+            .map(|f| f.rsplit('.').next().unwrap_or(f).to_string())
+            .or_else(|| {
+                sig.extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+            });
+        if let Some(p) = parent_bare {
+            extended.insert(p);
+        }
+    }
+    candidate.intersection(&extended).cloned().collect()
+}
+
+/// Stage-2 virtual dispatch (E0438): reject a **generic virtual method on a
+/// polymorphic base class**. The base lowers to a `dyn <Name>Kind` trait
+/// object so overrides dispatch dynamically; a method with its own generic
+/// type parameters makes that trait not object-safe (rustc `E0038`). Mirrors
+/// the interface object-safety rule E0435.
+fn check_polymorphic_base_generic_methods(
+    table: &SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let bases = polymorphic_base_bare_names(table);
+    if bases.is_empty() {
+        return;
+    }
+    for (fqn, sig) in &table.classes {
+        let bare = fqn.rsplit('.').next().unwrap_or(fqn);
+        if !bases.contains(bare) {
+            continue;
+        }
+        // Deterministic order for a stable message (HashMap iteration isn't).
+        let mut offenders: Vec<&String> = sig
+            .methods
+            .iter()
+            .filter(|(_, m)| !m.is_static && !m.generic_params.is_empty())
+            .filter(|(_, m)| {
+                matches!(m.visibility, Visibility::Public | Visibility::Protected)
+            })
+            .map(|(name, _)| name)
+            .collect();
+        offenders.sort();
+        if let Some(name) = offenders.first() {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0438_GenericVirtualMethod,
+                    format!(
+                        "class `{bare}` is a polymorphic base (it's extended), so its virtual \
+                         method `{name}` would dispatch through a `dyn` trait object — but `{name}` \
+                         has generic type parameters, which isn't object-safe; make it non-generic, \
+                         mark it `final`, or seal the hierarchy",
+                    ),
+                )
+                .with_span(sig.span),
+            );
+        }
+    }
+}
+
+/// Stage-1 interface dispatch (E0436): reject a class that **extends the
+/// exception hierarchy** and also implements an interface (directly or via a
+/// superclass's `implements`).
+///
+/// Interface trait methods are emitted with a `&self` receiver so the
+/// interface can back a `Rc<dyn Trait>` value type; that's only satisfiable
+/// by the interior-mutable wrapper representation. Exception classes can't be
+/// wrapped (a `panic_any` payload must be `Send`; `Rc<RefCell<…>>` is
+/// `!Send`), so they stay on the legacy `&mut self` value path and the
+/// `impl Trait for ExcClass` would fail to compile. Catching it here turns a
+/// leaked rustc `E0308`/`E0596` into a clear, deferred-feature diagnostic.
+fn check_interface_on_exception_class(
+    table: &SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (class_name, class) in &table.classes {
+        if class.is_external {
+            continue;
+        }
+        if !class_or_ancestor_implements_any(table, class_name) {
+            continue;
+        }
+        if !class_extends_exception_hierarchy(table, class_name) {
+            continue;
+        }
+        diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0436_InterfaceOnExceptionClass,
+                format!(
+                    "class `{class_name}` extends the exception hierarchy and implements an \
+                     interface — interface dynamic dispatch isn't supported for exception \
+                     classes yet (they can't use the interior-mutable representation that \
+                     `Rc<dyn Trait>` requires)",
+                ),
+            )
+            .with_span(class.span),
+        );
+    }
+}
+
+/// True iff `class_name` or any of its ancestor classes declares a non-empty
+/// `implements` clause. Walks the `extends` chain (FQN-preferred, bare
+/// fallback) with a depth guard.
+fn class_or_ancestor_implements_any(table: &SymbolTable, class_name: &str) -> bool {
+    let mut cursor: Option<&str> = Some(class_name);
+    let mut depth = 0usize;
+    while let Some(name) = cursor {
+        if depth > 64 {
+            return false;
+        }
+        let Some(class) = table.classes.get(name) else {
+            return false;
+        };
+        if !class.implements.is_empty() {
+            return true;
+        }
+        cursor = class.extends_fqn.as_deref().or_else(|| {
+            class
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+        });
+        depth += 1;
+    }
+    false
+}
+
+/// True iff `class_name`'s `extends` chain reaches `Exception` or
+/// `Throwable` (matched on the bare last segment so a no-package fallback
+/// chain still resolves). Mirrors the backend's exception taint used to keep
+/// thrown classes off the `Rc<RefCell>` wrapper path.
+fn class_extends_exception_hierarchy(table: &SymbolTable, class_name: &str) -> bool {
+    let mut cursor: Option<String> = Some(class_name.to_string());
+    let mut depth = 0usize;
+    while let Some(name) = cursor {
+        if depth > 64 {
+            return false;
+        }
+        let bare = name.rsplit('.').next().unwrap_or(&name);
+        if bare == "Exception" || bare == "Throwable" {
+            return true;
+        }
+        let Some(class) = table.classes.get(&name) else {
+            // Unknown class key — try the bare name once before giving up
+            // (handles the `extends Exception` leaf where `Exception` has
+            // no user ClassSig).
+            return false;
+        };
+        cursor = class.extends_fqn.clone().or_else(|| {
+            class
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+        });
+        depth += 1;
     }
     false
 }
@@ -2465,6 +2707,7 @@ fn insert_interface(
         InterfaceSig {
             visibility: interface_decl.visibility,
             generic_params: interface_decl.generic_params.clone(),
+            extends: interface_decl.extends.clone(),
             methods,
             fields,
             span: interface_decl.span,
@@ -4108,6 +4351,260 @@ mod tests {
             )),
             "expected no E0423/E0424: {diags:?}",
         );
+    }
+
+    // ----------------------------------------------------------------
+    // Interface dyn-dispatch object-safety gate (E0435 predicate)
+    // ----------------------------------------------------------------
+
+    /// A plain, non-generic interface with only ordinary instance methods
+    /// is ready to back a `Rc<dyn Trait>` value type.
+    #[test]
+    fn plain_interface_is_dyn_dispatchable() {
+        let (table, diags) = build_table(
+            r#"
+            public interface Shape {
+                double area();
+                String name();
+            }
+            "#,
+        );
+        assert!(diags.is_empty(), "no diagnostics: {diags:?}");
+        assert_eq!(
+            interface_dyn_dispatch_support(&table, "Shape"),
+            Some(Ok(())),
+            "plain interface should be dyn-dispatchable",
+        );
+    }
+
+    /// `static` and `default` methods don't block dispatch — statics become
+    /// free functions, defaults are object-safe trait items.
+    #[test]
+    fn interface_with_static_and_default_is_dyn_dispatchable() {
+        let (table, diags) = build_table(
+            r#"
+            public interface MathLike {
+                static int doubled(int n) { return n + n; }
+                default int quadrupled(int n) { return n + n + n + n; }
+                int compute(int n);
+            }
+            "#,
+        );
+        assert!(diags.is_empty(), "no diagnostics: {diags:?}");
+        assert_eq!(
+            interface_dyn_dispatch_support(&table, "MathLike"),
+            Some(Ok(())),
+            "static/default methods must not block dispatch",
+        );
+    }
+
+    /// A generic interface (`interface A<T>`) is a perfectly valid
+    /// declaration, but is deferred as a `dyn` value type for stage 1.
+    #[test]
+    fn generic_interface_is_deferred_for_dyn() {
+        let (table, diags) = build_table(
+            r#"
+            public interface Box<T> {
+                T get();
+            }
+            "#,
+        );
+        assert!(diags.is_empty(), "declaration itself is valid: {diags:?}");
+        assert_eq!(
+            interface_dyn_dispatch_support(&table, "Box"),
+            Some(Err(DynDispatchBlock::GenericInterface(1))),
+            "generic interface as a dyn value type is deferred",
+        );
+    }
+
+    /// An interface with a generic *method* (`<R> R map(...)`) is not
+    /// object-safe — deferred, reporting the offending method.
+    #[test]
+    fn interface_with_generic_method_is_deferred_for_dyn() {
+        let (table, diags) = build_table(
+            r#"
+            public interface Mapper {
+                <R> R map(R input);
+                String name();
+            }
+            "#,
+        );
+        assert!(diags.is_empty(), "declaration itself is valid: {diags:?}");
+        assert_eq!(
+            interface_dyn_dispatch_support(&table, "Mapper"),
+            Some(Err(DynDispatchBlock::GenericMethod("map".to_string()))),
+            "generic interface method blocks object safety",
+        );
+    }
+
+    /// A non-interface name (a class) resolves to `None` — the predicate
+    /// only speaks about interfaces.
+    #[test]
+    fn non_interface_name_is_none_for_dyn_support() {
+        let (table, _diags) = build_table(
+            r#"
+            public class Circle {}
+            "#,
+        );
+        assert_eq!(
+            interface_dyn_dispatch_support(&table, "Circle"),
+            None,
+            "a class is not an interface",
+        );
+        assert_eq!(
+            interface_dyn_dispatch_support(&table, "DoesNotExist"),
+            None,
+            "an unknown name is not an interface",
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // Interface on exception class (E0436)
+    // ----------------------------------------------------------------
+
+    /// An exception-hierarchy class that implements an interface is
+    /// rejected (deferred for stage-1 dispatch) rather than mis-lowered.
+    #[test]
+    fn exception_class_implementing_interface_emits_e0436() {
+        let (_table, diags) = build_table(
+            r#"
+            public interface Tagged { void bump(); }
+            public class Boom extends Exception implements Tagged {
+                public void bump() {}
+            }
+            "#,
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0436_InterfaceOnExceptionClass),
+            "expected E0436: {diags:?}",
+        );
+    }
+
+    /// A subclass that inherits both the exception base and the interface
+    /// obligation through its parent also trips E0436.
+    #[test]
+    fn inherited_exception_and_interface_emits_e0436() {
+        let (_table, diags) = build_table(
+            r#"
+            public interface Tagged { void bump(); }
+            public class Base extends Exception implements Tagged {
+                public void bump() {}
+            }
+            public class Derived extends Base {}
+            "#,
+        );
+        assert!(
+            diags
+                .iter()
+                .filter(|d| d.code == code::Code::E0436_InterfaceOnExceptionClass)
+                .count()
+                >= 1,
+            "expected E0436 on the exception+interface hierarchy: {diags:?}",
+        );
+    }
+
+    /// A normal (non-exception) class implementing an interface must NOT
+    /// trip E0436 — this is the common, supported case.
+    #[test]
+    fn normal_interface_implementer_no_e0436() {
+        let (_table, diags) = build_table(
+            r#"
+            public interface Shape { double area(); }
+            public class Circle implements Shape {
+                public double area() { return 1.0; }
+            }
+            "#,
+        );
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0436_InterfaceOnExceptionClass),
+            "normal implementer must not trip E0436: {diags:?}",
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // Interface subtyping (is_subtype: class <: implemented interface)
+    // ----------------------------------------------------------------
+
+    fn user_ty(name: &str) -> crate::ty::Ty {
+        crate::ty::Ty::User {
+            name: name.to_string(),
+            generic_args: vec![],
+        }
+    }
+
+    /// A class is a subtype of an interface it directly implements.
+    #[test]
+    fn class_is_subtype_of_directly_implemented_interface() {
+        let (table, diags) = build_table(
+            r#"
+            public interface Shape { double area(); }
+            public class Circle implements Shape {
+                public double area() { return 1.0; }
+            }
+            "#,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        assert!(crate::ty::is_subtype(&user_ty("Circle"), &user_ty("Shape"), &table));
+        // Not the reverse.
+        assert!(!crate::ty::is_subtype(&user_ty("Shape"), &user_ty("Circle"), &table));
+    }
+
+    /// A class inherits its superclass's `implements`, so it's a subtype
+    /// of an interface the parent implements.
+    #[test]
+    fn class_is_subtype_of_inherited_interface() {
+        let (table, diags) = build_table(
+            r#"
+            public interface Shape { double area(); }
+            public class Base implements Shape {
+                public double area() { return 1.0; }
+            }
+            public class Derived extends Base {}
+            "#,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        assert!(crate::ty::is_subtype(&user_ty("Derived"), &user_ty("Shape"), &table));
+    }
+
+    /// Transitive interface-extends: `class C implements A`, `A extends B`
+    /// ⟹ `C <: B`.
+    #[test]
+    fn class_is_subtype_through_interface_extends() {
+        let (table, diags) = build_table(
+            r#"
+            public interface B { void b(); }
+            public interface A extends B { void a(); }
+            public class C implements A {
+                public void a() {}
+                public void b() {}
+            }
+            "#,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        assert!(crate::ty::is_subtype(&user_ty("C"), &user_ty("A"), &table));
+        assert!(crate::ty::is_subtype(&user_ty("C"), &user_ty("B"), &table));
+    }
+
+    /// An unrelated class is not a subtype of an interface it doesn't
+    /// implement, and the existing class-extends relation still holds.
+    #[test]
+    fn unrelated_class_not_subtype_and_extends_still_works() {
+        let (table, diags) = build_table(
+            r#"
+            public interface Shape { double area(); }
+            public class Other {}
+            public class Animal {}
+            public class Dog extends Animal {}
+            "#,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        assert!(!crate::ty::is_subtype(&user_ty("Other"), &user_ty("Shape"), &table));
+        // Regression: class-extends subtyping is untouched.
+        assert!(crate::ty::is_subtype(&user_ty("Dog"), &user_ty("Animal"), &table));
     }
 
     // ----------------------------------------------------------------

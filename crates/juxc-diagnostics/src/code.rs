@@ -181,6 +181,48 @@ pub enum Code {
     /// pre-fix symptom was a runtime OOM in the backend's ancestor
     /// walk; with this code the cycle is caught at tycheck.
     E0434_CyclicInheritance,
+    /// E0435 — An interface is used as a **dynamically-dispatched value
+    /// type** (an interface-typed local / parameter / field / return —
+    /// lowered to `Rc<dyn Trait>`) but its shape isn't object-safe / not
+    /// yet supported in this form. Per stage-1 interface dispatch, two
+    /// Jux-expressible shapes are deferred: a **generic interface**
+    /// (`interface A<T>` — a value slot would need `dyn A<Arg>`, threaded
+    /// args land later) and an interface with a **generic method**
+    /// (`<R> R map(...)` — genuinely not `dyn`-compatible in Rust).
+    /// Firing here keeps the emitted `Rc<dyn Trait>` from leaking rustc's
+    /// `E0038`/`E0107`. The interface itself remains a perfectly valid
+    /// declaration — only its use as a `dyn` value type is restricted; it
+    /// can still be implemented and called through concrete classes.
+    E0435_InterfaceNotDynDispatchable,
+    /// E0436 — A class that **extends the exception hierarchy** also
+    /// `implements` an interface. Stage-1 interface dispatch makes
+    /// interface trait methods `&self`, which is only satisfiable by the
+    /// interior-mutable wrapper representation (`Rc<RefCell<…>>`). An
+    /// exception class can't use that representation — the payload of
+    /// `panic_any` must be `Send`, and `Rc<RefCell<…>>` is `!Send` — so it
+    /// stays on the legacy `&mut self` value path, which a `&self`
+    /// interface impl can't back. Rejecting the combination here keeps the
+    /// emitted `impl Trait for ExcClass` from leaking rustc's `E0308` /
+    /// `E0596`. (Exception classes and interfaces are each fine on their
+    /// own; only their combination is deferred.)
+    E0436_InterfaceOnExceptionClass,
+    /// E0437 — A **data field is accessed through a polymorphic-base
+    /// reference** (`Animal a = new Dog(); … a.someField …`). A polymorphic
+    /// base lowers to a `Rc<dyn <Name>Kind>` trait object so virtual method
+    /// dispatch works; a trait object can't expose the underlying struct's
+    /// fields, so field access through such a reference isn't supported yet.
+    /// Use an accessor method (`a.getSomeField()`) instead, or hold the value
+    /// at its concrete type. (Stage-2 polymorphism; auto-generated field
+    /// accessors are a planned follow-up.) Field access on `this` and on a
+    /// concrete (non-base) receiver is unaffected.
+    E0437_FieldThroughPolymorphicBase,
+    /// E0438 — A **polymorphic base class declares a virtual method with its
+    /// own generic type parameters** (`<R> R map(...)`). The base lowers to a
+    /// `dyn <Name>Kind` trait object for virtual dispatch, and a generic
+    /// method makes the trait not object-safe (rustc `E0038`). Make the method
+    /// non-generic, mark the class (or method) `final`, or seal the hierarchy.
+    /// (Stage-2 polymorphism; mirrors the interface rule E0435.)
+    E0438_GenericVirtualMethod,
     /// E0440 — A `switch` over a sealed type (enum or sealed
     /// class) doesn't cover every variant / permitted subclass
     /// and has no wildcard arm. Per `JUX-DIAGNOSTICS-ADDENDUM.md`
@@ -317,6 +359,10 @@ impl Code {
             Code::E0432_InvalidTopLevelVisibility => "E0432",
             Code::E0433_OverrideNarrowsAccess    => "E0433",
             Code::E0434_CyclicInheritance        => "E0434",
+            Code::E0435_InterfaceNotDynDispatchable => "E0435",
+            Code::E0436_InterfaceOnExceptionClass => "E0436",
+            Code::E0437_FieldThroughPolymorphicBase => "E0437",
+            Code::E0438_GenericVirtualMethod     => "E0438",
             Code::E0440_NotExhaustive            => "E0440",
             Code::E0431_GenericInferenceNoSolution => "E0431",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",

@@ -208,6 +208,7 @@ pub fn lower_workspace(
     // AND provably aliased — non-aliased eligible classes demote to the
     // legacy plain-struct ("Inline") shape via `compute_wrapped_set`.
     e.wrapper_classes = compute_wrapped_set(units, &e.expr_types);
+    e.poly_base_classes = compute_polymorphic_base_classes(units);
     for unit in units {
         // Stub units carry no real class bodies to copy down parent chains.
         if unit.is_external {
@@ -331,6 +332,7 @@ pub fn lower_workspace_test(
     // Phase B (§CR.3.3): wrap only wrap-eligible AND aliased classes;
     // non-aliased eligible classes demote to the legacy Inline shape.
     e.wrapper_classes = compute_wrapped_set(units, &e.expr_types);
+    e.poly_base_classes = compute_polymorphic_base_classes(units);
     for unit in units {
         // Stub units carry no real class bodies to copy down parent chains.
         if unit.is_external {
@@ -639,6 +641,14 @@ struct RustEmitter {
     /// positive just adds a `.borrow()` that wouldn't compile, which
     /// surfaces clearly).
     pub(crate) wrapper_classes: std::collections::HashSet<String>,
+    /// Bare names of **polymorphic base classes** (non-sealed, non-final,
+    /// non-generic classes extended by ≥1 subclass — see
+    /// [`compute_polymorphic_base_classes`]). A value slot of one of these
+    /// types lowers to `Rc<dyn <Name>Kind>` for Stage-2 virtual dispatch, the
+    /// `<Name>Kind` trait is populated with the base's virtual methods, and an
+    /// upcast wraps instead of slicing. Empty until the Stage-2 emit paths
+    /// consult it; populated alongside [`Self::wrapper_classes`].
+    pub(crate) poly_base_classes: std::collections::HashSet<String>,
     /// True while emitting the body of a constructor / method /
     /// operator that belongs to a **wrapper-shape** class (one in
     /// [`Self::wrapper_classes`]). Drives the interior-mutability
@@ -648,6 +658,18 @@ struct RustEmitter {
     /// `C(Rc::new(RefCell::new(…)))`. `false` everywhere else, so the
     /// legacy plain-struct emitters keep their original behavior.
     pub(crate) emitting_wrapper_class: bool,
+    /// `true` while emitting a **value-position type** — a variable /
+    /// parameter / field / return slot, as opposed to a trait-impl header
+    /// (`impl Trait for C`), a generic bound (`<T: Trait>`), or a `From<>`
+    /// header. Drives the interface→`Rc<dyn Trait>` rewrite in
+    /// [`Self::emit_type_as_rust`]: an interface name in a value slot becomes
+    /// a `Rc<dyn Trait>` trait object (so the slot can hold any implementer
+    /// and dispatch dynamically), while the same name in a trait/bound
+    /// position keeps its bare spelling. Defaults to `false`; value-position
+    /// emitters set it via [`Self::emit_value_type_as_rust`], so any position
+    /// that isn't routed simply keeps the legacy bare emission (a feature
+    /// gap, never a miscompile of existing code).
+    pub(crate) in_value_type_position: bool,
     /// `true` while emitting a class that declares `static { }` blocks
     /// (§S.4.1). Drives the first-use trigger: each constructor body and each
     /// static method body emits a `Self::__static_init();` call at its top so
@@ -1116,6 +1138,7 @@ pub(crate) fn compute_aliased_classes(
             Expr::Literal(_)
             | Expr::Path(_)
             | Expr::This(_)
+            | Expr::Super(_)
             | Expr::MethodRef(_) => {}
         }
     }
@@ -1351,7 +1374,176 @@ pub(crate) fn compute_wrapped_set(
 ) -> HashSet<String> {
     let eligible = compute_wrapper_classes(units);
     let aliased = compute_aliased_classes(units, expr_types);
-    eligible.intersection(&aliased).cloned().collect()
+    let iface_forced = compute_interface_forced_classes(units);
+    let poly_forced = compute_polymorphic_forced_classes(units);
+    // (eligible ∩ aliased) ∪ (eligible ∩ interface-implementer-closure)
+    //                     ∪ (eligible ∩ polymorphic-base-hierarchy-closure).
+    // Forcing interface implementers AND polymorphic-base hierarchies makes
+    // their inherent methods `&self` (interior-mutable wrapper rule), which is
+    // what the `&self` `Kind`/interface trait methods require, and keeps the
+    // upcast a shared-`Rc` bump (identity-preserving) instead of a slice. A
+    // component that isn't wrap-eligible (sealed / exception / generic …) is
+    // dropped by the `eligible` intersection here — sealed dispatches through
+    // `&self` match arms, and genuine conflicts are rejected at tycheck.
+    eligible
+        .iter()
+        .filter(|n| {
+            aliased.contains(*n) || iface_forced.contains(*n) || poly_forced.contains(*n)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Bare names of every class that must be **force-wrapped because it — or a
+/// member of its connected inheritance component — implements an interface**.
+///
+/// Stage-1 interface dispatch flips interface trait methods and their
+/// `impl Trait for C` delegations to `&self` (step 5), which is only sound
+/// when every implementer is a wrapper class (interior-mutable, so a field
+/// write goes through `self.0.borrow_mut()` instead of needing `&mut self`).
+/// A class with a non-empty `implements` clause is therefore seeded into the
+/// forced set, and the seed floods its **whole connected component** through
+/// the `extends` graph (both directions): a wrapper child embeds its parent's
+/// `_Inner` struct, so a value-class parent under a wrapper child wouldn't
+/// compile (§CR.3.5 hierarchy uniformity).
+///
+/// Returns the raw (un-intersected) closure; [`compute_wrapped_set`]
+/// intersects it with the wrap-eligible set, so a sealed/exception component
+/// is excluded here and handled on its own path (sealed `&self` match
+/// dispatch) or diagnosed at tycheck.
+fn compute_interface_forced_classes(
+    units: &[juxc_ast::CompilationUnit],
+) -> HashSet<String> {
+    // Direct `extends` parent (bare) per class, plus the inverse children
+    // adjacency, and the seed list of classes that implement an interface.
+    let mut parent_of: HashMap<String, Option<String>> = HashMap::new();
+    let mut children_of: HashMap<String, Vec<String>> = HashMap::new();
+    let mut stack: Vec<String> = Vec::new();
+    for unit in units {
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                let name = cd.name.text.clone();
+                let parent = cd
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+                if let Some(p) = &parent {
+                    children_of.entry(p.clone()).or_default().push(name.clone());
+                }
+                parent_of.insert(name.clone(), parent);
+                if !cd.implements.is_empty() {
+                    stack.push(name);
+                }
+            }
+        }
+    }
+    // Flood each seed's connected component (ancestors + descendants).
+    let mut forced: HashSet<String> = HashSet::new();
+    while let Some(name) = stack.pop() {
+        if !forced.insert(name.clone()) {
+            continue;
+        }
+        if let Some(Some(parent)) = parent_of.get(&name) {
+            stack.push(parent.clone());
+        }
+        if let Some(kids) = children_of.get(&name) {
+            for k in kids {
+                stack.push(k.clone());
+            }
+        }
+    }
+    forced
+}
+
+/// Bare names of every **polymorphic base class** — a class that is extended
+/// by ≥1 other class and is itself non-sealed, non-final, and non-generic.
+///
+/// Stage-2 virtual dispatch lowers a polymorphic base's value slots to
+/// `Rc<dyn <Name>Kind>`: a base-typed reference can hold any subclass instance
+/// and dispatches dynamically through the populated `<Name>Kind` trait. The
+/// exclusions each have their own path or are deferred: a **sealed** base uses
+/// enum + match dispatch (already works); a **final** base can't be extended
+/// (so it's never a base); a **generic** base would need an object-unsafe
+/// `dyn Kind<T>` (deferred with a diagnostic).
+pub(crate) fn compute_polymorphic_base_classes(
+    units: &[juxc_ast::CompilationUnit],
+) -> HashSet<String> {
+    // `candidate` = classes eligible to be a base (non-sealed / non-final /
+    // non-generic). `extended` = bare names that appear as some class's
+    // `extends` target. A polymorphic base is the intersection.
+    let mut candidate: HashSet<String> = HashSet::new();
+    let mut extended: HashSet<String> = HashSet::new();
+    for unit in units {
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                if !cd.is_sealed
+                    && cd.permits.is_empty()
+                    && !cd.is_final
+                    && cd.generic_params.is_empty()
+                {
+                    candidate.insert(cd.name.text.clone());
+                }
+                if let Some(parent) = cd
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+                {
+                    extended.insert(parent);
+                }
+            }
+        }
+    }
+    candidate.intersection(&extended).cloned().collect()
+}
+
+/// Force-wrap closure for polymorphic-base hierarchies: every class in the
+/// connected `extends` component reachable from a polymorphic base
+/// ([`compute_polymorphic_base_classes`]), flooded in both directions.
+///
+/// Both the base AND all its subclasses must be wrapper classes so the upcast
+/// coercion `std::rc::Rc::new(sub.clone()) as Rc<dyn BaseKind>` works — `sub`
+/// derives `Clone`/`Debug` and the `.clone()` is a cheap `Rc` bump sharing the
+/// inner `RefCell` (preserving identity) — and so the `__parent` embedding
+/// stays uniform across the hierarchy (§CR.3.5). [`compute_wrapped_set`]
+/// intersects this with the eligible set, so a component that includes a
+/// sealed / exception / generic member collapses back to legacy.
+fn compute_polymorphic_forced_classes(
+    units: &[juxc_ast::CompilationUnit],
+) -> HashSet<String> {
+    let bases = compute_polymorphic_base_classes(units);
+    let mut parent_of: HashMap<String, Option<String>> = HashMap::new();
+    let mut children_of: HashMap<String, Vec<String>> = HashMap::new();
+    for unit in units {
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                let name = cd.name.text.clone();
+                let parent = cd
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+                if let Some(p) = &parent {
+                    children_of.entry(p.clone()).or_default().push(name.clone());
+                }
+                parent_of.insert(name.clone(), parent);
+            }
+        }
+    }
+    let mut stack: Vec<String> = bases.into_iter().collect();
+    let mut forced: HashSet<String> = HashSet::new();
+    while let Some(name) = stack.pop() {
+        if !forced.insert(name.clone()) {
+            continue;
+        }
+        if let Some(Some(parent)) = parent_of.get(&name) {
+            stack.push(parent.clone());
+        }
+        if let Some(kids) = children_of.get(&name) {
+            for k in kids {
+                stack.push(k.clone());
+            }
+        }
+    }
+    forced
 }
 
 /// Collect the **bare names of every class that is `throw`n or named
@@ -1680,7 +1872,9 @@ impl RustEmitter {
             anonymous_class_counter: 0,
             class_asts: std::collections::HashMap::new(),
             wrapper_classes: std::collections::HashSet::new(),
+            poly_base_classes: std::collections::HashSet::new(),
             emitting_wrapper_class: false,
+            in_value_type_position: false,
             emitting_class_has_static_init: false,
             emitting_call_callee: false,
         }
@@ -1747,6 +1941,9 @@ impl RustEmitter {
             // eligible classes demote to the legacy Inline shape.
             for w in compute_wrapped_set(std::slice::from_ref(unit), &self.expr_types) {
                 self.wrapper_classes.insert(w);
+            }
+            for b in compute_polymorphic_base_classes(std::slice::from_ref(unit)) {
+                self.poly_base_classes.insert(b);
             }
             for item in &unit.items {
                 if let TopLevelDecl::Class(cd) = item {
