@@ -133,5 +133,27 @@
             description="Create a new Jux package (nested directories)">
       <add-to-group group-id="NewGroup" anchor="after" relative-to-action="Jux.NewFile"/>
     </action>
+
+    <!-- Alt+Insert "Generate" menu inside a Jux class: constructor + accessors
+         built from the class's own fields. Each is only enabled inside a type
+         body (see JuxGenerateAction.update). -->
+    <action id="Jux.Generate.Constructor"
+            class="dev.jux.intellij.actions.JuxGenerateConstructorAction"
+            text="Constructor"
+            description="Generate a constructor from the class's fields">
+      <add-to-group group-id="Generate" anchor="first"/>
+    </action>
+    <action id="Jux.Generate.Getters"
+            class="dev.jux.intellij.actions.JuxGenerateGettersAction"
+            text="Getters"
+            description="Generate a getter for each field">
+      <add-to-group group-id="Generate" anchor="after" relative-to-action="Jux.Generate.Constructor"/>
+    </action>
+    <action id="Jux.Generate.Setters"
+            class="dev.jux.intellij.actions.JuxGenerateSettersAction"
+            text="Setters"
+            description="Generate a setter for each field">
+      <add-to-group group-id="Generate" anchor="after" relative-to-action="Jux.Generate.Getters"/>
+    </action>
   </actions>
 </idea-plugin>
