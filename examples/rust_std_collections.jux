@@ -2,27 +2,30 @@
 // `HashMap`, and `HashSet` imported from `rust.std`, used with their Rust API in
 // Jux syntax — lowering to genuine `std::vec::Vec` / `std::collections::HashMap`
 // / `HashSet`. Construction, value-arg mutation (push/insert), length,
-// iteration, AND reference-arg lookups (contains_key / contains — where codegen
-// re-adds the call-site `&` borrow) all lower cleanly.
+// indexing (v[i]), iteration, AND reference-arg lookups (contains_key / contains
+// — codegen re-adds the call-site `&` borrow) all lower cleanly.
 import rust.std.Vec;
 import rust.std.HashMap;
 import rust.std.HashSet;
 
 public void main() {
+    // Vec: push, index, for-each, len.
     var nums = new Vec();
     nums.push(3);
     nums.push(4);
     nums.push(5);
     var total = 0;
     for (var n : nums) { total = total + n; }
-    print($"vec: len=${nums.len()} total=${total}");
+    print($"vec: len=${nums.len()} first=${nums[0]} total=${total}");
 
+    // HashMap: insert, len, contains_key (&-borrowed key).
     var ages = new HashMap();
     ages.insert("ada", 36);
     ages.insert("alan", 41);
-    var hasAda = ages.containsKey("ada");   // &-borrow re-added at the call site
+    var hasAda = ages.containsKey("ada");
     print($"map: len=${ages.len()} has ada=${hasAda}");
 
+    // HashSet: insert (deduped), len, contains (&-borrowed value).
     var seen = new HashSet();
     seen.insert(7);
     seen.insert(7);
