@@ -1,0 +1,24 @@
+// Collections via the REAL Rust std (JUX-BINDGEN-ADDENDUM §G.9.2): `Vec` and
+// `HashMap` imported from `rust.std`, used with their Rust API (push / insert /
+// len) in Jux syntax — lowering to the genuine `std::vec::Vec` and
+// `std::collections::HashMap`. (Reference-argument lookups like `contains_key`
+// need the call-site `&` borrow that bindgen drops — a tracked §G.9.2 gap — so
+// this template sticks to construction, value-arg mutation, length, and
+// iteration, which lower cleanly.)
+import rust.std.Vec;
+import rust.std.HashMap;
+
+public void main() {
+    var nums = new Vec();
+    nums.push(3);
+    nums.push(4);
+    nums.push(5);
+    var total = 0;
+    for (var n : nums) { total = total + n; }
+    print($"vec: len=${nums.len()} total=${total}");
+
+    var ages = new HashMap();
+    ages.insert("ada", 36);
+    ages.insert("alan", 41);
+    print($"map: len=${ages.len()}");
+}
