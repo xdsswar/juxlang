@@ -383,7 +383,9 @@ fn resolve_and_load_stub_sources(manifest: &Manifest) -> Vec<SourceFile> {
         let Some((kind, crate_name)) = crate::stubs::foreign_dep_kind(&dep.name) else {
             continue; // ordinary Jux path dependency — handled elsewhere
         };
-        if let Err(e) = crate::stubs::resolve_crate_stub(root, kind, crate_name) {
+        if let Err(e) =
+            crate::stubs::resolve_crate_stub(root, kind, crate_name, dep.version.as_deref())
+        {
             eprintln!(
                 "jux: warning: could not resolve stub for `{}.{crate_name}` \
                  (autocomplete for it will be unavailable): {e}",
@@ -446,7 +448,12 @@ pub fn ensure_project_stubs(root: &Path) -> StubSyncReport {
             let Some((kind, crate_name)) = crate::stubs::foreign_dep_kind(&dep.name) else {
                 continue; // ordinary Jux path dependency
             };
-            match crate::stubs::resolve_crate_stub(pkg_root, kind, crate_name) {
+            match crate::stubs::resolve_crate_stub(
+                pkg_root,
+                kind,
+                crate_name,
+                dep.version.as_deref(),
+            ) {
                 Ok(path) => report.resolved.push(path),
                 Err(e) => report
                     .warnings

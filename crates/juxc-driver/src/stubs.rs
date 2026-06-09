@@ -392,6 +392,7 @@ pub fn resolve_crate_stub(
     project_root: &Path,
     kind: &str,
     crate_name: &str,
+    version: Option<&str>,
 ) -> anyhow::Result<PathBuf> {
     let cache = crate_stub_cache_path(project_root, kind, crate_name);
     if cache.is_file() {
@@ -405,7 +406,7 @@ pub fn resolve_crate_stub(
         );
     }
 
-    let json = run_cargo_rustdoc_json(project_root, crate_name)?;
+    let json = run_cargo_rustdoc_json(crate_name, version)?;
     let package = format!("rust.{crate_name}");
     let stub = generate_stub_from_rustdoc_json(&json, &package)
         .map_err(|e| anyhow::anyhow!("bindgen failed to ingest rustdoc JSON for `{crate_name}`: {e}"))?;
@@ -431,9 +432,27 @@ pub fn generate_stub_from_rustdoc_json(
 /// Invoke `cargo rustdoc` to produce a crate's public-API JSON.
 ///
 /// rustdoc JSON is a nightly-only, `-Z unstable-options` feature, so we ask the
-/// `nightly` toolchain explicitly via `cargo +nightly`. The produced JSON lands
-/// under `target/doc/<crate>.json`; we read and return its text.
-fn run_cargo_rustdoc_json(project_root: &Path, crate_name: &str) -> anyhow::Result<String> {
+/// `nightly` toolchain explicitly via `cargo +nightly`. A Jux project has no
+/// `Cargo.toml`, so rustdoc can't run there; instead we materialise a throwaway
+/// Cargo project (under the user cache) that **depends on** `crate_name`, run
+/// `cargo +nightly rustdoc -p <crate>` inside it, and read the emitted
+/// `target/doc/<crate>.json`. `version` is the manifest requirement
+/// (`"0.27"`, …) — `*` when unspecified.
+fn run_cargo_rustdoc_json(crate_name: &str, version: Option<&str>) -> anyhow::Result<String> {
+    let work = rustdoc_gen_dir(crate_name)
+        .ok_or_else(|| anyhow::anyhow!("no cache directory to generate rustdoc JSON in"))?;
+    std::fs::create_dir_all(work.join("src"))?;
+    // A minimal package whose only purpose is to pull `crate_name` into a
+    // resolvable dependency graph for rustdoc.
+    let sanitized = crate_name.replace('-', "_");
+    let ver = version.unwrap_or("*");
+    let cargo_toml = format!(
+        "[package]\nname = \"__juxc_doc_{sanitized}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n\
+         [dependencies]\n{crate_name} = \"{ver}\"\n",
+    );
+    std::fs::write(work.join("Cargo.toml"), cargo_toml)?;
+    std::fs::write(work.join("src").join("lib.rs"), "")?;
+
     let output = Command::new("cargo")
         .arg("+nightly")
         .arg("rustdoc")
@@ -444,7 +463,7 @@ fn run_cargo_rustdoc_json(project_root: &Path, crate_name: &str) -> anyhow::Resu
         .arg("unstable-options")
         .arg("--output-format")
         .arg("json")
-        .current_dir(project_root)
+        .current_dir(&work)
         .output()
         .map_err(|e| anyhow::anyhow!("failed to spawn `cargo +nightly rustdoc`: {e}"))?;
     if !output.status.success() {
@@ -454,10 +473,21 @@ fn run_cargo_rustdoc_json(project_root: &Path, crate_name: &str) -> anyhow::Resu
         );
     }
     // rustdoc writes `<crate>.json` (hyphens become underscores in the file).
-    let json_name = format!("{}.json", crate_name.replace('-', "_"));
-    let json_path = project_root.join("target").join("doc").join(&json_name);
+    let json_name = format!("{sanitized}.json");
+    let json_path = work.join("target").join("doc").join(&json_name);
     std::fs::read_to_string(&json_path).map_err(|e| {
         anyhow::anyhow!("rustdoc JSON not found at {}: {e}", json_path.display())
+    })
+}
+
+/// The throwaway-Cargo-project directory used to rustdoc one foreign crate:
+/// `<user-cache>/juxc/rustdoc-gen/<crate>/`. Reused across runs so cargo's own
+/// caching makes regeneration cheap. `None` when no cache root resolves.
+fn rustdoc_gen_dir(crate_name: &str) -> Option<PathBuf> {
+    user_cache_dir().map(|d| {
+        d.join("juxc")
+            .join("rustdoc-gen")
+            .join(crate_name.replace('-', "_"))
     })
 }
 
@@ -512,7 +542,7 @@ mod tests {
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, "package rust.serde_json;\n").unwrap();
 
-        let got = resolve_crate_stub(&dir, "rust", "serde_json").expect("cache hit");
+        let got = resolve_crate_stub(&dir, "rust", "serde_json", None).expect("cache hit");
         assert_eq!(got, cached);
         let _ = std::fs::remove_dir_all(&dir);
     }
