@@ -289,16 +289,68 @@ impl RustEmitter {
         if is_cmp {
             self.emitting_comparison_operand = true;
         }
+        // **Java-style numeric promotion.** In `int <op> double` Java widens the
+        // integer operand to the float type; Rust has no implicit numeric
+        // coercion, so an un-cast `i * 2.0` is rejected (`isize * f64`). For a
+        // mixed integer/float arithmetic op we cast the integer side to `f64`.
+        let is_arith = matches!(
+            b.op,
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem,
+        );
+        let (cast_left, cast_right) = if is_arith {
+            match (self.operand_is_float(&b.left), self.operand_is_float(&b.right)) {
+                (Some(false), Some(true)) => (true, false),
+                (Some(true), Some(false)) => (false, true),
+                _ => (false, false),
+            }
+        } else {
+            (false, false)
+        };
+
         // Left side of a left-associative op: equal precedence is OK,
         // because emission order already preserves grouping.
+        if cast_left {
+            self.w.push('(');
+        }
         self.emit_expr_with_parent_prec(&b.left, prec, /*right=*/ false);
+        if cast_left {
+            self.w.push_str(" as f64)");
+        }
         self.w.push(' ');
         self.w.push_str(b.op.as_rust_str());
         self.w.push(' ');
         // Right side: equal precedence would *change* grouping
         // (`1 + (2 + 3)` vs `1 + 2 + 3`), so parens are required.
+        if cast_right {
+            self.w.push('(');
+        }
         self.emit_expr_with_parent_prec(&b.right, prec, /*right=*/ true);
+        if cast_right {
+            self.w.push_str(" as f64)");
+        }
         self.emitting_comparison_operand = prev_cmp;
+    }
+
+    /// Numeric class of an operand for Java-style promotion: `Some(true)` for a
+    /// floating type (`float`/`double`), `Some(false)` for any integer width,
+    /// `None` for non-numeric operands or when the type isn't known.
+    fn operand_is_float(&self, e: &Expr) -> Option<bool> {
+        use juxc_tycheck::Primitive as P;
+        // A numeric literal's shape is authoritative and always available
+        // (literals may not carry an `expr_types` entry).
+        if let Expr::Literal(lit) = e {
+            return match lit {
+                juxc_ast::Literal::Float(_) => Some(true),
+                juxc_ast::Literal::Int(_) => Some(false),
+                _ => None,
+            };
+        }
+        match self.expr_types.get(&expr_span_of(e))? {
+            Ty::Primitive(P::Float | P::Double | P::F32 | P::F64) => Some(true),
+            Ty::Primitive(P::Bool | P::Char) => None,
+            Ty::Primitive(_) => Some(false),
+            _ => None,
+        }
     }
 
     /// If `b`'s LHS is a known user class that defines the matching
