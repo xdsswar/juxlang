@@ -162,9 +162,11 @@ impl SymbolTable {
         {
             return Some(k);
         }
-        if let Some(k) = self.classes.keys().find(|k| matches_last(k)) {
-            return Some(k.clone());
-        }
+        // A user-declared record / enum / interface / alias of this bare name
+        // takes precedence over an EXTERNAL (`rust.std`) class of the same name
+        // — e.g. a user `enum Dir` must shadow the `std::fs::Dir` stub class.
+        // These tables hold user declarations (stub types land in `classes`),
+        // so a match here is the user's own type.
         if let Some(k) = self.records.keys().find(|k| matches_last(k)) {
             return Some(k.clone());
         }
@@ -175,6 +177,11 @@ impl SymbolTable {
             return Some(k.clone());
         }
         if let Some(k) = self.aliases.keys().find(|k| matches_last(k)) {
+            return Some(k.clone());
+        }
+        // Last resort: an external stub class (the Rust-std view). Reached only
+        // when no user type of this name exists.
+        if let Some(k) = self.classes.keys().find(|k| matches_last(k)) {
             return Some(k.clone());
         }
         None
