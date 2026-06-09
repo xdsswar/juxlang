@@ -705,9 +705,38 @@ impl RustEmitter {
     /// `None` when the iterable's type wasn't recorded or carries no element
     /// type. Drives the loop-variable [`Self::local_types`] registration above.
     fn for_each_element_ty(&self, iter: &Expr) -> Option<Ty> {
-        match self.expr_types.get(&expr_span_of(iter)) {
-            Some(Ty::Array { element, .. }) => Some((**element).clone()),
-            Some(Ty::User { generic_args, .. }) if !generic_args.is_empty() => {
+        // Prefer the iterable's recorded type.
+        if let Some(elem) = self
+            .expr_types
+            .get(&expr_span_of(iter))
+            .and_then(Self::element_of)
+        {
+            return Some(elem);
+        }
+        // A field-access iterable (`obj.field`) often has no `expr_types` entry;
+        // resolve the field's declared type from the receiver's class instead.
+        if let Expr::Field(f) = iter {
+            if let Some(class) = self.receiver_class_ast(&f.object) {
+                if let Some(field_ty) = class
+                    .fields
+                    .iter()
+                    .find(|fd| fd.name.text == f.field.text)
+                    .and_then(|fd| fd.ty.as_ref())
+                {
+                    let ty = juxc_tycheck::ty_from_ref_in_env(field_ty, &self.symbols);
+                    return Self::element_of(&ty);
+                }
+            }
+        }
+        None
+    }
+
+    /// The element type of an iterable type: an array's element or the first
+    /// generic argument of a `Vec<T>` / `HashSet<T>` / `List<T>`.
+    fn element_of(ty: &Ty) -> Option<Ty> {
+        match ty {
+            Ty::Array { element, .. } => Some((**element).clone()),
+            Ty::User { generic_args, .. } if !generic_args.is_empty() => {
                 Some(generic_args[0].clone())
             }
             _ => None,

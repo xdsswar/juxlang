@@ -244,8 +244,19 @@ impl RustEmitter {
                             return;
                         }
                         "writeText" => {
+                            // `std::fs::write(path, &content)` — borrow the
+                            // content (it satisfies `impl AsRef<[u8]>`) so the
+                            // caller can keep using its String after the write,
+                            // instead of moving it out (rustc E0382).
                             self.w.push_str("std::fs::write(");
-                            self.emit_call_args(call);
+                            if let Some(path) = call.args.first() {
+                                self.emit_expr(path);
+                            }
+                            if let Some(content) = call.args.get(1) {
+                                self.w.push_str(", &(");
+                                self.emit_expr(content);
+                                self.w.push(')');
+                            }
                             self.w.push_str(").unwrap()");
                             return;
                         }
