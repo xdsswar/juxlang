@@ -706,11 +706,15 @@ impl RustEmitter {
         // unreliable (interp-string synthetic-source collisions).
         // Falls back to `Ty::Unknown` for the `var x = …` form
         // where no type was written.
+        // Whether this local's type is an external (`rust.std` / crate) type —
+        // used below to mark it `mut` conservatively (§G.9.2).
+        let mut external_local = false;
         if let Some(ty_ref) = &var.ty {
             let ty = juxc_tycheck::ty_from_ref_in_env(
                 ty_ref,
                 &self.symbols,
             );
+            external_local = self.is_external_user_ty(&ty);
             if let Some(scope) = self.local_types.last_mut() {
                 scope.insert(var.name.text.clone(), ty);
             }
@@ -727,13 +731,20 @@ impl RustEmitter {
             if let Some(ty @ juxc_tycheck::Ty::User { .. }) =
                 self.expr_types.get(&expr_span_of(init)).cloned()
             {
+                external_local = self.is_external_user_ty(&ty);
                 if let Some(scope) = self.local_types.last_mut() {
                     scope.insert(var.name.text.clone(), ty);
                 }
             }
         }
         self.w.push_str("let ");
-        if self.mutated_in_fn.contains(&var.name.text) {
+        // §G.9.2: a local of an external (`rust.std` / crate) type is marked
+        // `mut` conservatively. bindgen drops the `&mut self` receiver disposition
+        // (§G.3.4), so the mutation analysis can't tell a `p.reserve(…)` (mutates)
+        // from a `p.len()` (doesn't); marking external locals `mut` lets the
+        // mutating calls compile. The crate prelude `#![allow(unused_mut)]`
+        // absorbs the over-marking on read-only uses.
+        if self.mutated_in_fn.contains(&var.name.text) || external_local {
             self.w.push_str("mut ");
         }
         self.w.push_str(&var.name.text);

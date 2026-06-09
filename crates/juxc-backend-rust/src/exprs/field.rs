@@ -37,6 +37,33 @@ impl RustEmitter {
             self.emit_safe_field(f);
             return;
         }
+        // §G.9.2: a member access on an **external** (`rust.std` / crate)
+        // receiver uses the foreign symbol's REAL Rust name, which is
+        // `snake_case` — bindgen camelCased it for the Jux surface (§G.4). So
+        // `p.asPath()` → `p.as_path()`, `s.isEmpty()` → `s.is_empty()`. The call
+        // path appends `(args)` after this returns; a plain field access is
+        // complete here. External types are plain Rust values (not the Rc/RefCell
+        // wrapper representation), so none of the `.0.borrow()` rewrites apply.
+        if let Some(Ty::User { name, .. }) = self
+            .expr_types
+            .get(&expr_span_of(&f.object))
+            .cloned()
+            .map(strip_nullable)
+        {
+            let external = if self.symbols.classes.contains_key(&name) {
+                self.symbols.classes.get(&name).map(|c| c.is_external).unwrap_or(false)
+            } else {
+                self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(&name))
+                    .map(|c| c.is_external)
+                    .unwrap_or(false)
+            };
+            if external {
+                self.emit_expr(&f.object);
+                self.w.push('.');
+                self.w.push_str(&camel_to_snake(&f.field.text));
+                return;
+            }
+        }
         // **Expression-bodied property rewrite.** When `f.field`
         // names a method declared with the property shape
         // (`T name => expr;`), emit `obj.name()` instead of the
@@ -969,4 +996,32 @@ fn receiver_needs_parens(e: &Expr) -> bool {
             | Expr::NewArray(_)
             | Expr::NewArrayLit(_)
     )
+}
+
+/// Unwrap one layer of `T?` so a nullable receiver (`PathBuf?`) resolves to its
+/// underlying user type for the §G.9.2 external-member check.
+fn strip_nullable(ty: Ty) -> Ty {
+    match ty {
+        Ty::Nullable(inner) => *inner,
+        other => other,
+    }
+}
+
+/// Convert a Jux `camelBack` member name back to the foreign symbol's real
+/// `snake_case` Rust spelling (the inverse of bindgen's §G.4 `snake→camel`):
+/// `asPath` → `as_path`, `isEmpty` → `is_empty`, `withCapacity` → `with_capacity`.
+/// Used only for members on external (`rust.std` / crate) receivers (§G.9.2).
+fn camel_to_snake(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, ch) in s.char_indices() {
+        if ch.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }

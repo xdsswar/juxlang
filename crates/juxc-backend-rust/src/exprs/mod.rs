@@ -73,6 +73,25 @@ impl RustEmitter {
         }
     }
 
+    /// True when `ty` (after unwrapping `T?`) is an external (`rust.std` / crate)
+    /// stub type. Used to mark external-typed locals `mut` (§G.9.2) and to route
+    /// member names through the camelCase→snake_case rewrite.
+    pub(crate) fn is_external_user_ty(&self, ty: &juxc_tycheck::Ty) -> bool {
+        use juxc_tycheck::Ty;
+        match ty {
+            Ty::Nullable(inner) => self.is_external_user_ty(inner),
+            Ty::User { name, .. } => {
+                if let Some(c) = self.symbols.classes.get(name) {
+                    return c.is_external;
+                }
+                self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(name))
+                    .map(|c| c.is_external)
+                    .unwrap_or(false)
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Literal(lit) => self.emit_literal(lit),
