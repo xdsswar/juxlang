@@ -1305,6 +1305,23 @@ impl crate::RustEmitter {
     /// the parameter's `is_ref` flag (set from the stub's `&` marker) consulted.
     pub(crate) fn callee_param_is_ref(&self, callee: &juxc_ast::Expr, arg_idx: usize) -> bool {
         let juxc_ast::Expr::Field(f) = callee else { return false };
+        // Static call `ClassName.method(...)`: the receiver is a class NAME, not
+        // a value, so it never appears in `expr_types`. Resolve the class
+        // directly and read the static method's param. Only foreign (external)
+        // static methods carry meaningful by-ref params (§G.9.2).
+        if let juxc_ast::Expr::Path(qn) = &*f.object {
+            if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                if let Some(c) = self.symbols.classes.get(&class_fqn) {
+                    if c.is_external {
+                        if let Some(m) = c.methods.get(f.field.text.as_str()) {
+                            if m.is_static {
+                                return m.params.get(arg_idx).map(|p| p.is_ref).unwrap_or(false);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Receiver type: from `expr_types` (the normal route), falling back to
         // the name-keyed `local_types` when the receiver is a bare variable —
         // the latter is reliable inside string interpolation, where synthetic

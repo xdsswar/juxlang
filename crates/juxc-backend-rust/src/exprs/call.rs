@@ -111,17 +111,31 @@ impl RustEmitter {
                     .map(|(_, s)| s.is_foreign_result)
                     .unwrap_or(false)
             }
-            // Static call `ClassName.method(args)` — resolve the class by its
-            // (bare) receiver name, then the named method.
+            // Method call `recv.method(args)` — two shapes:
+            //  - Static `ClassName.method(...)`: the receiver is a type name.
+            //  - Instance `value.method(...)`: resolve the receiver's inferred
+            //    type to its class, then look up the method.
             Expr::Field(f) => {
+                let method = f.field.text.as_str();
+                // Static: receiver is a bare/qualified class name.
                 if let Expr::Path(qn) = &*f.object {
                     if let Some(last) = qn.segments.last() {
                         if let Some(fqn) = self.symbols.find_fqn_by_bare(&last.text) {
                             if let Some(cls) = self.symbols.classes.get(&fqn) {
-                                if let Some(m) = cls.methods.get(f.field.text.as_str()) {
+                                if let Some(m) = cls.methods.get(method) {
                                     return m.is_foreign_result;
                                 }
                             }
+                        }
+                    }
+                }
+                // Instance: resolve the receiver's type → class → method.
+                if let Some(juxc_tycheck::Ty::User { name, .. }) =
+                    self.receiver_ty_for_call(&f.object)
+                {
+                    if let Some(cls) = self.symbols.classes.get(&name) {
+                        if let Some(m) = cls.methods.get(method) {
+                            return m.is_foreign_result;
                         }
                     }
                 }
@@ -129,6 +143,29 @@ impl RustEmitter {
             }
             _ => false,
         }
+    }
+
+    /// Best-effort inferred type of a method-call receiver — the same
+    /// `local_types` → `expr_types` → string-literal resolution
+    /// [`Self::try_emit_stdlib_method`] uses, factored out for the
+    /// foreign-result check. Returns `None` when the receiver wasn't typed.
+    fn receiver_ty_for_call(&self, recv: &Expr) -> Option<juxc_tycheck::Ty> {
+        if let Expr::Path(qn) = recv {
+            if qn.segments.len() == 1 {
+                let bare = qn.segments[0].text.as_str();
+                if let Some(ty) = self
+                    .local_types
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(bare).cloned())
+                {
+                    return Some(ty);
+                }
+            }
+        }
+        self.expr_types
+            .get(&crate::exprs::expr_span_of(recv))
+            .cloned()
     }
 
     /// Emit a call expression. Special-cases the built-in `print` to
@@ -482,7 +519,21 @@ impl RustEmitter {
                         .map(|m| m.is_static)
                         .unwrap_or(false);
                     if is_static_method {
-                        self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                        // §G.9.2: a static call on a foreign stub class
+                        // (`Url.parse(...)`) lowers through its REAL Rust path
+                        // (`url::Url::parse(...)`) from the `@rust` annotation,
+                        // not the flat `crate::rust::url::Url` spelling.
+                        let external_real = self
+                            .symbols
+                            .classes
+                            .get(&class_fqn)
+                            .filter(|c| c.is_external)
+                            .and_then(|c| c.rust_path.clone());
+                        if let Some(real) = external_real {
+                            self.w.push_str(&real);
+                        } else {
+                            self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                        }
                         self.w.push_str("::");
                         self.w.push_str(&f.field.text);
                         self.w.push('(');
@@ -502,6 +553,21 @@ impl RustEmitter {
                             }
                             let nullable = self.callee_param_is_nullable(&call.callee, i);
                             let upcast = self.arg_needs_sealed_upcast(&call.callee, i, arg);
+                            // Foreign by-ref param (`&str`, …): re-attach the
+                            // call-site borrow (§G.9.2). Resolved directly off the
+                            // already-known static method, since the class-name
+                            // receiver never appears in `expr_types`.
+                            let is_ref = self
+                                .symbols
+                                .classes
+                                .get(&class_fqn)
+                                .and_then(|c| c.methods.get(f.field.text.as_str()))
+                                .and_then(|m| m.params.get(i))
+                                .map(|p| p.is_ref)
+                                .unwrap_or(false);
+                            if is_ref {
+                                self.w.push('&');
+                            }
                             self.emit_arg_with_nullable_wrap(arg, nullable);
                             if upcast {
                                 self.w.push_str(".into()");
