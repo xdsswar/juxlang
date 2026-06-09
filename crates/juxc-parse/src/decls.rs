@@ -1168,7 +1168,8 @@ impl<'a> Parser<'a> {
         // Consume the class-name identifier (matches the surrounding class).
         self.parse_ident()?;
         self.expect(&TokenKind::LParen, "'(' to start constructor parameter list");
-        let params = self.parse_param_list();
+        // Constructor parameters reject the `final` binding mode (§A.2.4).
+        let params = self.parse_param_list_with(/*allow_final=*/ false);
         self.expect(&TokenKind::RParen, "')' to close constructor parameter list");
         // A `;` body marks an **elided** constructor — the signature-only
         // form `.jux.d` declaration stubs use (JUX-BINDGEN-ADDENDUM.md §G.2).
@@ -2010,12 +2011,20 @@ impl<'a> Parser<'a> {
     /// milestone 1: empty or a flat list of `type ident` params, no `out`,
     /// no defaults, no variadics.
     pub(crate) fn parse_param_list(&mut self) -> Vec<Param> {
+        self.parse_param_list_with(/*allow_final=*/ true)
+    }
+
+    /// `parse_param_list` variant that controls whether a `final`/`const`
+    /// parameter binding mode is accepted. Constructors pass `false` (a `final`
+    /// constructor parameter is rejected); methods / functions / operators pass
+    /// `true`.
+    pub(crate) fn parse_param_list_with(&mut self, allow_final: bool) -> Vec<Param> {
         let mut params = Vec::new();
         if self.at(&TokenKind::RParen) {
             return params;
         }
         loop {
-            let Some(param) = self.parse_param() else { break };
+            let Some(param) = self.parse_param(allow_final) else { break };
             params.push(param);
             if !self.eat(&TokenKind::Comma) {
                 break;
@@ -2025,12 +2034,27 @@ impl<'a> Parser<'a> {
     }
 
     /// Per §A.2.4 `param = annotation* param-mode? type identifier ('=' expression)?`.
-    /// Minimal form for milestone 1: no annotations, no mode, no default.
-    pub(crate) fn parse_param(&mut self) -> Option<Param> {
+    /// Supports the `final` / `const` binding mode (`param-mode`); annotations and
+    /// `out` / defaults are still future work. `allow_final` is `false` for
+    /// constructor parameters, where a `final` mode is a diagnostic.
+    pub(crate) fn parse_param(&mut self, allow_final: bool) -> Option<Param> {
         let start = self.peek_span();
+        // Optional `final` (or its synonym `const`) binding mode.
+        let final_span = self.peek_span();
+        let is_final = self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const);
+        if is_final && !allow_final {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "`final` is not allowed on a constructor parameter — a constructor \
+                     parameter is forwarded into a field, whose binding mode applies instead",
+                )
+                .with_span(final_span),
+            );
+        }
         let ty = self.parse_type_ref()?;
         let name = self.parse_ident()?;
         let end = self.last_consumed_span();
-        Some(Param { name, ty, default: None, span: start.join(end) })
+        Some(Param { name, ty, is_final, default: None, span: start.join(end) })
     }
 }

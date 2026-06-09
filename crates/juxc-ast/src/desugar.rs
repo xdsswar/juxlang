@@ -239,6 +239,7 @@ fn lower_one_property(
         let value_param = Param {
             name: ident("value", span),
             ty: prop.ty.clone(),
+            is_final: false,
             default: None,
             span,
         };

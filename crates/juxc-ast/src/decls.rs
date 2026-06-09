@@ -752,6 +752,13 @@ pub struct Param {
     pub name: Ident,
     /// Declared type.
     pub ty: TypeRef,
+    /// `true` when the parameter carries the `final` (or its synonym `const`)
+    /// binding mode (grammar §A.2.4 `param-mode`): the parameter cannot be
+    /// reassigned inside the body. Allowed on method / function parameters;
+    /// **rejected on constructor parameters** (a constructor parameter is
+    /// typically forwarded straight into a field, where the binding mode is the
+    /// field's, not the parameter's).
+    pub is_final: bool,
     /// Default value, if any.
     pub default: Option<Expr>,
     /// Span of the entire parameter.

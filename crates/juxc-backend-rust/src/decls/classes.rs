@@ -2188,6 +2188,7 @@ fn substitute_fn_signature(
         .map(|p| juxc_ast::Param {
             name: p.name.clone(),
             ty: substitute_type_ref(&p.ty, &effective),
+            is_final: p.is_final,
             default: p.default.clone(),
             span: p.span,
         })
