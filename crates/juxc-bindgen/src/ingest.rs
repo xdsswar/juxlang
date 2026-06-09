@@ -25,11 +25,75 @@ pub fn generate_from_json(json: &str, package: &str) -> Result<StubFile, serde_j
     Ok(generate(&krate, package))
 }
 
+/// Ingest several rustdoc-JSON crates into a single, deduplicated [`StubFile`]
+/// under one `package`.
+///
+/// This is how Rust's layered standard library (`core` ⊂ `alloc` ⊂ `std`) is
+/// surfaced as one Jux package: the bulk of the prelude (`Vec`, `String`,
+/// `Box`, `Rc`/`Arc`, `BTreeMap`…) is *defined* in `alloc`/`core` and merely
+/// re-exported by `std`, so ingesting `std` alone misses them (their defining
+/// items carry a non-zero `crate_id` and are skipped by [`generate`]). Feeding
+/// each crate's own JSON in turn — where each is the *local* crate
+/// (`crate_id == 0`) — captures every definition.
+///
+/// Items are keyed by name and the **first** occurrence wins: pass crates in
+/// `core, alloc, std` order so the most fundamental definition is the one
+/// surfaced. Deduplication also collapses the platform-duplicated names Rust
+/// ships (e.g. the several `ChildExt` traits under `std::os::*::process`) that
+/// would otherwise collide as duplicate Jux declarations (E0400) once merged
+/// into a single package.
+pub fn generate_merged(jsons: &[(&str, &str)], package: &str) -> Result<StubFile, serde_json::Error> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut collected: Vec<(String, StubItem)> = Vec::new();
+    let mut format_version = 0;
+
+    for (_crate_name, json) in jsons {
+        let krate: Crate = serde_json::from_str(json)?;
+        format_version = krate.format_version;
+        for (name, item) in collect_items(&krate) {
+            // First definition wins (crates passed core→alloc→std), and
+            // platform-duplicated names are collapsed.
+            if seen.insert(name.clone()) {
+                collected.push((name, item));
+            }
+        }
+    }
+
+    collected.sort_by(|a, b| a.0.cmp(&b.0));
+
+    Ok(StubFile {
+        package: package.to_string(),
+        header: vec![format!(
+            "bindgen — generated from {} rustdoc JSON crate(s) (format_version {})",
+            jsons.len(),
+            format_version
+        )],
+        items: collected.into_iter().map(|(_, it)| it).collect(),
+    })
+}
+
 /// Build a [`StubFile`] from an already-parsed rustdoc [`Crate`].
 ///
 /// Only public items of the local crate (`crate_id == 0`) are emitted, in a
 /// deterministic (name-sorted) order so a stub regenerates identically.
 pub fn generate(krate: &Crate, package: &str) -> StubFile {
+    let mut collected = collect_items(krate);
+
+    // Deterministic order: by item name.
+    collected.sort_by(|a, b| a.0.cmp(&b.0));
+
+    StubFile {
+        package: package.to_string(),
+        header: vec![format!("bindgen — generated from rustdoc JSON (format_version {})", krate.format_version)],
+        items: collected.into_iter().map(|(_, it)| it).collect(),
+    }
+}
+
+/// Walk a single crate's index and collect every public, local
+/// (`crate_id == 0`) item as a `(name, StubItem)` pair, **unsorted**. Shared by
+/// [`generate`] (single crate) and [`generate_merged`] (cross-crate dedup) so
+/// the item-selection rules live in exactly one place.
+fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
     // Every id that is a member of some impl or trait — used to tell a free
     // function (top-level `fn`) apart from a method/associated function.
     let member_ids = collect_member_ids(krate);
@@ -82,14 +146,7 @@ pub fn generate(krate: &Crate, package: &str) -> StubFile {
         }
     }
 
-    // Deterministic order: by item name.
-    collected.sort_by(|a, b| a.0.cmp(&b.0));
-
-    StubFile {
-        package: package.to_string(),
-        header: vec![format!("bindgen — generated from rustdoc JSON (format_version {})", krate.format_version)],
-        items: collected.into_iter().map(|(_, it)| it).collect(),
-    }
+    collected
 }
 
 /// Collect every id referenced as a member of an impl block or a trait, so the
@@ -140,7 +197,8 @@ fn build_struct(krate: &Crate, name: &str, s: &Struct, item: &Item) -> StubType 
         StructKind::Tuple(_) | StructKind::Unit => all_public = false,
     }
 
-    let (ctors, methods) = collect_inherent_members(krate, &s.impls, name);
+    let (ctors, mut methods) = collect_inherent_members(krate, &s.impls, name);
+    dedup_methods_by_name(&mut methods);
 
     // §G.6.3 kind selection: an all-public plain-fielded struct with no methods
     // maps to a Jux `struct`; anything with private fields or behaviour is a
@@ -218,7 +276,22 @@ fn build_trait(
             st.methods.push(sf);
         }
     }
+    dedup_methods_by_name(&mut st.methods);
     st
+}
+
+/// Drop methods whose Jux name collides with an earlier one, keeping the first.
+///
+/// Rust freely overloads a name across inherent `impl` blocks (and a method may
+/// appear once per monomorphisable receiver shape — e.g. `MaybeUninit::<T>` and
+/// `MaybeUninit::<[T]>` both yielding `assume_init`). Jux has **no** method
+/// overloading (one name, one signature: `E0402`), so a faithful surfacing must
+/// pick a single representative. First-wins is deterministic because the caller
+/// has already ordered the impl members, and keeps the most general inherent
+/// definition that rustdoc lists first.
+fn dedup_methods_by_name(methods: &mut Vec<StubFn>) {
+    let mut seen: HashSet<String> = HashSet::new();
+    methods.retain(|m| seen.insert(m.name.clone()));
 }
 
 /// Collect constructors and methods from a type's **inherent** impl blocks.

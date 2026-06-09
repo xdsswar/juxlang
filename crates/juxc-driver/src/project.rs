@@ -100,9 +100,17 @@ pub fn build_package(
     let mut binaries = Vec::new();
     let mut library = None;
 
+    // Resolve foreign (`rust.*` / `c.*` / `cpp.*`) `[dependencies]` to `.jux.d`
+    // stubs (generating + caching them under `.jux-stubs/` when absent), then
+    // gather every project stub source so the bound crates' APIs are in scope
+    // (JUX-BINDGEN §G.6/§G.11). These units are `.jux.d`, so the front end
+    // flags them `external` and the backend never lowers them.
+    let stub_sources = resolve_and_load_stub_sources(manifest);
+
     // ---- [lib] target ---------------------------------------------------
     if let Some(lib) = &manifest.lib {
         let mut sources = dep_sources.to_vec();
+        sources.extend(stub_sources.clone());
         sources.extend(load_lib_sources(manifest)?);
         let result = crate::compile_workspace_as(
             sources,
@@ -131,6 +139,7 @@ pub fn build_package(
     // ---- [[bin]] targets ------------------------------------------------
     for bin in &manifest.bins {
         let mut sources = dep_sources.to_vec();
+        sources.extend(stub_sources.clone());
         sources.extend(load_bin_sources(manifest, &bin.path)?);
         let result = crate::compile_workspace_as(
             sources,
@@ -352,6 +361,35 @@ fn load_bin_sources(manifest: &Manifest, _entry: &Path) -> Result<Vec<SourceFile
 /// present).
 pub fn collect_dependency_sources(dep_manifest: &Manifest) -> Result<Vec<SourceFile>> {
     load_src_tree(&dep_manifest.project_root.join("src"))
+}
+
+/// Resolve a package's foreign `[dependencies]` to `.jux.d` stubs and load every
+/// project stub source.
+///
+/// For each `rust.<crate>` / `c.<lib>` / `cpp.<lib>` dependency
+/// ([`crate::stubs::foreign_dep_kind`]) this generates + caches the stub under
+/// `.jux-stubs/` when it's absent (Rust crates via rustdoc JSON; C/C++ require a
+/// vendored stub for now — §G.6/§G.7). Generation failures are reported to
+/// stderr and skipped rather than aborting the build, so an offline / non-nightly
+/// environment still compiles (it just lacks that crate's autocomplete). Finally
+/// every `.jux.d` under `.jux-stubs/` is loaded as a source — including the
+/// default `rust.std.*` set, which the front end auto-prepends separately, so
+/// only project-local crate stubs come from here.
+fn resolve_and_load_stub_sources(manifest: &Manifest) -> Vec<SourceFile> {
+    let root = &manifest.project_root;
+    for dep in &manifest.dependencies {
+        let Some((kind, crate_name)) = crate::stubs::foreign_dep_kind(&dep.name) else {
+            continue; // ordinary Jux path dependency — handled elsewhere
+        };
+        if let Err(e) = crate::stubs::resolve_crate_stub(root, kind, crate_name) {
+            eprintln!(
+                "jux: warning: could not resolve stub for `{}.{crate_name}` \
+                 (autocomplete for it will be unavailable): {e}",
+                kind
+            );
+        }
+    }
+    crate::stubs::load_project_stub_sources(root)
 }
 
 /// Walk a `src/` tree and load every `.jux` file as a [`SourceFile`].

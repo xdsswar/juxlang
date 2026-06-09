@@ -32,8 +32,49 @@ impl<'a> Parser<'a> {
         is_final: bool,
         is_sealed: bool,
     ) -> Option<ClassDecl> {
+        self.parse_class_like(annotations, visibility, is_abstract, is_final, is_sealed, false)
+    }
+
+    /// Parse a `struct Name { … }` declaration (grammar §A.2.5
+    /// `struct-decl = visibility? 'struct' identifier generic-params?
+    /// struct-body`). A Jux struct is a value-type aggregate with **no**
+    /// inheritance, so it accepts neither `extends`, `implements`, nor
+    /// `permits`; its body is the same field/method member set as a class.
+    ///
+    /// Phase 1 reuses the [`ClassDecl`] node (see [`Self::parse_class_like`]):
+    /// the result is an implicitly-`final` class flagged [`ClassDecl::is_struct`]
+    /// so downstream phases can recover the `struct` origin. This is what lets
+    /// bindgen-generated `.jux.d` stubs (Rust structs → §G.6.3) parse, resolve,
+    /// and autocomplete in Jux syntax.
+    pub(crate) fn parse_struct_decl(
+        &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
+        visibility: Visibility,
+    ) -> Option<ClassDecl> {
+        // Structs are implicitly final (no subtyping) and never abstract/sealed.
+        self.parse_class_like(annotations, visibility, false, true, false, true)
+    }
+
+    /// Shared body of [`Self::parse_class_decl`] and [`Self::parse_struct_decl`].
+    /// `is_struct` selects the leading keyword (`struct` vs `class`) and is
+    /// recorded on the produced [`ClassDecl`]; everything else — generics, the
+    /// optional inheritance clauses (absent on structs, so they simply parse to
+    /// empty), and the member loop — is identical.
+    fn parse_class_like(
+        &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
+        visibility: Visibility,
+        is_abstract: bool,
+        is_final: bool,
+        is_sealed: bool,
+        is_struct: bool,
+    ) -> Option<ClassDecl> {
         let start = self.peek_span();
-        self.expect_kw(Keyword::Class, "expected `class` keyword");
+        if is_struct {
+            self.expect_kw(Keyword::Struct, "expected `struct` keyword");
+        } else {
+            self.expect_kw(Keyword::Class, "expected `class` keyword");
+        }
         let name = self.parse_ident()?;
         // Optional generic parameters per §A.2.4 `generic-params`.
         // Turn-1 form is `<T>` / `<T, U>` — no bounds, no defaults.
@@ -106,6 +147,7 @@ impl<'a> Parser<'a> {
                 let is_nested_keyword = matches!(
                     self.tokens.get(probe).map(|t| &t.kind),
                     Some(TokenKind::Kw(Keyword::Class))
+                        | Some(TokenKind::Kw(Keyword::Struct))
                         | Some(TokenKind::Kw(Keyword::Interface))
                         | Some(TokenKind::Kw(Keyword::Record))
                         | Some(TokenKind::Kw(Keyword::Enum))
@@ -124,6 +166,12 @@ impl<'a> Parser<'a> {
                                 is_final,
                                 is_sealed,
                             )
+                            .map(juxc_ast::TopLevelDecl::Class),
+                        // A nested `struct` reuses the struct parser; like other
+                        // nested types it is lifted to the top level as a Class
+                        // node (flagged `is_struct`).
+                        TokenKind::Kw(Keyword::Struct) => self
+                            .parse_struct_decl(member_anns.clone(), member_vis)
                             .map(juxc_ast::TopLevelDecl::Class),
                         TokenKind::Kw(Keyword::Interface) => self
                             .parse_interface_decl(member_anns.clone(), member_vis)
@@ -155,17 +203,14 @@ impl<'a> Parser<'a> {
             };
             if is_ctor {
                 let ctor = self.parse_constructor_decl(member_anns, member_vis)?;
-                if !constructors.is_empty() {
-                    // Turn 1 enforces single-ctor. Multiple ctors are a
-                    // documented Turn-2 feature.
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::Code::E0200_UnexpectedToken,
-                            "Turn-1 classes support only one constructor (overloading lands later)",
-                        )
-                        .with_span(ctor.span),
-                    );
-                }
+                // The single-constructor Turn-1 limitation is enforced in
+                // tycheck (`check_single_constructor`) rather than here, so a
+                // `.jux.d` declaration stub — which legitimately declares
+                // overloaded constructors (`HashMap()` + `HashMap(int)`,
+                // JUX-BINDGEN-ADDENDUM §G.5.1/§G.5.2) — parses cleanly. The
+                // parser is source-origin-agnostic and can't tell a stub from
+                // a normal source; tycheck knows the unit's `is_external` flag
+                // and exempts stubs from the limit.
                 constructors.push(ctor);
                 continue;
             }
@@ -290,6 +335,26 @@ impl<'a> Parser<'a> {
                     // Member name.
                     if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
                         i += 1;
+                        // Optional method-level generic params `<T, …>` between
+                        // the name and the parameter list (§A.2.4
+                        // `function-decl … identifier generic-params? '('`).
+                        // Without skipping these, a generic method like
+                        // `T map<U>(U f)` lands on `<` instead of `(` and is
+                        // misclassified as a field (→ "expected ';'"). Balance
+                        // the angle brackets exactly as the return-type scan above.
+                        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
+                            i += 1;
+                            let mut depth: u32 = 1;
+                            while depth > 0 {
+                                match self.tokens.get(i).map(|t| &t.kind) {
+                                    Some(TokenKind::Lt) => depth += 1,
+                                    Some(TokenKind::Gt) => depth -= 1,
+                                    Some(TokenKind::Eof) | None => break,
+                                    _ => {}
+                                }
+                                i += 1;
+                            }
+                        }
                         matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen))
                     } else {
                         false
@@ -392,6 +457,7 @@ impl<'a> Parser<'a> {
             is_abstract,
             is_final,
             is_sealed,
+            is_struct,
             permits,
             name,
             generic_params,
@@ -1131,7 +1197,18 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::LParen, "'(' to start constructor parameter list");
         let params = self.parse_param_list();
         self.expect(&TokenKind::RParen, "')' to close constructor parameter list");
-        let body = self.parse_block();
+        // A `;` body marks an **elided** constructor — the signature-only
+        // form `.jux.d` declaration stubs use (JUX-BINDGEN-ADDENDUM.md §G.2).
+        // It parses to an empty block; the backend never lowers it because
+        // the whole unit is flagged `external`. A normal `.jux` source that
+        // writes `Foo();` gets the same empty block, which is harmless (the
+        // constructor just does nothing).
+        let body = if self.eat(&TokenKind::Semicolon) {
+            let sp = self.last_consumed_span();
+            juxc_ast::Block { statements: Vec::new(), span: sp }
+        } else {
+            self.parse_block()
+        };
         let end = self.last_consumed_span();
         Some(ConstructorDecl {
             annotations,
@@ -1509,8 +1586,36 @@ impl<'a> Parser<'a> {
         let params = self.parse_param_list();
         self.expect(&TokenKind::RParen, "')' to close parameter list");
 
-        // throws-clause is unimplemented for milestone 1.
-        let throws = Vec::new();
+        // throws-clause per §A.2.4 / §7.11: `throws Type (, Type)*`. The error
+        // types are recorded as qualified names so the type checker and the
+        // backend can map `throws E` ↔ `Result<T, E>` (§16.7). Stubs emitted by
+        // `juxc bindgen` (§G.5.4) carry this clause for `Result`-returning
+        // foreign functions, so it must parse here.
+        let throws = if self.eat_kw(Keyword::Throws) {
+            let mut tys = Vec::new();
+            loop {
+                let qn = self.parse_qualified_name();
+                if qn.segments.is_empty() {
+                    break;
+                }
+                tys.push(qn);
+                // The throws-clause grammar is `'throws' type-list` and a `type`
+                // admits `generic-args` (§A.2.4 / §A.2.7), e.g. a foreign
+                // `throws OccupiedError<K, V, A>` from a `.jux.d` stub. The AST
+                // records only the error type's qualified *name*, so we parse and
+                // discard any `<…>` argument list rather than letting the leading
+                // `<` derail the signature into a "expected '{'" block error.
+                if self.at(&TokenKind::Lt) {
+                    self.skip_balanced_angle_brackets();
+                }
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            tys
+        } else {
+            Vec::new()
+        };
 
         // function-body = block | '=' expression ';' | ';'
         let body = if self.eat(&TokenKind::Semicolon) {
@@ -1534,6 +1639,28 @@ impl<'a> Parser<'a> {
             is_property: false,
             span: start.join(end),
         })
+    }
+
+    /// Consume a balanced `< … >` token run starting at the current `<`,
+    /// tolerating nesting (`Map<K, Vec<V>>`). The cursor must be on the opening
+    /// `Lt`; on return it sits just past the matching `Gt`. Used where a
+    /// generic-argument list appears in a position whose AST keeps only the bare
+    /// name (e.g. a `throws` error type), so the arguments are parsed-and-dropped
+    /// rather than left to derail the surrounding declaration.
+    fn skip_balanced_angle_brackets(&mut self) {
+        if !self.at(&TokenKind::Lt) {
+            return;
+        }
+        self.advance(); // opening `<`
+        let mut depth: u32 = 1;
+        while depth > 0 && !self.at_eof() {
+            match self.peek() {
+                TokenKind::Lt => depth += 1,
+                TokenKind::Gt => depth -= 1,
+                _ => {}
+            }
+            self.advance();
+        }
     }
 
     /// Parse one `operator OP(...) { ... }` declaration. Caller has

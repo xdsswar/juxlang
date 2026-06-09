@@ -103,7 +103,14 @@ impl fmt::Display for JuxType {
                 Some(n) => write!(f, "{elem}[{n}]"),
                 None => write!(f, "{elem}[]"),
             },
-            JuxType::Tuple(ts) => write!(f, "({})", join(ts)),
+            // Tuple types (`(A, B)`, grammar §A.2.7 `tuple-type`) are surfaced
+            // as the nominal `Tuple<A, B>` rather than the bracketed form. The
+            // parser's `tuple-type` support lands with the broader advanced-type
+            // work; until then the nominal keeps the element types visible and,
+            // crucially, parses — so the enclosing member survives into the
+            // symbol table and autocompletes. (The unit tuple `()` never reaches
+            // here: `map_type` folds it to `void`.)
+            JuxType::Tuple(ts) => write!(f, "Tuple<{}>", join(ts)),
             JuxType::Fn { params, ret, is_async } => {
                 if *is_async {
                     write!(f, "({}) async -> {ret}", join(params))
@@ -113,7 +120,15 @@ impl fmt::Display for JuxType {
             }
             JuxType::Void => f.write_str("void"),
             JuxType::Never => f.write_str("never"),
-            JuxType::RawPtr(t) => write!(f, "{t}*"),
+            // A raw pointer (`*const T` / `*mut T`) is surfaced as the nominal
+            // `Ptr<T>` rather than the grammar's `T*` (`pointer-type`, §A.2.7,
+            // unsafe-only). The parser's `pointer-type` support and the real
+            // pointer lowering land with the deferred C/C++/unsafe interop work;
+            // until then `Ptr<T>` keeps the pointee visible and, crucially,
+            // parses — so the enclosing member survives into the symbol table
+            // and still autocompletes. The `RawPtr` IR variant is retained so a
+            // future renderer can emit true `T*` without re-deriving the shape.
+            JuxType::RawPtr(t) => write!(f, "Ptr<{t}>"),
             JuxType::Wildcard(None) => f.write_str("?"),
             JuxType::Wildcard(Some(w)) => match w.kind {
                 WildcardKind::Extends => write!(f, "? extends {}", w.bound),
@@ -167,7 +182,9 @@ mod tests {
             JuxType::Array { elem: Box::new(JuxType::Prim("int")), size: Some(8) }.to_string(),
             "int[8]",
         );
-        assert_eq!(JuxType::RawPtr(Box::new(JuxType::Prim("byte"))).to_string(), "byte*");
+        // Raw pointers surface as the nominal `Ptr<T>` (parseable today; real
+        // `T*` pointer-type syntax lands with the deferred unsafe/C-interop work).
+        assert_eq!(JuxType::RawPtr(Box::new(JuxType::Prim("byte"))).to_string(), "Ptr<byte>");
     }
 
     #[test]

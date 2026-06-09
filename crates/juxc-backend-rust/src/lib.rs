@@ -209,6 +209,10 @@ pub fn lower_workspace(
     // legacy plain-struct ("Inline") shape via `compute_wrapped_set`.
     e.wrapper_classes = compute_wrapped_set(units, &e.expr_types);
     for unit in units {
+        // Stub units carry no real class bodies to copy down parent chains.
+        if unit.is_external {
+            continue;
+        }
         let pkg: Vec<String> = unit
             .package
             .as_ref()
@@ -241,6 +245,13 @@ pub fn lower_workspace(
     // and Rust would reject the second as a redefinition.
     let mut tree = PackageNode::default();
     for (i, unit) in units.iter().enumerate() {
+        // External `.jux.d` stub units (JUX-BINDGEN-ADDENDUM §G.9.1) contribute
+        // signatures to the symbol table but have no bodies to lower — the real
+        // crate provides them at link time. Skip them so the backend emits no
+        // (bodyless) Rust for a stub `class`/`struct`/`fn`.
+        if unit.is_external {
+            continue;
+        }
         let pkg: Vec<String> = unit
             .package
             .as_ref()
@@ -321,6 +332,10 @@ pub fn lower_workspace_test(
     // non-aliased eligible classes demote to the legacy Inline shape.
     e.wrapper_classes = compute_wrapped_set(units, &e.expr_types);
     for unit in units {
+        // Stub units carry no real class bodies to copy down parent chains.
+        if unit.is_external {
+            continue;
+        }
         let pkg: Vec<String> = unit
             .package
             .as_ref()
@@ -344,6 +359,10 @@ pub fn lower_workspace_test(
     }
     let mut tree = PackageNode::default();
     for (i, unit) in units.iter().enumerate() {
+        // Skip external `.jux.d` stub units — they have no bodies to lower.
+        if unit.is_external {
+            continue;
+        }
         let pkg: Vec<String> = unit
             .package
             .as_ref()

@@ -129,12 +129,12 @@ Every body is `;`. The file is valid Jux. The resolver loads it; `juxc-tycheck` 
 | `Box<dyn Trait>`              | `Trait`                            | Jux interface (§8.2)                               |
 | `impl Trait` (return)         | `Trait`                            | the named trait's Jux interface                    |
 | `Fn(A) -> B` family           | `(A) -> B`                         | function type (§8.2, §7.9)                         |
-| `(A, B)`                      | `(A, B)`                           | tuple (§5.3)                                       |
+| `(A, B)`                      | `Tuple<A, B>`                      | tuple (§5.3); nominal placeholder, see §G.3.5      |
 | `[T; N]`                      | `T[N]`                             | const-size array (§5.5)                            |
 | `&[T]`                        | `T[]`                              | runtime-size array                                 |
 | `()` (unit)                   | `void`                             | in return position                                 |
 | `!` (never)                   | `never`                            | bottom type (§K.4.1)                               |
-| `*const T`, `*mut T`          | `T*`                               | raw pointer, `unsafe` contexts only (§5.5)         |
+| `*const T`, `*mut T`          | `Ptr<T>`                           | raw pointer (§5.5); nominal placeholder, see §G.3.5 |
 | Macros                        | — (skipped)                        | not importable (§8.2)                              |
 
 ### G.3.2. Nullability and `Option`
@@ -148,6 +148,15 @@ A Rust function returning `Result<T, E>` maps to a Jux function with return type
 ### G.3.4. Borrows Vanish
 
 Rust's `&T` and `&mut T` carry no Jux spelling — they map to plain `T`, and Jux's borrow inference (§6.3, `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.7) re-derives the borrow mode at each call site. This is the central reason Jux code reads like Java even though it lowers to borrow-checked Rust: the `&` is inferred, never written. A `&mut self` method becomes an ordinary mutating method (§6.3); a `&self` method becomes a non-mutating one.
+
+### G.3.5. Phase-1 Nominal Placeholders — Tuples and Raw Pointers
+
+The grammar reserves `tuple-type` (`(A, B)`, §A.2.7) and `pointer-type` (`T*`, §A.2.7, `unsafe`-only) but the Phase-1 parser does not yet read either spelling back in. Because a generated stub must **parse** for its enclosing member to survive into the symbol table (and thus autocomplete), `bindgen` surfaces these two types under nominal placeholders until the real type-syntax features land (the pointer/tuple work travels with the broader `unsafe` / C-interop effort):
+
+- a tuple `(A, B, …)` → `Tuple<A, B, …>` (the unit tuple `()` still folds to `void` in return position);
+- a raw pointer `*const T` / `*mut T` → `Ptr<T>`.
+
+Both spellings keep the element/pointee types visible in signatures, hover, and completion. `Tuple<…>` / `Ptr<T>` are not declared types in Phase 1 — they read as opaque foreign names, which is harmless because a stub's own signatures are never validated (§G.9.1). When `tuple-type` / `pointer-type` gain parser and lowering support, this section is removed and the §G.3.1 rows revert to `(A, B)` / `T*`.
 
 ---
 
@@ -292,6 +301,19 @@ call lowers directly to the crate's real symbol.
 ```
 
 Because Phase 1 lowering already emits Rust (§C.9), a bound Rust crate needs **no FFI shim** — the generated Rust simply names the crate's items directly. The stub is purely an IDE/resolver artifact; it carries no runtime cost.
+
+### G.6.2.1. The Default `rust.std` Surface — Generated, Not Curated
+
+The Rust standard library is auto-loaded into every compile and editor analysis (the §G.3 mirror of the implicit `jux.std/` prepend), so `Vec` / `HashMap` / `String` autocomplete in Jux syntax with no `requires`. Crucially, **no std `.jux.d` is checked into the repository** — `juxc` generates the `rust.std` stub from the **toolchain the user actually has installed**, so the surface always matches their compiler:
+
+- **Source.** The pre-built rustdoc JSON the `rust-docs-json` rustup component ships under `<sysroot>/share/doc/rust/json/` (located via `rustc +nightly --print sysroot`, then the default toolchain). When that component is absent, std autocomplete is simply unavailable — never an error.
+- **Merge set.** `alloc` + `std` are ingested and merged into one `rust.std` package via the cross-crate, name-deduplicated path (§G.6.2.2). `core` is **excluded**: its JSON is ~20k items / tens of MB (operator traits, SIMD, every primitive's intrinsics), far too heavy to lex on every compile, and the only `core` types a Jux programmer reaches — `Option`, `Result` — are folded away by the type map (§G.3.1). A user who needs the rest of `core` binds it on demand as an ordinary `rust.core` dependency (§G.11).
+- **Cache.** The generated stub is written once to the OS user-cache dir (`<cache>/juxc/stubs/rust-std.jux.d`) and loaded directly thereafter — no subprocess on the hot path, so the LSP's per-keystroke `check_workspace` stays cheap. A version marker in the cache header invalidates it when the bindgen surface changes; deleting the cache forces regeneration after a toolchain update.
+- **Override.** `$JUX_STUBS_DIR` points the loader at a directory of `.jux.d` files loaded verbatim (no generation) — the hook for tests and for vendoring a frozen std surface.
+
+### G.6.2.2. Merging Layered Crates
+
+A single crate's rustdoc JSON only fully defines its **own** (`crate_id == 0`) items; items it merely re-exports from a lower layer appear as external references and are skipped. Rust's std is layered `core` ⊂ `alloc` ⊂ `std` — `Vec`, `String`, `Box`, `Rc`/`Arc`, `BTreeMap` are *defined* in `alloc` and only re-exported by `std` — so ingesting `std` alone misses them. `bindgen` therefore ingests each crate's JSON in turn (each as the local crate) and merges the results into one package, keyed by item name with **first-definition-wins** (crates supplied most-fundamental-first). Deduplication also collapses the platform-duplicated names std ships (e.g. the several `ChildExt` traits under `std::os::*::process`) that would otherwise collide as duplicate Jux declarations (`E0400`).
 
 ### G.6.3. Type Kind Selection
 
@@ -452,12 +474,19 @@ This is the single compiler change the addendum requires; everything else reuses
 
 ### G.9.1. The `.jux.d` Flag
 
-`juxc-resolve` (phase 4, `JUX-COMPILER-PIPELINE-ADDENDUM.md` §C.2.4) gains a per-file flag: a file with the `.jux.d` extension is **external/opaque**. Its declarations are loaded into the symbol table and type-checked for signature well-formedness, but they are marked `external`, which means:
+`juxc-resolve` (phase 4, `JUX-COMPILER-PIPELINE-ADDENDUM.md` §C.2.4) gains a per-file flag: a file with the `.jux.d` extension is **external/opaque**. Its declarations are loaded into the symbol table, but they are marked `external`, which means:
 
 - They contribute names, types, and signatures to resolution and to `juxc-tycheck` (phases 6–9).
 - They are **excluded from reachability** (phase 9.5, §C.4.5) as roots — a stub is reachable only if user code references it, exactly like any other declaration.
 - They **never enter MIR construction** (phase 10): an `external` declaration has no body to lower.
 - They are therefore invisible to borrow inference (phase 11), drop/refcount lowering (phases 12–14), and codegen (phase 19+).
+- Their **own diagnostics are suppressed** — see §G.9.1.1.
+
+#### G.9.1.1. Stub Diagnostics Are Suppressed (Trust, Don't Validate)
+
+A stub is a *trusted, signature-only view* of an API the foreign toolchain has **already compiled**. Validating it against Jux's rules is both unnecessary (the real crate is the source of truth) and counter-productive at scale: a faithful machine surface of a real Rust crate inevitably references types the generated surface didn't pull in, spells an optional value-type as a Jux-illegal `uint?`, leaves a `const` initializer the parser can't resolve, and so on. None of these are user-actionable, so `juxc-driver` **drops every lex/parse/resolve/tycheck diagnostic attributed to a `.jux.d` source** before reporting (and before deciding whether codegen may proceed). A stub that is 95% well-formed still contributes its 95% to completion and resolution, rather than burying the user in errors about `std`.
+
+This is the mechanism that makes "autocomplete over *any* crate" robust: the bar a stub must clear is **parse far enough to enter the symbol table**, not **type-check clean**. (Diagnostics in ordinary `.jux` sources — including the hand-written `jux.std/` tree — are never suppressed.)
 
 ### G.9.2. Lowering Targets
 

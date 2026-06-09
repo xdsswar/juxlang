@@ -300,6 +300,14 @@ pub struct ClassSig {
     pub package: Vec<String>,
     /// True when the class is declared `abstract`.
     pub is_abstract: bool,
+    /// True when this class came from a `.jux.d` declaration stub
+    /// (JUX-BINDGEN-ADDENDUM §G.9) — an `external`, signature-only view of a
+    /// foreign (Rust/C/C++) type. Stub classes are exempt from the Turn-1
+    /// "single constructor" limit (§G.5.1/§G.5.2 needs overloaded `new`) and
+    /// from the "abstract method only in abstract class" rule (a stub's
+    /// bodyless methods are signatures, not abstract members to implement),
+    /// because the real foreign type provides the bodies at link time.
+    pub is_external: bool,
     /// True when the class is declared `final` — no other class may
     /// extend it. Enforced by `check_final_and_sealed_extends`.
     pub is_final: bool,
@@ -683,7 +691,7 @@ pub fn build_workspace(
             if let TopLevelDecl::Class(c) = item {
                 class_unit.insert(make_fqn(&unit_pkg, &c.name.text), unit_idx);
             }
-            insert_top_level(&mut table, item, &unit_pkg, unit_idx, diagnostics);
+            insert_top_level(&mut table, item, &unit_pkg, unit_idx, unit.is_external, diagnostics);
         }
     }
     // Second pass: build per-unit name-resolution contexts now that
@@ -704,6 +712,7 @@ pub fn build_workspace(
     check_abstract_methods_implemented(&table, diagnostics);
     check_diamond_default_conflicts(&table, diagnostics);
     check_method_modifier_combinations(&table, diagnostics);
+    check_single_constructor(&table, diagnostics);
     check_top_level_visibility(&table, diagnostics);
     check_override_does_not_narrow_access(&table, diagnostics);
     table
@@ -936,6 +945,7 @@ fn insert_top_level(
     item: &TopLevelDecl,
     package: &[String],
     unit_idx: usize,
+    is_external: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // Every top-level kind is keyed by FQN. Records / enums /
@@ -945,7 +955,7 @@ fn insert_top_level(
     // packages coexist without firing E0400.
     match item {
         TopLevelDecl::Class(class_decl) => {
-            insert_class(table, class_decl, package, diagnostics);
+            insert_class(table, class_decl, package, is_external, diagnostics);
         }
         TopLevelDecl::Record(record_decl) => {
             insert_record(table, record_decl, package, diagnostics);
@@ -1589,11 +1599,45 @@ fn check_diamond_default_conflicts(
 /// implicitly abstract by construction. The interface
 /// abstract+static collision (`static` on an unbodied
 /// signature) is already enforced by the parser (E0200).
+/// Enforce the Turn-1 "at most one constructor" limit (constructor
+/// overloading lands in a later turn). This moved out of the parser so that
+/// `.jux.d` declaration stubs — which legitimately declare overloaded `new`
+/// constructors (`HashMap()` + `HashMap(int)`, JUX-BINDGEN §G.5.1/§G.5.2) —
+/// parse and resolve cleanly: the stub class is flagged `is_external` and
+/// exempted here, while ordinary user classes still get the limit enforced.
+fn check_single_constructor(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
+    for (class_name, class) in &table.classes {
+        if class.is_external {
+            continue;
+        }
+        // The first constructor is allowed; every subsequent one fires.
+        for extra in class.constructors.iter().skip(1) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    format!(
+                        "class `{class_name}` declares more than one constructor — \
+                         Turn-1 classes support only one constructor (overloading lands later)",
+                    ),
+                )
+                .with_span(extra.span),
+            );
+        }
+    }
+}
+
 fn check_method_modifier_combinations(
     table: &SymbolTable,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (class_name, class) in &table.classes {
+        // External `.jux.d` stub classes (JUX-BINDGEN §G.9) hold bodyless
+        // *signatures*, not abstract members to implement — the real foreign
+        // type provides the bodies. So they're exempt from the abstract-method
+        // modifier rules (which would otherwise reject every stub method).
+        if class.is_external {
+            continue;
+        }
         for (method_name, method) in &class.methods {
             if method.is_abstract && !class.is_abstract {
                 diagnostics.push(
@@ -1819,6 +1863,7 @@ fn insert_class(
     table: &mut SymbolTable,
     class_decl: &ClassDecl,
     package: &[String],
+    is_external: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let fqn = make_fqn(package, &class_decl.name.text);
@@ -1940,6 +1985,7 @@ fn insert_class(
             visibility: class_decl.visibility,
             package: package.to_vec(),
             is_abstract: class_decl.is_abstract,
+            is_external,
             is_final: class_decl.is_final,
             is_sealed: class_decl.is_sealed,
             permits: class_decl

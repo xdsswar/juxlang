@@ -360,4 +360,103 @@ mod tests {
         assert!(greet.is_method, "greet should be a method");
         assert!(greet.detail.contains("(String who)"), "detail: {}", greet.detail);
     }
+
+    // ====================================================================
+    // PHASE 5 — Rust-derived symbols (`.jux.d` stubs) surface in completion
+    // in Jux syntax (JUX-BINDGEN-ADDENDUM §G.10)
+    // ====================================================================
+
+    /// A `.jux.d` declaration stub: a signature-only `Widget` whose
+    /// methods/ctor end in `;` (no bodies) — exactly what `juxc bindgen`
+    /// emits for a foreign Rust type, viewed in Jux syntax.
+    const WIDGET_STUB: &str = "package rust.demo;\n\
+        public class Widget {\n\
+            public Widget(int w, int h);\n\
+            public int area();\n\
+            public int width();\n\
+        }\n";
+
+    /// User code that imports + constructs the stubbed `Widget`.
+    const WIDGET_MAIN: &str = "import rust.demo.Widget;\n\
+        public void main() {\n\
+            var w = new Widget(2, 3);\n\
+            print(w.area());\n\
+        }\n";
+
+    /// Member completion after `widget.` lists the STUB's methods — the
+    /// Rust-derived API surfaced in Jux syntax. Proof that anything in the
+    /// symbol table (including `external` `.jux.d` units) is served by the
+    /// same `members_of` the LSP uses for member completion.
+    #[test]
+    fn stub_member_completion_lists_rust_methods_in_jux_syntax() {
+        let root = temp_root("stub_member_completion");
+        // The `.jux.d` extension is what marks the unit external; the LSP
+        // workspace scan must pick it up (workspace::scan_jux_files).
+        let stub_dir = root.join(".jux-stubs").join("rust");
+        fs::create_dir_all(&stub_dir).unwrap();
+        fs::write(stub_dir.join("demo.jux.d"), WIDGET_STUB).unwrap();
+        let main = root.join("main.jux");
+        fs::write(&main, WIDGET_MAIN).unwrap();
+
+        let main_uri = Url::from_file_path(&main).unwrap();
+        let rope = Rope::from_str(WIDGET_MAIN);
+        let analysis = analyze_workspace(&root, &main_uri, &rope);
+
+        // The stub resolved cleanly: no errors on the open file.
+        let main_diags = analysis.diagnostics_by_uri.get(&main_uri).cloned().unwrap_or_default();
+        assert!(
+            main_diags.iter().all(|d| d.severity != Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR)),
+            "stub usage should be error-free, got: {:?}",
+            main_diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+
+        // Member completion after `widget.` → the Rust-derived methods.
+        let recv = Ty::User { name: "rust.demo.Widget".to_string(), generic_args: vec![] };
+        let members = crate::intel::members_of(&analysis.symbols, &recv);
+        let names: Vec<&str> = members.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"area"), "expected `area` from the stub, got {names:?}");
+        assert!(names.contains(&"width"), "expected `width` from the stub, got {names:?}");
+        // Rendered in Jux syntax: the method detail carries the Jux return type.
+        let area = members.iter().find(|m| m.name == "area").unwrap();
+        assert!(area.is_method, "area should be a method");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Completing the type name `Widget` offers the `rust.demo` import — the
+    /// auto-import candidate for the Rust-derived type. Proof that `.jux.d`
+    /// stub types feed the workspace index's `type_packages` map.
+    #[test]
+    fn stub_type_offers_rust_demo_import() {
+        use std::collections::HashMap;
+        let root = temp_root("stub_auto_import");
+        let stub_dir = root.join(".jux-stubs").join("rust");
+        fs::create_dir_all(&stub_dir).unwrap();
+        fs::write(stub_dir.join("demo.jux.d"), WIDGET_STUB).unwrap();
+        // A user file that doesn't import Widget yet — so an import is offered.
+        fs::write(root.join("other.jux"), "public void other() {}").unwrap();
+
+        let index = crate::workspace::index_workspace(&root, &HashMap::new());
+
+        assert!(
+            index.type_names.contains(&"Widget".to_string()),
+            "stub type `Widget` should be in the workspace type index, got {:?}",
+            index.type_names
+        );
+        assert!(
+            index.member_names.contains(&"area".to_string()),
+            "stub method `area` should be in the member index, got {:?}",
+            index.member_names
+        );
+        let pkgs = index
+            .type_packages
+            .get("Widget")
+            .expect("Widget must have an auto-import package candidate");
+        assert!(
+            pkgs.contains(&"rust.demo".to_string()),
+            "completing `Widget` should offer `import rust.demo.Widget`, got {pkgs:?}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

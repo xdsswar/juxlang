@@ -20,6 +20,13 @@ mod workspace;
 use server::Backend;
 use tower_lsp::{LspService, Server};
 
+/// Name of the project-local `.jux.d` stub cache directory (JUX-BINDGEN §G.11.2).
+/// Re-exported from `juxc-driver` so the workspace scan and the driver's stub
+/// loader agree on the one directory name.
+pub(crate) fn stubs_dirname() -> &'static str {
+    juxc_driver::stubs::PROJECT_STUB_DIRNAME
+}
+
 #[tokio::main]
 async fn main() {
     // stdio transport. `tokio::io::stdin/stdout` give us the async byte

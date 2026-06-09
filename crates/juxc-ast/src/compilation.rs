@@ -24,6 +24,16 @@ pub struct CompilationUnit {
     pub imports: Vec<ImportDecl>,
     /// Top-level declarations (types, functions, constants, type aliases).
     pub items: Vec<TopLevelDecl>,
+    /// True when this unit was loaded from a `.jux.d` **declaration stub**
+    /// (JUX-BINDGEN-ADDENDUM.md §G.9) rather than an ordinary `.jux`
+    /// source. An external unit is *opaque*: its declarations contribute
+    /// names / types / signatures to name-resolution and type-checking, but
+    /// they have no bodies to lower, so the backend **skips** them entirely
+    /// (the real Rust crate / C shim provides the implementation at link
+    /// time — §G.9.1/§G.9.2). The parser never sets this — it's a property
+    /// of *where the source came from*, so the driver flips it on after
+    /// parsing based on the file's `.jux.d` extension.
+    pub is_external: bool,
     /// Span covering the whole file.
     pub span: Span,
 }

@@ -56,15 +56,35 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         let path = entry.path();
         if path.is_dir() {
             let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            // Skip build output, dependency caches, and hidden dirs. A
+            // The `.jux-stubs/` cache (JUX-BINDGEN §G.11.2) holds the project's
+            // generated `.jux.d` stubs — it's hidden by convention but MUST be
+            // scanned so Rust-derived types/methods surface in completion.
+            if name == crate::stubs_dirname() {
+                walk(&path, out);
+                continue;
+            }
+            // Skip build output, dependency caches, and other hidden dirs. A
             // `resources` folder is fine — it simply contains no `.jux` files.
             if name.starts_with('.') || name == "target" || name == "node_modules" {
                 continue;
             }
             walk(&path, out);
-        } else if path.extension().and_then(|s| s.to_str()) == Some("jux") {
+        } else if is_jux_source(&path) {
             out.push(path);
         }
+    }
+}
+
+/// True for files the workspace analysis should feed to `check_workspace`:
+/// ordinary `.jux` sources AND `.jux.d` declaration stubs (JUX-BINDGEN-ADDENDUM
+/// §G). A stub's `file_name` ends in `.jux.d` (so `Path::extension` is `d`),
+/// which is why we match on the file-name suffix rather than the extension —
+/// pulling stubs into the index is what makes Rust-derived types/methods
+/// surface in completion/hover in Jux syntax (§G.10).
+fn is_jux_source(path: &Path) -> bool {
+    match path.file_name().and_then(|s| s.to_str()) {
+        Some(name) => name.ends_with(".jux.d") || name.ends_with(".jux"),
+        None => false,
     }
 }
 

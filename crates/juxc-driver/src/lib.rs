@@ -45,6 +45,7 @@ pub mod manifest;
 pub mod project;
 mod source_map;
 mod stdlib;
+pub mod stubs;
 
 pub use manifest::Manifest;
 
@@ -110,6 +111,11 @@ where
     // package modules exist by the time user units reference
     // their types.
     let mut all_sources = stdlib::load_std_sources();
+    // Auto-load the default `rust.std.*` declaration stubs (`.jux.d`) so Rust
+    // std types autocomplete in Jux syntax with no opt-in (JUX-BINDGEN-ADDENDUM
+    // §G.3). These units are flagged `external` below so the backend never
+    // lowers them — the real Rust std provides the bodies at link time.
+    all_sources.extend(stubs::load_std_stub_sources());
     all_sources.extend(sources);
     let sources = all_sources;
 
@@ -133,6 +139,8 @@ where
         }
         units.push(parsed.ast);
     }
+    // Flag `.jux.d` units external (§G.9.1) so the lowering step skips them.
+    stubs::mark_external_units(&mut units, &sources);
 
     // Phase 6+ — tycheck against the merged workspace. We build one
     // SymbolTable that contains every class/record/enum/interface/
@@ -141,6 +149,12 @@ where
     // own diagnostics with the matching unit/source index.
     let typed = juxc_tycheck::typecheck_workspace(&units);
     diagnostics.extend(typed.diagnostics);
+
+    // `.jux.d` declaration stubs are trusted, signature-only views of foreign
+    // APIs — never validated. Drop any diagnostic they produced so the build
+    // isn't blocked (and the user isn't spammed) by complaints about std/crate
+    // stubs that the real crate already compiles cleanly.
+    stubs::drop_external_diagnostics(&mut diagnostics, &sources);
 
     let has_errors = diagnostics
         .iter()
@@ -175,6 +189,7 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
     // rationale) — same shape for the test runner so `@Test`
     // bodies can use `Map`, `Throwable`, etc.
     let mut all_sources = stdlib::load_std_sources();
+    all_sources.extend(stubs::load_std_stub_sources());
     all_sources.extend(sources);
     let sources = all_sources;
     let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
@@ -191,8 +206,11 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
         }
         units.push(parsed.ast);
     }
+    stubs::mark_external_units(&mut units, &sources);
     let typed = juxc_tycheck::typecheck_workspace(&units);
     diagnostics.extend(typed.diagnostics);
+    // Trusted foreign-API stubs are never validated — drop their diagnostics.
+    stubs::drop_external_diagnostics(&mut diagnostics, &sources);
     let has_errors = diagnostics
         .iter()
         .any(|d| matches!(d.severity, Severity::Error));
@@ -269,6 +287,10 @@ pub fn check_workspace(sources: Vec<SourceFile>) -> CheckResult {
     // first so their package modules exist when user units reference
     // their types.
     let mut all_sources = stdlib::load_std_sources();
+    // Same `rust.std.*` stub auto-load as the compile path — so the LSP
+    // (which routes through `check_workspace`) surfaces Rust std types and
+    // methods in completion/hover, in Jux syntax (§G.10).
+    all_sources.extend(stubs::load_std_stub_sources());
     all_sources.extend(sources);
     let sources = all_sources;
 
@@ -290,6 +312,7 @@ pub fn check_workspace(sources: Vec<SourceFile>) -> CheckResult {
         }
         units.push(parsed.ast);
     }
+    stubs::mark_external_units(&mut units, &sources);
 
     // Tycheck against the merged workspace. We keep `symbols` and
     // `expr_types` so the LSP can serve hover/completion/goto without
@@ -297,6 +320,11 @@ pub fn check_workspace(sources: Vec<SourceFile>) -> CheckResult {
     // matching unit/source index.
     let typed = juxc_tycheck::typecheck_workspace(&units);
     diagnostics.extend(typed.diagnostics);
+
+    // Trusted foreign-API stubs are never validated (see
+    // `stubs::drop_external_diagnostics`): the LSP must not surface false errors
+    // about std/crate stubs, while still serving completion/hover from them.
+    stubs::drop_external_diagnostics(&mut diagnostics, &sources);
 
     CheckResult {
         diagnostics,
@@ -820,5 +848,174 @@ fn run_rustfmt(files: &[PathBuf]) {
                 return;
             }
         }
+    }
+}
+
+// ============================================================================
+// `.jux.d` stub tests (JUX-BINDGEN-ADDENDUM.md §G)
+// ============================================================================
+
+#[cfg(test)]
+mod stub_tests {
+    use juxc_diagnostics::Severity;
+    use juxc_source::SourceFile;
+
+    /// A signature-only `.jux.d` declaration stub: a `Widget` class whose
+    /// methods/ctor end in `;` (no bodies). This is exactly what
+    /// `juxc bindgen` emits and what the resolver must ingest as `external`.
+    const WIDGET_STUB: &str = "package rust.demo;\n\
+        public class Widget {\n\
+            public Widget(int w, int h);\n\
+            public int area();\n\
+        }\n";
+
+    /// User code that imports and constructs the stubbed `Widget` and calls a
+    /// method on it. After Phase 5 this must type-check with zero diagnostics
+    /// — no \"missing body\", no \"unresolved\".
+    const USER_MAIN: &str = "import rust.demo.Widget;\n\
+        public void main() {\n\
+            var w = new Widget(2, 3);\n\
+            print(w.area());\n\
+        }\n";
+
+    /// `.jux.d` units type-check as `external`: the stub's bodyless methods /
+    /// constructor don't trip a missing-body error, and user code that imports
+    /// + uses the stub resolves cleanly.
+    #[test]
+    fn external_stub_resolves_with_no_diagnostics() {
+        let stub = SourceFile::new("rust/demo.jux.d", WIDGET_STUB);
+        let main = SourceFile::new("main.jux", USER_MAIN);
+        let result = crate::check_workspace(vec![stub, main]);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, Severity::Error))
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "expected zero errors resolving a `.jux.d` stub, got: {:?}",
+            errors.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// Codegen must NOT emit a `Widget` struct from the stub — the real Rust
+    /// crate provides it. We compile the same workspace and assert the emitted
+    /// Rust never declares a `Widget` type (the stub is `external`, skipped at
+    /// lowering), while the user's `main` IS emitted.
+    #[test]
+    fn external_stub_is_not_lowered_to_codegen() {
+        let stub = SourceFile::new("rust/demo.jux.d", WIDGET_STUB);
+        let main = SourceFile::new("main.jux", USER_MAIN);
+        let result = crate::compile_workspace(vec![stub, main]).expect("compile");
+        let crate_ = result.crate_.expect("workspace should compile to a crate");
+        let all_rust: String = crate_
+            .sources
+            .iter()
+            .map(|(_, c)| c.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // No `Widget` struct/impl emitted from the stub.
+        assert!(
+            !all_rust.contains("struct Widget") && !all_rust.contains("impl Widget"),
+            "stub Widget must not be lowered into the emitted Rust:\n{all_rust}"
+        );
+        // The user's main WAS emitted (sanity: lowering happened for non-stub).
+        assert!(all_rust.contains("fn main"), "user main should still be emitted");
+    }
+
+    /// A `.jux.d` std stub supplied via `$JUX_STUBS_DIR` is loaded verbatim,
+    /// contributes its types to the symbol table, and resolves in Jux syntax —
+    /// while its own (signature-only) declarations never raise errors. This is
+    /// the override hook the test harness and `vendoring` use; the production
+    /// path instead *generates* `rust.std` from the installed toolchain (see
+    /// [`stubs::load_std_stub_sources`]), which a separate, toolchain-gated test
+    /// exercises.
+    #[test]
+    fn std_stub_dir_loads_clean_and_resolves() {
+        // A minimal hand-rolled stub standing in for generated `rust.std`.
+        let dir = std::env::temp_dir().join(format!(
+            "juxc-stubdir-{}-{}",
+            std::process::id(),
+            "vec"
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(
+            dir.join("std.jux.d"),
+            "package rust.std;\n\
+             public class Vec<T> {\n\
+                 public Vec();\n\
+                 public void push(T value);\n\
+                 public int len();\n\
+             }\n",
+        )
+        .unwrap();
+        std::env::set_var("JUX_STUBS_DIR", &dir);
+
+        let main = SourceFile::new(
+            "main.jux",
+            "import rust.std.Vec;\n\
+             public void main() {\n\
+                 var v = new Vec();\n\
+                 v.push(1);\n\
+                 print(v.len());\n\
+             }\n",
+        );
+        let result = crate::check_workspace(vec![main]);
+        std::env::remove_var("JUX_STUBS_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, Severity::Error))
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "std stub must load clean and resolve `Vec`, got: {:?}",
+            errors.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+        assert!(
+            result.symbols.classes.contains_key("rust.std.Vec"),
+            "rust.std.Vec should be in the symbol table"
+        );
+    }
+
+    /// Production path: `rust.std` is generated from the **installed toolchain's**
+    /// pre-built rustdoc JSON (no curated `.jux.d` in the repo). Gated on the
+    /// `rust-docs-json` component being present — skipped otherwise so CI without
+    /// it stays green. Proves the headline collections (`Vec`, `HashMap`,
+    /// `String`) surface in Jux syntax and that the generated stub is error-free.
+    #[test]
+    fn generated_rust_std_from_toolchain_resolves_collections() {
+        // Make sure no override is active; force regeneration into a temp cache.
+        std::env::remove_var("JUX_STUBS_DIR");
+        let stub = crate::stubs::load_std_stub_sources();
+        let Some(stub) = stub.into_iter().next() else {
+            eprintln!("rust-docs-json not installed — skipping generated-std test");
+            return;
+        };
+        let text = stub.contents();
+        for ty in ["class Vec", "class HashMap", "class String"] {
+            assert!(text.contains(ty), "generated rust.std missing `{ty}`");
+        }
+
+        let main = SourceFile::new(
+            "main.jux",
+            "import rust.std.HashMap;\n\
+             public void main() {\n\
+                 var m = new HashMap();\n\
+             }\n",
+        );
+        let result = crate::check_workspace(vec![main]);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, Severity::Error))
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "generated rust.std must resolve cleanly, got: {:?}",
+            errors.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
     }
 }

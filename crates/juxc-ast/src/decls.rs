@@ -333,6 +333,17 @@ pub struct ClassDecl {
     /// restricts its subclasses to the explicit `permits` list. Any
     /// extender outside the list fires `E0422_SealedClassNotPermitted`.
     pub is_sealed: bool,
+    /// True when this node came from a `struct` declaration rather than a
+    /// `class` (grammar §A.2.5 `struct-decl`). A Jux `struct` is a value-type
+    /// aggregate with no inheritance; in Phase 1 it shares the `ClassDecl`
+    /// representation (parsed identically — fields + methods, implicitly
+    /// `final`, never `extends`) so it flows through resolve / tycheck / the
+    /// symbol table unchanged. The flag is retained so later turns can give
+    /// structs their distinct value semantics (and so the backend can lower a
+    /// `struct` to a Rust `struct` rather than the class handle representation)
+    /// without re-deriving the origin. External `.jux.d` stubs (Rust structs
+    /// surfaced by bindgen, §G.6.3) are the first consumers.
+    pub is_struct: bool,
     /// Names of the classes that may extend this class — populated
     /// only when `is_sealed` is true. Each entry is the bare class
     /// name from the `permits` clause.

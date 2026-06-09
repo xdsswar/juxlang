@@ -500,6 +500,7 @@ dependencies = [
  "anyhow",
  "juxc-ast",
  "juxc-backend-rust",
+ "juxc-bindgen",
  "juxc-diagnostics",
  "juxc-lex",
  "juxc-parse",
@@ -507,6 +508,7 @@ dependencies = [
  "juxc-source",
  "juxc-tycheck",
  "serde",
+ "serde_json",
  "toml 0.8.23",
 ]
 

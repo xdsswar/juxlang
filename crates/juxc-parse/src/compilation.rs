@@ -31,11 +31,24 @@ impl<'a> Parser<'a> {
 
         let mut items = Vec::new();
         while !self.at_eof() {
+            // Remember the cursor so we can guarantee forward progress: a
+            // `parse_top_level_decl` / `recover_to_top_level` pair that
+            // consumes *nothing* (e.g. recovery anchored on a keyword the
+            // dispatch doesn't actually handle) would otherwise spin forever
+            // and blow the heap. The guard below force-advances in that case.
+            let before = self.pos;
             if let Some(item) = self.parse_top_level_decl() {
                 items.push(item);
             } else {
                 // Recovery: jump to the next plausible top-level keyword.
                 self.recover_to_top_level();
+            }
+            if self.pos == before {
+                // No token was consumed this iteration — the current token is
+                // a recovery anchor with no matching production. Step over it
+                // so the loop always terminates; the failed `parse_top_level_decl`
+                // already emitted a diagnostic.
+                self.advance();
             }
         }
         // Flatten nested-type declarations out to the top level so
@@ -54,7 +67,10 @@ impl<'a> Parser<'a> {
 
         // Span the whole file from the first token to the EOF marker.
         let end = self.peek_span();
-        CompilationUnit { package, imports, items, span: start.join(end) }
+        // The parser is source-origin-agnostic: every freshly-parsed unit
+        // starts non-external. The driver flips `is_external` on after the
+        // fact for `.jux.d` declaration stubs (§G.9.1).
+        CompilationUnit { package, imports, items, is_external: false, span: start.join(end) }
     }
 
     /// `package qualified-name ';'` — optional, only valid at the very
@@ -377,6 +393,14 @@ impl<'a> Parser<'a> {
                 .with_span(self.peek_span()),
             );
             return None;
+        }
+        if self.at_kw(Keyword::Struct) {
+            // Grammar §A.2.5 `struct-decl`. Phase 1 represents a struct as an
+            // implicitly-`final` `ClassDecl` flagged `is_struct` (see
+            // `parse_struct_decl`), so it shares the class machinery through
+            // resolve / tycheck / the symbol table while keeping its origin.
+            let struct_decl = self.parse_struct_decl(annotations, visibility)?;
+            return Some(TopLevelDecl::Class(struct_decl));
         }
         if self.at_kw(Keyword::Enum) {
             let enum_decl = self.parse_enum_decl(annotations, visibility)?;

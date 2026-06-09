@@ -345,6 +345,17 @@ interface-const   = 'const' type identifier '=' expression ';'
 struct-decl       = visibility? 'struct' identifier generic-params? struct-body
 struct-body       = '{' ( field-decl | function-decl | drop-decl )* '}'
 
+-- Phase-1 representation note: the parser accepts `struct-decl` and routes it
+-- through the same node as `class-decl`, flagged `is_struct` (an implicitly
+-- `final` class with no `extends`/`implements`). This lets struct types parse,
+-- resolve, type-check, and populate the symbol table today — chiefly so
+-- bindgen-generated `.jux.d` stubs of Rust structs (§G.6.3) autocomplete in Jux
+-- syntax. The distinct value-type semantics of a struct (copy-on-assign, no
+-- inheritance as a checked rule, lowering to a Rust `struct` rather than the
+-- class handle representation) are a later turn; `is_struct` preserves the
+-- origin so that turn needs no re-parse. `drop-decl` in a struct body is not yet
+-- parsed (no generated stub emits one).
+
 record-decl       = visibility? 'record' identifier generic-params?
                     '(' record-component-list? ')'
                     ( 'implements' type-list )?
