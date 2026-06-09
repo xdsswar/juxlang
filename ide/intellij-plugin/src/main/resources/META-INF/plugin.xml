@@ -137,6 +137,12 @@
         language="Jux"
         implementationClass="dev.jux.intellij.completion.JuxCompletionContributor"/>
 
+    <!-- Quick Documentation (Ctrl+Q) / nav-bar tooltip: render a declaration's
+         signature + its doc comment from the PSI. Works without the LSP. -->
+    <lang.documentationProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.documentation.JuxDocumentationProvider"/>
+
     <!-- Native syntax highlighting + a customizable color page (§I.3). -->
     <lang.syntaxHighlighterFactory
         language="Jux"
