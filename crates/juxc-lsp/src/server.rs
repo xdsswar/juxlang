@@ -383,6 +383,31 @@ fn already_imports(text: &str, fqn: &str) -> bool {
 /// immediately after the `package …;` line when present, else at the very top
 /// of the file. The edit is a zero-width insertion (start == end) of a full
 /// line. Returns `None` when `text` already imports `fqn`.
+/// The dotted package declared at the top of `text` (`package a.b.c;` → `a.b.c`),
+/// or `None` for a package-less file. Used to suppress auto-import suggestions
+/// for a type that lives in the **same** package as the file being edited — a
+/// same-package type needs no import (and a file must never offer to import the
+/// very type it is declaring).
+fn current_package(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix("package") {
+            // Require a word boundary after `package`.
+            if rest.starts_with(char::is_whitespace) {
+                let pkg = rest.trim().trim_end_matches(';').trim();
+                if !pkg.is_empty() {
+                    return Some(pkg.to_string());
+                }
+            }
+        }
+        // A non-blank, non-comment line before any `package` means there is none.
+        if !t.is_empty() && !t.starts_with("//") && !t.starts_with("package") {
+            break;
+        }
+    }
+    None
+}
+
 fn import_edit(rope: &Rope, fqn: &str) -> Option<TextEdit> {
     let text = rope.to_string();
     if already_imports(&text, fqn) {
@@ -978,9 +1003,18 @@ impl LanguageServer for Backend {
                     // the bare name has exactly one declaring package we can pick
                     // it unambiguously; ambiguous names are left to the explicit
                     // code action.
+                    // Don't auto-import a type that lives in THIS file's own
+                    // package — it's already in scope (and a file must never
+                    // import the type it is itself declaring).
+                    let cur_pkg = current_package(&text);
                     let import_edit = ws
                         .type_packages
                         .get(name)
+                        .map(|pkgs| {
+                            pkgs.iter()
+                                .filter(|p| Some(p.as_str()) != cur_pkg.as_deref())
+                                .collect::<Vec<_>>()
+                        })
                         .filter(|pkgs| pkgs.len() == 1)
                         .and_then(|pkgs| {
                             let fqn = format!("{}.{name}", pkgs[0]);
@@ -1053,7 +1087,14 @@ impl LanguageServer for Backend {
             let Some(word) = word_at(&text, start_off) else { continue };
 
             let Some(pkgs) = ws.type_packages.get(&word.text) else { continue };
+            let cur_pkg = current_package(&text);
             for pkg in pkgs {
+                // A same-package type needs no import; never offer to import a
+                // type that's in this file's own package (or that this file
+                // declares).
+                if Some(pkg.as_str()) == cur_pkg.as_deref() {
+                    continue;
+                }
                 let fqn = format!("{pkg}.{}", word.text);
                 if !offered.insert(fqn.clone()) {
                     continue;
@@ -1195,6 +1236,16 @@ mod tests {
         assert_eq!(color.children.as_ref().map(|c| c.len()), Some(2));
 
         assert!(syms.iter().any(|s| s.name == "main" && s.kind == SymbolKind::FUNCTION));
+    }
+
+    /// `current_package` reads the file's own package so auto-import can skip
+    /// same-package (and self) types.
+    #[test]
+    fn current_package_is_read_for_same_package_suppression() {
+        assert_eq!(current_package("package xss.it;\npublic class Other {}").as_deref(), Some("xss.it"));
+        assert_eq!(current_package("  package a.b.c ;\n").as_deref(), Some("a.b.c"));
+        assert_eq!(current_package("// a comment\npackage p;\n").as_deref(), Some("p"));
+        assert_eq!(current_package("public class NoPkg {}"), None);
     }
 
     // ---- auto-import edit construction ----
