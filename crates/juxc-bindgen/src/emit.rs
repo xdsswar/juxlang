@@ -32,6 +32,12 @@ pub fn render(file: &StubFile) -> String {
         match item {
             StubItem::Type(t) => render_type(&mut out, t),
             StubItem::Function(f) => {
+                // `@rust("real::path")` records a free function's true Rust path
+                // so the backend imports it as `use real::path as juxName;`,
+                // bridging snake_case Rust to the camelCase Jux stub name.
+                if let Some(path) = &f.rust_path {
+                    let _ = writeln!(out, "@rust(\"{path}\")");
+                }
                 out.push_str(&render_fn(f, false));
                 out.push('\n');
             }
@@ -237,6 +243,7 @@ mod tests {
             ret: JuxType::Void,
             throws: None,
             is_unsafe: false,
+            rust_path: None,
             doc: None,
         });
         hm.methods.push(StubFn {
@@ -249,6 +256,7 @@ mod tests {
             ret: JuxType::nullable(JuxType::Param("V".into())),
             throws: None,
             is_unsafe: false,
+            rust_path: None,
             doc: None,
         });
 
@@ -278,6 +286,7 @@ mod tests {
             ret: JuxType::user("Config"),
             throws: Some(JuxType::user("ConfigError")),
             is_unsafe: false,
+            rust_path: None,
             doc: None,
         };
         assert_eq!(
@@ -298,6 +307,35 @@ mod tests {
         assert!(!out.contains("case "));
     }
 
+    /// A free function with a real Rust path renders a `@rust("…")` annotation
+    /// above it, so the backend can alias the snake_case name on import.
+    #[test]
+    fn renders_rust_path_on_free_fn() {
+        let f = StubFn {
+            visibility: Vis::Public,
+            is_static: false,
+            is_default: false,
+            name: "parseDuration".into(),
+            generics: vec![],
+            params: vec![param("s", JuxType::String)],
+            ret: JuxType::user("Duration"),
+            throws: Some(JuxType::user("DurationError")),
+            is_unsafe: false,
+            rust_path: Some("humantime::parse_duration".into()),
+            doc: None,
+        };
+        let file = StubFile {
+            items: vec![StubItem::Function(f)],
+            ..Default::default()
+        };
+        let out = render(&file);
+        assert!(out.contains("@rust(\"humantime::parse_duration\")"), "{out}");
+        assert!(
+            out.contains("public Duration parseDuration(String s) throws DurationError;"),
+            "{out}",
+        );
+    }
+
     /// An `unsafe` Rust fn surfaces with the Jux `unsafe` modifier (§A.2.4),
     /// after `static`, before the return type.
     #[test]
@@ -312,6 +350,7 @@ mod tests {
             ret: JuxType::Prim("i32"),
             throws: None,
             is_unsafe: true,
+            rust_path: None,
             doc: None,
         };
         assert_eq!(render_fn(&f, false), "public unsafe i32 getpid();");

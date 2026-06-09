@@ -130,6 +130,13 @@ pub struct StubFn {
     /// (§A.2.4) so the front end records it and the type checker requires an
     /// `unsafe` context at every call site (§A.2.8).
     pub is_unsafe: bool,
+    /// The **real** fully-qualified Rust path of a free function
+    /// (`humantime::parse_duration`), from the rustdoc summary. Rendered as a
+    /// `@rust("…")` annotation so the backend lowers the import to
+    /// `use humantime::parse_duration as parseDuration;` — bridging the
+    /// snake_case Rust name to the camelCase Jux stub name. `None` for methods
+    /// (dispatched on the type) and when unavailable.
+    pub rust_path: Option<String>,
     pub doc: Option<String>,
 }
 

@@ -704,6 +704,11 @@ pub struct FunctionSig {
     /// Rust `Result<T, E>` return (§G.5.4). The backend unwraps the `Result`
     /// at the call site and re-throws the error on `Err`.
     pub is_foreign_result: bool,
+    /// The real Rust path of a foreign free function (`humantime::parse_duration`)
+    /// recovered from its `@rust("…")` annotation. The backend imports it as
+    /// `use <rust_path> as <jux_name>;` so the snake_case Rust name resolves
+    /// behind the camelCase Jux stub name. `None` for ordinary Jux functions.
+    pub rust_path: Option<String>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -2487,6 +2492,13 @@ fn insert_function(
             // Rust `fn -> Result<T, E>` (§G.5.4). Its call site must unwrap the
             // `Result` (and re-throw the error) since Jux sees only `T`.
             is_foreign_result: is_external && !fn_decl.throws.is_empty(),
+            // `@rust("real::path")` on a foreign free function records its true
+            // Rust path (snake_case name) so the backend can alias it on import.
+            rust_path: if is_external {
+                rust_path_annotation(&fn_decl.annotations)
+            } else {
+                None
+            },
             span: fn_decl.span,
         },
     );

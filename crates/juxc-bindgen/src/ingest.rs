@@ -117,9 +117,12 @@ fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
                 collected.push((name.clone(), StubItem::Type(build_trait(krate, name, &t.generics, &t.items, item))));
             }
             ItemEnum::Function(f) if is_public(&item.visibility) && !member_ids.contains(&item.id.0) => {
-                // Free function (§G.5.5).
+                // Free function (§G.5.5). Record its real Rust path so the
+                // backend can alias the snake_case Rust name to the camelCase
+                // Jux stub name on import.
                 let mut sf = map_function(name, f);
                 sf.is_static = false;
+                sf.rust_path = real_rust_path(krate, item);
                 collected.push((name.clone(), StubItem::Function(sf)));
             }
             ItemEnum::Constant { type_, const_: _ } if is_public(&item.visibility) => {
@@ -365,6 +368,9 @@ fn map_function(name: &str, f: &Function) -> StubFn {
         ret,
         throws,
         is_unsafe: f.header.is_unsafe,
+        // Set by the free-function call site (which has the rustdoc item); a
+        // method leaves this `None` (it's dispatched on its `@rust`-pathed type).
+        rust_path: None,
         doc: None,
     }
 }

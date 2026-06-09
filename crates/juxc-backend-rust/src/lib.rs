@@ -2173,6 +2173,24 @@ impl RustEmitter {
             }
         }
 
+        // A foreign free FUNCTION with an `@rust("real::path")` annotation
+        // (`FunctionSig::rust_path`): the Rust name is snake_case
+        // (`parse_duration`) but the Jux stub name is camelCase
+        // (`parseDuration`), so we bind the real path UNDER the Jux name with an
+        // alias — `use humantime::parse_duration as parseDuration;`. The bare
+        // call `parseDuration(...)` then resolves to the foreign function.
+        if let Some(sig) = self.symbols.functions.get(&fqn) {
+            if let Some(real) = sig.rust_path.as_ref() {
+                // The Jux-facing name is the import's alias if present, else the
+                // last segment of the imported path (the camelCase stub name).
+                let jux_name = match alias {
+                    Some(a) => a.text.as_str(),
+                    None => segs.last().copied().unwrap_or(""),
+                };
+                return Some(format!("use {real} as {jux_name};"));
+            }
+        }
+
         // Fallback for foreign *non-type* symbols (free functions, consts) that
         // carry no `@rust` annotation: a `rust.<crate>.…` import on a foreign
         // crate other than `std`. The crate's `.jux.d` package mirrors the crate
