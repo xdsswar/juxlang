@@ -143,6 +143,13 @@
         language="Jux"
         implementationClass="dev.jux.intellij.documentation.JuxDocumentationProvider"/>
 
+    <!-- Java-style inline parameter-name hints inside resolved calls
+         (`foo(name: a, …)`). By-name over file-local declarations; ambiguous
+         overloads get no hint so a label is never wrong. -->
+    <codeInsight.parameterNameHints
+        language="Jux"
+        implementationClass="dev.jux.intellij.hints.JuxInlayHintsProvider"/>
+
     <!-- Native syntax highlighting + a customizable color page (§I.3). -->
     <lang.syntaxHighlighterFactory
         language="Jux"
