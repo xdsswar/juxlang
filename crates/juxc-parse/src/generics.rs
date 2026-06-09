@@ -21,7 +21,7 @@ impl<'a> Parser<'a> {
             return Vec::new();
         }
         let mut params = Vec::new();
-        if !self.at(&TokenKind::Gt) {
+        if !self.at_generic_close() {
             loop {
                 let start = self.peek_span();
                 let Some(name) = self.parse_ident() else { break };
@@ -42,12 +42,14 @@ impl<'a> Parser<'a> {
                 }
                 let end = self.last_consumed_span();
                 params.push(TypeParam { name, bounds, span: start.join(end) });
-                if !self.eat(&TokenKind::Comma) {
+                // A bound's nested generics may have parked a split `>` — that's
+                // our close, so don't look for another comma-separated param.
+                if self.pending_gt > 0 || !self.eat(&TokenKind::Comma) {
                     break;
                 }
             }
         }
-        self.expect(&TokenKind::Gt, "'>' to close generic parameters");
+        self.close_generic_angle("'>' to close generic parameters");
         params
     }
 
@@ -67,16 +69,19 @@ impl<'a> Parser<'a> {
             return Vec::new();
         }
         let mut args = Vec::new();
-        if !self.at(&TokenKind::Gt) {
+        if !self.at_generic_close() {
             loop {
                 let Some(arg) = self.parse_one_generic_arg() else { break };
                 args.push(arg);
-                if !self.eat(&TokenKind::Comma) {
+                // A nested arg ending in `>>` parks a split `>` here — that `>`
+                // closes THIS list (e.g. the outer `>` of `List<List<int>>`), so
+                // stop before consuming a comma we don't have.
+                if self.pending_gt > 0 || !self.eat(&TokenKind::Comma) {
                     break;
                 }
             }
         }
-        self.expect(&TokenKind::Gt, "'>' to close generic arguments");
+        self.close_generic_angle("'>' to close generic arguments");
         args
     }
 

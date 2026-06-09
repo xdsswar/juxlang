@@ -283,55 +283,14 @@ impl<'a> Parser<'a> {
                 ) {
                     i += 1;
                 }
-                let starts_with_type = matches!(
-                    self.tokens.get(i).map(|t| &t.kind),
-                    Some(TokenKind::Ident(_)) | Some(TokenKind::Kw(Keyword::Void)),
-                );
-                if starts_with_type {
-                    i += 1;
-                    // Skip a generic-arg list `<...>` after the type
-                    // name (`Pair<A, B>`, `Map<K, V>`, …) by
-                    // balancing angle brackets. Without this the
-                    // lookahead bails on the leading `<` and the
-                    // dispatcher routes a perfectly good method
-                    // declaration to the field parser. Mirrors the
-                    // same scan in `looks_like_typed_local`.
-                    if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
-                        i += 1;
-                        let mut depth: u32 = 1;
-                        while depth > 0 {
-                            match self.tokens.get(i).map(|t| &t.kind) {
-                                Some(TokenKind::Lt) => depth += 1,
-                                Some(TokenKind::Gt) => depth -= 1,
-                                Some(TokenKind::Eof) | None => break,
-                                _ => {}
-                            }
-                            i += 1;
-                        }
-                    }
-                    // Skip array dims attached to the type (not legal
-                    // on `void` returns, but we let parse_return_type
-                    // surface that diagnostic if it happens).
-                    while matches!(
-                        self.tokens.get(i).map(|t| &t.kind),
-                        Some(TokenKind::LBracket)
-                    ) {
-                        i += 1;
-                        let mut depth = 1;
-                        while depth > 0 {
-                            match self.tokens.get(i).map(|t| &t.kind) {
-                                Some(TokenKind::LBracket) => depth += 1,
-                                Some(TokenKind::RBracket) => depth -= 1,
-                                Some(TokenKind::Eof) | None => break,
-                                _ => {}
-                            }
-                            i += 1;
-                        }
-                    }
-                    // Optional `?` nullable marker.
-                    if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Question)) {
-                        i += 1;
-                    }
+                // Advance `i` past the return type — a nominal type (with
+                // generics / array / `?` suffixes, glued-`>>` aware) OR a
+                // function type `(A) -> R` (so a member that returns a closure,
+                // `(int) -> void onClick();`, is classified as a method, not a
+                // field). `scan_type_at` returns `None` when no type is present.
+                let after_return_type = self.scan_type_at(i);
+                if let Some(j) = after_return_type {
+                    i = j;
                     // Member name.
                     if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
                         i += 1;
@@ -349,6 +308,8 @@ impl<'a> Parser<'a> {
                                 match self.tokens.get(i).map(|t| &t.kind) {
                                     Some(TokenKind::Lt) => depth += 1,
                                     Some(TokenKind::Gt) => depth -= 1,
+                                    // A glued `>>` closes two nested generic lists.
+                                    Some(TokenKind::GtGt) => depth = depth.saturating_sub(2),
                                     Some(TokenKind::Eof) | None => break,
                                     _ => {}
                                 }
@@ -394,6 +355,8 @@ impl<'a> Parser<'a> {
                             match self.tokens.get(i).map(|t| &t.kind) {
                                 Some(TokenKind::Lt) => depth += 1,
                                 Some(TokenKind::Gt) => depth -= 1,
+                                // A glued `>>` closes two nested generic lists.
+                                Some(TokenKind::GtGt) => depth = depth.saturating_sub(2),
                                 Some(TokenKind::Eof) | None => break,
                                 _ => {}
                             }
@@ -405,7 +368,7 @@ impl<'a> Parser<'a> {
                         Some(TokenKind::LBracket)
                     ) {
                         i += 1;
-                        let mut depth = 1;
+                        let mut depth: u32 = 1;
                         while depth > 0 {
                             match self.tokens.get(i).map(|t| &t.kind) {
                                 Some(TokenKind::LBracket) => depth += 1,
@@ -559,8 +522,16 @@ impl<'a> Parser<'a> {
             );
         let ty = if no_type { None } else { Some(self.parse_type_ref()?) };
         let name = self.parse_ident()?;
-        self.expect(&TokenKind::Eq, "'=' in const declaration");
-        let value = self.parse_expr()?;
+        // The initializer is optional: a `.jux.d` declaration stub declares a
+        // constant by type and name only (`public const char SEP;`, §G.2 — the
+        // real value lives in the foreign crate). When `=` is absent we
+        // synthesize an inert `null` placeholder; the stub is never lowered and
+        // its diagnostics are suppressed, so the value is never observed.
+        let value = if self.eat(&TokenKind::Eq) {
+            self.parse_expr()?
+        } else {
+            juxc_ast::Expr::Literal(juxc_ast::Literal::Null)
+        };
         self.expect(&TokenKind::Semicolon, "';' after const declaration");
         let end = self.last_consumed_span();
         Some(juxc_ast::ConstDecl {
@@ -704,12 +675,14 @@ impl<'a> Parser<'a> {
                     // Eat any `<T, ...>` generic arg list — naive depth
                     // counter handles nested generics.
                     if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
-                        let mut depth = 1;
+                        let mut depth: u32 = 1;
                         i += 1;
                         while depth > 0 {
                             match self.tokens.get(i).map(|t| &t.kind) {
                                 Some(TokenKind::Lt) => depth += 1,
                                 Some(TokenKind::Gt) => depth -= 1,
+                                // A glued `>>` closes two nested generic lists.
+                                Some(TokenKind::GtGt) => depth = depth.saturating_sub(2),
                                 Some(TokenKind::Eof) | None => break,
                                 _ => {}
                             }
@@ -1337,6 +1310,8 @@ impl<'a> Parser<'a> {
                             match self.tokens.get(j).map(|t| &t.kind) {
                                 Some(TokenKind::Lt) => depth += 1,
                                 Some(TokenKind::Gt) => depth -= 1,
+                                // A glued `>>` closes two nested generic lists.
+                                Some(TokenKind::GtGt) => depth = depth.saturating_sub(2),
                                 Some(TokenKind::Eof) | None => break,
                                 _ => {}
                             }
@@ -1431,6 +1406,9 @@ impl<'a> Parser<'a> {
         let start = self.peek_span();
         self.expect_kw(Keyword::Enum, "expected `enum` keyword");
         let name = self.parse_ident()?;
+        // Optional generic parameters per §A.2.4 — `enum Cow<B>`,
+        // `enum Entry<K, V, A>`. Variant payloads may reference them.
+        let generic_params = self.parse_generic_params();
         self.expect(&TokenKind::LBrace, "'{' to start enum body");
 
         let mut variants = Vec::new();
@@ -1510,6 +1488,7 @@ impl<'a> Parser<'a> {
             annotations,
             visibility,
             name,
+            generic_params,
             variants,
             operators,
             span: start.join(end),
@@ -1647,6 +1626,113 @@ impl<'a> Parser<'a> {
     /// generic-argument list appears in a position whose AST keeps only the bare
     /// name (e.g. a `throws` error type), so the arguments are parsed-and-dropped
     /// rather than left to derail the surrounding declaration.
+    /// Non-consuming lookahead: if a **function type** (`(A, …) -> R`, grammar
+    /// §A.2.7) begins at token index `i`, return the index just past it;
+    /// otherwise `None`. Used by the class-member discriminator so a member that
+    /// *returns* a function type (`(int) -> void onClick();`) is classified as a
+    /// method rather than mis-read as a field. Handles the balanced parameter
+    /// parens, an optional `async` / `throws` prefix on the result, and a
+    /// nominal-or-nested-function result type.
+    fn scan_fn_type_at(&self, mut i: usize) -> Option<usize> {
+        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen)) {
+            return None;
+        }
+        // Balanced parameter parens.
+        i += 1;
+        let mut depth: u32 = 1;
+        while depth > 0 {
+            match self.tokens.get(i).map(|t| &t.kind) {
+                Some(TokenKind::LParen) => depth += 1,
+                Some(TokenKind::RParen) => depth -= 1,
+                Some(TokenKind::Eof) | None => return None,
+                _ => {}
+            }
+            i += 1;
+        }
+        // Optional `async`, then optional `throws Name (, Name)*`.
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Kw(Keyword::Async))) {
+            i += 1;
+        }
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Kw(Keyword::Throws))) {
+            i += 1;
+            loop {
+                if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
+                    return None;
+                }
+                i += 1;
+                if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Comma)) {
+                    break;
+                }
+                i += 1;
+            }
+        }
+        // The `->` is what distinguishes a function type from a parenthesised /
+        // tuple type. Without it, this isn't a function type.
+        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Arrow)) {
+            return None;
+        }
+        i += 1;
+        // Result type: `void`, a nominal type (with generics / array / nullable
+        // suffixes), or a nested function type.
+        Some(self.scan_type_at(i)?)
+    }
+
+    /// Non-consuming lookahead: return the index just past a **type** starting at
+    /// `i` — a nominal type (`Map<K, V>`, `int[]`, `T?`, with glued-`>>`
+    /// handling) or a function type (`(A) -> R`). `None` if no type is there.
+    /// `void` is accepted as a (result-position) type. Shared by the member
+    /// discriminator and `scan_fn_type_at`.
+    fn scan_type_at(&self, mut i: usize) -> Option<usize> {
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen)) {
+            return self.scan_fn_type_at(i);
+        }
+        match self.tokens.get(i).map(|t| &t.kind) {
+            Some(TokenKind::Kw(Keyword::Void)) => {
+                return Some(i + 1);
+            }
+            Some(TokenKind::Ident(_)) => {
+                i += 1;
+            }
+            _ => return None,
+        }
+        // Generic args `<…>` (glued `>>` closes two levels).
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
+            i += 1;
+            let mut depth: u32 = 1;
+            while depth > 0 {
+                match self.tokens.get(i).map(|t| &t.kind) {
+                    Some(TokenKind::Lt) => depth += 1,
+                    Some(TokenKind::Gt) => depth -= 1,
+                    Some(TokenKind::GtGt) => depth = depth.saturating_sub(2),
+                    Some(TokenKind::Eof) | None => break,
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
+        // Interleaved `?` / `[…]` suffixes.
+        loop {
+            match self.tokens.get(i).map(|t| &t.kind) {
+                Some(TokenKind::Question) => i += 1,
+                Some(TokenKind::LBracket) => {
+                    i += 1;
+                    let mut depth: u32 = 1;
+                    while depth > 0 {
+                        match self.tokens.get(i).map(|t| &t.kind) {
+                            Some(TokenKind::LBracket) => depth += 1,
+                            Some(TokenKind::RBracket) => depth -= 1,
+                            Some(TokenKind::Eof) | None => break,
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                }
+                _ => break,
+            }
+        }
+        Some(i)
+    }
+
     fn skip_balanced_angle_brackets(&mut self) {
         if !self.at(&TokenKind::Lt) {
             return;
@@ -1657,6 +1743,8 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 TokenKind::Lt => depth += 1,
                 TokenKind::Gt => depth -= 1,
+                // A glued `>>` closes two nested generic lists at once.
+                TokenKind::GtGt => depth = depth.saturating_sub(2),
                 _ => {}
             }
             self.advance();

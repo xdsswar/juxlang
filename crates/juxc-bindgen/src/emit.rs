@@ -133,17 +133,25 @@ fn render_ctor(out: &mut String, c: &StubCtor) {
     let _ = writeln!(out, "    {}{}({});", c.visibility.prefix(), c.name, render_params(&c.params));
 }
 
-/// Render a method or free function. `in_interface` lets an abstract method
-/// drop its body to `;` (which it does regardless — stubs have no bodies).
-fn render_fn(f: &StubFn, _in_interface: bool) -> String {
+/// Render a method or free function. `in_interface` suppresses the `static`
+/// modifier: a Jux interface method that carries `static` (or `default`) must
+/// have a body, which a signature-only stub never does — so inside an interface
+/// every member is surfaced as a plain abstract signature.
+fn render_fn(f: &StubFn, in_interface: bool) -> String {
     let mut s = String::new();
     s.push_str(f.visibility.prefix());
-    if f.is_static {
+    // `static` is valid on a *class* stub method (no body needed there), but on
+    // an interface a bodyless `static` is `E0200`. A Rust trait's associated
+    // function (no `self`) is surfaced as a plain interface signature instead.
+    if f.is_static && !in_interface {
         s.push_str("static ");
     }
-    if f.is_default {
-        s.push_str("default ");
-    }
+    // NB: a Rust trait's *provided* method (`f.is_default`) is NOT rendered with
+    // the Jux `default` keyword. A `.jux.d` stub is signature-only, and a Jux
+    // `default` method requires a body (else E0200) — which a stub never has.
+    // The `default`-ness isn't representable in a bodyless view and is moot
+    // anyway (stubs aren't lowered, §G.9), so it's surfaced as a plain
+    // signature. `is_default` stays on the IR for non-stub consumers.
     let _ = write!(s, "{} {}{}({})", f.ret, f.name, render_generics(&f.generics), render_params(&f.params));
     if let Some(err) = &f.throws {
         let _ = write!(s, " throws {err}");

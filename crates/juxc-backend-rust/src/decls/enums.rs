@@ -45,6 +45,8 @@ impl RustEmitter {
         self.emit_visibility(enum_decl.visibility);
         self.w.push_str("enum ");
         self.w.push_str(&enum_decl.name.text);
+        // `enum Name<T, U>` — generic parameters per §A.2.4.
+        self.emit_generic_params(&enum_decl.generic_params);
         self.w.push_str(" {\n");
 
         self.w.indent_inc();
@@ -76,8 +78,11 @@ impl RustEmitter {
         let has_inherent_ops = enum_decl.operators.iter().any(|o| !o.is_deleted);
         if has_inherent_ops {
             self.w.emit_indent();
-            self.w.push_str("impl ");
+            self.w.push_str("impl");
+            self.emit_generic_params(&enum_decl.generic_params);
+            self.w.push(' ');
             self.w.push_str(&enum_decl.name.text);
+            self.emit_generic_params_as_args(&enum_decl.generic_params);
             self.w.push_str(" {\n");
             for op in &enum_decl.operators {
                 self.emit_operator_as_method(op);
@@ -104,7 +109,17 @@ impl RustEmitter {
             .operators
             .iter()
             .any(|o| o.kind == OperatorKind::ToString && o.is_deleted);
-        if !enum_decl.variants.is_empty() && !has_string_override && !string_deleted {
+        // Auto-Display is skipped for **generic** enums (same convention as
+        // generic records, `generic_record_skips_display_for_now`): a correct
+        // `impl<T> Display` would need `T: Display` bounds derived per payload,
+        // which the conditional-derive machinery doesn't yet compute. A generic
+        // enum still lowers, prints via `Debug`, and is fully usable; the
+        // value-rendering Display lands with the bound-inference work.
+        if !enum_decl.variants.is_empty()
+            && !has_string_override
+            && !string_deleted
+            && enum_decl.generic_params.is_empty()
+        {
             self.emit_enum_auto_display(enum_decl);
         }
 

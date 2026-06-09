@@ -122,13 +122,20 @@ fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
                 sf.is_static = false;
                 collected.push((name.clone(), StubItem::Function(sf)));
             }
-            ItemEnum::Constant { type_, const_ } if is_public(&item.visibility) => {
+            ItemEnum::Constant { type_, const_: _ } if is_public(&item.visibility) => {
                 collected.push((
                     name.clone(),
                     StubItem::Const(StubConst {
                         name: escape_keyword(name),
                         ty: map_type(type_),
-                        value: const_.value.clone().or_else(|| Some(const_.expr.clone())),
+                        // The rustdoc value/expr is a *Rust* expression
+                        // (`crate::sys::path::SEPARATORS`, `'\\'`, a const fn
+                        // call, …) that has no valid Jux spelling. A stub const is
+                        // signature-only and never lowered (§G.9), so its
+                        // initializer carries no information — elide it to a
+                        // bodyless `const T NAME;` rather than emit unparseable
+                        // text.
+                        value: None,
                     }),
                 ));
             }
@@ -138,7 +145,9 @@ fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
                     StubItem::Const(StubConst {
                         name: escape_keyword(name),
                         ty: map_type(&s.type_),
-                        value: Some(s.expr.clone()),
+                        // See the `Constant` arm: the Rust initializer has no Jux
+                        // spelling and a stub never lowers it.
+                        value: None,
                     }),
                 ));
             }

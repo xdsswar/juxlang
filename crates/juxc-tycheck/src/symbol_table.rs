@@ -138,6 +138,22 @@ impl SymbolTable {
         let matches_last = |fqn: &String| -> bool {
             fqn.rsplit('.').next().is_some_and(|seg| seg == name)
         };
+        // Classes: an unqualified name must prefer a **non-external** class
+        // (the user's own / `jux.std`) over an auto-loaded `.jux.d` stub class
+        // (the Rust-std view). Names like `Box`, `String`, `Vec`, `HashMap`
+        // exist in BOTH `jux.std` and the generated `rust.std` surface; without
+        // this preference an unqualified `Box` could bind to `rust.std.Box` and
+        // the backend would emit a non-existent `rust::std::Box` path. The
+        // Rust-std type stays reachable through an explicit `import rust.std.Box`
+        // (exact-FQN resolution, which never comes here).
+        if let Some(k) = self
+            .classes
+            .iter()
+            .find(|(k, sig)| matches_last(k) && !sig.is_external)
+            .map(|(k, _)| k.clone())
+        {
+            return Some(k);
+        }
         if let Some(k) = self.classes.keys().find(|k| matches_last(k)) {
             return Some(k.clone());
         }

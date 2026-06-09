@@ -459,4 +459,65 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
     }
+
+    /// END-TO-END: the **generated** `rust.std` surface — produced from the
+    /// installed toolchain's rustdoc JSON, not a project-local `.jux.d` — feeds
+    /// BOTH editor paths through the LSP:
+    ///
+    /// 1. **Auto-import** — completing the bare `HashMap` offers
+    ///    `import rust.std.HashMap` (the type's declaring package reaches
+    ///    `WorkspaceIndex::type_packages` via the auto-loaded std stub).
+    /// 2. **Member completion** — a `rust.std.HashMap` receiver lists its Rust
+    ///    methods in Jux syntax (`insert`, `get`, `len`, `containsKey`).
+    ///
+    /// There is no project `.jux-stubs/` here: the only source of
+    /// `rust.std.HashMap` is the std stub `check_workspace` auto-loads. Gated on
+    /// the `rust-docs-json` rustup component — when std autocomplete is
+    /// unavailable the test skips, so CI without the component stays green.
+    #[test]
+    fn generated_rust_std_feeds_completion_and_auto_import() {
+        // Make sure no `$JUX_STUBS_DIR` override is shadowing the generated path.
+        std::env::remove_var("JUX_STUBS_DIR");
+
+        let root = temp_root("generated_std_lsp");
+        // User code constructing a HashMap WITHOUT importing it — so the import
+        // is exactly what we expect the editor to offer.
+        let main_src = "public void main() {\n    var m = new HashMap();\n}\n";
+        let main = root.join("main.jux");
+        fs::write(&main, main_src).unwrap();
+
+        // The index routes through `check_workspace`, which auto-loads the
+        // generated `rust.std`.
+        let index = crate::workspace::index_workspace(&root, &HashMap::new());
+
+        // Gate: no `HashMap` ⇒ `rust-docs-json` isn't installed ⇒ skip.
+        let Some(pkgs) = index.type_packages.get("HashMap") else {
+            eprintln!("rust-docs-json not installed — skipping generated-std LSP test");
+            let _ = fs::remove_dir_all(&root);
+            return;
+        };
+
+        // (1) Auto-import candidate is the generated std package.
+        assert!(
+            pkgs.contains(&"rust.std".to_string()),
+            "completing `HashMap` should offer `import rust.std.HashMap`, got {pkgs:?}"
+        );
+
+        // (2) Member completion on a `rust.std.HashMap` receiver lists the Rust
+        // method surface in Jux syntax.
+        let main_uri = Url::from_file_path(&main).unwrap();
+        let rope = Rope::from_str(main_src);
+        let analysis = analyze_workspace(&root, &main_uri, &rope);
+        let recv = Ty::User { name: "rust.std.HashMap".to_string(), generic_args: vec![] };
+        let members = crate::intel::members_of(&analysis.symbols, &recv);
+        let names: Vec<&str> = members.iter().map(|m| m.name.as_str()).collect();
+        for expected in ["insert", "get", "len", "containsKey"] {
+            assert!(
+                names.contains(&expected),
+                "rust.std.HashMap should list `{expected}` in Jux syntax, got {names:?}"
+            );
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

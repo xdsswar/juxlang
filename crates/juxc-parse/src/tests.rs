@@ -2435,3 +2435,106 @@ fn generic_type_alias_parses() {
     assert_eq!(alias.target.name.segments[0].text, "Tuple");
     assert_eq!(alias.target.generic_args.len(), 2);
 }
+
+// ============================================================================
+// Production syntax coverage (JUX-GRAMMAR §A.2.4–§A.2.7) — features the Rust
+// std/crate stub surface exercises end-to-end. Each must parse with ZERO
+// diagnostics (`parse_clean` asserts that).
+// ============================================================================
+
+/// Nested generics whose closing `>>` is glued into one `GtGt` token by the
+/// lexer still close two lists (`List<List<int>>`, `Map<K, Vec<V>>`).
+#[test]
+fn nested_generics_with_glued_gtgt_parse() {
+    let ast = parse_clean(
+        "public class C {\n\
+            public List<List<int>> a();\n\
+            public Map<String, List<int>> b();\n\
+            public A<B<C<int>>> c();\n\
+         }",
+    );
+    let TopLevelDecl::Class(c) = &ast.items[0] else { panic!("class") };
+    assert_eq!(c.methods.len(), 3);
+}
+
+/// A `struct` declaration parses (grammar §A.2.5) as a `ClassDecl` flagged
+/// `is_struct`, with its fields and generics.
+#[test]
+fn struct_decl_parses_with_fields_and_generics() {
+    let ast = parse_clean(
+        "public struct Pair<A, B> {\n\
+            public A first;\n\
+            public B second;\n\
+         }",
+    );
+    let TopLevelDecl::Class(c) = &ast.items[0] else { panic!("struct→class") };
+    assert!(c.is_struct, "struct origin recorded");
+    assert!(c.is_final, "structs are implicitly final");
+    assert_eq!(c.generic_params.len(), 2);
+    assert_eq!(c.fields.len(), 2);
+}
+
+/// Generic enums carry their type parameters (`enum Cow<B>`,
+/// `enum Entry<K, V, A>`), and variant payloads may reference them.
+#[test]
+fn generic_enum_parses() {
+    let ast = parse_clean(
+        "public enum Cow<B> {\n\
+            Borrowed(B), Owned(B)\n\
+         }",
+    );
+    let TopLevelDecl::Enum(e) = &ast.items[0] else { panic!("enum") };
+    assert_eq!(e.generic_params.len(), 1);
+    assert_eq!(e.generic_params[0].name.text, "B");
+    assert_eq!(e.variants.len(), 2);
+}
+
+/// Method-level generic parameters between the name and the parameter list
+/// (`T map<U>(U f)`) are classified as methods, not fields.
+#[test]
+fn method_level_generics_parse() {
+    let ast = parse_clean(
+        "public class C {\n\
+            public U map<U>(U f);\n\
+         }",
+    );
+    let TopLevelDecl::Class(c) = &ast.items[0] else { panic!("class") };
+    assert_eq!(c.methods.len(), 1);
+    assert_eq!(c.methods[0].generic_params.len(), 1);
+}
+
+/// Function types in return and parameter position, including a `void` result
+/// (`(A) -> void`), parse.
+#[test]
+fn function_types_in_return_and_param_parse() {
+    let ast = parse_clean(
+        "public class C {\n\
+            public (int) -> void onClick();\n\
+            public void setHook((int) -> bool h);\n\
+         }",
+    );
+    let TopLevelDecl::Class(c) = &ast.items[0] else { panic!("class") };
+    assert_eq!(c.methods.len(), 2);
+}
+
+/// Nullable and array suffixes parse in EITHER order — `T?[]` and `T[]?`.
+#[test]
+fn nullable_and_array_suffix_order_independent() {
+    let ast = parse_clean(
+        "public class C {\n\
+            public int?[] a();\n\
+            public int[]? b();\n\
+         }",
+    );
+    let TopLevelDecl::Class(c) = &ast.items[0] else { panic!("class") };
+    assert_eq!(c.methods.len(), 2);
+}
+
+/// A constant may be declared without an initializer (`.jux.d` stub form,
+/// §G.2) — `public const char SEP;`.
+#[test]
+fn bodyless_const_parses() {
+    let ast = parse_clean("public const char SEP;");
+    let TopLevelDecl::Const(c) = &ast.items[0] else { panic!("const") };
+    assert_eq!(c.name.text, "SEP");
+}

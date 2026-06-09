@@ -154,7 +154,7 @@ Rust's `&T` and `&mut T` carry no Jux spelling — they map to plain `T`, and Ju
 The grammar reserves `tuple-type` (`(A, B)`, §A.2.7) and `pointer-type` (`T*`, §A.2.7, `unsafe`-only) but the Phase-1 parser does not yet read either spelling back in. Because a generated stub must **parse** for its enclosing member to survive into the symbol table (and thus autocomplete), `bindgen` surfaces these two types under nominal placeholders until the real type-syntax features land (the pointer/tuple work travels with the broader `unsafe` / C-interop effort):
 
 - a tuple `(A, B, …)` → `Tuple<A, B, …>` (the unit tuple `()` still folds to `void` in return position);
-- a raw pointer `*const T` / `*mut T` → `Ptr<T>`.
+- a raw pointer `*const T` / `*mut T` → `Ptr<T>` (a pointer to unit, `*mut ()` — the common opaque `void*` — has a `Void` pointee, which is not a valid type argument, so it surfaces as `Ptr<Object>` rather than the unparseable `Ptr<void>`).
 
 Both spellings keep the element/pointee types visible in signatures, hover, and completion. `Tuple<…>` / `Ptr<T>` are not declared types in Phase 1 — they read as opaque foreign names, which is harmless because a stub's own signatures are never validated (§G.9.1). When `tuple-type` / `pointer-type` gain parser and lowering support, this section is removed and the §G.3.1 rows revert to `(A, B)` / `T*`.
 
@@ -339,6 +339,16 @@ public interface Read {
     default int readToEnd(List<byte> buf) throws IoError;
 }
 ```
+
+#### G.6.4.1. Signature-Only Surfacing of Bodied / Static / Valued Members
+
+A `.jux.d` stub is **signature-only** (§G.2), which constrains how three Rust constructs surface — each would otherwise require a body Jux's grammar mandates but a stub never has:
+
+- **Provided trait methods** (a Rust default impl) are surfaced as **plain abstract signatures**, not Jux `default` methods. A Jux `default` method requires a body (`E0200`); the provided-ness isn't representable bodyless and is moot for a never-lowered stub. (The example above shows the *intent*; the emitted `.jux.d` drops the `default` keyword.)
+- **Associated functions without a receiver** on a trait (Rust "static" trait methods) are surfaced as **plain abstract signatures**, not Jux `static` interface methods — a bodyless `static` interface method is likewise `E0200`. (On a *class* stub, `static` is kept: a class may carry a bodyless static signature.)
+- **Constants / statics** are surfaced as **bodyless** `const T NAME;` declarations. The rustdoc initializer is a *Rust* expression (`crate::sys::path::SEP`, `'\\'`, a const-fn call) with no Jux spelling; since a stub const is never lowered (§G.9) the value carries no information, so it is elided. The parser accepts an initializer-less `const` exactly for this stub form (§A.2.2 / §G.2).
+
+These are surfacing choices, not language changes: the real crate provides every body, value, and static dispatch at link time.
 
 ### G.6.5. First-Class `import rust.X`
 

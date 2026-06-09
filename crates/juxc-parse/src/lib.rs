@@ -101,6 +101,15 @@ pub(crate) struct Parser<'a> {
     pub(crate) tokens: &'a [Token],
     /// Index of the *next* token to be consumed. Indexes into `tokens`.
     pub(crate) pos: usize,
+    /// Leftover closing `>`s from a split `>>` token. The lexer glues adjacent
+    /// `>` into a single `GtGt`, but in **type position** a `>>` closes two
+    /// nested generic lists (`List<List<int>>`). When a generic-close consumes a
+    /// `GtGt`, it advances past the token and parks the *second* `>` here for the
+    /// enclosing generic list to consume. Always drained back to 0 within a
+    /// balanced generic close; only ever touched by the generic-close helpers
+    /// ([`Self::close_generic_angle`]), so ordinary `>>`-shift parsing is
+    /// unaffected. See `parse_generic_args` / `parse_generic_params`.
+    pub(crate) pending_gt: u8,
     /// Diagnostics emitted along the way, in source order.
     pub(crate) diagnostics: Vec<Diagnostic>,
 }
@@ -108,7 +117,53 @@ pub(crate) struct Parser<'a> {
 impl<'a> Parser<'a> {
     /// Build a parser over the given token slice.
     pub(crate) fn new(tokens: &'a [Token]) -> Self {
-        Self { tokens, pos: 0, diagnostics: Vec::new() }
+        Self { tokens, pos: 0, pending_gt: 0, diagnostics: Vec::new() }
+    }
+
+    // ------------------------------------------------------------------
+    // Generic-angle closing — `>` token splitting
+    // ------------------------------------------------------------------
+
+    /// True when a generic-argument/parameter list is positioned at its closing
+    /// `>` — either a parked split-`>` ([`Self::pending_gt`]), a real `Gt`, or
+    /// the first `>` of a `GtGt`. Used to decide "close now vs. expect another
+    /// comma-separated entry".
+    pub(crate) fn at_generic_close(&self) -> bool {
+        self.pending_gt > 0 || matches!(self.peek(), TokenKind::Gt | TokenKind::GtGt)
+    }
+
+    /// Consume one closing `>` of a generic list, transparently splitting a
+    /// `>>` (`GtGt`) token: the first `>` closes the current list and the second
+    /// is parked in [`Self::pending_gt`] for the enclosing list. Emits
+    /// `E0200` via `expected` when no `>` is available. Returns whether a `>`
+    /// was consumed.
+    pub(crate) fn close_generic_angle(&mut self, expected: &str) -> bool {
+        if self.pending_gt > 0 {
+            self.pending_gt -= 1;
+            return true;
+        }
+        match self.peek() {
+            TokenKind::Gt => {
+                self.advance();
+                true
+            }
+            TokenKind::GtGt => {
+                // Consume the glued `>>` and park its second `>`.
+                self.advance();
+                self.pending_gt += 1;
+                true
+            }
+            _ => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        format!("expected {expected}"),
+                    )
+                    .with_span(self.peek_span()),
+                );
+                false
+            }
+        }
     }
 
     // ------------------------------------------------------------------

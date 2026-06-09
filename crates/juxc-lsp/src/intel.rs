@@ -494,7 +494,14 @@ fn bare_of(fqn: &str) -> &str {
 /// Returns `None` for primitives / arrays / unresolved types.
 fn user_type_name(ty: &Ty) -> Option<&str> {
     match ty {
-        Ty::User { name, .. } => Some(bare_of(name)),
+        // Return the receiver's *full* name (FQN when it carries a package),
+        // NOT the bare last segment: `class_key_for` / `lookup_by_bare` try an
+        // exact-key hit before the bare-name fallback, so a fully-qualified
+        // receiver like `rust.std.HashMap` resolves to its own members instead
+        // of colliding by bare name with a same-named type in another package
+        // (e.g. `jux.std.collections.HashMap`). Bare receivers are unchanged —
+        // the bare-name fallback still finds them.
+        Ty::User { name, .. } => Some(name),
         Ty::Nullable(inner) => user_type_name(inner),
         _ => None,
     }

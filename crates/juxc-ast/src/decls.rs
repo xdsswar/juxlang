@@ -258,6 +258,10 @@ pub struct EnumDecl {
     pub visibility: Visibility,
     /// The enum's name (used as the type and as the variant qualifier).
     pub name: Ident,
+    /// Type parameters in declaration order — the `B` in `enum Cow<B>` or the
+    /// `K, V` in `enum Entry<K, V>`. Empty for a non-generic enum. Payload types
+    /// of the variants may reference these parameters (`Borrowed(B)`).
+    pub generic_params: Vec<TypeParam>,
     /// Variant declarations in source order. Order determines auto-
     /// derived ordinal values when those land.
     pub variants: Vec<EnumVariant>,

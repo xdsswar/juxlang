@@ -41,24 +41,48 @@ impl<'a> Parser<'a> {
         // can only be generic args, never the less-than operator.
         let generic_args = self.parse_generic_args();
 
-        let nullable = self.eat(&TokenKind::Question);
+        // If this type's generic list closed by consuming a `>>` (so a split `>`
+        // is parked for an ENCLOSING list), the cursor now sits past the `>>` on
+        // whatever follows the *outer* type — any `?` / `[]` there belongs to the
+        // outer type, not this one. Skip the suffix parse so it isn't stolen.
+        if self.pending_gt > 0 {
+            let end = self.last_consumed_span();
+            return Some(TypeRef {
+                name: qname.clone(),
+                generic_args,
+                nullable: false,
+                array_shape: None,
+                fn_shape: None,
+                span: qname.span.join(end),
+            });
+        }
 
-        // Optional array suffix per §A.2.7: `type '[' const-expr ']'`
-        // or `type '[' ']'`. Only one level (single-dimensional) is
-        // accepted today; multi-dim is a future extension.
-        let array_shape = if self.eat(&TokenKind::LBracket) {
-            if self.eat(&TokenKind::RBracket) {
-                // `T[]` — dynamic. We accept the syntax but the backend
-                // doesn't yet lower it (Turn 2 work).
-                Some(ArrayShape::Dynamic)
-            } else {
-                let size = self.parse_expr()?;
-                self.expect(&TokenKind::RBracket, "']' to close array size");
-                Some(ArrayShape::Fixed(Box::new(size)))
+        // Optional `?` (nullable, §A.2.7) and array suffix (`[]` / `[N]`) in
+        // **either order** — both `T?[]` (nullable element, arrayed) and `T[]?`
+        // (nullable array) occur in generated stubs (from `&[Option<V>]` and
+        // `Option<&[u8]>` respectively). `TypeRef` flattens them into one
+        // `nullable` flag + one `array_shape`, so a loop that ORs each suffix in
+        // as it appears captures both spellings.
+        let mut nullable = false;
+        let mut array_shape = None;
+        loop {
+            if !nullable && self.eat(&TokenKind::Question) {
+                nullable = true;
+                continue;
             }
-        } else {
-            None
-        };
+            if array_shape.is_none() && self.eat(&TokenKind::LBracket) {
+                array_shape = Some(if self.eat(&TokenKind::RBracket) {
+                    // `T[]` — dynamic. Accepted; lowering is Turn-2 work.
+                    ArrayShape::Dynamic
+                } else {
+                    let size = self.parse_expr()?;
+                    self.expect(&TokenKind::RBracket, "']' to close array size");
+                    ArrayShape::Fixed(Box::new(size))
+                });
+                continue;
+            }
+            break;
+        }
 
         let end = self.last_consumed_span();
         Some(TypeRef {
@@ -147,7 +171,22 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
         self.expect(&TokenKind::Arrow, "'->' in function type");
-        let return_type = self.parse_type_ref()?;
+        // The function-type result may be `void` (`(A) -> void`), which is a
+        // keyword `parse_type_ref` won't accept — synthesize a `void` TypeRef
+        // for that case (mirrors `parse_return_type`'s `async void` handling).
+        let return_type = if self.eat_kw(Keyword::Void) {
+            let span = self.last_consumed_span();
+            TypeRef {
+                name: QualifiedName { segments: vec![juxc_ast::Ident { text: "void".to_string(), span }], span },
+                generic_args: Vec::new(),
+                nullable: false,
+                array_shape: None,
+                fn_shape: None,
+                span,
+            }
+        } else {
+            self.parse_type_ref()?
+        };
         let end = self.last_consumed_span();
         // The TypeRef shape carries the function-type info in
         // `fn_shape`; `name` is a synthetic `__fn` sentinel so

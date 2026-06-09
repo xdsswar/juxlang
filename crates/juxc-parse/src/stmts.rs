@@ -377,11 +377,9 @@ impl<'a> Parser<'a> {
                 match self.tokens.get(i).map(|t| &t.kind) {
                     Some(TokenKind::Lt) => depth += 1,
                     Some(TokenKind::Gt) => depth -= 1,
-                    // `>>` token would close two levels at once — we
-                    // don't currently emit single `Gt` tokens for it,
-                    // so single-depth lookahead is fine for Turn 1.
-                    // Multi-depth generics in typed-local position would
-                    // need this branch extended (or `>>` peeling).
+                    // A glued `>>` closes two nested generic lists at once
+                    // (`List<List<int>> x = …`), so it counts double here.
+                    Some(TokenKind::GtGt) => depth = depth.saturating_sub(2),
                     Some(TokenKind::Eof) | None => return false,
                     _ => {}
                 }

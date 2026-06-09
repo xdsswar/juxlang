@@ -128,7 +128,17 @@ impl fmt::Display for JuxType {
             // parses — so the enclosing member survives into the symbol table
             // and still autocompletes. The `RawPtr` IR variant is retained so a
             // future renderer can emit true `T*` without re-deriving the shape.
-            JuxType::RawPtr(t) => write!(f, "Ptr<{t}>"),
+            JuxType::RawPtr(t) => {
+                // A pointer to unit (`*const ()` / `*mut ()`, common as an opaque
+                // C `void*`) has a `Void` pointee — but `void` is not a valid
+                // nominal type argument, so surface it as an opaque `Ptr<Object>`
+                // rather than the unparseable `Ptr<void>`.
+                if matches!(**t, JuxType::Void) {
+                    f.write_str("Ptr<Object>")
+                } else {
+                    write!(f, "Ptr<{t}>")
+                }
+            }
             JuxType::Wildcard(None) => f.write_str("?"),
             JuxType::Wildcard(Some(w)) => match w.kind {
                 WildcardKind::Extends => write!(f, "? extends {}", w.bound),
