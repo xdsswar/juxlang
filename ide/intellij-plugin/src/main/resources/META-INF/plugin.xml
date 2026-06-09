@@ -172,5 +172,11 @@
             description="Generate a setter for each field">
       <add-to-group group-id="Generate" anchor="after" relative-to-action="Jux.Generate.Getters"/>
     </action>
+    <action id="Jux.Generate.OverrideMethods"
+            class="dev.jux.intellij.actions.JuxOverrideMethodsAction"
+            text="Override/Implement Methods"
+            description="Generate @override stubs for inherited methods not yet declared">
+      <add-to-group group-id="Generate" anchor="after" relative-to-action="Jux.Generate.Setters"/>
+    </action>
   </actions>
 </idea-plugin>

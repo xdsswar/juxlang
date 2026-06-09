@@ -75,6 +75,45 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         assertEquals(setOf("Red", "Green", "Blue"), constants)
     }
 
+    /**
+     * The PSI structure the override-methods Generate action relies on: a
+     * class's `implements`/`extends` clause exposes its supertype names as
+     * TYPE_REFERENCE nodes, and the class body holds its methods as
+     * METHOD_DECLARATION children — so the action can read supertype names and
+     * method signatures off the tree.
+     */
+    fun testOverrideActionPsiShape() {
+        val psi = createPsiFile(
+            "Shape.jux",
+            """
+            package demo;
+            public interface Shape { double area(); String name(); }
+            public class Circle implements Shape {
+                public double area() { return 3.14; }
+            }
+            """.trimIndent(),
+        )
+        assertEmpty(PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java))
+
+        val circle = PsiTreeUtil.collectElementsOfType(psi, JuxTypeDeclaration::class.java)
+            .first { it.name == "Circle" }
+        // implements clause carries the supertype reference `Shape`.
+        val impl = circle.node.findChildByType(dev.jux.intellij.psi.JuxElementTypes.IMPLEMENTS_CLAUSE)
+        assertNotNull("implements clause present", impl)
+        val refs = PsiTreeUtil.collectElements(impl!!.psi) {
+            it.node.elementType == dev.jux.intellij.psi.JuxElementTypes.TYPE_REFERENCE
+        }.map { it.text.trim() }
+        assertTrue("supertype Shape referenced", refs.any { it.contains("Shape") })
+
+        // The class body exposes its own method as a METHOD_DECLARATION child.
+        val body = circle.node.findChildByType(dev.jux.intellij.psi.JuxElementTypes.CLASS_BODY)
+        assertNotNull("class body present", body)
+        val ownMethods = body!!.psi.children
+            .filter { it.node.elementType == dev.jux.intellij.psi.JuxElementTypes.METHOD_DECLARATION }
+            .mapNotNull { (it as? dev.jux.intellij.psi.JuxNamedElement)?.name }
+        assertTrue("Circle declares area()", ownMethods.contains("area"))
+    }
+
     /** A use of a type name resolves to its in-file declaration. */
     fun testReferenceResolvesToDeclaration() {
         val file = createPsiFile(
