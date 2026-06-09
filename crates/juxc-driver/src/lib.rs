@@ -42,6 +42,7 @@ use juxc_source::SourceFile;
 pub const DEFAULT_CRATE_NAME: &str = CRATE_NAME;
 
 pub mod manifest;
+mod package_check;
 pub mod project;
 mod source_map;
 mod stdlib;
@@ -144,6 +145,11 @@ where
     // Flag `.jux.d` units external (§G.9.1) so the lowering step skips them.
     stubs::mark_external_units(&mut units, &sources);
 
+    // Enforce the source-layout rule (§B.1): a file's `package` must match its
+    // path under `src/`. Catching a stale layout here turns what would be a
+    // cryptic post-codegen `rustc` E0432 into a precise Jux E0301.
+    diagnostics.extend(package_check::check_package_paths(&units, &sources));
+
     // Phase 6+ — tycheck against the merged workspace. We build one
     // SymbolTable that contains every class/record/enum/interface/
     // function from every unit, then run the per-expression type
@@ -209,6 +215,8 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
         units.push(parsed.ast);
     }
     stubs::mark_external_units(&mut units, &sources);
+    // Source-layout rule (§B.1), same as the main compile path.
+    diagnostics.extend(package_check::check_package_paths(&units, &sources));
     let typed = juxc_tycheck::typecheck_workspace(&units);
     diagnostics.extend(typed.diagnostics);
     // Trusted foreign-API stubs are never validated — drop their diagnostics.
@@ -315,6 +323,10 @@ pub fn check_workspace(sources: Vec<SourceFile>) -> CheckResult {
         units.push(parsed.ast);
     }
     stubs::mark_external_units(&mut units, &sources);
+
+    // Source-layout rule (§B.1): surface a package/path mismatch as a precise
+    // E0301 in the editor too, pointing at the offending `package` line.
+    diagnostics.extend(package_check::check_package_paths(&units, &sources));
 
     // Tycheck against the merged workspace. We keep `symbols` and
     // `expr_types` so the LSP can serve hover/completion/goto without

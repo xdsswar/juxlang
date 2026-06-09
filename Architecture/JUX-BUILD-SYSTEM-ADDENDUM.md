@@ -72,6 +72,18 @@ Rules:
 - Subdirectories of `src/` correspond to package path segments separated by `.`.
 - A file's top-level `package` declaration **must** match its directory location, or the build fails (`E0301`).
 
+**Enforcement (juxc, pre-codegen).** A file's package identity is *derived from its path under the source root*; `juxc` validates the written `package` line against that derived value before lowering, so a stale layout never reaches `rustc`. Concretely, for a file under a `src/` root:
+
+| File location | `package` declaration | Result |
+|---|---|---|
+| directly in `src/` | absent | OK — package-less (root) file |
+| directly in `src/` | present | `E0301` — a root file must be package-less |
+| `src/a/b/` | absent | `E0301` — missing required `package a.b;` |
+| `src/a/b/` | `package a.b;` | OK |
+| `src/a/b/` | `package a.x;` (mismatch) | `E0301` — *expected `a.b`* |
+
+The diagnostic points at the offending `package` line (or the file head for a missing declaration) and names the expected package. This is what turns the classic failure — a file in `…/other/` declaring `package xss.it;` while a consumer writes `import xss.it.other.Other;` — from a cryptic emitted-Rust `E0432` into a precise Jux error. Files **not** under a `src/` root (a loose `juxc foo.jux`, the auto-loaded `jux.std`, `.jux.d` stubs) are unconstrained: their package comes from the declaration alone.
+
 ### B.1.2. Test Layout
 
 Tests live in a parallel `test/` directory mirroring `src/`. A file `test/com/example/myapp/FooTest.jux` is associated with `src/com/example/myapp/Foo.jux` for tooling purposes (run-tests-for-this-source navigation, coverage report grouping). The test file itself declares its own package, conventionally `com.example.myapp.test` (the production package's name with `.test` appended).
