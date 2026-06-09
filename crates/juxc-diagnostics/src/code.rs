@@ -204,6 +204,11 @@ pub enum Code {
     /// check, instead of leaking a `rustc` trait-bound error from the
     /// emitted `panic_any`.
     E0710_ThrowRequiresException,
+    /// E0701 — `async` declared in a profile that has no async runtime. Per the
+    /// async addendum §18.1.11, the `jux-core` profile has no event loop, so
+    /// declaring an `async` function/method is a compile error; rewrite it with
+    /// `Result<T, E>` and explicit state machines (§16.7).
+    E0701_AsyncNotInProfile,
     /// E0720 — An unreachable `catch` clause. Per the exceptions addendum
     /// §X.3.4, catch clauses are tried in source order; a clause whose type is
     /// the same as, or a subtype of, an earlier clause's type can never run
@@ -305,6 +310,7 @@ impl Code {
             Code::E0440_NotExhaustive            => "E0440",
             Code::E0431_GenericInferenceNoSolution => "E0431",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
+            Code::E0701_AsyncNotInProfile        => "E0701",
             Code::E0710_ThrowRequiresException   => "E0710",
             Code::E0720_UnreachableCatch         => "E0720",
             Code::E0930_OperatorConflict         => "E0930",

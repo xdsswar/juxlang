@@ -89,7 +89,12 @@ pub fn analyze_workspace(root: &Path, uri: &Url, rope: &Rope) -> Analysis {
         sources.push(SourceFile::new(path, rope.to_string()));
     }
 
-    analyze_sources(uri, rope, sources)
+    // The language profile from the project's `jux.toml [build] profile` drives
+    // profile rules in the editor (e.g. `jux-core` rejects `async`, E0701).
+    let profile = juxc_driver::Manifest::load(root)
+        .map(|m| m.profile)
+        .unwrap_or_default();
+    analyze_sources(uri, rope, sources, profile)
 }
 
 /// Single-file fallback used when there's no workspace root (untitled buffers,
@@ -101,14 +106,20 @@ pub fn analyze_single(uri: &Url, rope: &Rope) -> Analysis {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| uri.to_string());
     let source = SourceFile::new(path, rope.to_string());
-    analyze_sources(uri, rope, vec![source])
+    // No project → default `full` profile (no profile-specific restrictions).
+    analyze_sources(uri, rope, vec![source], juxc_driver::Profile::Full)
 }
 
 /// Shared core: feed `sources` (the user units; stdlib is auto-prepended) to
 /// `check_workspace`, then group the tagged diagnostics by URI and resolve
 /// each span against its own file's text.
-fn analyze_sources(open_uri: &Url, open_rope: &Rope, sources: Vec<SourceFile>) -> Analysis {
-    let result = juxc_driver::check_workspace(sources);
+fn analyze_sources(
+    open_uri: &Url,
+    open_rope: &Rope,
+    sources: Vec<SourceFile>,
+    profile: juxc_driver::Profile,
+) -> Analysis {
+    let result = juxc_driver::check_workspace_with(sources, profile);
 
     // Pre-seed every analysed *user* file's URI with an empty vec so a file
     // that went from "had errors" to "clean" gets its diagnostics cleared

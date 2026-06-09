@@ -37,7 +37,7 @@
 
 use std::collections::HashMap;
 
-use juxc_ast::{CompilationUnit, FnDecl, Param, ReturnType, TopLevelDecl, TypeRef};
+use juxc_ast::{CompilationUnit, FnDecl, FnModifier, Param, ReturnType, TopLevelDecl, TypeRef};
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_source::Span;
 
@@ -50,6 +50,92 @@ pub mod ty;
 
 pub use env::TypeEnv;
 pub use infer::{infer_block, infer_expr};
+
+/// The language **build profile** (async addendum §18.1.11). Selects the async
+/// runtime — or, for [`Profile::Core`], forbids `async` entirely. Set from the
+/// manifest's `[build] profile`; defaults to [`Profile::Full`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Profile {
+    /// `jux-full` — full event loop + worker pool. Async available.
+    #[default]
+    Full,
+    /// `jux-embedded` — single-threaded executor, no workers. Async available.
+    Embedded,
+    /// `jux-core` — no async runtime; declaring `async` is `E0701`.
+    Core,
+}
+
+impl Profile {
+    /// Parse a manifest `[build] profile` value (`"full"` / `"embedded"` /
+    /// `"core"`, case-insensitive). Unknown values fall back to [`Profile::Full`].
+    pub fn from_manifest_str(s: &str) -> Profile {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "embedded" => Profile::Embedded,
+            "core" => Profile::Core,
+            _ => Profile::Full,
+        }
+    }
+}
+
+/// Emit `E0701` for every `async` declaration when the profile has no async
+/// runtime ([`Profile::Core`]). Per §18.1.11 the core profile has no event
+/// loop, so an `async` function/method can't run — the fix is a `Result`/
+/// state-machine rewrite (§16.7). A no-op for `Full` / `Embedded`. External
+/// (`.jux.d`) units are skipped, and each diagnostic is tagged with its unit
+/// index (parallel to the driver's `sources`) so the LSP routes it correctly.
+pub fn check_async_profile(units: &[CompilationUnit], profile: Profile) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    if profile != Profile::Core {
+        return out;
+    }
+    for (idx, unit) in units.iter().enumerate() {
+        if unit.is_external {
+            continue;
+        }
+        for item in &unit.items {
+            match item {
+                TopLevelDecl::Function(f) => flag_async_decl(f, idx, &mut out),
+                TopLevelDecl::Class(c) => {
+                    c.methods.iter().for_each(|m| flag_async_decl(m, idx, &mut out))
+                }
+                TopLevelDecl::Interface(i) => {
+                    i.methods.iter().for_each(|m| flag_async_decl(m, idx, &mut out))
+                }
+                TopLevelDecl::Record(r) => {
+                    r.methods.iter().for_each(|m| flag_async_decl(m, idx, &mut out))
+                }
+                // Enums carry only variants + operator overloads (no plain
+                // methods), so there's no `async` declaration to flag there.
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Flag one declaration with `E0701` when it is `async` (encoded as an
+/// `async T` return or the `async` modifier).
+fn flag_async_decl(f: &FnDecl, file_idx: usize, out: &mut Vec<Diagnostic>) {
+    let is_async = matches!(f.return_type, ReturnType::AsyncType(_))
+        || f.modifiers.iter().any(|m| matches!(m, FnModifier::Async));
+    if is_async {
+        out.push(
+            Diagnostic::error(
+                code::Code::E0701_AsyncNotInProfile,
+                format!(
+                    "`async` is unavailable in the `jux-core` profile: `{}` cannot be async",
+                    f.name.text,
+                ),
+            )
+            .with_span(f.span)
+            .with_file(file_idx)
+            .with_help(
+                "the core profile has no async runtime — rewrite with `Result<T, E>` and an \
+                 explicit state machine (§16.7), or build under the `full`/`embedded` profile",
+            ),
+        );
+    }
+}
 pub use symbol_table::SymbolTable;
 pub use ty::{ty_from_ref_in_env, ArrayKind, Primitive, Ty};
 
@@ -380,6 +466,49 @@ mod tests {
     #[test]
     fn class_non_entry_main_is_not_flagged() {
         assert_eq!(check_count("public class App { public void main(int x, int y) {} }"), 0);
+    }
+
+    // ---- async-in-profile (E0701, §18.1.11) ----
+
+    fn parse_unit(src: &str) -> CompilationUnit {
+        let sf = SourceFile::new("t.jux", src);
+        let lexed = lex(&sf);
+        parse(&lexed.tokens).ast
+    }
+
+    /// An `async` declaration under the `jux-core` profile is E0701.
+    #[test]
+    fn async_in_core_profile_is_e0701() {
+        let unit = parse_unit("public async int f(){ return 1; }");
+        let d = check_async_profile(std::slice::from_ref(&unit), Profile::Core);
+        assert!(
+            d.iter().any(|x| x.code == code::Code::E0701_AsyncNotInProfile),
+            "got: {d:?}",
+        );
+    }
+
+    /// The same declaration under `full` / `embedded` is fine.
+    #[test]
+    fn async_in_full_and_embedded_profile_ok() {
+        let unit = parse_unit("public async int f(){ return 1; }");
+        assert!(check_async_profile(std::slice::from_ref(&unit), Profile::Full).is_empty());
+        assert!(check_async_profile(std::slice::from_ref(&unit), Profile::Embedded).is_empty());
+    }
+
+    /// A non-async declaration is never flagged, even in `core`.
+    #[test]
+    fn sync_decl_in_core_profile_ok() {
+        let unit = parse_unit("public int f(){ return 1; }");
+        assert!(check_async_profile(std::slice::from_ref(&unit), Profile::Core).is_empty());
+    }
+
+    /// The profile string parser is case-insensitive and defaults to `full`.
+    #[test]
+    fn profile_parses_from_manifest_str() {
+        assert_eq!(Profile::from_manifest_str("core"), Profile::Core);
+        assert_eq!(Profile::from_manifest_str("Embedded"), Profile::Embedded);
+        assert_eq!(Profile::from_manifest_str("FULL"), Profile::Full);
+        assert_eq!(Profile::from_manifest_str("nonsense"), Profile::Full);
     }
 
     // TODO(async main): per `JUX-ENTRY-POINTS-ADDENDUM.md` §E.1.3 the form

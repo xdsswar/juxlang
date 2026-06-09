@@ -115,6 +115,7 @@ pub fn build_package(
         let result = crate::compile_workspace_as(
             sources,
             juxc_backend_rust::lower_workspace_lib,
+            manifest.profile,
         )?;
         record(&result, &mut all_diagnostics, &mut all_sources);
         if let Some(crate_) = result.crate_ {
@@ -144,6 +145,7 @@ pub fn build_package(
         let result = crate::compile_workspace_as(
             sources,
             juxc_backend_rust::lower_workspace,
+            manifest.profile,
         )?;
         record(&result, &mut all_diagnostics, &mut all_sources);
         if let Some(crate_) = result.crate_ {

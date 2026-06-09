@@ -49,6 +49,7 @@ mod stdlib;
 mod stdlib_embedded;
 pub mod stubs;
 
+pub use juxc_tycheck::Profile;
 pub use manifest::Manifest;
 pub use project::{ensure_project_stubs, StubSyncReport};
 
@@ -81,7 +82,17 @@ pub struct CompileResult {
 /// `sources` must be non-empty. Passing exactly one source produces
 /// the same result as the legacy [`compile`] entry point.
 pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
-    compile_workspace_as(sources, juxc_backend_rust::lower_workspace)
+    compile_workspace_as(sources, juxc_backend_rust::lower_workspace, juxc_tycheck::Profile::Full)
+}
+
+/// [`compile_workspace`] under an explicit language [`Profile`] (async addendum
+/// §18.1.11) — used by the CLI / project tool once the manifest's `[build]
+/// profile` is known, so `jux-core` rejects `async` (E0701).
+pub fn compile_workspace_with(
+    sources: Vec<SourceFile>,
+    profile: juxc_tycheck::Profile,
+) -> Result<CompileResult> {
+    compile_workspace_as(sources, juxc_backend_rust::lower_workspace, profile)
 }
 
 /// Generic core of [`compile_workspace`]: runs the full front end over
@@ -93,7 +104,11 @@ pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
 /// [`juxc_backend_rust::lower_workspace`] (binary crate) and
 /// [`juxc_backend_rust::lower_workspace_lib`] (library crate) without
 /// duplicating the lex/parse/resolve/tycheck plumbing.
-pub fn compile_workspace_as<F>(sources: Vec<SourceFile>, lower: F) -> Result<CompileResult>
+pub fn compile_workspace_as<F>(
+    sources: Vec<SourceFile>,
+    lower: F,
+    profile: juxc_tycheck::Profile,
+) -> Result<CompileResult>
 where
     F: FnOnce(
         &[juxc_ast::CompilationUnit],
@@ -149,6 +164,10 @@ where
     // path under `src/`. Catching a stale layout here turns what would be a
     // cryptic post-codegen `rustc` E0432 into a precise Jux E0301.
     diagnostics.extend(package_check::check_package_paths(&units, &sources));
+
+    // Profile rule (§18.1.11): the `jux-core` profile has no async runtime, so
+    // an `async` declaration is E0701.
+    diagnostics.extend(juxc_tycheck::check_async_profile(&units, profile));
 
     // Phase 6+ — tycheck against the merged workspace. We build one
     // SymbolTable that contains every class/record/enum/interface/
@@ -291,6 +310,14 @@ pub struct CheckResult {
 /// `sources` may be empty, in which case only the stdlib is analysed (and the
 /// diagnostics should be empty).
 pub fn check_workspace(sources: Vec<SourceFile>) -> CheckResult {
+    check_workspace_with(sources, juxc_tycheck::Profile::Full)
+}
+
+/// [`check_workspace`] under an explicit language [`Profile`] — the editor /
+/// tooling path. Lets the LSP enforce the manifest's `[build] profile` (e.g.
+/// `jux-core` async rejection, E0701) live, in the same pass that produces the
+/// other diagnostics.
+pub fn check_workspace_with(sources: Vec<SourceFile>, profile: juxc_tycheck::Profile) -> CheckResult {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
     // Same stdlib auto-prepend as the compile path: stdlib units go
@@ -327,6 +354,9 @@ pub fn check_workspace(sources: Vec<SourceFile>) -> CheckResult {
     // Source-layout rule (§B.1): surface a package/path mismatch as a precise
     // E0301 in the editor too, pointing at the offending `package` line.
     diagnostics.extend(package_check::check_package_paths(&units, &sources));
+
+    // Profile rule (§18.1.11): surface `async`-in-core (E0701) in the editor.
+    diagnostics.extend(juxc_tycheck::check_async_profile(&units, profile));
 
     // Tycheck against the merged workspace. We keep `symbols` and
     // `expr_types` so the LSP can serve hover/completion/goto without

@@ -88,7 +88,15 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
             .with_context(|| format!("reading {}", path.display()))?;
         sources.push(juxc_source::SourceFile::new(path.clone(), contents));
     }
-    let result = juxc_driver::compile_workspace(sources)?;
+    // Discover the project root (nearest ancestor with a `jux.toml`) and load
+    // its manifest up front: the `[build] profile` drives front-end profile
+    // rules (e.g. `jux-core` rejects `async`, E0701), and the metadata feeds
+    // the emitted Cargo.toml later. `None` for a loose file outside any project.
+    let project_root = files[0].parent().and_then(find_project_root);
+    let manifest = project_root.as_deref().and_then(juxc_driver::Manifest::load);
+    let profile = manifest.as_ref().map(|m| m.profile).unwrap_or_default();
+
+    let result = juxc_driver::compile_workspace_with(sources, profile)?;
 
     // Surface diagnostics. We print to stderr so stdout stays clean
     // (important when --run forwards the user program's output).
@@ -126,17 +134,9 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
         .emit_dir
         .unwrap_or_else(|| default_emit_dir(&files[0]));
 
-    // Discover the project root (nearest ancestor with a `jux.toml`)
-    // starting from the first input's directory, and load its
-    // manifest. `None` when the input is a loose file outside any
-    // project — in which case the build emits the default,
-    // metadata-free Cargo.toml exactly as before.
-    let project_root = files[0]
-        .parent()
-        .and_then(find_project_root);
-    let manifest = project_root
-        .as_deref()
-        .and_then(juxc_driver::Manifest::load);
+    // `project_root` / `manifest` were discovered up front (before the compile)
+    // so the front end could enforce profile rules; reuse them here for the
+    // emitted Cargo.toml metadata.
 
     // Decide the produced binary's name. Priority:
     // 1. `--name` (explicit one-off override).

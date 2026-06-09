@@ -112,6 +112,10 @@ pub struct Manifest {
     /// `[workspace] members` — present only in workspace-root manifests.
     /// Each entry is a member directory relative to the workspace root.
     pub workspace_members: Vec<String>,
+    /// `[build] profile` — the language profile (`full` / `embedded` / `core`,
+    /// async addendum §18.1.11). Drives async availability (`core` forbids it,
+    /// E0701). Defaults to [`juxc_tycheck::Profile::Full`].
+    pub profile: juxc_tycheck::Profile,
 }
 
 /// A single `[dependencies]` entry. Phase 1 only fully supports `path`
@@ -172,6 +176,13 @@ struct RawWorkspace {
     members: Vec<String>,
 }
 
+/// Serde shape for the `[build]` table. Only the language `profile` is consumed
+/// here (`full` / `embedded` / `core`); other `[build]` keys are tolerated.
+#[derive(Debug, Default, Deserialize)]
+struct RawBuild {
+    profile: Option<String>,
+}
+
 /// Serde shape for a `[dependencies]` value. A dependency value is either
 /// a bare version string (`"1.0"`) or a table with `path`/`version`/etc.
 /// This untagged enum captures both.
@@ -206,6 +217,7 @@ struct RawManifest {
     #[serde(default)]
     dependencies: std::collections::BTreeMap<String, RawDependency>,
     workspace: Option<RawWorkspace>,
+    build: Option<RawBuild>,
 }
 
 impl Manifest {
@@ -337,6 +349,13 @@ impl Manifest {
         // ---- [workspace] --------------------------------------------------
         let workspace_members = raw.workspace.map(|w| w.members).unwrap_or_default();
 
+        // ---- [build] profile ----------------------------------------------
+        let profile = raw
+            .build
+            .and_then(|b| b.profile)
+            .map(|s| juxc_tycheck::Profile::from_manifest_str(&s))
+            .unwrap_or_default();
+
         Some(Manifest {
             project_root: project_root.to_path_buf(),
             package,
@@ -344,6 +363,7 @@ impl Manifest {
             bins,
             dependencies,
             workspace_members,
+            profile,
         })
     }
 }
@@ -506,6 +526,18 @@ mod tests {
         let reg = m.dependencies.iter().find(|d| d.name == "reg").unwrap();
         assert_eq!(reg.path, None);
         assert_eq!(reg.version.as_deref(), Some("1.0"));
+    }
+
+    #[test]
+    fn build_profile_parsed_and_defaults_full() {
+        let (core, _d1) = load_toml("[package]\nname = \"app\"\n\n[build]\nprofile = \"core\"\n");
+        assert_eq!(core.profile, juxc_tycheck::Profile::Core);
+        let (embedded, _d2) =
+            load_toml("[package]\nname = \"app\"\n\n[build]\nprofile = \"embedded\"\n");
+        assert_eq!(embedded.profile, juxc_tycheck::Profile::Embedded);
+        // No `[build]` table → default `full`.
+        let (default, _d3) = load_toml("[package]\nname = \"app\"\n");
+        assert_eq!(default.profile, juxc_tycheck::Profile::Full);
     }
 
     #[test]
