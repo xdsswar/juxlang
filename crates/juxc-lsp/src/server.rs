@@ -289,6 +289,79 @@ fn receiver_type_by_reparse(
         .map(|(_, t)| t.clone())
 }
 
+/// True when the identifier starting at `ident_start` sits in the **type
+/// position of a `new <Type>` expression** — the nearest word before it
+/// (skipping whitespace) is the `new` keyword. In that position completion
+/// offers only type names, inserted bare, so `new X` stays `X` rather than the
+/// spurious `X()` IntelliJ appends to function-shaped items.
+fn is_new_context(text: &str, ident_start: usize) -> bool {
+    let bytes = text.as_bytes();
+    let mut end = ident_start.min(bytes.len());
+    while end > 0 && (bytes[end - 1] as char).is_ascii_whitespace() {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 && is_ident_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    &text[start..end] == "new"
+}
+
+/// Scanning left from `offset`, find the `(` that opens the call whose argument
+/// list the caret sits inside, plus the active parameter index (the number of
+/// top-level commas before the caret). Nested parentheses are balanced; a
+/// top-level `;`/`{`/`}` ends the search (we're no longer inside a call).
+/// Returns `None` when the caret isn't inside any call's `( … )`.
+fn find_enclosing_call(text: &str, offset: usize) -> Option<(usize, u32)> {
+    let bytes = text.as_bytes();
+    let mut i = offset.min(bytes.len());
+    let mut depth = 0i32;
+    let mut commas = 0u32;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b')' => depth += 1,
+            b'(' => {
+                if depth == 0 {
+                    return Some((i, commas));
+                }
+                depth -= 1;
+            }
+            b',' if depth == 0 => commas += 1,
+            b';' | b'{' | b'}' if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Build one [`SignatureInformation`] for `callee` from its parameter list,
+/// rendering each parameter as `Type name` (Jux syntax) so the popup reads like
+/// the declaration.
+fn signature_info(
+    callee: &str,
+    params: &[juxc_tycheck::symbol_table::ParamSig],
+) -> SignatureInformation {
+    let labels: Vec<String> = params
+        .iter()
+        .map(|p| format!("{} {}", intel::render_type(&p.ty), p.name))
+        .collect();
+    let label = format!("{callee}({})", labels.join(", "));
+    let parameters = labels
+        .into_iter()
+        .map(|l| ParameterInformation {
+            label: ParameterLabel::Simple(l),
+            documentation: None,
+        })
+        .collect();
+    SignatureInformation {
+        label,
+        documentation: None,
+        parameters: Some(parameters),
+        active_parameter: None,
+    }
+}
+
 /// If the identifier starting at `ident_start` is the member half of a
 /// `receiver.member` access, return the byte offset of the receiver's last
 /// byte (i.e. the `.`'s offset) so the receiver expression's span — which ends
@@ -755,6 +828,14 @@ impl LanguageServer for Backend {
                     trigger_characters: Some(vec![".".into(), ":".into(), "@".into()]),
                     ..Default::default()
                 }),
+                // Parameter info: when the caret is inside a call's `( … )`, show
+                // the callee's signature with the active parameter highlighted —
+                // re-triggered on `(` and each `,` (IntelliJ-style).
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".into(), ",".into()]),
+                    retrigger_characters: Some(vec![",".into()]),
+                    work_done_progress_options: Default::default(),
+                }),
                 // Auto-import quick-fixes for unresolved-but-known types
                 // (FEATURE 3). Advertised as a simple boolean provider; the
                 // handler filters to the import action itself.
@@ -1040,11 +1121,21 @@ impl LanguageServer for Backend {
 
         let mut items: Vec<CompletionItem> = Vec::new();
 
+        // `new <Type>` position: offer ONLY type names, inserted bare (so `new X`
+        // stays `X`, never `X()`). Suppresses snippets, keywords, primitives, and
+        // the function/member bag — the function items are what IntelliJ auto-
+        // appends `()` to, which is the spurious `X()` after `new`.
+        let type_only = is_new_context(&text, member_start);
+
         // Snippets (sorted to the top) — declaration templates at top level /
         // type body, statement templates inside a function body.
-        let snippets: &[(&str, &str)] = match ctx {
-            CtxKind::Statement => STMT_SNIPPETS,
-            CtxKind::TopLevel | CtxKind::TypeBody => DECL_SNIPPETS,
+        let snippets: &[(&str, &str)] = if type_only {
+            &[]
+        } else {
+            match ctx {
+                CtxKind::Statement => STMT_SNIPPETS,
+                CtxKind::TopLevel | CtxKind::TypeBody => DECL_SNIPPETS,
+            }
         };
         for (label, body) in snippets {
             items.push(CompletionItem {
@@ -1059,10 +1150,14 @@ impl LanguageServer for Backend {
         }
 
         // Keywords for this context.
-        let keywords: &[&str] = match ctx {
-            CtxKind::TopLevel => TOPLEVEL_KEYWORDS,
-            CtxKind::TypeBody => MEMBER_KEYWORDS,
-            CtxKind::Statement => STATEMENT_KEYWORDS,
+        let keywords: &[&str] = if type_only {
+            &[]
+        } else {
+            match ctx {
+                CtxKind::TopLevel => TOPLEVEL_KEYWORDS,
+                CtxKind::TypeBody => MEMBER_KEYWORDS,
+                CtxKind::Statement => STATEMENT_KEYWORDS,
+            }
         };
         for kw in keywords {
             items.push(CompletionItem {
@@ -1073,19 +1168,22 @@ impl LanguageServer for Backend {
             });
         }
 
-        // Built-in types — useful in every context.
-        for ty in PRIMITIVES {
-            items.push(CompletionItem {
-                label: (*ty).to_string(),
-                kind: Some(CompletionItemKind::STRUCT),
-                detail: Some("built-in type".to_string()),
-                sort_text: Some(format!("2_{ty}")),
-                ..Default::default()
-            });
+        // Built-in types — useful in every context except after `new` (there's
+        // no `new int()`).
+        if !type_only {
+            for ty in PRIMITIVES {
+                items.push(CompletionItem {
+                    label: (*ty).to_string(),
+                    kind: Some(CompletionItemKind::STRUCT),
+                    detail: Some("built-in type".to_string()),
+                    sort_text: Some(format!("2_{ty}")),
+                    ..Default::default()
+                });
+            }
         }
 
         // Literal constants — expressions only.
-        if ctx == CtxKind::Statement {
+        if !type_only && ctx == CtxKind::Statement {
             for c in CONSTANTS {
                 items.push(CompletionItem {
                     label: (*c).to_string(),
@@ -1157,8 +1255,9 @@ impl LanguageServer for Backend {
                     });
                 }
             }
-            // Members only make sense in expression position (a function body).
-            if ctx == CtxKind::Statement {
+            // Members only make sense in expression position (a function body),
+            // and never in a `new <Type>` position.
+            if !type_only && ctx == CtxKind::Statement {
                 for name in &ws.member_names {
                     if seen.insert(name.clone()) {
                         items.push(CompletionItem {
@@ -1174,6 +1273,78 @@ impl LanguageServer for Backend {
         }
 
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    /// Parameter info (`textDocument/signatureHelp`). When the caret is inside a
+    /// call's argument list, resolve the callee — a free function, a `new X`
+    /// constructor, or a `recv.method` — and return its signature(s) with the
+    /// active parameter (the count of top-level commas before the caret)
+    /// highlighted, exactly like the IntelliJ Java popup.
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+        let Some(doc) = self.docs.get(&uri) else {
+            return Ok(None);
+        };
+        let offset = position_to_offset(&doc.rope, pos);
+        let text = doc.rope.to_string();
+
+        // Find the `(` that opens the call the caret sits inside, and how many
+        // arguments precede the caret.
+        let Some((open_paren, active_param)) = find_enclosing_call(&text, offset) else {
+            return Ok(None);
+        };
+
+        // The callee identifier ends just before the `(` (skipping whitespace).
+        let bytes = text.as_bytes();
+        let mut name_end = open_paren;
+        while name_end > 0 && (bytes[name_end - 1] as char).is_ascii_whitespace() {
+            name_end -= 1;
+        }
+        let name_start = ident_start_before(&text, name_end);
+        let callee = &text[name_start..name_end];
+        if callee.is_empty() {
+            return Ok(None);
+        }
+
+        // Classify the call shape from what precedes the callee name.
+        let signatures: Vec<SignatureInformation> = if is_new_context(&text, name_start) {
+            // `new X(…)` — every constructor of class `X`.
+            match intel::resolve_type(&doc.symbols, callee) {
+                Some(intel::Resolved::Class(_, sig)) if !sig.constructors.is_empty() => sig
+                    .constructors
+                    .iter()
+                    .map(|c| signature_info(callee, &c.params))
+                    .collect(),
+                // A class with no explicit constructor → a single no-arg form.
+                Some(intel::Resolved::Class(_, _)) => vec![signature_info(callee, &[])],
+                _ => Vec::new(),
+            }
+        } else if let Some(dot) = receiver_dot_before(&text, name_start) {
+            // `recv.method(…)` — resolve the receiver's type, then the method.
+            match doc.type_ending_at(dot) {
+                Some(recv_ty) => match intel::resolve_member(&doc.symbols, recv_ty, callee) {
+                    Some(intel::Resolved::Method(_, sig)) => vec![signature_info(callee, &sig.params)],
+                    _ => Vec::new(),
+                },
+                None => Vec::new(),
+            }
+        } else {
+            // Free function call.
+            match intel::resolve_function(&doc.symbols, callee) {
+                Some(intel::Resolved::Function(_, sig)) => vec![signature_info(callee, &sig.params)],
+                _ => Vec::new(),
+            }
+        };
+
+        if signatures.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(SignatureHelp {
+            signatures,
+            active_signature: Some(0),
+            active_parameter: Some(active_param),
+        }))
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
@@ -1426,6 +1597,58 @@ mod tests {
             other => panic!("expected a user type, got {other:?}"),
         };
         assert!(name.ends_with("Foo"), "expected the receiver to type as Foo, got {name}");
+    }
+
+    /// A chained `new Other().` — the receiver expression `new Other()` should
+    /// type as `Other` so its members (`.flex`, …) resolve while typing, which
+    /// is the `uint x = new Other().flex();` shape.
+    #[test]
+    fn reparse_recovers_chained_new_receiver_type() {
+        let text = "public class Other { public void flex() {} }\n\
+                    public void main() { var x = new Other(). }\n";
+        let dot = text.rfind("). ").expect("chained dot") + 1; // the `.` after `)`
+        let uri = Url::parse("file:///t.jux").unwrap();
+        let ty = receiver_type_by_reparse(text, dot, dot + 1, None, &uri)
+            .expect("chained receiver type recovered");
+        let name = match ty {
+            juxc_tycheck::Ty::User { name, .. } => name,
+            other => panic!("expected a user type, got {other:?}"),
+        };
+        assert!(name.ends_with("Other"), "expected receiver to type as Other, got {name}");
+    }
+
+    // ---- `new <Type>` position + call-site detection ----
+
+    #[test]
+    fn is_new_context_detects_constructor_position() {
+        let t = "var x = new Foo";
+        assert!(is_new_context(t, t.rfind("Foo").unwrap()));
+        // A plain reference, not after `new`.
+        let t2 = "var x = Foo";
+        assert!(!is_new_context(t2, t2.rfind("Foo").unwrap()));
+        // Member access, not `new`.
+        let t3 = "obj.bar";
+        assert!(!is_new_context(t3, t3.rfind("bar").unwrap()));
+        // `newThing` is one identifier — not the `new` keyword.
+        let t4 = "var x = newThing";
+        assert!(!is_new_context(t4, t4.rfind("newThing").unwrap()));
+    }
+
+    #[test]
+    fn find_enclosing_call_tracks_active_parameter() {
+        // Caret after `b` → second argument of `foo(`.
+        let t = "foo(a, b";
+        assert_eq!(find_enclosing_call(t, t.len()), Some((3, 1)));
+        // Caret in an empty argument list → first parameter.
+        let t2 = "bar()";
+        assert_eq!(find_enclosing_call(t2, 4), Some((3, 0)));
+        // Not inside any call.
+        let t3 = "x = 1;";
+        assert_eq!(find_enclosing_call(t3, t3.len()), None);
+        // Nested: caret inside the inner call's args (commas of the outer call
+        // don't count).
+        let t4 = "foo(a, bar(b";
+        assert_eq!(find_enclosing_call(t4, t4.len()), Some((10, 0)));
     }
 
     #[test]
