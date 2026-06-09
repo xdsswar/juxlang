@@ -89,6 +89,48 @@ fn fold_concat_for_print<'a>(operands: &[&'a Expr]) -> (String, Vec<&'a Expr>) {
 }
 
 impl RustEmitter {
+    /// True when `call` targets a foreign (`.jux.d`) function or static method
+    /// whose `throws E` clause maps a Rust `Result<T, E>` return (§G.5.4) — the
+    /// `is_foreign_result` flag on its signature. Such a call must have its
+    /// `Result` unwrapped at the use site (see the `Expr::Call` arm of
+    /// `emit_expr`). Covers bare free-function calls and `ClassName.method(...)`
+    /// static calls; instance-method foreign-result calls are a later refinement.
+    pub(crate) fn call_is_foreign_result(&self, call: &CallExpr) -> bool {
+        match &*call.callee {
+            // Free function `f(args)` — exact key, else last-segment match for an
+            // imported foreign fn keyed by its full `rust.<crate>.<fn>` path.
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let bare = qn.segments[0].text.as_str();
+                if let Some(sig) = self.symbols.functions.get(bare) {
+                    return sig.is_foreign_result;
+                }
+                self.symbols
+                    .functions
+                    .iter()
+                    .find(|(k, _)| k.rsplit('.').next() == Some(bare))
+                    .map(|(_, s)| s.is_foreign_result)
+                    .unwrap_or(false)
+            }
+            // Static call `ClassName.method(args)` — resolve the class by its
+            // (bare) receiver name, then the named method.
+            Expr::Field(f) => {
+                if let Expr::Path(qn) = &*f.object {
+                    if let Some(last) = qn.segments.last() {
+                        if let Some(fqn) = self.symbols.find_fqn_by_bare(&last.text) {
+                            if let Some(cls) = self.symbols.classes.get(&fqn) {
+                                if let Some(m) = cls.methods.get(f.field.text.as_str()) {
+                                    return m.is_foreign_result;
+                                }
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     /// Emit a call expression. Special-cases the built-in `print` to
     /// `println!(…)`. Every other callee is emitted verbatim (the
     /// resolver guarantees the name exists).

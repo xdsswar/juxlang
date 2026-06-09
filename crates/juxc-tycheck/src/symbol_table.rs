@@ -533,6 +533,9 @@ pub struct MethodSig {
     /// Whether the method is declared `unsafe` (§A.2.4). Calling it
     /// requires an `unsafe` context, same rule as a free `unsafe` fn (E0506).
     pub is_unsafe: bool,
+    /// True for a foreign (`.jux.d`) method whose `throws E` clause maps a Rust
+    /// `Result<T, E>` return (§G.5.4) — the call site unwraps it.
+    pub is_foreign_result: bool,
     /// Method-level generic parameters, if any.
     pub generic_params: Vec<TypeParam>,
     /// Formal parameters in declaration order.
@@ -697,6 +700,10 @@ pub struct FunctionSig {
     /// `unsafe { … }` block or the body of another `unsafe` fn (E0506).
     /// Foreign `unsafe fn` stubs (e.g. `libc::getpid`) carry this.
     pub is_unsafe: bool,
+    /// True for a foreign (`.jux.d`) function whose `throws E` clause maps a
+    /// Rust `Result<T, E>` return (§G.5.4). The backend unwraps the `Result`
+    /// at the call site and re-throws the error on `Err`.
+    pub is_foreign_result: bool,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -1178,16 +1185,16 @@ fn insert_top_level(
             insert_class(table, class_decl, package, is_external, diagnostics);
         }
         TopLevelDecl::Record(record_decl) => {
-            insert_record(table, record_decl, package, diagnostics);
+            insert_record(table, record_decl, package, is_external, diagnostics);
         }
         TopLevelDecl::Enum(enum_decl) => {
             insert_enum(table, enum_decl, package, diagnostics);
         }
         TopLevelDecl::Interface(interface_decl) => {
-            insert_interface(table, interface_decl, package, diagnostics);
+            insert_interface(table, interface_decl, package, is_external, diagnostics);
         }
         TopLevelDecl::Function(fn_decl) => {
-            insert_function(table, fn_decl, package, diagnostics);
+            insert_function(table, fn_decl, package, is_external, diagnostics);
         }
         TopLevelDecl::TypeAlias(alias) => {
             insert_type_alias(table, alias, package, unit_idx, diagnostics);
@@ -2139,7 +2146,7 @@ fn insert_class(
             );
             continue;
         }
-        methods.insert(method.name.text.clone(), method_sig(method));
+        methods.insert(method.name.text.clone(), method_sig(method, is_external));
     }
 
     // Operators — same E0402 treatment for duplicates, keyed by kind.
@@ -2234,6 +2241,7 @@ fn insert_record(
     table: &mut SymbolTable,
     record_decl: &RecordDecl,
     package: &[String],
+    is_external: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let fqn = make_fqn(package, &record_decl.name.text);
@@ -2288,7 +2296,7 @@ fn insert_record(
             );
             continue;
         }
-        methods.insert(method.name.text.clone(), method_sig(method));
+        methods.insert(method.name.text.clone(), method_sig(method, is_external));
     }
     table.records.insert(
         fqn,
@@ -2388,6 +2396,7 @@ fn insert_interface(
     table: &mut SymbolTable,
     interface_decl: &InterfaceDecl,
     package: &[String],
+    is_external: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let fqn = make_fqn(package, &interface_decl.name.text);
@@ -2414,7 +2423,7 @@ fn insert_interface(
             );
             continue;
         }
-        methods.insert(method.name.text.clone(), method_sig(method));
+        methods.insert(method.name.text.clone(), method_sig(method, is_external));
     }
     let mut fields = HashMap::new();
     for field in &interface_decl.fields {
@@ -2449,6 +2458,7 @@ fn insert_function(
     table: &mut SymbolTable,
     fn_decl: &FnDecl,
     package: &[String],
+    is_external: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // `main()` always lives at the crate root for entry-point
@@ -2473,6 +2483,10 @@ fn insert_function(
                 .modifiers
                 .iter()
                 .any(|m| matches!(m, juxc_ast::FnModifier::Unsafe)),
+            // A foreign (`.jux.d`) function with a `throws` clause came from a
+            // Rust `fn -> Result<T, E>` (§G.5.4). Its call site must unwrap the
+            // `Result` (and re-throw the error) since Jux sees only `T`.
+            is_foreign_result: is_external && !fn_decl.throws.is_empty(),
             span: fn_decl.span,
         },
     );
@@ -2550,7 +2564,7 @@ fn synth_type_ref(name: &str, span: Span) -> TypeRef {
     }
 }
 
-fn method_sig(method: &FnDecl) -> MethodSig {
+fn method_sig(method: &FnDecl, is_external: bool) -> MethodSig {
     MethodSig {
         visibility: method.visibility,
         annotations: method.annotations.clone(),
@@ -2568,6 +2582,7 @@ fn method_sig(method: &FnDecl) -> MethodSig {
             .modifiers
             .iter()
             .any(|m| matches!(m, juxc_ast::FnModifier::Unsafe)),
+        is_foreign_result: is_external && !method.throws.is_empty(),
         generic_params: method.generic_params.clone(),
         params: method.params.iter().map(param_sig).collect(),
         return_type: method.return_type.clone(),

@@ -156,7 +156,20 @@ impl RustEmitter {
                     .join("::");
                 self.w.push_str(&path);
             }
-            Expr::Call(c) => self.emit_call(c),
+            Expr::Call(c) => {
+                // A call to a foreign (`.jux.d`) function/method whose `throws E`
+                // maps a Rust `Result<T, E>` (§G.5.4): unwrap the `Result` so the
+                // Jux-visible value is `T`, re-throwing the error via `panic_any`
+                // on `Err` so an enclosing Jux `try`/`catch` recovers it.
+                if self.call_is_foreign_result(c) {
+                    self.w.push('(');
+                    self.emit_call(c);
+                    self.w
+                        .push_str(").unwrap_or_else(|__e| std::panic::panic_any(__e))");
+                } else {
+                    self.emit_call(c);
+                }
+            }
             Expr::Binary(b) => self.emit_binary(b),
             Expr::Unary(u) => self.emit_unary(u),
             Expr::Range(r) => self.emit_range(r),
