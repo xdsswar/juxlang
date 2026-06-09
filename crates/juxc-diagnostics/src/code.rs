@@ -223,6 +223,16 @@ pub enum Code {
     /// `.await outside async fn` failure from leaking out of `rustc`.
     E0700_AwaitRequiresAsyncContext,
 
+    // ---- Memory / Unsafe (E0500–E0599) ----
+    /// E0506 — An `unsafe` operation used outside an `unsafe` context. Per
+    /// the layout/ABI addendum §L.5.2, calling an `unsafe` function (e.g. a
+    /// foreign `unsafe fn` such as `libc::getpid`) — or, in the future,
+    /// dereferencing a raw pointer — is only legal inside an `unsafe { … }`
+    /// block or the body of another `unsafe` fn. Catching it here turns what
+    /// would be a `rustc` E0133 ("call to unsafe function") into a precise Jux
+    /// diagnostic.
+    E0506_UnsafeOpOutsideUnsafe,
+
     // ---- Operators / Auto-derivation (E0900–E0999) ----
     /// E0930 — Conflicting operator declarations. Per
     /// `JUX-OPERATORS-ADDENDUM.md` §O.2.1, defining BOTH `operator<=>`
@@ -313,6 +323,7 @@ impl Code {
             Code::E0701_AsyncNotInProfile        => "E0701",
             Code::E0710_ThrowRequiresException   => "E0710",
             Code::E0720_UnreachableCatch         => "E0720",
+            Code::E0506_UnsafeOpOutsideUnsafe    => "E0506",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",

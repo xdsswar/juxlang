@@ -100,6 +100,7 @@ fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
             }
             false
         }
+        Stmt::Unsafe(b) => body_moves_path(b, name),
         Stmt::Break(_) | Stmt::Continue(_) => false,
     }
 }
@@ -425,6 +426,17 @@ impl RustEmitter {
                 self.w.push_str(");\n");
             }
             Stmt::Try(t) => self.emit_try(t),
+            Stmt::Unsafe(block) => {
+                // `unsafe { … }` lowers verbatim to a Rust `unsafe { … }`
+                // block — the body's statements (which may call `unsafe`
+                // foreign fns or use raw-pointer ops) emit unchanged inside.
+                self.w.push_str("unsafe {\n");
+                self.w.indent_inc();
+                self.emit_block_contents(block);
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push_str("}\n");
+            }
         }
     }
 
@@ -1340,5 +1352,6 @@ pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::SuperCall(_, s) => *s,
         Stmt::Throw(_, s) => *s,
         Stmt::Try(t) => t.span,
+        Stmt::Unsafe(b) => b.span,
     }
 }

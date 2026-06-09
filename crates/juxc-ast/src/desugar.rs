@@ -333,6 +333,9 @@ fn rewrite_block_implicit_this(
                     rewrite_block_implicit_this(f, members, &mut locals.clone());
                 }
             }
+            Stmt::Unsafe(b) => {
+                rewrite_block_implicit_this(b, members, &mut locals.clone());
+            }
             Stmt::Break(_) | Stmt::Continue(_) => {}
         }
     }
@@ -492,6 +495,7 @@ fn rewrite_stmt_property_writes(
                 rewrite_block_property_writes(f, auto_props);
             }
         }
+        Stmt::Unsafe(b) => rewrite_block_property_writes(b, auto_props),
         Stmt::Break(_) | Stmt::Continue(_) => {}
     }
 }

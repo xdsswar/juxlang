@@ -115,6 +115,13 @@ impl<'a> Parser<'a> {
         if self.at_kw(Keyword::Try) {
             return Some(Stmt::Try(self.parse_try_stmt()?));
         }
+        if self.at_kw(Keyword::Unsafe) {
+            // `unsafe { … }` per §A.2.8 (`unsafe-stmt = 'unsafe' block`).
+            // A bare `unsafe` block with no trailing `;`; the body is an
+            // ordinary block whose statements may use unsafe operations.
+            self.advance(); // 'unsafe'
+            return Some(Stmt::Unsafe(self.parse_block()));
+        }
         if self.at_kw(Keyword::Super) {
             // `super(args);` — parent-constructor delegation per §7.3.1.
             // Backend lifts this out of the body into the child struct's

@@ -364,6 +364,7 @@ fn map_function(name: &str, f: &Function) -> StubFn {
         params: map_params(f),
         ret,
         throws,
+        is_unsafe: f.header.is_unsafe,
         doc: None,
     }
 }

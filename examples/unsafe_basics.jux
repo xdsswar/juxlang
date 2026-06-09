@@ -1,0 +1,32 @@
+// Demonstrates Jux's `unsafe` feature (§A.2.4 modifier, §A.2.8 block).
+//
+// - An `unsafe` function carries the modifier and lowers to a Rust
+//   `unsafe fn`.
+// - Calling an `unsafe` function is only legal inside an `unsafe` context:
+//   either an `unsafe { ... }` block or the body of another `unsafe` fn.
+//   (Calling it from a plain function is a compile error, E0506.)
+//
+// This mirrors how a foreign `unsafe` Rust function (e.g. a `libc` binding)
+// is called from Jux — the front end demands the `unsafe` opt-in, so the
+// emitted Rust never trips rustc's E0133.
+
+// A low-level routine marked `unsafe`. The body itself is ordinary Jux; the
+// modifier marks the *contract* — callers must opt in.
+public unsafe int rawDouble(int n) {
+    return n * 2;
+}
+
+// Another unsafe fn: its whole body is an unsafe context, so it can call
+// `rawDouble` directly without a nested `unsafe { }`.
+public unsafe int rawQuad(int n) {
+    return rawDouble(rawDouble(n));
+}
+
+public void main() {
+    int total = 0;
+    // Unsafe calls must be wrapped in an `unsafe { }` block from a plain fn.
+    unsafe {
+        total = rawDouble(10) + rawQuad(3);
+    }
+    print($"unsafe result: ${total}");
+}

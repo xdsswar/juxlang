@@ -270,6 +270,7 @@ fn check_stmt(stmt: &Stmt, diags: &mut Vec<Diagnostic>) {
                 check_block(fin, diags);
             }
         }
+        Stmt::Unsafe(b) => check_block(b, diags),
     }
 }
 

@@ -206,8 +206,21 @@ fn collect_mutated_names_real(
                 collect_mutating_calls(&f.iter, out, user_mut);
                 collect_mutated_names(&f.body, out, user_mut);
             }
-            // Other statement kinds — Return(None), Break, Continue —
-            // don't carry expressions that could mutate.
+            Stmt::Unsafe(b) => collect_mutated_names(b, out, user_mut),
+            Stmt::Try(t) => {
+                // Assignments and mutating calls inside a try/catch/finally
+                // promote their locals to `let mut` just like any other block.
+                collect_mutated_names(&t.body, out, user_mut);
+                for c in &t.catches {
+                    collect_mutated_names(&c.body, out, user_mut);
+                }
+                if let Some(fin) = &t.finally {
+                    collect_mutated_names(fin, out, user_mut);
+                }
+            }
+            Stmt::Throw(e, _) => collect_mutating_calls(e, out, user_mut),
+            // Other statement kinds — Return(None), Break, Continue,
+            // SuperCall — don't carry assignments that promote a local.
             _ => {}
         }
     }
@@ -359,6 +372,7 @@ fn stmt_contains_await(stmt: &Stmt) -> bool {
                 || t.finally.as_ref().is_some_and(block_contains_await)
         }
         Stmt::SuperCall(args, _) => args.iter().any(expr_contains_await),
+        Stmt::Unsafe(b) => block_contains_await(b),
         Stmt::Break(_) | Stmt::Continue(_) => false,
     }
 }
@@ -813,6 +827,7 @@ fn stmt_calls_mut_method_on_this(stmt: &Stmt, mut_methods: &HashSet<String>) -> 
             }
             false
         }
+        Stmt::Unsafe(b) => body_calls_mut_method_on_this(b, mut_methods),
         Stmt::Break(_) | Stmt::Continue(_) => false,
     }
 }

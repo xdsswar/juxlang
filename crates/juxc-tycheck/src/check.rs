@@ -266,6 +266,12 @@ pub(crate) struct Checker<'a> {
     /// this is set (async addendum §18.1.2). Reset to `false` inside a
     /// constructor body and inside a non-async lambda.
     pub(crate) in_async: bool,
+    /// True while we're inside an **unsafe context** — the body of an
+    /// `unsafe` function/method, or an `unsafe { … }` block. Drives the
+    /// `E0506_UnsafeOpOutsideUnsafe` check: calling an `unsafe` function (a
+    /// foreign `unsafe fn` stub) is only legal when this is set (grammar
+    /// §A.2.8). Reset to `false` inside a non-unsafe lambda.
+    pub(crate) in_unsafe: bool,
     /// `var x = new X<>()` declarations whose inferred type carries an
     /// **unresolved** generic argument (nothing at the construction site pinned
     /// it). Flushed at the end of each function/method/constructor body: a
@@ -292,6 +298,7 @@ impl<'a> Checker<'a> {
             expr_types: HashMap::new(),
             in_static: false,
             in_async: false,
+            in_unsafe: false,
             uninferable_news: Vec::new(),
             used_names: std::collections::HashSet::new(),
         }
@@ -522,8 +529,11 @@ impl<'a> Checker<'a> {
         ));
         let saved_async = self.in_async;
         self.in_async = Self::fn_is_async(fn_decl);
+        let saved_unsafe = self.in_unsafe;
+        self.in_unsafe = fn_decl.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
         self.flush_uninferable_news();
+        self.in_unsafe = saved_unsafe;
         self.in_async = saved_async;
         self.current_return = saved;
         self.env.pop_scope();
@@ -628,8 +638,11 @@ impl<'a> Checker<'a> {
         ));
         let saved_async = self.in_async;
         self.in_async = Self::fn_is_async(method);
+        let saved_unsafe = self.in_unsafe;
+        self.in_unsafe = method.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
         self.flush_uninferable_news();
+        self.in_unsafe = saved_unsafe;
         self.in_async = saved_async;
         self.current_return = saved;
         self.in_static = saved_static;
@@ -1001,6 +1014,15 @@ impl<'a> Checker<'a> {
                 }
             }
 
+            Stmt::Unsafe(b) => {
+                // Inside an `unsafe { … }` block, unsafe operations (calls to
+                // `unsafe` fns, raw-pointer ops) are permitted. Set the flag
+                // for the duration of the block, then restore.
+                let saved_unsafe = self.in_unsafe;
+                self.in_unsafe = true;
+                self.check_block(b);
+                self.in_unsafe = saved_unsafe;
+            }
             Stmt::Break(_) | Stmt::Continue(_) => {}
         }
     }
@@ -1811,6 +1833,25 @@ impl<'a> Checker<'a> {
     ///   a mismatch instead of silently passing on the `Ty::Param`
     ///   wildcard.
     /// - Anything else → walk sub-expressions only.
+    /// Emit `E0506` when an `unsafe` callee is invoked outside an `unsafe`
+    /// context (`unsafe { … }` block or `unsafe` fn body). No-op when the
+    /// callee is safe or we're already in an unsafe context. `name` is the
+    /// callee for the message; `span` anchors the diagnostic.
+    fn require_unsafe_context(&mut self, callee_is_unsafe: bool, name: &str, span: Span) {
+        if callee_is_unsafe && !self.in_unsafe {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0506_UnsafeOpOutsideUnsafe,
+                    format!(
+                        "call to `unsafe` function `{name}` requires an `unsafe` block; \
+                         wrap it in `unsafe {{ … }}` or mark the enclosing function `unsafe`",
+                    ),
+                )
+                .with_span(span),
+            );
+        }
+    }
+
     fn check_call(&mut self, c: &CallExpr) {
         // Always walk args first, regardless of callee shape, so nested
         // checks still fire.
@@ -1824,9 +1865,30 @@ impl<'a> Checker<'a> {
                     }
                     return;
                 }
-                if let Some(fn_sig) = self.symbols.functions.get(name) {
+                // Resolve the callee FQN: an exact bare key (same-package free
+                // function), or an imported FQN — a foreign (`rust.libc.getpid`)
+                // or cross-package free function brought into scope via
+                // `import a.b.f`, keyed in the table by its full path.
+                let resolved_fqn = if self.symbols.functions.contains_key(name.as_str()) {
+                    Some(name.to_string())
+                } else {
+                    self.env
+                        .unqualified
+                        .get(name.as_str())
+                        .cloned()
+                        .filter(|fqn| self.symbols.functions.contains_key(fqn))
+                };
+                if let Some(fqn) = resolved_fqn {
+                    let fn_sig = self
+                        .symbols
+                        .functions
+                        .get(&fqn)
+                        .expect("resolved_fqn is a known function key");
                     let params = fn_sig.params.clone();
                     let generic_params = fn_sig.generic_params.clone();
+                    let callee_unsafe = fn_sig.is_unsafe;
+                    // §A.2.8: calling an `unsafe` fn needs an `unsafe` context.
+                    self.require_unsafe_context(callee_unsafe, name, c.span);
                     // Generic inference at the call site (spec §T.4):
                     // when the callee declares `<T>` and the user
                     // didn't write an explicit turbofish, recover the
@@ -1904,6 +1966,11 @@ impl<'a> Checker<'a> {
                                     &class_fqn,
                                     method_name,
                                     "static method",
+                                    c.span,
+                                );
+                                self.require_unsafe_context(
+                                    method.is_unsafe,
+                                    method_name,
                                     c.span,
                                 );
                                 self.check_call_args(
@@ -2080,6 +2147,7 @@ impl<'a> Checker<'a> {
                     let method_generic_params = method.generic_params.clone();
                     let method_vis = method.visibility;
                     let method_is_static = method.is_static;
+                    let method_is_unsafe = method.is_unsafe;
                     // Clone the declaring-class name into an owned
                     // String so it outlives the immutable borrow on
                     // `self.symbols` we'd otherwise need.
@@ -2117,6 +2185,7 @@ impl<'a> Checker<'a> {
                         "method",
                         c.span,
                     );
+                    self.require_unsafe_context(method_is_unsafe, method_name, c.span);
                     let (mut subst_params, mut subst_args): (Vec<TypeParam>, Vec<Ty>) =
                         compose_extends_substitution(
                             &name,
@@ -3283,6 +3352,42 @@ mod tests {
             r#"public int g(){ return 1; } public void f(){ var ok = async () -> { return await g(); }; }"#,
         );
         assert!(!has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+    }
+
+    // ---- unsafe-context enforcement (E0506, §A.2.8 / Layout-ABI §L.5.2) ----
+
+    /// Calling an `unsafe` free function from a plain (non-unsafe) context → E0506.
+    #[test]
+    fn unsafe_call_outside_unsafe_errors() {
+        let d = run(r#"public unsafe int risky(){ return 1; } public void f(){ var x = risky(); }"#);
+        assert!(has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+    }
+
+    /// The same call wrapped in an `unsafe { … }` block is fine.
+    #[test]
+    fn unsafe_call_in_unsafe_block_ok() {
+        let d = run(
+            r#"public unsafe int risky(){ return 1; } public void f(){ unsafe { var x = risky(); } }"#,
+        );
+        assert!(!has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+    }
+
+    /// An `unsafe` callee invoked from the body of another `unsafe` fn is fine —
+    /// the whole body is an unsafe context.
+    #[test]
+    fn unsafe_call_from_unsafe_fn_ok() {
+        let d = run(
+            r#"public unsafe int risky(){ return 1; } public unsafe int caller(){ return risky(); }"#,
+        );
+        assert!(!has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+    }
+
+    /// Calling a SAFE function (no `unsafe` modifier) never trips E0506,
+    /// whether or not it's inside an `unsafe` block.
+    #[test]
+    fn safe_call_never_trips_e0506() {
+        let d = run(r#"public int ok(){ return 1; } public void f(){ var x = ok(); }"#);
+        assert!(!has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
     }
 
     // ---- throw operand must be an Exception (E0710, §X.2.1) ----

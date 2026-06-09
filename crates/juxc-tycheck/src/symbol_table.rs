@@ -530,6 +530,9 @@ pub struct MethodSig {
     /// `obj.name` as `obj.name()` so the call syntax stays
     /// Java-shaped at the use site.
     pub is_property: bool,
+    /// Whether the method is declared `unsafe` (§A.2.4). Calling it
+    /// requires an `unsafe` context, same rule as a free `unsafe` fn (E0506).
+    pub is_unsafe: bool,
     /// Method-level generic parameters, if any.
     pub generic_params: Vec<TypeParam>,
     /// Formal parameters in declaration order.
@@ -689,6 +692,11 @@ pub struct FunctionSig {
     pub params: Vec<ParamSig>,
     /// Declared return type (or `void`).
     pub return_type: ReturnType,
+    /// Whether the function is declared `unsafe` (§A.2.4). A call to an
+    /// `unsafe` function is only legal inside an `unsafe` context — an
+    /// `unsafe { … }` block or the body of another `unsafe` fn (E0506).
+    /// Foreign `unsafe fn` stubs (e.g. `libc::getpid`) carry this.
+    pub is_unsafe: bool,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -2461,6 +2469,10 @@ fn insert_function(
             generic_params: fn_decl.generic_params.clone(),
             params: fn_decl.params.iter().map(param_sig).collect(),
             return_type: fn_decl.return_type.clone(),
+            is_unsafe: fn_decl
+                .modifiers
+                .iter()
+                .any(|m| matches!(m, juxc_ast::FnModifier::Unsafe)),
             span: fn_decl.span,
         },
     );
@@ -2551,6 +2563,10 @@ fn method_sig(method: &FnDecl) -> MethodSig {
             .modifiers
             .iter()
             .any(|m| matches!(m, juxc_ast::FnModifier::Static)),
+        is_unsafe: method
+            .modifiers
+            .iter()
+            .any(|m| matches!(m, juxc_ast::FnModifier::Unsafe)),
         generic_params: method.generic_params.clone(),
         params: method.params.iter().map(param_sig).collect(),
         return_type: method.return_type.clone(),

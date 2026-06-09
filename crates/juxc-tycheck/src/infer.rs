@@ -1239,6 +1239,11 @@ fn infer_stmt(stmt: &Stmt, env: &mut TypeEnv, symbols: &SymbolTable) {
                 env.pop_scope();
             }
         }
+        Stmt::Unsafe(b) => {
+            env.push_scope();
+            infer_block(b, env, symbols);
+            env.pop_scope();
+        }
         Stmt::Break(_) | Stmt::Continue(_) => {}
     }
 }

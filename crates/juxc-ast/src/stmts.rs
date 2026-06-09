@@ -71,7 +71,12 @@ pub enum Stmt {
     /// `std::panic::catch_unwind` and binds the caught name to
     /// the panic payload's `Display` string regardless of `T`.
     Try(TryStmt),
-    // For, Switch, Unsafe, …
+    /// `unsafe { B }` — an unsafe block per grammar §A.2.8
+    /// (`unsafe-stmt = 'unsafe' block`). Inside it, calls to `unsafe`
+    /// functions and the raw-pointer operators (`*p`, `&x`) are permitted;
+    /// the body lowers verbatim to a Rust `unsafe { … }` block.
+    Unsafe(Block),
+    // For, Switch, …
 }
 
 /// `try B0 catch (T1 e1) B1 catch (T2 e2) B2 ... finally Bf` —

@@ -705,6 +705,13 @@ impl Resolver {
                     self.pop_scope();
                 }
             }
+            Stmt::Unsafe(b) => {
+                // `unsafe { … }` opens a fresh scope like any block; name
+                // resolution inside is identical to a plain block.
+                self.push_scope();
+                self.visit_block(b);
+                self.pop_scope();
+            }
         }
     }
 

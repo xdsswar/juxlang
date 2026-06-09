@@ -1216,6 +1216,7 @@ pub(crate) fn compute_aliased_classes(
                     walk_block(fin, aliased, mark);
                 }
             }
+            Stmt::Unsafe(b) => walk_block(b, aliased, mark),
             Stmt::Break(_) | Stmt::Continue(_) => {}
         }
     }

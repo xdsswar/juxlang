@@ -126,6 +126,10 @@ pub struct StubFn {
     pub ret: JuxType,
     /// `throws E`, set when the Rust return was `Result<_, E>` (§G.5.4).
     pub throws: Option<JuxType>,
+    /// The Rust function is `unsafe`. Rendered as the Jux `unsafe` modifier
+    /// (§A.2.4) so the front end records it and the type checker requires an
+    /// `unsafe` context at every call site (§A.2.8).
+    pub is_unsafe: bool,
     pub doc: Option<String>,
 }
 

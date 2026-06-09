@@ -152,6 +152,12 @@ fn render_fn(f: &StubFn, in_interface: bool) -> String {
     if f.is_static && !in_interface {
         s.push_str("static ");
     }
+    // An `unsafe` Rust fn surfaces with the Jux `unsafe` modifier (§A.2.4), so
+    // the parser records it and the type checker demands an `unsafe` context at
+    // every call site. Sits after `static`, before the return type.
+    if f.is_unsafe {
+        s.push_str("unsafe ");
+    }
     // NB: a Rust trait's *provided* method (`f.is_default`) is NOT rendered with
     // the Jux `default` keyword. A `.jux.d` stub is signature-only, and a Jux
     // `default` method requires a body (else E0200) — which a stub never has.
@@ -230,6 +236,7 @@ mod tests {
             params: vec![param("key", JuxType::Param("K".into())), param("value", JuxType::Param("V".into()))],
             ret: JuxType::Void,
             throws: None,
+            is_unsafe: false,
             doc: None,
         });
         hm.methods.push(StubFn {
@@ -241,6 +248,7 @@ mod tests {
             params: vec![param("key", JuxType::Param("K".into()))],
             ret: JuxType::nullable(JuxType::Param("V".into())),
             throws: None,
+            is_unsafe: false,
             doc: None,
         });
 
@@ -269,6 +277,7 @@ mod tests {
             params: vec![param("s", JuxType::String)],
             ret: JuxType::user("Config"),
             throws: Some(JuxType::user("ConfigError")),
+            is_unsafe: false,
             doc: None,
         };
         assert_eq!(
@@ -287,5 +296,24 @@ mod tests {
         assert!(out.contains("Red, Custom(int)"));
         // No Swift-style `case` prefix.
         assert!(!out.contains("case "));
+    }
+
+    /// An `unsafe` Rust fn surfaces with the Jux `unsafe` modifier (§A.2.4),
+    /// after `static`, before the return type.
+    #[test]
+    fn renders_unsafe_modifier() {
+        let f = StubFn {
+            visibility: Vis::Public,
+            is_static: false,
+            is_default: false,
+            name: "getpid".into(),
+            generics: vec![],
+            params: vec![],
+            ret: JuxType::Prim("i32"),
+            throws: None,
+            is_unsafe: true,
+            doc: None,
+        };
+        assert_eq!(render_fn(&f, false), "public unsafe i32 getpid();");
     }
 }

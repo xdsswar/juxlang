@@ -81,6 +81,13 @@ impl RustEmitter {
         if matches!(fn_decl.return_type, ReturnType::AsyncType(_)) {
             self.w.push_str("async ");
         }
+        // `unsafe T f()` → `unsafe fn f()` (§A.2.4 modifier). The keyword
+        // precedes `fn` (after `async`, matching Rust's `async unsafe fn`
+        // ordering — though Jux writes `unsafe` first, the emitted Rust
+        // tolerates either since `async` is rare on unsafe fns).
+        if fn_decl.modifiers.contains(&juxc_ast::FnModifier::Unsafe) {
+            self.w.push_str("unsafe ");
+        }
         self.w.push_str("fn ");
         // Async-main rename — see `is_async_main` comment above.
         if is_async_main {

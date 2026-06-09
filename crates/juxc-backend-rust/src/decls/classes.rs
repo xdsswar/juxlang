@@ -1749,6 +1749,10 @@ impl RustEmitter {
         if matches!(method.return_type, ReturnType::AsyncType(_)) {
             self.w.push_str("async ");
         }
+        // `unsafe T m()` → `unsafe fn m()` (§A.2.4 modifier).
+        if method.modifiers.contains(&juxc_ast::FnModifier::Unsafe) {
+            self.w.push_str("unsafe ");
+        }
         self.w.push_str("fn ");
         self.w.push_str(&method.name.text);
         // Method's own generic parameters plus any synthetic wildcards.
