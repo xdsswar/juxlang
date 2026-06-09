@@ -11,6 +11,7 @@
 //   5. Await inside ternary / conditional expressions.
 //   6. Generic-typed async return.
 //   7. Nested parallel calls.
+import jux.std.exceptions.Exception;
 
 // ============================================================================
 // 1. Async + mutating method.
@@ -47,9 +48,8 @@ public class HttpFetcher implements AsyncFetcher {
 // 3. Exception type used by the try/catch test below.
 // ============================================================================
 
-public class IOException {
-    public String message;
-    public IOException(String message) { this.message = message; }
+public class IOException extends Exception {
+    public IOException(String message) { super(message); }
 }
 
 public async int might_throw(bool fail) {

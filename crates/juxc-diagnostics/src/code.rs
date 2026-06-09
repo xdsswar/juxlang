@@ -184,6 +184,13 @@ pub enum Code {
     E0440_NotExhaustive,
 
     // ---- Async / Generators (E0700–E0799) ----
+    /// E0710 — `throw` of a non-`Exception` value. Per the exceptions
+    /// addendum §X.2.1 (`JUX-EXCEPTIONS-ADDENDUM.md`), `throw expr`
+    /// requires `expr` to be of type `Exception` or a subclass. Throwing
+    /// a primitive / `String` / unrelated value fires this code at type
+    /// check, instead of leaking a `rustc` trait-bound error from the
+    /// emitted `panic_any`.
+    E0710_ThrowRequiresException,
     /// E0700 — `await` used outside an async context. Per the async
     /// addendum §18.1.2 (`JUX-ASYNC-ADDENDUM-v2.md`), `await` is only
     /// permitted inside an `async` function/method, an async lambda, or
@@ -277,6 +284,7 @@ impl Code {
             Code::E0434_CyclicInheritance        => "E0434",
             Code::E0440_NotExhaustive            => "E0440",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
+            Code::E0710_ThrowRequiresException   => "E0710",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",

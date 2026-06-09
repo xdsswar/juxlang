@@ -283,6 +283,60 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// True when `ty` is a valid `throw` operand: an `Exception` (or subclass),
+    /// per §X.2.1. An indeterminate type (`Unknown` / a type parameter) is
+    /// accepted so inference gaps don't produce false E0710s; a definite
+    /// non-class value (primitive, `String`, array, …) is rejected.
+    fn throwable_ok(&self, ty: &Ty) -> bool {
+        // Peel any nullable wrapper — `throw maybeEx` is judged on the inner type.
+        let mut inner = ty;
+        while let Ty::Nullable(i) = inner {
+            inner = i;
+        }
+        let start = match inner {
+            Ty::Unknown | Ty::Param(_) => return true,
+            Ty::User { name, .. } => name.as_str(),
+            _ => return false,
+        };
+        // Walk the class-extends chain looking for `Exception`. We match on the
+        // bare last segment (`*.Exception`) rather than a strict FQN compare so a
+        // chain whose `extends_fqn` is still bare (no-package fallback) resolves
+        // too — and we resolve each bare extends segment back to a class key so
+        // the hop doesn't dead-end. `Throwable`/`Error` never hit `Exception`, so
+        // they're correctly rejected (spec §X.2.1 requires `Exception`).
+        let mut key = if self.symbols.classes.contains_key(start) {
+            Some(start.to_string())
+        } else {
+            self.symbols.find_fqn_by_bare(start)
+        };
+        let mut depth = 0;
+        while let Some(k) = key {
+            if depth > 64 {
+                break;
+            }
+            if k.rsplit('.').next() == Some("Exception") {
+                return true;
+            }
+            let Some(class) = self.symbols.classes.get(&k) else { break };
+            key = match &class.extends_fqn {
+                Some(fqn) => Some(fqn.clone()),
+                None => class
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+                    .and_then(|bare| {
+                        if self.symbols.classes.contains_key(&bare) {
+                            Some(bare)
+                        } else {
+                            self.symbols.find_fqn_by_bare(&bare)
+                        }
+                    }),
+            };
+            depth += 1;
+        }
+        false
+    }
+
     /// Is this function/method declared `async`? `async` is encoded either as
     /// an `async T` return type or as the `async` modifier; accept both.
     fn fn_is_async(decl: &FnDecl) -> bool {
@@ -830,13 +884,29 @@ impl<'a> Checker<'a> {
 
             Stmt::SuperCall(args, span) => self.check_super_call(args, *span),
 
-            Stmt::Throw(e, _) => {
-                // Type-check the thrown expression. Full spec
-                // demands the value be `Exception` or a subclass;
-                // Phase-1 lets any value through (the lowering
-                // calls `format!("{:?}", v)` to render it for
-                // panic, so any Debug-shaped value works).
+            Stmt::Throw(e, span) => {
+                // Walk the operand for sub-expression diagnostics, then enforce
+                // §X.2.1: the thrown value must be `Exception` or a subclass.
+                // Catching it here turns the otherwise-cryptic emitted-Rust
+                // trait-bound failure (`panic_any` on a non-exception) into a
+                // precise Jux E0710.
                 self.check_expr(e);
+                let thrown = infer_expr(e, &self.env, self.symbols);
+                if !self.throwable_ok(&thrown) {
+                    // Anchor on the operand when it has a real span, else the
+                    // whole `throw` statement (literals can carry dummy spans).
+                    let es = expr_span(e);
+                    let at = if es == Span::DUMMY { *span } else { es };
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0710_ThrowRequiresException,
+                            format!(
+                                "`throw` requires an `Exception` (or subclass), found {thrown}",
+                            ),
+                        )
+                        .with_span(at),
+                    );
+                }
             }
 
             Stmt::Try(t) => {
@@ -3130,6 +3200,36 @@ mod tests {
             r#"public int g(){ return 1; } public void f(){ var ok = async () -> { return await g(); }; }"#,
         );
         assert!(!has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+    }
+
+    // ---- throw operand must be an Exception (E0710, §X.2.1) ----
+    // `run` builds a single unit with no stdlib, so these use a local
+    // `Exception` class — `throwable_ok` matches the bare `Exception` segment.
+
+    #[test]
+    fn throw_int_errors() {
+        let d = run(r#"public class Exception {} public void f(){ throw 5; }"#);
+        assert!(has(&d, code::Code::E0710_ThrowRequiresException), "got: {d:?}");
+    }
+
+    #[test]
+    fn throw_string_errors() {
+        let d = run(r#"public class Exception {} public void f(){ throw "oops"; }"#);
+        assert!(has(&d, code::Code::E0710_ThrowRequiresException), "got: {d:?}");
+    }
+
+    #[test]
+    fn throw_exception_ok() {
+        let d = run(r#"public class Exception {} public void f(){ throw new Exception(); }"#);
+        assert!(!has(&d, code::Code::E0710_ThrowRequiresException), "got: {d:?}");
+    }
+
+    #[test]
+    fn throw_user_exception_subclass_ok() {
+        let d = run(
+            r#"public class Exception {} public class MyErr extends Exception {} public void f(){ throw new MyErr(); }"#,
+        );
+        assert!(!has(&d, code::Code::E0710_ThrowRequiresException), "got: {d:?}");
     }
 
     /// Assigning a String to an int local → E0410.

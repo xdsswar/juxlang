@@ -1,8 +1,8 @@
 // Exceptions — `throw` / `try` / `catch` / `finally`.
+import jux.std.exceptions.Exception;
 
-public class IOException {
-    public String message;
-    public IOException(String message) { this.message = message; }
+public class IOException extends Exception {
+    public IOException(String message) { super(message); }
 }
 
 public void risky(int n) {

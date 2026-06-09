@@ -16,13 +16,14 @@
  * exit. The whole demo runs in well under a second on release.
  */
 
+import jux.std.exceptions.Exception;
+
 /**
  * Simple wrapper that the demo throws when an assertion doesn't
  * hold. Cleaner than littering `print` + `return` everywhere.
  */
-public class TestFailure {
-    public String message;
-    public TestFailure(String message) { this.message = message; }
+public class TestFailure extends Exception {
+    public TestFailure(String message) { super(message); }
 }
 
 /**
