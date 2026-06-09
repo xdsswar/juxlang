@@ -72,18 +72,29 @@ pub(crate) fn locate_std_dir() -> Option<PathBuf> {
 /// them as `SourceFile`s in path-lexicographic order so emission
 /// stays deterministic.
 pub(crate) fn load_std_sources() -> Vec<SourceFile> {
-    let Some(std_dir) = locate_std_dir() else {
-        return Vec::new();
-    };
-    let mut paths: Vec<PathBuf> = Vec::new();
-    collect_jux_files(&std_dir, &mut paths);
-    paths.sort();
-    paths
-        .into_iter()
-        .filter_map(|p| match std::fs::read_to_string(&p) {
-            Ok(contents) => Some(SourceFile::new(p, contents)),
-            Err(_) => None,
-        })
+    // A directory override (`$JUX_STD_DIR`, or a `jux.std/` next to the binary /
+    // in the cwd) wins when present — it lets a developer iterate on the stdlib
+    // declarations without rebuilding the compiler. The on-disk folder is no
+    // longer shipped, so in normal use this resolves to nothing and we fall
+    // through to the embedded copy below.
+    if let Some(std_dir) = locate_std_dir() {
+        let mut paths: Vec<PathBuf> = Vec::new();
+        collect_jux_files(&std_dir, &mut paths);
+        paths.sort();
+        let sources: Vec<SourceFile> = paths
+            .into_iter()
+            .filter_map(|p| std::fs::read_to_string(&p).ok().map(|c| SourceFile::new(p, c)))
+            .collect();
+        if !sources.is_empty() {
+            return sources;
+        }
+    }
+    // Embedded stdlib (the former `jux.std/` tree, inlined into the binary so the
+    // compiler is self-contained — see `stdlib_embedded`). Synthetic
+    // `jux.std/<path>` paths keep source markers / diagnostics reading the same.
+    crate::stdlib_embedded::STDLIB_SOURCES
+        .iter()
+        .map(|(rel, src)| SourceFile::new(PathBuf::from("jux.std").join(rel), (*src).to_string()))
         .collect()
 }
 

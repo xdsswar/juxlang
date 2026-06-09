@@ -45,6 +45,7 @@ pub mod manifest;
 pub mod project;
 mod source_map;
 mod stdlib;
+mod stdlib_embedded;
 pub mod stubs;
 
 pub use manifest::Manifest;
