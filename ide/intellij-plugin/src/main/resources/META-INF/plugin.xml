@@ -102,6 +102,12 @@
     <lineIndentProvider
         implementation="dev.jux.intellij.editor.JuxLineIndentProvider"/>
 
+    <!-- Optimize Imports (Ctrl+Alt+O): drop unused / duplicate imports and sort
+         the survivors, Java-style. The keybinding is the platform default. -->
+    <lang.importOptimizer
+        language="Jux"
+        implementationClass="dev.jux.intellij.editor.JuxImportOptimizer"/>
+
     <!-- New Project / New Module support: the "Jux" generator scaffolds a
          jux.toml + src/main.jux project (§I — project model). -->
     <moduleType
