@@ -1179,6 +1179,11 @@ impl<'a> Parser<'a> {
             TokenKind::StarEq => Some(BinaryOp::Mul),
             TokenKind::SlashEq => Some(BinaryOp::Div),
             TokenKind::PercentEq => Some(BinaryOp::Rem),
+            TokenKind::AmpEq => Some(BinaryOp::BitAnd),
+            TokenKind::PipeEq => Some(BinaryOp::BitOr),
+            TokenKind::CaretEq => Some(BinaryOp::BitXor),
+            TokenKind::LtLtEq => Some(BinaryOp::Shl),
+            TokenKind::GtGtEq => Some(BinaryOp::Shr),
             _ => None,
         }
     }

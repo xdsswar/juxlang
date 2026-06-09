@@ -574,6 +574,12 @@ pub(crate) fn compound_assign_op(kind: &TokenKind) -> Option<BinaryOp> {
         TokenKind::StarEq    => BinaryOp::Mul,
         TokenKind::SlashEq   => BinaryOp::Div,
         TokenKind::PercentEq => BinaryOp::Rem,
+        // Bitwise / shift compound assignment (grammar §A.1).
+        TokenKind::AmpEq     => BinaryOp::BitAnd,
+        TokenKind::PipeEq    => BinaryOp::BitOr,
+        TokenKind::CaretEq   => BinaryOp::BitXor,
+        TokenKind::LtLtEq    => BinaryOp::Shl,
+        TokenKind::GtGtEq    => BinaryOp::Shr,
         _ => return None,
     })
 }
