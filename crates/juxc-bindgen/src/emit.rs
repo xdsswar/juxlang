@@ -190,7 +190,14 @@ fn render_generics(generics: &[String]) -> String {
 fn render_params(params: &[crate::model::StubParam]) -> String {
     params
         .iter()
-        .map(|p| format!("{} {}", p.ty, p.name))
+        .map(|p| {
+            // A `&`-prefixed type marks a borrowed parameter (§G.9.2): the Jux
+            // type is unchanged (borrow vanishes, §G.3.4), but the parser reads
+            // the `&` back into a per-parameter flag so codegen re-adds the
+            // call-site borrow.
+            let amp = if p.by_ref { "&" } else { "" };
+            format!("{amp}{} {}", p.ty, p.name)
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -202,7 +209,7 @@ mod tests {
     use crate::ty::JuxType;
 
     fn param(name: &str, ty: JuxType) -> StubParam {
-        StubParam { name: name.into(), ty }
+        StubParam { name: name.into(), ty, by_ref: false }
     }
 
     #[test]

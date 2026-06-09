@@ -373,8 +373,20 @@ fn map_params(f: &Function) -> Vec<StubParam> {
         .inputs
         .iter()
         .filter(|(n, _)| n != "self")
-        .map(|(n, ty)| StubParam { name: param_name(n), ty: map_type(ty) })
+        .map(|(n, ty)| StubParam {
+            name: param_name(n),
+            ty: map_type(ty),
+            by_ref: is_borrow_param(ty),
+        })
         .collect()
+}
+
+/// True when the Rust parameter is a borrow that maps to a by-value Jux type but
+/// must be passed with a call-site `&` (§G.9.2). A borrowed **slice** (`&[T]`)
+/// is excluded — it maps to a Jux array and is lowered through the array path,
+/// not as a single `&arg`.
+fn is_borrow_param(ty: &Type) -> bool {
+    matches!(ty, Type::BorrowedRef { type_, .. } if !matches!(type_.as_ref(), Type::Slice(_)))
 }
 
 /// `Result<T, E>` in return position becomes `T throws E` (§G.5.4); `Option<T>`

@@ -510,6 +510,12 @@ impl RustEmitter {
             if i > 0 { self.w.push_str(", "); }
             let nullable = self.callee_param_is_nullable(&call.callee, i);
             let upcast = self.arg_needs_sealed_upcast(&call.callee, i, arg);
+            // §G.9.2: a borrowed parameter (`&T`) of an external method gets the
+            // call-site `&` back — `m.containsKey("a")` → `m.contains_key(&"a"…)`.
+            let by_ref = self.callee_param_is_ref(&call.callee, i);
+            if by_ref {
+                self.w.push('&');
+            }
             if upcast {
                 self.emit_arg_with_nullable_wrap(arg, nullable);
                 self.w.push_str(".into()");

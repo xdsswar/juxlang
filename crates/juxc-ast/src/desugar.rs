@@ -240,6 +240,7 @@ fn lower_one_property(
             name: ident("value", span),
             ty: prop.ty.clone(),
             is_final: false,
+            is_ref: false,
             default: None,
             span,
         };

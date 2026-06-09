@@ -134,6 +134,13 @@ pub struct StubFn {
 pub struct StubParam {
     pub name: String,
     pub ty: JuxType,
+    /// The Rust parameter was a borrow (`&T` / `&mut T`, a non-slice
+    /// `BorrowedRef`). The Jux type still drops the `&` (§G.3.4), but the flag is
+    /// retained so codegen can re-attach the call-site borrow when invoking the
+    /// foreign method (§G.9.2): a Rust `contains_key(&Q)` needs `&arg`, not
+    /// `arg`. Surfaced in the `.jux.d` as a leading `&` marker that the parser
+    /// consumes back into a per-parameter flag.
+    pub by_ref: bool,
 }
 
 /// An enum variant. `payload` empty = unit variant; `discriminant` set for

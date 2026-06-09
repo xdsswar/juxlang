@@ -587,6 +587,9 @@ pub struct ParamSig {
     pub name: String,
     /// Declared type as written.
     pub ty: TypeRef,
+    /// The parameter is a foreign borrow (`&T`) — codegen re-adds the call-site
+    /// `&` when invoking this (external) method (§G.9.2). False for user params.
+    pub is_ref: bool,
 }
 
 /// Signature of a top-level record declaration.
@@ -2604,6 +2607,7 @@ fn param_sig(p: &juxc_ast::Param) -> ParamSig {
     ParamSig {
         name: p.name.text.clone(),
         ty: p.ty.clone(),
+        is_ref: p.is_ref,
     }
 }
 

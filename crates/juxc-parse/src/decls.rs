@@ -2052,9 +2052,13 @@ impl<'a> Parser<'a> {
                 .with_span(final_span),
             );
         }
+        // A leading `&` marks a borrowed parameter in a bindgen-generated stub
+        // (§G.9.2). It carries no Jux type meaning (borrows vanish, §G.3.4) — we
+        // record it as a flag so codegen re-adds the call-site borrow.
+        let is_ref = self.eat(&TokenKind::Amp);
         let ty = self.parse_type_ref()?;
         let name = self.parse_ident()?;
         let end = self.last_consumed_span();
-        Some(Param { name, ty, is_final, default: None, span: start.join(end) })
+        Some(Param { name, ty, is_final, is_ref, default: None, span: start.join(end) })
     }
 }

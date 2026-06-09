@@ -2155,6 +2155,7 @@ impl<'a> Checker<'a> {
                 .map(|c| ParamSig {
                     name: c.name.clone(),
                     ty: c.ty.clone(),
+                    is_ref: false,
                 })
                 .collect();
             let subst_params = record.generic_params.clone();

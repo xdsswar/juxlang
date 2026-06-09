@@ -1259,6 +1259,60 @@ impl crate::RustEmitter {
         false
     }
 
+    /// True when arg `arg_idx` of a method call `recv.method(...)` maps to a
+    /// **borrowed** parameter (`&T`) of an **external** (`rust.std` / crate)
+    /// method — so codegen must re-add the call-site `&` (§G.9.2): a Rust
+    /// `contains_key(&Q)` needs `&arg`, not `arg`. The receiver's type is read
+    /// from `expr_types`; the method is looked up by its Jux (camelCase) name and
+    /// the parameter's `is_ref` flag (set from the stub's `&` marker) consulted.
+    pub(crate) fn callee_param_is_ref(&self, callee: &juxc_ast::Expr, arg_idx: usize) -> bool {
+        let juxc_ast::Expr::Field(f) = callee else { return false };
+        // Receiver type: from `expr_types` (the normal route), falling back to
+        // the name-keyed `local_types` when the receiver is a bare variable —
+        // the latter is reliable inside string interpolation, where synthetic
+        // spans make the `expr_types` lookup miss.
+        let recv_ty_opt = self
+            .expr_types
+            .get(&crate::exprs::expr_span_of(&f.object))
+            .cloned()
+            .or_else(|| {
+                if let juxc_ast::Expr::Path(qn) = &*f.object {
+                    if qn.segments.len() == 1 {
+                        return self
+                            .local_types
+                            .iter()
+                            .rev()
+                            .find_map(|s| s.get(&qn.segments[0].text).cloned());
+                    }
+                }
+                None
+            });
+        let recv_ty = match recv_ty_opt {
+            Some(juxc_tycheck::Ty::User { name, .. }) => name,
+            Some(juxc_tycheck::Ty::Nullable(inner)) => match *inner {
+                juxc_tycheck::Ty::User { name, .. } => name,
+                _ => return false,
+            },
+            _ => return false,
+        };
+        let sig = if let Some(c) = self.symbols.classes.get(&recv_ty) {
+            c
+        } else {
+            match self.lookup_class_by_bare_or_fqn(recv_ty.rsplit('.').next().unwrap_or(&recv_ty)) {
+                Some(c) => c,
+                None => return false,
+            }
+        };
+        if !sig.is_external {
+            return false;
+        }
+        sig.methods
+            .get(f.field.text.as_str())
+            .and_then(|m| m.params.get(arg_idx))
+            .map(|p| p.is_ref)
+            .unwrap_or(false)
+    }
+
     /// Look up the i-th formal parameter's declared type ref for
     /// the given callee expression. Mirrors
     /// [`Self::callee_param_is_nullable`] but returns the whole

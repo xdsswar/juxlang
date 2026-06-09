@@ -1,12 +1,12 @@
-// Collections via the REAL Rust std (JUX-BINDGEN-ADDENDUM §G.9.2): `Vec` and
-// `HashMap` imported from `rust.std`, used with their Rust API (push / insert /
-// len) in Jux syntax — lowering to the genuine `std::vec::Vec` and
-// `std::collections::HashMap`. (Reference-argument lookups like `contains_key`
-// need the call-site `&` borrow that bindgen drops — a tracked §G.9.2 gap — so
-// this template sticks to construction, value-arg mutation, length, and
-// iteration, which lower cleanly.)
+// Collections via the REAL Rust std (JUX-BINDGEN-ADDENDUM §G.9.2): `Vec`,
+// `HashMap`, and `HashSet` imported from `rust.std`, used with their Rust API in
+// Jux syntax — lowering to genuine `std::vec::Vec` / `std::collections::HashMap`
+// / `HashSet`. Construction, value-arg mutation (push/insert), length,
+// iteration, AND reference-arg lookups (contains_key / contains — where codegen
+// re-adds the call-site `&` borrow) all lower cleanly.
 import rust.std.Vec;
 import rust.std.HashMap;
+import rust.std.HashSet;
 
 public void main() {
     var nums = new Vec();
@@ -20,5 +20,12 @@ public void main() {
     var ages = new HashMap();
     ages.insert("ada", 36);
     ages.insert("alan", 41);
-    print($"map: len=${ages.len()}");
+    var hasAda = ages.containsKey("ada");   // &-borrow re-added at the call site
+    print($"map: len=${ages.len()} has ada=${hasAda}");
+
+    var seen = new HashSet();
+    seen.insert(7);
+    seen.insert(7);
+    var has7 = seen.contains(7);
+    print($"set: len=${seen.len()} has 7=${has7}");
 }
