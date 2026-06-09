@@ -121,6 +121,16 @@
                 anchor="right"
                 factoryClass="dev.jux.intellij.toolwindow.JuxToolWindowFactory"
                 icon="dev.jux.intellij.JuxIcons.FILE"/>
+
+    <!-- Persisted, IDE-wide Jux toolchain configuration (juxc / juxc-lsp / jux).
+         Auto-detected from $JUX_HOME / PATH / install locations; configurable in
+         Settings | Tools | Jux Toolchain. Every feature (LSP, Run, tool window)
+         resolves through it. -->
+    <applicationService serviceImplementation="dev.jux.intellij.settings.JuxSettings"/>
+    <applicationConfigurable parentId="tools"
+                             id="dev.jux.intellij.settings.JuxConfigurable"
+                             instance="dev.jux.intellij.settings.JuxConfigurable"
+                             displayName="Jux Toolchain"/>
   </extensions>
 
   <actions>

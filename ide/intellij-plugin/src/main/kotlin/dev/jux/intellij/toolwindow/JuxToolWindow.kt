@@ -77,15 +77,16 @@ private class JuxTasksPanel(private val project: Project) {
         val base = project.basePath ?: return
         // Prefer a `src/` source root if present, else the project root.
         val input = if (File(base, "src").isDirectory) "src" else "."
-        val juxc = try {
-            JuxToolchain.resolveJuxc()
-        } catch (t: Throwable) {
+        val found = JuxToolchain.find("juxc")
+        if (found == null) {
             console.print(
-                "Could not locate `juxc` — set the JUX_HOME environment variable to your Jux install.\n",
+                "Could not locate `juxc`. Configure it in Settings | Tools | Jux Toolchain, " +
+                    "or set the JUX_HOME environment variable / put juxc on your PATH.\n",
                 com.intellij.execution.ui.ConsoleViewContentType.ERROR_OUTPUT,
             )
             return
         }
+        val juxc = found
         val cmd = GeneralCommandLine(juxc)
             .withParameters(args + input)
             .withWorkDirectory(base)
