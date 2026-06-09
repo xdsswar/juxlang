@@ -392,6 +392,69 @@ fn resolve_and_load_stub_sources(manifest: &Manifest) -> Vec<SourceFile> {
     crate::stubs::load_project_stub_sources(root)
 }
 
+/// Summary of an [`ensure_project_stubs`] pass.
+#[derive(Default)]
+pub struct StubSyncReport {
+    /// `.jux.d` stub paths now present on disk — cache hits plus any freshly
+    /// generated this pass. One per foreign dependency that resolved.
+    pub resolved: Vec<PathBuf>,
+    /// Human-readable warnings for foreign deps whose stub couldn't be produced
+    /// (offline, no nightly toolchain, or a C/C++ dep needing a vendored stub).
+    /// Advisory only — the project still analyses, just without that crate's
+    /// completion.
+    pub warnings: Vec<String>,
+}
+
+/// Ensure every foreign (`rust.*` / `c.*` / `cpp.*`) `[dependencies]` entry of
+/// the project rooted at `root` has a generated/cached `.jux.d` stub under
+/// `.jux-stubs/`, so editor tooling indexes the bound crates' APIs in Jux syntax
+/// **without first running a build** (JUX-BINDGEN §G.6/§G.11, §G.10).
+///
+/// This is the editor-side counterpart of [`build_package`]'s
+/// [`resolve_and_load_stub_sources`]: the build path generates stubs as a side
+/// effect of compiling, but the language server must do it up front so a
+/// freshly-added Rust dependency autocompletes immediately. It processes the
+/// root package's manifest and, when `root` is a workspace root, every
+/// `[workspace] members` manifest — covering "all Rust crates across all
+/// modules". The stubs land in each package's own `.jux-stubs/`, which the LSP's
+/// workspace scan already walks.
+///
+/// rustdoc generation shells out (`cargo +nightly rustdoc`) and only runs for a
+/// dep whose stub is **absent**, so this is meant to run once on project open
+/// (or a manifest change), not per keystroke. A missing `jux.toml` or an
+/// unresolvable dep degrades to a warning, never an error.
+pub fn ensure_project_stubs(root: &Path) -> StubSyncReport {
+    let mut report = StubSyncReport::default();
+    let Some(root_manifest) = Manifest::load(root) else {
+        return report; // no `jux.toml` here — nothing to resolve
+    };
+
+    // The packages to scan: the root package plus every workspace member, so a
+    // workspace's modules all get their bound-crate stubs.
+    let mut manifests = vec![root_manifest.clone()];
+    for rel in &root_manifest.workspace_members {
+        if let Some(member) = Manifest::load(&root.join(rel)) {
+            manifests.push(member);
+        }
+    }
+
+    for manifest in &manifests {
+        let pkg_root = &manifest.project_root;
+        for dep in &manifest.dependencies {
+            let Some((kind, crate_name)) = crate::stubs::foreign_dep_kind(&dep.name) else {
+                continue; // ordinary Jux path dependency
+            };
+            match crate::stubs::resolve_crate_stub(pkg_root, kind, crate_name) {
+                Ok(path) => report.resolved.push(path),
+                Err(e) => report
+                    .warnings
+                    .push(format!("could not resolve stub for `{kind}.{crate_name}`: {e}")),
+            }
+        }
+    }
+    report
+}
+
 /// Walk a `src/` tree and load every `.jux` file as a [`SourceFile`].
 fn load_src_tree(src_dir: &Path) -> Result<Vec<SourceFile>> {
     let mut paths: Vec<PathBuf> = Vec::new();
@@ -449,5 +512,57 @@ fn record(
     diags.extend(result.diagnostics.iter().cloned());
     if sources.is_empty() {
         *sources = result.sources.clone();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ensure_project_stubs` discovers a `rust.<crate>` dependency in the
+    /// project manifest and resolves it to its cached `.jux.d` — the cache-hit
+    /// path, so the editor indexes a bound crate without shelling out to
+    /// `cargo rustdoc`. Mirrors the toolchain-free stub resolution test in
+    /// `stubs.rs`.
+    #[test]
+    fn ensure_project_stubs_resolves_cached_rust_dep() {
+        let root =
+            std::env::temp_dir().join(format!("juxc-ensure-stubs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        // A manifest with a Rust crate dependency and an unrelated path dep.
+        std::fs::write(
+            root.join("jux.toml"),
+            "[package]\nname = \"app\"\n\n\
+             [dependencies]\n\"rust.serde_json\" = \"1.0\"\n\"greeter\" = { path = \"../greeter\" }\n",
+        )
+        .unwrap();
+
+        // Pre-seed the crate stub so resolution is a cache hit (no nightly).
+        let stub = crate::stubs::crate_stub_cache_path(&root, "rust", "serde_json");
+        std::fs::create_dir_all(stub.parent().unwrap()).unwrap();
+        std::fs::write(&stub, "package rust.serde_json;\n").unwrap();
+
+        let report = ensure_project_stubs(&root);
+        assert!(report.warnings.is_empty(), "warnings: {:?}", report.warnings);
+        assert_eq!(report.resolved, vec![stub], "the rust dep resolves to its cached stub");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// No `jux.toml` at the root → an empty report, never a panic. The LSP
+    /// relies on this for a loose folder that isn't a Jux project.
+    #[test]
+    fn ensure_project_stubs_no_manifest_is_empty() {
+        let root = std::env::temp_dir().join(format!("juxc-ensure-none-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let report = ensure_project_stubs(&root);
+        assert!(report.resolved.is_empty());
+        assert!(report.warnings.is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

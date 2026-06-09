@@ -489,6 +489,43 @@ impl Backend {
         }
     }
 
+    /// Generate (or refresh) the project's foreign-crate (`rust.*` / `c.*` /
+    /// `cpp.*`) dependency stubs under `.jux-stubs/`, so the bound crates' APIs
+    /// autocomplete and auto-import in Jux syntax **without** a prior `jux build`
+    /// (JUX-BINDGEN §G.6/§G.10/§G.11). The workspace scan already indexes
+    /// `.jux-stubs/`; this fills it for every `rust.<crate>` declared across the
+    /// project and its modules.
+    ///
+    /// rustdoc generation shells out and only runs for a stub that's missing, so
+    /// this is invoked once on project open. It's CPU/process-bound, so it runs
+    /// on a blocking thread; failures (offline, no nightly) are logged, never
+    /// surfaced as diagnostics. No-op until a root is set.
+    async fn ensure_crate_stubs(&self) {
+        let Some(root) = self.workspace.read().ok().and_then(|ws| ws.root.clone()) else {
+            return;
+        };
+        let report =
+            match tokio::task::spawn_blocking(move || juxc_driver::ensure_project_stubs(&root))
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => return, // the blocking task panicked; skip
+            };
+        for w in &report.warnings {
+            self.client
+                .log_message(MessageType::WARNING, format!("jux: {w}"))
+                .await;
+        }
+        if !report.resolved.is_empty() {
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!("jux: indexed {} bound-crate stub(s)", report.resolved.len()),
+                )
+                .await;
+        }
+    }
+
     /// Re-scan every `.jux` file in the project and refresh the workspace
     /// type-name index used by completion. Runs the (heavy) analysis on a
     /// blocking thread; cheap to call on open/save. No-op until a root is set.
@@ -670,7 +707,12 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "juxc-lsp ready")
             .await;
-        // Build the initial project-wide index (all classes/types/members).
+        // Generate/refresh foreign-crate stubs for the project's `rust.*` deps
+        // BEFORE indexing, since the index scans `.jux-stubs/`. This makes bound
+        // Rust crates autocomplete in Jux syntax on first open, no build needed.
+        self.ensure_crate_stubs().await;
+        // Build the initial project-wide index (all classes/types/members,
+        // including the just-generated crate stubs).
         self.reindex().await;
     }
 

@@ -49,6 +49,7 @@ mod stdlib_embedded;
 pub mod stubs;
 
 pub use manifest::Manifest;
+pub use project::{ensure_project_stubs, StubSyncReport};
 
 /// Top-level compile result.
 ///
