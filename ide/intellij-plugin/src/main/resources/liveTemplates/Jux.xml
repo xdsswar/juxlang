@@ -1,0 +1,60 @@
+<templateSet group="Jux">
+  <template name="psvm" value="public void main() {&#10;    $END$&#10;}" description="Entry-point main function" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="sout" value="print($END$);" description="print(...)" toReformat="false" toShortenFQNames="false">
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="soutf" value="print($&quot;$END$&quot;);" description="print an interpolated string" toReformat="false" toShortenFQNames="false">
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="fore" value="for (var $ITEM$ : $ITERABLE$) {&#10;    $END$&#10;}" description="for-each loop" toReformat="true" toShortenFQNames="false">
+    <variable name="ITEM" expression="" defaultValue="&quot;item&quot;" alwaysStopAt="true"/>
+    <variable name="ITERABLE" expression="" defaultValue="&quot;items&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="ifn" value="if ($VAR$ == null) {&#10;    $END$&#10;}" description="if value is null" toReformat="true" toShortenFQNames="false">
+    <variable name="VAR" expression="" defaultValue="&quot;value&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="inn" value="if ($VAR$ != null) {&#10;    $END$&#10;}" description="if value is not null" toReformat="true" toShortenFQNames="false">
+    <variable name="VAR" expression="" defaultValue="&quot;value&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="whilet" value="while (true) {&#10;    $END$&#10;}" description="while (true) loop" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="tryc" value="try {&#10;    $END$&#10;} catch (Exception e) {&#10;}" description="try / catch" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="ret" value="return $END$;" description="return statement" toReformat="false" toShortenFQNames="false">
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="var" value="var $NAME$ = $VALUE$;$END$" description="var declaration" toReformat="false" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue="&quot;x&quot;" alwaysStopAt="true"/>
+    <variable name="VALUE" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="cls" value="public class $NAME$ {&#10;    $END$&#10;}" description="public class" toReformat="true" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="intf" value="public interface $NAME$ {&#10;    $END$&#10;}" description="public interface" toReformat="true" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="enm" value="public enum $NAME$ {&#10;    $END$&#10;}" description="public enum" toReformat="true" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="rec" value="public record $NAME$($END$) {}" description="public record" toReformat="false" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="fn" value="public $RET$ $NAME$($PARAMS$) {&#10;    $END$&#10;}" description="public method" toReformat="true" toShortenFQNames="false">
+    <variable name="RET" expression="" defaultValue="&quot;void&quot;" alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+    <variable name="PARAMS" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+</templateSet>

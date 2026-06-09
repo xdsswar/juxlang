@@ -150,6 +150,14 @@
         language="Jux"
         implementationClass="dev.jux.intellij.hints.JuxInlayHintsProvider"/>
 
+    <!-- Live templates (psvm, sout, fore, ifn, tryc, cls, …) — the Java-IDE
+         abbreviation-expand-on-Tab experience. The context type gates them to
+         Jux code (not comments/strings); the set ships in liveTemplates/Jux.xml. -->
+    <liveTemplateContext
+        contextId="JUX"
+        implementation="dev.jux.intellij.templates.JuxTemplateContextType"/>
+    <defaultLiveTemplates file="liveTemplates/Jux"/>
+
     <!-- Native syntax highlighting + a customizable color page (§I.3). -->
     <lang.syntaxHighlighterFactory
         language="Jux"
