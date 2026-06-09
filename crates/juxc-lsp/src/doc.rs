@@ -32,6 +32,9 @@ pub struct Document {
     /// The merged workspace symbol table from the same analysis pass. Hover and
     /// member completion resolve the hovered/receiver identifier against this.
     pub symbols: Arc<SymbolTable>,
+    /// Source paths indexed parallel to `symbols.decl_unit`'s unit indices, so
+    /// goto-definition can map a resolved declaration to its file.
+    pub source_paths: Arc<Vec<std::path::PathBuf>>,
 }
 
 impl Document {

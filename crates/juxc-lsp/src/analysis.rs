@@ -46,6 +46,12 @@ pub struct Analysis {
     /// inferred [`Ty`]. Wrapped in `Arc` so the (potentially large) table can be
     /// cheaply shared into the cached [`crate::doc::Document`].
     pub symbols: std::sync::Arc<SymbolTable>,
+    /// Filesystem path of every analysed source, indexed **parallel to the
+    /// symbol table's `unit_index`** (`SymbolTable::decl_unit`). Goto-definition
+    /// maps a resolved declaration's unit index to its file here. Synthetic
+    /// stdlib paths (which aren't real files) are kept in place so indices stay
+    /// aligned; the handler simply can't open them.
+    pub source_paths: std::sync::Arc<Vec<PathBuf>>,
 }
 
 /// Analyse the open document at `uri` (current text `rope`) **in the context
@@ -135,12 +141,15 @@ fn analyze_sources(open_uri: &Url, open_rope: &Rope, sources: Vec<SourceFile>) -
     let expr_types: Vec<(Span, Ty)> = result.expr_types.into_iter().collect();
     let mut type_names = Vec::new();
     collect_type_names(&result.symbols, &mut type_names);
+    let source_paths: Vec<PathBuf> =
+        result.sources.iter().map(|s| s.path().to_path_buf()).collect();
 
     Analysis {
         diagnostics_by_uri: by_uri,
         expr_types,
         type_names,
         symbols: std::sync::Arc::new(result.symbols),
+        source_paths: std::sync::Arc::new(source_paths),
     }
 }
 
@@ -212,6 +221,64 @@ mod tests {
         "package xss.it.follow; public class Follow { public void printVal(){ print(1); } }";
     const MAIN: &str = "import xss.it.follow.Follow; \
          public static void main(){ var f = new Follow(); f.printVal(); }";
+
+    /// Goto-definition resolves a cross-file type to the unit that declares it,
+    /// and `source_paths` maps that unit back to the right file — the data the
+    /// LSP `goto_definition` handler turns into a `Location`.
+    #[test]
+    fn goto_definition_resolves_cross_file_type() {
+        let root = temp_root("goto_cross_file");
+        let follow = root.join("Follow.jux");
+        let main = root.join("main.jux");
+        fs::write(&follow, FOLLOW).unwrap();
+        fs::write(&main, MAIN).unwrap();
+
+        let main_uri = Url::from_file_path(&main).unwrap();
+        let rope = Rope::from_str(MAIN);
+        let analysis = analyze_workspace(&root, &main_uri, &rope);
+
+        let (unit, span) = analysis
+            .symbols
+            .definition_of("Follow")
+            .expect("`Follow` resolves to a declaration");
+        let path = &analysis.source_paths[unit];
+        assert!(
+            path.ends_with("Follow.jux"),
+            "definition of `Follow` should point at Follow.jux, got {path:?}"
+        );
+        // The span is within Follow.jux's text.
+        let text = fs::read_to_string(path).unwrap();
+        assert!((span.end as usize) <= text.len(), "span within the file");
+        assert!(text[span.start as usize..span.end as usize].contains("Follow"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Goto-definition reaches into the generated `rust.std` stub: an unqualified
+    /// rust-only type (`Arc`) resolves to the cached `.jux.d` file. Gated on the
+    /// `rust-docs-json` component.
+    #[test]
+    fn goto_definition_reaches_generated_std_stub() {
+        std::env::remove_var("JUX_STUBS_DIR");
+        let root = temp_root("goto_std");
+        let main = root.join("main.jux");
+        fs::write(&main, "public void main() {}\n").unwrap();
+        let main_uri = Url::from_file_path(&main).unwrap();
+        let rope = Rope::from_str("public void main() {}\n");
+        let analysis = analyze_workspace(&root, &main_uri, &rope);
+
+        match analysis.symbols.definition_of("Arc") {
+            Some((unit, _span)) => {
+                let path = &analysis.source_paths[unit];
+                assert!(
+                    path.to_string_lossy().ends_with(".jux.d"),
+                    "`Arc` should resolve into a `.jux.d` stub, got {path:?}"
+                );
+            }
+            None => eprintln!("rust-docs-json not installed — skipping std goto test"),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
 
     /// The bug fix, proven through the LSP analysis layer: analysing `main.jux`
     /// IN ITS WORKSPACE (with `Follow.jux` present) publishes ZERO diagnostics

@@ -81,6 +81,14 @@ pub struct SymbolTable {
     /// per-unit check. Single-unit builds always have a single
     /// entry at index `0`.
     pub units: Vec<UnitContext>,
+    /// FQN of every top-level declaration → the index of the unit that declared
+    /// it (into the workspace `sources`/`units` slice). Powers goto-definition:
+    /// the editor resolves an identifier to its FQN, looks up the declaring unit
+    /// here, and pairs it with the matching `*Sig::span` to point at the
+    /// declaration's source file — including a generated `rust.std` / crate
+    /// `.jux.d` stub. Every kind (class, record, enum, interface, function,
+    /// alias, const) is recorded.
+    pub decl_unit: HashMap<String, usize>,
 }
 
 /// Per-unit name-resolution context built once during
@@ -170,6 +178,67 @@ impl SymbolTable {
             return Some(k.clone());
         }
         None
+    }
+
+    /// Resolve an identifier to the location of its declaration: the index of
+    /// the declaring unit (into the workspace `sources`/`units`) and the
+    /// declaration's source span. Powers goto-definition.
+    ///
+    /// `name` may be a fully-qualified name or a bare last segment; types,
+    /// free functions, constants, and type aliases are all considered. Returns
+    /// `None` when nothing matches. The span is **relative to the declaring
+    /// unit's source** (caller pairs it with `sources[unit]` to build a
+    /// `file:line:col` location).
+    pub fn definition_of(&self, name: &str) -> Option<(usize, Span)> {
+        let fqn = self.canonical_fqn(name)?;
+        let unit = *self.decl_unit.get(&fqn)?;
+        let span = self.decl_span(&fqn)?;
+        Some((unit, span))
+    }
+
+    /// Map a bare-or-qualified identifier to the exact FQN key it denotes,
+    /// across every top-level kind. Exact-key hits win; otherwise the
+    /// last-segment match (`find_fqn_by_bare` for types, plus functions /
+    /// consts) applies.
+    fn canonical_fqn(&self, name: &str) -> Option<String> {
+        if self.is_type_name(name)
+            || self.functions.contains_key(name)
+            || self.consts.contains_key(name)
+        {
+            return Some(name.to_string());
+        }
+        if let Some(fqn) = self.find_fqn_by_bare(name) {
+            return Some(fqn);
+        }
+        let matches_last = |fqn: &String| fqn.rsplit('.').next().is_some_and(|s| s == name);
+        self.functions
+            .keys()
+            .find(|k| matches_last(k))
+            .or_else(|| self.consts.keys().find(|k| matches_last(k)))
+            .cloned()
+    }
+
+    /// The declaration span recorded for an exact FQN, looked up across kinds.
+    fn decl_span(&self, fqn: &str) -> Option<Span> {
+        if let Some(s) = self.classes.get(fqn) {
+            return Some(s.span);
+        }
+        if let Some(s) = self.records.get(fqn) {
+            return Some(s.span);
+        }
+        if let Some(s) = self.enums.get(fqn) {
+            return Some(s.span);
+        }
+        if let Some(s) = self.interfaces.get(fqn) {
+            return Some(s.span);
+        }
+        if let Some(s) = self.functions.get(fqn) {
+            return Some(s.span);
+        }
+        if let Some(s) = self.aliases.get(fqn) {
+            return Some(s.span);
+        }
+        self.consts.get(fqn).map(|s| s.span)
     }
 
     /// Walk `class_name`'s `extends` chain looking for a method named
@@ -707,6 +776,10 @@ pub fn build_workspace(
             if let TopLevelDecl::Class(c) = item {
                 class_unit.insert(make_fqn(&unit_pkg, &c.name.text), unit_idx);
             }
+            // Record FQN → declaring-unit for goto-definition (every kind).
+            if let Some(name) = top_level_name(item) {
+                table.decl_unit.insert(make_fqn(&unit_pkg, name), unit_idx);
+            }
             insert_top_level(&mut table, item, &unit_pkg, unit_idx, unit.is_external, diagnostics);
         }
     }
@@ -953,6 +1026,20 @@ fn seed_unqualified_from_import(
                 out.insert(bare, fqn);
             }
         }
+    }
+}
+
+/// The declared name of a top-level item, used to key `SymbolTable::decl_unit`.
+/// `None` only if a future variant has no name.
+fn top_level_name(item: &TopLevelDecl) -> Option<&str> {
+    match item {
+        TopLevelDecl::Class(d) => Some(&d.name.text),
+        TopLevelDecl::Record(d) => Some(&d.name.text),
+        TopLevelDecl::Enum(d) => Some(&d.name.text),
+        TopLevelDecl::Interface(d) => Some(&d.name.text),
+        TopLevelDecl::Function(d) => Some(&d.name.text),
+        TopLevelDecl::TypeAlias(d) => Some(&d.name.text),
+        TopLevelDecl::Const(d) => Some(&d.name.text),
     }
 }
 

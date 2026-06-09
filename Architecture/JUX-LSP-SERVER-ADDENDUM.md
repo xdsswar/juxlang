@@ -148,6 +148,10 @@ The server advertises the following in its `InitializeResult.capabilities`. The 
 
 The server requests **incremental** sync (`TextDocumentSyncKind::Incremental`). Documents are stored as `ropey::Rope`; `didChange` edits are applied to the rope in O(log n).
 
+### `definition` — goto-definition
+
+`textDocument/definition` jumps to the declaration of the identifier under the cursor — a **type, free function, constant, or type alias** name. The symbol table records `decl_unit: FQN → declaring-unit-index` during its build pass; the LSP resolves the identifier to its canonical FQN (exact key, else last-segment match, preferring a non-external type so an unqualified `Box`/`HashMap` lands on the Jux type, not the `rust.std` stub), reads the matching `*Sig::span`, and pairs it with the analysed `source_paths[unit]` to form the `Location`. This reaches **into generated `rust.std` / crate `.jux.d` stubs** (the cached stub file is a real, openable path), so "go to definition" on a Rust-derived type opens its Jux-syntax declaration. Member-level goto (`recv.method`) awaits per-member source spans; today the receiver still resolves for hover/completion.
+
 ### `semanticTokens` precedence
 
 When `semanticTokens` is enabled and returns a non-empty token map for a document, the editor's LSP client overrides the TextMate-grammar classification for that range. This is the channel through which we resolve "is this identifier a type, a value, or a function?" — questions TextMate cannot answer.

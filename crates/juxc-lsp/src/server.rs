@@ -2,9 +2,13 @@
 //! store.
 //!
 //! Phase-1/2 capabilities (§L.5): full-document sync, push diagnostics, hover
-//! (expression type under the cursor), and completion (keywords + in-scope
-//! type names). Goto-definition, references, and rename are advertised off
-//! until the AST cross-reference index lands.
+//! (expression type under the cursor + declaration signatures), completion
+//! (keywords, in-scope type names, receiver-aware members), auto-import code
+//! actions, and **goto-definition** for type / function / const / alias names
+//! (resolved through `SymbolTable::decl_unit` → `source_paths`, reaching into
+//! generated `rust.std` / crate `.jux.d` stubs). References and rename remain
+//! advertised off until the AST cross-reference index lands; member-level
+//! goto-definition awaits per-member source spans.
 
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -469,6 +473,7 @@ impl Backend {
             expr_types: analysis.expr_types,
             type_names: analysis.type_names,
             symbols: analysis.symbols,
+            source_paths: analysis.source_paths,
         };
         self.docs.insert(uri.clone(), doc);
 
@@ -563,6 +568,10 @@ impl LanguageServer for Backend {
                 // (FEATURE 3). Advertised as a simple boolean provider; the
                 // handler filters to the import action itself.
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                // Goto-definition: jump to a type / function / const / alias
+                // declaration anywhere in the workspace — including into a
+                // generated `rust.std` / crate `.jux.d` stub (§L.5).
+                definition_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
         })
@@ -672,6 +681,53 @@ impl LanguageServer for Backend {
             }),
             range: Some(span_to_range(&doc.rope, span)),
         }))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+        let Some(doc) = self.docs.get(&uri) else {
+            return Ok(None);
+        };
+        let offset = position_to_offset(&doc.rope, pos);
+        let text = doc.rope.to_string();
+
+        // Resolve a plain identifier — a type / function / const / alias name —
+        // to its declaration. (Member-level goto, `recv.member`, needs per-member
+        // source spans that aren't tracked yet; the receiver's type still
+        // resolves through hover/completion.)
+        let Some(word) = word_at(&text, offset) else {
+            return Ok(None);
+        };
+        let Some((unit_idx, span)) = doc.symbols.definition_of(&word.text) else {
+            return Ok(None);
+        };
+        let Some(path) = doc.source_paths.get(unit_idx) else {
+            return Ok(None);
+        };
+        let Ok(target_uri) = Url::from_file_path(path) else {
+            // Synthetic stdlib paths aren't real files — nothing to open.
+            return Ok(None);
+        };
+        // Convert the declaring unit's byte span to a line/col range using that
+        // file's text: the live rope when it's the open document, else the
+        // on-disk content the analysis read.
+        let target_rope = if target_uri == uri {
+            doc.rope.clone()
+        } else {
+            match std::fs::read_to_string(path) {
+                Ok(t) => Rope::from_str(&t),
+                Err(_) => return Ok(None),
+            }
+        };
+        let range = span_to_range(&target_rope, span);
+        Ok(Some(GotoDefinitionResponse::Scalar(Location {
+            uri: target_uri,
+            range,
+        })))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -1018,6 +1074,7 @@ mod tests {
             expr_types: analysis.expr_types,
             type_names: analysis.type_names,
             symbols: analysis.symbols,
+            source_paths: analysis.source_paths,
         };
 
         // Find the `.` of `g.greet` in the source and resolve the receiver `g`.
