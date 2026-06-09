@@ -1977,6 +1977,7 @@ impl<'a> Parser<'a> {
                     nullable: false,
                     array_shape: None,
                     fn_shape: None,
+                    ptr_depth: 0,
                     span,
                 };
                 return Some(ReturnType::AsyncType(void_ty));

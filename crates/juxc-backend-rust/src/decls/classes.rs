@@ -2272,6 +2272,7 @@ fn substitute_type_ref(
         nullable: ty.nullable,
         array_shape: ty.array_shape.clone(),
         fn_shape,
+        ptr_depth: ty.ptr_depth,
         span: ty.span,
     }
 }

@@ -46,6 +46,21 @@ impl RustEmitter {
     /// allocating. Owned-string semantics (mutation, storage in structs)
     /// will need a more nuanced mapping when we get there.
     pub(crate) fn emit_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
+        // Raw pointer `T*` is the OUTERMOST modifier (§5.5 / §A.2.7), peeled
+        // first: each `*` level emits a Rust `*mut`, then we recurse on the
+        // type with the pointer suffix stripped. So `int*` → `*mut isize`,
+        // `int**` → `*mut *mut isize`, and `T[]*` (array then pointer) →
+        // `*mut Vec<T>`. Pointers are `unsafe`-only; the type checker gates
+        // their use behind an `unsafe` context.
+        if ty.ptr_depth > 0 {
+            for _ in 0..ty.ptr_depth {
+                self.w.push_str("*mut ");
+            }
+            let mut inner = ty.clone();
+            inner.ptr_depth = 0;
+            self.emit_type_as_rust(&inner);
+            return;
+        }
         // Nullable types `T?` lower to Rust's `Option<T>`. We peel
         // the `nullable` flag here and recurse on the inner type
         // (which is `ty` with `nullable = false`). All other shape
@@ -93,6 +108,7 @@ impl RustEmitter {
                         nullable: ty.nullable,
                         array_shape: None,
                         fn_shape: ty.fn_shape.clone(),
+                        ptr_depth: 0,
                         span: ty.span,
                     };
                     self.emit_type_as_rust(&element_ty);
@@ -114,6 +130,7 @@ impl RustEmitter {
                         nullable: ty.nullable,
                         array_shape: None,
                         fn_shape: ty.fn_shape.clone(),
+                        ptr_depth: 0,
                         span: ty.span,
                     };
                     self.emit_type_as_rust(&element_ty);
@@ -134,6 +151,7 @@ impl RustEmitter {
                 nullable: false,
                 array_shape: ty.array_shape.clone(),
                 fn_shape: ty.fn_shape.clone(),
+                ptr_depth: 0,
                 span: ty.span,
             };
             self.w.push_str("Option<");

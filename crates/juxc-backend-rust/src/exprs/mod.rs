@@ -1028,6 +1028,7 @@ pub(crate) fn ty_kind_from_ref_with_params(
             nullable: t.nullable,
             array_shape: None,
             fn_shape: t.fn_shape.clone(),
+            ptr_depth: 0,
             span: t.span,
         };
         let element = ty_kind_from_ref_with_params(&element_ref, generic_params);

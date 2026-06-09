@@ -414,6 +414,7 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
             nullable: t.nullable,
             array_shape: None,
             fn_shape: t.fn_shape.clone(),
+            ptr_depth: t.ptr_depth,
             span: t.span,
         };
         let element = ty_from_ref(&element_ref, env, symbols);

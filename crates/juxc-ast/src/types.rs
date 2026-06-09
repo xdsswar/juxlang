@@ -39,8 +39,22 @@ pub struct TypeRef {
     /// Boxed to keep `TypeRef`'s memory footprint small in the
     /// common (non-function) case.
     pub fn_shape: Option<Box<FnTypeShape>>,
+    /// Number of trailing `*` raw-pointer markers (§5.5 / §A.2.7). `0` for an
+    /// ordinary type; `1` for `T*`, `2` for `T**`. Each level lowers to a Rust
+    /// `*mut`, so `T*` → `*mut T`. Raw pointers are `unsafe`-only — declaring or
+    /// dereferencing one is meaningful only in an `unsafe` context. The pointer
+    /// suffix is the OUTERMOST modifier: `T[]*` is a pointer to an array, and a
+    /// nullable pointer `T*?` lowers to `Option<*mut T>`.
+    pub ptr_depth: u8,
     /// Span of the whole reference.
     pub span: Span,
+}
+
+impl TypeRef {
+    /// True when this type carries one or more trailing `*` (a raw pointer).
+    pub fn is_pointer(&self) -> bool {
+        self.ptr_depth > 0
+    }
 }
 
 /// `(A, B) async? throws? -> R` — function-type per grammar §A.2.7.

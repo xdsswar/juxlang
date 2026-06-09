@@ -53,6 +53,16 @@ impl RustEmitter {
     /// needs parens (`-(x + y)` rather than `-x + y`). Atomic and postfix
     /// operands don't.
     pub(crate) fn emit_unary(&mut self, u: &UnaryExpr) {
+        // `&x` (address-of) lowers to a raw-pointer macro, not a prefix
+        // token: `core::ptr::addr_of_mut!(x)` yields a `*mut T` (a Rust
+        // reference `&x` is a different type). The operand is a place, so
+        // it's emitted verbatim inside the macro call.
+        if matches!(u.op, juxc_ast::UnaryOp::AddrOf) {
+            self.w.push_str("core::ptr::addr_of_mut!(");
+            self.emit_expr(&u.operand);
+            self.w.push(')');
+            return;
+        }
         self.w.push_str(u.op.as_rust_str());
         // Unary precedence is higher than any binary; reusing
         // emit_expr_with_parent_prec at UNARY_PREC gives the right

@@ -278,11 +278,18 @@ impl<'a> Parser<'a> {
         // - simple name (single-segment Path) — `x = …`
         // - array element (Index)              — `arr[i] = …`
         // - field access (Field)               — `this.x = …`, `obj.field = …`
+        // - raw-pointer deref (`*p = …`)       — write through a pointer
+        //   (§A.2.9, `unsafe`-only; the type checker gates the `*` on an
+        //   `unsafe` context).
         // Anything else is rejected with E0200.
         let is_lvalue = matches!(
             &target_expr,
             Expr::Path(qn) if qn.segments.len() == 1
-        ) || matches!(&target_expr, Expr::Index(_) | Expr::Field(_));
+        ) || matches!(&target_expr, Expr::Index(_) | Expr::Field(_))
+            || matches!(
+                &target_expr,
+                Expr::Unary(u) if u.op == juxc_ast::UnaryOp::Deref
+            );
         if !is_lvalue {
             self.diagnostics.push(
                 Diagnostic::error(
@@ -414,6 +421,12 @@ impl<'a> Parser<'a> {
                 i += 1;
             }
         }
+        // Optional trailing `*` raw-pointer markers — `int* p = …`,
+        // `T** pp;`. The pointer suffix is the outermost type modifier, so
+        // it comes after the array dims, matching `parse_type_ref`.
+        while matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Star)) {
+            i += 1;
+        }
         // After the type, expect IDENT then `=` or `;`.
         matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_)))
             && matches!(
@@ -487,6 +500,7 @@ impl<'a> Parser<'a> {
             nullable: lhs_ty.nullable,
             array_shape: None,
             fn_shape: lhs_ty.fn_shape.clone(),
+            ptr_depth: 0,
             span: lhs_ty.span,
         };
         let fixed = matches!(lhs_ty.array_shape, Some(ArrayShape::Fixed(_)));

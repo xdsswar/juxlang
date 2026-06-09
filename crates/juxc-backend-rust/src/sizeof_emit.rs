@@ -66,6 +66,7 @@ impl RustEmitter {
                 nullable: false,
                 array_shape: None,
                 fn_shape: None,
+                ptr_depth: 0,
                 span: qn.span,
             };
             if let Some(rust_ty) = jux_primitive_to_rust(&synth_ref) {

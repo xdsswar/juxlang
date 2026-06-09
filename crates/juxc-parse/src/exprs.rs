@@ -347,6 +347,12 @@ impl<'a> Parser<'a> {
             TokenKind::Minus => Some(UnaryOp::Neg),
             TokenKind::Bang => Some(UnaryOp::Not),
             TokenKind::Tilde => Some(UnaryOp::BitNot),
+            // Prefix `*` / `&` in expression position are the raw-pointer
+            // deref / address-of operators (§A.2.9, `unsafe`-only). They're
+            // unambiguous here — the binary `*` (multiply) and `&` (bit-and)
+            // only appear after an operand, at binary precedence.
+            TokenKind::Star => Some(UnaryOp::Deref),
+            TokenKind::Amp => Some(UnaryOp::AddrOf),
             _ => None,
         };
         if let Some(op) = op {
@@ -850,6 +856,7 @@ impl<'a> Parser<'a> {
                     nullable: false,
                     array_shape: None,
                     fn_shape: None,
+                    ptr_depth: 0,
                     span: element_name.span,
                 };
                 self.expect(&TokenKind::LBracket, "'[' after `new T`");

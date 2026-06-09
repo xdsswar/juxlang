@@ -415,11 +415,11 @@ pub struct UnaryExpr {
     pub span: Span,
 }
 
-/// The prefix unary operators currently modeled by the AST.
+/// The prefix unary operators modeled by the AST.
 ///
-/// `+` (unary plus, no-op), `move`, `await`, `&` (address-of, unsafe),
-/// and `*` (pointer deref, unsafe) from §A.4 are not modeled yet — they
-/// land with their respective feature areas.
+/// `+` (unary plus, no-op) and `move` from §A.4 are not modeled yet — they
+/// land with their respective feature areas. `await` is modeled as its own
+/// [`Expr::Await`] node rather than a `UnaryOp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     /// `-x` — arithmetic negation.
@@ -428,10 +428,21 @@ pub enum UnaryOp {
     Not,
     /// `~x` — bitwise NOT (on integer operands).
     BitNot,
+    /// `*p` — raw-pointer dereference (§A.2.9, `unsafe`-only). Lowers to
+    /// Rust `*p`; reading/writing through it is only legal in an `unsafe`
+    /// context.
+    Deref,
+    /// `&x` — address-of, producing a raw pointer (§A.2.9, `unsafe`-only).
+    /// Lowers to Rust `core::ptr::addr_of_mut!(x)` (a `*mut T`), not a Rust
+    /// reference. Only meaningful in an `unsafe` context.
+    AddrOf,
 }
 
 impl UnaryOp {
-    /// The Rust spelling of this operator.
+    /// The Rust spelling of this operator for the simple prefix forms.
+    /// `AddrOf` lowers to a macro call (`addr_of_mut!`) rather than a
+    /// prefix token, so the backend special-cases it instead of using
+    /// this string.
     ///
     /// **`BitNot → !`:** Rust spells bitwise NOT as `!` (the same token
     /// it uses for logical NOT), choosing operator by operand type.
@@ -443,6 +454,8 @@ impl UnaryOp {
             UnaryOp::Neg => "-",
             UnaryOp::Not => "!",
             UnaryOp::BitNot => "!",
+            UnaryOp::Deref => "*",
+            UnaryOp::AddrOf => "&",
         }
     }
 }

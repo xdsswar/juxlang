@@ -2545,6 +2545,7 @@ fn synth_type_ref(name: &str, span: Span) -> TypeRef {
         nullable: false,
         array_shape: None,
         fn_shape: None,
+        ptr_depth: 0,
         span,
     }
 }

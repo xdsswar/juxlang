@@ -999,7 +999,12 @@ fn infer_unary(u: &UnaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     }
     match u.op {
         UnaryOp::Not => Ty::Primitive(Primitive::Bool),
-        UnaryOp::Neg | UnaryOp::BitNot => operand_ty,
+        // Raw pointers erase to their pointee's `Ty` (the `ptr_depth` on
+        // `TypeRef` isn't carried into `Ty`), so `*p` (deref) and `&x`
+        // (address-of) both flow the operand's nominal type through. The
+        // real `*mut T` / `T` distinction is enforced by rustc on the
+        // emitted code.
+        UnaryOp::Neg | UnaryOp::BitNot | UnaryOp::Deref | UnaryOp::AddrOf => operand_ty,
     }
 }
 
@@ -1009,7 +1014,7 @@ fn unary_op_to_kind(op: UnaryOp) -> Option<OperatorKind> {
     Some(match op {
         UnaryOp::Neg => OperatorKind::Minus,
         UnaryOp::BitNot => OperatorKind::BitNot,
-        UnaryOp::Not => return None,
+        UnaryOp::Not | UnaryOp::Deref | UnaryOp::AddrOf => return None,
     })
 }
 

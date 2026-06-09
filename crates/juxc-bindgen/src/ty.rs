@@ -120,23 +120,20 @@ impl fmt::Display for JuxType {
             }
             JuxType::Void => f.write_str("void"),
             JuxType::Never => f.write_str("never"),
-            // A raw pointer (`*const T` / `*mut T`) is surfaced as the nominal
-            // `Ptr<T>` rather than the grammar's `T*` (`pointer-type`, §A.2.7,
-            // unsafe-only). The parser's `pointer-type` support and the real
-            // pointer lowering land with the deferred C/C++/unsafe interop work;
-            // until then `Ptr<T>` keeps the pointee visible and, crucially,
-            // parses — so the enclosing member survives into the symbol table
-            // and still autocompletes. The `RawPtr` IR variant is retained so a
-            // future renderer can emit true `T*` without re-deriving the shape.
+            // A raw pointer (`*const T` / `*mut T`) renders as the grammar's
+            // `T*` (`pointer-type`, §5.5 / §A.2.7, `unsafe`-only). The parser
+            // reads the trailing `*` into `TypeRef::ptr_depth` and the backend
+            // lowers it to `*mut T`, so a foreign pointer survives round-trip:
+            // stub → symbol table → emitted Rust.
             JuxType::RawPtr(t) => {
                 // A pointer to unit (`*const ()` / `*mut ()`, common as an opaque
                 // C `void*`) has a `Void` pointee — but `void` is not a valid
-                // nominal type argument, so surface it as an opaque `Ptr<Object>`
-                // rather than the unparseable `Ptr<void>`.
+                // type name, so surface it as `Object*` rather than the
+                // unparseable `void*`.
                 if matches!(**t, JuxType::Void) {
-                    f.write_str("Ptr<Object>")
+                    f.write_str("Object*")
                 } else {
-                    write!(f, "Ptr<{t}>")
+                    write!(f, "{t}*")
                 }
             }
             JuxType::Wildcard(None) => f.write_str("?"),
@@ -192,9 +189,11 @@ mod tests {
             JuxType::Array { elem: Box::new(JuxType::Prim("int")), size: Some(8) }.to_string(),
             "int[8]",
         );
-        // Raw pointers surface as the nominal `Ptr<T>` (parseable today; real
-        // `T*` pointer-type syntax lands with the deferred unsafe/C-interop work).
-        assert_eq!(JuxType::RawPtr(Box::new(JuxType::Prim("byte"))).to_string(), "Ptr<byte>");
+        // Raw pointers render as the grammar's `T*` (§5.5 / §A.2.7); the parser
+        // reads the trailing `*` into `TypeRef::ptr_depth` → `*mut T`.
+        assert_eq!(JuxType::RawPtr(Box::new(JuxType::Prim("byte"))).to_string(), "byte*");
+        // A `void*` (unit pointee) surfaces as `Object*` — `void` isn't a type name.
+        assert_eq!(JuxType::RawPtr(Box::new(JuxType::Void)).to_string(), "Object*");
     }
 
     #[test]

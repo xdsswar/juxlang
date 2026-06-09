@@ -265,7 +265,19 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
             collect_mutating_calls(&b.left, out, user_mut);
             collect_mutating_calls(&b.right, out, user_mut);
         }
-        Expr::Unary(u) => collect_mutating_calls(&u.operand, out, user_mut),
+        Expr::Unary(u) => {
+            // `&x` (address-of) lowers to `core::ptr::addr_of_mut!(x)`, which
+            // requires `x` to be a mutable place — so taking the address of a
+            // local promotes it to `let mut`.
+            if u.op == juxc_ast::UnaryOp::AddrOf {
+                if let Expr::Path(qn) = &*u.operand {
+                    if qn.segments.len() == 1 {
+                        out.insert(qn.segments[0].text.clone());
+                    }
+                }
+            }
+            collect_mutating_calls(&u.operand, out, user_mut);
+        }
         Expr::Range(r) => {
             collect_mutating_calls(&r.start, out, user_mut);
             collect_mutating_calls(&r.end, out, user_mut);
@@ -999,6 +1011,7 @@ pub(crate) fn field_supports_eq(ty: &juxc_ast::TypeRef) -> bool {
             nullable: ty.nullable,
             array_shape: None,
             fn_shape: ty.fn_shape.clone(),
+            ptr_depth: 0,
             span: ty.span,
         };
         return field_supports_eq(&element);
@@ -1010,6 +1023,7 @@ pub(crate) fn field_supports_eq(ty: &juxc_ast::TypeRef) -> bool {
             nullable: false,
             array_shape: None,
             fn_shape: ty.fn_shape.clone(),
+            ptr_depth: 0,
             span: ty.span,
         };
         return field_supports_eq(&inner);
@@ -1054,6 +1068,7 @@ pub(crate) fn field_supports_default(ty: &juxc_ast::TypeRef) -> bool {
             nullable: false,
             array_shape: None,
             fn_shape: ty.fn_shape.clone(),
+            ptr_depth: 0,
             span: ty.span,
         };
         return field_supports_default(&element);
@@ -1623,6 +1638,7 @@ impl WildcardLifter {
             nullable: ty.nullable,
             array_shape: ty.array_shape.clone(),
             fn_shape: ty.fn_shape.clone(),
+            ptr_depth: ty.ptr_depth,
             span: ty.span,
         }
     }
@@ -1659,6 +1675,7 @@ impl WildcardLifter {
             nullable: false,
             array_shape: None,
             fn_shape: None,
+            ptr_depth: 0,
             span: Span::DUMMY,
         }
     }

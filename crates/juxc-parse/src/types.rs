@@ -53,6 +53,7 @@ impl<'a> Parser<'a> {
                 nullable: false,
                 array_shape: None,
                 fn_shape: None,
+                ptr_depth: 0,
                 span: qname.span.join(end),
             });
         }
@@ -84,6 +85,15 @@ impl<'a> Parser<'a> {
             break;
         }
 
+        // Trailing raw-pointer markers `*` (§5.5 / §A.2.7), the OUTERMOST
+        // modifier: `T*` → `*mut T`, `T**` → `*mut *mut T`. In type position a
+        // `*` is unambiguous (it's never the multiply operator there). Pointers
+        // are `unsafe`-only — the type checker enforces the `unsafe` context.
+        let mut ptr_depth: u8 = 0;
+        while self.eat(&TokenKind::Star) {
+            ptr_depth = ptr_depth.saturating_add(1);
+        }
+
         let end = self.last_consumed_span();
         Some(TypeRef {
             name: qname.clone(),
@@ -91,6 +101,7 @@ impl<'a> Parser<'a> {
             nullable,
             array_shape,
             fn_shape: None,
+            ptr_depth,
             span: qname.span.join(end),
         })
     }
@@ -182,6 +193,7 @@ impl<'a> Parser<'a> {
                 nullable: false,
                 array_shape: None,
                 fn_shape: None,
+                ptr_depth: 0,
                 span,
             }
         } else {
@@ -201,6 +213,7 @@ impl<'a> Parser<'a> {
             generic_args: Vec::new(),
             nullable: false,
             array_shape: None,
+            ptr_depth: 0,
             fn_shape: Some(Box::new(FnTypeShape {
                 params,
                 return_type,

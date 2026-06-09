@@ -1132,6 +1132,28 @@ impl<'a> Checker<'a> {
 
             Expr::Unary(u) => {
                 self.check_expr(&u.operand);
+                // §A.2.9 — the raw-pointer operators `*p` (deref) and `&x`
+                // (address-of) are `unsafe`-only. Outside an `unsafe` context
+                // they trip E0506 (same rule as calling an `unsafe` fn).
+                if matches!(u.op, juxc_ast::UnaryOp::Deref | juxc_ast::UnaryOp::AddrOf)
+                    && !self.in_unsafe
+                {
+                    let what = if matches!(u.op, juxc_ast::UnaryOp::Deref) {
+                        "raw-pointer dereference `*`"
+                    } else {
+                        "address-of `&`"
+                    };
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0506_UnsafeOpOutsideUnsafe,
+                            format!(
+                                "{what} requires an `unsafe` block; wrap it in `unsafe {{ … }}` \
+                                 or mark the enclosing function `unsafe`",
+                            ),
+                        )
+                        .with_span(u.span),
+                    );
+                }
                 // §O.3.4 — unary operator on a user type whose
                 // matching operator was deleted with `= delete;`.
                 if let Some(kind) = op_kind_for_unary(u.op) {
@@ -2756,7 +2778,8 @@ fn op_kind_for_unary(op: UnaryOp) -> Option<OperatorKind> {
     Some(match op {
         UnaryOp::Neg => OperatorKind::Minus,
         UnaryOp::BitNot => OperatorKind::BitNot,
-        UnaryOp::Not => return None,
+        // `!x`, raw-pointer `*p` / `&x` aren't overloadable (§O.2.5).
+        UnaryOp::Not | UnaryOp::Deref | UnaryOp::AddrOf => return None,
     })
 }
 
@@ -3387,6 +3410,27 @@ mod tests {
     #[test]
     fn safe_call_never_trips_e0506() {
         let d = run(r#"public int ok(){ return 1; } public void f(){ var x = ok(); }"#);
+        assert!(!has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+    }
+
+    /// Address-of `&x` outside an `unsafe` context → E0506 (§A.2.9).
+    #[test]
+    fn address_of_outside_unsafe_errors() {
+        let d = run(r#"public void f(){ int x = 1; int* p = &x; }"#);
+        assert!(has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+    }
+
+    /// Raw-pointer deref `*p` outside an `unsafe` context → E0506 (§A.2.9).
+    #[test]
+    fn deref_outside_unsafe_errors() {
+        let d = run(r#"public void f(){ int x = 1; int* p = &x; int y = *p; }"#);
+        assert!(has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+    }
+
+    /// The same pointer ops inside an `unsafe { }` block are fine.
+    #[test]
+    fn pointer_ops_in_unsafe_block_ok() {
+        let d = run(r#"public void f(){ int x = 1; unsafe { int* p = &x; *p = 2; } }"#);
         assert!(!has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
     }
 

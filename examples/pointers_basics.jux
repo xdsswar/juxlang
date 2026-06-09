@@ -1,0 +1,25 @@
+// Demonstrates Jux raw pointers (§5.5 / §A.2.7) — `T*` type, address-of `&x`,
+// and dereference `*p`. All three are `unsafe`-only (§A.2.9): the type checker
+// requires an `unsafe` context, mirroring how Rust gates raw-pointer access.
+//
+// `T*` lowers to Rust `*mut T`, `&x` to `core::ptr::addr_of_mut!(x)`, and `*p`
+// to a Rust deref — so a foreign pointer (`*const u8` → `ubyte*` in a bound
+// crate's stub) round-trips through Jux faithfully.
+
+// An `unsafe` helper that writes a value through a raw pointer. Its whole body
+// is an unsafe context, so the deref needs no nested `unsafe { }`.
+public unsafe void store(int* p, int value) {
+    *p = value;
+}
+
+public void main() {
+    int n = 10;
+    // Address-of, deref, and pointer-passing all live inside the `unsafe` block.
+    unsafe {
+        int* p = &n;
+        // Read through the pointer, double it, write it back.
+        int doubled = *p * 2;
+        store(p, doubled);
+    }
+    print($"n after pointer write: ${n}");
+}
