@@ -6,13 +6,71 @@
   </vendor>
 
   <description><![CDATA[
-    Language support for <b>Jux</b> — Java-shaped syntax that lowers to Rust.
+    <h2>Jux Language</h2>
+    <p>
+      Full IDE support for <b>Jux</b> — a Java/C#-shaped language that lowers to
+      Rust. Write familiar class/interface/enum/record syntax and ship native
+      binaries through the Rust toolchain, with a first-class editing experience
+      modelled on IntelliJ's own Java plugin.
+    </p>
+
+    <h3>Editing &amp; Navigation</h3>
     <ul>
-      <li>Native Java-like syntax highlighting (keywords, types, strings, comments, annotations) with a customizable color scheme</li>
-      <li><b>New → Jux Project</b>, <b>New → Jux File</b> (Class / Interface / Enum / Struct / Record / Annotation), and <b>New → Jux Package</b></li>
-      <li>Automatic <code>package</code> inference from the file's source-root-relative path</li>
-      <li>Run any file with a <code>main</code>; diagnostics, hover types, completion and auto-import through the <code>juxc-lsp</code> language server</li>
+      <li>Native, PSI-based parser (not just TextMate): a real syntax tree powers
+        the <b>Structure View</b>, breadcrumbs, code folding, and brace matching</li>
+      <li>Customizable <b>syntax highlighting</b> for keywords, types, strings,
+        comments and annotations, with a dedicated color-settings page</li>
+      <li><b>Go to Declaration</b>, <b>Find Usages</b>, and <b>Rename</b> for
+        in-file declarations; cross-file and Rust-std symbols resolve through the
+        language server</li>
+      <li>Java-like editor behaviour: smart Enter, <b>Auto-Indent</b>
+        (<code>Ctrl+Alt+I</code>), auto-closing quotes/brackets, and line/block
+        comment toggling</li>
+      <li><b>Optimize Imports</b> (<code>Ctrl+Alt+O</code>) — removes unused and
+        duplicate imports and sorts the rest, just like Java</li>
     </ul>
+
+    <h3>Code Generation (Alt+Insert)</h3>
+    <ul>
+      <li>Generate a <b>constructor</b>, <b>getters</b>, and <b>setters</b> from
+        a class's fields</li>
+      <li><b>Override / Implement Methods</b> — stubs for inherited methods not
+        yet declared, walking the supertype chain</li>
+    </ul>
+
+    <h3>Intelligence (via <code>juxc-lsp</code>)</h3>
+    <ul>
+      <li>Live <b>diagnostics</b> with precise Jux error codes — workspace-aware,
+        so cross-file and cross-package errors surface on the right file</li>
+      <li><b>Completion</b> over keywords, project types, and receiver-aware
+        members, with <b>auto-import</b> on accept and import quick-fixes</li>
+      <li><b>Hover</b> showing inferred expression types and declaration
+        signatures</li>
+      <li>Autocomplete and auto-import over the <b>Rust standard library</b> and
+        any bound Rust crate — rendered in Jux syntax — indexed automatically
+        from your toolchain and project dependencies</li>
+    </ul>
+
+    <h3>Project &amp; Build</h3>
+    <ul>
+      <li><b>New → Jux Project</b>, <b>New → Jux File</b> (Class / Interface /
+        Enum / Struct / Record / Annotation) and <b>New → Jux Package</b>, with
+        <code>package</code> inferred from the source-root-relative path</li>
+      <li><b>Jux tool window</b> (right side, like Gradle/Cargo): one-click
+        Build, Run, Test, Build Release and Check over a live console</li>
+      <li><b>Run configurations</b> that auto-detect any file with a
+        <code>main</code> and wire up the gutter Run action</li>
+      <li>IDE-wide <b>toolchain settings</b> (Settings | Tools | Jux Toolchain):
+        auto-detects <code>juxc</code> / <code>jux</code> / <code>juxc-lsp</code>
+        from <code>$JUX_HOME</code>, <code>PATH</code>, and common install
+        locations</li>
+    </ul>
+
+    <p>
+      Works in every IntelliJ-platform IDE (IDEA, CLion, RustRover, GoLand,
+      PyCharm, …). The language-server features require an Ultimate-class IDE or
+      the LSP4IJ plugin on Community editions.
+    </p>
   ]]></description>
 
   <!-- Platform-only dependency: the plugin loads in every IntelliJ-platform
