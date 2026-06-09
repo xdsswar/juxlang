@@ -204,6 +204,12 @@ pub enum Code {
     /// check, instead of leaking a `rustc` trait-bound error from the
     /// emitted `panic_any`.
     E0710_ThrowRequiresException,
+    /// E0720 — An unreachable `catch` clause. Per the exceptions addendum
+    /// §X.3.4, catch clauses are tried in source order; a clause whose type is
+    /// the same as, or a subtype of, an earlier clause's type can never run
+    /// (the earlier, broader clause already caught it). The likely mistake —
+    /// ordering `catch (Exception)` before `catch (IOException)` — is an error.
+    E0720_UnreachableCatch,
     /// E0700 — `await` used outside an async context. Per the async
     /// addendum §18.1.2 (`JUX-ASYNC-ADDENDUM-v2.md`), `await` is only
     /// permitted inside an `async` function/method, an async lambda, or
@@ -300,6 +306,7 @@ impl Code {
             Code::E0431_GenericInferenceNoSolution => "E0431",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0710_ThrowRequiresException   => "E0710",
+            Code::E0720_UnreachableCatch         => "E0720",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",

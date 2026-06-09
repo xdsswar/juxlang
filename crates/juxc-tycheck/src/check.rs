@@ -967,12 +967,32 @@ impl<'a> Checker<'a> {
 
             Stmt::Try(t) => {
                 self.check_block(&t.body);
+                // Caught types so far, to detect an unreachable later clause
+                // (§X.3.4): a catch whose type is the same as, or a subtype of,
+                // an earlier clause's can never run.
+                let mut caught: Vec<Ty> = Vec::new();
                 for c in &t.catches {
+                    let ty = ty_from_ref(&c.ty, &self.env, self.symbols);
+                    if caught.iter().any(|earlier| is_subtype(&ty, earlier, self.symbols)) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0720_UnreachableCatch,
+                                format!(
+                                    "unreachable `catch ({})`: an earlier clause already \
+                                     catches it",
+                                    ty,
+                                ),
+                            )
+                            .with_span(c.span)
+                            .with_help("reorder catches so more specific types come first"),
+                        );
+                    }
+                    caught.push(ty);
                     self.env.push_scope();
                     // Bind the caught name with the declared type
                     // so the body sees `e` as a normal local.
-                    let ty = ty_from_ref(&c.ty, &self.env, self.symbols);
-                    self.env.declare(&c.name.text, ty);
+                    let bind_ty = ty_from_ref(&c.ty, &self.env, self.symbols);
+                    self.env.declare(&c.name.text, bind_ty);
                     self.check_block(&c.body);
                     self.env.pop_scope();
                 }
@@ -3327,6 +3347,34 @@ mod tests {
     fn non_generic_new_not_flagged() {
         let d = run(r#"public class Plain { public Plain() {} } public void f(){ var p = new Plain(); }"#);
         assert!(!has(&d, code::Code::E0431_GenericInferenceNoSolution), "got: {d:?}");
+    }
+
+    // ---- unreachable catch (E0720, §X.3.4) ----
+
+    /// `catch (Base)` before `catch (Derived)` makes the Derived clause
+    /// unreachable.
+    #[test]
+    fn unreachable_catch_after_supertype_errors() {
+        let d = run(
+            r#"public class Base {} public class Derived extends Base {} public void f(){ try {} catch (Base e) {} catch (Derived e2) {} }"#,
+        );
+        assert!(has(&d, code::Code::E0720_UnreachableCatch), "got: {d:?}");
+    }
+
+    /// Specific-before-broad ordering is reachable — no E0720.
+    #[test]
+    fn ordered_catches_specific_first_ok() {
+        let d = run(
+            r#"public class Base {} public class Derived extends Base {} public void f(){ try {} catch (Derived e) {} catch (Base e2) {} }"#,
+        );
+        assert!(!has(&d, code::Code::E0720_UnreachableCatch), "got: {d:?}");
+    }
+
+    /// Catching the exact same type twice — the second is unreachable.
+    #[test]
+    fn duplicate_catch_type_errors() {
+        let d = run(r#"public class E1 {} public void f(){ try {} catch (E1 e) {} catch (E1 e2) {} }"#);
+        assert!(has(&d, code::Code::E0720_UnreachableCatch), "got: {d:?}");
     }
 
     /// Assigning a String to an int local → E0410.
