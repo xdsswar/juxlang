@@ -1,18 +1,16 @@
 // Demonstrates static initializer blocks (`static { }`, JUX-SEMANTICS §S.4.1).
 //
-// A `static { }` block runs **once**, on first observable use of the class —
-// here, the first `new Settings()` (construction) or the first call to a static
-// method. It's guarded by a thread-safe once-latch, so concurrent first-uses
-// block on a single execution.
-//
-// (Phase-1 note: the first-use trigger fires on construction and static-method
-// calls; triggering on a bare static-field read alone is a documented follow-up.)
+// A `static { }` block runs **once**, on first observable use of the class:
+// reading/writing a static field, calling a static method, or constructing an
+// instance — whichever happens first. It's guarded by a thread-safe, re-entrant
+// once-latch, so concurrent first-uses block on a single execution and a block
+// that reads its own statics during init sees the in-progress values.
 
 public class Settings {
     public static int maxRetries;
     public static String mode;
 
-    // Runs once, before the first instance or static call is observed.
+    // Runs once, lazily, before the class is first observed.
     static {
         Settings.maxRetries = 3;
         Settings.mode = "production";
@@ -27,10 +25,10 @@ public class Settings {
 }
 
 public void main() {
-    // First observable use — constructing an instance triggers the static block.
+    // First observable use is a bare static-FIELD READ (no construction or
+    // static call yet) — it still triggers the static block first.
+    print($"first read: retries=${Settings.maxRetries}");
+    // Subsequent uses don't re-run it (once-guarded).
     var s = new Settings();
     print($"after construct: ${Settings.describe()}");
-    // The static block does NOT run again (once-guarded).
-    var s2 = new Settings();
-    print($"second construct: retries=${Settings.maxRetries}");
 }

@@ -1,8 +1,9 @@
 //! End-to-end test for static initializer blocks (`static { }`, §S.4.1).
 //!
 //! Runs `examples/static_blocks.jux`. Exercises:
-//! - a `static { }` block running once, triggered by the first construction.
-//! - the once-guard: a second construction does not re-run it.
+//! - a `static { }` block triggered by the first observable use — here a bare
+//!   static-FIELD READ, before any construction or static call.
+//! - the once-guard: later uses do not re-run it.
 //! - a static method reading static fields the block initialized.
 
 use std::path::PathBuf;
@@ -40,9 +41,9 @@ fn static_block_runs_once_on_first_use() {
         lines.as_slice(),
         [
             "static init: configured",
+            "first read: retries=3",
             "after construct: mode=production, retries=3",
-            "second construct: retries=3",
         ],
-        "static block should run exactly once, before first construction:\n{stdout}",
+        "static block should run once, triggered by the first static-field read:\n{stdout}",
     );
 }

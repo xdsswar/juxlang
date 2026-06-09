@@ -401,6 +401,11 @@ pub struct ClassSig {
     /// `rust::std::HashSet` spelling, so user code that *uses* the type compiles.
     /// `None` for ordinary (non-stub) classes and stubs without the annotation.
     pub rust_path: Option<String>,
+    /// True when the class declares one or more `static { }` blocks (§S.4.1).
+    /// The backend forces the class's once-guarded `__static_init()` on first
+    /// observable use — construction, a static method call, or a static-field
+    /// read/write — so it runs before the class is observed initialized.
+    pub has_static_init: bool,
     /// True when the class is declared `final` — no other class may
     /// extend it. Enforced by `check_final_and_sealed_extends`.
     pub is_final: bool,
@@ -2219,6 +2224,7 @@ fn insert_class(
             is_abstract: class_decl.is_abstract,
             is_external,
             rust_path: rust_path_annotation(&class_decl.annotations),
+            has_static_init: !class_decl.static_init_blocks.is_empty(),
             is_final: class_decl.is_final,
             is_sealed: class_decl.is_sealed,
             permits: class_decl

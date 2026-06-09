@@ -1686,8 +1686,20 @@ impl RustEmitter {
         self.w.indent_inc();
         self.w.line("fn __static_init() {");
         self.w.indent_inc();
+        // Re-entrancy-safe once-latch. `Once` alone deadlocks/panics if the
+        // initializer re-enters (a static block that reads a static field or
+        // calls a static method of the same class). A thread-local "in progress"
+        // flag lets a re-entrant call return early — reading the partially-set
+        // state (a forward reference, which Java permits) — while a *different*
+        // thread's first use still blocks on the single `Once` execution.
+        self.w.line(
+            "thread_local! { static __JUX_STATIC_BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }",
+        );
         self.w
             .line("static __JUX_STATIC_GUARD: std::sync::Once = std::sync::Once::new();");
+        self.w
+            .line("if __JUX_STATIC_GUARD.is_completed() || __JUX_STATIC_BUSY.with(|b| b.get()) { return; }");
+        self.w.line("__JUX_STATIC_BUSY.with(|b| b.set(true));");
         self.w.line("__JUX_STATIC_GUARD.call_once(|| {");
         self.w.indent_inc();
         // Static context: no `this`. Collect mutated locals so reassignments
@@ -1708,6 +1720,7 @@ impl RustEmitter {
         self.this_alias = prev_this;
         self.w.indent_dec();
         self.w.line("});");
+        self.w.line("__JUX_STATIC_BUSY.with(|b| b.set(false));");
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();

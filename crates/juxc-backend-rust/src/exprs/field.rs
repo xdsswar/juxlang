@@ -215,6 +215,18 @@ impl RustEmitter {
                             return;
                         }
                         // Mutable static — guarded `LazyLock<Mutex<T>>`.
+                        // Reading a static field is an observable use (§S.4.1),
+                        // so an rvalue read of a field whose class has
+                        // `static { }` blocks runs the once-guarded initializer
+                        // first, wrapped in a block expression. (`__static_init`
+                        // is re-entrancy-safe, so this is harmless even when the
+                        // read happens inside the static block itself.)
+                        let has_si = self
+                            .symbols
+                            .classes
+                            .get(&class_fqn)
+                            .map(|c| c.has_static_init)
+                            .unwrap_or(false);
                         if self.emitting_lvalue {
                             self.w.push('*');
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
@@ -222,10 +234,21 @@ impl RustEmitter {
                             self.w.push_str(&f.field.text);
                             self.w.push_str(".lock().unwrap()");
                         } else {
+                            // Parenthesize the block expression so it stays an
+                            // EXPRESSION in operand position (`x.base * 5`): a
+                            // bare leading `{` would parse as a block statement.
+                            if has_si {
+                                self.w.push_str("({ ");
+                                self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                                self.w.push_str("::__static_init(); ");
+                            }
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                             self.w.push('_');
                             self.w.push_str(&f.field.text);
                             self.w.push_str(".lock().unwrap().clone()");
+                            if has_si {
+                                self.w.push_str(" })");
+                            }
                         }
                         return;
                     }
