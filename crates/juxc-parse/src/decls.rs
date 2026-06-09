@@ -308,6 +308,23 @@ impl<'a> Parser<'a> {
                 ) {
                     i += 1;
                 }
+                // Skip an optional Java-style leading generic-params clause
+                // `<T, …>` so `public <T> T identity(...)` is classified as a
+                // method (the `<` would otherwise abort the return-type scan).
+                if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
+                    i += 1;
+                    let mut depth: u32 = 1;
+                    while depth > 0 {
+                        match self.tokens.get(i).map(|t| &t.kind) {
+                            Some(TokenKind::Lt) => depth += 1,
+                            Some(TokenKind::Gt) => depth -= 1,
+                            Some(TokenKind::GtGt) => depth = depth.saturating_sub(2),
+                            Some(TokenKind::Eof) | None => break,
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                }
                 // Advance `i` past the return type — a nominal type (with
                 // generics / array / `?` suffixes, glued-`>>` aware) OR a
                 // function type `(A) -> R` (so a member that returns a closure,
@@ -1583,11 +1600,20 @@ impl<'a> Parser<'a> {
         let start = self.peek_span();
 
         let modifiers = self.parse_fn_modifiers();
+        // Java-style LEADING generic parameters: `public <T> T identity(T v)`
+        // (spec §A.2.4 / §7, e.g. line 1217). They sit before the return type;
+        // we also still accept the trailing form `T identity<T>(...)` below.
+        let leading_generics = self.parse_generic_params();
         let return_type = self.parse_return_type()?;
         let name = self.parse_ident()?;
-        // Optional generic parameters per §A.2.4. `<T>` between name
-        // and `(`. Turn-1 limitation: no bounds, no defaults.
-        let generic_params = self.parse_generic_params();
+        // Optional trailing generic parameters `<T>` between name and `(`.
+        // Turn-1 limitation: no bounds, no defaults.
+        let trailing_generics = self.parse_generic_params();
+        let generic_params = if leading_generics.is_empty() {
+            trailing_generics
+        } else {
+            leading_generics
+        };
 
         self.expect(&TokenKind::LParen, "'(' to start parameter list");
         let params = self.parse_param_list();

@@ -31,3 +31,4 @@ Cargo.lock.bak
 /ide/intellij-plugin/gradle/wrapper/gradle-wrapper.properties
 /ide/intellij-plugin/gradle/
 /ref-only/
+_bugtest/
