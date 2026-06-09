@@ -1190,6 +1190,22 @@ fn infer_stmt(stmt: &Stmt, env: &mut TypeEnv, symbols: &SymbolTable) {
             infer_block(&f.body, env, symbols);
             env.pop_scope();
         }
+        Stmt::ForC(f) => {
+            env.push_scope();
+            if let Some(init) = f.init.as_deref() {
+                infer_stmt(init, env, symbols);
+            }
+            if let Some(cond) = &f.cond {
+                let _ = infer_expr(cond, env, symbols);
+            }
+            if let Some(upd) = f.update.as_deref() {
+                infer_stmt(upd, env, symbols);
+            }
+            env.push_scope();
+            infer_block(&f.body, env, symbols);
+            env.pop_scope();
+            env.pop_scope();
+        }
         Stmt::If(if_stmt) => {
             // Evaluate the condition for its side effects (declares
             // nothing today, but keeps the walker total).

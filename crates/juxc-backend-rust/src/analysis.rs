@@ -219,10 +219,47 @@ fn collect_mutated_names_real(
                 }
             }
             Stmt::Throw(e, _) => collect_mutating_calls(e, out, user_mut),
+            Stmt::ForC(f) => {
+                // The init's loop variable is reassigned by the update clause
+                // (`i = i + 1`), so the update's lvalue base must be collected
+                // to promote the binding to `let mut`. Descend into all clauses.
+                if let Some(init) = f.init.as_deref() {
+                    collect_mutated_names_in_stmt(init, out, user_mut);
+                }
+                if let Some(upd) = f.update.as_deref() {
+                    collect_mutated_names_in_stmt(upd, out, user_mut);
+                }
+                collect_mutated_names(&f.body, out, user_mut);
+            }
             // Other statement kinds — Return(None), Break, Continue,
             // SuperCall — don't carry assignments that promote a local.
             _ => {}
         }
+    }
+}
+
+/// Collect mutated-local names from a single statement — the init/update
+/// clause of a C-style `for`. An `Assign` promotes its lvalue base (`i = i+1`
+/// → `i`); a `VarDecl`/`Expr` contributes any mutating calls in its expressions.
+pub(crate) fn collect_mutated_names_in_stmt(
+    stmt: &Stmt,
+    out: &mut HashSet<String>,
+    user_mut: &HashSet<String>,
+) {
+    match stmt {
+        Stmt::Assign(a) => {
+            if let Some(name) = lvalue_base_name(&a.target) {
+                out.insert(name);
+            }
+            collect_mutating_calls(&a.value, out, user_mut);
+        }
+        Stmt::VarDecl(v) => {
+            if let Some(init) = &v.init {
+                collect_mutating_calls(init, out, user_mut);
+            }
+        }
+        Stmt::Expr(e) => collect_mutating_calls(e, out, user_mut),
+        _ => {}
     }
 }
 
@@ -378,6 +415,9 @@ fn stmt_contains_await(stmt: &Stmt) -> bool {
         Stmt::If(i) => if_contains_await(i),
         Stmt::While(w) => expr_contains_await(&w.condition) || block_contains_await(&w.body),
         Stmt::ForEach(f) => expr_contains_await(&f.iter) || block_contains_await(&f.body),
+        Stmt::ForC(f) => {
+            f.cond.as_ref().is_some_and(expr_contains_await) || block_contains_await(&f.body)
+        }
         Stmt::Try(t) => {
             block_contains_await(&t.body)
                 || t.catches.iter().any(|c| block_contains_await(&c.body))
@@ -819,6 +859,7 @@ fn stmt_calls_mut_method_on_this(stmt: &Stmt, mut_methods: &HashSet<String>) -> 
             expr_calls_mut_method_on_this(&f.iter, mut_methods)
                 || body_calls_mut_method_on_this(&f.body, mut_methods)
         }
+        Stmt::ForC(f) => body_calls_mut_method_on_this(&f.body, mut_methods),
         Stmt::SuperCall(args, _) => args
             .iter()
             .any(|a| expr_calls_mut_method_on_this(a, mut_methods)),

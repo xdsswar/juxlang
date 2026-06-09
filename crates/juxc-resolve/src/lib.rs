@@ -687,6 +687,24 @@ impl Resolver {
             Stmt::If(if_stmt) => self.visit_if(if_stmt),
             Stmt::While(w) => self.visit_while(w),
             Stmt::ForEach(f) => self.visit_for_each(f),
+            Stmt::ForC(f) => {
+                // The header opens a scope: an `init` local declaration is
+                // visible in cond/update/body and dies at the loop's end.
+                self.push_scope();
+                if let Some(init) = f.init.as_deref() {
+                    self.visit_stmt(init);
+                }
+                if let Some(cond) = &f.cond {
+                    self.visit_expr(cond);
+                }
+                if let Some(upd) = f.update.as_deref() {
+                    self.visit_stmt(upd);
+                }
+                self.push_scope();
+                self.visit_block(&f.body);
+                self.pop_scope();
+                self.pop_scope();
+            }
             Stmt::Assign(a) => self.visit_assign(a),
             // break/continue introduce no names and reference none.
             // Validating they're inside a loop is a future check.

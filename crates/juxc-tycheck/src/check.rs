@@ -960,6 +960,35 @@ impl<'a> Checker<'a> {
                 self.env.pop_scope();
             }
 
+            Stmt::ForC(f) => {
+                // Header scope: init declares the loop var, visible in
+                // cond/update/body.
+                self.env.push_scope();
+                if let Some(init) = f.init.as_deref() {
+                    self.check_stmt(init);
+                }
+                if let Some(cond) = &f.cond {
+                    self.check_expr(cond);
+                    let cond_ty = infer_expr(cond, &self.env, self.symbols);
+                    if !is_boolish(&cond_ty) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0410_TypeMismatch,
+                                format!("expected bool condition, found {cond_ty}"),
+                            )
+                            .with_span(expr_span(cond)),
+                        );
+                    }
+                }
+                if let Some(upd) = f.update.as_deref() {
+                    self.check_stmt(upd);
+                }
+                self.env.push_scope();
+                self.check_block(&f.body);
+                self.env.pop_scope();
+                self.env.pop_scope();
+            }
+
             Stmt::Expr(e) => {
                 self.check_expr(e);
             }

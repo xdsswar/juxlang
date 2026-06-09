@@ -336,8 +336,47 @@ fn rewrite_block_implicit_this(
             Stmt::Unsafe(b) => {
                 rewrite_block_implicit_this(b, members, &mut locals.clone());
             }
+            Stmt::ForC(f) => {
+                // The whole loop opens a fresh scope (init declarations are
+                // loop-local). Rewrite init/cond/update/body against it.
+                let mut inner = locals.clone();
+                if let Some(init) = f.init.as_deref_mut() {
+                    rewrite_for_clause_implicit_this(init, members, &mut inner);
+                }
+                if let Some(cond) = &mut f.cond {
+                    rewrite_implicit_this(cond, members, &mut inner);
+                }
+                if let Some(upd) = f.update.as_deref_mut() {
+                    rewrite_for_clause_implicit_this(upd, members, &mut inner);
+                }
+                rewrite_block_implicit_this(&mut f.body, members, &mut inner.clone());
+            }
             Stmt::Break(_) | Stmt::Continue(_) => {}
         }
+    }
+}
+
+/// Rewrite implicit-`this` inside a C-style `for` init/update clause — the only
+/// statement shapes a for-clause takes (a local decl, an assignment, or a bare
+/// expression). Extends `locals` with a declared loop variable.
+fn rewrite_for_clause_implicit_this(
+    stmt: &mut Stmt,
+    members: &std::collections::HashSet<String>,
+    locals: &mut std::collections::HashSet<String>,
+) {
+    match stmt {
+        Stmt::VarDecl(v) => {
+            if let Some(init) = &mut v.init {
+                rewrite_implicit_this(init, members, locals);
+            }
+            locals.insert(v.name.text.clone());
+        }
+        Stmt::Assign(a) => {
+            rewrite_implicit_this(&mut a.target, members, locals);
+            rewrite_implicit_this(&mut a.value, members, locals);
+        }
+        Stmt::Expr(e) => rewrite_implicit_this(e, members, locals),
+        _ => {}
     }
 }
 
@@ -496,6 +535,18 @@ fn rewrite_stmt_property_writes(
             }
         }
         Stmt::Unsafe(b) => rewrite_block_property_writes(b, auto_props),
+        Stmt::ForC(f) => {
+            if let Some(init) = f.init.as_deref_mut() {
+                rewrite_stmt_property_writes(init, auto_props);
+            }
+            if let Some(cond) = &mut f.cond {
+                rewrite_expr_property_access(cond, auto_props);
+            }
+            if let Some(upd) = f.update.as_deref_mut() {
+                rewrite_stmt_property_writes(upd, auto_props);
+            }
+            rewrite_block_property_writes(&mut f.body, auto_props);
+        }
         Stmt::Break(_) | Stmt::Continue(_) => {}
     }
 }

@@ -1212,6 +1212,12 @@ pub(crate) fn compute_aliased_classes(
                 walk_expr(&f.iter, aliased, mark);
                 walk_block(&f.body, aliased, mark);
             }
+            Stmt::ForC(f) => {
+                if let Some(cond) = &f.cond {
+                    walk_expr(cond, aliased, mark);
+                }
+                walk_block(&f.body, aliased, mark);
+            }
             Stmt::Try(t) => {
                 walk_block(&t.body, aliased, mark);
                 for c in &t.catches {

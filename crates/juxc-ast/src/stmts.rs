@@ -76,7 +76,33 @@ pub enum Stmt {
     /// functions and the raw-pointer operators (`*p`, `&x`) are permitted;
     /// the body lowers verbatim to a Rust `unsafe { … }` block.
     Unsafe(Block),
-    // For, Switch, …
+    /// `for (init; cond; update) block` — the C-style counted loop per
+    /// §A.2.8. Distinct from the enhanced [`Self::ForEach`] form. See
+    /// [`ForCStmt`].
+    ForC(ForCStmt),
+    // Switch, …
+}
+
+/// `for ( init? ; cond? ; update? ) block` — the C-style three-clause loop.
+///
+/// All three header clauses are optional (`for (;;)` is an infinite loop).
+/// `init` and `update` are modeled as statements (a `var`/typed local decl or
+/// an assignment / expression); `cond` is a boolean expression.
+#[derive(Debug, Clone)]
+pub struct ForCStmt {
+    /// Initializer — typically a local declaration (`int i = 0`) or an
+    /// assignment. `None` for an empty init clause.
+    pub init: Option<Box<Stmt>>,
+    /// Loop condition, re-checked before each iteration. `None` (empty
+    /// clause) means "always true".
+    pub cond: Option<Expr>,
+    /// Update step, run after each iteration (and on `continue`). Usually an
+    /// assignment (`i = i + 1`). `None` for an empty update clause.
+    pub update: Option<Box<Stmt>>,
+    /// The loop body.
+    pub body: Block,
+    /// Span of the whole `for (…) { … }`.
+    pub span: Span,
 }
 
 /// `try B0 catch (T1 e1) B1 catch (T2 e2) B2 ... finally Bf` —

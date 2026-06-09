@@ -271,6 +271,18 @@ fn check_stmt(stmt: &Stmt, diags: &mut Vec<Diagnostic>) {
             }
         }
         Stmt::Unsafe(b) => check_block(b, diags),
+        Stmt::ForC(f) => {
+            if let Some(init) = f.init.as_deref() {
+                check_stmt(init, diags);
+            }
+            if let Some(cond) = &f.cond {
+                check_expr(cond, diags);
+            }
+            if let Some(upd) = f.update.as_deref() {
+                check_stmt(upd, diags);
+            }
+            check_block(&f.body, diags);
+        }
     }
 }
 

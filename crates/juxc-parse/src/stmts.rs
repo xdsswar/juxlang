@@ -4,7 +4,7 @@
 //! reorganization. Behavior is identical to the original methods.
 
 use juxc_ast::{
-    ArrayShape, AssignStmt, BinaryOp, Block, CatchClause, ElseBranch, Expr, ForEachStmt, IfStmt,
+    ArrayShape, AssignStmt, BinaryOp, Block, CatchClause, ElseBranch, Expr, ForCStmt, ForEachStmt, IfStmt,
     NewArrayLitExpr, Stmt, TryStmt, TypeRef, VarDecl, WhileStmt,
 };
 use juxc_diagnostics::{code, Diagnostic};
@@ -77,6 +77,12 @@ impl<'a> Parser<'a> {
             return Some(Stmt::While(self.parse_while_stmt()?));
         }
         if self.at_kw(Keyword::For) {
+            // Disambiguate the C-style `for (init; cond; update)` from the
+            // enhanced `for (var x : iter)` by scanning the header for the
+            // first top-level `;` (C-style) vs `:` (for-each).
+            if self.is_c_style_for() {
+                return self.parse_for_c_stmt().map(Stmt::ForC);
+            }
             return Some(Stmt::ForEach(self.parse_for_each_stmt()?));
         }
         if self.at_kw(Keyword::Break) {
@@ -238,6 +244,99 @@ impl<'a> Parser<'a> {
         Some(ForEachStmt { var_type, var_name, iter, body, span: start.join(end) })
     }
 
+    /// Lookahead: is the `for (...)` header the C-style three-clause form
+    /// (`init; cond; update`) rather than the enhanced `for (var x : iter)`?
+    /// We scan from just past `for (` and report `true` if a top-level `;`
+    /// (paren/bracket/brace depth 0 within the header) appears before a
+    /// top-level `:`. The cursor is left untouched.
+    fn is_c_style_for(&self) -> bool {
+        // `self.pos` is at `for`; the `(` follows.
+        let mut i = self.pos + 2; // past `for` and `(`
+        let mut depth: i32 = 0;
+        while let Some(tok) = self.tokens.get(i) {
+            match &tok.kind {
+                TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => depth += 1,
+                TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace => {
+                    if depth == 0 {
+                        return false; // closed the header without a `;`
+                    }
+                    depth -= 1;
+                }
+                TokenKind::Semicolon if depth == 0 => return true,
+                TokenKind::Colon if depth == 0 => return false,
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /// `for ( init? ; cond? ; update? ) block` — the C-style counted loop.
+    /// Each clause is optional. `init`/`update` are parsed as statements
+    /// (a local decl or an assignment / expression); `cond` is a boolean.
+    pub(crate) fn parse_for_c_stmt(&mut self) -> Option<ForCStmt> {
+        let start = self.peek_span();
+        self.advance(); // 'for'
+        self.expect(&TokenKind::LParen, "'(' after `for`");
+
+        // ---- init clause (terminated by `;`) ----
+        let init: Option<Box<Stmt>> = if self.at(&TokenKind::Semicolon) {
+            self.advance(); // empty init
+            None
+        } else {
+            // A `var`/`final` or typed local decl consumes its own trailing
+            // `;`; an assignment / expression init we terminate ourselves.
+            if self.at_kw(Keyword::Var)
+                || self.at_kw(Keyword::Final)
+                || self.at_kw(Keyword::Const)
+                || self.looks_like_typed_local()
+            {
+                let decl = self.parse_stmt()?; // consumes the `;`
+                Some(Box::new(decl))
+            } else {
+                let expr = self.parse_expr()?;
+                let s = if self.at(&TokenKind::Eq) {
+                    self.parse_assignment_tail(expr, None)?
+                } else if let Some(op) = compound_assign_op(self.peek()) {
+                    self.parse_assignment_tail(expr, Some(op))?
+                } else {
+                    self.expect(&TokenKind::Semicolon, "';' after for-init");
+                    Stmt::Expr(expr)
+                };
+                Some(Box::new(s))
+            }
+        };
+
+        // ---- condition clause (terminated by `;`) ----
+        let cond: Option<Expr> = if self.at(&TokenKind::Semicolon) {
+            None
+        } else {
+            Some(self.parse_expr()?)
+        };
+        self.expect(&TokenKind::Semicolon, "';' after for-condition");
+
+        // ---- update clause (terminated by `)`) ----
+        let update: Option<Box<Stmt>> = if self.at(&TokenKind::RParen) {
+            None
+        } else {
+            let expr = self.parse_expr()?;
+            let s = if self.at(&TokenKind::Eq) {
+                self.parse_assignment_tail_no_semi(expr, None)?
+            } else if let Some(op) = compound_assign_op(self.peek()) {
+                self.parse_assignment_tail_no_semi(expr, Some(op))?
+            } else {
+                Stmt::Expr(expr)
+            };
+            Some(Box::new(s))
+        };
+        self.expect(&TokenKind::RParen, "')' after for-update");
+
+        let body = self.parse_block();
+        let end = self.last_consumed_span();
+        Some(ForCStmt { init, cond, update, body, span: start.join(end) })
+    }
+
     /// `while-stmt = 'while' '(' expression ')' block` per §A.2.8.
     pub(crate) fn parse_while_stmt(&mut self) -> Option<WhileStmt> {
         let start = self.peek_span();
@@ -314,6 +413,44 @@ impl<'a> Parser<'a> {
         // - **Readability.** The backend emits `+=` verbatim instead
         //   of reconstructing it from a Binary expression — what
         //   the user wrote is what they see in the rustc errors.
+        let span = expr_span(&target_expr).join(self.last_consumed_span());
+        Some(Stmt::Assign(AssignStmt {
+            target: target_expr,
+            op: compound_op,
+            value: rhs_expr,
+            span,
+        }))
+    }
+
+    /// Like [`Self::parse_assignment_tail`] but does NOT consume a trailing
+    /// `;` — used for the update clause of a C-style `for`, which is
+    /// terminated by `)` instead. Same lvalue rules.
+    pub(crate) fn parse_assignment_tail_no_semi(
+        &mut self,
+        target_expr: Expr,
+        compound_op: Option<BinaryOp>,
+    ) -> Option<Stmt> {
+        let op_span = self.peek_span();
+        self.advance(); // '=' or compound op
+        let rhs_expr = self.parse_expr()?;
+        let is_lvalue = matches!(
+            &target_expr,
+            Expr::Path(qn) if qn.segments.len() == 1
+        ) || matches!(&target_expr, Expr::Index(_) | Expr::Field(_))
+            || matches!(
+                &target_expr,
+                Expr::Unary(u) if u.op == juxc_ast::UnaryOp::Deref
+            );
+        if !is_lvalue {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "left-hand side of assignment must be a name, array element, or field",
+                )
+                .with_span(op_span),
+            );
+            return None;
+        }
         let span = expr_span(&target_expr).join(self.last_consumed_span());
         Some(Stmt::Assign(AssignStmt {
             target: target_expr,

@@ -80,6 +80,7 @@ fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
                 || expr_moves_path_at_top(&s.iter, name)
                 || body_moves_path(&s.body, name)
         }
+        Stmt::ForC(f) => body_moves_path(&f.body, name),
         Stmt::SuperCall(args, _) => {
             args.iter().any(|a| is_path_named(a, name) || expr_moves_path_at_top(a, name))
         }
@@ -391,6 +392,7 @@ impl RustEmitter {
             Stmt::If(if_stmt) => self.emit_if(if_stmt),
             Stmt::While(w) => self.emit_while(w),
             Stmt::ForEach(f) => self.emit_for_each(f),
+            Stmt::ForC(f) => self.emit_for_c(f),
             Stmt::Assign(a) => self.emit_assign(a),
             Stmt::Break(_) => self.w.push_str("break;\n"),
             Stmt::Continue(_) => self.w.push_str("continue;\n"),
@@ -886,6 +888,66 @@ impl RustEmitter {
     /// stays as a `while` even though it's also always true. Recognizing
     /// always-true expressions would need const evaluation, which is a
     /// later phase.
+    /// Lower a C-style `for (init; cond; update) body`. We can't map it to a
+    /// Rust `while` directly because `continue` must still run the UPDATE — in
+    /// Rust a `continue` skips to the condition. So we hoist the update to the
+    /// TOP of the loop, guarded by a first-iteration flag:
+    ///
+    /// ```text
+    /// { <init>
+    ///   let mut __first = true;
+    ///   loop {
+    ///     if !__first { <update> }
+    ///     __first = false;
+    ///     if !(<cond>) { break; }
+    ///     <body>
+    ///   } }
+    /// ```
+    ///
+    /// `continue` jumps to the loop top → runs the update → re-checks the
+    /// condition → body (exactly C semantics); `break` exits the loop. The
+    /// outer `{ }` scopes the init's loop variable.
+    pub(crate) fn emit_for_c(&mut self, f: &juxc_ast::ForCStmt) {
+        self.w.push_str("{\n");
+        self.w.indent_inc();
+        // Init clause.
+        if let Some(init) = f.init.as_deref() {
+            self.w.emit_indent();
+            self.emit_stmt(init);
+        }
+        self.w.line("let mut __jux_for_first = true;");
+        self.w.line("loop {");
+        self.w.indent_inc();
+        // Update (skipped on the first iteration).
+        if let Some(upd) = f.update.as_deref() {
+            self.w.line("if !__jux_for_first {");
+            self.w.indent_inc();
+            self.w.emit_indent();
+            self.emit_stmt(upd);
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+        self.w.line("__jux_for_first = false;");
+        // Condition check (empty cond → always true → no break).
+        if let Some(cond) = &f.cond {
+            self.w.emit_indent();
+            self.w.push_str("if !(");
+            self.emit_expr(cond);
+            self.w.push_str(") {\n");
+            self.w.indent_inc();
+            self.w.line("break;");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+        // Body.
+        self.emit_block_contents(&f.body);
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.emit_indent();
+        self.w.push_str("}\n");
+    }
+
     pub(crate) fn emit_while(&mut self, w: &WhileStmt) {
         if matches!(w.condition, Expr::Literal(Literal::Bool(true))) {
             self.w.push_str("loop {\n");
@@ -1374,6 +1436,7 @@ pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::If(i) => i.span,
         Stmt::While(w) => w.span,
         Stmt::ForEach(f) => f.span,
+        Stmt::ForC(f) => f.span,
         Stmt::Assign(a) => a.span,
         Stmt::Break(s) => *s,
         Stmt::Continue(s) => *s,
