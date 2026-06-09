@@ -1949,11 +1949,22 @@ impl RustEmitter {
                 .as_ref()
                 .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect())
                 .unwrap_or_default();
-            // Sync main at crate root → no shim needed; the user's
-            // `fn main()` already serves as the binary entry point.
-            // Async main at crate root → emit_fn_decl produced its
-            // own block_on shim; nothing more to do here.
             if pkg.is_empty() {
+                // Crate-root main. A SYNC main already serves as the binary
+                // entry point (`fn main` / `pub fn main` emitted in place), so
+                // nothing to add. An ASYNC main was renamed to
+                // `__jux_async_main` (emit_fn_decl), so emit the sync shim that
+                // drives it — it sits at the crate root, no module path needed.
+                if is_async_main {
+                    self.w.newline();
+                    self.w.line("fn main() {");
+                    self.w.indent_inc();
+                    self.w.emit_indent();
+                    self.w
+                        .push_str("futures::executor::block_on(__jux_async_main());\n");
+                    self.w.indent_dec();
+                    self.w.line("}");
+                }
                 return;
             }
             self.w.newline();

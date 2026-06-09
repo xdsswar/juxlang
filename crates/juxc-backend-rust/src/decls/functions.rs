@@ -171,11 +171,14 @@ impl RustEmitter {
         //     prepend the module path). Skip the local shim here
         //     so we don't produce a duplicate.
         //
-        // The check uses the *current unit's* package (held in
-        // `symbols.package`) rather than the workspace flag,
-        // because the workspace driver sets `workspace_mode = true`
-        // unconditionally even for single-file inputs.
-        if is_async_main && self.symbols.package.is_empty() {
+        // In **workspace mode** the crate-root shim is owned by
+        // `emit_workspace_main_shim` (it has each unit's real package and
+        // emits one shim at the crate root). `self.symbols.package` is the
+        // *merged* table's package there — non-empty even for a package-less
+        // unit — so this local check can't be trusted in that mode. Gate on
+        // `!workspace_mode` so the single-file (non-workspace) path emits the
+        // shim here and the workspace path emits it there, never both.
+        if is_async_main && self.symbols.package.is_empty() && !self.workspace_mode {
             self.w.line("fn main() {");
             self.w.indent_inc();
             self.w.emit_indent();

@@ -1,0 +1,13 @@
+// Async/await end-to-end: an `async` function is `await`ed from an `async`
+// main. The backend lowers `async T f()` to a Rust `async fn`, `await e` to
+// `e.await`, and emits a synchronous `fn main()` shim that drives the async
+// entry point through `futures::executor::block_on` (JUX-ASYNC-ADDENDUM §18.1).
+public async int doubled(int n) {
+    return n + n;
+}
+
+public async void main() {
+    var a = await doubled(3);
+    var b = await doubled(a);
+    print($"async: ${a} ${b}");
+}
