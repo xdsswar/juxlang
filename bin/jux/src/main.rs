@@ -523,7 +523,9 @@ fn severity_label(s: Severity) -> &'static str {
 }
 
 /// Print a "not yet implemented" message pointing at the relevant spec
-/// section, then exit with status 2 so scripts can detect it.
+/// section, then exit with status 2 so scripts can detect it. Retained as
+/// scaffolding for CLI subcommands still on the roadmap (§B.15).
+#[allow(dead_code)]
 fn not_yet_implemented<S: Into<String>>(what: S) -> Result<ExitCode> {
     eprintln!("jux: {} is not yet implemented", what.into());
     eprintln!("     (see JUX-BUILD-SYSTEM-ADDENDUM.md §B.15 for the full CLI surface)");
