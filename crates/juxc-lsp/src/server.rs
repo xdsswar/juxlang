@@ -653,7 +653,22 @@ impl LanguageServer for Backend {
 
             if let Some(resolved) = resolved {
                 let mut value = format!("```jux\n{}\n```", resolved.signature());
-                if let Some(doc_line) = doc_comment_before(&text, word.start) {
+                // Doc comment: prefer the one at the **declaration** site — for a
+                // type / function name we can locate the declaring unit (even a
+                // generated `rust.std` stub) via `definition_of` and read its
+                // `/** … */` there. Falls back to the usage-site scan (members,
+                // or when the declaration can't be located).
+                let decl_doc = doc.symbols.definition_of(&word.text).and_then(|(unit, span)| {
+                    let path = doc.source_paths.get(unit)?;
+                    let same_as_open = Url::from_file_path(path).ok().as_ref() == Some(&uri);
+                    let decl_text = if same_as_open {
+                        text.clone()
+                    } else {
+                        std::fs::read_to_string(path).ok()?
+                    };
+                    doc_comment_before(&decl_text, span.start as usize)
+                });
+                if let Some(doc_line) = decl_doc.or_else(|| doc_comment_before(&text, word.start)) {
                     value.push_str("\n\n");
                     value.push_str(&doc_line);
                 }
@@ -1023,6 +1038,38 @@ mod tests {
             doc_comment_before(text, name_start).as_deref(),
             Some("Greets someone.")
         );
+    }
+
+    /// Hover doc resolution reads the doc comment from the DECLARING file (not
+    /// the usage site): the same `definition_of` + `source_paths` +
+    /// `doc_comment_before` pipeline the hover handler runs, here exercised
+    /// cross-file so a `/** … */` on a type in another file surfaces on hover at
+    /// the use site.
+    #[test]
+    fn hover_doc_comes_from_declaring_file() {
+        let root = temp_root("hover_decl_doc");
+        let lib = root.join("Lib.jux");
+        let main = root.join("main.jux");
+        std::fs::write(
+            &lib,
+            "package lib;\n/** A widget that does things. */\npublic class Widget { public int area(){ return 1; } }\n",
+        )
+        .unwrap();
+        let main_src = "import lib.Widget;\npublic void run(){ var w = new Widget(); }\n";
+        std::fs::write(&main, main_src).unwrap();
+
+        let uri = Url::from_file_path(&main).unwrap();
+        let rope = Rope::from_str(main_src);
+        let analysis = analyze_workspace(&root, &uri, &rope);
+
+        // The hover handler's declaration-doc path, run directly.
+        let (unit, span) = analysis.symbols.definition_of("Widget").expect("Widget resolves");
+        let path = &analysis.source_paths[unit];
+        let decl_text = std::fs::read_to_string(path).unwrap();
+        let doc = doc_comment_before(&decl_text, span.start as usize);
+        assert_eq!(doc.as_deref(), Some("A widget that does things."));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // ---- auto-import edit construction ----
