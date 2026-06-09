@@ -31,8 +31,16 @@ impl RustEmitter {
         // labels qualify to `Enum::Variant`. Saved/restored for nested switches.
         let prev_switch_enum = self.current_switch_enum.take();
         self.current_switch_enum = self.scrutinee_enum_bare(&s.scrutinee);
+        // A `String`-typed scrutinee matches against `&str` literal patterns
+        // (`case "a" ->`), so we match on `.as_str()` — `match s.as_str() {
+        // "a" => … }` — rather than the owned `String` (which Rust won't
+        // compare against `&str` patterns).
+        let scrut_is_string = self.scrutinee_is_string(&s.scrutinee);
         self.w.push_str("match ");
         self.emit_expr(&s.scrutinee);
+        if scrut_is_string {
+            self.w.push_str(".as_str()");
+        }
         self.w.push_str(" {\n");
         for arm in &s.arms {
             // Modest indent — switch is usually nested at depth >= 1
@@ -132,6 +140,35 @@ impl RustEmitter {
             }
         }
         None
+    }
+
+    /// True when the switch scrutinee is `String`-typed (so the `match` should
+    /// be on `.as_str()` to compare against `&str` literal patterns). Mirrors
+    /// [`Self::scrutinee_enum_bare`]'s type resolution.
+    fn scrutinee_is_string(&self, scrutinee: &juxc_ast::Expr) -> bool {
+        // String literal scrutinee (`switch ("x")`): `Span::DUMMY`, so it never
+        // appears in `expr_types` — recognize it directly.
+        if let juxc_ast::Expr::Literal(juxc_ast::Literal::String(_)) = scrutinee {
+            return true;
+        }
+        if let Some(t) = self.expr_types.get(&crate::exprs::expr_span_of(scrutinee)) {
+            if matches!(t, juxc_tycheck::Ty::String) {
+                return true;
+            }
+        }
+        if let juxc_ast::Expr::Path(qn) = scrutinee {
+            if qn.segments.len() == 1 {
+                if let Some(t) = self
+                    .local_types
+                    .iter()
+                    .rev()
+                    .find_map(|s| s.get(&qn.segments[0].text))
+                {
+                    return matches!(t, juxc_tycheck::Ty::String);
+                }
+            }
+        }
+        false
     }
 
     /// True when `name` is a variant of the enum currently being switched on.

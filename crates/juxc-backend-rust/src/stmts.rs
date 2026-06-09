@@ -912,6 +912,34 @@ impl RustEmitter {
     /// `emit_literal`; identifiers refer to `String`-typed bindings).
     /// No `.to_string()` injection is needed here anymore.
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
+        // **Static-block first-use trigger (§S.4.1).** Writing a static field is
+        // an observable use, so run the class's once-guarded `__static_init()`
+        // before the write. (`__static_init` is re-entrancy-safe, so a write
+        // from inside the static block itself is a harmless no-op.) Emitted as
+        // a leading statement; the assignment follows after re-indenting.
+        if let Expr::Field(tf) = &a.target {
+            if let Expr::Path(qn) = &*tf.object {
+                if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                    let needs = self
+                        .symbols
+                        .classes
+                        .get(&class_fqn)
+                        .map(|c| {
+                            c.has_static_init
+                                && c.fields
+                                    .get(tf.field.text.as_str())
+                                    .map(|f| f.is_static)
+                                    .unwrap_or(false)
+                        })
+                        .unwrap_or(false);
+                    if needs {
+                        self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                        self.w.push_str("::__static_init();\n");
+                        self.w.emit_indent();
+                    }
+                }
+            }
+        }
         // **Property-setter routing (JUX-MISSING-DEFS §M.7).** When the
         // target is `obj.Prop` and `Prop` names a property with a
         // settable accessor (`set` / `init`), lower the write to a call
