@@ -530,6 +530,8 @@ dependencies = [
  "juxc-ast",
  "juxc-diagnostics",
  "juxc-driver",
+ "juxc-lex",
+ "juxc-parse",
  "juxc-source",
  "juxc-tycheck",
  "ropey",

@@ -4,11 +4,12 @@
 //! Phase-1/2 capabilities (§L.5): full-document sync, push diagnostics, hover
 //! (expression type under the cursor + declaration signatures), completion
 //! (keywords, in-scope type names, receiver-aware members), auto-import code
-//! actions, and **goto-definition** for type / function / const / alias names
+//! actions, **goto-definition** for type / function / const / alias names
 //! (resolved through `SymbolTable::decl_unit` → `source_paths`, reaching into
-//! generated `rust.std` / crate `.jux.d` stubs). References and rename remain
-//! advertised off until the AST cross-reference index lands; member-level
-//! goto-definition awaits per-member source spans.
+//! generated `rust.std` / crate `.jux.d` stubs), and **document symbols** (an
+//! outline of the open file's declarations with members nested). References and
+//! rename remain advertised off until the AST cross-reference index lands;
+//! member-level goto-definition awaits per-member source spans.
 
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -263,6 +264,65 @@ fn receiver_dot_before(text: &str, ident_start: usize) -> Option<usize> {
     }
     // The receiver expression's span ends at the `.`'s offset (exclusive end).
     Some(dot)
+}
+
+/// Map a top-level declaration to a hierarchical [`DocumentSymbol`] for the
+/// editor outline: the declaration itself, with its members (methods, fields,
+/// variants) nested as children. `range` covers the whole declaration;
+/// `selection_range` is the name. Returns `None` for an unnameable item.
+fn top_level_document_symbol(item: &juxc_ast::TopLevelDecl, rope: &Rope) -> Option<DocumentSymbol> {
+    use juxc_ast::TopLevelDecl as T;
+    let sym = |name: &str, kind: SymbolKind, decl: Span, name_span: Span, children: Vec<DocumentSymbol>| {
+        #[allow(deprecated)]
+        DocumentSymbol {
+            name: name.to_string(),
+            detail: None,
+            kind,
+            tags: None,
+            deprecated: None,
+            range: span_to_range(rope, decl),
+            selection_range: span_to_range(rope, name_span),
+            children: if children.is_empty() { None } else { Some(children) },
+        }
+    };
+    match item {
+        T::Class(c) => {
+            let mut kids = Vec::new();
+            for f in &c.fields {
+                kids.push(sym(&f.name.text, SymbolKind::FIELD, f.span, f.name.span, Vec::new()));
+            }
+            for m in &c.methods {
+                kids.push(sym(&m.name.text, SymbolKind::METHOD, m.span, m.name.span, Vec::new()));
+            }
+            // A `struct`-origin class reads as a STRUCT in the outline.
+            let kind = if c.is_struct { SymbolKind::STRUCT } else { SymbolKind::CLASS };
+            Some(sym(&c.name.text, kind, c.span, c.name.span, kids))
+        }
+        T::Interface(i) => {
+            let kids = i
+                .methods
+                .iter()
+                .map(|m| sym(&m.name.text, SymbolKind::METHOD, m.span, m.name.span, Vec::new()))
+                .collect();
+            Some(sym(&i.name.text, SymbolKind::INTERFACE, i.span, i.name.span, kids))
+        }
+        T::Enum(e) => {
+            let kids = e
+                .variants
+                .iter()
+                .map(|v| sym(&v.name.text, SymbolKind::ENUM_MEMBER, v.span, v.name.span, Vec::new()))
+                .collect();
+            Some(sym(&e.name.text, SymbolKind::ENUM, e.span, e.name.span, kids))
+        }
+        T::Record(r) => Some(sym(&r.name.text, SymbolKind::STRUCT, r.span, r.name.span, Vec::new())),
+        T::Function(f) => {
+            Some(sym(&f.name.text, SymbolKind::FUNCTION, f.span, f.name.span, Vec::new()))
+        }
+        T::Const(c) => Some(sym(&c.name.text, SymbolKind::CONSTANT, c.span, c.name.span, Vec::new())),
+        T::TypeAlias(a) => {
+            Some(sym(&a.name.text, SymbolKind::TYPE_PARAMETER, a.span, a.name.span, Vec::new()))
+        }
+    }
 }
 
 /// Extract the first line of a `///` or `/** … */` doc comment immediately
@@ -572,6 +632,10 @@ impl LanguageServer for Backend {
                 // declaration anywhere in the workspace — including into a
                 // generated `rust.std` / crate `.jux.d` stub (§L.5).
                 definition_provider: Some(OneOf::Left(true)),
+                // Document symbols: an outline of the open file's declarations
+                // (types + their members, functions, consts) for the editor's
+                // breadcrumbs / symbol picker (§L.5).
+                document_symbol_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
         })
@@ -743,6 +807,30 @@ impl LanguageServer for Backend {
             uri: target_uri,
             range,
         })))
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri;
+        let Some(doc) = self.docs.get(&uri) else {
+            return Ok(None);
+        };
+        // Re-parse the open buffer (cheap; lex+parse only) to get its AST — the
+        // analysis pass keeps the merged symbol table but not the per-file AST.
+        let text = doc.rope.to_string();
+        let path = uri.to_file_path().unwrap_or_else(|_| std::path::PathBuf::from("buffer.jux"));
+        let source = juxc_source::SourceFile::new(path, text);
+        let lexed = juxc_lex::lex(&source);
+        let parsed = juxc_parse::parse(&lexed.tokens);
+        let symbols: Vec<DocumentSymbol> = parsed
+            .ast
+            .items
+            .iter()
+            .filter_map(|item| top_level_document_symbol(item, &doc.rope))
+            .collect();
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -1070,6 +1158,43 @@ mod tests {
         assert_eq!(doc.as_deref(), Some("A widget that does things."));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The document-symbol outline nests members under their type and covers
+    /// every top-level kind.
+    #[test]
+    fn document_symbols_outline_nests_members() {
+        let src = "package app;\n\
+            public class Widget {\n\
+                public int w;\n\
+                public int area() { return 1; }\n\
+            }\n\
+            public enum Color { Red, Green }\n\
+            public void main() {}\n";
+        let source = juxc_source::SourceFile::new(std::path::PathBuf::from("t.jux"), src.to_string());
+        let lexed = juxc_lex::lex(&source);
+        let parsed = juxc_parse::parse(&lexed.tokens);
+        let rope = Rope::from_str(src);
+        let syms: Vec<_> = parsed
+            .ast
+            .items
+            .iter()
+            .filter_map(|it| top_level_document_symbol(it, &rope))
+            .collect();
+
+        // Widget (class) with a field + method child; Color (enum) with 2
+        // variants; main (function).
+        let widget = syms.iter().find(|s| s.name == "Widget").expect("Widget");
+        assert_eq!(widget.kind, SymbolKind::CLASS);
+        let kids = widget.children.as_ref().expect("members");
+        assert!(kids.iter().any(|c| c.name == "w" && c.kind == SymbolKind::FIELD));
+        assert!(kids.iter().any(|c| c.name == "area" && c.kind == SymbolKind::METHOD));
+
+        let color = syms.iter().find(|s| s.name == "Color").expect("Color");
+        assert_eq!(color.kind, SymbolKind::ENUM);
+        assert_eq!(color.children.as_ref().map(|c| c.len()), Some(2));
+
+        assert!(syms.iter().any(|s| s.name == "main" && s.kind == SymbolKind::FUNCTION));
     }
 
     // ---- auto-import edit construction ----

@@ -27,6 +27,10 @@ juxc-driver      = { workspace = true }
 # (`TypeRef`, `ReturnType`, `Visibility`, `GenericArg`, …) in their public
 # fields, which hover/completion render back to Jux source.
 juxc-ast         = { workspace = true }
+# The `documentSymbol` handler re-parses the open buffer (lex + parse only) to
+# build a declaration outline from its AST.
+juxc-lex         = { workspace = true }
+juxc-parse       = { workspace = true }
 
 # LSP scaffolding (§L.4). We re-export lsp types through `tower_lsp::lsp_types`
 # so the LSP type version always matches `tower-lsp`'s.
