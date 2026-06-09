@@ -95,10 +95,12 @@ impl RustEmitter {
             // `String` for `string`, etc.). Tracking it here lets a
             // String-returning operator return a bare string literal
             // and pick up the `.to_string()` coercion automatically.
+            self.current_fn_params = op.params.iter().map(|p| p.name.text.clone()).collect();
             let saved = self.current_return_type.take();
             self.current_return_type = Some(op.return_type.clone());
             self.emit_fn_body_at(body, &op.return_type);
             self.current_return_type = saved;
+            self.current_fn_params.clear();
             self.this_alias = None;
         }
         self.w.indent_dec();

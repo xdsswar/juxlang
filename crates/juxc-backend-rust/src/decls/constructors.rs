@@ -125,11 +125,16 @@ impl RustEmitter {
                 self.nullable_locals.insert(p.name.text.clone());
             }
         }
+        // Constructor params shadow same-named fields (the canonical
+        // `Other(String test){ this.test = test; }` shape), so they must NOT be
+        // rewritten by the implicit-`this` pass.
+        self.current_fn_params = ctor.params.iter().map(|p| p.name.text.clone()).collect();
         for stmt in &ctor.body.statements {
             self.emit_source_marker(stmt_span(stmt));
             self.w.emit_indent();
             self.emit_stmt(stmt);
         }
+        self.current_fn_params.clear();
         self.this_alias = None;
 
         // Return the constructed value.
@@ -455,11 +460,13 @@ impl RustEmitter {
                     self.nullable_locals.insert(p.name.text.clone());
                 }
             }
+            self.current_fn_params = ctor.params.iter().map(|p| p.name.text.clone()).collect();
             for stmt in &ctor.body.statements {
                 self.emit_source_marker(stmt_span(stmt));
                 self.w.emit_indent();
                 self.emit_stmt(stmt);
             }
+            self.current_fn_params.clear();
             self.this_alias = None;
             self.w.line("__self");
         }

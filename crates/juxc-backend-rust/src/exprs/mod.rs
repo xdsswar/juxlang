@@ -102,19 +102,45 @@ impl RustEmitter {
                 // forward to the same shape `emit_field` produces
                 // for the explicit `Test.a` access — keeps the
                 // mutable-static lock/unlock machinery in one place.
-                if qn.segments.len() == 1 {
+                // The implicit-`this` rewrite below applies to a bare *value*
+                // reference, never the callee of a `foo(...)` call — a bare
+                // method call is resolved by `emit_call` (Java's `foo()` ≡
+                // `this.foo()` for methods), and rewriting it here as a field
+                // access would call the field instead of the method.
+                // Bare reference to an enclosing-class field. NOT a call callee
+                // (a bare `foo()` method call is resolved by `emit_call`).
+                if qn.segments.len() == 1 && !self.emitting_call_callee {
                     if let Some(class_name) = self.enclosing_class.clone() {
-                        let name = &qn.segments[0].text;
-                        if let Some(class) = self.lookup_class_by_bare_or_fqn(&class_name) {
-                            if let Some(field) = class.fields.get(name.as_str()) {
-                                if field.is_static {
-                                    self.emit_enclosing_class_static_ref(
-                                        &class_name,
-                                        name,
-                                        field.is_final,
-                                    );
-                                    return;
-                                }
+                        let name = qn.segments[0].text.clone();
+                        // A bare name that shadows a field (a parameter or a
+                        // local in scope) is NOT a field reference — leave it.
+                        let shadowed = self.current_fn_params.contains(&name)
+                            || self.local_types.iter().any(|s| s.contains_key(&name));
+                        let field = self
+                            .lookup_class_by_bare_or_fqn(&class_name)
+                            .and_then(|c| c.fields.get(name.as_str()))
+                            .map(|f| (f.is_static, f.is_final));
+                        if let (false, Some((is_static, is_final))) = (shadowed, field) {
+                            if is_static {
+                                // Static field — no `this` needed (works in a
+                                // static method too).
+                                self.emit_enclosing_class_static_ref(&class_name, &name, is_final);
+                                return;
+                            }
+                            // Implicit-`this` for an INSTANCE field (Java rule:
+                            // bare `f` ≡ `this.f`), only where a `self`/`__self`
+                            // alias is in scope — a static method has no `this`,
+                            // so a bare instance-field name there is a real error.
+                            if self.this_alias.is_some() {
+                                let span = qn.span;
+                                let this_field = juxc_ast::FieldExpr {
+                                    object: Box::new(Expr::This(span)),
+                                    field: juxc_ast::Ident { text: name, span },
+                                    safe: false,
+                                    span,
+                                };
+                                self.emit_field(&this_field);
+                                return;
                             }
                         }
                     }

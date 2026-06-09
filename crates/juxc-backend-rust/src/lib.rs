@@ -441,6 +441,13 @@ struct RustEmitter {
     /// `emit_constructor` / `emit_operator_as_method` for the
     /// duration of each body and restored afterwards.
     pub(crate) enclosing_class: Option<String>,
+    /// Parameter names of the method / constructor / operator whose body is
+    /// currently being emitted. A bare identifier that names a parameter (or a
+    /// local, tracked via `local_types`) shadows an instance field of the same
+    /// name, so the implicit-`this` rewrite (a bare instance-field reference →
+    /// `this.field`, Java rule) must NOT fire for it. Set alongside
+    /// `this_alias` at each body-emission site and restored afterwards.
+    pub(crate) current_fn_params: std::collections::HashSet<String>,
     /// Name of the interface whose default-method body we're
     /// currently emitting. Powers bare-name method-call rewrites
     /// inside `default` bodies — `monthlySalary()` resolves to
@@ -1633,6 +1640,7 @@ impl RustEmitter {
             mutated_in_fn: HashSet::new(),
             this_alias: None,
             enclosing_class: None,
+            current_fn_params: std::collections::HashSet::new(),
             enclosing_interface: None,
             user_mut_methods: HashSet::new(),
             emitting_lvalue: false,

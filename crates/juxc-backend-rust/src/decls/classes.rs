@@ -1822,10 +1822,15 @@ impl RustEmitter {
                     self.nullable_locals.insert(p.name.text.clone());
                 }
             }
+            // Record this method's parameter names so the implicit-`this`
+            // rewrite (bare instance-field → `this.field`) doesn't fire for a
+            // parameter that shadows a field.
+            self.current_fn_params = method.params.iter().map(|p| p.name.text.clone()).collect();
             let saved = self.current_return_type.take();
             self.current_return_type = Some(method.return_type.clone());
             self.emit_fn_body_at(body, &method.return_type);
             self.current_return_type = saved;
+            self.current_fn_params.clear();
             self.this_alias = None;
         } else {
             // Abstract method — no Jux body. Emit `unimplemented!()`
