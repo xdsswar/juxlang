@@ -34,9 +34,10 @@ surfaced in Jux syntax:
   p.reserve(16);` lowers to the real `std::path::PathBuf` — real-path imports,
   `new X()` → `X::new()`, camelCase → snake_case methods, `&mut self`-aware
   bindings (`JUX-BINDGEN-ADDENDUM.md` §G.9.2, in progress).
-- A hand-written `jux.std` (Java-shaped `List`/`Map`/`String`/exceptions) is
-  still the default std today; `rust.std` is the future replacement it's being
-  migrated toward.
+- A hand-written std (Java-shaped `List`/`Map`/`String`/exceptions) is still the
+  default std today — now **embedded in the compiler** (the loose `jux.std/`
+  folder was removed; the compiler is self-contained). `rust.std` is the future
+  replacement it's being migrated toward.
 
 ### Editor tooling
 
