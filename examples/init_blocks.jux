@@ -1,0 +1,31 @@
+// Demonstrates instance initializer blocks (`init { }`, JUX-MISSING-DEFS §M.1).
+//
+// An `init` block runs at the end of every constructor — after the field
+// initializers and the constructor body, before the new object is handed back
+// (construction sequence step 5, §S.4.4). It's the right place for derived-field
+// setup and validation that must happen on every construction path.
+
+public class Rect {
+    public int width;
+    public int height;
+    public int area;       // derived in the init block
+    public String label;
+
+    public Rect(int width, int height) {
+        this.width = width;
+        this.height = height;
+        this.label = "rect";
+    }
+
+    // Runs after the constructor body on every `new Rect(...)`.
+    init {
+        this.area = this.width * this.height;
+        print($"init: ${this.label} ${this.width}x${this.height} -> area ${this.area}");
+    }
+}
+
+public void main() {
+    var a = new Rect(3, 4);
+    var b = new Rect(5, 6);
+    print($"areas: ${a.area} and ${b.area}");
+}

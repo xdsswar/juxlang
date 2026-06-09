@@ -77,6 +77,11 @@ impl RustEmitter {
         // literal. Idiomatic Rust, AND it sidesteps the "need `Default`
         // for generic-typed fields" problem inherent to the fallback
         // `__self`-builder pattern.
+        //
+        // A class with `init { }` blocks (§M.1) can't use the fast path: the
+        // init blocks run *after* construction and mutate `this`, which needs
+        // the `__self` builder binding to mutate. So we fall through.
+        if class_decl.init_blocks.is_empty() {
         if let Some(simple) = extract_simple_ctor_inits(ctor) {
             self.emit_simple_ctor_body(class_decl, &simple);
             self.w.indent_dec();
@@ -84,6 +89,7 @@ impl RustEmitter {
             self.w.newline();
             self.w.indent_dec();
             return;
+        }
         }
 
         // Fallback: the body has stmts other than this.field-init (e.g.,
@@ -115,6 +121,11 @@ impl RustEmitter {
         self.this_alias = Some("__self".to_string());
         let mut muts = HashSet::new();
         collect_mutated_names(&ctor.body, &mut muts, &self.user_mut_methods);
+        // Init blocks (§M.1) run in the same `fn new` scope, so their local
+        // reassignments must be in the `let mut` set too.
+        for init in &class_decl.init_blocks {
+            collect_mutated_names(init, &mut muts, &self.user_mut_methods);
+        }
         self.mutated_in_fn = muts;
         // Seed nullable-locals from this constructor's params so
         // a body that passes a `T?` parameter into a `T?` slot
@@ -134,7 +145,20 @@ impl RustEmitter {
             self.w.emit_indent();
             self.emit_stmt(stmt);
         }
+        // Constructor params are out of scope for init blocks (an init block is
+        // shared across all constructors), so clear them before the init pass.
         self.current_fn_params.clear();
+
+        // §M.1 / §S.4.4 step 5: run every `init { }` block in source order,
+        // after the constructor body and before the value is returned. `this`
+        // still aliases `__self`.
+        for init in &class_decl.init_blocks {
+            for stmt in &init.statements {
+                self.emit_source_marker(stmt_span(stmt));
+                self.w.emit_indent();
+                self.emit_stmt(stmt);
+            }
+        }
         self.this_alias = None;
 
         // Return the constructed value.
@@ -391,7 +415,14 @@ impl RustEmitter {
         let prev_wrapper = self.emitting_wrapper_class;
         self.emitting_wrapper_class = false;
 
-        if let Some(simple) = extract_simple_ctor_inits(ctor) {
+        // A class with `init { }` blocks can't use the simple fast path —
+        // its init blocks run after construction and mutate `this`.
+        let simple = if class_decl.init_blocks.is_empty() {
+            extract_simple_ctor_inits(ctor)
+        } else {
+            None
+        };
+        if let Some(simple) = simple {
             // `C_Inner { __parent: Parent::new_inner(super_args), … }`.
             self.w.emit_indent();
             self.emit_wrapper_simple_ctor_inner(class_decl, &inner, &simple);
@@ -453,6 +484,9 @@ impl RustEmitter {
             self.this_alias = Some("__self".to_string());
             let mut muts = HashSet::new();
             collect_mutated_names(&ctor.body, &mut muts, &self.user_mut_methods);
+            for init in &class_decl.init_blocks {
+                collect_mutated_names(init, &mut muts, &self.user_mut_methods);
+            }
             self.mutated_in_fn = muts;
             self.nullable_locals.clear();
             for p in &ctor.params {
@@ -467,6 +501,15 @@ impl RustEmitter {
                 self.emit_stmt(stmt);
             }
             self.current_fn_params.clear();
+            // §M.1 / §S.4.4 step 5: run each `init { }` block after the ctor
+            // body, before returning the inner value. `this` → __self.
+            for init in &class_decl.init_blocks {
+                for stmt in &init.statements {
+                    self.emit_source_marker(stmt_span(stmt));
+                    self.w.emit_indent();
+                    self.emit_stmt(stmt);
+                }
+            }
             self.this_alias = None;
             self.w.line("__self");
         }
@@ -595,7 +638,13 @@ impl RustEmitter {
         self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(" {\n");
         self.w.indent_inc();
+        // A class with `init { }` blocks binds the inner to `let mut __self`
+        // so the init pass can mutate it before returning (§M.1).
+        let has_init = !class_decl.init_blocks.is_empty();
         self.w.emit_indent();
+        if has_init {
+            self.w.push_str("let mut __self = ");
+        }
         self.w.push_str(&inner);
         self.w.push_str(" {");
         let mut first = true;
@@ -630,7 +679,30 @@ impl RustEmitter {
         } else {
             self.w.push_str(" }");
         }
-        self.w.push('\n');
+        if has_init {
+            // Close the `let mut __self = … {};`, run init blocks, return __self.
+            self.w.push_str(";\n");
+            let prev_wrapper = self.emitting_wrapper_class;
+            self.emitting_wrapper_class = false;
+            self.this_alias = Some("__self".to_string());
+            let mut muts = HashSet::new();
+            for init in &class_decl.init_blocks {
+                collect_mutated_names(init, &mut muts, &self.user_mut_methods);
+            }
+            self.mutated_in_fn = muts;
+            for init in &class_decl.init_blocks {
+                for stmt in &init.statements {
+                    self.emit_source_marker(stmt_span(stmt));
+                    self.w.emit_indent();
+                    self.emit_stmt(stmt);
+                }
+            }
+            self.this_alias = None;
+            self.emitting_wrapper_class = prev_wrapper;
+            self.w.line("__self");
+        } else {
+            self.w.push('\n');
+        }
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();
@@ -656,7 +728,15 @@ impl RustEmitter {
         self.w.indent_inc();
         self.w.line("pub fn new() -> Self {");
         self.w.indent_inc();
-        self.w.line("Self {");
+        // A class with `init { }` blocks builds into a `let mut __self`
+        // binding so the init blocks can mutate `this` (= __self) before the
+        // value is returned (§M.1 / §S.4.4 step 5).
+        let has_init = !class_decl.init_blocks.is_empty();
+        if has_init {
+            self.w.line("let mut __self = Self {");
+        } else {
+            self.w.line("Self {");
+        }
         self.w.indent_inc();
         // Sealed-parent skip: subclasses of sealed have no
         // `__parent` slot to initialize.
@@ -698,7 +778,27 @@ impl RustEmitter {
             self.w.push_str(",\n");
         }
         self.w.indent_dec();
-        self.w.line("}");
+        if has_init {
+            self.w.line("};");
+            // Run the init blocks (this → __self), then return __self.
+            self.this_alias = Some("__self".to_string());
+            let mut muts = HashSet::new();
+            for init in &class_decl.init_blocks {
+                collect_mutated_names(init, &mut muts, &self.user_mut_methods);
+            }
+            self.mutated_in_fn = muts;
+            for init in &class_decl.init_blocks {
+                for stmt in &init.statements {
+                    self.emit_source_marker(stmt_span(stmt));
+                    self.w.emit_indent();
+                    self.emit_stmt(stmt);
+                }
+            }
+            self.this_alias = None;
+            self.w.line("__self");
+        } else {
+            self.w.line("}");
+        }
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();

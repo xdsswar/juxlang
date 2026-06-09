@@ -114,6 +114,8 @@ impl<'a> Parser<'a> {
         let mut operators = Vec::new();
         let mut properties: Vec<juxc_ast::PropertyDecl> = Vec::new();
         let mut nested_types: Vec<juxc_ast::TopLevelDecl> = Vec::new();
+        let mut init_blocks: Vec<juxc_ast::Block> = Vec::new();
+        let mut static_init_blocks: Vec<juxc_ast::Block> = Vec::new();
 
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             // Per grammar §A.2.4 each class member may carry its own
@@ -121,6 +123,29 @@ impl<'a> Parser<'a> {
             // member's parser.
             let member_anns = self.parse_annotations();
             let member_vis = self.parse_visibility();
+
+            // Initializer blocks (JUX-MISSING-DEFS §M.1, JUX-SEMANTICS §S.4.1).
+            // These carry no visibility / return type, just a leading keyword
+            // and a block:
+            //   - `static { … }` — a static-init block (runs once on first use).
+            //   - `init { … }`    — an instance-init block (runs after each ctor).
+            // Detected by the keyword immediately followed by `{`, so a `static`
+            // FIELD or METHOD (`static int x;`, `static void m()`) is unaffected.
+            if self.at_kw(Keyword::Static)
+                && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::LBrace))
+            {
+                self.advance(); // 'static'
+                static_init_blocks.push(self.parse_block());
+                continue;
+            }
+            if self.at_kw(Keyword::Init)
+                && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::LBrace))
+            {
+                self.advance(); // 'init'
+                init_blocks.push(self.parse_block());
+                continue;
+            }
+
             // Nested-type lookahead: walk forward without consuming
             // through `[static] [abstract|final|sealed]*` and see
             // if a `class`/`interface`/`record`/`enum` keyword
@@ -432,6 +457,8 @@ impl<'a> Parser<'a> {
             operators,
             properties,
             nested_types,
+            init_blocks,
+            static_init_blocks,
             span: start.join(end),
         })
     }

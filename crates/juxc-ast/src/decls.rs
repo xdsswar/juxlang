@@ -403,6 +403,15 @@ pub struct ClassDecl {
     /// §M.7.2 access control and route `obj.Prop = v` writes through
     /// the synthesized setter. Empty for classes with no properties.
     pub properties: Vec<PropertyDecl>,
+    /// Instance initializer blocks (`init { … }`, JUX-MISSING-DEFS §M.1), in
+    /// source order. Every constructor runs every `init` block at the end of
+    /// its body (construction sequence step 5, §S.4.4), before the reference is
+    /// returned. Empty for classes with no `init` blocks.
+    pub init_blocks: Vec<Block>,
+    /// Static initializer blocks (`static { … }`, JUX-SEMANTICS §S.4.1), in
+    /// source order. They run once, on first observable use of the class.
+    /// Empty for classes with no `static` blocks.
+    pub static_init_blocks: Vec<Block>,
     /// Span covering the whole `class Name { … }` declaration.
     pub span: Span,
 }

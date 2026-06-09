@@ -636,6 +636,21 @@ impl Resolver {
             self.pop_scope();
             self.pop_scope();
         }
+        // Instance / static initializer blocks (§M.1 / §S.4.1). Each opens a
+        // member scope where `this` and the class members are visible, then a
+        // body scope. (A `static` block has no `this`, but declaring it is
+        // harmless — a static block won't reference it.)
+        for block in class_decl.init_blocks.iter().chain(&class_decl.static_init_blocks) {
+            self.push_scope();
+            self.declare("this");
+            for name in &member_names {
+                self.declare(name);
+            }
+            self.push_scope();
+            self.visit_block(block);
+            self.pop_scope();
+            self.pop_scope();
+        }
     }
 
     fn visit_fn_decl(&mut self, fn_decl: &FnDecl) {

@@ -576,6 +576,19 @@ impl<'a> Checker<'a> {
         for op in &class.operators {
             self.check_operator(op, &this_ty);
         }
+        // Initializer blocks (§M.1 / §S.4.1). `this` is in scope (an instance
+        // `init` runs during construction; a `static` block has no instance,
+        // but declaring `this` is harmless since a well-formed static block
+        // won't read it). Neither form is async.
+        for block in class.init_blocks.iter().chain(&class.static_init_blocks) {
+            self.env.push_scope();
+            self.env.declare("this", this_ty.clone());
+            let saved_async = self.in_async;
+            self.in_async = false;
+            self.check_block(block);
+            self.in_async = saved_async;
+            self.env.pop_scope();
+        }
 
         self.env.clear_generic_params();
         self.env.clear_class();
