@@ -189,11 +189,34 @@ impl TypeChecker {
                         self.check_main_signature(fn_decl);
                     }
                 }
-                // Class declarations don't carry top-level signature
-                // rules of their own yet — the only check we do at
-                // this milestone is on `main`. Tycheck for class
-                // bodies lands once we have a real type table.
-                TopLevelDecl::Class(_) => {}
+                // A class member named `main` with an entry-shaped signature
+                // must be `static` (§E.1.2.2) — it has no receiver for the
+                // runtime to call it on. A non-static one is an ordinary
+                // method; flag the likely mistake as E0326.
+                TopLevelDecl::Class(class) => {
+                    for m in &class.methods {
+                        if m.name.text == "main"
+                            && is_entry_shaped(m)
+                            && !m
+                                .modifiers
+                                .iter()
+                                .any(|md| matches!(md, juxc_ast::FnModifier::Static))
+                        {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0326_ClassMainNotStatic,
+                                    format!(
+                                        "class member `main` must be `static` to be an entry \
+                                         point (in class `{}`)",
+                                        class.name.text,
+                                    ),
+                                )
+                                .with_span(m.span)
+                                .with_help("add `static` to the `main` method"),
+                            );
+                        }
+                    }
+                }
                 // Same story for enums — no top-level signature rules
                 // until methods on enums land.
                 TopLevelDecl::Enum(_) => {}
@@ -229,27 +252,7 @@ impl TypeChecker {
     /// is *not* part of the check — the spec doesn't require any specific
     /// modifier on `main`, just that one of these shapes matches.
     fn check_main_signature(&mut self, fn_decl: &FnDecl) {
-        let return_ok = match &fn_decl.return_type {
-            ReturnType::Void => true,
-            ReturnType::Type(t) => is_int(t),
-            // `async void main()` synthesizes an AsyncType whose inner
-            // TypeRef's name is the sentinel "void". Treat that the
-            // same as `void`. `async int main()` is the int-returning
-            // async entry shape.
-            ReturnType::AsyncType(t) => {
-                let is_void_sentinel = t.name.segments.len() == 1
-                    && t.name.segments[0].text == "void"
-                    && t.generic_args.is_empty()
-                    && !t.nullable;
-                is_void_sentinel || is_int(t)
-            }
-        };
-        let params_ok = match fn_decl.params.as_slice() {
-            [] => true,
-            [single] => is_string_array(single),
-            _ => false,
-        };
-        if !(return_ok && params_ok) {
+        if !is_entry_shaped(fn_decl) {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0323_MainSignatureMismatch,
@@ -272,6 +275,33 @@ impl TypeChecker {
 // type-system addendum's primitive names, not against a full type table.
 // When real type checking lands, these go away.
 // ============================================================================
+
+/// Does `fn_decl` have an **entry-shaped** signature — one of `void`/`int`
+/// (or their `async` forms) returning, taking no args or a single `String[]`?
+/// This is the name-agnostic shape match shared by the free-`main` check and
+/// the class-`main`-must-be-static check (§E.1.2).
+fn is_entry_shaped(fn_decl: &FnDecl) -> bool {
+    let return_ok = match &fn_decl.return_type {
+        ReturnType::Void => true,
+        ReturnType::Type(t) => is_int(t),
+        // `async void main()` synthesizes an AsyncType whose inner TypeRef's
+        // name is the sentinel "void"; treat it like `void`. `async int main()`
+        // is the int-returning async entry shape.
+        ReturnType::AsyncType(t) => {
+            let is_void_sentinel = t.name.segments.len() == 1
+                && t.name.segments[0].text == "void"
+                && t.generic_args.is_empty()
+                && !t.nullable;
+            is_void_sentinel || is_int(t)
+        }
+    };
+    let params_ok = match fn_decl.params.as_slice() {
+        [] => true,
+        [single] => is_string_array(single),
+        _ => false,
+    };
+    return_ok && params_ok
+}
 
 /// Is `t` the type `int` (single segment, name "int", non-nullable, no generics)?
 fn is_int(t: &TypeRef) -> bool {
@@ -331,6 +361,25 @@ mod tests {
     #[test]
     fn bool_main_is_e0323() {
         assert_eq!(check_count("public bool main() {}"), 1);
+    }
+
+    /// A `static` class `main` with an entry shape is a valid entry point.
+    #[test]
+    fn class_static_main_is_accepted() {
+        assert_eq!(check_count("public class App { public static void main() {} }"), 0);
+    }
+
+    /// A non-`static` class `main` with an entry shape fires E0326.
+    #[test]
+    fn class_non_static_main_is_e0326() {
+        assert_eq!(check_count("public class App { public void main() {} }"), 1);
+    }
+
+    /// A class method named `main` that ISN'T entry-shaped (two params — no
+    /// accepted form takes two) is an ordinary method: no E0326.
+    #[test]
+    fn class_non_entry_main_is_not_flagged() {
+        assert_eq!(check_count("public class App { public void main(int x, int y) {} }"), 0);
     }
 
     // TODO(async main): per `JUX-ENTRY-POINTS-ADDENDUM.md` §E.1.3 the form

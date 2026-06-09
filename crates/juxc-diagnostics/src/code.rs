@@ -39,6 +39,12 @@ pub enum Code {
     E0304_DuplicateLocalDeclaration,
     /// E0320 — Entry file has both top-level statements and a `main` function.
     E0320_AmbiguousEntryPoint,
+    /// E0326 — A class member named `main` with an entry-shaped signature is
+    /// not `static`. Per `JUX-ENTRY-POINTS-ADDENDUM.md` §E.1.2.2, a `main`
+    /// inside a class must be `static` (it has no receiver — the runtime can't
+    /// construct an instance to call it on). A non-static `main` is an ordinary
+    /// method, not an entry point; the spec makes the likely mistake an error.
+    E0326_ClassMainNotStatic,
     /// E0323 — `main`'s signature does not match any accepted form.
     ///
     /// Per `JUX-ENTRY-POINTS-ADDENDUM.md` §E.1.2 the accepted forms are
@@ -256,6 +262,7 @@ impl Code {
             Code::E0304_DuplicateLocalDeclaration => "E0304",
             Code::E0320_AmbiguousEntryPoint      => "E0320",
             Code::E0323_MainSignatureMismatch    => "E0323",
+            Code::E0326_ClassMainNotStatic       => "E0326",
             Code::E0400_DuplicateDeclaration     => "E0400",
             Code::E0401_DuplicateField           => "E0401",
             Code::E0402_DuplicateMethod          => "E0402",
