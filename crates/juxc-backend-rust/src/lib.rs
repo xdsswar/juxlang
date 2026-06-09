@@ -2146,23 +2146,42 @@ impl RustEmitter {
         if *wildcard || name.segments.is_empty() {
             return None;
         }
-        let fqn = name
-            .segments
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect::<Vec<_>>()
-            .join(".");
-        let sig = self.symbols.classes.get(&fqn)?;
-        if !sig.is_external {
-            return None;
+        let segs: Vec<&str> = name.segments.iter().map(|s| s.text.as_str()).collect();
+        let fqn = segs.join(".");
+
+        // Preferred path: an external *type* records its real Rust path on
+        // `ClassSig::rust_path` (from the stub's `@rust("…")` annotation), so
+        // `rust.std.HashSet` lowers to `use std::collections::HashSet;`.
+        if let Some(sig) = self.symbols.classes.get(&fqn) {
+            if sig.is_external {
+                if let Some(real) = sig.rust_path.as_ref() {
+                    // The real path's last segment equals the Jux type name
+                    // (bindgen keeps the Rust type name), so a plain `use`
+                    // binds it under that name.
+                    return Some(match alias {
+                        Some(a) => format!("use {real} as {};", a.text),
+                        None => format!("use {real};"),
+                    });
+                }
+            }
         }
-        let real = sig.rust_path.as_ref()?;
-        // The real path's last segment equals the Jux type name (bindgen keeps
-        // the Rust type name), so a plain `use` binds it under that name.
-        match alias {
-            Some(a) => Some(format!("use {real} as {};", a.text)),
-            None => Some(format!("use {real};")),
+
+        // Fallback for foreign *non-type* symbols (free functions, consts) that
+        // carry no `@rust` annotation: a `rust.<crate>.…` import on a foreign
+        // crate other than `std`. The crate's `.jux.d` package mirrors the crate
+        // root one-to-one, so dropping the reserved `rust.` prefix yields the
+        // real Rust path (`rust.libc.getpid` → `use libc::getpid;`). `std` is
+        // excluded — its stub flattens nested modules, so a bare strip would be
+        // wrong (`rust.std.spawn` is really `std::thread::spawn`), and std types
+        // are already covered by the `@rust`-annotated branch above.
+        if matches!(segs.first(), Some(&"rust")) && segs.len() >= 3 && segs[1] != "std" {
+            let real = segs[1..].join("::");
+            return Some(match alias {
+                Some(a) => format!("use {real} as {};", a.text),
+                None => format!("use {real};"),
+            });
         }
+        None
     }
 
     fn emit_imports(&mut self, imports: &[ImportDecl], inside_package_mod: bool) {
@@ -2611,6 +2630,21 @@ pub struct PathDep {
     pub rel_path: String,
 }
 
+/// A single registry-dependency line for the emitted `[dependencies]` table:
+/// a published crate name and a version requirement (`serde_json = "1.0"`).
+///
+/// These come from a package's foreign (`rust.<crate>`) `[dependencies]` and
+/// are what actually *link* the bound crate into the emitted Rust binary —
+/// the `.jux.d` stub only puts the crate's API in scope at type-check time.
+#[derive(Debug, Clone)]
+pub struct RegistryDep {
+    /// The published crate name as written after `rust.` (`serde_json`).
+    pub crate_name: String,
+    /// The version requirement string (`"1.0"`, `"0.27"`); `"*"` when the
+    /// manifest left it unspecified.
+    pub version: String,
+}
+
 /// Build the `Cargo.toml` for an emitted crate of a given [`CrateTarget`],
 /// with optional package metadata and path-dependencies.
 ///
@@ -2635,6 +2669,7 @@ pub fn cargo_toml_for_target(
     uses_async: bool,
     meta: &CargoMeta,
     path_deps: &[PathDep],
+    registry_deps: &[RegistryDep],
     in_workspace: bool,
 ) -> String {
     let pkg_name = match target {
@@ -2676,12 +2711,21 @@ pub fn cargo_toml_for_target(
         pkg.push_str("build = \"build.rs\"\n");
     }
 
-    // [dependencies] — futures (when async is used) plus any path deps.
+    // [dependencies] — futures (when async is used), foreign registry crates
+    // (`rust.<crate>` deps, which actually link the bound crate in), and any
+    // sibling path deps.
     let mut deps = String::new();
-    if uses_async || !path_deps.is_empty() {
+    if uses_async || !path_deps.is_empty() || !registry_deps.is_empty() {
         deps.push_str("[dependencies]\n");
         if uses_async {
             deps.push_str("futures = \"0.3\"\n");
+        }
+        for d in registry_deps {
+            deps.push_str(&format!(
+                "{} = \"{}\"\n",
+                d.crate_name,
+                escape_toml(&d.version),
+            ));
         }
         for d in path_deps {
             deps.push_str(&format!(

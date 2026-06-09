@@ -3988,7 +3988,7 @@ fn static_property_uses_class_path_accessors() {
 #[test]
 fn cargo_toml_bin_target_uses_manifest_name() {
     let target = CrateTarget::Bin { name: "myapp".to_string() };
-    let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &[], false);
+    let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &[], &[], false);
     // The [[bin]] name is the manifest-driven name, not `jux_emitted`.
     assert!(toml.contains("[[bin]]\nname = \"myapp\""), "{toml}");
     assert!(toml.contains("path = \"src/main.rs\""), "{toml}");
@@ -4003,7 +4003,7 @@ fn cargo_toml_lib_target_emits_crate_type() {
         name: "mylib".to_string(),
         crate_type: vec!["lib".to_string(), "cdylib".to_string()],
     };
-    let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &[], false);
+    let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &[], &[], false);
     assert!(toml.contains("[lib]\npath = \"src/lib.rs\""), "{toml}");
     assert!(toml.contains("crate-type = [\"lib\", \"cdylib\"]"), "{toml}");
     // A library target emits no [[bin]].
@@ -4018,10 +4018,24 @@ fn cargo_toml_path_dep_and_workspace_member() {
         rel_path: "../lib-greeter".to_string(),
     }];
     // in_workspace = true → the per-crate [workspace] opt-out is omitted.
-    let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &deps, true);
+    let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &deps, &[], true);
     assert!(
         toml.contains("greeter = { path = \"../lib-greeter\" }"),
         "{toml}"
     );
     assert!(!toml.contains("\n[workspace]\n"), "{toml}");
+}
+
+#[test]
+fn cargo_toml_registry_dep_is_linked() {
+    let target = CrateTarget::Bin { name: "app".to_string() };
+    let reg = vec![RegistryDep {
+        crate_name: "minifb".to_string(),
+        version: "0.27".to_string(),
+    }];
+    let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &[], &reg, false);
+    // The foreign `rust.minifb` dep becomes a version line under [dependencies].
+    assert!(toml.contains("minifb = \"0.27\""), "{toml}");
+    // futures (async) and the registry dep share one [dependencies] table.
+    assert_eq!(toml.matches("[dependencies]").count(), 1, "{toml}");
 }

@@ -821,7 +821,15 @@ fn expr_calls_mut_method_on_this(expr: &Expr, mut_methods: &HashSet<String>) -> 
     match expr {
         Expr::Call(c) => {
             if let Expr::Field(f) = &*c.callee {
-                if receiver_root_is_this(&f.object) && mut_methods.contains(f.field.text.as_str()) {
+                // A method call rooted at `this` is mutating when the method is
+                // a known collection mutator (`this.items.push(...)`) OR a user
+                // `&mut self` method. The first arm is what makes a method that
+                // mutates a collection FIELD require `&mut self` (and mark its
+                // callers' receivers `mut`).
+                if receiver_root_is_this(&f.object)
+                    && (is_mutating_method(f.field.text.as_str())
+                        || mut_methods.contains(f.field.text.as_str()))
+                {
                     return true;
                 }
             }

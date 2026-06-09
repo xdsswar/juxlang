@@ -612,11 +612,18 @@ pub fn build_emitted_crate(
     let cargo_meta = manifest
         .map(|m| m.package.to_cargo_meta())
         .unwrap_or_default();
+    // Foreign (`rust.<crate>`) `[dependencies]` become registry deps in the
+    // emitted Cargo.toml so the bound crate is actually linked into the binary
+    // (the `.jux.d` stub only put its API in scope at type-check time).
+    let registry_deps = manifest
+        .map(|m| collect_registry_deps(m))
+        .unwrap_or_default();
     let cargo_toml = juxc_backend_rust::cargo_toml_for_target(
         target,
         uses_async,
         &cargo_meta,
         path_deps,
+        &registry_deps,
         in_workspace,
     );
     fs::write(crate_dir.join("Cargo.toml"), &cargo_toml)
@@ -711,6 +718,27 @@ pub fn build_emitted_crate(
 /// lower-cases nothing but replaces `-` with `_` in the produced rlib name.
 fn sanitize_crate(name: &str) -> String {
     name.replace('-', "_")
+}
+
+/// Collect a package's foreign `rust.<crate>` `[dependencies]` as emitted-crate
+/// registry deps. Only `rust` foreign deps are linkable in this phase; `c.*` /
+/// `cpp.*` need a native build seam and are skipped here (their stubs still load
+/// for type-checking). An unspecified version becomes `*`.
+fn collect_registry_deps(manifest: &Manifest) -> Vec<juxc_backend_rust::RegistryDep> {
+    manifest
+        .dependencies
+        .iter()
+        .filter_map(|dep| {
+            let (kind, crate_name) = crate::stubs::foreign_dep_kind(&dep.name)?;
+            if kind != "rust" {
+                return None;
+            }
+            Some(juxc_backend_rust::RegistryDep {
+                crate_name: crate_name.to_string(),
+                version: dep.version.clone().unwrap_or_else(|| "*".to_string()),
+            })
+        })
+        .collect()
 }
 
 /// Copy the manifest's `icon` (a `.ico` resolved against the project
