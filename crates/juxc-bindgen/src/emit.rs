@@ -47,6 +47,12 @@ fn render_type(out: &mut String, t: &StubType) {
     if let Some(doc) = &t.doc {
         let _ = writeln!(out, "/** {doc} */");
     }
+    // `@rust("real::path")` records the true Rust path so the backend can lower a
+    // reference to this external type to its real symbol (§G.9.2) instead of the
+    // flat Jux `rust.std.X` spelling.
+    if let Some(path) = &t.rust_path {
+        let _ = writeln!(out, "@rust(\"{path}\")");
+    }
 
     let keyword = match t.kind {
         TypeKind::Class => "class",

@@ -393,6 +393,14 @@ pub struct ClassSig {
     /// bodyless methods are signatures, not abstract members to implement),
     /// because the real foreign type provides the bodies at link time.
     pub is_external: bool,
+    /// For an `is_external` stub type: the **real** fully-qualified Rust path of
+    /// the foreign type (`std::collections::HashSet`), recovered from the
+    /// `@rust("…")` annotation bindgen emits (§G.9.2). The backend lowers an
+    /// `import`/reference of this type to its real Rust symbol via this path
+    /// (e.g. `use std::collections::HashSet;`) instead of the flat Jux
+    /// `rust::std::HashSet` spelling, so user code that *uses* the type compiles.
+    /// `None` for ordinary (non-stub) classes and stubs without the annotation.
+    pub rust_path: Option<String>,
     /// True when the class is declared `final` — no other class may
     /// extend it. Enforced by `check_final_and_sealed_extends`.
     pub is_final: bool,
@@ -1027,6 +1035,27 @@ fn seed_unqualified_from_import(
             }
         }
     }
+}
+
+/// Extract the real Rust path from a `@rust("std::collections::HashSet")`
+/// annotation (§G.9.2), if present. The annotation name is matched
+/// case-insensitively (per the built-in annotation rule); the argument is a
+/// single positional string literal. Returns `None` when absent or malformed.
+fn rust_path_annotation(annotations: &[juxc_ast::Annotation]) -> Option<String> {
+    use juxc_ast::{AnnotationArg, Expr, Literal};
+    for ann in annotations {
+        let Some(seg) = ann.name.segments.last() else { continue };
+        if seg.text.to_ascii_lowercase() != "rust" {
+            continue;
+        }
+        if let Some(AnnotationArg::Positional(Expr::Literal(Literal::String(s)))) = ann.args.first()
+        {
+            if !s.is_empty() {
+                return Some(s.clone());
+            }
+        }
+    }
+    None
 }
 
 /// The declared name of a top-level item, used to key `SymbolTable::decl_unit`.
@@ -2089,6 +2118,7 @@ fn insert_class(
             package: package.to_vec(),
             is_abstract: class_decl.is_abstract,
             is_external,
+            rust_path: rust_path_annotation(&class_decl.annotations),
             is_final: class_decl.is_final,
             is_sealed: class_decl.is_sealed,
             permits: class_decl

@@ -2108,9 +2108,53 @@ impl RustEmitter {
     /// - **Wildcard + alias** (parser already rejected) — the alias is
     ///   dropped; emit just the wildcard form so the result is at least
     ///   valid Rust.
+    /// If `spec` imports a single external stub type whose real Rust path is
+    /// known (§G.9.2), return the `use <real_path>[ as Alias];` line. The real
+    /// path is absolute (`std::…`), so no `crate::` prefix applies. Returns
+    /// `None` for wildcard/grouped imports, non-external types, or types without
+    /// a recorded `@rust` path — those fall through to the ordinary `render_use`.
+    fn external_use_line(&self, spec: &ImportSpec) -> Option<String> {
+        let ImportSpec::Path { name, wildcard, alias } = spec else {
+            return None;
+        };
+        if *wildcard || name.segments.is_empty() {
+            return None;
+        }
+        let fqn = name
+            .segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+        let sig = self.symbols.classes.get(&fqn)?;
+        if !sig.is_external {
+            return None;
+        }
+        let real = sig.rust_path.as_ref()?;
+        // The real path's last segment equals the Jux type name (bindgen keeps
+        // the Rust type name), so a plain `use` binds it under that name.
+        match alias {
+            Some(a) => Some(format!("use {real} as {};", a.text)),
+            None => Some(format!("use {real};")),
+        }
+    }
+
     fn emit_imports(&mut self, imports: &[ImportDecl], inside_package_mod: bool) {
         let mut emitted_any = false;
         for import in imports {
+            // §G.9.2: an `import` of an external stub type (a Rust-std / crate
+            // `.jux.d` type) lowers to a `use` of its REAL Rust path, recorded on
+            // `ClassSig::rust_path` from the `@rust("…")` annotation — so the bare
+            // type name resolves to the foreign symbol (`use
+            // std::collections::HashSet;`) rather than the non-existent
+            // `rust::std::HashSet`.
+            if let Some(line) = self.external_use_line(&import.spec) {
+                if self.emitted_uses_in_module.insert(line.clone()) {
+                    self.w.line(&line);
+                    emitted_any = true;
+                }
+                continue;
+            }
             if let Some(line) = render_use(&import.spec, inside_package_mod) {
                 // Per-module dedupe: when two units in the same
                 // package both import the same name, we'd

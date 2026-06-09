@@ -42,6 +42,37 @@ pub(crate) enum ArgRef {
 pub(crate) const UNARY_PREC: u8 = 18;
 
 impl RustEmitter {
+    /// The real Rust path of an external stub type named by `class_name`
+    /// (`std::path::PathBuf` for `PathBuf` / `rust.std.PathBuf`), or `None` for
+    /// a non-external type or a stub without a recorded `@rust` path (§G.9.2).
+    /// Resolves a bare name through `find_fqn_by_bare` (which prefers a
+    /// non-external type, so an unqualified `Box`/`HashMap` is NOT treated as the
+    /// Rust-std stub here); a dotted name is taken as the FQN directly.
+    pub(crate) fn external_class_real_path(
+        &self,
+        class_name: &juxc_ast::QualifiedName,
+    ) -> Option<String> {
+        if class_name.segments.is_empty() {
+            return None;
+        }
+        let fqn = if class_name.segments.len() == 1 {
+            self.symbols.find_fqn_by_bare(&class_name.segments[0].text)?
+        } else {
+            class_name
+                .segments
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(".")
+        };
+        let sig = self.symbols.classes.get(&fqn)?;
+        if sig.is_external {
+            sig.rust_path.clone()
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Literal(lit) => self.emit_literal(lit),
@@ -165,7 +196,16 @@ impl RustEmitter {
                 // form. Same-package single-segment names stay
                 // bare. Mirrors the type-position rule in
                 // `emit_type_as_rust`.
-                let (path, prepend_crate) = if n.class_name.segments.len() == 1 {
+                // §G.9.2: constructing an external stub type (`new PathBuf()`)
+                // lowers to its REAL Rust path's `::new()` —
+                // `std::path::PathBuf::new()` — never the Jux
+                // `crate::rust::std::PathBuf`. The real path is recorded on
+                // `ClassSig::rust_path` from the `@rust("…")` annotation.
+                let (path, prepend_crate) = if let Some(real) =
+                    self.external_class_real_path(&n.class_name)
+                {
+                    (real, false)
+                } else if n.class_name.segments.len() == 1 {
                     let bare = n.class_name.segments[0].text.as_str();
                     if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
                         if fqn.contains('.') {

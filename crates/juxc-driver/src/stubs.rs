@@ -58,7 +58,7 @@ const STD_MERGE_CRATES: &[&str] = &["alloc", "std"];
 /// Bump to invalidate previously-cached generated `rust.std` stubs when the
 /// bindgen surface or the merge set changes. Embedded in the cache header and
 /// checked on load.
-const STD_STUB_CACHE_VERSION: u32 = 5;
+const STD_STUB_CACHE_VERSION: u32 = 6;
 
 /// Does `path` name a `.jux.d` declaration stub?
 ///

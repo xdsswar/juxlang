@@ -224,6 +224,7 @@ fn build_struct(krate: &Crate, name: &str, s: &Struct, item: &Item) -> StubType 
     st.constructors = ctors;
     st.methods = methods;
     st.doc = first_doc_line(item);
+    st.rust_path = real_rust_path(krate, item);
     st
 }
 
@@ -231,6 +232,7 @@ fn build_enum(krate: &Crate, name: &str, e: &Enum, item: &Item) -> StubType {
     let mut st = StubType::new(TypeKind::Enum, name);
     st.generics = generic_param_names(&e.generics);
     st.doc = first_doc_line(item);
+    st.rust_path = real_rust_path(krate, item);
 
     for vid in &e.variants {
         let Some(vitem) = krate.index.get(vid) else { continue };
@@ -274,6 +276,7 @@ fn build_trait(
     let mut st = StubType::new(TypeKind::Interface, name);
     st.generics = generic_param_names(generics);
     st.doc = first_doc_line(item);
+    st.rust_path = real_rust_path(krate, item);
 
     for mid in item_ids {
         let Some(mitem) = krate.index.get(mid) else { continue };
@@ -544,6 +547,48 @@ fn last_segment(path: &str) -> &str {
 fn is_public(v: &Visibility) -> bool {
     // `Default` covers trait items and enum variants of public parents.
     matches!(v, Visibility::Public | Visibility::Default)
+}
+
+/// The real, fully-qualified Rust path of `item` (`std::collections::HashSet`),
+/// from the rustdoc `paths` summary. Used to populate `StubType::rust_path` so
+/// the backend can lower a reference to this external type to its true Rust path
+/// (§G.9.2) rather than the flat Jux `rust.std.X` spelling.
+fn real_rust_path(krate: &Crate, item: &Item) -> Option<String> {
+    let summary = krate.paths.get(&item.id)?;
+    if summary.path.is_empty() {
+        return None;
+    }
+    Some(public_rust_path(&summary.path))
+}
+
+/// Normalise a rustdoc **definition** path to a **publicly-importable** Rust
+/// path. rustdoc's `paths` summary reports where an item is *defined*, which
+/// includes private intermediate modules (`std::collections::hash::set::HashSet`,
+/// `alloc::collections::btree::map::BTreeMap`) that are not themselves `pub`.
+///
+/// Two normalisations cover the std surface this slice targets:
+/// 1. The defining crate `alloc` / `core` is re-exported wholesale under `std`,
+///    so its leading segment maps to `std` (a binary always links `std`).
+/// 2. The `collections` types are re-exported at `std::collections::<Type>`, so a
+///    path that threads through a `collections` segment collapses to
+///    `std::collections::<Type>`, dropping the private `{btree,hash,…}::{set,map}`
+///    nesting.
+///
+/// Other multi-segment paths are kept as-is (crate-normalised). This is a
+/// heuristic — a few deeply-nested non-collection types (e.g. `std::os::unix::…`)
+/// keep their definition path; full public-path resolution via rustdoc re-export
+/// (`Use`) items is a follow-up.
+fn public_rust_path(path: &[String]) -> String {
+    let mut segs: Vec<String> = path.to_vec();
+    if matches!(segs.first().map(String::as_str), Some("alloc" | "core")) {
+        segs[0] = "std".to_string();
+    }
+    if segs.iter().any(|s| s == "collections") {
+        if let Some(last) = segs.last() {
+            return format!("std::collections::{last}");
+        }
+    }
+    segs.join("::")
 }
 
 fn first_doc_line(item: &Item) -> Option<String> {

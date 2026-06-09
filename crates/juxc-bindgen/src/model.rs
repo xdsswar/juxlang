@@ -71,6 +71,13 @@ pub struct StubType {
     pub variants: Vec<StubVariant>,
     /// First line of the foreign doc comment, if any.
     pub doc: Option<String>,
+    /// The **real** fully-qualified Rust path of this type
+    /// (`std::collections::HashSet`, `serde_json::Value`), from the rustdoc
+    /// item summary. Emitted as a `@rust("…")` annotation so the backend can
+    /// lower a reference to this external type to its true Rust path (§G.9.2) —
+    /// the Jux-facing package (`rust.std`) is flat for autocomplete and does not
+    /// reflect the real module path. `None` when unavailable.
+    pub rust_path: Option<String>,
 }
 
 impl StubType {
@@ -85,6 +92,7 @@ impl StubType {
             methods: Vec::new(),
             variants: Vec::new(),
             doc: None,
+            rust_path: None,
         }
     }
 }
