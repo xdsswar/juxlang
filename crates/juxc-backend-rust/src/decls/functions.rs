@@ -283,6 +283,16 @@ impl RustEmitter {
                 }
                 self.emit_expr(expr);
                 self.emitting_nullable_target = prev_nullable_target;
+                // **Wrapper-class share-on-return (§CR.4.1).** Same as the
+                // non-tail `return` arm in `emit_stmt`: a tail `return <wrapped
+                // place>;` (a `this`/local/`xs[i]` of a wrapped class) must hand
+                // the caller a SHARED handle, not a borrow — append the cheap
+                // `Rc` refcount-bump clone. Without this, `return this;` in a
+                // builder method emits `self` (a `&C`) where owned `C` is
+                // expected (rustc E0308). Skipped under Some/upcast wraps.
+                if !wrap_some && !wrap_upcast && self.wrapper_value_needs_clone(expr) {
+                    self.w.push_str(".clone()");
+                }
                 if wrap_upcast {
                     self.w.push_str(".into()");
                 }

@@ -1,0 +1,16 @@
+// The Java builder pattern — fluent method chaining via `return this;`.
+// Each `add` mutates the shared (Rc<RefCell>) instance and returns the same
+// handle, so the chain accumulates onto one object. `return this;` lowers to a
+// cheap `self.clone()` (an Rc refcount bump), NOT a move — which is what keeps
+// the chain compiling and the reference semantics intact.
+public class Sum {
+    private int total;
+    public Sum() { this.total = 0; }
+    public Sum add(int x) { this.total = this.total + x; return this; }
+    public int value() { return total; }
+}
+
+public void main() {
+    var s = new Sum().add(2).add(3).add(10).value();
+    print($"sum=${s}");
+}
