@@ -183,12 +183,26 @@ impl RustEmitter {
                 _ => {}
             }
         }
+        if let Some(rust_ty) = jux_primitive_to_rust(ty) {
+            // Const-context override: a `const`/`static` decl can't
+            // run `.to_string()` at init time, so `String` lowers to
+            // `&'static str` in this position. The matching
+            // `emit_literal` path drops its `.to_string()` wrap when
+            // `emitting_const_context` is set.
+            if self.emitting_const_context && rust_ty == "String" {
+                self.w.push_str("&'static str");
+                return;
+            }
+            self.w.push_str(rust_ty);
+            return;
+        }
         // **External (rust.std / crate) type in type position (§G.9.2).** A
         // field/param/return/local typed with a bound foreign type — e.g.
         // `Vec<Todo>` — emits its real Rust path (`std::vec::Vec<Todo>`) from
         // the stub's `@rust("…")` annotation, not the flat `crate::rust::std::Vec`
-        // module path (which doesn't exist). Generic args recurse so they get
-        // their own mapping.
+        // module path (which doesn't exist). Placed AFTER `jux_primitive_to_rust`
+        // so names that are also Jux primitives (`String`, …) keep their
+        // primitive lowering. Generic args recurse so they get their own mapping.
         if let Some(real) = self.external_class_real_path(&ty.name) {
             self.w.push_str(&real);
             if !ty.generic_args.is_empty() {
@@ -203,19 +217,6 @@ impl RustEmitter {
                 }
                 self.w.push('>');
             }
-            return;
-        }
-        if let Some(rust_ty) = jux_primitive_to_rust(ty) {
-            // Const-context override: a `const`/`static` decl can't
-            // run `.to_string()` at init time, so `String` lowers to
-            // `&'static str` in this position. The matching
-            // `emit_literal` path drops its `.to_string()` wrap when
-            // `emitting_const_context` is set.
-            if self.emitting_const_context && rust_ty == "String" {
-                self.w.push_str("&'static str");
-                return;
-            }
-            self.w.push_str(rust_ty);
             return;
         }
         // Cross-package bare-name reference — when a single
