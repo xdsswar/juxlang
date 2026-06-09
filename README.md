@@ -13,12 +13,38 @@ is what we're building against it.
 
 ## Status
 
-**Working single-file compiler.** The pipeline runs end-to-end:
-lex → parse → resolve → typecheck → lower-to-Rust → `cargo build` → run.
-`jux run examples/hello.jux` prints `Hello, world!`. The Phase 1 strategy
-([`JUX-LANG-V1.md`](Architecture/JUX-LANG-V1.md) §2.2) is in place: `juxc`
-transpiles `.jux` source to idiomatic Rust, then invokes `cargo`/`rustc` to
-produce the native binary.
+**Working compiler + project builds + editor tooling.** The pipeline runs
+end-to-end: lex → parse → resolve → typecheck → lower-to-Rust → `cargo build` →
+run. `jux run examples/hello.jux` prints `Hello, world!`, and
+`juxc <project-dir> --run` builds a whole multi-package source tree. The Phase 1
+strategy ([`JUX-LANG-V1.md`](Architecture/JUX-LANG-V1.md) §2.2) is in place:
+`juxc` transpiles `.jux` source to idiomatic, human-readable Rust, then invokes
+`cargo`/`rustc` to produce the native binary.
+
+### Rust-std / crate interop (the std is Rust's std)
+
+Jux uses the **Rust standard library (and any Rust crate) as its own std**,
+surfaced in Jux syntax:
+
+- **Autocomplete / hover / goto-definition** over Rust `std` and project crates,
+  rendered in Jux syntax — generated on demand from the installed toolchain's
+  rustdoc JSON (`juxc-bindgen`), never hand-curated. The editor reaches *into*
+  the generated declaration stubs.
+- **Compile against it.** `import rust.std.PathBuf; var p = new PathBuf();
+  p.reserve(16);` lowers to the real `std::path::PathBuf` — real-path imports,
+  `new X()` → `X::new()`, camelCase → snake_case methods, `&mut self`-aware
+  bindings (`JUX-BINDGEN-ADDENDUM.md` §G.9.2, in progress).
+- A hand-written `jux.std` (Java-shaped `List`/`Map`/`String`/exceptions) is
+  still the default std today; `rust.std` is the future replacement it's being
+  migrated toward.
+
+### Editor tooling
+
+- **`juxc-lsp`** — a language server (the single semantic source of truth):
+  workspace-wide diagnostics, hover signatures + docs, receiver-aware
+  completion, auto-import code actions, goto-definition, and document symbols.
+- **IntelliJ plugin** (`ide/intellij-plugin/`) — a native Java-style PSI plugin;
+  `./gradlew buildPlugin` produces an installable `.zip`.
 
 ### Implemented today
 
@@ -29,7 +55,11 @@ That includes:
   ranges, casts (`abs.jux`, `arithmetic.jux`, `bitops.jux`, `casts.jux`,
   `loop_range.jux`).
 - **Classes** — fields, constructors, methods, `static`/`final`,
-  visibility (`encapsulation.jux`, `point.jux`, `vector3.jux`).
+  visibility, **bare instance-field access** (`f` ≡ `this.f`), `final`/`const`
+  method parameters, and C#-style **properties** (`{ get; set; }`,
+  expression-bodied with `->`) (`encapsulation.jux`, `point.jux`, `vector3.jux`).
+- **`struct`** declarations and **generic enums** (`enum Cow<B>`); **nested
+  generics** (`List<List<int>>`), function types, and tuple/pointer placeholders.
 - **Inheritance** — `extends`, `super(...)`, overrides, abstract classes,
   `sealed`/`non-sealed` (`animals.jux`, `shapes.jux`, `sealed_shapes.jux`).
 - **Interfaces** — default methods, static methods, constants
@@ -55,10 +85,15 @@ That includes:
 
 ### Stubbed / not yet implemented
 
-- `jux new <name>` and `jux test` print "not yet implemented".
-- **Project mode** — running `jux build` / `jux run` / `jux check` without a
-  file path errors out; `jux.toml` parsing and dependency resolution land
-  with the build-system milestone.
+- **Project mode works**: `juxc <dir> --run` builds a multi-package source
+  tree, and `jux.toml` (`[package]`/`[lib]`/`[[bin]]`/`[dependencies]`/
+  `[workspace]`) drives multi-module builds with per-module binary metadata
+  (version/author/icon). `jux new` / `jux test` remain stubs.
+- **`rust.std` compile coverage is partial** — construction + method calls work;
+  generics-on-construction, free functions, traits/operators, and the full
+  type-mapping are in progress (§G.9.2). Real `tuple-type`/`pointer-type` syntax
+  is surfaced as `Tuple<…>`/`Ptr<…>` placeholders pending the unsafe/C-interop
+  work.
 - `native` and `synchronized` method modifiers are intentionally out of
   scope (Jux is not Java — JNI bridging and intrinsic monitors will be
   redesigned for the Rust backend).
@@ -91,7 +126,11 @@ juxlang/
 │   ├── juxc-resolve/            # Phase 4: name resolution (pipeline §C.2.4)
 │   ├── juxc-tycheck/            # Phases 6–9: type checking (pipeline §C.3)
 │   ├── juxc-backend-rust/       # Phase 19: lowering to Rust (pipeline §C.9)
-│   └── juxc-driver/             # phase orchestration
+│   ├── juxc-bindgen/            # rustdoc JSON → Jux-syntax .jux.d stubs (§G)
+│   ├── juxc-lsp/                # language server (LSP; §L)
+│   └── juxc-driver/             # phase orchestration + project/workspace builds
+├── ide/
+│   └── intellij-plugin/         # IntelliJ plugin (Java-style PSI; ./gradlew buildPlugin)
 └── bin/
     ├── juxc/                    # the compiler binary
     └── jux/                     # the project tool (cargo-equivalent)
