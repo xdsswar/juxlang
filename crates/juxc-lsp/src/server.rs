@@ -1495,6 +1495,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A wrong-arity call (here a constructor missing its required argument)
+    /// is type-checked by the workspace pass, tagged with the open file's index,
+    /// and therefore PUBLISHED to that file's URI — i.e. it shows as a red
+    /// squiggle in the editor, not only at compile time. Guards the
+    /// file-tagging that routes tycheck diagnostics to the right document.
+    #[test]
+    fn arity_error_is_published_to_the_open_file() {
+        let root = temp_root("arity_published");
+        let main = root.join("main.jux");
+        let src = "public class Other {\n\
+                   \x20   public Other(String name){ }\n\
+                   }\n\
+                   public void main(){ var o = new Other(); }\n";
+        std::fs::write(&main, src).unwrap();
+
+        let uri = Url::from_file_path(&main).unwrap();
+        let rope = Rope::from_str(src);
+        let analysis = analyze_workspace(&root, &uri, &rope);
+
+        let diags = analysis
+            .diagnostics_by_uri
+            .get(&uri)
+            .expect("the open file has a diagnostics entry");
+        assert!(
+            diags
+                .iter()
+                .any(|d| matches!(&d.code, Some(NumberOrString::String(c)) if c == "E0411")),
+            "expected the arity error (E0411) to be published to the open file, got: {diags:?}",
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// The document-symbol outline nests members under their type and covers
     /// every top-level kind.
     #[test]
