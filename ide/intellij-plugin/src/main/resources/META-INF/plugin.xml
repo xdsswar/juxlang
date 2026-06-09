@@ -114,6 +114,13 @@
         implementation="dev.jux.intellij.run.JuxRunConfigurationType"/>
     <runConfigurationProducer
         implementation="dev.jux.intellij.run.JuxRunConfigurationProducer"/>
+
+    <!-- The "Jux" tool window (right side, like Gradle/Cargo): one-click
+         Build / Run / Test / Build Release / Check over a live console. -->
+    <toolWindow id="Jux"
+                anchor="right"
+                factoryClass="dev.jux.intellij.toolwindow.JuxToolWindowFactory"
+                icon="dev.jux.intellij.JuxIcons.FILE"/>
   </extensions>
 
   <actions>
