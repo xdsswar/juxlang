@@ -1,0 +1,73 @@
+// ============================================================================
+// Jux CRM demo — showcases enums, interfaces, classes + the builder pattern,
+// generics, rust.std Vec + for-each, switch with bare enum labels, and
+// Java-style int<->double promotion. End to end: juxc -> rustc -> native.
+// ============================================================================
+import rust.std.Vec;
+
+public enum Priority { Low, Medium, High }
+public enum Status { Pending, Active, Done }
+
+public interface Named { String label(); }
+
+// A generic wrapper — `Box<T>` holds any T.
+public class Box<T> {
+    public T value;
+    public Box(T value){ this.value = value; }
+    public T get(){ return this.value; }
+}
+
+// Fluent builder transitions via `return this`.
+public class Todo implements Named {
+    public String title;
+    public Priority priority;
+    public Status status;
+    public Todo(String title, Priority priority){
+        this.title = title;
+        this.priority = priority;
+        this.status = Status.Pending;
+    }
+    public Todo start(){ this.status = Status.Active; return this; }
+    public Todo finish(){ this.status = Status.Done; return this; }
+    public bool done(){ return this.status == Status.Done; }
+    public String label(){ return this.title; }
+}
+
+public String statusLabel(Status s){
+    switch (s) {
+        case Pending -> { return "pending"; }
+        case Active  -> { return "active"; }
+        case Done    -> { return "done"; }
+    }
+}
+
+public String priorityTag(Priority p){
+    switch (p) {
+        case High   -> { return "!!!"; }
+        case Medium -> { return "!!"; }
+        case Low    -> { return "!"; }
+    }
+}
+
+public void main(){
+    // A generic Box in action.
+    var greeting = new Box<String>("Jux CRM");
+    print($"=== ${greeting.get()} ===");
+
+    // Build a backlog with fluent chaining.
+    var backlog = new Vec<Todo>();
+    backlog.push(new Todo("Design logo", Priority.High).start().finish());
+    backlog.push(new Todo("Write docs", Priority.Low).start());
+    backlog.push(new Todo("Ship v1", Priority.Medium).finish());
+    backlog.push(new Todo("Email leads", Priority.High));
+
+    // Report + stats (int -> double promotion for the percentage).
+    var total = backlog.len();
+    var done = 0;
+    for (var t : backlog) {
+        print($"  ${priorityTag(t.priority)} ${t.label()} [${statusLabel(t.status)}]");
+        if (t.done()) { done = done + 1; }
+    }
+    var pct = (double) done / (double) total * 100.0;
+    print($"--- ${done}/${total} complete (${pct}%) ---");
+}
