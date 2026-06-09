@@ -879,7 +879,7 @@ fn check_imports_resolve(
             .find(|k| fqn_bare(k) == bare && k.contains('.'))
             .cloned()
     };
-    let mut report = |fqn: String, span: Span, diagnostics: &mut Vec<Diagnostic>| {
+    let report = |fqn: String, span: Span, diagnostics: &mut Vec<Diagnostic>| {
         if exists(&fqn) {
             return;
         }

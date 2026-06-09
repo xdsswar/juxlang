@@ -81,18 +81,38 @@ impl RustEmitter {
         // for generic-typed fields" problem inherent to the fallback
         // `__self`-builder pattern.
         //
-        // A class with `init { }` blocks (§M.1) can't use the fast path: the
-        // init blocks run *after* construction and mutate `this`, which needs
-        // the `__self` builder binding to mutate. So we fall through.
-        if class_decl.init_blocks.is_empty() {
+        // A class with `init { }` blocks (§M.1) still uses the simple inits when
+        // the ctor is simple — but binds them to `let mut __self` so the init
+        // blocks can mutate `this` afterward. This keeps generic-typed fields
+        // working (the explicit inits avoid the `__self`-builder's `Default`
+        // requirement); only a NON-simple ctor body falls to the builder.
         if let Some(simple) = extract_simple_ctor_inits(ctor) {
-            self.emit_simple_ctor_body(class_decl, &simple);
+            if class_decl.init_blocks.is_empty() {
+                self.emit_simple_ctor_body(class_decl, &simple, false);
+            } else {
+                self.emit_simple_ctor_body(class_decl, &simple, true);
+                // Run the init blocks against `__self`, then return it.
+                self.this_alias = Some("__self".to_string());
+                let mut muts = HashSet::new();
+                for init in &class_decl.init_blocks {
+                    collect_mutated_names(init, &mut muts, &self.user_mut_methods);
+                }
+                self.mutated_in_fn = muts;
+                for init in &class_decl.init_blocks {
+                    for stmt in &init.statements {
+                        self.emit_source_marker(stmt_span(stmt));
+                        self.w.emit_indent();
+                        self.emit_stmt(stmt);
+                    }
+                }
+                self.this_alias = None;
+                self.w.line("__self");
+            }
             self.w.indent_dec();
             self.w.line("}");
             self.w.newline();
             self.w.indent_dec();
             return;
-        }
         }
 
         // Fallback: the body has stmts other than this.field-init (e.g.,
@@ -182,6 +202,12 @@ impl RustEmitter {
         &mut self,
         class_decl: &juxc_ast::ClassDecl,
         simple: &SimpleCtorInits,
+        // When the class has `init { }` blocks, bind the literal to
+        // `let mut __self = Self { … };` so the caller can run the init blocks
+        // against it. Crucially this uses the constructor's EXPLICIT field
+        // inits (not `Default`), so a generic-typed field (`T value`) doesn't
+        // require `T: Default` the way the `__self`-builder fallback does.
+        bind_to_self: bool,
     ) {
         // (Migrated to Writer indent-aware API)
         // Caller (`emit_constructor`) has the writer at level 2 — the
@@ -207,7 +233,11 @@ impl RustEmitter {
             }
         }
 
-        self.w.line("Self {");
+        if bind_to_self {
+            self.w.line("let mut __self = Self {");
+        } else {
+            self.w.line("Self {");
+        }
         self.w.indent_inc();
         // Sealed-parent skip: subclasses-of-sealed lower without a
         // `__parent` field (they ARE the parent enum's variant);
@@ -305,7 +335,11 @@ impl RustEmitter {
             self.w.push_str(",\n");
         }
         self.w.indent_dec();
-        self.w.line("}");
+        if bind_to_self {
+            self.w.line("};");
+        } else {
+            self.w.line("}");
+        }
     }
 
     /// Emit a user-declared constructor for a **wrapper-shape** class
