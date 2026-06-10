@@ -154,9 +154,32 @@ impl RustEmitter {
             // receiver resolution works on params too — wrapper-class field
             // access (`s.field`), stdlib-dispatch, and enum-switch scrutinee
             // qualification all consult this when `expr_types` is unreliable.
+            // The function's own generic parameter names — a bare param typed by
+            // one of these is a `Ty::Param` (the backend has no `TypeEnv`, so
+            // `ty_from_ref_in_env` alone can't tell `T` from an unknown class).
+            let generic_param_names: std::collections::HashSet<&str> = fn_decl
+                .generic_params
+                .iter()
+                .map(|g| g.name.text.as_str())
+                .collect();
             for p in &fn_decl.params {
-                let ty = juxc_tycheck::ty_from_ref_in_env(&p.ty, &self.symbols);
-                if matches!(ty, juxc_tycheck::Ty::User { .. }) {
+                let bare_generic = p.ty.array_shape.is_none()
+                    && !p.ty.nullable
+                    && p.ty.generic_args.is_empty()
+                    && p.ty.name.segments.len() == 1
+                    && generic_param_names.contains(p.ty.name.segments[0].text.as_str());
+                let ty = if bare_generic {
+                    juxc_tycheck::Ty::Param(p.ty.name.segments[0].text.clone())
+                } else {
+                    juxc_tycheck::ty_from_ref_in_env(&p.ty, &self.symbols)
+                };
+                // Register `User` (wrapper-class resolution) and `Param`
+                // (generic-value `.clone()` decisions) params; both are consulted
+                // name-keyed when `expr_types` is unreliable.
+                if matches!(
+                    ty,
+                    juxc_tycheck::Ty::User { .. } | juxc_tycheck::Ty::Param(_)
+                ) {
                     if let Some(scope) = self.local_types.last_mut() {
                         scope.insert(p.name.text.clone(), ty);
                     }

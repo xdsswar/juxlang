@@ -162,7 +162,12 @@ impl RustEmitter {
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("struct ");
         self.w.push_str(&class_decl.name.text);
-        self.emit_generic_params(&class_decl.generic_params);
+        // The struct's own type params carry `Clone + Debug` (the `#[derive]`
+        // above needs them, and a generic field `Box<T>` propagates Box's own
+        // `T: Clone + Debug` bound) — same as the wrapper-inner struct and every
+        // impl header for this class. Without it the declaration is bare `<T>`
+        // while the field/derive demand the bound (rustc E0277).
+        self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         // Inheritance: embed the parent struct as `__parent`. Field
