@@ -28,6 +28,12 @@ fun PsiBuilder.parseQualifiedName() {
  */
 fun PsiBuilder.parseType() {
     val m = mark()
+    // Whether a base type was actually parsed. When it wasn't (the token here
+    // can't start a type — e.g. a leading `*`/`&` of a deref/address-of
+    // *expression* statement), we must NOT consume the trailing `* ? []`
+    // suffixes: doing so would let a speculative local-variable parse swallow
+    // `*p = value;` as a `type=*, name=p` decl and bury the rollback.
+    var baseParsed = true
     when {
         at(T.LPAREN) -> {
             // Tuple `(A, B)` or function `(A) async throws T -> R` type.
@@ -37,21 +43,27 @@ fun PsiBuilder.parseType() {
             if (at(T.ARROW)) { advanceLexer(); parseType() }
         }
         at(T.VOID_KW) -> advanceLexer()
-        else -> {
-            expectOrError(T.IDENTIFIER, "type expected")
+        at(T.IDENTIFIER) -> {
+            advanceLexer()
             while (at(T.DOT) && lookAhead(1) === T.IDENTIFIER) {
                 advanceLexer(); advanceLexer()
             }
             if (at(T.LT)) parseTypeArguments()
         }
+        else -> {
+            expectOrError(T.IDENTIFIER, "type expected")
+            baseParsed = false
+        }
     }
-    // Array / nullable / pointer suffixes.
-    while (true) {
-        when {
-            at(T.LBRACKET) -> skipMatched(T.LBRACKET, T.RBRACKET)
-            at(T.QUESTION) -> advanceLexer()
-            at(T.STAR) -> advanceLexer()
-            else -> break
+    // Array / nullable / pointer suffixes — only after a real base type.
+    if (baseParsed) {
+        while (true) {
+            when {
+                at(T.LBRACKET) -> skipMatched(T.LBRACKET, T.RBRACKET)
+                at(T.QUESTION) -> advanceLexer()
+                at(T.STAR) -> advanceLexer()
+                else -> break
+            }
         }
     }
     m.done(E.TYPE_REFERENCE)

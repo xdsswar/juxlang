@@ -114,6 +114,48 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         assertTrue("Circle declares area()", ownMethods.contains("area"))
     }
 
+    /**
+     * Constructs that the PSI parser must accept without red squiggles, pinned
+     * explicitly (the corpus test covers them via examples/, but this guards the
+     * exact shapes against future parser edits):
+     *  - `init { }` instance-initializer blocks,
+     *  - pointer types `int*` and a deref *statement* `*p = value;` (must parse
+     *    as an expression statement, not a bogus `type=*, name=p` local),
+     *  - the `=>` type-test with a smart-cast binder, both `as` and C-style
+     *    downcasts, `super.method()`, and nullable `T?` value flow.
+     */
+    fun testNewLanguageConstructsParseWithoutErrors() {
+        val psi = createPsiFile(
+            "New.jux",
+            """
+            public abstract class Animal { public abstract String sound(); }
+            public class Dog extends Animal {
+                public int hits;
+                public Dog() {}
+                public String sound() { return super.toString(); }
+                // instance-initializer block
+                init { this.hits = 0; }
+            }
+            public unsafe void store(int* p, int value) { *p = value; }
+            public void main() {
+                Animal? a = new Dog();
+                if (a != null) {
+                    if (a => Dog d) { print(d.sound()); }
+                    Dog viaC = (Dog) a;
+                    Dog viaAs = a as Dog;
+                    print(viaC.sound());
+                    print(viaAs.sound());
+                }
+            }
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertTrue(
+            "unexpected parse errors: " + errors.joinToString { "${it.errorDescription}@${it.textOffset}" },
+            errors.isEmpty(),
+        )
+    }
+
     /** A use of a type name resolves to its in-file declaration. */
     fun testReferenceResolvesToDeclaration() {
         val file = createPsiFile(
