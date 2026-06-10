@@ -88,6 +88,8 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         }
         Expr::This(_) => infer_this(env),
         Expr::Super(_) => infer_super(env, symbols),
+        // `x => T` is a runtime type test — always boolean.
+        Expr::TypeTest(_) => Ty::Primitive(Primitive::Bool),
         Expr::Field(f) => infer_field(f, env, symbols),
         Expr::Index(i) => infer_index(i, env, symbols),
         Expr::Call(c) => infer_call(c, env, symbols),

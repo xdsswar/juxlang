@@ -37,6 +37,35 @@ impl RustEmitter {
             self.emit_safe_field(f);
             return;
         }
+        // **Field READ through a polymorphic-base reference** → accessor call.
+        // A base-typed value is a `Rc<dyn …Kind>` trait object that can't
+        // expose struct fields, so `baseRef.f` reads via the generated
+        // `__get_f()` (reachable up the `Kind` supertrait chain). `this`,
+        // concrete receivers, method callees, and lvalue (write) targets keep
+        // direct field access — writes go through `__set_f` in `emit_assign`.
+        if !is_call_callee && !self.emitting_lvalue && !matches!(&*f.object, Expr::This(_)) {
+            if let Some(bare) = self.receiver_class_bare(&f.object) {
+                if self.poly_base_classes.contains(&bare) {
+                    let accessor_ok = self
+                        .symbols
+                        .lookup_field(&bare, &f.field.text)
+                        .map(|(fsig, _)| {
+                            matches!(
+                                fsig.visibility,
+                                juxc_ast::Visibility::Public | juxc_ast::Visibility::Protected
+                            )
+                        })
+                        .unwrap_or(false);
+                    if accessor_ok {
+                        self.emit_expr(&f.object);
+                        self.w.push_str(".__get_");
+                        self.w.push_str(&f.field.text);
+                        self.w.push_str("()");
+                        return;
+                    }
+                }
+            }
+        }
         // §G.9.2: a member access on an **external** (`rust.std` / crate)
         // receiver uses the foreign symbol's REAL Rust name, which is
         // `snake_case` — bindgen camelCased it for the Jux surface (§G.4). So

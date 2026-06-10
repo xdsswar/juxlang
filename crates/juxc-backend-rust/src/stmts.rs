@@ -184,6 +184,7 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
             .iter()
             .any(|el| is_path_named(el, name) || expr_moves_path_at_top(el, name)),
         Expr::Cast(c) => is_path_named(&c.value, name) || expr_moves_path_at_top(&c.value, name),
+        Expr::TypeTest(t) => expr_moves_path_at_top(&t.value, name),
         Expr::Binary(b) => {
             // String concat (`+` with a string operand) emits as
             // `format!` which borrows — no move. Other binaries
@@ -1141,6 +1142,52 @@ impl RustEmitter {
         // `obj.f += obj.f` releases the read borrow before the
         // write borrow is taken. This mirrors the mutable-static
         // scoped-temp shape above (§CR.5.7).
+        // **Field WRITE through a polymorphic-base reference** → `__set_f(v)`.
+        // A base-typed value is a `Rc<dyn …Kind>` that can't expose struct
+        // fields; the generated setter writes through interior mutability.
+        // Plain `=` only (compound `+=` through a `dyn` setter isn't modeled).
+        if a.op.is_none() {
+            if let Expr::Field(tf) = &a.target {
+                if !tf.safe && !matches!(&*tf.object, Expr::This(_)) {
+                    if let Some(bare) = self.receiver_class_bare(&tf.object) {
+                        if self.poly_base_classes.contains(&bare) {
+                            let field_info = self
+                                .symbols
+                                .lookup_field(&bare, &tf.field.text)
+                                .map(|(fsig, _)| {
+                                    (
+                                        matches!(
+                                            fsig.visibility,
+                                            juxc_ast::Visibility::Public
+                                                | juxc_ast::Visibility::Protected
+                                        ),
+                                        fsig.ty.clone(),
+                                    )
+                                });
+                            if let Some((true, fty)) = field_info {
+                                self.emit_expr(&tf.object);
+                                self.w.push_str(".__set_");
+                                self.w.push_str(&tf.field.text);
+                                self.w.push('(');
+                                if !matches!(
+                                    self.iface_coercion_to(&fty, &a.value),
+                                    crate::analysis::IfaceCoercion::None,
+                                ) {
+                                    self.emit_expr_coerced_to_iface(&fty, &a.value);
+                                } else {
+                                    self.emit_expr(&a.value);
+                                    if self.wrapper_value_needs_clone(&a.value) {
+                                        self.w.push_str(".clone()");
+                                    }
+                                }
+                                self.w.push_str(");\n");
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if let Expr::Field(tf) = &a.target {
             if !tf.safe && self.receiver_is_wrapper_class(&tf.object) {
                 // Walk the `__parent` chain to the slot that actually
@@ -1421,7 +1468,31 @@ impl RustEmitter {
             .as_ref()
             .map_or(false, |n| self.nullable_locals.contains(n));
 
-        if let Some(name) = &cast_name {
+        // Type-test smart-cast: `if (x => Dog d) { … }` lowers to
+        // `if let Some(d) = x.__jux_as_Dog() { … }` — `d` is a fresh `Dog`
+        // sharing `x`'s inner cell (mutations reflect). The bare (no-binder)
+        // `x => Dog` condition falls through to the plain path below.
+        let typetest_binder = match &if_stmt.condition {
+            Expr::TypeTest(t) if t.binder.is_some() => Some(t),
+            _ => None,
+        };
+        if let Some(t) = typetest_binder {
+            let binder = t.binder.as_ref().unwrap();
+            let target = t
+                .ty
+                .name
+                .segments
+                .last()
+                .map(|s| s.text.clone())
+                .unwrap_or_default();
+            self.w.push_str("if let Some(");
+            self.w.push_str(&binder.text);
+            self.w.push_str(") = ");
+            self.emit_expr(&t.value);
+            self.w.push_str(".__jux_as_");
+            self.w.push_str(&target);
+            self.w.push_str("() {\n");
+        } else if let Some(name) = &cast_name {
             self.w.push_str("if let Some(");
             self.w.push_str(name);
             self.w.push_str(") = ");
@@ -1460,9 +1531,34 @@ impl RustEmitter {
         while let Some(branch) = else_branch {
             match branch {
                 ElseBranch::If(inner) => {
-                    self.w.push_str(" else if ");
-                    self.emit_expr(&inner.condition);
-                    self.w.push_str(" {\n");
+                    // `else if (x => Dog d)` → `else if let Some(d) =
+                    // x.__jux_as_Dog()`; the bare/non-typetest case stays a
+                    // plain `else if <cond>`.
+                    let binder_test = match &inner.condition {
+                        Expr::TypeTest(t) if t.binder.is_some() => Some(t),
+                        _ => None,
+                    };
+                    if let Some(t) = binder_test {
+                        let binder = t.binder.as_ref().unwrap();
+                        let target = t
+                            .ty
+                            .name
+                            .segments
+                            .last()
+                            .map(|s| s.text.clone())
+                            .unwrap_or_default();
+                        self.w.push_str(" else if let Some(");
+                        self.w.push_str(&binder.text);
+                        self.w.push_str(") = ");
+                        self.emit_expr(&t.value);
+                        self.w.push_str(".__jux_as_");
+                        self.w.push_str(&target);
+                        self.w.push_str("() {\n");
+                    } else {
+                        self.w.push_str(" else if ");
+                        self.emit_expr(&inner.condition);
+                        self.w.push_str(" {\n");
+                    }
                     self.w.indent_inc();
                     self.emit_block_contents(&inner.then_block);
                     self.w.indent_dec();

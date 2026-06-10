@@ -1,0 +1,56 @@
+// "Finish polymorphism": explicit downcast, the `=>` type-test / smart-cast,
+// and field access through a base reference. Builds on virtual dispatch
+// (examples/polymorphism.jux) — here a base-typed value is narrowed back to a
+// concrete type, tested at run time, and has its fields read/written through
+// the base reference.
+
+public abstract class Animal {
+    public String name;                 // public field — reachable via accessor
+    public Animal(String name) { this.name = name; }
+    public abstract String sound();
+}
+
+public interface Tagged { String tag(); }
+
+public class Dog extends Animal {
+    public Dog(String name) { super(name); }
+    public String sound() { return "Woof"; }
+    public String fetch() { return "fetched"; }   // Dog-only method
+}
+
+public class Cat extends Animal implements Tagged {
+    public Cat(String name) { super(name); }
+    public String sound() { return "Meow"; }
+    public String tag() { return "cat-tag"; }
+}
+
+public void main() {
+    Animal a = new Dog("Rex");
+
+    // Field access through a base reference (read + write via accessors).
+    print(a.name);                      // Rex
+    a.name = "Max";
+    print(a.name);                      // Max
+
+    // Explicit downcast — both syntaxes — then call a concrete-only method.
+    Dog d1 = (Dog) a;
+    print(d1.fetch());                  // fetched
+    Dog d2 = a as Dog;
+    print(d2.sound());                  // Woof
+
+    // `=>` bare boolean test.
+    if (a => Dog) { print("a is a Dog"); } else { print("a is not a Dog"); }
+
+    // `=>` smart-cast binder — binds `c: Cat` in the then-branch.
+    Animal b = new Cat("Felix");
+    if (b => Dog dd) {
+        print($"dog ${dd.fetch()}");
+    } else if (b => Cat cc) {
+        print($"${cc.name} says ${cc.sound()} / ${cc.tag()}");   // Felix says Meow / cat-tag
+    }
+
+    // Interface sidecast through the base reference.
+    if (b => Tagged t) {
+        print($"tagged: ${t.tag()}");   // tagged: cat-tag
+    }
+}

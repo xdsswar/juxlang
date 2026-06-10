@@ -802,6 +802,13 @@ impl Resolver {
         // Each arm gets its own scope so `var` declarations inside the
         // `if` aren't visible after the `if` ends.
         self.push_scope();
+        // Type-test smart-cast binder: `if (x => Dog d)` introduces `d` into
+        // the then-branch scope so references to it resolve.
+        if let Expr::TypeTest(t) = &if_stmt.condition {
+            if let Some(binder) = &t.binder {
+                self.declare_at(&binder.text, binder.span);
+            }
+        }
         self.visit_block(&if_stmt.then_block);
         self.pop_scope();
         if let Some(else_branch) = &if_stmt.else_branch {
@@ -892,6 +899,13 @@ impl Resolver {
                 // `super` resolves no names itself — it's a static receiver
                 // marker; the method named after it (`super.m`) is resolved
                 // structurally against the ancestor chain in tycheck/backend.
+            }
+            Expr::TypeTest(t) => {
+                // Resolve the tested value. The optional binder introduces a
+                // fresh name scoped to the enclosing `if`'s then-branch; that
+                // scoping is applied where the `if` is visited, so there's
+                // nothing to bind here.
+                self.visit_expr(&t.value);
             }
             Expr::This(_) => {
                 // `this` is bound at the head of each constructor /

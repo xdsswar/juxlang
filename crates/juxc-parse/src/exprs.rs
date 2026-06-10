@@ -139,13 +139,42 @@ impl<'a> Parser<'a> {
     /// Logical-AND layer: left-associative short-circuit `&&` per §A.4
     /// level 5. Tighter than `||`, looser than `|`.
     pub(crate) fn parse_logic_and(&mut self) -> Option<Expr> {
-        let mut left = self.parse_bit_or()?;
+        let mut left = self.parse_typetest()?;
         while matches!(self.peek(), TokenKind::AndAnd) {
             self.advance();
-            let right = self.parse_bit_or()?;
+            let right = self.parse_typetest()?;
             left = make_binary(BinaryOp::And, left, right);
         }
         Some(left)
+    }
+
+    /// Type-test layer (§T.1.4) — `value => Type [binder]`. **Non-associative**
+    /// and binds tighter than `&&`/`||` (so `x => Dog && y` parses as
+    /// `(x => Dog) && y`), looser than the bitwise operators. The RHS is a
+    /// *type* (parsed via [`Self::parse_type_ref`]) followed by an optional
+    /// smart-cast binder identifier (`x => Dog d`). Yields [`Expr::TypeTest`].
+    pub(crate) fn parse_typetest(&mut self) -> Option<Expr> {
+        let value = self.parse_bit_or()?;
+        if !matches!(self.peek(), TokenKind::FatArrow) {
+            return Some(value);
+        }
+        self.advance(); // '=>'
+        let ty = self.parse_type_ref()?;
+        // Optional binder — a bare identifier right after the type
+        // (`x => Dog d`). A following `&&`, `)`, etc. ends the test.
+        let binder = if matches!(self.peek(), TokenKind::Ident(_)) {
+            self.parse_ident()
+        } else {
+            None
+        };
+        let end = binder.as_ref().map(|b| b.span).unwrap_or(ty.span);
+        let span = expr_span(&value).join(end);
+        Some(Expr::TypeTest(juxc_ast::TypeTestExpr {
+            value: Box::new(value),
+            ty,
+            binder,
+            span,
+        }))
     }
 
     /// Bitwise-OR layer: left-associative `|` per §A.4 level 6.
@@ -479,7 +508,29 @@ impl<'a> Parser<'a> {
         if is_known_primitive_type_name(&first_ident) {
             return true;
         }
-        has_nullable || has_array || multi_segment
+        if has_nullable || has_array || multi_segment {
+            return true;
+        }
+        // Bare single-segment name (`(Dog) x`): a reference cast to a class /
+        // interface. Treat it as a cast only when the operand begins with an
+        // **unambiguous atom** — an identifier, a literal, `this`, `new`, or
+        // `sizeof`. We deliberately exclude `(`, `-`, `!`, `~` (already in
+        // `followed_by_unary`): `(f)(x)` is a call, `(a) - b` is a
+        // subtraction, etc. A bare `(Name) atom` has no other valid reading
+        // (juxtaposed expressions aren't legal), so this is unambiguous.
+        matches!(
+            self.tokens.get(i).map(|t| &t.kind),
+            Some(TokenKind::Ident(_))
+                | Some(TokenKind::Int(_))
+                | Some(TokenKind::Float(_))
+                | Some(TokenKind::Str(_))
+                | Some(TokenKind::InterpStr(_))
+                | Some(TokenKind::Bool(_))
+                | Some(TokenKind::Null)
+                | Some(TokenKind::Kw(Keyword::This))
+                | Some(TokenKind::Kw(Keyword::New))
+                | Some(TokenKind::Kw(Keyword::Sizeof)),
+        )
     }
 
     /// Real-parse path for the C-style cast form once
@@ -1091,6 +1142,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::Unary(u) => u.span,
         Expr::Range(r) => r.span,
         Expr::Cast(c) => c.span,
+        Expr::TypeTest(t) => t.span,
         Expr::SizeOf(s) => s.span,
         Expr::NewArray(n) => n.span,
         Expr::NewArrayLit(n) => n.span,

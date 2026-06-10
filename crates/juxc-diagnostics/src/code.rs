@@ -223,6 +223,20 @@ pub enum Code {
     /// non-generic, mark the class (or method) `final`, or seal the hierarchy.
     /// (Stage-2 polymorphism; mirrors the interface rule E0435.)
     E0438_GenericVirtualMethod,
+    /// E0442 — A **reference cast / type-test between unrelated types**
+    /// (`(Dog) someString`, `x as Cat` where `x` can't be a `Cat`,
+    /// `x => Unrelated`). A class/interface cast or `=>` test is only valid
+    /// when the source and target are in a subtype relationship (one is the
+    /// other's ancestor/implementer), or the target is `any` — otherwise the
+    /// cast can never succeed. Use the related type, or `=>` to test before
+    /// casting. (Sealed-type narrowing should go through `switch` instead.)
+    E0442_UnrelatedCast,
+    /// E0441 — A **type-test smart-cast binder used outside an `if`
+    /// condition** (`var b = x => Dog d;`). The bound form `x => T name`
+    /// introduces `name` as a smart-cast and is only meaningful as (or within)
+    /// an `if` condition's then-branch. In any other position write the bare
+    /// boolean test `x => T` (no binder).
+    E0441_TypeTestBinderMisplaced,
     /// E0440 — A `switch` over a sealed type (enum or sealed
     /// class) doesn't cover every variant / permitted subclass
     /// and has no wildcard arm. Per `JUX-DIAGNOSTICS-ADDENDUM.md`
@@ -363,6 +377,8 @@ impl Code {
             Code::E0436_InterfaceOnExceptionClass => "E0436",
             Code::E0437_FieldThroughPolymorphicBase => "E0437",
             Code::E0438_GenericVirtualMethod     => "E0438",
+            Code::E0442_UnrelatedCast            => "E0442",
+            Code::E0441_TypeTestBinderMisplaced  => "E0441",
             Code::E0440_NotExhaustive            => "E0440",
             Code::E0431_GenericInferenceNoSolution => "E0431",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",

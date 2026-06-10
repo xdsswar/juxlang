@@ -1369,6 +1369,196 @@ impl RustEmitter {
         self.w.push_str(" }\n");
     }
 
+    /// True iff class `c` **IS-A** `t` — the same class, a transitive
+    /// subclass, or an implementer of interface `t`. The relation that decides
+    /// whether a `__jux_as_<t>` downcast hook on a base can return `Some`.
+    pub(crate) fn class_is_a(&self, c: &str, t: &str) -> bool {
+        c == t
+            || juxc_tycheck::ty::walk_extends_reaches(c, t, &self.symbols)
+            || juxc_tycheck::ty::class_implements_interface(c, t, &self.symbols)
+    }
+
+    /// The cast / type-test targets (from `downcast_targets`) reachable as a
+    /// runtime instance of a value statically typed as base `b` — i.e. some
+    /// class IS-A `b` AND IS-A the target, and the target is not `b` itself or
+    /// a supertype (that's an upcast, handled by coercion). These become the
+    /// `__jux_as_<T>` hooks on `<b>Kind`. Sorted for deterministic output.
+    fn hook_targets_for_base(&self, b: &str) -> Vec<String> {
+        if self.downcast_targets.is_empty() {
+            return Vec::new();
+        }
+        let mut out: Vec<String> = self
+            .downcast_targets
+            .iter()
+            .filter(|t| {
+                // Skip upcasts (b IS-A t ⟹ t is b or a supertype).
+                !self.class_is_a(b, t)
+                    && self.symbols.classes.keys().any(|fqn| {
+                        let c = fqn.rsplit('.').next().unwrap_or(fqn);
+                        self.class_is_a(c, b) && self.class_is_a(c, t)
+                    })
+            })
+            .cloned()
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Emit the **value type** a `__jux_as_<t>` hook returns inside its
+    /// `Option<…>` — `Rc<dyn t>` for an interface, `Rc<dyn tKind>` for a
+    /// polymorphic-base class, or the bare wrapper newtype `t` for a concrete
+    /// (leaf) class. Mirrors value-position emission for a bare `t`.
+    fn emit_hook_target_type(&mut self, t: &str) {
+        if self.lookup_interface_by_bare_or_fqn(t).is_some() {
+            self.w.push_str("std::rc::Rc<dyn ");
+            self.w.push_str(t);
+            self.w.push('>');
+        } else if self.poly_base_classes.contains(t) {
+            self.w.push_str("std::rc::Rc<dyn ");
+            self.w.push_str(t);
+            self.w.push_str("Kind>");
+        } else {
+            self.w.push_str(t);
+        }
+    }
+
+    /// Emit the `__jux_as_<t>(&self) -> Option<…> { None }` hook signature
+    /// (default body) on a trait.
+    fn emit_downcast_hook_sig(&mut self, t: &str) {
+        self.w.emit_indent();
+        self.w.push_str("fn __jux_as_");
+        self.w.push_str(t);
+        self.w.push_str("(&self) -> Option<");
+        self.emit_hook_target_type(t);
+        self.w.push_str("> { None }\n");
+    }
+
+    /// Emit a concrete `__jux_as_<t>` hook override returning `Some(self)` —
+    /// `Some(self.clone())` for a leaf target, or
+    /// `Some(Rc::new(self.clone()) as <target>)` for a trait-object target
+    /// (identity-preserving `Rc` bump sharing the inner cell).
+    fn emit_downcast_hook_impl(&mut self, t: &str) {
+        self.w.emit_indent();
+        self.w.push_str("fn __jux_as_");
+        self.w.push_str(t);
+        self.w.push_str("(&self) -> Option<");
+        self.emit_hook_target_type(t);
+        self.w.push_str("> { Some(");
+        let is_dyn =
+            self.lookup_interface_by_bare_or_fqn(t).is_some() || self.poly_base_classes.contains(t);
+        if is_dyn {
+            self.w.push_str("std::rc::Rc::new(self.clone()) as ");
+            self.emit_hook_target_type(t);
+        } else {
+            self.w.push_str("self.clone()");
+        }
+        self.w.push_str(") }\n");
+    }
+
+    /// A class's **own public / protected instance fields** — the ones that
+    /// get `__get_<f>` / `__set_<f>` accessor methods on its `<Name>Kind`
+    /// trait so they're reachable through a base reference (a `dyn` trait
+    /// object can't expose struct fields directly). Private and static fields
+    /// are excluded. Returns `(field_name, field_type)` pairs, sorted.
+    fn class_accessor_fields(&self, owner_bare: &str) -> Vec<(String, juxc_ast::TypeRef)> {
+        let cd = self.class_asts.get(owner_bare).or_else(|| {
+            self.class_asts
+                .iter()
+                .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == owner_bare)
+                .map(|(_, v)| v)
+        });
+        let Some(cd) = cd else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, juxc_ast::TypeRef)> = cd
+            .fields
+            .iter()
+            .filter(|f| {
+                !f.is_static
+                    && matches!(
+                        f.visibility,
+                        juxc_ast::Visibility::Public | juxc_ast::Visibility::Protected
+                    )
+                    && f.ty.is_some()
+            })
+            .map(|f| (f.name.text.clone(), f.ty.clone().unwrap()))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// Number of `__parent` hops from class `impl_class` up to `owner` (where
+    /// the accessed field is declared). 0 when they're the same class.
+    fn field_depth_from(&self, impl_class: &str, owner: &str) -> usize {
+        if impl_class == owner {
+            return 0;
+        }
+        let mut depth = 0usize;
+        let mut cursor = self.direct_parent_bare(impl_class);
+        while let Some(p) = cursor {
+            depth += 1;
+            if p == owner || depth > 64 {
+                return depth;
+            }
+            cursor = self.direct_parent_bare(&p);
+        }
+        depth
+    }
+
+    /// Emit the `__get_<f>` / `__set_<f>` accessor *signatures* (required trait
+    /// methods) for `owner_bare`'s own public/protected fields.
+    fn emit_accessor_trait_sigs(&mut self, owner_bare: &str) {
+        for (name, ty) in self.class_accessor_fields(owner_bare) {
+            self.w.emit_indent();
+            self.w.push_str("fn __get_");
+            self.w.push_str(&name);
+            self.w.push_str("(&self) -> ");
+            self.emit_value_type_as_rust(&ty);
+            self.w.push_str(";\n");
+            self.w.emit_indent();
+            self.w.push_str("fn __set_");
+            self.w.push_str(&name);
+            self.w.push_str("(&self, __v: ");
+            self.emit_value_type_as_rust(&ty);
+            self.w.push_str(");\n");
+        }
+    }
+
+    /// Emit the delegating accessor *bodies* for `owner_bare`'s fields in an
+    /// `impl <Owner>Kind for <impl_class>` block — reading / writing the field
+    /// through `self.0.borrow()[.__parent…]` at the right inheritance depth.
+    fn emit_accessor_impl_methods(&mut self, owner_bare: &str, impl_class_bare: &str) {
+        let depth = self.field_depth_from(impl_class_bare, owner_bare);
+        for (name, ty) in self.class_accessor_fields(owner_bare) {
+            // getter — clone out of the borrow guard before it drops.
+            self.w.emit_indent();
+            self.w.push_str("fn __get_");
+            self.w.push_str(&name);
+            self.w.push_str("(&self) -> ");
+            self.emit_value_type_as_rust(&ty);
+            self.w.push_str(" { self.0.borrow()");
+            for _ in 0..depth {
+                self.w.push_str(".__parent");
+            }
+            self.w.push('.');
+            self.w.push_str(&name);
+            self.w.push_str(".clone() }\n");
+            // setter — scoped `borrow_mut()` write.
+            self.w.emit_indent();
+            self.w.push_str("fn __set_");
+            self.w.push_str(&name);
+            self.w.push_str("(&self, __v: ");
+            self.emit_value_type_as_rust(&ty);
+            self.w.push_str(") { self.0.borrow_mut()");
+            for _ in 0..depth {
+                self.w.push_str(".__parent");
+            }
+            self.w.push('.');
+            self.w.push_str(&name);
+            self.w.push_str(" = __v; }\n");
+        }
+    }
+
     /// Emit a class's marker trait and the transitive marker impls
     /// covering its parent chain.
     ///
@@ -1428,13 +1618,35 @@ impl RustEmitter {
         } else {
             Vec::new()
         };
-        if own_methods.is_empty() {
+        // Runtime-type downcast hooks (`__jux_as_<T>`) live on traits that can
+        // be a `dyn` value — polymorphic-base Kind traits — for every
+        // cast/type-test target reachable from this base.
+        let hook_targets = if c_is_poly {
+            self.hook_targets_for_base(&class_bare)
+        } else {
+            Vec::new()
+        };
+        // Field accessors (`__get_<f>` / `__set_<f>`) for this base's own
+        // public/protected fields — so they're reachable through a base
+        // reference (a `dyn` can't expose struct fields).
+        let accessor_fields = if c_is_poly {
+            self.class_accessor_fields(&class_bare)
+        } else {
+            Vec::new()
+        };
+        if own_methods.is_empty() && hook_targets.is_empty() && accessor_fields.is_empty() {
             self.w.push_str(" {}\n");
         } else {
             self.w.push_str(" {\n");
             self.w.indent_inc();
             for (name, sig) in &own_methods {
                 self.emit_kind_trait_method_sig(name, sig);
+            }
+            for t in &hook_targets {
+                self.emit_downcast_hook_sig(t);
+            }
+            if !accessor_fields.is_empty() {
+                self.emit_accessor_trait_sigs(&class_bare);
             }
             self.w.indent_dec();
             self.w.emit_indent();
@@ -1461,13 +1673,26 @@ impl RustEmitter {
             self.w.push_str("Kind for ");
             self.w.push_str(&class_bare);
             self.emit_generic_params_as_args(&class_decl.generic_params);
-            if own_methods.is_empty() {
+            // Hook overrides this class provides for its OWN Kind trait: the
+            // targets `class_bare` IS-A (so `__jux_as_T` returns `Some(self)`).
+            let self_hooks: Vec<String> = hook_targets
+                .iter()
+                .filter(|t| self.class_is_a(&class_bare, t))
+                .cloned()
+                .collect();
+            if own_methods.is_empty() && self_hooks.is_empty() && accessor_fields.is_empty() {
                 self.w.push_str(" {}\n");
             } else {
                 self.w.push_str(" {\n");
                 self.w.indent_inc();
                 for (name, sig) in &own_methods {
                     self.emit_kind_delegating_method(&class_bare, name, sig);
+                }
+                for t in &self_hooks {
+                    self.emit_downcast_hook_impl(t);
+                }
+                if !accessor_fields.is_empty() {
+                    self.emit_accessor_impl_methods(&class_bare, &class_bare);
                 }
                 self.w.indent_dec();
                 self.w.emit_indent();
@@ -1511,13 +1736,36 @@ impl RustEmitter {
                 } else {
                     Vec::new()
                 };
-                if anc_methods.is_empty() {
+                // Hook overrides this class provides for the ANCESTOR's Kind
+                // trait: ancestor's hook targets that `class_bare` IS-A.
+                let anc_hook_targets = if self.poly_base_classes.contains(&ancestor_bare) {
+                    self.hook_targets_for_base(&ancestor_bare)
+                } else {
+                    Vec::new()
+                };
+                let anc_hooks: Vec<String> = anc_hook_targets
+                    .iter()
+                    .filter(|t| self.class_is_a(&class_bare, t))
+                    .cloned()
+                    .collect();
+                let anc_accessor_fields = if self.poly_base_classes.contains(&ancestor_bare) {
+                    self.class_accessor_fields(&ancestor_bare)
+                } else {
+                    Vec::new()
+                };
+                if anc_methods.is_empty() && anc_hooks.is_empty() && anc_accessor_fields.is_empty() {
                     self.w.push_str(" {}\n");
                 } else {
                     self.w.push_str(" {\n");
                     self.w.indent_inc();
                     for (name, sig) in &anc_methods {
                         self.emit_kind_delegating_method(&class_bare, name, sig);
+                    }
+                    for t in &anc_hooks {
+                        self.emit_downcast_hook_impl(t);
+                    }
+                    if !anc_accessor_fields.is_empty() {
+                        self.emit_accessor_impl_methods(&ancestor_bare, &class_bare);
                     }
                     self.w.indent_dec();
                     self.w.emit_indent();

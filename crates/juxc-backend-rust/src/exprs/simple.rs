@@ -18,6 +18,62 @@ impl RustEmitter {
     /// in Rust). Everything else — unary, postfix, path, literal,
     /// another cast — emits naked.
     pub(crate) fn emit_cast(&mut self, c: &CastExpr) {
+        // **Reference cast between user types** (class / interface): an upcast
+        // coerces into the target trait object, a downcast goes through the
+        // runtime-type `__jux_as_<T>` hook (panicking `ClassCastException` on
+        // failure), and a same-type cast is the identity. Only the numeric
+        // `value as Type` path falls through to the bottom.
+        let target_plain = c.ty.array_shape.is_none()
+            && !c.ty.nullable
+            && c.ty.ptr_depth == 0
+            && c.ty.fn_shape.is_none();
+        let target_bare = c.ty.name.segments.last().map(|s| s.text.clone());
+        let target_is_user = target_plain
+            && target_bare.as_deref().is_some_and(|t| {
+                self.lookup_class_by_bare_or_fqn(t).is_some()
+                    || self.lookup_interface_by_bare_or_fqn(t).is_some()
+            });
+        if target_is_user {
+            let t = target_bare.unwrap();
+            let src_bare = self
+                .expr_types
+                .get(&crate::exprs::expr_span_of(&c.value))
+                .and_then(|ty| match ty {
+                    juxc_tycheck::Ty::User { name, .. } => {
+                        Some(name.rsplit('.').next().unwrap_or(name).to_string())
+                    }
+                    _ => None,
+                });
+            if let Some(s) = src_bare {
+                if s == t {
+                    // Identity cast — emit the value (share-clone a place).
+                    self.emit_expr(&c.value);
+                    if self.wrapper_value_needs_clone(&c.value) {
+                        self.w.push_str(".clone()");
+                    }
+                    return;
+                }
+                if self.class_is_a(&s, &t) {
+                    // Upcast (S IS-A T) — coerce into T's trait-object slot.
+                    self.emit_expr_coerced_to_iface(&c.ty, &c.value);
+                    return;
+                }
+                // Downcast (T IS-A S) or interface sidecast (a common subtype
+                // exists) — runtime-type hook; panic `ClassCastException` on a
+                // miss. tycheck (E0442) already rejected casts with no possible
+                // common instance, so the `__jux_as_<T>` hook exists here.
+                self.w.push('(');
+                self.emit_expr(&c.value);
+                self.w.push_str(".__jux_as_");
+                self.w.push_str(&t);
+                self.w
+                    .push_str("().unwrap_or_else(|| panic!(\"ClassCastException: value is not a ");
+                self.w.push_str(&t);
+                self.w.push_str("\")))");
+                return;
+            }
+        }
+        // Numeric / primitive cast — Rust `value as type`.
         let needs_paren = matches!(&*c.value, Expr::Binary(_) | Expr::Range(_));
         if needs_paren {
             self.w.push('(');
@@ -28,6 +84,53 @@ impl RustEmitter {
         }
         self.w.push_str(" as ");
         self.emit_type_as_rust(&c.ty);
+    }
+
+    /// Lower the **bare boolean** type-test `x => T` (the binder form in an
+    /// `if` condition is handled in `emit_if`). For a value statically typed as
+    /// a trait object (a polymorphic base or interface) the test is the runtime
+    /// hook `x.__jux_as_T().is_some()`. For a concrete value the runtime type
+    /// is known at compile time, so the result is a constant `true`/`false` —
+    /// emitted inside a block that still evaluates the operand for its side
+    /// effects.
+    pub(crate) fn emit_type_test(&mut self, t: &juxc_ast::TypeTestExpr) {
+        let target = t
+            .ty
+            .name
+            .segments
+            .last()
+            .map(|s| s.text.clone())
+            .unwrap_or_default();
+        let src = self
+            .expr_types
+            .get(&crate::exprs::expr_span_of(&t.value))
+            .and_then(|ty| match ty {
+                juxc_tycheck::Ty::User { name, .. } => {
+                    Some(name.rsplit('.').next().unwrap_or(name).to_string())
+                }
+                _ => None,
+            });
+        let src_is_dyn = src.as_deref().is_some_and(|s| {
+            self.poly_base_classes.contains(s) || self.lookup_interface_by_bare_or_fqn(s).is_some()
+        });
+        if src_is_dyn {
+            self.w.push('(');
+            self.emit_expr(&t.value);
+            self.w.push_str(".__jux_as_");
+            self.w.push_str(&target);
+            self.w.push_str("().is_some())");
+        } else {
+            // Concrete (or unknown) source — runtime type is statically known.
+            let result = src
+                .as_deref()
+                .map(|s| self.class_is_a(s, &target))
+                .unwrap_or(false);
+            self.w.push_str("{ let _ = &(");
+            self.emit_expr(&t.value);
+            self.w.push_str("); ");
+            self.w.push_str(if result { "true" } else { "false" });
+            self.w.push_str(" }");
+        }
     }
 
     /// Lower a range expression. Jux and Rust use the same tokens with
