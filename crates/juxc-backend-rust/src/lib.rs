@@ -718,6 +718,15 @@ struct RustEmitter {
     /// that isn't routed simply keeps the legacy bare emission (a feature
     /// gap, never a miscompile of existing code).
     pub(crate) in_value_type_position: bool,
+    /// `true` while emitting the BODY of a `try` block that contains a
+    /// function-level `return`. The body lowers inside a
+    /// `catch_unwind` closure, so a `return` there can't exit the
+    /// enclosing fn — the Return emitter threads the value out as
+    /// `Some(value)` instead, and `emit_try`'s post-`finally` step
+    /// performs the real return (Java ordering: value computed →
+    /// `finally` runs → return completes). Cleared inside lambda and
+    /// anonymous-class bodies, whose `return`s belong to themselves.
+    pub(crate) in_try_closure: bool,
     /// `true` while emitting a class that declares `static { }` blocks
     /// (§S.4.1). Drives the first-use trigger: each constructor body and each
     /// static method body emits a `Self::__static_init();` call at its top so
@@ -2433,6 +2442,7 @@ impl RustEmitter {
             downcast_targets: std::collections::HashSet::new(),
             emitting_wrapper_class: false,
             in_value_type_position: false,
+            in_try_closure: false,
             emitting_class_has_static_init: false,
             emitting_call_callee: false,
         }

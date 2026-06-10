@@ -43,6 +43,46 @@ fn extract_super_args(ctor: &juxc_ast::ConstructorDecl) -> Option<Vec<Expr>> {
 }
 
 impl RustEmitter {
+    /// Emit the parent's CONSTRUCTOR base path for a `__parent:` init —
+    /// the path only, no generic args (`Parent::new(...)` infers them
+    /// from the field's declared type; `Parent<int>::new` would be
+    /// invalid Rust anyway). A cross-package parent gets the
+    /// `crate::a::b::Name` rooting (`extends Exception` →
+    /// `crate::jux::std::exceptions::Exception`), mirroring the bare-
+    /// name resolution `emit_type_as_rust` does for type positions.
+    pub(crate) fn emit_parent_ctor_base_path(&mut self, parent_ty: &juxc_ast::TypeRef) {
+        if parent_ty.name.segments.len() > 1 {
+            let joined = parent_ty
+                .name
+                .segments
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join("::");
+            self.w.push_str("crate::");
+            self.w.push_str(&joined);
+            return;
+        }
+        let Some(seg) = parent_ty.name.segments.first() else { return };
+        let bare = seg.text.as_str();
+        if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
+            if fqn.contains('.') {
+                let cur_pkg = self.symbols.package.join(".");
+                let fqn_pkg = fqn
+                    .rsplit_once('.')
+                    .map(|(p, _)| p.to_string())
+                    .unwrap_or_default();
+                if fqn_pkg != cur_pkg {
+                    self.w.push_str("crate::");
+                    self.w
+                        .push_str(&fqn.split('.').collect::<Vec<_>>().join("::"));
+                    return;
+                }
+            }
+        }
+        self.w.push_str(bare);
+    }
+
     /// Emit a user-declared constructor as `pub fn new(...) -> Self`.
     /// Caller (`emit_class_decl`) has the writer at level 0; the ctor
     /// signature lives at depth 1 (inside the class's `impl` block),
@@ -292,15 +332,15 @@ impl RustEmitter {
             if !parent_is_sealed {
                 self.w.emit_indent();
                 self.w.push_str("__parent: ");
-                // Emit only the parent's bare identifier here, not the
-                // full `<...>` instantiation. The `__parent` field
-                // declaration already pins the parent's generic args, so
-                // Rust infers them at the call site — and
-                // `Parent<int>::new(...)` is invalid Rust syntax anyway
-                // (would need the turbofish form `Parent::<int>::new`).
-                if let Some(seg) = parent_ty.name.segments.first() {
-                    self.w.push_str(&seg.text);
-                }
+                // Emit only the parent's path here, not the full `<...>`
+                // instantiation. The `__parent` field declaration already
+                // pins the parent's generic args, so Rust infers them at
+                // the call site — and `Parent<int>::new(...)` is invalid
+                // Rust syntax anyway (would need the turbofish form
+                // `Parent::<int>::new`). The helper crate-roots a
+                // cross-package parent (`extends Exception` →
+                // `crate::jux::std::exceptions::Exception`).
+                self.emit_parent_ctor_base_path(parent_ty);
                 self.w.push_str("::new(");
                 // If the constructor wrote `super(args);`, lift those args
                 // here. If it didn't, Phase 1 calls `Parent::new()` with
@@ -515,10 +555,10 @@ impl RustEmitter {
             self.w.push_str(" {\n");
             self.w.indent_inc();
             if let Some(parent_ty) = &class_decl.extends {
-                if let Some(seg) = parent_ty.name.segments.first() {
+                {
                     self.w.emit_indent();
                     self.w.push_str("__parent: ");
-                    self.w.push_str(&seg.text);
+                    self.emit_parent_ctor_base_path(parent_ty);
                     self.w.push_str("::new_inner(");
                     // Lift `super(args)` if present in the body.
                     if let Some(super_args) = extract_super_args(ctor) {
@@ -636,9 +676,9 @@ impl RustEmitter {
         // extractor's lifted `super(...)` call; absent → no-arg parent
         // ctor (valid for parameterless parents).
         if let Some(parent_ty) = &class_decl.extends {
-            if let Some(seg) = parent_ty.name.segments.first() {
+            {
                 self.w.push_str(" __parent: ");
-                self.w.push_str(&seg.text);
+                self.emit_parent_ctor_base_path(parent_ty);
                 self.w.push_str("::new_inner(");
                 if let Some(super_args) = &simple.super_args {
                     let super_args = super_args.clone();

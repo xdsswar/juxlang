@@ -909,6 +909,9 @@ impl RustEmitter {
         // `move` grabs the CLONE and the caller's binding stays live —
         // both handles point at the same `RefCell`, matching Java's
         // capture-the-reference semantics.
+        // A `return` inside the lambda belongs to the LAMBDA, not any
+        // enclosing try-closure — clear the threading flag for the body.
+        let prev_try = std::mem::take(&mut self.in_try_closure);
         let captures = self.collect_wrapper_captures(l);
         if !captures.is_empty() {
             self.w.push_str("{ ");
@@ -950,6 +953,7 @@ impl RustEmitter {
         if !self.collect_wrapper_captures(l).is_empty() {
             self.w.push_str(" }");
         }
+        self.in_try_closure = prev_try;
     }
 
     /// Emit `e` inside a parent context with the given precedence,
@@ -1076,9 +1080,10 @@ impl RustEmitter {
             self.w.push_str("impl ");
             self.w.push_str(&struct_name);
             self.w.push_str(" {");
-            // Inherent override methods.
+            // Inherent override methods — `&mut self` so `this.field`
+            // writes through the embedded `__parent` borrow mutably.
             for method in &methods {
-                self.emit_anonymous_method(method);
+                self.emit_anonymous_method(method, true);
             }
             self.w.push_str(" } ");
             // Instance-initializer blocks (Java's "double-brace
@@ -1114,7 +1119,10 @@ impl RustEmitter {
         }
         // Default path — interface target. Empty `impl Trait for
         // __JuxAnonN { ... }` block carrying the user's overrides.
-        self.w.push_str("{ #[derive(Clone)] struct ");
+        // `Debug` join `Clone`: the interface trait carries a
+        // `std::fmt::Debug` supertrait (Stage-1), so the synthetic
+        // implementer must derive it too.
+        self.w.push_str("{ #[derive(Clone, Debug)] struct ");
         self.w.push_str(&struct_name);
         self.w.push_str("; impl ");
         self.w.push_str(crate_prefix);
@@ -1123,7 +1131,9 @@ impl RustEmitter {
         self.w.push_str(&struct_name);
         self.w.push_str(" {");
         for method in &methods {
-            self.emit_anonymous_method(method);
+            // Interface trait methods take `&self` (Stage-1 dispatch
+            // flip) — the impl must match the trait exactly (E0053).
+            self.emit_anonymous_method(method, false);
         }
         self.w.push_str(" }");
         // Instance-initializer blocks run before returning the
@@ -1134,9 +1144,18 @@ impl RustEmitter {
             self.emit_block_contents(ib);
             self.w.push_str(" }");
         }
-        self.w.push(' ');
+        // The instance is born as the interface's trait-object value —
+        // an anonymous implementer has no nameable type at the Jux
+        // level, so EVERY slot it can flow into is `Rc<dyn Trait>`.
+        // Wrapping here (instead of relying on `iface_coercion_to`,
+        // which keys off the symbol table the synthetic struct isn't
+        // in) makes the coercion unconditional.
+        self.w.push_str(" std::rc::Rc::new(");
         self.w.push_str(&struct_name);
-        self.w.push_str(" }");
+        self.w.push_str(") as std::rc::Rc<dyn ");
+        self.w.push_str(crate_prefix);
+        self.w.push_str(&path);
+        self.w.push_str("> }");
     }
 
     /// Emit one method from an anonymous-class body as an
@@ -1145,7 +1164,11 @@ impl RustEmitter {
     /// the interface-target path (where the impl block is for the
     /// trait) and the class-target path (where the impl block
     /// targets the synthetic struct itself).
-    fn emit_anonymous_method(&mut self, method: &juxc_ast::FnDecl) {
+    fn emit_anonymous_method(&mut self, method: &juxc_ast::FnDecl, receiver_mut: bool) {
+        // Method bodies own their `return`s — never thread them into an
+        // enclosing try-closure (anonymous classes can be instantiated
+        // inside a `try` body).
+        let __prev_try = std::mem::take(&mut self.in_try_closure);
         // `async T` on a method in an anonymous-class body lowers to
         // `async fn` on the synthetic struct's impl — same shape as
         // the named-class method emitter (`decls/classes.rs`).
@@ -1155,9 +1178,13 @@ impl RustEmitter {
             self.w.push_str(" fn ");
         }
         self.w.push_str(&method.name.text);
-        // `&mut self` — matches the receiver kind interfaces now
-        // emit so trait-dispatch flows through without recursion.
-        self.w.push_str("(&mut self");
+        // Receiver kind follows the impl target: an interface trait
+        // method is `&self` (the Stage-1 dispatch flip — the impl must
+        // match the trait signature exactly, rustc E0053); a
+        // class-target inherent override keeps `&mut self` so
+        // `this.field` writes through the embedded `__parent`.
+        self.w
+            .push_str(if receiver_mut { "(&mut self" } else { "(&self" });
         for param in &method.params {
             self.w.push_str(", ");
             self.w.push_str(&param.name.text);
@@ -1188,6 +1215,7 @@ impl RustEmitter {
             self.this_alias = prev_alias;
         }
         self.w.push('}');
+        self.in_try_closure = __prev_try;
     }
 }
 

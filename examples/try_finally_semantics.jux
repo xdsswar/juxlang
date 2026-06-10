@@ -1,0 +1,78 @@
+// Java-faithful try/catch/finally semantics.
+//
+// The lowering wraps the try body in `catch_unwind`; the Java
+// guarantees pinned here:
+//   1. `finally` runs on the NORMAL path.
+//   2. A `return` inside the try computes its value, runs `finally`,
+//      THEN completes (the body's returns thread out as `Some(value)`
+//      through the closure; a post-`finally` step performs the real
+//      return).
+//   3. `finally` runs on the CAUGHT path.
+//   4. An UNCAUGHT exception runs `finally` FIRST, then keeps
+//      propagating (the payload parks across the finally and
+//      `resume_unwind`s after).
+//   5. Catch clauses dispatch by runtime subtype, in source order;
+//      a catch body may rethrow to an outer handler.
+//   6. Inherited exception members work through user subclasses
+//      (`e.message` field and Java-style `e.getMessage()`).
+
+public class NotFound extends Exception {
+    public NotFound(String m) { super(m); }
+}
+
+public int viaReturn() {
+    try {
+        return 1;
+    } finally {
+        print("finally-before-return");
+    }
+}
+
+public void propagator() throws Exception {
+    try {
+        throw new Exception("up");
+    } finally {
+        print("finally-before-propagate");
+    }
+}
+
+public void main() {
+    // 1. Normal path.
+    try {
+        print("normal");
+    } finally {
+        print("finally-normal");
+    }
+
+    // 2. Return inside try — finally first, then the value arrives.
+    print(viaReturn());
+
+    // 3. Caught path.
+    try {
+        throw new NotFound("nf");
+    } catch (NotFound e) {
+        print("caught: " + e.getMessage());
+    } finally {
+        print("finally-caught");
+    }
+
+    // 4. Uncaught propagation through an inner finally.
+    try {
+        propagator();
+    } catch (Exception e) {
+        print("outer caught: " + e.message);
+    }
+
+    // 5. Subtype dispatch + rethrow.
+    try {
+        try {
+            throw new NotFound("inner");
+        } catch (NotFound e) {
+            throw new Exception("rethrown");
+        }
+    } catch (Exception e) {
+        print("rethrow: " + e.message);
+    }
+
+    print("done");
+}
