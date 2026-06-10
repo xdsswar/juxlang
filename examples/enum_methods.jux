@@ -1,0 +1,33 @@
+// Enum bodies (§A.2.5) — methods and constants after the `;`
+// terminator. `this` is the enum VALUE; methods typically dispatch
+// with `switch (this)` and lower to inherent `&self` fns on the Rust
+// enum; constants become associated consts.
+
+public enum Shape {
+    Circle(double),
+    Rect(double, double),
+    Point;
+
+    const int SIDES_MAX = 4;
+
+    public double area() {
+        return switch (this) {
+            case Shape.Circle(var r) -> 3.14 * r * r;
+            case Shape.Rect(var w, var h) -> w * h;
+            case Shape.Point -> 0.0;
+        };
+    }
+
+    // Methods can call sibling methods through `this`.
+    public bool isFlat() {
+        return this.area() == 0.0;
+    }
+}
+
+public void main() {
+    print(Shape.Circle(2.0).area());
+    print(Shape.Rect(3.0, 4.0).area());
+    print(Shape.Point.isFlat());
+    print(Shape.Circle(1.0).isFlat());
+    print(Shape.SIDES_MAX);
+}

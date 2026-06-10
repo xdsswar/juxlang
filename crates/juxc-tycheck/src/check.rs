@@ -521,6 +521,26 @@ impl<'a> Checker<'a> {
         for op in &enum_decl.operators {
             self.check_operator(op, &this_ty);
         }
+        // Enum METHODS (§A.2.5) — `this` is the enum value; bodies
+        // check like operator bodies (no inheritance, no fields).
+        for method in &enum_decl.methods {
+            let Some(body) = &method.body else { continue };
+            self.env.push_scope();
+            self.env.declare("this", this_ty.clone());
+            for param in &method.params {
+                let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
+                self.env.declare(&param.name.text, ty);
+            }
+            let saved = self.current_return.take();
+            self.current_return = Some(return_type_to_ty(
+                &method.return_type,
+                &self.env,
+                self.symbols,
+            ));
+            self.check_block(body);
+            self.current_return = saved;
+            self.env.pop_scope();
+        }
         self.env.clear_class();
     }
 
@@ -3022,6 +3042,23 @@ impl<'a> Checker<'a> {
                             Some(&name),
                             &subst_params,
                             &subst_args,
+                        );
+                        return;
+                    }
+                }
+                // Enum methods (§A.2.5) — same no-chain lookup shape
+                // as records.
+                if let Some(enum_sig) = self.symbols.enums.get(&name) {
+                    if let Some(method) = enum_sig.methods.get(method_name) {
+                        let params = method.params.clone();
+                        self.check_call_args(
+                            method_name,
+                            &params,
+                            &c.args,
+                            c.span,
+                            Some(&name),
+                            &[],
+                            &[],
                         );
                         return;
                     }

@@ -555,6 +555,28 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                         );
                     }
                 }
+                // Enum methods (§A.2.5) — declared in the enum body
+                // after the variant list. No inheritance chain; the
+                // enum's own generic params substitute.
+                if let Some(enum_sig) = symbols.enums.get(name) {
+                    if let Some(method) = enum_sig.methods.get(method_name) {
+                        let raw = return_type_in_method(
+                            &method.return_type,
+                            name,
+                            &method.generic_params,
+                            symbols,
+                        );
+                        return method_infer_return(
+                            &raw,
+                            method,
+                            name,
+                            &c.args,
+                            &c.explicit_generic_args,
+                            env,
+                            symbols,
+                        );
+                    }
+                }
             }
             // Stdlib method return-type fallback — covers
             // `String.trim()`, `xs.map(f)`, etc. so the chained

@@ -662,6 +662,10 @@ pub struct EnumSig {
     /// [`RecordSig::operators`]. Most enums won't have any — natural
     /// variant-order semantics cover the common cases.
     pub operators: HashMap<OperatorKind, OperatorSig>,
+    /// Methods declared in the enum body (§A.2.5), keyed by name —
+    /// same shape as [`ClassSig::methods`] so call-site inference
+    /// reuses the method machinery.
+    pub methods: HashMap<String, MethodSig>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -2663,6 +2667,11 @@ fn insert_enum(
             visibility: enum_decl.visibility,
             variants,
             operators,
+            methods: enum_decl
+                .methods
+                .iter()
+                .map(|m| (m.name.text.clone(), method_sig(m, false)))
+                .collect(),
             span: enum_decl.span,
         },
     );

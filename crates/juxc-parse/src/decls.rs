@@ -1481,6 +1481,8 @@ impl<'a> Parser<'a> {
         // cover most cases, but `operator string() = delete;` for
         // security-sensitive enums is a real use case.
         let mut operators = Vec::new();
+        let mut methods: Vec<FnDecl> = Vec::new();
+        let mut constants: Vec<juxc_ast::FieldDecl> = Vec::new();
         if self.eat(&TokenKind::Semicolon) {
             while !self.at(&TokenKind::RBrace) && !self.at_eof() {
                 let member_vis = self.parse_visibility();
@@ -1515,18 +1517,28 @@ impl<'a> Parser<'a> {
                     if let Some(op) = self.parse_operator_decl(member_vis) {
                         operators.push(op);
                     }
+                } else if self.at_kw(Keyword::Const) || self.at_kw(Keyword::Final) {
+                    // Enum CONSTANT (§A.2.5) — `const int MAX = 9;`,
+                    // implicitly static (interface-constant rules).
+                    // `parse_field_decl` consumes the modifier itself
+                    // and records is_final; we force is_static below.
+                    if let Some(mut field) = self.parse_field_decl(Vec::new(), member_vis) {
+                        field.is_static = true;
+                        field.is_final = true;
+                        constants.push(field);
+                    }
                 } else {
-                    let here = self.peek_span();
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::Code::E0200_UnexpectedToken,
-                            "enum bodies only support `operator` declarations after the `;` \
-                             terminator (methods aren't supported yet)",
-                        )
-                        .with_span(here),
-                    );
-                    while !self.at(&TokenKind::RBrace) && !self.at_eof() {
-                        self.advance();
+                    // Enum METHOD (§A.2.5) — same shape as a class
+                    // method; `this` is the enum value (typically
+                    // dispatched with `switch (this)`).
+                    if let Some(m) = self.parse_fn_decl(Vec::new(), member_vis) {
+                        methods.push(m);
+                    } else {
+                        // Recovery: skip to the closing brace so one
+                        // malformed member can't loop forever.
+                        while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+                            self.advance();
+                        }
                     }
                 }
             }
@@ -1541,6 +1553,8 @@ impl<'a> Parser<'a> {
             generic_params,
             variants,
             operators,
+            methods,
+            constants,
             span: start.join(end),
         })
     }

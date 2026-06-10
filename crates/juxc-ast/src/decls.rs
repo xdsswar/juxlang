@@ -273,6 +273,13 @@ pub struct EnumDecl {
     /// most cases) but `= delete;` for `operator string` is the same
     /// security-sensitive use case records have.
     pub operators: Vec<OperatorDecl>,
+    /// Methods declared in the enum body after the `;` terminator
+    /// (§A.2.5). Lowered as inherent methods on the Rust enum
+    /// (`this` ≡ the enum value, dispatched by `switch (this)`).
+    pub methods: Vec<FnDecl>,
+    /// `const` fields in the enum body — implicitly static, like
+    /// interface constants.
+    pub constants: Vec<FieldDecl>,
     /// Span covering the whole `enum Name { … }` declaration.
     pub span: Span,
 }
