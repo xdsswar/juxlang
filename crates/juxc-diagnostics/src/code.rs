@@ -251,6 +251,30 @@ pub enum Code {
     /// `rustc`'s `E0282 type annotations needed`. Write the argument
     /// explicitly (`new Vec<String>()`).
     E0431_GenericInferenceNoSolution,
+    /// E0443 — A malformed **explicit call-site type-argument list** —
+    /// the `<…>` in `id<int>(5)` / `obj.pick<String>(x)`. Fires when:
+    /// the callee isn't generic (no type params to apply the args to),
+    /// the count of explicit args doesn't match the callee's type-param
+    /// count, or an argument names a type that doesn't resolve. Catching
+    /// it here keeps `rustc`'s `E0107` ("wrong number of generic
+    /// arguments") / `E0412` ("cannot find type") from leaking out of
+    /// the emitted crate. Drop the `<…>` to rely on inference, or fix
+    /// the argument list to match the declaration.
+    E0443_ExplicitTypeArgs,
+    /// E0444 — A **bounded wildcard used as a storage type over a
+    /// user-defined generic class** — `Box<? extends Animal>` as a
+    /// field, local-variable, or return slot. Phase 1 lowers such a
+    /// slot by erasing the wildcard arg to a trait object inside the
+    /// container (`Box<Rc<dyn AnimalKind>>`), but Rust generics are
+    /// invariant: a concrete `Box<Dog>` can't flow into that slot
+    /// without a structural conversion the compiler doesn't synthesize
+    /// (Java gets this for free via erasure). Catching it here keeps
+    /// `rustc`'s `E0308` from leaking. Wildcards in **parameter**
+    /// position still work (they lift to a synthetic function generic);
+    /// for storage, use a concrete type argument (`Box<Animal>`) or pass
+    /// the value through a parameter instead. Full covariant-container
+    /// storage is deferred to a later phase.
+    E0444_WildcardStorageUnsupported,
 
     // ---- Async / Generators (E0700–E0799) ----
     /// E0710 — `throw` of a non-`Exception` value. Per the exceptions
@@ -381,6 +405,8 @@ impl Code {
             Code::E0441_TypeTestBinderMisplaced  => "E0441",
             Code::E0440_NotExhaustive            => "E0440",
             Code::E0431_GenericInferenceNoSolution => "E0431",
+            Code::E0443_ExplicitTypeArgs         => "E0443",
+            Code::E0444_WildcardStorageUnsupported => "E0444",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0701_AsyncNotInProfile        => "E0701",
             Code::E0710_ThrowRequiresException   => "E0710",

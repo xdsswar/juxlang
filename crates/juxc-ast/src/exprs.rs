@@ -581,6 +581,12 @@ impl BinaryOp {
 pub struct CallExpr {
     /// The callee expression (typically a path).
     pub callee: Box<Expr>,
+    /// Explicit call-site type arguments — the `<int>` in
+    /// `id<int>(5)` / `obj.pick<String>(x)` (spec: postfix
+    /// `expr '<' type-args '>' '(' args ')'`). Empty when the
+    /// caller relied on inference (`id(5)`). Concrete types only —
+    /// wildcards are meaningless at a call site.
+    pub explicit_generic_args: Vec<TypeRef>,
     /// Positional arguments. Named/`out`/`move` arguments arrive later.
     pub args: Vec<Expr>,
     /// Span covering callee and argument list.

@@ -156,6 +156,60 @@ fn call_with_multiple_args() {
     assert_eq!(s, "x");
 }
 
+/// Explicit call-site type argument: `identity<int>(5)` parses as a
+/// `Call` carrying one `explicit_generic_args` entry — NOT as the
+/// less-than/greater-than comparison chain `(identity < int) > (5)`.
+#[test]
+fn call_with_explicit_type_arg() {
+    let ast = parse_clean("public void main() { identity<int>(5); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else {
+        panic!("expected call expression statement");
+    };
+    let Expr::Path(qn) = &*call.callee else { panic!("expected path callee") };
+    assert_eq!(qn.segments[0].text, "identity");
+    assert_eq!(call.explicit_generic_args.len(), 1);
+    assert_eq!(call.explicit_generic_args[0].name.segments[0].text, "int");
+    assert_eq!(call.args.len(), 1);
+}
+
+/// Multiple explicit type args: `pair<int, String>(1, "a")` — both
+/// type args are captured, in order.
+#[test]
+fn call_with_multiple_explicit_type_args() {
+    let ast = parse_clean(r#"public void main() { pair<int, String>(1, "a"); }"#);
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
+    assert_eq!(call.explicit_generic_args.len(), 2);
+    assert_eq!(call.explicit_generic_args[0].name.segments[0].text, "int");
+    assert_eq!(call.explicit_generic_args[1].name.segments[0].text, "String");
+    assert_eq!(call.args.len(), 2);
+}
+
+/// Explicit type arg on an instance method: `obj.pick<String>(x)`.
+#[test]
+fn method_call_with_explicit_type_arg() {
+    let ast = parse_clean("public void main() { obj.pick<String>(x); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
+    assert!(matches!(&*call.callee, Expr::Field(_)));
+    assert_eq!(call.explicit_generic_args.len(), 1);
+    assert_eq!(call.explicit_generic_args[0].name.segments[0].text, "String");
+}
+
+/// A plain `<` comparison must NOT be swallowed by the turbofish
+/// lookahead: `a < b` carries no call `(` after the `>`, so it stays a
+/// binary comparison and the call's `explicit_generic_args` is empty.
+#[test]
+fn less_than_is_not_explicit_type_args() {
+    let ast = parse_clean("public void main() { f(a < b); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
+    assert!(call.explicit_generic_args.is_empty());
+    assert_eq!(call.args.len(), 1);
+    assert!(matches!(&call.args[0], Expr::Binary(_)));
+}
+
 /// `bool` and `null` literals lex as their own token kinds; the parser
 /// must propagate them through `parse_primary`.
 #[test]

@@ -533,6 +533,59 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Non-consuming lookahead: does the `<` at the cursor begin an
+    /// explicit call-site type-argument list, `expr '<' types '>' '('`?
+    ///
+    /// This is the postfix turbofish form the spec gives for explicit
+    /// generic calls (`id<int>(5)`, `obj.pick<String>(x)`). The `<`
+    /// is otherwise the less-than operator, so we commit to the
+    /// type-arg reading only when the angle list balances cleanly,
+    /// contains nothing that *can't* appear in a type list, and is
+    /// immediately followed by a call `(`. Same ambiguity tradeoff as
+    /// C#: a pathological `a < b > (c)` double-comparison parses as a
+    /// generic call — but that shape is type-nonsensical in practice.
+    /// Conservative on every uncertainty: returns false so `<` flows
+    /// through as a comparison operator.
+    pub(crate) fn looks_like_explicit_type_args(&self) -> bool {
+        let mut i = self.pos;
+        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
+            return false;
+        }
+        i += 1;
+        let mut depth: i32 = 1;
+        // An empty `<>` is not a valid type-arg list — require at least
+        // one type-ish token before the close.
+        let mut saw_inner = false;
+        while depth > 0 {
+            match self.tokens.get(i).map(|t| &t.kind) {
+                Some(TokenKind::Lt) => depth += 1,
+                Some(TokenKind::Gt) => depth -= 1,
+                // A glued `>>` closes two nested lists at once.
+                Some(TokenKind::GtGt) => depth -= 2,
+                // Tokens that legitimately appear inside a concrete
+                // type-arg list: names (`int`, `pkg.Foo`), separators,
+                // array markers, and the nullable `?` suffix.
+                Some(TokenKind::Ident(_))
+                | Some(TokenKind::Dot)
+                | Some(TokenKind::Comma)
+                | Some(TokenKind::LBracket)
+                | Some(TokenKind::RBracket)
+                | Some(TokenKind::Question) => saw_inner = true,
+                // Anything else (literals, operators, `(`, EOF, …) means
+                // this `<` is a comparison, not a type-arg list.
+                _ => return false,
+            }
+            i += 1;
+            if depth < 0 {
+                return false;
+            }
+        }
+        // `i` now sits just past the balanced close; an explicit
+        // type-arg list is only meaningful when a call `(` follows.
+        saw_inner
+            && matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen))
+    }
+
     /// Real-parse path for the C-style cast form once
     /// [`Self::looks_like_c_style_cast`] has confirmed the shape.
     /// Consumes `(`, parses the type, consumes `)`, parses the
@@ -613,7 +666,30 @@ impl<'a> Parser<'a> {
                     let end = self.peek_span();
                     self.expect(&TokenKind::RParen, "')' to close argument list");
                     let span = expr_span(&expr).join(end);
-                    expr = Expr::Call(CallExpr { callee: Box::new(expr), args, span });
+                    expr = Expr::Call(CallExpr {
+                        callee: Box::new(expr),
+                        explicit_generic_args: Vec::new(),
+                        args,
+                        span,
+                    });
+                }
+                // Explicit call-site type arguments: `callee<T, …>(args)`
+                // (spec postfix turbofish). Only taken when the lookahead
+                // confirms a balanced `<…>` immediately followed by `(`,
+                // so the `<` operator path is otherwise untouched.
+                TokenKind::Lt if self.looks_like_explicit_type_args() => {
+                    let explicit_generic_args = self.parse_generic_args_concrete();
+                    self.advance(); // '(' — guaranteed present by the lookahead
+                    let args = self.parse_arg_list();
+                    let end = self.peek_span();
+                    self.expect(&TokenKind::RParen, "')' to close argument list");
+                    let span = expr_span(&expr).join(end);
+                    expr = Expr::Call(CallExpr {
+                        callee: Box::new(expr),
+                        explicit_generic_args,
+                        args,
+                        span,
+                    });
                 }
                 TokenKind::LBracket => {
                     // index: array[index]

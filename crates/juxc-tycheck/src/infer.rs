@@ -41,8 +41,9 @@ use juxc_ast::{
 use crate::env::TypeEnv;
 use crate::symbol_table::{MethodSig, SymbolTable};
 use crate::ty::{
-    compose_extends_substitution, infer_generic_args, lower_member_type, substitute,
-    substitute_via_inference, ty_from_ref, ArrayKind, Primitive, Ty,
+    compose_extends_substitution, explicit_generic_arg_map, infer_generic_args,
+    lower_member_type, substitute, substitute_via_inference, ty_from_ref, ArrayKind,
+    Primitive, Ty,
 };
 
 // ============================================================================
@@ -404,18 +405,30 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     env,
                     symbols,
                 );
-                let param_tys: Vec<&TypeRef> =
-                    fn_sig.params.iter().map(|p| &p.ty).collect();
-                let arg_tys: Vec<Ty> = c
-                    .args
-                    .iter()
-                    .map(|a| infer_expr(a, env, symbols))
-                    .collect();
-                let inferred = infer_generic_args(
-                    &fn_sig.generic_params,
-                    &param_tys,
-                    &arg_tys,
-                );
+                // Explicit call-site type args (`id<int>(5)`) bind the
+                // params directly; otherwise recover them from the
+                // argument types (spec §T.4).
+                let inferred = if !c.explicit_generic_args.is_empty() {
+                    explicit_generic_arg_map(
+                        &fn_sig.generic_params,
+                        &c.explicit_generic_args,
+                        env,
+                        symbols,
+                    )
+                } else {
+                    let param_tys: Vec<&TypeRef> =
+                        fn_sig.params.iter().map(|p| &p.ty).collect();
+                    let arg_tys: Vec<Ty> = c
+                        .args
+                        .iter()
+                        .map(|a| infer_expr(a, env, symbols))
+                        .collect();
+                    infer_generic_args(
+                        &fn_sig.generic_params,
+                        &param_tys,
+                        &arg_tys,
+                    )
+                };
                 return substitute_via_inference(
                     &base,
                     &fn_sig.generic_params,
@@ -481,6 +494,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                         method,
                         declaring_class,
                         &c.args,
+                        &c.explicit_generic_args,
                         env,
                         symbols,
                     );
@@ -504,6 +518,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                             method,
                             name,
                             &c.args,
+                            &c.explicit_generic_args,
                             env,
                             symbols,
                         );
@@ -527,6 +542,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                             method,
                             name,
                             &c.args,
+                            &c.explicit_generic_args,
                             env,
                             symbols,
                         );
@@ -666,15 +682,22 @@ fn method_infer_return(
     method: &MethodSig,
     _declaring_owner: &str,
     args: &[Expr],
+    explicit_generic_args: &[TypeRef],
     env: &TypeEnv,
     symbols: &SymbolTable,
 ) -> Ty {
     if method.generic_params.is_empty() {
         return after_class.clone();
     }
-    let param_tys: Vec<&TypeRef> = method.params.iter().map(|p| &p.ty).collect();
-    let arg_tys: Vec<Ty> = args.iter().map(|a| infer_expr(a, env, symbols)).collect();
-    let inferred = infer_generic_args(&method.generic_params, &param_tys, &arg_tys);
+    // Explicit call-site type args (`obj.pick<String>(x)`) bind the
+    // method's params directly; otherwise infer from the arg types.
+    let inferred = if !explicit_generic_args.is_empty() {
+        explicit_generic_arg_map(&method.generic_params, explicit_generic_args, env, symbols)
+    } else {
+        let param_tys: Vec<&TypeRef> = method.params.iter().map(|p| &p.ty).collect();
+        let arg_tys: Vec<Ty> = args.iter().map(|a| infer_expr(a, env, symbols)).collect();
+        infer_generic_args(&method.generic_params, &param_tys, &arg_tys)
+    };
     substitute_via_inference(after_class, &method.generic_params, &inferred)
 }
 
