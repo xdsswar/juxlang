@@ -190,7 +190,19 @@ impl RustEmitter {
             // tail-position emission is consulting `current_return_type`.
             let saved = self.current_return_type.take();
             self.current_return_type = Some(fn_decl.return_type.clone());
+            // The function's own `int`-typed const-generic params
+            // (`fn cap<int N>()`) — bare value reads of `N` in the body
+            // emit `(N as isize)`. Extends (not replaces) any enclosing
+            // class's set; restored after the body.
+            let prev_const_ints = self.const_int_params.clone();
+            self.const_int_params
+                .extend(crate::collect_const_int_params(&fn_decl.generic_params));
+            let prev_type_params = self.current_type_params.clone();
+            self.current_type_params
+                .extend(crate::collect_type_param_names(&fn_decl.generic_params));
             self.emit_fn_body(body, &fn_decl.return_type);
+            self.const_int_params = prev_const_ints;
+            self.current_type_params = prev_type_params;
             self.current_return_type = saved;
         }
         self.w.indent_dec();

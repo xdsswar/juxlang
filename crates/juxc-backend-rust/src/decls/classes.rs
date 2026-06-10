@@ -129,6 +129,14 @@ impl RustEmitter {
         self.enclosing_class = Some(class_decl.name.text.clone());
         let prev_has_static_init = self.emitting_class_has_static_init;
         self.emitting_class_has_static_init = !class_decl.static_init_blocks.is_empty();
+        // `int`-typed const-generic params (`<int N>`) are visible to
+        // every body in the class; bare value reads of `N` emit
+        // `(N as isize)` (see `const_int_params`). Restored at the end
+        // alongside `enclosing_class`.
+        let prev_const_ints = std::mem::take(&mut self.const_int_params);
+        self.const_int_params = crate::collect_const_int_params(&class_decl.generic_params);
+        let prev_type_params = std::mem::take(&mut self.current_type_params);
+        self.current_type_params = crate::collect_type_param_names(&class_decl.generic_params);
         // **Wrapper-shape branch (Phase A, §CR.4.1 / §CR.5.1 / §CR.6).**
         // Classes in `wrapper_classes` lower to the shared-mutation,
         // interior-mutable wrapper shape so Jux gets Java reference
@@ -145,6 +153,8 @@ impl RustEmitter {
             self.emit_wrapper_class_decl(class_decl);
             self.enclosing_class = prev_enclosing;
             self.emitting_class_has_static_init = prev_has_static_init;
+            self.const_int_params = prev_const_ints;
+            self.current_type_params = prev_type_params;
             return;
         }
         // Derive Clone unconditionally so the `T: Clone` bound used on
@@ -317,9 +327,11 @@ impl RustEmitter {
         // `format!`/`println!` type-checks. Only the formatted params
         // pick up the bound; purely-stored params keep `Clone + Debug`.
         let displayed = self.class_displayed_generic_params(class_decl);
+        let defaulted = Self::class_default_bound_params(class_decl);
         self.emit_generic_params_with_clone_bound_plus_display(
             &class_decl.generic_params,
             &displayed,
+            &defaulted,
         );
         self.w.push(' ');
         self.w.push_str(&class_decl.name.text);
@@ -520,6 +532,8 @@ impl RustEmitter {
         // bare-static-name rewrite this powers.
         self.enclosing_class = prev_enclosing;
         self.emitting_class_has_static_init = prev_has_static_init;
+        self.const_int_params = prev_const_ints;
+        self.current_type_params = prev_type_params;
     }
 
     /// Emit a **simple** class in the shared-mutation wrapper shape
@@ -648,9 +662,11 @@ impl RustEmitter {
         // field's instantiated type to be `Display`. Purely-stored
         // params keep only `Clone + Debug`.
         let displayed = self.class_displayed_generic_params(class_decl);
+        let defaulted = Self::class_default_bound_params(class_decl);
         self.emit_generic_params_with_clone_bound_plus_display(
             &class_decl.generic_params,
             &displayed,
+            &defaulted,
         );
         self.w.push(' ');
         self.w.push_str(name);
@@ -1032,6 +1048,44 @@ impl RustEmitter {
     /// (`this.field`, or a bare `field` reference inside the body).
     /// Anything we can't resolve simply isn't added — the param keeps
     /// only its `Clone + Debug` bound, matching the prior behavior.
+    /// Type-param names that need a `+ Default` bound on this class's
+    /// inherent impl — every param used as the **element of a fixed
+    /// array field** (`T[N] storage;`). Constructing such a field
+    /// (`new T[N]`) lowers to `std::array::from_fn(|_| Default::
+    /// default())` (see `emit_new_array`), which requires `T: Default`.
+    /// The struct declaration itself doesn't need the bound (it merely
+    /// stores `[T; N]`), so only the impl-header emission consults
+    /// this. A `new T[k]` *local* in a class without such a field is
+    /// outside this scan — exotic enough to leave for the const-eval
+    /// phase.
+    pub(crate) fn class_default_bound_params(
+        class_decl: &juxc_ast::ClassDecl,
+    ) -> HashSet<String> {
+        let mut defaulted: HashSet<String> = HashSet::new();
+        if class_decl.generic_params.is_empty() {
+            return defaulted;
+        }
+        let param_names: HashSet<&str> = class_decl
+            .generic_params
+            .iter()
+            .filter(|p| !p.is_const())
+            .map(|p| p.name.text.as_str())
+            .collect();
+        for field in &class_decl.fields {
+            if let Some(ty) = &field.ty {
+                if matches!(ty.array_shape, Some(juxc_ast::ArrayShape::Fixed(_)))
+                    && ty.generic_args.is_empty()
+                    && ty.fn_shape.is_none()
+                    && ty.name.segments.len() == 1
+                    && param_names.contains(ty.name.segments[0].text.as_str())
+                {
+                    defaulted.insert(ty.name.segments[0].text.clone());
+                }
+            }
+        }
+        defaulted
+    }
+
     pub(crate) fn class_displayed_generic_params(
         &self,
         class_decl: &juxc_ast::ClassDecl,
@@ -2543,6 +2597,14 @@ impl RustEmitter {
             self.current_fn_params = method.params.iter().map(|p| p.name.text.clone()).collect();
             let saved = self.current_return_type.take();
             self.current_return_type = Some(method.return_type.clone());
+            // Method-level generic params extend the class-level sets
+            // for this body (`T pick<int K>()` / `<U> U map(…)`).
+            let prev_const_ints = self.const_int_params.clone();
+            self.const_int_params
+                .extend(crate::collect_const_int_params(&method.generic_params));
+            let prev_type_params = self.current_type_params.clone();
+            self.current_type_params
+                .extend(crate::collect_type_param_names(&method.generic_params));
             // First-use trigger for `static { }` blocks (§S.4.1): a static
             // method call is an observable use. (Instance methods aren't —
             // constructing the receiver already triggered init.)
@@ -2550,6 +2612,8 @@ impl RustEmitter {
                 self.emit_static_init_trigger();
             }
             self.emit_fn_body_at(body, &method.return_type);
+            self.const_int_params = prev_const_ints;
+            self.current_type_params = prev_type_params;
             self.current_return_type = saved;
             self.current_fn_params.clear();
             self.this_alias = None;

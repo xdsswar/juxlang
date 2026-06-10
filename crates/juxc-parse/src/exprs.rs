@@ -564,8 +564,11 @@ impl<'a> Parser<'a> {
                 Some(TokenKind::GtGt) => depth -= 2,
                 // Tokens that legitimately appear inside a concrete
                 // type-arg list: names (`int`, `pkg.Foo`), separators,
-                // array markers, and the nullable `?` suffix.
+                // array markers, the nullable `?` suffix, and const-
+                // generic literal args (`cap<8>()`, `flag<true>()`).
                 Some(TokenKind::Ident(_))
+                | Some(TokenKind::Int(_))
+                | Some(TokenKind::Bool(_))
                 | Some(TokenKind::Dot)
                 | Some(TokenKind::Comma)
                 | Some(TokenKind::LBracket)

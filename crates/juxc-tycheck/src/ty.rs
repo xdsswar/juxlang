@@ -738,6 +738,7 @@ mod tests {
                 span: Span::DUMMY,
             },
             bounds: Vec::new(),
+            const_ty: None,
             span: Span::DUMMY,
         }
     }

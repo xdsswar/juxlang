@@ -619,8 +619,25 @@ pub struct TypeParam {
     /// uses `&` between multiple bounds; we use the same shape here.
     /// Empty for unbounded parameters.
     pub bounds: Vec<TypeRef>,
+    /// `Some(value_type)` makes this a **const generic** parameter —
+    /// the `<int N>` in `class RingBuffer<T, int N>` per grammar
+    /// §A.2.6 (`generic-param = 'int' identifier | type identifier`)
+    /// and type-system §T.11.3. The `TypeRef` is the *value* type of
+    /// the parameter (`int`, `bool`, …), and the argument at a use
+    /// site is a compile-time-constant value (`new RingBuffer<float,
+    /// 256>()`), not a type. `None` for ordinary type parameters.
+    /// Const params never carry `bounds`.
+    pub const_ty: Option<TypeRef>,
     /// Span of the parameter declaration.
     pub span: Span,
+}
+
+impl TypeParam {
+    /// True iff this is a const-generic parameter (`<int N>`) rather
+    /// than an ordinary type parameter (`<T>`).
+    pub fn is_const(&self) -> bool {
+        self.const_ty.is_some()
+    }
 }
 
 /// A class field per §7.3 + grammar §A.2.4 `field-decl`.

@@ -637,7 +637,7 @@ JUX-LANG-V1 §13.1 specifies "Lowering to Rust source code." This section gives 
 | Sealed interface `I permits A, B`           | `enum I_Sealed { A(A), B(B) }` plus the trait              |
 | Generic `<T extends Trait>`                 | `<T: Trait>`                                               |
 | Bounded generic `<T extends A & B>`         | `<T: A + B>`                                               |
-| Const generic `<int N>`                     | `<const N: i32>`                                           |
+| Const generic `<int N>`                     | `<const N: usize>` (array sizes `[T; N]` require exactly `usize` on stable Rust; an int-value read of `N` casts back with `N as isize`) |
 | `throws E`                                  | `Result<T, E>` return type                                 |
 | `try { } catch (E e) { }`                   | `match expr { Ok(v) => v, Err(e) => { ... } }`             |
 | `?` propagation                             | Rust's `?`                                                 |

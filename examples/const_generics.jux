@@ -1,0 +1,78 @@
+// Const generics — `<int N>` / `<bool B>` value parameters
+// (grammar §A.2.6, type-system §T.11.3), Phase-1 core subset.
+//
+// A const-generic parameter's argument is a compile-time-constant
+// VALUE, not a type: `new Ring<float, 256>()` instantiates `N = 256`.
+// Lowering maps `<int N>` to Rust `const N: usize` — `usize`, not the
+// spec table's earlier `i32`, because a fixed array size `[T; N]`
+// must be exactly `usize` on stable Rust. Where `N` is read as an int
+// *value* (`return N;`), the backend casts back (`N as isize`).
+//
+// In the core subset:
+//   - declare `<int N>` / `<bool B>` on classes and functions,
+//   - use `N` bare as a fixed array size (`T[N]` → Rust `[T; N]`),
+//   - use `N` as an int value in expressions,
+//   - instantiate with literals (`new Ring<float, 256>()`, `Buf<4>`).
+//
+// Deferred with a clean E0445 (never a rustc leak): const-generic
+// arithmetic (`byte[N + 1]` — needs the const-eval interpreter, spec
+// phase 16), non-literal arguments (`new Buf<x>()`), and const params
+// of other value types (`<long N>`).
+
+// The spec's headline shape: a fixed-capacity container whose storage
+// lives entirely on the stack — `T[N]` lowers to Rust `[T; N]`, no
+// heap allocation.
+public class Ring<T, int N> {
+    public T[N] storage;
+    public int head;
+
+    public Ring(T fill) {
+        this.storage = new T[N];
+        this.head = 0;
+    }
+
+    public int capacity() {
+        return N;
+    }
+}
+
+// A const param alongside ordinary code — `N` reads as an int value.
+public class Buf<int N> {
+    public int[N] data;
+
+    public Buf() {
+        this.data = new int[N];
+    }
+
+    public int cap() { return N; }
+    public int doubled() { return N * 2; }
+}
+
+// A bool const parameter.
+public class Flag<bool B> {
+    public Flag() { }
+    public bool enabled() { return B; }
+}
+
+// A const-generic free function, called with the explicit turbofish.
+public int scaled<int N>() {
+    return N * 10;
+}
+
+public void main() {
+    var r = new Ring<int, 8>(0);
+    print(r.capacity());
+
+    var b = new Buf<4>();
+    print(b.cap());
+    print(b.doubled());
+
+    // Type-position use of a const arg.
+    Buf<4> b2 = new Buf<4>();
+    print(b2.cap());
+
+    var f = new Flag<true>();
+    print(f.enabled());
+
+    print(scaled<3>());
+}

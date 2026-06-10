@@ -667,6 +667,30 @@ struct RustEmitter {
     /// upcast wraps instead of slicing. Empty until the Stage-2 emit paths
     /// consult it; populated alongside [`Self::wrapper_classes`].
     pub(crate) poly_base_classes: std::collections::HashSet<String>,
+    /// Names of **`int`-typed const-generic parameters** in scope —
+    /// the `N` of an enclosing `class RingBuffer<T, int N>` or
+    /// `fn cap<int N>()`. A bare read of such a name in *value*
+    /// position emits `(N as isize)`: the param declares as Rust
+    /// `const N: usize` (fixed array sizes require exactly `usize` on
+    /// stable), while Jux `int` is `isize`. Array-size position
+    /// (`[T; N]`) wants the raw `usize` — suppressed there via
+    /// [`Self::in_array_size_position`]. `bool` const params need no
+    /// cast and aren't tracked. Set around class / function body
+    /// emission; cleared after.
+    pub(crate) const_int_params: std::collections::HashSet<String>,
+    /// Names of the **ordinary type parameters** in scope (the `T` of
+    /// an enclosing `class Ring<T, int N>` / `fn id<T>(…)`). Lets the
+    /// array-creation emitter recognize a generic element (`new T[N]`)
+    /// and lower it via `std::array::from_fn(|_| Default::default())`
+    /// — the `[Default::default(); N]` repeat form would additionally
+    /// require `T: Copy`, which Jux generics don't carry. Set/restored
+    /// alongside [`Self::const_int_params`].
+    pub(crate) current_type_params: std::collections::HashSet<String>,
+    /// True while emitting the size expression of a fixed array
+    /// (`[T; «here»]`, types.rs `ArrayShape::Fixed`). Suppresses the
+    /// `(N as isize)` value-cast for const params — the size slot
+    /// needs the raw `usize`.
+    pub(crate) in_array_size_position: bool,
     /// Bare names used as **cast / type-test targets** (`(T) e`, `e => T`) in
     /// the program (see [`compute_downcast_targets`]). For each such target the
     /// relevant dyn traits emit a `__jux_as_<T>` runtime-type downcast hook;
@@ -1480,6 +1504,42 @@ fn compute_interface_forced_classes(
     forced
 }
 
+/// Collect the names of the **`int`-typed const-generic parameters** in a
+/// generic-params list — the `N` of `<T, int N>`. These feed
+/// [`RustEmitter::const_int_params`] so bare value reads of `N` emit
+/// `(N as isize)` (the param declares as Rust `const N: usize`; see
+/// `emit_const_generic_param_decl`). `bool` const params need no cast and
+/// are excluded.
+pub(crate) fn collect_const_int_params(
+    params: &[juxc_ast::TypeParam],
+) -> HashSet<String> {
+    params
+        .iter()
+        .filter(|p| {
+            p.const_ty
+                .as_ref()
+                .and_then(|t| t.name.segments.last())
+                .map(|s| s.text != "bool")
+                .unwrap_or(false)
+        })
+        .map(|p| p.name.text.clone())
+        .collect()
+}
+
+/// Collect the names of the **ordinary type parameters** in a
+/// generic-params list — everything that is NOT a const param. Feeds
+/// [`RustEmitter::current_type_params`] (generic-element array
+/// recognition in `emit_new_array`).
+pub(crate) fn collect_type_param_names(
+    params: &[juxc_ast::TypeParam],
+) -> HashSet<String> {
+    params
+        .iter()
+        .filter(|p| !p.is_const())
+        .map(|p| p.name.text.clone())
+        .collect()
+}
+
 /// Bare names of every **polymorphic base class** — a class that is extended
 /// by ≥1 other class and is itself non-sealed, non-final, and non-generic.
 ///
@@ -2127,6 +2187,9 @@ impl RustEmitter {
             class_asts: std::collections::HashMap::new(),
             wrapper_classes: std::collections::HashSet::new(),
             poly_base_classes: std::collections::HashSet::new(),
+            const_int_params: std::collections::HashSet::new(),
+            current_type_params: std::collections::HashSet::new(),
+            in_array_size_position: false,
             downcast_targets: std::collections::HashSet::new(),
             emitting_wrapper_class: false,
             in_value_type_position: false,

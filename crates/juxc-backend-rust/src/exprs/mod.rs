@@ -109,6 +109,26 @@ impl RustEmitter {
                 // access would call the field instead of the method.
                 // Bare reference to an enclosing-class field. NOT a call callee
                 // (a bare `foo()` method call is resolved by `emit_call`).
+                // **Const-generic param read in value position** — `N` of an
+                // enclosing `<int N>` declares as Rust `const N: usize`, but a
+                // Jux `int` value is `isize`, so a bare read emits
+                // `(N as isize)`. Array-size position (`[T; N]`) wants the raw
+                // `usize` and suppresses the cast; a local/param named `N`
+                // shadows the generic and wins.
+                if qn.segments.len() == 1
+                    && !self.in_array_size_position
+                    && self.const_int_params.contains(&qn.segments[0].text)
+                {
+                    let name = &qn.segments[0].text;
+                    let shadowed = self.current_fn_params.contains(name)
+                        || self.local_types.iter().any(|s| s.contains_key(name));
+                    if !shadowed {
+                        self.w.push('(');
+                        self.w.push_str(name);
+                        self.w.push_str(" as isize)");
+                        return;
+                    }
+                }
                 if qn.segments.len() == 1 && !self.emitting_call_callee {
                     if let Some(class_name) = self.enclosing_class.clone() {
                         let name = qn.segments[0].text.clone();

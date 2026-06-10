@@ -46,10 +46,38 @@ impl RustEmitter {
     /// - `new char[8]`     → `['\\0'; 8]`
     /// - `new MyType[N]`   → `[Default::default(); N]` (works iff MyType: Default + Copy)
     pub(crate) fn emit_new_array(&mut self, n: &NewArrayExpr) {
+        // **Generic element** (`new T[N]` where `T` is a type param in
+        // scope): the `[VALUE; N]` repeat form would require `T: Copy`
+        // on top of `Default` — Jux generics carry `Clone`, not `Copy`.
+        // `std::array::from_fn` evaluates the closure per element, so
+        // only `T: Default` is needed (added to the class's bound by
+        // `class_default_bound_params` when a `T[N]` field exists).
+        // The array's size/type are inferred from the assignment
+        // target, so `from_fn` needs no explicit length.
+        let elem_is_type_param = n.element_type.array_shape.is_none()
+            && !n.element_type.nullable
+            && n.element_type.generic_args.is_empty()
+            && n.element_type.fn_shape.is_none()
+            && n.element_type.name.segments.len() == 1
+            && self
+                .current_type_params
+                .contains(n.element_type.name.segments[0].text.as_str());
+        if elem_is_type_param {
+            self.w
+                .push_str("std::array::from_fn(|_| Default::default())");
+            return;
+        }
         self.w.push('[');
         self.emit_default_value_for(&n.element_type);
         self.w.push_str("; ");
+        // The repeat-length slot is a const `usize` position — a
+        // const-generic param (`new int[N]`) must stay raw `N`, not
+        // the `(N as isize)` value-cast (rustc: "generic parameters
+        // may not be used in const operations").
+        let prev = self.in_array_size_position;
+        self.in_array_size_position = true;
         self.emit_expr(&n.size);
+        self.in_array_size_position = prev;
         self.w.push(']');
     }
 
