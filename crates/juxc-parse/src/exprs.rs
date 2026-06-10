@@ -857,6 +857,32 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Some(Expr::Literal(Literal::Bool(b)))
             }
+            TokenKind::Char(raw) => {
+                // Character literal `'A'` / `'\n'` / `'\u{263A}'`
+                // (§A.1.5). The lexer hands over the raw bytes between
+                // the quotes; escapes decode through the same machinery
+                // strings use, then we require exactly ONE code point.
+                self.advance();
+                let (decoded, errors) = process_string_escapes(&raw);
+                for msg in errors {
+                    self.diagnostics.push(
+                        Diagnostic::error(code::Code::E0200_UnexpectedToken, msg)
+                            .with_span(span),
+                    );
+                }
+                let mut chars = decoded.chars();
+                let ch = chars.next().unwrap_or('\0');
+                if chars.next().is_some() {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "character literal must contain exactly one character",
+                        )
+                        .with_span(span),
+                    );
+                }
+                Some(Expr::Literal(Literal::Char(ch)))
+            }
             TokenKind::Null => {
                 self.advance();
                 Some(Expr::Literal(Literal::Null))

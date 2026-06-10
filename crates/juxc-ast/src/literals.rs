@@ -17,6 +17,10 @@ pub enum Literal {
     String(String),
     /// `true` / `false`.
     Bool(bool),
+    /// Character literal — `'A'`, `'\n'`, `'\u{263A}'` (§A.1.5). The
+    /// escape is decoded at parse time (single code point), so the
+    /// backend re-emits a Rust `char` literal directly.
+    Char(char),
     /// `null`.
     Null,
 }

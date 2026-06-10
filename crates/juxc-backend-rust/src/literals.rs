@@ -52,6 +52,22 @@ impl RustEmitter {
                 }
             }
             Literal::Bool(b) => self.w.push_str(if *b { "true" } else { "false" }),
+            // Rust char literal — re-escape control/quote characters
+            // (the parser already decoded the Jux escape into the raw
+            // `char`) so the emitted source stays valid Rust.
+            Literal::Char(c) => {
+                self.w.push('\'');
+                match c {
+                    '\n' => self.w.push_str("\\n"),
+                    '\r' => self.w.push_str("\\r"),
+                    '\t' => self.w.push_str("\\t"),
+                    '\\' => self.w.push_str("\\\\"),
+                    '\'' => self.w.push_str("\\'"),
+                    '\0' => self.w.push_str("\\0"),
+                    other => self.w.push(*other),
+                }
+                self.w.push('\'');
+            }
             // `null` is the empty value of an `Option<T>`. We always
             // emit `None` and let Rust's type inference fill in the
             // `T`; var decls / returns / fn args carry an explicit

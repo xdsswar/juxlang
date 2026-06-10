@@ -362,6 +362,33 @@ impl RustEmitter {
                 // `new Maybe<String>("hello")` un-wrapped when
                 // `Maybe`'s component is `String?`.
                 let bare_class = n.class_name.segments.last().map(|s| s.text.as_str());
+                // A param is nullable when its DECLARED type is `T?` — or
+                // when it's a bare generic param (`T v`) whose explicit
+                // type argument at this `new` site is nullable
+                // (`new Box<int?>(7)` must wrap the 7 in `Some`). The
+                // substitution check lines class generic params up with
+                // `n.generic_args` positionally.
+                let param_nullable = |param_ty: &juxc_ast::TypeRef,
+                                      generic_params: &[juxc_ast::TypeParam]|
+                 -> bool {
+                    if param_ty.nullable {
+                        return true;
+                    }
+                    if param_ty.array_shape.is_some()
+                        || param_ty.fn_shape.is_some()
+                        || !param_ty.generic_args.is_empty()
+                        || param_ty.name.segments.len() != 1
+                    {
+                        return false;
+                    }
+                    let bare = param_ty.name.segments[0].text.as_str();
+                    generic_params
+                        .iter()
+                        .position(|gp| gp.name.text == bare)
+                        .and_then(|i| n.generic_args.get(i))
+                        .map(|arg| arg.nullable)
+                        .unwrap_or(false)
+                };
                 let ctor_nullable_flags: Vec<bool> = bare_class
                     .and_then(|name| {
                         // FQN-tolerant lookup: classes/records may be
@@ -373,9 +400,17 @@ impl RustEmitter {
                         // auto-`Some()` wrapping works the same as
                         // single-file emission.
                         self.lookup_class_by_bare_or_fqn(name)
-                            .and_then(|c| c.constructors.first())
-                            .map(|ctor| {
-                                ctor.params.iter().map(|p| p.ty.nullable).collect()
+                            .map(|c| {
+                                let gp = c.generic_params.clone();
+                                c.constructors
+                                    .first()
+                                    .map(|ctor| {
+                                        ctor.params
+                                            .iter()
+                                            .map(|p| param_nullable(&p.ty, &gp))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default()
                             })
                             .or_else(|| {
                                 self.symbols
@@ -386,7 +421,11 @@ impl RustEmitter {
                                             || k.rsplit('.').next().unwrap_or(k.as_str()) == name
                                     })
                                     .map(|(_, r)| {
-                                        r.components.iter().map(|c| c.ty.nullable).collect()
+                                        let gp = r.generic_params.clone();
+                                        r.components
+                                            .iter()
+                                            .map(|c| param_nullable(&c.ty, &gp))
+                                            .collect()
                                     })
                             })
                     })
