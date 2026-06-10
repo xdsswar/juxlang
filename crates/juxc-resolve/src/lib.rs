@@ -539,6 +539,21 @@ impl Resolver {
             self.visit_block(body);
             self.pop_scope();
         }
+        // Enum METHOD bodies (§A.2.5) — `this` + params in scope; the
+        // enum's own constants are reachable as bare names too.
+        for method in &enum_decl.methods {
+            let Some(body) = &method.body else { continue };
+            self.push_scope();
+            self.declare("this");
+            for c in &enum_decl.constants {
+                self.declare(&c.name.text);
+            }
+            for param in &method.params {
+                self.declare(&param.name.text);
+            }
+            self.visit_block(body);
+            self.pop_scope();
+        }
     }
 
     /// Walk a class declaration's members, opening a fresh scope per

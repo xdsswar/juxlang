@@ -76,7 +76,8 @@ impl RustEmitter {
         // block entirely (matches the historical no-impl-block output
         // for plain enums).
         let has_inherent_ops = enum_decl.operators.iter().any(|o| !o.is_deleted);
-        if has_inherent_ops {
+        let has_members = !enum_decl.methods.is_empty() || !enum_decl.constants.is_empty();
+        if has_inherent_ops || has_members {
             self.w.emit_indent();
             self.w.push_str("impl");
             self.emit_generic_params(&enum_decl.generic_params);
@@ -86,6 +87,18 @@ impl RustEmitter {
             self.w.push_str(" {\n");
             for op in &enum_decl.operators {
                 self.emit_operator_as_method(op);
+            }
+            // Enum CONSTANTS (§A.2.5) — associated consts (same
+            // `pub const` shape static-final class fields use).
+            for c in &enum_decl.constants {
+                self.emit_static_field(c);
+            }
+            // Enum METHODS (§A.2.5) — `this` is the enum VALUE
+            // (`&self` receiver); bodies typically dispatch via
+            // `switch (this)`. Enums are plain Rust value enums, so
+            // none of the wrapper machinery threads here.
+            for method in &enum_decl.methods {
+                self.emit_enum_method(method);
             }
             self.w.line("}");
             self.w.newline();
@@ -257,4 +270,74 @@ fn enum_derive_attribute(enum_decl: &juxc_ast::EnumDecl) -> String {
         derives.push("Copy");
     }
     format!("#[derive({})]", derives.join(", "))
+}
+
+impl crate::RustEmitter {
+    /// Emit one ENUM METHOD (§A.2.5) as an inherent `fn` on the Rust
+    /// enum. Mirrors `emit_operator_as_method`'s receiver/body
+    /// discipline: `this` aliases `self`, the receiver is `&self`
+    /// (`&mut self` when the body writes through `this` — rare on a
+    /// value enum, but `this = …`-style reassignment isn't a thing, so
+    /// in practice this stays `&self`), static methods drop the
+    /// receiver entirely.
+    pub(crate) fn emit_enum_method(&mut self, method: &juxc_ast::FnDecl) {
+        use juxc_ast::ReturnType;
+        let body = method.body.as_ref();
+        let is_static = method
+            .modifiers
+            .iter()
+            .any(|m| matches!(m, juxc_ast::FnModifier::Static));
+
+        self.w.indent_inc();
+        self.w.emit_indent();
+        if matches!(method.return_type, ReturnType::AsyncType(_)) {
+            self.w.push_str("pub async fn ");
+        } else {
+            self.w.push_str("pub fn ");
+        }
+        self.w.push_str(&method.name.text);
+        self.w.push('(');
+        if !is_static {
+            self.w.push_str("&self");
+        }
+        for (i, param) in method.params.iter().enumerate() {
+            if i > 0 || !is_static {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(&param.name.text);
+            self.w.push_str(": ");
+            self.emit_value_type_as_rust(&param.ty);
+        }
+        self.w.push(')');
+        match &method.return_type {
+            ReturnType::Void => {}
+            ReturnType::Type(t) | ReturnType::AsyncType(t) => {
+                self.w.push_str(" -> ");
+                self.emit_return_type_as_rust(t);
+            }
+        }
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        if let Some(body) = body {
+            let prev_alias = self.this_alias.take();
+            if !is_static {
+                self.this_alias = Some("self".to_string());
+            }
+            let mut muts = std::collections::HashSet::new();
+            crate::analysis::collect_mutated_names(body, &mut muts, &self.user_mut_methods);
+            self.mutated_in_fn = muts;
+            self.current_fn_params =
+                method.params.iter().map(|p| p.name.text.clone()).collect();
+            let saved = self.current_return_type.take();
+            self.current_return_type = Some(method.return_type.clone());
+            self.emit_fn_body_at(body, &method.return_type);
+            self.current_return_type = saved;
+            self.current_fn_params.clear();
+            self.this_alias = prev_alias;
+        }
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+        self.w.indent_dec();
+    }
 }
