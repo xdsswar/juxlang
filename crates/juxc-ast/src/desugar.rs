@@ -316,6 +316,10 @@ fn rewrite_block_implicit_this(
                 rewrite_implicit_this(&mut s.condition, members, locals);
                 rewrite_block_implicit_this(&mut s.body, members, &mut locals.clone());
             }
+            Stmt::DoWhile(s) => {
+                rewrite_block_implicit_this(&mut s.body, members, &mut locals.clone());
+                rewrite_implicit_this(&mut s.condition, members, locals);
+            }
             Stmt::ForEach(s) => {
                 rewrite_implicit_this(&mut s.iter, members, locals);
                 let mut inner = locals.clone();
@@ -520,6 +524,10 @@ fn rewrite_stmt_property_writes(
         Stmt::While(s) => {
             rewrite_expr_property_access(&mut s.condition, auto_props);
             rewrite_block_property_writes(&mut s.body, auto_props);
+        }
+        Stmt::DoWhile(s) => {
+            rewrite_block_property_writes(&mut s.body, auto_props);
+            rewrite_expr_property_access(&mut s.condition, auto_props);
         }
         Stmt::ForEach(s) => {
             rewrite_expr_property_access(&mut s.iter, auto_props);

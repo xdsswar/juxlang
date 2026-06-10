@@ -1362,7 +1362,8 @@ pub(crate) fn binary_prec(op: BinaryOp) -> u8 {
     match op {
         BinaryOp::Or     => 4,
         BinaryOp::And    => 5,
-        BinaryOp::Eq | BinaryOp::NotEq => 6,
+        // Reference identity (`===`/`!==`) shares the equality level.
+        BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::RefEq | BinaryOp::RefNeq => 6,
         BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => 7,
         BinaryOp::BitOr  => 8,
         BinaryOp::BitXor => 9,
@@ -1495,6 +1496,10 @@ fn collect_bare_names_block(b: &juxc_ast::Block, sink: &mut dyn FnMut(&str)) {
             Stmt::While(w) => {
                 collect_bare_names_expr(&w.condition, sink);
                 collect_bare_names_block(&w.body, sink);
+            }
+            Stmt::DoWhile(d) => {
+                collect_bare_names_block(&d.body, sink);
+                collect_bare_names_expr(&d.condition, sink);
             }
             Stmt::ForEach(f) => {
                 collect_bare_names_expr(&f.iter, sink);

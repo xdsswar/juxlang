@@ -63,7 +63,7 @@ pub use exprs::{
 pub use literals::{FloatKind, FloatLit, IntKind, IntLit, IntRadix, Literal};
 pub use patterns::{Pattern, SwitchArm, SwitchBody, SwitchExpr};
 pub use stmts::{
-    AssignStmt, Block, CatchClause, ElseBranch, ForCStmt, ForEachStmt, IfStmt, Stmt,
-    TryStmt, VarDecl, WhileStmt,
+    AssignStmt, Block, CatchClause, DoWhileStmt, ElseBranch, ForCStmt, ForEachStmt, IfStmt,
+    Stmt, TryStmt, VarDecl, WhileStmt,
 };
 pub use types::{ArrayShape, FnTypeShape, GenericArg, TypeRef, WildcardArg, WildcardBound};

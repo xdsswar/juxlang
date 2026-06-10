@@ -238,6 +238,57 @@ impl RustEmitter {
             self.emit_string_concat(b);
             return;
         }
+        // **Reference identity `===` / `!==` (§T.1.4).** Address
+        // identity, never structural — not overridable:
+        //   - `x === null` ≡ the null check (same `.is_none()` shape
+        //     as `== null`);
+        //   - wrapper-class operands (`Rc<RefCell<Inner>>` newtype) →
+        //     `std::rc::Rc::ptr_eq(&l.0, &r.0)` — true iff both
+        //     handles share the same cell;
+        //   - interface / poly-base dyn handles (`Rc<dyn …>`) →
+        //     `Rc::ptr_eq(&l, &r)` (no `.0`). Aliasing always forces
+        //     the wrapper representation, so two handles to ONE object
+        //     can never meet on the inline path.
+        if matches!(b.op, BinaryOp::RefEq | BinaryOp::RefNeq) {
+            let is_eq = b.op == BinaryOp::RefEq;
+            if matches!(&*b.left, Expr::Literal(juxc_ast::Literal::Null))
+                || matches!(&*b.right, Expr::Literal(juxc_ast::Literal::Null))
+            {
+                let target: &Expr = if matches!(&*b.left, Expr::Literal(juxc_ast::Literal::Null)) {
+                    &b.right
+                } else {
+                    &b.left
+                };
+                let needs_parens = receiver_needs_parens(target);
+                if needs_parens {
+                    self.w.push('(');
+                }
+                self.emit_expr(target);
+                if needs_parens {
+                    self.w.push(')');
+                }
+                self.w
+                    .push_str(if is_eq { ".is_none()" } else { ".is_some()" });
+                return;
+            }
+            if !is_eq {
+                self.w.push('!');
+            }
+            let left_wrapper = self.receiver_is_wrapper_class(&b.left);
+            let right_wrapper = self.receiver_is_wrapper_class(&b.right);
+            self.w.push_str("std::rc::Rc::ptr_eq(&");
+            self.emit_expr(&b.left);
+            if left_wrapper {
+                self.w.push_str(".0");
+            }
+            self.w.push_str(", &");
+            self.emit_expr(&b.right);
+            if right_wrapper {
+                self.w.push_str(".0");
+            }
+            self.w.push(')');
+            return;
+        }
         // Null-equality peephole: `x == null` and `x != null` lower
         // to `x.is_none()` / `x.is_some()` respectively, instead of
         // the literal `x == None` (which would require `T: PartialEq`

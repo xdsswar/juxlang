@@ -1118,6 +1118,8 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     match b.op {
         BinaryOp::Eq
         | BinaryOp::NotEq
+        | BinaryOp::RefEq
+        | BinaryOp::RefNeq
         | BinaryOp::Lt
         | BinaryOp::Le
         | BinaryOp::Gt
@@ -1299,6 +1301,12 @@ fn infer_stmt(stmt: &Stmt, env: &mut TypeEnv, symbols: &SymbolTable) {
             env.push_scope();
             infer_block(&w.body, env, symbols);
             env.pop_scope();
+        }
+        Stmt::DoWhile(d) => {
+            env.push_scope();
+            infer_block(&d.body, env, symbols);
+            env.pop_scope();
+            let _ = infer_expr(&d.condition, env, symbols);
         }
         Stmt::Expr(e) => {
             let _ = infer_expr(e, env, symbols);
