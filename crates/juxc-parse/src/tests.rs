@@ -756,9 +756,9 @@ fn break_and_continue_parse() {
     );
     let body = body_of(&ast.items[0]);
     let Stmt::While(w1) = &body.statements[0] else { panic!() };
-    assert!(matches!(w1.body.statements[0], Stmt::Break(_)));
+    assert!(matches!(w1.body.statements[0], Stmt::Break(..)));
     let Stmt::While(w2) = &body.statements[1] else { panic!() };
-    assert!(matches!(w2.body.statements[0], Stmt::Continue(_)));
+    assert!(matches!(w2.body.statements[0], Stmt::Continue(..)));
 }
 
 // ---------------------------------------------------------------------------

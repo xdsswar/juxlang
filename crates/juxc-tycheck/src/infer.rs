@@ -1350,7 +1350,8 @@ fn infer_stmt(stmt: &Stmt, env: &mut TypeEnv, symbols: &SymbolTable) {
             infer_block(b, env, symbols);
             env.pop_scope();
         }
-        Stmt::Break(_) | Stmt::Continue(_) => {}
+        Stmt::Break(..) | Stmt::Continue(..) => {}
+        Stmt::Labeled { stmt, .. } => infer_stmt(stmt, env, symbols),
     }
 }
 

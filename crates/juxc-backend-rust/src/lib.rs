@@ -691,6 +691,14 @@ struct RustEmitter {
     /// `(N as isize)` value-cast for const params — the size slot
     /// needs the raw `usize`.
     pub(crate) in_array_size_position: bool,
+    /// A loop label waiting to be attached — set by the
+    /// `Stmt::Labeled` emission arm, consumed by the next loop
+    /// emitter (`emit_while` / `emit_do_while` / `emit_for_each` /
+    /// `emit_for_c`) right before its loop keyword. Indirection is
+    /// needed because `for_c` lowers inside a scope block: the Rust
+    /// label must sit on the inner `loop`, not the block (a block
+    /// label wouldn't support `continue 'label`).
+    pub(crate) pending_loop_label: Option<String>,
     /// Bare names used as **cast / type-test targets** (`(T) e`, `e => T`) in
     /// the program (see [`compute_downcast_targets`]). For each such target the
     /// relevant dyn traits emit a `__jux_as_<T>` runtime-type downcast hook;
@@ -1327,7 +1335,8 @@ pub(crate) fn compute_aliased_classes(
                 }
             }
             Stmt::Unsafe(b) => walk_block(b, aliased, mark),
-            Stmt::Break(_) | Stmt::Continue(_) => {}
+            Stmt::Break(..) | Stmt::Continue(..) => {}
+            Stmt::Labeled { stmt, .. } => walk_stmt(stmt, aliased, mark),
         }
     }
 
@@ -1487,7 +1496,12 @@ pub(crate) fn compute_aliased_classes(
                     }
                 }
                 Stmt::Unsafe(b) => mark_lambda_captures_block(b, aliased, mark),
-                Stmt::Break(_) | Stmt::Continue(_) => {}
+                Stmt::Break(..) | Stmt::Continue(..) => {}
+                Stmt::Labeled { stmt, .. } => mark_lambda_captures_block(
+                    &juxc_ast::Block { statements: vec![(**stmt).clone()], span: Span::DUMMY },
+                    aliased,
+                    mark,
+                ),
             }
         }
     }
@@ -1954,7 +1968,8 @@ fn cast_targets_stmt(s: &juxc_ast::Stmt, out: &mut HashSet<String>) {
     match s {
         Stmt::Expr(e) => cast_targets_expr(e, out),
         Stmt::Return(Some(e)) => cast_targets_expr(e, out),
-        Stmt::Return(None) | Stmt::Break(_) | Stmt::Continue(_) => {}
+        Stmt::Return(None) | Stmt::Break(..) | Stmt::Continue(..) => {}
+        Stmt::Labeled { stmt, .. } => cast_targets_stmt(stmt, out),
         Stmt::VarDecl(v) => {
             if let Some(e) = &v.init {
                 cast_targets_expr(e, out);
@@ -2452,6 +2467,7 @@ impl RustEmitter {
             const_int_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),
             in_array_size_position: false,
+            pending_loop_label: None,
             downcast_targets: std::collections::HashSet::new(),
             emitting_wrapper_class: false,
             in_value_type_position: false,

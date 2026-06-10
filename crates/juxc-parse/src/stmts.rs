@@ -67,6 +67,27 @@ impl<'a> Parser<'a> {
             // `final`/`const` keyword.
             return self.parse_typed_local_with(true).map(Stmt::VarDecl);
         }
+        // **Labeled loop** (§A.2.8): `name: while/do/for …`. Two-token
+        // lookahead — a bare identifier followed by `:` followed by a
+        // loop keyword. Anything else (e.g. `Type name = …;` locals,
+        // ternary arms) never has this shape at statement start.
+        if matches!(self.peek(), TokenKind::Ident(_))
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Colon),
+            )
+            && matches!(
+                self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                Some(TokenKind::Kw(Keyword::While))
+                    | Some(TokenKind::Kw(Keyword::Do))
+                    | Some(TokenKind::Kw(Keyword::For)),
+            )
+        {
+            let label = self.parse_ident()?;
+            self.advance(); // ':'
+            let inner = self.parse_stmt()?;
+            return Some(Stmt::Labeled { label, stmt: Box::new(inner) });
+        }
         if self.at_kw(Keyword::Var) {
             return self.parse_var_decl().map(Stmt::VarDecl);
         }
@@ -107,16 +128,25 @@ impl<'a> Parser<'a> {
             let span = self.peek_span();
             self.advance(); // 'break'
             // §A.2.8: `break-stmt = 'break' identifier? ';'` — the
-            // identifier form (labeled break) is a future feature. We
-            // accept only the bare `break;` for now.
+            // optional identifier targets an enclosing labeled loop.
+            let label = if matches!(self.peek(), TokenKind::Ident(_)) {
+                self.parse_ident()
+            } else {
+                None
+            };
             self.expect(&TokenKind::Semicolon, "';' after `break`");
-            return Some(Stmt::Break(span));
+            return Some(Stmt::Break(label, span));
         }
         if self.at_kw(Keyword::Continue) {
             let span = self.peek_span();
             self.advance(); // 'continue'
+            let label = if matches!(self.peek(), TokenKind::Ident(_)) {
+                self.parse_ident()
+            } else {
+                None
+            };
             self.expect(&TokenKind::Semicolon, "';' after `continue`");
-            return Some(Stmt::Continue(span));
+            return Some(Stmt::Continue(label, span));
         }
         if self.at_kw(Keyword::Switch) {
             // Statement-form `switch (x) { … }` per §A.2.8. Uses the
