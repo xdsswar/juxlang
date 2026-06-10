@@ -799,6 +799,15 @@ public class Throwable {
     public Throwable(String message) {
         this.message = message;
     }
+
+    /**
+     * Java-style accessor for the failure message — equivalent to
+     * reading the `message` field directly; both forms are supported
+     * (`e.message` and `e.getMessage()`).
+     */
+    public String getMessage() {
+        return this.message;
+    }
 }
 "###),
     ("exceptions/UnsupportedOperationException.jux", r###"/**

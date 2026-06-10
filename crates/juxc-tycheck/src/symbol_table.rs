@@ -1080,6 +1080,22 @@ fn resolve_type_ref_to_fqn(
         if table.classes.contains_key(bare) {
             return Some(bare.clone());
         }
+        // FQN-suffix fallback: a bare `extends Exception` in a user
+        // unit must reach the stdlib's `jux.std.exceptions.Exception`
+        // even without an explicit import (the exception hierarchy is
+        // ambiently available — `throw new Exception(...)` already
+        // resolves this way at other sites). Mirrors the backend's
+        // `lookup_class_by_bare_or_fqn` suffix scan; without it the
+        // member chain stops at the user subclass and inherited
+        // fields/methods (`e.message`, `e.getMessage()`) go
+        // unresolved (E0412/E0413).
+        if let Some(fqn) = table
+            .classes
+            .keys()
+            .find(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+        {
+            return Some(fqn.clone());
+        }
         return None;
     }
     let joined: String = ty_ref

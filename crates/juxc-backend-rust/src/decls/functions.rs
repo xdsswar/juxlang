@@ -298,6 +298,21 @@ impl RustEmitter {
                 self.emit_stmt(stmt);
             }
         }
+        // A non-void body ending in a `try` statement: the try lowering
+        // completes its returns via a post-`finally` `if let` (see
+        // `emit_try`), which leaves the Rust block's tail as `()` — but
+        // the fn expects a value. Java guarantees every path through
+        // such a function returns ("missing return statement" is a
+        // javac compile error), so the fall-through is unreachable by
+        // construction; the explicit `unreachable!` both satisfies
+        // rustc's type-check and traps loudly if the guarantee is ever
+        // violated.
+        if !matches!(return_type, ReturnType::Void)
+            && matches!(body.statements.last(), Some(Stmt::Try(_)))
+        {
+            self.w
+                .line("unreachable!(\"function fell off the end of a try without returning\");");
+        }
     }
 
     /// Emit the *tail* statement of a function body — the one targeted

@@ -357,9 +357,23 @@ impl RustEmitter {
                 self.w.push_str(";\n");
             }
             Stmt::Return(value) => {
+                // **Try-body return threading.** Inside a `try` block's
+                // `catch_unwind` closure a `return` can't exit the
+                // enclosing fn — it threads the value out as
+                // `Some(value)` (`return;` in a void fn → `Some(())`),
+                // and the try lowering's post-`finally` step performs
+                // the real return. See `emit_try`.
+                let in_try = self.in_try_closure;
                 self.w.push_str("return");
+                if value.is_none() && in_try {
+                    self.w.push_str(" Some(());\n");
+                    return;
+                }
                 if let Some(e) = value {
                     self.w.push(' ');
+                    if in_try {
+                        self.w.push_str("Some(");
+                    }
                     // Nullable-return coercion: when the enclosing
                     // fn returns `T?` (lowered as `Option<T>`) and
                     // the value being returned isn't already a
@@ -416,6 +430,9 @@ impl RustEmitter {
                         }
                     }
                     if do_some {
+                        self.w.push(')');
+                    }
+                    if in_try {
                         self.w.push(')');
                     }
                 }
@@ -521,15 +538,57 @@ impl RustEmitter {
         //     context must thread the value out via the result
         //     instead.
         //
-        // Both paths produce `Result<(), Box<dyn Any + Send>>`,
-        // so the catch / finally machinery downstream is shared.
+        // **Java control-flow semantics** (§X.3):
+        //   - a `return` inside the try body computes its value, runs
+        //     `finally`, then returns — the closure can't return from
+        //     the enclosing fn, so the body's returns thread out as
+        //     `Some(value)` (the `in_try_closure` flag rewrites them)
+        //     and a post-`finally` `if let` performs the real return;
+        //   - an UNMATCHED (or uncaught — no catch clauses) exception
+        //     runs `finally` FIRST, then resumes unwinding — the
+        //     payload parks in `__jux_unhandled` across the finally.
         let is_async = crate::analysis::block_contains_await(&t.body);
+        let has_ret = block_contains_fn_return(&t.body);
         // Wrap the whole thing in a block so locals introduced by
         // the lowering don't leak.
         self.w.push_str("{\n");
         self.w.indent_inc();
+        if has_ret {
+            // Return-value channel — `Option<RetT>`, `None` = the body
+            // ran to completion without returning.
+            self.w.emit_indent();
+            self.w.push_str("let mut __jux_ret: Option<");
+            match self.current_return_type.clone() {
+                Some(juxc_ast::ReturnType::Type(rt))
+                | Some(juxc_ast::ReturnType::AsyncType(rt)) => {
+                    self.emit_return_type_as_rust(&rt);
+                }
+                _ => self.w.push_str("()"),
+            }
+            self.w.push_str("> = None;\n");
+        }
+        // Unhandled-exception channel — holds the payload across the
+        // `finally` body so propagation happens AFTER it runs.
+        self.w.line(
+            "let mut __jux_unhandled: Option<::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>> = None;",
+        );
         self.w.emit_indent();
-        self.w.push_str("let __jux_try_result: std::thread::Result<()> = ");
+        if has_ret {
+            self.w.push_str("let __jux_try_result: std::thread::Result<Option<");
+            match self.current_return_type.clone() {
+                Some(juxc_ast::ReturnType::Type(rt))
+                | Some(juxc_ast::ReturnType::AsyncType(rt)) => {
+                    self.emit_return_type_as_rust(&rt);
+                }
+                _ => self.w.push_str("()"),
+            }
+            self.w.push_str(">> = ");
+        } else {
+            self.w
+                .push_str("let __jux_try_result: std::thread::Result<()> = ");
+        }
+        let prev_try_flag = self.in_try_closure;
+        self.in_try_closure = has_ret;
         if is_async {
             // `futures::FutureExt::catch_unwind(...)` is fully
             // qualified so we don't need a `use` statement at the
@@ -540,6 +599,9 @@ impl RustEmitter {
             );
             self.w.indent_inc();
             self.emit_block_contents(&t.body);
+            if has_ret {
+                self.w.line("None");
+            }
             self.w.indent_dec();
             self.w.emit_indent();
             self.w.push_str("})).await;\n");
@@ -548,15 +610,23 @@ impl RustEmitter {
                 .push_str("std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
             self.w.indent_inc();
             self.emit_block_contents(&t.body);
+            if has_ret {
+                self.w.line("None");
+            }
             self.w.indent_dec();
             self.w.emit_indent();
             self.w.push_str("}));\n");
         }
+        self.in_try_closure = prev_try_flag;
         // Match on the result and run the appropriate catch.
         self.w.emit_indent();
         self.w.push_str("match __jux_try_result {\n");
         self.w.indent_inc();
-        self.w.line("Ok(_) => {}");
+        if has_ret {
+            self.w.line("Ok(__jux_body_ret) => { __jux_ret = __jux_body_ret; }");
+        } else {
+            self.w.line("Ok(_) => {}");
+        }
         self.w.emit_indent();
         self.w.push_str("Err(__jux_payload) => {\n");
         self.w.indent_inc();
@@ -565,17 +635,18 @@ impl RustEmitter {
         // it binds the catch name to the recovered typed value and
         // breaks out of the labelled block. On failure, the payload
         // threads through to the next clause. If no clause matches
-        // we resume the panic so an outer handler / runtime hook
-        // can deal with it (mirrors Java's "uncaught propagates").
+        // the payload parks in `__jux_unhandled` — `finally` runs,
+        // THEN the panic resumes (mirrors Java's "finally before
+        // propagation").
         //
         // A labelled block (`'__jux_catch: { ... break '__jux_catch;
         // ... }`) is the cleanest way to express "stop dispatch
         // after the first match" without nesting matches arbitrarily
         // deep.
         if t.catches.is_empty() {
-            // No catch clauses (try/finally form). Drop the payload
-            // silently — `finally` still runs below.
-            self.w.line("let _ = __jux_payload;");
+            // No catch clauses (try/finally form). Park the payload —
+            // `finally` runs below, then the unwind resumes.
+            self.w.line("__jux_unhandled = Some(__jux_payload);");
         } else {
             // Fully qualify `::std::boxed::Box` so a user class
             // named `Box` doesn't shadow it. `std::panic::catch_unwind`
@@ -617,11 +688,10 @@ impl RustEmitter {
                 self.w.indent_dec();
                 self.w.line("}");
             }
-            // No clause matched — resume the panic so it
-            // propagates to whoever was waiting on this future /
-            // call.
+            // No clause matched — park the payload; `finally` runs
+            // first, then the unwind resumes below.
             self.w.line(
-                "if let Some(__jux_unhandled) = __jux_payload_slot.take() { std::panic::resume_unwind(__jux_unhandled); }",
+                "if let Some(__jux_p) = __jux_payload_slot.take() { __jux_unhandled = Some(__jux_p); }",
             );
             self.w.indent_dec();
             self.w.line("}");
@@ -631,9 +701,30 @@ impl RustEmitter {
         self.w.indent_dec();
         self.w.line("}");
         // Finally: emit its body verbatim after the match. Runs
-        // in both success and failure paths.
+        // in both success and failure paths — and BEFORE an
+        // unmatched exception resumes or a try-body `return`
+        // completes (Java ordering).
         if let Some(fin) = &t.finally {
             self.emit_block_contents(fin);
+        }
+        // Resume an unmatched/uncaught exception now that `finally`
+        // ran.
+        self.w.line(
+            "if let Some(__jux_p) = __jux_unhandled { std::panic::resume_unwind(__jux_p); }",
+        );
+        // Complete a `return` the try body initiated. When THIS try
+        // is itself nested inside another try's closure, the real
+        // return threads outward as `Some(...)` again — the restored
+        // `in_try_closure` flag picks the shape.
+        if has_ret {
+            self.w.emit_indent();
+            if self.in_try_closure {
+                self.w
+                    .push_str("if let Some(__jux_ret_v) = __jux_ret { return Some(__jux_ret_v); }\n");
+            } else {
+                self.w
+                    .push_str("if let Some(__jux_ret_v) = __jux_ret { return __jux_ret_v; }\n");
+            }
         }
         self.w.indent_dec();
         self.w.emit_indent();
@@ -1732,5 +1823,59 @@ pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::Throw(_, s) => *s,
         Stmt::Try(t) => t.span,
         Stmt::Unsafe(b) => b.span,
+    }
+}
+
+/// True when `block` contains a function-level `return` — the signal
+/// that a `try` body needs the `Option<RetT>` return-threading shape
+/// (see `RustEmitter::emit_try`). Walks every statement form
+/// recursively, INCLUDING nested `try` blocks (their post-`finally`
+/// re-return lands inside the outer closure too) and switch-statement
+/// arm blocks. Lambda bodies are SKIPPED — a `return` there belongs to
+/// the lambda, not the enclosing function.
+pub(crate) fn block_contains_fn_return(block: &juxc_ast::Block) -> bool {
+    block.statements.iter().any(stmt_contains_fn_return)
+}
+
+fn stmt_contains_fn_return(s: &Stmt) -> bool {
+    match s {
+        Stmt::Return(_) => true,
+        Stmt::If(i) => {
+            if block_contains_fn_return(&i.then_block) {
+                return true;
+            }
+            let mut cursor = i.else_branch.as_deref();
+            while let Some(branch) = cursor {
+                match branch {
+                    juxc_ast::ElseBranch::If(inner) => {
+                        if block_contains_fn_return(&inner.then_block) {
+                            return true;
+                        }
+                        cursor = inner.else_branch.as_deref();
+                    }
+                    juxc_ast::ElseBranch::Block(b) => {
+                        return block_contains_fn_return(b);
+                    }
+                }
+            }
+            false
+        }
+        Stmt::While(w) => block_contains_fn_return(&w.body),
+        Stmt::ForEach(f) => block_contains_fn_return(&f.body),
+        Stmt::ForC(f) => block_contains_fn_return(&f.body),
+        Stmt::Try(t) => {
+            block_contains_fn_return(&t.body)
+                || t.catches.iter().any(|c| block_contains_fn_return(&c.body))
+                || t.finally
+                    .as_ref()
+                    .map(|f| block_contains_fn_return(f))
+                    .unwrap_or(false)
+        }
+        Stmt::Unsafe(b) => block_contains_fn_return(b),
+        Stmt::Expr(juxc_ast::Expr::Switch(sw)) => sw.arms.iter().any(|arm| match &arm.body {
+            juxc_ast::SwitchBody::Block(b) => block_contains_fn_return(b),
+            juxc_ast::SwitchBody::Expr(_) => false,
+        }),
+        _ => false,
     }
 }

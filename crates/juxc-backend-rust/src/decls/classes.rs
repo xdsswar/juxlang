@@ -256,7 +256,12 @@ impl RustEmitter {
                         self.w.push_str(&class_decl.name.text);
                         self.emit_generic_params_as_args(&class_decl.generic_params);
                         self.w.push_str("> for ");
-                        self.w.push_str(parent_bare);
+                        // Route through the type emitter (NOT the bare
+                        // name) so a cross-package parent gets its
+                        // `crate::…` rooting — `extends Exception`
+                        // reaches `crate::jux::std::exceptions::
+                        // Exception`, same as the Deref target below.
+                        self.emit_type_as_rust(parent_ty);
                         self.w.push_str(" { fn from(v: ");
                         self.w.push_str(&class_decl.name.text);
                         self.emit_generic_params_as_args(&class_decl.generic_params);
