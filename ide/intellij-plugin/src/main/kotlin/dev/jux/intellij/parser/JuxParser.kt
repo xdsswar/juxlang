@@ -93,6 +93,7 @@ class JuxParser : PsiParser {
             b.at(T.TYPE_KW) -> parseTypeAlias(b, decl)
             b.at(T.NEW_KW) -> parseConstructor(b, decl)
             b.at(T.OPERATOR_KW) -> parseOperator(b, decl)
+            b.at(T.INIT_KW) -> { b.advanceLexer(); parseCodeBlock(b); decl.done(E.INIT_BLOCK) }
             b.at(T.LBRACE) -> { parseCodeBlock(b); decl.done(E.INIT_BLOCK) }
             b.at(T.DROP_KW) -> { b.advanceLexer(); parseCodeBlock(b); decl.done(E.DROP_BLOCK) }
             else -> parseMethodOrField(b, decl)
@@ -179,8 +180,8 @@ class JuxParser : PsiParser {
 
     private fun isMemberStart(b: PsiBuilder): Boolean =
         b.at(T.AT) || b.atAny(JUX_MODIFIERS) || b.atAny(JUX_TYPE_DECL_KEYWORDS) ||
-            b.at(T.NEW_KW) || b.at(T.OPERATOR_KW) || b.at(T.DROP_KW) ||
-            b.at(T.IDENTIFIER) || b.at(T.VOID_KW)
+            b.at(T.NEW_KW) || b.at(T.OPERATOR_KW) || b.at(T.DROP_KW) || b.at(T.INIT_KW) ||
+            b.at(T.LBRACE) || b.at(T.IDENTIFIER) || b.at(T.VOID_KW)
 
     private fun parseEnumConstants(b: PsiBuilder) {
         while (!b.eof() && b.at(T.IDENTIFIER)) {
