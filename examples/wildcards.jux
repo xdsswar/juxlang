@@ -1,21 +1,28 @@
-// Bounded wildcards — Java PECS semantics.
+// Bounded wildcards — Java PECS semantics, Phase-1 scope.
 //
-// Two lowering paths in the backend:
+// A wildcard in **parameter** position is sound and fully supported:
+// the backend lifts it to a synthetic generic on the enclosing
+// function, so the parameter accepts any subtype of the bound:
 //
-//   1. PARAM position (`void f(List<? extends Animal> xs)`) lifts the
-//      wildcard to a synthetic generic on the enclosing function:
-//        fn f<__W0: AnimalKind + Clone>(xs: List<__W0>) { … }
-//      Caller can pass List<Dog>, List<Cat>, … — any subtype works.
+//     void describe(Bag<? extends Animal> xs)
+//   ⇒ fn describe<__W0: AnimalKind + Clone>(xs: Bag<__W0>) { … }
 //
-//   2. STORAGE position (`List<? extends Animal> xs = …` as a local,
-//      field, or return) erases to a trait object:
-//        let xs: List<Box<dyn AnimalKind>> = …;
-//      The marker trait carries no `Clone` supertrait so it's
-//      dyn-compatible; bounds at use sites add `+ Clone` separately.
+// The caller can pass Bag<Dog>, Bag<Cat>, … — every concrete subtype
+// works, because the function is monomorphized per call.
 //
-// Phase-1 caveat: wildcard-typed values are PASS-THROUGH only —
-// field/method access through the bound needs an accessor-trait
-// layer that lands in a later pass.
+// A wildcard in a **storage** position (a field, local, or return
+// slot) is a different matter: it would erase to a trait object inside
+// the container (`Bag<Rc<dyn AnimalKind>>`), and Rust's invariant
+// generics can't take a concrete `Bag<Dog>` there without a structural
+// conversion Phase 1 doesn't synthesize. Those slots are diagnosed
+// with **E0444** instead of leaking a `rustc` type error — see the
+// note in `wildcards_storage.jux`. Use a concrete type argument, or
+// (as here) take the value through a parameter.
+//
+// NOTE: the container is named `Bag`, not `List` — a user class that
+// reuses a stdlib collection name (`List`, `Map`, `Set`, …) collides
+// with the std trait of the same name in value position; resolving
+// that shadowing precisely is deferred to a later phase.
 
 public class Animal {
     public String name;
@@ -28,19 +35,29 @@ public class Dog extends Animal {
     public Dog(String name) { super(name); }
 }
 
-public class List<T> {
+public class Cat extends Animal {
+    public Cat(String name) { super(name); }
+}
+
+public class Bag<T> {
     public T head;
-    public List(T head) {
+    public Bag(T head) {
         this.head = head;
     }
 }
 
-// Param-position wildcard — function-generic lift.
-public void describe(List<? extends Animal> xs) {
-    print("got a list of animals");
+// Param-position covariant wildcard — accepts a Bag of ANY Animal
+// subtype. Phase-1 caveat: a wildcard-typed value is PASS-THROUGH
+// only; reading `xs.head.name` *through* the bound needs an
+// accessor-trait layer that lands in a later pass, so we don't reach
+// into it here.
+public void describe(Bag<? extends Animal> xs) {
+    print("got a bag of animals");
 }
 
 public void main() {
-    var dogs = new List<Dog>(new Dog("Rex"));
+    var dogs = new Bag<Dog>(new Dog("Rex"));
+    var cats = new Bag<Cat>(new Cat("Felix"));
     describe(dogs);
+    describe(cats);
 }

@@ -939,6 +939,28 @@ pub fn substitute_via_inference(
     substitute(ty, generic_params, &args)
 }
 
+/// Build an inference map (same shape [`infer_generic_args`] returns)
+/// from EXPLICIT call-site type arguments — the `<int>` in
+/// `id<int>(5)` — instead of recovering them from the argument types.
+///
+/// Binding is positional: the i-th explicit arg binds the i-th generic
+/// param. A surplus or shortfall of explicit args (arity mismatch) is
+/// tolerated here — only the lined-up pairs are bound; the dedicated
+/// arity diagnostic lives in the `check` pass. Lowering each arg uses
+/// the caller's env so bare names (`Dog`, `int`) resolve normally.
+pub fn explicit_generic_arg_map(
+    generic_params: &[TypeParam],
+    explicit: &[TypeRef],
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> std::collections::HashMap<String, Ty> {
+    let mut inferred = std::collections::HashMap::new();
+    for (param, ty) in generic_params.iter().zip(explicit.iter()) {
+        inferred.insert(param.name.text.clone(), ty_from_ref(ty, env, symbols));
+    }
+    inferred
+}
+
 /// If `fqn` names a type alias, lower the alias's target into a
 /// concrete [`Ty`] and return it. Returns `None` when the FQN
 /// doesn't name an alias — the caller falls through to the

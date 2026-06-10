@@ -645,6 +645,29 @@ impl RustEmitter {
         self.emitting_format_arg = prev_fmt;
         self.emitting_comparison_operand = prev_cmp;
         self.emitting_call_callee = prev_callee;
+        // Explicit call-site type arguments (`id<int>(5)`) lower to a
+        // Rust turbofish `id::<i32>(5)`. Required for correctness: Rust
+        // would otherwise infer the type-param from the argument
+        // literals/values, silently ignoring the user's annotation
+        // (`identity<long>(5)` must bind `T = i64`, not the `i32` the
+        // literal would default to). Each arg is lowered as a
+        // generic-arg slot (owned `String`, `Rc<dyn …>` for poly/iface
+        // types) so it matches how the same `T` is monomorphized when
+        // the call relies on inference.
+        if !call.explicit_generic_args.is_empty() {
+            self.w.push_str("::<");
+            for (i, ty) in call.explicit_generic_args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                if crate::analysis::is_jux_string_type(ty) {
+                    self.w.push_str("String");
+                } else {
+                    self.emit_value_type_as_rust(ty);
+                }
+            }
+            self.w.push('>');
+        }
         self.w.push('(');
         // Same flag discipline as above: a regular call's args
         // consume String values, so any inner string literal needs

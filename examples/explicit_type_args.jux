@@ -1,0 +1,60 @@
+// Explicit call-site type arguments — the postfix turbofish form
+// `expr<T>(args)` (spec §A.2.9 / §T.4). The `<…>` pins the callee's
+// generic parameters directly instead of leaving them to inference.
+//
+// Lowering: each call carries its explicit args through to a Rust
+// turbofish, `identity::<i64>(5)`. This matters for correctness —
+// without it, Rust would infer the type-param from the argument
+// literal and silently ignore the annotation (`identity<long>(5)`
+// must bind `T = long`, not the `int` the literal `5` defaults to).
+//
+// The parser commits to the turbofish reading only when a balanced
+// `<…>` is immediately followed by a call `(`, so the ordinary
+// less-than operator (`a < b`) is untouched.
+
+// A single-parameter generic free function.
+public T identity<T>(T x) {
+    return x;
+}
+
+// A generic free function that loses its type to inference when the
+// argument is a literal — the explicit form is what pins it.
+public T echo<T>(T value) {
+    return value;
+}
+
+// A generic method on a class.
+public class Wrapper {
+    public R wrap<R>(R item) {
+        return item;
+    }
+}
+
+public void main() {
+    // Explicit arg agreeing with the natural inference.
+    var a = identity<int>(5);
+    print(a);
+
+    // Explicit arg that the literal alone could NOT produce: `5` would
+    // default to `int`, but `<long>` forces `T = long`.
+    long b = identity<long>(5);
+    print(b);
+
+    // Explicit arg on a String-typed call.
+    var s = echo<String>("hello");
+    print(s);
+
+    // Inference still works side-by-side — no turbofish needed.
+    var c = echo(42);
+    print(c);
+
+    // Explicit arg on an instance method.
+    var w = new Wrapper();
+    var r = w.wrap<bool>(true);
+    print(r);
+
+    // The less-than operator is unaffected by the turbofish lookahead.
+    int x = 3;
+    int y = 7;
+    print(x < y);
+}

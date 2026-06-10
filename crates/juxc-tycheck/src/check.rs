@@ -582,6 +582,7 @@ impl<'a> Checker<'a> {
         for field in &class.fields {
             if let Some(fty) = &field.ty {
                 self.check_iface_value_type(fty);
+                self.check_wildcard_storage_type(fty);
             }
         }
         for ctor in &class.constructors {
@@ -743,6 +744,65 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Fire **E0444** when a **bounded wildcard** appears as a generic
+    /// argument of a **user-defined generic class** used in a *storage*
+    /// position — a field, local-variable, or return slot. Such a slot
+    /// erases the wildcard to a trait object inside the container
+    /// (`Box<? extends Animal>` → `Box<Rc<dyn AnimalKind>>`), but Rust
+    /// generics are invariant, so no concrete `Box<Dog>` can populate it
+    /// without a structural conversion Phase 1 doesn't synthesize. Catch
+    /// it here instead of leaking `rustc`'s `E0308`.
+    ///
+    /// **Parameter** positions are exempt — the backend lifts a wildcard
+    /// param to a synthetic function generic (`fn f<__W: …>(b: Box<__W>)`)
+    /// which accepts any concrete subtype soundly. So this is only called
+    /// from the field / local / return visitors, never the param ones.
+    ///
+    /// Scope is narrow on purpose: only **user classes** (not interfaces
+    /// — those route through E0435 — and not stdlib collections, which
+    /// have their own representation) carrying a *direct* wildcard arg.
+    fn check_wildcard_storage_type(&mut self, tref: &juxc_ast::TypeRef) {
+        if tref.fn_shape.is_some() || tref.ptr_depth > 0 {
+            return;
+        }
+        // The type must name a user-declared generic class.
+        let Some(seg) = tref.name.segments.last() else { return };
+        let bare = seg.text.as_str();
+        let is_user_generic_class = self
+            .symbols
+            .classes
+            .iter()
+            .any(|(k, c)| {
+                !c.generic_params.is_empty()
+                    && (k == bare || k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+            });
+        if !is_user_generic_class {
+            return;
+        }
+        // At least one DIRECT generic arg must be a bounded/unbounded
+        // wildcard (`? extends T`, `? super T`, `?`).
+        let has_wildcard = tref
+            .generic_args
+            .iter()
+            .any(|a| matches!(a, juxc_ast::GenericArg::Wildcard(_)));
+        if !has_wildcard {
+            return;
+        }
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0444_WildcardStorageUnsupported,
+                format!(
+                    "a bounded wildcard on the user type `{bare}` can't be used as a \
+                     storage slot (field, local, or return) in this phase — the container \
+                     erases to a trait object that a concrete `{bare}<…>` can't populate; \
+                     use a concrete type argument, or take the value as a parameter (where \
+                     wildcards lift to a function generic)",
+                ),
+            )
+            .with_span(tref.span),
+        );
+    }
+
     /// Validate a **reference cast** (`(T) x` / `x as T`) between user types
     /// (E0442): the source and target must be in a subtype relationship in
     /// either direction (a downcast or an upcast), or the target must be
@@ -850,7 +910,10 @@ impl<'a> Checker<'a> {
     /// [`ReturnType`], if any (skips `void`).
     fn check_iface_return_type(&mut self, rt: &ReturnType) {
         match rt {
-            ReturnType::Type(t) | ReturnType::AsyncType(t) => self.check_iface_value_type(t),
+            ReturnType::Type(t) | ReturnType::AsyncType(t) => {
+                self.check_iface_value_type(t);
+                self.check_wildcard_storage_type(t);
+            }
             ReturnType::Void => {}
         }
     }
@@ -979,6 +1042,7 @@ impl<'a> Checker<'a> {
                 // emits a broken slot type.
                 if let Some(t) = &v.ty {
                     self.check_iface_value_type(t);
+                    self.check_wildcard_storage_type(t);
                 }
                 // If both a declared type and an initializer are
                 // present, the two must be compatible. Otherwise the
@@ -2214,6 +2278,53 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Validate an **explicit call-site type-argument list** against the
+    /// callee's declared generic params (spec turbofish `id<int>(5)`).
+    /// Emits **E0443** when the callee isn't generic (no params to bind)
+    /// or when the count doesn't match — both of which would otherwise
+    /// leak `rustc`'s `E0107`. `callee_desc` is woven into the message
+    /// (e.g. ``function `id` `` / ``method `pick` ``). A no-op when the
+    /// caller wrote no explicit args.
+    fn check_explicit_type_args(
+        &mut self,
+        explicit: &[TypeRef],
+        generic_params: &[TypeParam],
+        callee_desc: &str,
+        span: Span,
+    ) {
+        if explicit.is_empty() {
+            return;
+        }
+        if generic_params.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0443_ExplicitTypeArgs,
+                    format!(
+                        "{callee_desc} is not generic, so it takes no type arguments; \
+                         remove the `<…>`",
+                    ),
+                )
+                .with_span(span),
+            );
+            return;
+        }
+        if explicit.len() != generic_params.len() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0443_ExplicitTypeArgs,
+                    format!(
+                        "{callee_desc} expects {} type argument{}, but {} {} supplied",
+                        generic_params.len(),
+                        if generic_params.len() == 1 { "" } else { "s" },
+                        explicit.len(),
+                        if explicit.len() == 1 { "was" } else { "were" },
+                    ),
+                )
+                .with_span(span),
+            );
+        }
+    }
+
     fn check_call(&mut self, c: &CallExpr) {
         // Always walk args first, regardless of callee shape, so nested
         // checks still fire.
@@ -2251,6 +2362,14 @@ impl<'a> Checker<'a> {
                     let callee_unsafe = fn_sig.is_unsafe;
                     // §A.2.8: calling an `unsafe` fn needs an `unsafe` context.
                     self.require_unsafe_context(callee_unsafe, name, c.span);
+                    // Validate any explicit `<…>` turbofish against the
+                    // callee's declared type params (E0443).
+                    self.check_explicit_type_args(
+                        &c.explicit_generic_args,
+                        &generic_params,
+                        &format!("function `{name}`"),
+                        c.span,
+                    );
                     // Generic inference at the call site (spec §T.4):
                     // when the callee declares `<T>` and the user
                     // didn't write an explicit turbofish, recover the
@@ -2548,6 +2667,14 @@ impl<'a> Checker<'a> {
                         c.span,
                     );
                     self.require_unsafe_context(method_is_unsafe, method_name, c.span);
+                    // Validate any explicit `<…>` turbofish against the
+                    // method's own type params (E0443).
+                    self.check_explicit_type_args(
+                        &c.explicit_generic_args,
+                        &method_generic_params,
+                        &format!("method `{method_name}`"),
+                        c.span,
+                    );
                     let (mut subst_params, mut subst_args): (Vec<TypeParam>, Vec<Ty>) =
                         compose_extends_substitution(
                             &name,
@@ -4999,6 +5126,67 @@ mod tests {
         assert!(
             !has(&d, code::Code::E0435_InterfaceNotDynDispatchable),
             "plain interface value field should be allowed: {d:?}",
+        );
+    }
+
+    /// A bounded wildcard on a user generic class in a FIELD slot →
+    /// E0444 (covariant container storage isn't supported in Phase 1).
+    #[test]
+    fn wildcard_storage_field_emits_e0444() {
+        let d = run(
+            r#"
+            public class Animal { public String name; public Animal(String n) { this.name = n; } }
+            public class Bag<T> { public T item; public Bag(T item) { this.item = item; } }
+            public class Holder {
+                public Bag<? extends Animal> contents;
+                public Holder(Bag<? extends Animal> c) { this.contents = c; }
+            }
+            public void main() {}
+            "#,
+        );
+        assert!(
+            has(&d, code::Code::E0444_WildcardStorageUnsupported),
+            "expected E0444 for wildcard storage field: {d:?}",
+        );
+    }
+
+    /// A bounded wildcard in PARAMETER position lifts to a function
+    /// generic and is sound — must NOT trip E0444.
+    #[test]
+    fn wildcard_param_does_not_emit_e0444() {
+        let d = run(
+            r#"
+            public class Animal { public String name; public Animal(String n) { this.name = n; } }
+            public class Bag<T> { public T item; public Bag(T item) { this.item = item; } }
+            public void describe(Bag<? extends Animal> b) {}
+            public void main() {}
+            "#,
+        );
+        assert!(
+            !has(&d, code::Code::E0444_WildcardStorageUnsupported),
+            "param-position wildcard should be allowed: {d:?}",
+        );
+    }
+
+    /// A concrete type argument in a storage slot (`Bag<Dog>`) carries no
+    /// wildcard — never E0444.
+    #[test]
+    fn concrete_storage_field_is_ok() {
+        let d = run(
+            r#"
+            public class Animal { public String name; public Animal(String n) { this.name = n; } }
+            public class Dog extends Animal { public Dog(String n) { super(n); } }
+            public class Bag<T> { public T item; public Bag(T item) { this.item = item; } }
+            public class Holder {
+                public Bag<Dog> contents;
+                public Holder(Bag<Dog> c) { this.contents = c; }
+            }
+            public void main() {}
+            "#,
+        );
+        assert!(
+            !has(&d, code::Code::E0444_WildcardStorageUnsupported),
+            "concrete-arg storage field should be allowed: {d:?}",
         );
     }
 }

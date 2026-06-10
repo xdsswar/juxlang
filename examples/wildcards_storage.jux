@@ -1,10 +1,25 @@
-// Storage-position wildcards exercise two backend lowerings:
+// Wildcards in STORAGE position — the Phase-1 boundary.
 //
-//   1. Param position — function-generic lift to `<__W0: Bound + Clone>`.
-//   2. Storage position (field) — erasure to `Box<dyn BoundKind>`.
+// A field / local / return slot typed `Bag<? extends Animal>` would
+// erase the wildcard to a trait object inside the container,
+// `Bag<Rc<dyn AnimalKind>>`. But Rust generics are invariant: a
+// concrete `Bag<Dog>` can't flow into a `Bag<Rc<dyn AnimalKind>>` slot
+// without a structural conversion the compiler doesn't synthesize
+// (Java gets it for free via type erasure). So a wildcard storage slot
+// is rejected up front with **E0444** rather than leaking `rustc`'s
+// `E0308`. For example, this field would NOT compile:
 //
-// The marker trait now has no `Clone` supertrait so `dyn AnimalKind`
-// is a valid trait object.
+//     public class Holder {
+//         public Bag<? extends Animal> contents;   // E0444
+//     }
+//
+// Two things that DO work and are shown below:
+//
+//   1. A field with a CONCRETE type argument (`Bag<Dog>`). No
+//      wildcard, no variance — a plain monomorphized container.
+//   2. A PARAM-position wildcard (`Bag<? extends Animal>`), which the
+//      backend lifts to a synthetic function generic so it accepts any
+//      concrete subtype soundly. (See `wildcards.jux`.)
 
 public class Animal {
     public String name;
@@ -15,31 +30,31 @@ public class Dog extends Animal {
     public Dog(String name) { super(name); }
 }
 
-public class Box1<T> {
+public class Bag<T> {
     public T item;
-    public Box1(T item) {
+    public Bag(T item) {
         this.item = item;
     }
 }
 
-// Field-position wildcard — `Holder.contents` is typed
-// `Box1<? extends Animal>` which lowers to `Box1<Box<dyn AnimalKind>>`.
-// This compiles because the marker trait is dyn-compatible.
+// Concrete-arg storage — the supported storage form.
 public class Holder {
-    public Box1<? extends Animal> contents;
+    public Bag<Dog> contents;
 
-    public Holder(Box1<? extends Animal> contents) {
+    public Holder(Bag<Dog> contents) {
         this.contents = contents;
     }
 }
 
-// Param-position wildcard — function-generic lift.
-public void describe(Box1<? extends Animal> b) {
-    print("got a box of animals");
+// Param-position wildcard — function-generic lift, pass-through.
+public void describe(Bag<? extends Animal> b) {
+    print("got a bag of animals");
 }
 
 public void main() {
-    var b = new Box1<Dog>(new Dog("Rex"));
+    var b = new Bag<Dog>(new Dog("Rex"));
+    var h = new Holder(b);
+    print(h.contents.item.name);
     describe(b);
     print("done");
 }
