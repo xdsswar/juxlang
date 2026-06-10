@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jux Language — Specification Hub</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+/* Apply the persisted theme before first paint to avoid a flash. */
+try { var t = localStorage.getItem('jux-docs-theme');
+      if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
 <style>
   /* Index-specific tweaks */
   .doc-grid + .section-heading { margin-top: 48px; }
@@ -14,44 +19,62 @@
 <div class="layout">
 
   <aside class="sidebar">
-    <a class="sidebar-brand" href="index.html">
-      <span class="sidebar-brand-mark">J</span>
-      <span>Jux</span>
-    </a>
+    <div class="sidebar-top">
+      <a class="sidebar-brand" href="index.html">
+        <span class="sidebar-brand-mark">J</span>
+        <span>Jux</span>
+      </a>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme">☾</button>
+    </div>
 
     <div class="sidebar-section">
       <div class="sidebar-section-title">Start Here</div>
       <a href="index.html">Overview</a>
-      <a href="JUX-LANG-V1.html">Language Dossier (V1)</a>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Foundation</div>
+      <a href="JUX-LANG-V1.html">Language V1 — Architecture &amp; Design</a>
     </div>
 
     <div class="sidebar-section">
       <div class="sidebar-section-title">Core Specifications</div>
-      <a href="JUX-GRAMMAR-ADDENDUM.html">Grammar</a>
-      <a href="JUX-SEMANTICS-ADDENDUM.html">Semantics</a>
-      <a href="JUX-OPERATORS-ADDENDUM.html">Operators</a>
+      <a href="JUX-GRAMMAR-ADDENDUM.html">Formal Grammar</a>
+      <a href="JUX-SEMANTICS-ADDENDUM.html">Execution Semantics</a>
+      <a href="JUX-OPERATORS-ADDENDUM.html">Operators (Final)</a>
       <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
-      <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions</a>
+      <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions &amp; Result Lowering</a>
       <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
-      <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotations</a>
+      <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
       <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
     </div>
 
     <div class="sidebar-section">
       <div class="sidebar-section-title">Compiler</div>
       <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
-      <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System</a>
-      <a href="JUX-CORE-LIB-ADDENDUM.html">Core Library</a>
+      <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+      <a href="JUX-CLASS-REPRESENTATION-ADDENDUM.html">Class Representation</a>
+      <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
       <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
-      <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling</a>
-      <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostics</a>
+      <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
+      <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+      <a href="JUX-CODEGEN-FIXES.html">Codegen Fixes</a>
     </div>
 
     <div class="sidebar-section">
-      <div class="sidebar-section-title">Earlier Addenda</div>
-      <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow</a>
-      <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await</a>
-      <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap</a>
+      <div class="sidebar-section-title">Tooling &amp; IDE</div>
+      <a href="JUX-BINDGEN-ADDENDUM.html">Bindgen &amp; Interface Stubs</a>
+      <a href="JUX-LSP-SERVER-ADDENDUM.html">Language Server (juxc-lsp)</a>
+      <a href="JUX-EDITOR-TOOLING-ADDENDUM.html">Editor &amp; IDE Tooling</a>
+      <a href="JUX-INTELLIJ-PLUGIN-ADDENDUM.html">IntelliJ Platform Plugin</a>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Process &amp; History</div>
+      <a href="ERRATA.html">ERRATA — Spec Reconciliations</a>
+      <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
+      <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
+      <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
     </div>
 
     <div class="sidebar-footer">
@@ -65,7 +88,7 @@
 
       <section class="hero">
         <h1>Jux</h1>
-        <p>A systems programming language with Java-readable syntax, Rust-grade safety, and native LLVM-class performance. Compiles through a modified Rust frontend; final binaries match hand-written Rust speed.</p>
+        <p>A systems programming language with Java-readable syntax, Rust-grade safety, and native LLVM-class performance. The compiler emits Rust source that any stable rustc builds; final binaries match hand-written Rust speed.</p>
         <div class="hero-tags">
           <span class="hero-tag">Java syntax</span>
           <span class="hero-tag">Rust safety</span>
@@ -215,7 +238,7 @@
       </div>
 
       <h2 id="project-structure">Project Structure</h2>
-      <p>The compiler implementation is a Cargo workspace of focused crates plus a stdlib in Jux source.</p>
+      <p>The compiler implementation is a Cargo workspace of focused crates. There is no separate Jux-written stdlib in Phase 1 — the standard library <em>is</em> the Rust std, reached through the emitted Rust crate.</p>
 
       <div class="diagram-frame">
         <svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg">
@@ -224,48 +247,47 @@
             <text x="40" y="44" fill="#fff" font-weight="700">juxlang/  ·  Cargo workspace</text>
 
             <!-- crates -->
-            <rect x="20" y="80" width="220" height="220" rx="8" fill="#f6f4ff" stroke="#6c4af2"/>
+            <rect x="20" y="80" width="230" height="220" rx="8" fill="#f6f4ff" stroke="#6c4af2"/>
             <text x="32" y="100" font-weight="700" fill="#6c4af2">crates/</text>
-            <text x="40" y="124">juxc/  · compiler binary</text>
-            <text x="40" y="142">jux/  · project tool (cargo-like)</text>
-            <text x="40" y="160">jux-syntax/  · lex + parse</text>
-            <text x="40" y="178">jux-hir/  · resolve + typeck</text>
-            <text x="40" y="196">jux-mir/  · MIR + borrow + lower</text>
-            <text x="40" y="214">jux-codegen/  · emit Rust source</text>
-            <text x="40" y="232">jux-diag/  · diagnostics</text>
-            <text x="40" y="250">jux-driver/  · pipeline glue</text>
-            <text x="40" y="268">jux-manifest/  · jux.toml</text>
-            <text x="40" y="286">jux-rt/  · runtime crate</text>
+            <text x="40" y="122">juxc-lex/  · lexer</text>
+            <text x="40" y="140">juxc-parse/ + juxc-ast/  · parser</text>
+            <text x="40" y="158">juxc-source/  · files + spans</text>
+            <text x="40" y="176">juxc-resolve/  · name resolution</text>
+            <text x="40" y="194">juxc-tycheck/  · type checking</text>
+            <text x="40" y="212">juxc-diagnostics/  · E-codes</text>
+            <text x="40" y="230">juxc-backend-rust/  · emit Rust</text>
+            <text x="40" y="248">juxc-driver/  · juxc + jux binaries</text>
+            <text x="40" y="266">juxc-lsp/  · language server</text>
+            <text x="40" y="284">juxc-bindgen/  · stubs + interop</text>
 
-            <!-- stdlib -->
-            <rect x="260" y="80" width="200" height="120" rx="8" fill="#e0fbf6" stroke="#00d9c5"/>
-            <text x="272" y="100" font-weight="700" fill="#00867a">stdlib/</text>
-            <text x="280" y="124">core/  · written in Jux</text>
-            <text x="290" y="142">option, result, iter</text>
-            <text x="290" y="160">string, exception, async</text>
-            <text x="280" y="180">std/  · expanded in Jux later</text>
+            <!-- std model -->
+            <rect x="270" y="80" width="190" height="120" rx="8" fill="#e0fbf6" stroke="#00d9c5"/>
+            <text x="282" y="100" font-weight="700" fill="#00867a">std = Rust std</text>
+            <text x="290" y="124">emitted crate links the</text>
+            <text x="290" y="142">Rust std directly —</text>
+            <text x="290" y="160">Vec, HashMap, String, …</text>
+            <text x="290" y="180">via the core-lib surface</text>
 
-            <!-- tests/docs -->
-            <rect x="260" y="220" width="200" height="80" rx="8" fill="#fff8e8" stroke="#e8a87c"/>
-            <text x="272" y="240" font-weight="700" fill="#a06236">tests/</text>
-            <text x="280" y="258">golden/, e2e/</text>
-            <text x="280" y="276">borrow-corpus/</text>
-            <text x="280" y="294">diagnostic-corpus/</text>
+            <!-- ide/editors -->
+            <rect x="270" y="220" width="190" height="80" rx="8" fill="#fff8e8" stroke="#e8a87c"/>
+            <text x="282" y="240" font-weight="700" fill="#a06236">ide/ · editors/</text>
+            <text x="290" y="258">intellij-plugin (PSI)</text>
+            <text x="290" y="276">jux.tmLanguage.json</text>
+            <text x="290" y="294">jux-tokens.json (generated)</text>
 
-            <!-- examples / tools -->
+            <!-- examples / docs -->
             <rect x="480" y="80" width="220" height="220" rx="8" fill="#fff" stroke="#cccdd6"/>
-            <text x="492" y="100" font-weight="700" fill="#1a1a2e">examples/  ·  tools/  ·  docs/</text>
+            <text x="492" y="100" font-weight="700" fill="#1a1a2e">examples/  ·  Architecture/</text>
             <text x="500" y="124">examples/  · sample programs</text>
-            <text x="510" y="142">hello, tcp-echo, blink</text>
-            <text x="500" y="166">tools/</text>
-            <text x="510" y="184">borrow-fuzzer  · invariant test</text>
-            <text x="510" y="202">snapshot-runner</text>
-            <text x="510" y="220">benchmarks</text>
-            <text x="500" y="244">docs/  · this site</text>
-            <text x="500" y="268">.github/workflows/</text>
-            <text x="510" y="286">multi-rustc CI matrix</text>
+            <text x="510" y="142">compiled end-to-end</text>
+            <text x="500" y="166">Architecture/  · the spec</text>
+            <text x="510" y="184">dossier + addenda (md)</text>
+            <text x="510" y="202">ERRATA.md  · reconciliations</text>
+            <text x="510" y="220">Docs/  · this site</text>
+            <text x="500" y="244">bin/  · juxc.exe · jux.exe</text>
+            <text x="500" y="268">juxc-lsp.exe</text>
 
-            <text x="20" y="334" fill="#888" font-size="11">10 main crates · 2 binaries (juxc, jux) · 5 test layers · multi-rustc CI</text>
+            <text x="20" y="334" fill="#888" font-size="11">11 crates · 3 binaries (juxc, jux, juxc-lsp) · spec-first workflow (addenda before code)</text>
           </g>
         </svg>
         <div class="diagram-caption">Workspace layout. Each crate is small and focused. Most users only see <code>juxc</code> and <code>jux</code>.</div>
@@ -799,10 +821,49 @@ users.map(u -&gt; u.name);                          <span class="com">// passed 
           <div class="doc-card-title">Diagnostic Codes</div>
           <div class="doc-card-desc">Master catalog of every E#### / W#### code. JSON output schema. Output formats. Stability promise.</div>
         </a>
+        <a class="doc-card" href="JUX-CLASS-REPRESENTATION-ADDENDUM.html">
+          <div class="doc-card-tag">Compiler</div>
+          <div class="doc-card-title">Class Representation</div>
+          <div class="doc-card-desc">How class instances lower to Rust: shared mutable references (<code>Rc&lt;RefCell&lt;…&gt;&gt;</code>), Java-style aliasing semantics, the wrapper model.</div>
+        </a>
+        <a class="doc-card" href="JUX-CODEGEN-FIXES.html">
+          <div class="doc-card-tag">Compiler</div>
+          <div class="doc-card-title">Codegen Fixes</div>
+          <div class="doc-card-desc">Catalog of emitted-Rust correctness fixes: readable output rules, borrow-leak hardening, lowering corner cases.</div>
+        </a>
       </div>
 
-      <div class="section-heading">Earlier Addenda &amp; Roadmap</div>
+      <div class="section-heading">Tooling &amp; IDE</div>
       <div class="doc-grid">
+        <a class="doc-card" href="JUX-BINDGEN-ADDENDUM.html">
+          <div class="doc-card-tag">Tooling</div>
+          <div class="doc-card-title">Bindgen &amp; Interface Stubs</div>
+          <div class="doc-card-desc"><code>juxc bindgen</code> — bindings and interface stubs for interop; in-memory hybrid stubs plus on-demand <code>.jux.d</code> generation.</div>
+        </a>
+        <a class="doc-card" href="JUX-LSP-SERVER-ADDENDUM.html">
+          <div class="doc-card-tag">Tooling</div>
+          <div class="doc-card-title">Language Server (juxc-lsp)</div>
+          <div class="doc-card-desc">The single source of truth for editor intelligence: diagnostics, completion, navigation — every editor routes through <code>juxc-lsp</code>.</div>
+        </a>
+        <a class="doc-card" href="JUX-EDITOR-TOOLING-ADDENDUM.html">
+          <div class="doc-card-tag">Tooling</div>
+          <div class="doc-card-title">Editor &amp; IDE Tooling</div>
+          <div class="doc-card-desc">TextMate grammar, token model, editor integration strategy across VS Code, IntelliJ, and anything LSP-capable.</div>
+        </a>
+        <a class="doc-card" href="JUX-INTELLIJ-PLUGIN-ADDENDUM.html">
+          <div class="doc-card-tag">Tooling</div>
+          <div class="doc-card-title">IntelliJ Platform Plugin</div>
+          <div class="doc-card-desc">The IntelliJ plugin architecture: generated token set from <code>juxc-lex</code>, Java-style PSI parser, project model, toolchain pins.</div>
+        </a>
+      </div>
+
+      <div class="section-heading">Process &amp; History</div>
+      <div class="doc-grid">
+        <a class="doc-card" href="ERRATA.html">
+          <div class="doc-card-tag">Process</div>
+          <div class="doc-card-title">ERRATA — Spec Reconciliations</div>
+          <div class="doc-card-desc">Normative resolutions of cross-addendum contradictions (panic vs exception, init order, visibility, nullable primitives). All applied back into the addenda.</div>
+        </a>
         <a class="doc-card" href="JUX-INHERITANCE-BORROW-ADDENDUM.html">
           <div class="doc-card-tag">Reference</div>
           <div class="doc-card-title">Inheritance × Borrow Inference</div>
@@ -836,8 +897,10 @@ users.map(u -&gt; u.name);                          <span class="com">// passed 
       <p>If you're an implementer, the <strong>Compiler Pipeline</strong> is your reference. Every phase, every algorithm, every diagnostic code lives there or one click away.</p>
 
     </div>
+    <nav class="toc-rail" id="toc" aria-label="On this page"></nav>
   </main>
 
 </div>
+<script src="parser.js"></script>
 </body>
 </html>

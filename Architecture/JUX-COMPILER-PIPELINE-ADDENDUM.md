@@ -357,7 +357,9 @@ The borrow checker is the language's central technical achievement and the most 
 
 ### C.5.1. Where It Runs
 
-After MIR construction (phase 11). The CFG gives the borrow checker:
+After MIR construction (phase 11). Per `ERRATA.md` E3: **one borrow checker, one phase** — phase 11 is the sole arbiter of all borrow rules for **both sync and async bodies**, including the async-specific rules of `JUX-ASYNC-ADDENDUM-v2.md`. When the checked body is async, an `await` expression inserts a yield point that ends any non-`Send` borrow whose lifetime would span it; this is part of the same visitor pass, not a separate "async-borrow" check. Async lowering (phase 14+) consumes borrow-checked MIR and does **not** re-check borrows.
+
+The CFG gives the borrow checker:
 
 - A list of basic blocks per function.
 - A successor relation (which block can flow to which).

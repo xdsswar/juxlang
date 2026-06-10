@@ -1,5 +1,11 @@
 # Jux Project — Deep Audit & Suggestions
 
+> **Status (2026-06-10): historical snapshot.** This audit describes the repo
+> as it stood when it was written; the "headline state" below is out of date
+> (the real type-checker, borrow-stress hardening, generics, and polymorphism
+> have since landed). Items completed since the audit are marked **✅ DONE**
+> inline. Unmarked items remain open recommendations, not commitments.
+
 *Prepared from a full read of `Architecture/*.md`, the compiler crates under `crates/`, and the `.jux` examples. Items are roughly ordered by leverage — top entries are decisions that get harder the longer you wait.*
 
 ---
@@ -16,7 +22,9 @@ This is fine. It just means the next moves have to be careful.
 
 These are the items where shipping more code first makes them harder to do later.
 
-### 1.1 Decide on class representation NOW, then formalize
+### 1.1 Decide on class representation NOW, then formalize — ✅ DONE
+*(`JUX-CLASS-REPRESENTATION-ADDENDUM.md` exists; classes lower as shared
+mutable references — `Rc<RefCell<…>>` — and the backend redesign landed.)*
 
 The backend currently assumes every class is `Arc<C_Inner>`. The right move is a **compiler-chosen** representation (inline | `Box` | `Rc` | `Arc`) with no user-visible annotations. **This decision should be written into `JUX-COMPILER-PIPELINE-ADDENDUM.md` as §C.9.3.1 before more backend code calcifies the Arc assumption.**
 
@@ -45,7 +53,9 @@ The spec's headline promises (borrow checker, async lowering, drop insertion, re
 
 You don't have to *build* MIR now. But you should **stop adding features that pretend AST is the final IR**. Concretely: don't add async/await codegen, drop blocks, or anything from spec phases 11–15 to the AST→Rust path. Those should wait for MIR.
 
-### 1.4 Resolve the four spec contradictions before they spread
+### 1.4 Resolve the four spec contradictions before they spread — ✅ DONE
+*(`Architecture/ERRATA.md` exists, resolves all four — E1–E4 — plus more,
+and as of 2026-06-10 every resolution is applied back into the addenda.)*
 
 The spec audit found four real ones:
 
@@ -60,7 +70,10 @@ The spec audit found four real ones:
 
 ## Tier 2 — The biggest single-leverage implementation work
 
-### 2.1 Build the real type-checker (188 → ~1000 lines)
+### 2.1 Build the real type-checker (188 → ~1000 lines) — ✅ DONE
+*(`juxc-tycheck` is now a full checker: member/visibility resolution,
+inheritance and interface-dispatch rules, smart-casts, exhaustiveness,
+generics inference incl. explicit type-args, wildcards, and const generics.)*
 
 This is the highest-leverage thing in the entire codebase. The current type-checker only validates `main()`'s signature. That means **every** type-dependent feature silently accepts wrong code:
 
@@ -109,7 +122,9 @@ Nine annotations are already implied (`@Override`, `@Deprecated`, `@layout(c)`, 
 
 **Action:** a `JUX-STANDARD-ANNOTATIONS.md` page that lists every blessed annotation with semantics. Anything not on the list is a user-defined annotation with no compiler behavior.
 
-### 3.3 Decide: are panics user-visible or not?
+### 3.3 Decide: are panics user-visible or not? — ✅ DONE
+*(Decided exactly as recommended: panics are aborts, not catchable;
+exceptions are values. Normative in `ERRATA.md` E1.)*
 
 The cleanest design (Rust's): panics are aborts, not catchable. Exceptions are values. The user only knows about exceptions.
 

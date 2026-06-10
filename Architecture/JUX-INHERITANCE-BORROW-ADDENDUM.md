@@ -164,6 +164,10 @@ Because `super` is statically resolved, it does not contribute to the virtual un
 
 Subclasses may read and write `protected` fields of their superclass. The borrow checker treats every such access as a borrow of the receiver, with the same whole-object rule as §6.9.1. A subclass cannot hold a borrow on `super.field` independent of `this`.
 
+Per `ERRATA.md` E4, `protected` follows the inheritance chain **regardless of package boundary** — a subclass in any package may read/write `protected` members it inherits from an ancestor in any other package. "Same package" is not an additional restriction (that's the role of `internal` / package-private; see the visibility table in `JUX-LANG-V1.md` §7.4).
+
+Construction-order interactions (when an inherited field becomes readable during `new`) follow `ERRATA.md` E2: the parent constructs fully before the child's field initializers, `init { }` blocks, and constructor body run, in that order — see `JUX-SEMANTICS-ADDENDUM.md` §S.4.4.
+
 ```jux
 public class Animal {
     protected int age;

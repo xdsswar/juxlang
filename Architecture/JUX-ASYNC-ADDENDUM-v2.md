@@ -265,6 +265,8 @@ Shared borrows are fine. Class references are fine (refcounting keeps them alive
 
 This rule exists because at an `await`, control returns to the event loop and other code may run, including code that observes the same object. Allowing exclusive borrows across awaits would let two suspended functions interleave their mutations on the same object — the data-race-via-cooperative-scheduling failure that Node.js codebases hit informally and that JS programmers learn to avoid by convention. Jux makes the convention a compile-time check.
 
+**Who enforces it.** Per `ERRATA.md` E3, this rule is enforced by the one borrow checker — phase 11, `JUX-COMPILER-PIPELINE-ADDENDUM.md` §C.5 — as part of its normal pass over async bodies (an `await` is a yield point that ends any non-`Send` borrow spanning it). Async lowering does not re-check borrows; there is no separate "async-borrow" phase.
+
 ```jux
 public async void good(User u) {
     var name = u.name;                    // shared access

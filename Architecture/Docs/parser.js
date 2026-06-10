@@ -314,13 +314,12 @@
     return out.join('\n');
   }
 
-  function buildToc(html) {
-    // Extract h2 and h3 headings into a list of TOC entries
-    var div = document.createElement('div');
-    div.innerHTML = html;
-    var hs = div.querySelectorAll('h2, h3');
+  function buildTocFrom(root) {
+    // Extract h2 and h3 headings (from a live element) into TOC entries.
+    var hs = root.querySelectorAll('h2, h3');
     var entries = [];
     for (var i = 0; i < hs.length; i++) {
+      if (!hs[i].id) hs[i].id = slug(hs[i].textContent);
       entries.push({
         level: parseInt(hs[i].tagName.substring(1), 10),
         text: hs[i].textContent,
@@ -330,35 +329,95 @@
     return entries;
   }
 
-  function init() {
-    var src = document.getElementById('md-content');
-    if (!src) return;
-    var md = src.textContent;
-    var html = render(md);
-    var target = document.getElementById('rendered');
-    if (target) {
-      target.innerHTML = html;
+  // ---- Theme toggle -------------------------------------------------
+  // The pre-paint snippet in each page's <head> applies the persisted
+  // choice before first render; this only wires the button.
+
+  function currentTheme() {
+    var explicit = document.documentElement.getAttribute('data-theme');
+    if (explicit) return explicit;
+    return (window.matchMedia &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches)
+      ? 'dark' : 'light';
+  }
+
+  function setupThemeToggle() {
+    var btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    function paint() {
+      btn.textContent = currentTheme() === 'dark' ? '☀' : '☾';
+      btn.setAttribute('title', currentTheme() === 'dark'
+        ? 'Switch to light theme' : 'Switch to dark theme');
     }
-    // Build TOC if requested
-    var tocTarget = document.getElementById('toc');
-    if (tocTarget) {
-      var entries = buildToc(html);
-      var ul = '<ul class="toc-list">';
-      for (var k = 0; k < entries.length; k++) {
-        var e = entries[k];
-        ul += '<li class="toc-l' + e.level + '"><a href="#' + e.id + '">' +
-              e.text + '</a></li>';
+    btn.addEventListener('click', function () {
+      var next = currentTheme() === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('jux-docs-theme', next); } catch (e) { /* private mode */ }
+      paint();
+    });
+    paint();
+  }
+
+  // ---- TOC scroll spy ------------------------------------------------
+
+  function setupTocSpy(tocTarget) {
+    var links = tocTarget.querySelectorAll('a[href^="#"]');
+    if (!links.length) return;
+    var byId = {};
+    var headings = [];
+    for (var i = 0; i < links.length; i++) {
+      var id = links[i].getAttribute('href').substring(1);
+      var h = document.getElementById(id);
+      if (h) { byId[id] = links[i]; headings.push(h); }
+    }
+    function onScroll() {
+      var active = null;
+      for (var i = 0; i < headings.length; i++) {
+        if (headings[i].getBoundingClientRect().top <= 90) active = headings[i].id;
+        else break;
       }
-      ul += '</ul>';
-      tocTarget.innerHTML = ul;
+      for (var id in byId) byId[id].classList.toggle('active', id === active);
     }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+  }
+
+  function init() {
+    // Render embedded markdown when present (spec pages); the index page
+    // is static HTML and skips this step.
+    var src = document.getElementById('md-content');
+    var target = document.getElementById('rendered');
+    if (src && target) {
+      target.innerHTML = render(src.textContent);
+    }
+
+    // Build the on-page TOC from whatever ended up in the content column.
+    var tocTarget = document.getElementById('toc');
+    var contentRoot = target || document.querySelector('.content');
+    if (tocTarget && contentRoot) {
+      var entries = buildTocFrom(contentRoot);
+      if (entries.length) {
+        var ul = '<div class="toc-rail-title">On this page</div><ul class="toc-list">';
+        for (var k = 0; k < entries.length; k++) {
+          var e = entries[k];
+          ul += '<li class="toc-l' + e.level + '"><a href="#' + e.id + '">' +
+                escapeHtml(e.text) + '</a></li>';
+        }
+        ul += '</ul>';
+        tocTarget.innerHTML = ul;
+        setupTocSpy(tocTarget);
+      }
+    }
+
     // Highlight active sidebar item
-    var path = (location.pathname.split('/').pop() || '').toLowerCase();
+    var path = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
     var sideLinks = document.querySelectorAll('.sidebar a');
     for (var s = 0; s < sideLinks.length; s++) {
       var href = (sideLinks[s].getAttribute('href') || '').toLowerCase();
       if (href === path) sideLinks[s].classList.add('active');
     }
+
+    setupThemeToggle();
   }
 
   if (document.readyState === 'loading') {

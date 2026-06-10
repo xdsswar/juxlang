@@ -5,14 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gaps Roadmap (historical) — Jux</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+/* Apply the persisted theme before first paint to avoid a flash. */
+try { var t = localStorage.getItem('jux-docs-theme');
+      if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
 </head>
 <body>
 <div class="layout">
 <aside class="sidebar">
-  <a class="sidebar-brand" href="index.html">
-    <span class="sidebar-brand-mark">J</span>
-    <span>Jux</span>
-  </a>
+  <div class="sidebar-top">
+    <a class="sidebar-brand" href="index.html">
+      <span class="sidebar-brand-mark">J</span>
+      <span>Jux</span>
+    </a>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme">☾</button>
+  </div>
   <div class="sidebar-section">
     <div class="sidebar-section-title">Start Here</div>
     <a href="index.html">Overview</a>
@@ -33,16 +41,26 @@
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
   </div>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Compiler &amp; Tooling</div>
+    <div class="sidebar-section-title">Compiler</div>
     <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
     <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+    <a href="JUX-CLASS-REPRESENTATION-ADDENDUM.html">Class Representation</a>
     <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
     <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
     <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
     <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+    <a href="JUX-CODEGEN-FIXES.html">Codegen Fixes</a>
   </div>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Earlier Addenda</div>
+    <div class="sidebar-section-title">Tooling &amp; IDE</div>
+    <a href="JUX-BINDGEN-ADDENDUM.html">Bindgen & Interface Stubs</a>
+    <a href="JUX-LSP-SERVER-ADDENDUM.html">Language Server (juxc-lsp)</a>
+    <a href="JUX-EDITOR-TOOLING-ADDENDUM.html">Editor & IDE Tooling</a>
+    <a href="JUX-INTELLIJ-PLUGIN-ADDENDUM.html">IntelliJ Platform Plugin</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Process &amp; History</div>
+    <a href="ERRATA.html">ERRATA — Spec Reconciliations</a>
     <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
     <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
     <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
@@ -58,13 +76,14 @@
       <div class="breadcrumb"><a href="index.html">← Jux Specification</a></div>
       <div id="rendered"></div>
     </div>
+    <nav class="toc-rail" id="toc" aria-label="On this page"></nav>
   </main>
 </div>
 
 <script id="md-content" type="text/markdown">
 # Jux Spec — Gap Analysis and Roadmap
 
-**Status:** Living document. Tracks specification gaps in the v0.1 dossier. Updated as addenda land.
+**Status:** Living document — but the per-gap prose below predates most of the addenda; check the **Resolved** list first. A gap whose addendum has landed is listed there even if its body text below still reads as open.
 
 **Purpose:** A single place to see what's left to write. Each gap is sized, prioritized, and given a recommended next step. When an addendum lands, the corresponding gap is moved to "Resolved" at the bottom.
 
@@ -87,6 +106,14 @@ Gaps are grouped by category, not priority. The summary table at the end orders 
 
 - ✅ **Inheritance × borrow checker.** Addendum §6.9, §7.4.1.
 - ✅ **Async / await.** Addendum §18 (v2, Kotlin-shaped).
+- ✅ **Error type hierarchy + Result lowering** (gap 1.2). `JUX-EXCEPTIONS-ADDENDUM.md`.
+- ✅ **Minimal core library** (gaps 1.1, 1.3, 1.4 — Phase-1 surface). `JUX-CORE-LIB-ADDENDUM.md`; Phase 1 backs it with the Rust std (collections wrap `Vec` / `HashMap` / …).
+- ✅ **Operator overloading policy + equality/hash pairing** (gaps 2.1, 2.2). `JUX-OPERATORS-ADDENDUM.md`.
+- ✅ **Build system and package manager** (gap 3.1). `JUX-BUILD-SYSTEM-ADDENDUM.md`.
+- ✅ **Tooling / IDE commitment** (gap 3.3). `JUX-EDITOR-TOOLING-ADDENDUM.md`, `JUX-LSP-SERVER-ADDENDUM.md`, `JUX-INTELLIJ-PLUGIN-ADDENDUM.md`.
+- ✅ **Memory layout and ABI** (gap 4.2). `JUX-LAYOUT-ABI-ADDENDUM.md`, `JUX-RUNTIME-ABI-ADDENDUM.md`.
+- ✅ **Compiler diagnostics specification** (gap 4.4). `JUX-DIAGNOSTICS-ADDENDUM.md`.
+- ✅ **Nested / inner / anonymous classes — positioned** (gap 2.3). `JUX-MISSING-DEFS-ADDENDUM.md` §M.9 (explicitly unsupported in Phase 1, codes E0991–E0993).
 
 ---
 

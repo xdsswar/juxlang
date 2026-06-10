@@ -1341,7 +1341,7 @@ public class Dog extends Animal {
 }
 ```
 
-`super(...)` must be the first statement of the constructor body. If a class has a non-trivial parent constructor (no zero-arg form) and the subclass does not invoke `super(...)` explicitly, the compiler reports `E0312` (missing super call).
+`super(...)` must be the first statement of the constructor body. If a class has a non-trivial parent constructor (no zero-arg form) and the subclass does not invoke `super(...)` explicitly, the compiler reports `E0211` (missing super call, per `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4).
 
 **Default constructor.** If no constructor is declared, the compiler synthesizes an implicit zero-argument constructor that calls `super()` (when a parent exists) and initializes fields to their declared defaults. Declaring *any* constructor removes the implicit one.
 
@@ -1363,6 +1363,15 @@ public class Singleton {
 ```
 
 **Init blocks.** For initialization logic shared across multiple constructors, see `JUX-MISSING-DEFS-ADDENDUM.md` §M.1 (`init { ... }` blocks).
+
+**Construction order.** Per `ERRATA.md` E2 (and `JUX-SEMANTICS-ADDENDUM.md` §S.4.4), `new C(args)` initializes in this order:
+
+1. **`super(args)` resolves first** — the parent's constructor (including its own ancestor chain, init blocks, and constructor body) completes before any code of `C` runs. (`this(...)` delegation instead runs the named sibling constructor's full chain.)
+2. **Field initializers** of `C` are evaluated in textual order.
+3. **`init { }` blocks** of `C` run, in textual order — before the constructor body. An init block may reference inherited fields because the parent has already constructed.
+4. **The constructor body** runs.
+
+This matches Java semantics.
 
 **Record constructors.** Records get an implicit primary constructor from their declaration plus optional compact-form validation; see §7.6.
 
@@ -1452,7 +1461,7 @@ public interface Trainable {
     }
 }
 
-public class Dog extends Animal implements Trainable {  // final by default
+public class Dog extends Animal implements Trainable {
     private List<String> tricks;
 
     public Dog(String name, int age = 0) {
@@ -1472,7 +1481,17 @@ public class Dog extends Animal implements Trainable {  // final by default
 }
 ```
 
-A class may extend exactly one class and implement any number of interfaces. The `final` modifier (default) prevents further inheritance. The `open` modifier permits it. To extend a class, the parent must be marked `open` or `abstract`.
+A class may extend exactly one **non-final** class and implement any number of interfaces (Java's rule). Classes are extendable by default; mark a class `final` to forbid extension (`E0420` fires on `extends`-ing a final class). There is no `open` keyword in Jux.
+
+**Visibility across the hierarchy.** Per `ERRATA.md` E4, `protected` follows the inheritance chain regardless of package boundary — a subclass in any package may use `protected` members it inherits. The full table:
+
+| Modifier            | Subclass access? | Same-package access? |
+|---------------------|------------------|----------------------|
+| `private`           | No               | No                   |
+| `package` (default) | No               | Yes                  |
+| `protected`         | Yes              | Yes                  |
+| `internal`          | No               | Yes (same module)    |
+| `public`            | Yes              | Yes                  |
 
 #### 7.4.1. Method Overridability — The Rule
 
@@ -2194,12 +2213,20 @@ public void main() {
     var displayName = findName(42) ?: "unknown";
     var altName     = findName(42) ?? "unknown";
 
-    // Safe navigation
-    var length = findName(42)?.length();    // returns int?
+    // Safe navigation — the chain short-circuits to null when the
+    // receiver is null. The result here is a reference type (String?).
+    var upper = findName(42)?.toUpperCase();    // String?
+
+    // For a chain that would end in a primitive, test-and-use instead
+    // (primitives cannot be nullable — see below):
+    var name = findName(42);
+    var length = name != null ? name.length() : 0;   // int
 }
 ```
 
 Nullability is tracked in the type system. Non-nullable references cannot hold null. This eliminates NullPointerException as a runtime failure mode.
+
+**Primitives cannot be nullable.** Per `ERRATA.md` E5, `T?` is well-formed only for reference types — `String`, user classes, records, enums, arrays of references. `int?`, `bool?`, `char?`, `float?`, and the width-explicit numerics are rejected at type-check time (`E0410` with a "primitive type X cannot be nullable" message). A `?.` chain whose last segment produces a primitive has no expressible result type yet — restructure with a null test / smart-cast (as above). Lifting such chains into a boxed shape (`Integer?`-style) is deferred until boxed primitive types land.
 
 ### 7.11. Error Handling
 
