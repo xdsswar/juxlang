@@ -23,6 +23,10 @@ impl<'a> Parser<'a> {
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             if let Some(stmt) = self.parse_stmt() {
                 statements.push(stmt);
+                // A desugaring statement (tuple destructure) may have
+                // queued follow-up declarations — same scope, source
+                // order.
+                statements.append(&mut self.pending_stmts);
             } else {
                 // Recovery: skip to the next `;` or `}` so we don't loop
                 // forever on a malformed statement.
@@ -89,6 +93,22 @@ impl<'a> Parser<'a> {
             return Some(Stmt::Labeled { label, stmt: Box::new(inner) });
         }
         if self.at_kw(Keyword::Var) {
+            // Tuple destructuring — `var (q, r) = expr;` (§5.3 /
+            // grammar §A.2.8 tuple-pattern). Desugars at parse time to
+            //
+            //     var __jux_tupN = expr;
+            //     var q = __jux_tupN.0;
+            //     var r = __jux_tupN.1;
+            //
+            // so every later phase sees ordinary declarations plus
+            // tuple-element accesses. Phase 1 accepts flat identifier
+            // patterns only (no nesting); `_` skips an element.
+            if matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::LParen)
+            ) {
+                return self.parse_var_tuple_destructure();
+            }
             return self.parse_var_decl().map(Stmt::VarDecl);
         }
         if self.at_kw(Keyword::If) {
@@ -529,6 +549,87 @@ impl<'a> Parser<'a> {
     /// Equivalent to [`Self::parse_var_decl_with`] with `is_final = false`.
     pub(crate) fn parse_var_decl(&mut self) -> Option<VarDecl> {
         self.parse_var_decl_with(false)
+    }
+
+    /// `var '(' ident (',' ident)+ ')' '=' expr ';'` — tuple
+    /// destructuring (§5.3). Returns the synthesized temp `var` and
+    /// queues one element `var` per binder on
+    /// [`crate::Parser::pending_stmts`] (drained by `parse_block`).
+    /// `_` binders skip their element. Nested patterns are a Phase-1
+    /// diagnostic.
+    fn parse_var_tuple_destructure(&mut self) -> Option<Stmt> {
+        let start = self.peek_span();
+        self.advance(); // 'var'
+        self.advance(); // '('
+        let mut binders: Vec<juxc_ast::Ident> = Vec::new();
+        loop {
+            if self.at(&TokenKind::LParen) {
+                let here = self.peek_span();
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        "nested tuple patterns aren't supported yet (Phase 1) — destructure the outer tuple first, then the element",
+                    )
+                    .with_span(here),
+                );
+                return None;
+            }
+            let ident = self.parse_ident()?;
+            binders.push(ident);
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RParen, "')' to close tuple pattern");
+        if binders.len() < 2 {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "a tuple pattern needs at least two binders — use a plain `var name = …;` otherwise",
+                )
+                .with_span(start.join(self.last_consumed_span())),
+            );
+        }
+        self.expect(&TokenKind::Eq, "'=' in tuple destructuring");
+        let init = self.parse_expr();
+        self.expect(&TokenKind::Semicolon, "';' after tuple destructuring");
+        let end = self.last_consumed_span();
+        let span = start.join(end);
+
+        let tmp_name = format!("__jux_tup{}", self.tuple_tmp_counter);
+        self.tuple_tmp_counter += 1;
+        let tmp_ident = juxc_ast::Ident { text: tmp_name.clone(), span: start };
+        // One element binding per non-`_` binder, reading `.N` off
+        // the temp. Queued for `parse_block` to splice in after the
+        // temp declaration.
+        for (i, binder) in binders.iter().enumerate() {
+            if binder.text == "_" {
+                continue;
+            }
+            let elem_init = Expr::Field(juxc_ast::FieldExpr {
+                object: Box::new(Expr::Path(juxc_ast::QualifiedName {
+                    segments: vec![juxc_ast::Ident { text: tmp_name.clone(), span: binder.span }],
+                    span: binder.span,
+                })),
+                field: juxc_ast::Ident { text: i.to_string(), span: binder.span },
+                safe: false,
+                span: binder.span,
+            });
+            self.pending_stmts.push(Stmt::VarDecl(VarDecl {
+                name: binder.clone(),
+                ty: None,
+                init: Some(elem_init),
+                is_final: false,
+                span: binder.span,
+            }));
+        }
+        Some(Stmt::VarDecl(VarDecl {
+            name: tmp_ident,
+            ty: None,
+            init,
+            is_final: false,
+            span,
+        }))
     }
 
     /// Underlying parser for `[final|const] var name = expr ;`.

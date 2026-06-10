@@ -150,6 +150,11 @@ fn is_path_named(e: &Expr, name: &str) -> bool {
 /// safely emit `for x in &xs`.
 fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
     match e {
+        // Tuple literal: each element is a by-value consume site,
+        // same as a call argument.
+        Expr::TupleLit(elems, _) => elems
+            .iter()
+            .any(|el| is_path_named(el, name) || expr_moves_path_at_top(el, name)),
         // Function / method call: each arg is a consume site
         // (passes by value). Method receivers (`x.method()`)
         // borrow via auto-deref, so we walk the callee for nested

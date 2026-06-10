@@ -271,6 +271,17 @@ impl fmt::Display for Ty {
                 ArrayKind::Dynamic => write!(f, "{element}[]"),
             },
             Ty::User { name, generic_args } => {
+                // Tuple sentinel displays in source syntax: `(int, String)`.
+                if name == juxc_ast::TUPLE_SENTINEL {
+                    f.write_str("(")?;
+                    for (i, arg) in generic_args.iter().enumerate() {
+                        if i > 0 {
+                            f.write_str(", ")?;
+                        }
+                        write!(f, "{arg}")?;
+                    }
+                    return f.write_str(")");
+                }
                 f.write_str(name)?;
                 if !generic_args.is_empty() {
                     f.write_str("<")?;
@@ -425,6 +436,25 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         return Ty::Array {
             element: Box::new(element),
             kind,
+        };
+    }
+
+    // 1.5. Tuple type — the `__tuple` sentinel encoding (§5.3).
+    //    Lower each element and keep the sentinel as a `Ty::User`
+    //    so compatibility falls out of the ordinary name+pairwise-
+    //    args rule. Checked BEFORE user-type resolution so the
+    //    sentinel never hits the import/FQN machinery.
+    if t.name.segments.len() == 1
+        && t.name.segments[0].text == juxc_ast::TUPLE_SENTINEL
+    {
+        let generic_args = t
+            .generic_args
+            .iter()
+            .map(|g| lower_generic_arg(g, env, symbols))
+            .collect();
+        return Ty::User {
+            name: juxc_ast::TUPLE_SENTINEL.to_string(),
+            generic_args,
         };
     }
 

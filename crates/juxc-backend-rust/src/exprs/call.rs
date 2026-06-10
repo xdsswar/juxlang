@@ -101,7 +101,7 @@ impl RustEmitter {
             // imported foreign fn keyed by its full `rust.<crate>.<fn>` path.
             Expr::Path(qn) if qn.segments.len() == 1 => {
                 let bare = qn.segments[0].text.as_str();
-                if let Some(sig) = self.symbols.functions.get(bare) {
+                if let Some((_, sig)) = self.symbols.lookup_function(bare) {
                     return sig.is_foreign_result;
                 }
                 self.symbols

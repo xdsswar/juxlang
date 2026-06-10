@@ -1,0 +1,35 @@
+// Tuples (§5.3) — anonymous, ordered, fixed-size value groupings.
+//
+// - Tuple types `(A, B)` appear in return slots, params, and locals;
+//   literals are `(a, b)`; elements read as `.0`, `.1`, ... (bounds
+//   checked at compile time, E0412).
+// - `var (q, r) = expr;` destructures; `_` skips an element.
+// - Value semantics: copied on assignment, stack-allocated, no
+//   boxing — lowered to Rust tuples verbatim.
+
+package tuples;
+
+(int, int) divmod(int a, int b) {
+    return (a / b, a % b);
+}
+
+(String, int, bool) info() {
+    return ("jux", 1, true);
+}
+
+public void main() {
+    var (q, r) = divmod(17, 5);
+    print(q);
+    print(r);
+
+    var pair = divmod(22, 7);
+    print(pair.0);
+    print(pair.1);
+
+    var (name, ver, _) = info();
+    print(name + " v" + ver);
+
+    var t = (q + r, "sum");
+    print(t.0);
+    print(t.1);
+}

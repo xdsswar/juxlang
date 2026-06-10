@@ -347,6 +347,11 @@ pub(crate) fn collect_mutated_names_in_stmt(
 /// Sub-expressions are walked recursively so nested calls are caught.
 pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_mut: &HashSet<String>) {
     match e {
+        Expr::TupleLit(elems, _) => {
+            for el in elems {
+                collect_mutating_calls(el, out, user_mut);
+            }
+        }
         Expr::Call(c) => {
             if let Expr::Field(f) = &*c.callee {
                 // A method call counts as mutating the receiver when
@@ -519,6 +524,7 @@ fn if_contains_await(i: &juxc_ast::IfStmt) -> bool {
 fn expr_contains_await(e: &Expr) -> bool {
     match e {
         Expr::Await(_, _) => true,
+        Expr::TupleLit(elems, _) => elems.iter().any(expr_contains_await),
         Expr::NotNullAssert(inner, _) => expr_contains_await(inner),
         Expr::Call(c) => {
             expr_contains_await(&c.callee) || c.args.iter().any(expr_contains_await)
@@ -1336,7 +1342,7 @@ impl crate::RustEmitter {
                 // type tells us the result's shape.
                 if let juxc_ast::Expr::Path(qn) = &*c.callee {
                     if qn.segments.len() == 1 {
-                        if let Some(f) = self.symbols.functions.get(&qn.segments[0].text) {
+                        if let Some((_, f)) = self.symbols.lookup_function(&qn.segments[0].text) {
                             return matches!(
                                 &f.return_type,
                                 juxc_ast::ReturnType::Type(t) if t.nullable
@@ -1424,7 +1430,7 @@ impl crate::RustEmitter {
         // Top-level fn: `f(...)`.
         if let juxc_ast::Expr::Path(qn) = callee {
             if qn.segments.len() == 1 {
-                if let Some(f) = self.symbols.functions.get(&qn.segments[0].text) {
+                if let Some((_, f)) = self.symbols.lookup_function(&qn.segments[0].text) {
                     return f
                         .params
                         .get(arg_idx)
@@ -1537,7 +1543,7 @@ impl crate::RustEmitter {
     ) -> Option<juxc_ast::TypeRef> {
         if let juxc_ast::Expr::Path(qn) = callee {
             if qn.segments.len() == 1 {
-                if let Some(f) = self.symbols.functions.get(&qn.segments[0].text) {
+                if let Some((_, f)) = self.symbols.lookup_function(&qn.segments[0].text) {
                     return f.params.get(arg_idx).map(|p| p.ty.clone());
                 }
             }

@@ -7,6 +7,7 @@ use juxc_ast::{ArrayShape, FnTypeShape, QualifiedName, TypeRef};
 use juxc_lex::{Keyword, TokenKind};
 use juxc_source::Span;
 
+use juxc_diagnostics::{code, Diagnostic};
 use crate::Parser;
 
 impl<'a> Parser<'a> {
@@ -29,6 +30,51 @@ impl<'a> Parser<'a> {
             if let Some(fn_ty) = self.try_parse_function_type() {
                 return Some(fn_ty);
             }
+            // Tuple type — `(A, B, …)` (§5.3 / grammar §A.2.7
+            // tuple-type). In type position a `(` not followed by a
+            // function arrow can only be a tuple, so commit. The unit
+            // form `()` is reserved with no v1 meaning (§A.2.7) and
+            // rejected here.
+            let start = self.peek_span();
+            self.advance(); // '('
+            let mut elems = Vec::new();
+            if !self.at(&TokenKind::RParen) {
+                loop {
+                    let ty = self.parse_type_ref()?;
+                    elems.push(ty);
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                    // Tolerate a trailing comma before `)`.
+                    if self.at(&TokenKind::RParen) {
+                        break;
+                    }
+                }
+            }
+            self.expect(&TokenKind::RParen, "')' to close tuple type");
+            if elems.len() < 2 {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        if elems.is_empty() {
+                            "the unit tuple type `()` is reserved and has no meaning yet — use `void` for no-value returns"
+                        } else {
+                            "a tuple type needs at least two elements — parenthesizing a single type has no effect"
+                        },
+                    )
+                    .with_span(start.join(self.last_consumed_span())),
+                );
+                return elems.into_iter().next();
+            }
+            let end = self.last_consumed_span();
+            let mut t = TypeRef::tuple(elems, start.join(end));
+            // Optional `?` — a nullable tuple `(A, B)?` lowers to
+            // `Option<(A, B)>`.
+            if self.eat(&TokenKind::Question) {
+                t.nullable = true;
+                t.span = start.join(self.last_consumed_span());
+            }
+            return Some(t);
         }
         let qname = self.parse_qualified_name();
         if qname.segments.is_empty() {

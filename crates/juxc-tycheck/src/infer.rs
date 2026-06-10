@@ -58,6 +58,14 @@ use crate::ty::{
 pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     match expr {
         Expr::Literal(lit) => infer_literal(lit),
+        // Tuple literal (§5.3) — encoded as the `__tuple` sentinel
+        // user-type with the element types as generic args (same
+        // encoding `ty_from_ref` produces for `(A, B)` type refs),
+        // so compatibility falls out of the ordinary name+args rule.
+        Expr::TupleLit(elems, _) => Ty::User {
+            name: juxc_ast::TUPLE_SENTINEL.to_string(),
+            generic_args: elems.iter().map(|e| infer_expr(e, env, symbols)).collect(),
+        },
         Expr::Path(qn) => {
             // Single-segment path → look up as a local. Multi-segment
             // paths could resolve to enum-variants or imported names,
@@ -326,6 +334,20 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     let object_ty = infer_expr(&f.object, env, symbols);
     let field_name = f.field.text.as_str();
 
+    // Tuple element access — `pair.0` / `pair.1` (§5.3). The
+    // receiver is the `__tuple` sentinel user-type; the numeric
+    // field indexes its generic args.
+    if let Ty::User { name, generic_args } = &object_ty {
+        if name == juxc_ast::TUPLE_SENTINEL {
+            if let Ok(idx) = field_name.parse::<usize>() {
+                if let Some(elem) = generic_args.get(idx) {
+                    return elem.clone();
+                }
+            }
+            return Ty::Unknown;
+        }
+    }
+
     // `.length` on any array → int.
     if let Ty::Array { .. } = &object_ty {
         if field_name == "length" {
@@ -397,7 +419,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // Top-level function — `helper(x)`.
         Expr::Path(qn) if qn.segments.len() == 1 => {
             let name = &qn.segments[0].text;
-            if let Some(fn_sig) = symbols.functions.get(name) {
+            if let Some((_, fn_sig)) = symbols.lookup_function(name) {
                 // Generic inference (spec §T.4): when the callee is
                 // generic and the call site didn't write explicit
                 // `<…>`, try to recover the type args from the

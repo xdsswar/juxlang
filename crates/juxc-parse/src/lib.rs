@@ -112,12 +112,30 @@ pub(crate) struct Parser<'a> {
     pub(crate) pending_gt: u8,
     /// Diagnostics emitted along the way, in source order.
     pub(crate) diagnostics: Vec<Diagnostic>,
+    /// Extra statements queued by a single `parse_stmt` call that
+    /// desugars one source statement into several — currently only
+    /// tuple destructuring (`var (q, r) = e;` → temp decl + one
+    /// `var` per element). `parse_block` drains this after every
+    /// statement so the extras land in source order at the same
+    /// scope level.
+    pub(crate) pending_stmts: Vec<juxc_ast::Stmt>,
+    /// Monotonic counter for `__jux_tup{N}` destructuring temps —
+    /// unique per compilation unit so nested/sibling destructures
+    /// never collide.
+    pub(crate) tuple_tmp_counter: u32,
 }
 
 impl<'a> Parser<'a> {
     /// Build a parser over the given token slice.
     pub(crate) fn new(tokens: &'a [Token]) -> Self {
-        Self { tokens, pos: 0, pending_gt: 0, diagnostics: Vec::new() }
+        Self {
+            tokens,
+            pos: 0,
+            pending_gt: 0,
+            diagnostics: Vec::new(),
+            pending_stmts: Vec::new(),
+            tuple_tmp_counter: 0,
+        }
     }
 
     // ------------------------------------------------------------------

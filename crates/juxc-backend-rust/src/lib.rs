@@ -1113,6 +1113,14 @@ pub(crate) fn compute_aliased_classes(
         mark: &mut dyn FnMut(&Expr, &mut HashSet<String>),
     ) {
         match e {
+            // Tuple literal — each element is a by-value capture into
+            // the tuple, same aliasing consequence as a call argument.
+            Expr::TupleLit(elems, _) => {
+                for el in elems {
+                    mark(el, aliased);
+                    walk_expr(el, aliased, mark);
+                }
+            }
             Expr::Call(c) => {
                 // Each argument is passed by value → the callee may
                 // retain it → alias the arg's class (fresh or not; a
@@ -2045,6 +2053,11 @@ fn cast_targets_else(b: Option<&juxc_ast::ElseBranch>, out: &mut HashSet<String>
 fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
     use juxc_ast::Expr;
     match e {
+        Expr::TupleLit(elems, _) => {
+            for el in elems {
+                cast_targets_expr(el, out);
+            }
+        }
         Expr::Cast(c) => {
             if let Some(seg) = c.ty.name.segments.last() {
                 out.insert(seg.text.clone());

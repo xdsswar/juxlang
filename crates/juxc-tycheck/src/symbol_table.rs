@@ -362,6 +362,27 @@ impl SymbolTable {
         }
     }
 
+    /// Look up a free function by name — exact FQN key first, then a
+    /// unique `.{name}`-suffix match. Free functions are keyed by FQN
+    /// (`probe.divmod`) while call sites usually carry the bare name;
+    /// without this fallback, packaged free functions silently
+    /// inferred as `Unknown`. Ambiguous bare names (declared in two
+    /// packages) return `None` rather than guessing.
+    pub fn lookup_function<'a>(&'a self, name: &str) -> Option<(&'a str, &'a FunctionSig)> {
+        if let Some((k, f)) = self.functions.get_key_value(name) {
+            return Some((k.as_str(), f));
+        }
+        if name.contains('.') {
+            return None;
+        }
+        let suffix = format!(".{name}");
+        let mut hits = self.functions.iter().filter(|(k, _)| k.ends_with(&suffix));
+        match (hits.next(), hits.next()) {
+            (Some((k, f)), None) => Some((k.as_str(), f)),
+            _ => None,
+        }
+    }
+
     /// Walk `class_name`'s `extends` chain looking for a field named
     /// `field_name`. Returns the matching [`FieldSig`] **and** the name
     /// of the class that actually declared it. See [`Self::lookup_method`]

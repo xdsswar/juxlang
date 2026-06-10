@@ -8,8 +8,15 @@
 
 use juxc_source::Span;
 
-use crate::common::QualifiedName;
+use crate::common::{Ident, QualifiedName};
 use crate::exprs::Expr;
+
+/// The sentinel type-name used to encode **tuple types** in
+/// [`TypeRef`] / the checker's `Ty::User` without a dedicated
+/// variant: `(int, String)` parses to `name == "__tuple"` with the
+/// element types as ordinary generic args. The leading `__` keeps it
+/// out of user namespace; helpers below construct/recognize it.
+pub const TUPLE_SENTINEL: &str = "__tuple";
 
 /// A reference to a type, e.g. `List<String>?`, `int[10]`, `byte[]`.
 ///
@@ -170,4 +177,44 @@ pub enum ArrayShape {
     /// `T[]` — dynamic-size, sized at runtime. Lowers to Rust `Vec<T>`.
     /// Not implemented in Turn 1.
     Dynamic,
+}
+
+impl TypeRef {
+    /// Construct a tuple type — `(A, B, …)` (§5.3) — using the
+    /// [`TUPLE_SENTINEL`] name encoding with the elements as
+    /// generic args.
+    pub fn tuple(elems: Vec<TypeRef>, span: Span) -> TypeRef {
+        TypeRef {
+            name: QualifiedName {
+                segments: vec![Ident { text: TUPLE_SENTINEL.to_string(), span }],
+                span,
+            },
+            generic_args: elems.into_iter().map(GenericArg::Type).collect(),
+            nullable: false,
+            array_shape: None,
+            fn_shape: None,
+            ptr_depth: 0,
+            span,
+        }
+    }
+
+    /// `Some(elements)` when this type is the tuple encoding.
+    pub fn tuple_elems(&self) -> Option<Vec<&TypeRef>> {
+        if self.fn_shape.is_none()
+            && self.name.segments.len() == 1
+            && self.name.segments[0].text == TUPLE_SENTINEL
+        {
+            Some(
+                self.generic_args
+                    .iter()
+                    .filter_map(|g| match g {
+                        GenericArg::Type(t) => Some(t),
+                        _ => None,
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        }
+    }
 }
