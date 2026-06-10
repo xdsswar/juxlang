@@ -1941,6 +1941,7 @@ impl WildcardLifter {
         self.new_params.push(TypeParam {
             name: ident.clone(),
             bounds,
+            const_ty: None,
             span: Span::DUMMY,
         });
         TypeRef {

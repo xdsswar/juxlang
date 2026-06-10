@@ -290,6 +290,17 @@ pub(crate) struct Checker<'a> {
     /// data field accessed through a base-typed reference would hit the
     /// `Rc<dyn …Kind>` representation, which can't expose struct fields.
     pub(crate) poly_bases: std::collections::HashSet<String>,
+    /// Names of the **const-generic parameters** currently in scope
+    /// (the `N` of an enclosing `<int N>` / `<bool B>`). Populated by
+    /// [`Self::declare_const_generic_params`]; never popped — a stale
+    /// entry can only arise across sibling decls, where the worst case
+    /// is an over-eager E0445 on an already-broken size expression.
+    /// Drives the fixed-array-size guard: a size expression that
+    /// *mentions* a const param must be the bare name (`new int[N]`),
+    /// since arithmetic over it (`N + 1`) needs the const-eval
+    /// interpreter (spec phase 16) and would otherwise leak rustc's
+    /// `generic_const_exprs` error.
+    pub(crate) const_param_names: std::collections::HashSet<String>,
 }
 
 impl<'a> Checker<'a> {
@@ -308,6 +319,7 @@ impl<'a> Checker<'a> {
             uninferable_news: Vec::new(),
             used_names: std::collections::HashSet::new(),
             poly_bases: crate::symbol_table::polymorphic_base_bare_names(symbols),
+            const_param_names: std::collections::HashSet::new(),
         }
     }
 
@@ -526,9 +538,13 @@ impl<'a> Checker<'a> {
         // inside the body resolve.
         for param in &fn_decl.params {
             self.check_iface_value_type(&param.ty);
+            self.check_fixed_array_size_in_type(&param.ty);
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
         }
+        // Const-generic params (`int cap<int N>()`) read as values in
+        // the body — declare them with their value type.
+        self.declare_const_generic_params(&fn_decl.generic_params);
         self.check_iface_return_type(&fn_decl.return_type);
         let saved = self.current_return.take();
         self.current_return = Some(return_type_to_ty(
@@ -566,6 +582,10 @@ impl<'a> Checker<'a> {
         for tp in &class.generic_params {
             self.env.add_generic_param(&tp.name.text);
         }
+        // Const-generic params (`<int N>`) additionally read as VALUES
+        // inside every body (`return N;`) — declare them with their
+        // value type so expressions over `N` type-check as ints/bools.
+        self.declare_const_generic_params(&class.generic_params);
         // Pre-compute the `this` type: User<class_name, [Param(T)…]>.
         let this_ty = Ty::User {
             name: class_name.clone(),
@@ -583,6 +603,7 @@ impl<'a> Checker<'a> {
             if let Some(fty) = &field.ty {
                 self.check_iface_value_type(fty);
                 self.check_wildcard_storage_type(fty);
+                self.check_fixed_array_size_in_type(fty);
             }
         }
         for ctor in &class.constructors {
@@ -657,8 +678,10 @@ impl<'a> Checker<'a> {
         for tp in &method.generic_params {
             self.env.add_generic_param(&tp.name.text);
         }
+        self.declare_const_generic_params(&method.generic_params);
         for param in &method.params {
             self.check_iface_value_type(&param.ty);
+            self.check_fixed_array_size_in_type(&param.ty);
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
         }
@@ -913,6 +936,7 @@ impl<'a> Checker<'a> {
             ReturnType::Type(t) | ReturnType::AsyncType(t) => {
                 self.check_iface_value_type(t);
                 self.check_wildcard_storage_type(t);
+                self.check_fixed_array_size_in_type(t);
             }
             ReturnType::Void => {}
         }
@@ -1002,6 +1026,7 @@ impl<'a> Checker<'a> {
         for tp in &record.generic_params {
             self.env.add_generic_param(&tp.name.text);
         }
+        self.declare_const_generic_params(&record.generic_params);
         let this_ty = Ty::User {
             name: name.clone(),
             generic_args: record
@@ -1043,6 +1068,7 @@ impl<'a> Checker<'a> {
                 if let Some(t) = &v.ty {
                     self.check_iface_value_type(t);
                     self.check_wildcard_storage_type(t);
+                    self.check_fixed_array_size_in_type(t);
                 }
                 // If both a declared type and an initializer are
                 // present, the two must be compatible. Otherwise the
@@ -1477,7 +1503,15 @@ impl<'a> Checker<'a> {
 
             Expr::NewObject(n) => self.check_new_object(n),
 
-            Expr::NewArray(n) => self.check_expr(&n.size),
+            Expr::NewArray(n) => {
+                self.check_expr(&n.size);
+                // A fixed-array size is a Rust const position: when it
+                // references a const-generic param it must be the BARE
+                // name (`new int[N]`) — arithmetic over it (`N + 1`)
+                // needs the const-eval interpreter (spec phase 16) and
+                // would leak rustc's `generic_const_exprs` error.
+                self.check_const_size_expr(&n.size);
+            }
 
             Expr::NewArrayLit(n) => {
                 for el in &n.elements {
@@ -2278,6 +2312,60 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Declare every **const-generic parameter** in `params` as a VALUE
+    /// in the current scope — the `N` of `<int N>` reads as an int
+    /// (`return N;`, `head < N`), the `B` of `<bool B>` as a bool. A
+    /// no-op for ordinary type params (referencing `T` as a value stays
+    /// an error).
+    fn declare_const_generic_params(&mut self, params: &[TypeParam]) {
+        for p in params {
+            let Some(cty) = &p.const_ty else { continue };
+            let value_ty = match cty.name.segments.last().map(|s| s.text.as_str()) {
+                Some("bool") => Ty::Primitive(Primitive::Bool),
+                _ => Ty::Primitive(Primitive::Int),
+            };
+            self.env.declare(&p.name.text, value_ty);
+            self.const_param_names.insert(p.name.text.clone());
+        }
+    }
+
+    /// Type-position sibling of [`Self::check_const_size_expr`]: pull
+    /// the size out of a `T[«size»]` declared type (field / local /
+    /// param / return) and run the same const-arithmetic guard.
+    fn check_fixed_array_size_in_type(&mut self, tref: &juxc_ast::TypeRef) {
+        if let Some(juxc_ast::ArrayShape::Fixed(size)) = &tref.array_shape {
+            let size = size.clone();
+            self.check_const_size_expr(&size);
+        }
+    }
+
+    /// Guard a **fixed-array size expression** (`new int[«size»]`,
+    /// `int[«size»] field;`) against const-generic arithmetic. The size
+    /// is a Rust const position: a const param may appear only as the
+    /// BARE name (`[T; N]`) — anything computed over it (`N + 1`,
+    /// `N * 2`) requires nightly `generic_const_exprs`, so it gets a
+    /// clean **E0445** (deferred to the const-eval phase, spec §T.11.4)
+    /// instead of a rustc leak. Sizes that don't mention a const param
+    /// are left alone — their (pre-existing) validation is rustc's
+    /// const-expr check.
+    fn check_const_size_expr(&mut self, size: &Expr) {
+        // Bare name or plain literal — always fine.
+        if matches!(size, Expr::Literal(_) | Expr::Path(_)) {
+            return;
+        }
+        if expr_mentions_name_of(size, &self.const_param_names) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0445_ConstGenericUnsupported,
+                    "const-generic arithmetic in array sizes (e.g. `N + 1`) is not \
+                     supported in this phase — use the bare parameter (`[N]`) or a \
+                     literal size",
+                )
+                .with_span(expr_span(size)),
+            );
+        }
+    }
+
     /// Validate an **explicit call-site type-argument list** against the
     /// callee's declared generic params (spec turbofish `id<int>(5)`).
     /// Emits **E0443** when the callee isn't generic (no params to bind)
@@ -2322,6 +2410,70 @@ impl<'a> Checker<'a> {
                 )
                 .with_span(span),
             );
+        }
+        // **Slot-kind validation** (E0445): a const param (`<int N>`)
+        // must receive a literal value, a type param must receive a
+        // type. The synthetic literal `TypeRef` is recognized via
+        // `const_literal_text` — without this check it would reach name
+        // resolution / the emitted Rust and leak rustc E0747.
+        for (param, arg) in generic_params.iter().zip(explicit.iter()) {
+            let literal = arg.const_literal_text();
+            match (&param.const_ty, literal) {
+                // Type slot got a literal (`new Box<256>(…)`).
+                (None, Some(lit)) => {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0445_ConstGenericUnsupported,
+                            format!(
+                                "`{}` is a type parameter, but `{lit}` is a constant value; \
+                                 supply a type here",
+                                param.name.text,
+                            ),
+                        )
+                        .with_span(arg.span),
+                    );
+                }
+                // Const slot got a type (`new Buf<String>()`).
+                (Some(_), None) => {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0445_ConstGenericUnsupported,
+                            format!(
+                                "`{}` is a const-generic parameter — its argument must be a \
+                                 compile-time literal (`4`, `true`), not a type or a runtime \
+                                 value",
+                                param.name.text,
+                            ),
+                        )
+                        .with_span(arg.span),
+                    );
+                }
+                // Const slot + literal: the literal's kind must match
+                // the param's value type (`true` can't bind `<int N>`).
+                (Some(cty), Some(lit)) => {
+                    let param_is_bool = cty
+                        .name
+                        .segments
+                        .last()
+                        .map(|s| s.text == "bool")
+                        .unwrap_or(false);
+                    let lit_is_bool = lit == "true" || lit == "false";
+                    if param_is_bool != lit_is_bool {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0445_ConstGenericUnsupported,
+                                format!(
+                                    "const-generic argument `{lit}` doesn't match the declared \
+                                     value type of `{}`",
+                                    param.name.text,
+                                ),
+                            )
+                            .with_span(arg.span),
+                        );
+                    }
+                }
+                (None, None) => {}
+            }
         }
     }
 
@@ -2830,6 +2982,34 @@ impl<'a> Checker<'a> {
             .map(|g| ty_from_ref(g, &self.env, self.symbols))
             .collect();
 
+        // Validate explicit args against the class's declared params —
+        // const-vs-type slot kind + literal-kind checks (E0445). A
+        // const-generic class also REQUIRES the explicit form: its
+        // value can't be inferred from constructor args.
+        if let Some(class) = self.symbols.classes.get(&class_name) {
+            let class_generic_params = class.generic_params.clone();
+            if !n.generic_args.is_empty() {
+                self.check_explicit_type_args(
+                    &n.generic_args,
+                    &class_generic_params,
+                    &format!("class `{class_name}`"),
+                    n.span,
+                );
+            } else if class_generic_params.iter().any(|p| p.is_const()) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0445_ConstGenericUnsupported,
+                        format!(
+                            "`{class_name}` declares const-generic parameters — write them \
+                             explicitly (`new {class_name}<…>(…)`); const values can't be \
+                             inferred from constructor arguments",
+                        ),
+                    )
+                    .with_span(n.span),
+                );
+            }
+        }
+
         if let Some(class) = self.symbols.classes.get(&class_name) {
             // Abstract classes can't be instantiated directly —
             // only concrete subclasses can satisfy the `new`. Fire
@@ -3290,6 +3470,32 @@ fn operator_kind_user_spelling(kind: OperatorKind) -> &'static str {
 /// these can be a reference-cast or type-test target.
 fn is_plain_user_typeref(ty: &juxc_ast::TypeRef) -> bool {
     ty.array_shape.is_none() && !ty.nullable && ty.ptr_depth == 0 && ty.fn_shape.is_none()
+}
+
+/// True when `e` contains a bare single-segment `Path` whose name is in
+/// `names`. Drives the const-generic array-size guard
+/// ([`Checker::check_const_size_expr`]) — only the expression shapes a
+/// size expression can realistically take are walked; an unmatched
+/// shape conservatively reports `false` (no diagnostic, rustc's
+/// const-expr check remains the backstop).
+fn expr_mentions_name_of(e: &Expr, names: &std::collections::HashSet<String>) -> bool {
+    match e {
+        Expr::Path(qn) => {
+            qn.segments.len() == 1 && names.contains(&qn.segments[0].text)
+        }
+        Expr::Binary(b) => {
+            expr_mentions_name_of(&b.left, names) || expr_mentions_name_of(&b.right, names)
+        }
+        Expr::Unary(u) => expr_mentions_name_of(&u.operand, names),
+        Expr::Cast(c) => expr_mentions_name_of(&c.value, names),
+        Expr::Call(c) => c.args.iter().any(|a| expr_mentions_name_of(a, names)),
+        Expr::Field(f) => expr_mentions_name_of(&f.object, names),
+        Expr::Index(ix) => {
+            expr_mentions_name_of(&ix.array, names)
+                || expr_mentions_name_of(&ix.index, names)
+        }
+        _ => false,
+    }
 }
 
 fn expr_span(e: &Expr) -> Span {
@@ -5187,6 +5393,78 @@ mod tests {
         assert!(
             !has(&d, code::Code::E0444_WildcardStorageUnsupported),
             "concrete-arg storage field should be allowed: {d:?}",
+        );
+    }
+
+    /// A type supplied where a const value is expected
+    /// (`new Buf<String>()` against `class Buf<int N>`) → E0445.
+    #[test]
+    fn type_in_const_slot_emits_e0445() {
+        let d = run(
+            r#"
+            public class Buf<int N> { public Buf() { } }
+            public void main() { var b = new Buf<String>(); }
+            "#,
+        );
+        assert!(
+            has(&d, code::Code::E0445_ConstGenericUnsupported),
+            "expected E0445 for a type in a const slot: {d:?}",
+        );
+    }
+
+    /// A literal supplied where a type is expected (`new Box<256>(5)`)
+    /// → E0445.
+    #[test]
+    fn literal_in_type_slot_emits_e0445() {
+        let d = run(
+            r#"
+            public class Box<T> { public T v; public Box(T v) { this.v = v; } }
+            public void main() { var b = new Box<256>(5); }
+            "#,
+        );
+        assert!(
+            has(&d, code::Code::E0445_ConstGenericUnsupported),
+            "expected E0445 for a literal in a type slot: {d:?}",
+        );
+    }
+
+    /// Const-generic arithmetic in an array size (`new int[N + 1]`)
+    /// → E0445 (needs the const-eval interpreter, deferred).
+    #[test]
+    fn const_arithmetic_array_size_emits_e0445() {
+        let d = run(
+            r#"
+            public class S<int N> {
+                public S() { }
+                public int probe() { var a = new int[N + 1]; return 0; }
+            }
+            public void main() { }
+            "#,
+        );
+        assert!(
+            has(&d, code::Code::E0445_ConstGenericUnsupported),
+            "expected E0445 for const arithmetic in an array size: {d:?}",
+        );
+    }
+
+    /// The supported core — `<int N>` declared, used bare as an array
+    /// size and as an int value, instantiated with a literal — carries
+    /// no E0445.
+    #[test]
+    fn const_generic_core_subset_is_clean() {
+        let d = run(
+            r#"
+            public class Buf<int N> {
+                public int[N] data;
+                public Buf() { this.data = new int[N]; }
+                public int cap() { return N; }
+            }
+            public void main() { var b = new Buf<4>(); print(b.cap()); }
+            "#,
+        );
+        assert!(
+            !has(&d, code::Code::E0445_ConstGenericUnsupported),
+            "core const-generic subset should be clean: {d:?}",
         );
     }
 }

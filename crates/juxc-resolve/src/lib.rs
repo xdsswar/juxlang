@@ -578,6 +578,16 @@ impl Resolver {
             }
             cursor = self.class_parents.get(n).map(|s| s.as_str());
         }
+        // **Const-generic params are value names.** The `N` of
+        // `class Buf<int N>` reads as an int value inside every body
+        // (`return N;`, `new int[N]`), so it joins the member-visible
+        // set. Ordinary type params don't — referencing `T` as a value
+        // stays an E0301.
+        for p in &class_decl.generic_params {
+            if p.is_const() {
+                member_names.insert(p.name.text.clone());
+            }
+        }
         // Helper closure: predeclared class-member names land in an
         // outer scope so a local/param of the same name shadows them
         // in the inner scope without firing
@@ -608,6 +618,14 @@ impl Resolver {
             self.push_scope();
             for param in &method.params {
                 self.declare(&param.name.text);
+            }
+            // Method-level const-generic params (`T pick<int K>(…)`)
+            // are value names in this body, like the class-level ones
+            // already in `member_names`.
+            for p in &method.generic_params {
+                if p.is_const() {
+                    self.declare(&p.name.text);
+                }
             }
             if let Some(body) = &method.body {
                 self.visit_block(body);
@@ -660,6 +678,13 @@ impl Resolver {
         self.push_scope();
         for param in &fn_decl.params {
             self.declare(&param.name.text);
+        }
+        // Const-generic params (`int cap<int N>()`) are value names in
+        // the body; ordinary type params are not.
+        for p in &fn_decl.generic_params {
+            if p.is_const() {
+                self.declare(&p.name.text);
+            }
         }
         if let Some(body) = &fn_decl.body {
             self.visit_block(body);

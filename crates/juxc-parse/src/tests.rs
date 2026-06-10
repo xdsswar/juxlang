@@ -210,6 +210,70 @@ fn less_than_is_not_explicit_type_args() {
     assert!(matches!(&call.args[0], Expr::Binary(_)));
 }
 
+/// Const-generic parameter declaration: `class Buf<int N>` (grammar
+/// §A.2.6 `'int' identifier`) — the param carries `const_ty: Some(int)`.
+#[test]
+fn const_generic_param_on_class_parses() {
+    let ast = parse_clean("public class Buf<T, int N> { }");
+    let TopLevelDecl::Class(c) = &ast.items[0] else { panic!("expected class") };
+    assert_eq!(c.generic_params.len(), 2);
+    assert!(!c.generic_params[0].is_const(), "T is an ordinary type param");
+    assert!(c.generic_params[1].is_const(), "N is a const param");
+    assert_eq!(c.generic_params[1].name.text, "N");
+    assert_eq!(
+        c.generic_params[1].const_ty.as_ref().unwrap().name.segments[0].text,
+        "int",
+    );
+}
+
+/// Const-generic parameter on a trailing-generic function:
+/// `int cap<int N>()`.
+#[test]
+fn const_generic_param_on_fn_parses() {
+    let ast = parse_clean("public int cap<int N>() { return N; }");
+    let TopLevelDecl::Function(f) = &ast.items[0] else { panic!("expected fn") };
+    assert_eq!(f.generic_params.len(), 1);
+    assert!(f.generic_params[0].is_const());
+    assert_eq!(f.generic_params[0].name.text, "N");
+}
+
+/// Const-generic argument literal: `new Buf<float, 256>()` — the `256`
+/// travels as a synthetic TypeRef recognized by `const_literal_text`.
+#[test]
+fn const_generic_arg_in_new_parses() {
+    let ast = parse_clean("public void main() { var b = new Buf<float, 256>(); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let Some(Expr::NewObject(n)) = &v.init else { panic!("expected new-expr") };
+    assert_eq!(n.generic_args.len(), 2);
+    assert!(n.generic_args[0].const_literal_text().is_none(), "float is a type");
+    assert_eq!(n.generic_args[1].const_literal_text(), Some("256"));
+}
+
+/// Const-generic argument in TYPE position: `Buf<4> b = …`.
+#[test]
+fn const_generic_arg_in_type_position_parses() {
+    let ast = parse_clean("public void main() { Buf<4> b = new Buf<4>(); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let ty = v.ty.as_ref().expect("declared type");
+    assert_eq!(ty.generic_args.len(), 1);
+    let juxc_ast::GenericArg::Type(t) = &ty.generic_args[0] else { panic!() };
+    assert_eq!(t.const_literal_text(), Some("4"));
+}
+
+/// A const param of an unsupported value type (`<long N>`) parses but
+/// fires the Phase-1 E0445 diagnostic.
+#[test]
+fn const_generic_param_long_is_diagnosed() {
+    let (ast, n_errors) = parse_with_errors("public class L<long N> { }");
+    assert!(n_errors >= 1, "expected E0445 for <long N>");
+    // The AST is still well-formed — the param is present.
+    let TopLevelDecl::Class(c) = &ast.items[0] else { panic!() };
+    assert_eq!(c.generic_params.len(), 1);
+    assert!(c.generic_params[0].is_const());
+}
+
 /// `bool` and `null` literals lex as their own token kinds; the parser
 /// must propagate them through `parse_primary`.
 #[test]

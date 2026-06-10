@@ -2648,6 +2648,81 @@ fn extends_wildcard_param_keeps_marker_bound() {
     );
 }
 
+/// A const-generic class lowers to a Rust const-generic struct:
+/// `<int N>` → `const N: usize` (usize, NOT isize — a fixed array size
+/// `[T; N]` must be exactly `usize` on stable Rust), the `T[N]` field
+/// to `[T; N]`, a bare value read of `N` to `(N as isize)`, and the
+/// literal instantiation to a turbofish.
+#[test]
+fn const_generic_class_lowers_to_rust_const_generics() {
+    let rust = emit(
+        r#"
+        public class Ring<T, int N> {
+            public T[N] storage;
+            public int head;
+            public Ring(T fill) {
+                this.storage = new T[N];
+                this.head = 0;
+            }
+            public int capacity() { return N; }
+        }
+        public void main() {
+            var r = new Ring<int, 8>(0);
+            print(r.capacity());
+        }
+        "#,
+    );
+    assert!(
+        rust.contains("const N: usize"),
+        "expected `const N: usize` param decl, got: {rust}",
+    );
+    assert!(
+        rust.contains("[T; N]"),
+        "expected `[T; N]` fixed-array field, got: {rust}",
+    );
+    assert!(
+        rust.contains("(N as isize)"),
+        "expected `(N as isize)` value read, got: {rust}",
+    );
+    assert!(
+        rust.contains("::<isize, 8>"),
+        "expected literal turbofish `::<isize, 8>`, got: {rust}",
+    );
+    // The generic-element array constructs via `from_fn` (no `T: Copy`),
+    // and the impl carries the matching `Default` bound.
+    assert!(
+        rust.contains("std::array::from_fn(|_| Default::default())"),
+        "expected from_fn array construction, got: {rust}",
+    );
+    assert!(
+        rust.contains("+ Default"),
+        "expected a `+ Default` bound for the array-element param, got: {rust}",
+    );
+}
+
+/// A `bool` const param lowers to `const B: bool` and its value read
+/// stays uncast (`bool` needs no usize bridge).
+#[test]
+fn bool_const_generic_param_lowers_uncast() {
+    let rust = emit(
+        r#"
+        public class Flag<bool B> {
+            public Flag() { }
+            public bool get() { return B; }
+        }
+        public void main() { var f = new Flag<true>(); print(f.get()); }
+        "#,
+    );
+    assert!(
+        rust.contains("const B: bool"),
+        "expected `const B: bool` param decl, got: {rust}",
+    );
+    assert!(
+        !rust.contains("(B as "),
+        "bool const param must not be cast, got: {rust}",
+    );
+}
+
 /// Wildcard imports lower to the Rust `::*` form.
 #[test]
 fn wildcard_import_lowers_to_glob_use() {

@@ -275,6 +275,20 @@ pub enum Code {
     /// the value through a parameter instead. Full covariant-container
     /// storage is deferred to a later phase.
     E0444_WildcardStorageUnsupported,
+    /// E0445 — A **const-generic form outside the Phase-1 core subset**.
+    /// The core subset (grammar §A.2.6, type-system §T.11.3) covers:
+    /// declaring `<int N>` / `<bool B>` params, using `N` as a fixed
+    /// array size (`T[N]`) or as an int value, and instantiating with a
+    /// literal (`new RingBuffer<float, 256>()`). This code fires on the
+    /// deferred rest: const params of other value types (`<long N>`),
+    /// non-literal const arguments (`new R<float, x>()`), const-generic
+    /// arithmetic in array sizes (`byte[N + 1]` — needs the const-eval
+    /// interpreter, spec phase 16), and a kind mismatch between the
+    /// param and the argument (a type where a const value is expected,
+    /// or vice versa). Catching these here keeps rustc's E0747/E0308/
+    /// `generic_const_exprs` errors from leaking. (E0840–E0842 stay
+    /// reserved for the real const-eval phase.)
+    E0445_ConstGenericUnsupported,
 
     // ---- Async / Generators (E0700–E0799) ----
     /// E0710 — `throw` of a non-`Exception` value. Per the exceptions
@@ -407,6 +421,7 @@ impl Code {
             Code::E0431_GenericInferenceNoSolution => "E0431",
             Code::E0443_ExplicitTypeArgs         => "E0443",
             Code::E0444_WildcardStorageUnsupported => "E0444",
+            Code::E0445_ConstGenericUnsupported  => "E0445",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0701_AsyncNotInProfile        => "E0701",
             Code::E0710_ThrowRequiresException   => "E0710",

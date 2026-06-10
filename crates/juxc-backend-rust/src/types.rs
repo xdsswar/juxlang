@@ -113,7 +113,13 @@ impl RustEmitter {
                     };
                     self.emit_type_as_rust(&element_ty);
                     self.w.push_str("; ");
+                    // The size slot must be a raw `usize` — flag the
+                    // position so a const-generic param (`[T; N]`)
+                    // skips its `(N as isize)` value-cast.
+                    let prev = self.in_array_size_position;
+                    self.in_array_size_position = true;
                     self.emit_expr(size);
+                    self.in_array_size_position = prev;
                     self.w.push(']');
                 }
                 ArrayShape::Dynamic => {
@@ -411,9 +417,59 @@ impl RustEmitter {
         }
     }
 
-    /// Emit a generic-parameter list as a declaration site — `<T, U>`.
+    /// Emit one **const-generic parameter declaration** — the Rust
+    /// `const N: usize` for a Jux `<int N>` (spec §T.11.3). The value
+    /// type maps `int → usize` rather than the literal `isize`: a
+    /// fixed array size `[T; N]` must be *exactly* `usize` on stable
+    /// Rust (`[T; N as usize]` over a generic param needs nightly
+    /// `generic_const_exprs`), and `T[N]` storage is the feature's
+    /// headline use. Where `N` is read as an int *value*, the
+    /// expression emitter casts back (`(N as isize)` — see
+    /// `const_generic_params` tracking). `bool` maps to itself.
+    fn emit_const_generic_param_decl(&mut self, p: &juxc_ast::TypeParam) {
+        self.w.push_str("const ");
+        self.w.push_str(&p.name.text);
+        self.w.push_str(": ");
+        let value_ty = p
+            .const_ty
+            .as_ref()
+            .and_then(|t| t.name.segments.last())
+            .map(|s| s.text.as_str())
+            .unwrap_or("int");
+        // Only `int` and `bool` survive the parser's E0445 gate; the
+        // fallback keeps emission total if that ever changes.
+        self.w.push_str(if value_ty == "bool" { "bool" } else { "usize" });
+    }
+
+    /// Emit a generic-parameter list as a declaration site — `<T, U>`,
+    /// const params as `const N: usize`.
     /// No-op when `params` is empty (the common, non-generic case).
     pub(crate) fn emit_generic_params(&mut self, params: &[juxc_ast::TypeParam]) {
+        if params.is_empty() {
+            return;
+        }
+        self.w.push('<');
+        for (i, p) in params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            if p.is_const() {
+                self.emit_const_generic_param_decl(p);
+            } else {
+                self.w.push_str(&p.name.text);
+            }
+        }
+        self.w.push('>');
+    }
+
+    /// Emit generic parameters as **type arguments** — `<T, U>` —
+    /// used on the `impl<T, U> Name<T, U>` header where the params
+    /// declared in the impl header are referenced as args on the
+    /// type name. In argument position a const param is just its
+    /// name (`Name<T, N>`), so this no longer simply forwards to
+    /// `emit_generic_params` (which emits the `const N: usize`
+    /// declaration form).
+    pub(crate) fn emit_generic_params_as_args(&mut self, params: &[juxc_ast::TypeParam]) {
         if params.is_empty() {
             return;
         }
@@ -425,15 +481,6 @@ impl RustEmitter {
             self.w.push_str(&p.name.text);
         }
         self.w.push('>');
-    }
-
-    /// Emit generic parameters as **type arguments** — `<T, U>` —
-    /// used on the `impl<T, U> Name<T, U>` header where the params
-    /// declared in the impl header are referenced as args on the
-    /// type name. Same textual shape as `emit_generic_params`, but
-    /// the call site reads differently.
-    pub(crate) fn emit_generic_params_as_args(&mut self, params: &[juxc_ast::TypeParam]) {
-        self.emit_generic_params(params);
     }
 
     /// Emit a generic-bound type position — same as `emit_type_as_rust`
@@ -479,6 +526,13 @@ impl RustEmitter {
         for (i, p) in params.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
+            }
+            // A const param (`<int N>`) declares as `const N: usize` —
+            // value params take no trait bounds, so the Clone/Debug
+            // tail below never applies to them.
+            if p.is_const() {
+                self.emit_const_generic_param_decl(p);
+                continue;
             }
             self.w.push_str(&p.name.text);
             self.w.push_str(": ");
@@ -530,6 +584,7 @@ impl RustEmitter {
         &mut self,
         params: &[juxc_ast::TypeParam],
         display_params: &std::collections::HashSet<String>,
+        default_params: &std::collections::HashSet<String>,
     ) {
         if params.is_empty() {
             return;
@@ -538,6 +593,11 @@ impl RustEmitter {
         for (i, p) in params.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
+            }
+            // Const params take no trait bounds — Display included.
+            if p.is_const() {
+                self.emit_const_generic_param_decl(p);
+                continue;
             }
             self.w.push_str(&p.name.text);
             self.w.push_str(": ");
@@ -549,6 +609,12 @@ impl RustEmitter {
             self.w.push_str("Clone + std::fmt::Debug");
             if display_params.contains(&p.name.text) {
                 self.w.push_str(" + std::fmt::Display");
+            }
+            // A param used as a fixed-array-field element (`T[N]`)
+            // needs `Default` for the `from_fn` construction — see
+            // `class_default_bound_params`.
+            if default_params.contains(&p.name.text) {
+                self.w.push_str(" + Default");
             }
         }
         self.w.push('>');

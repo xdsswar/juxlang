@@ -55,6 +55,31 @@ impl TypeRef {
     pub fn is_pointer(&self) -> bool {
         self.ptr_depth > 0
     }
+
+    /// Recognize a **synthetic const-generic argument** — the parser
+    /// carries the literal in `new RingBuffer<float, 256>()` /
+    /// `StackString<32>` as a `TypeRef` whose single name segment is
+    /// the literal text verbatim ("256", "true"). Returns that text,
+    /// or `None` for a real type reference. Used by tycheck to
+    /// validate slot kinds (a const param must get a literal, a type
+    /// param must not) and by the backend, which emits the text
+    /// verbatim in turbofish / type-arg position.
+    pub fn const_literal_text(&self) -> Option<&str> {
+        if self.nullable
+            || self.array_shape.is_some()
+            || self.fn_shape.is_some()
+            || self.ptr_depth > 0
+            || !self.generic_args.is_empty()
+            || self.name.segments.len() != 1
+        {
+            return None;
+        }
+        let text = self.name.segments[0].text.as_str();
+        let is_literal = text == "true"
+            || text == "false"
+            || (!text.is_empty() && text.chars().all(|c| c.is_ascii_digit() || c == '_'));
+        is_literal.then_some(text)
+    }
 }
 
 /// `(A, B) async? throws? -> R` — function-type per grammar §A.2.7.
