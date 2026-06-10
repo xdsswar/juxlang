@@ -1653,6 +1653,30 @@ impl<'a> Checker<'a> {
             Expr::Switch(s) => {
                 self.check_expr(&s.scrutinee);
                 for arm in &s.arms {
+                    // Or-pattern alternatives must be binding-free
+                    // (§A.3): an arm body can't reference a name that
+                    // only exists when one alternative matched.
+                    if let Pattern::Or(alts, span) = &arm.pattern {
+                        if alts.iter().any(pattern_introduces_bindings) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0447_OrPatternBinding,
+                                    "or-pattern alternatives can't introduce bindings: \
+                                     split into one `case` per alternative, or drop the \
+                                     `var` binders and re-test inside the body",
+                                )
+                                .with_span(*span),
+                            );
+                        }
+                    }
+                    // `when <cond>` guard (§A.2.8) — walk it for the
+                    // usual diagnostics. Pattern bindings live in the
+                    // arm's scope, which infer_block re-declares below
+                    // for block bodies; guard expressions over binders
+                    // resolve through the resolver pass.
+                    if let Some(g) = &arm.guard {
+                        self.check_expr(g);
+                    }
                     match &arm.body {
                         SwitchBody::Expr(e) => self.check_expr(e),
                         SwitchBody::Block(b) => {
@@ -2051,7 +2075,10 @@ impl<'a> Checker<'a> {
             Ty::User { name, .. } => name.as_str(),
             _ => return,
         };
-        let kind = if let Some(e) = self.symbols.enums.get(scrut_name) {
+        // FQN-aware lookup (exact key, then unique suffix) so a
+        // locally-inferred bare enum name still gets exhaustiveness
+        // (and rustc's E0004 never leaks for it).
+        let kind = if let Some((_, e)) = self.symbols.lookup_enum(scrut_name) {
             SealedKind::Enum {
                 name: scrut_name,
                 variants: e.variants.keys().cloned().collect(),
@@ -2075,6 +2102,13 @@ impl<'a> Checker<'a> {
         // catches anything.
         let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
         for arm in &s.arms {
+            // Guarded arms don't count toward exhaustiveness
+            // (§T.5.6) — the compiler can't prove the guard's
+            // runtime condition, so `case X when c ->` leaves `X`
+            // uncovered until an unguarded arm handles it.
+            if arm.guard.is_some() {
+                continue;
+            }
             if pattern_is_catchall(&arm.pattern) {
                 return;
             }
@@ -3786,8 +3820,29 @@ fn expr_span(e: &Expr) -> Span {
 /// catchall arms (`case _ -> …`, `case name -> …`). Variant
 /// patterns are NOT irrefutable, even when their sub-patterns are
 /// — they only cover their specific variant.
+/// True when `pattern` introduces at least one binding — a `var name`
+/// bind, a payload binder inside a variant pattern, or a type-test
+/// binder. Used to enforce the §A.3 rule that or-pattern alternatives
+/// are binding-free.
+fn pattern_introduces_bindings(p: &Pattern) -> bool {
+    match p {
+        Pattern::Bind(_) | Pattern::TypeBind { .. } => true,
+        Pattern::EnumVariant { args, .. } => {
+            args.iter().any(pattern_introduces_bindings)
+        }
+        Pattern::Or(alts, _) => alts.iter().any(pattern_introduces_bindings),
+        Pattern::Wildcard(_) | Pattern::Literal(_, _) | Pattern::Range { .. } => false,
+    }
+}
+
 fn pattern_is_catchall(p: &Pattern) -> bool {
-    matches!(p, Pattern::Wildcard(_) | Pattern::Bind(_))
+    match p {
+        Pattern::Wildcard(_) | Pattern::Bind(_) => true,
+        // `case A | _ ->` — any irrefutable alternative makes the
+        // whole or-pattern irrefutable.
+        Pattern::Or(alts, _) => alts.iter().any(pattern_is_catchall),
+        _ => false,
+    }
 }
 
 /// Walk a pattern and record every variant of `enum_name` it
@@ -3810,6 +3865,14 @@ fn collect_variants_covered(
         .rsplit('.')
         .next()
         .unwrap_or(enum_name);
+    // Or-pattern coverage is the union of its alternatives
+    // (`case A | B ->` covers both A and B).
+    if let Pattern::Or(alts, _) = pattern {
+        for alt in alts {
+            collect_variants_covered(alt, enum_name, out);
+        }
+        return;
+    }
     if let Pattern::EnumVariant { path, .. } = pattern {
         match path.segments.len() {
             // `case EnumName.Variant(...)` — qualified form.
@@ -3853,6 +3916,12 @@ fn collect_sealed_subclasses_covered(
         // arm to exactly the named subclass.
         Pattern::TypeBind { type_name, .. } => {
             out.insert(type_name.text.clone());
+        }
+        // Or-pattern coverage is the union of its alternatives.
+        Pattern::Or(alts, _) => {
+            for alt in alts {
+                collect_sealed_subclasses_covered(alt, out);
+            }
         }
         _ => {}
     }

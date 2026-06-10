@@ -53,6 +53,12 @@ impl RustEmitter {
             // keyword itself, which was emitted naked above.
             self.w.push_str("    ");
             self.emit_pattern(&arm.pattern);
+            // `when <cond>` guard (§A.2.8) → Rust match guard
+            // `if <cond>`. Pattern bindings are in scope.
+            if let Some(guard) = &arm.guard {
+                self.w.push_str(" if ");
+                self.emit_expr(guard);
+            }
             self.w.push_str(" => ");
             match &arm.body {
                 juxc_ast::SwitchBody::Expr(e) => {
@@ -195,6 +201,15 @@ impl RustEmitter {
     pub(crate) fn emit_pattern(&mut self, pattern: &juxc_ast::Pattern) {
         match pattern {
             juxc_ast::Pattern::Wildcard(_) => self.w.push('_'),
+            // Or-pattern `A | B | C` → Rust's identical `|` syntax.
+            juxc_ast::Pattern::Or(alts, _) => {
+                for (i, alt) in alts.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str(" | ");
+                    }
+                    self.emit_pattern(alt);
+                }
+            }
             juxc_ast::Pattern::Literal(lit, _) => {
                 // Pattern context: Rust match patterns require bare
                 // literals (not `String` values), so we suppress the

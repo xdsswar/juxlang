@@ -1892,6 +1892,54 @@ fn variant_pattern_with_var_binding_parses() {
     assert_eq!(ident.text, "n");
 }
 
+/// `when` guard (§A.2.8) — parses into `SwitchArm.guard`; unguarded
+/// arms carry `None`.
+#[test]
+fn switch_arm_when_guard_parses() {
+    use juxc_ast::Pattern;
+    let ast = parse_clean(
+        r#"public void main() {
+               var n = 5;
+               switch (n) {
+                   case var x when x > 3 -> print("big");
+                   default -> print("small");
+               }
+           }"#,
+    );
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Switch(s)) = &body.statements[1] else { panic!() };
+    assert!(matches!(&s.arms[0].pattern, Pattern::Bind(_)));
+    assert!(
+        matches!(s.arms[0].guard.as_ref(), Some(Expr::Binary(_))),
+        "expected Binary guard, got {:?}",
+        s.arms[0].guard,
+    );
+    assert!(s.arms[1].guard.is_none());
+}
+
+/// Or-pattern (§A.3) — `case 1 | 2 | 3 ->` folds the alternatives
+/// into a single `Pattern::Or`.
+#[test]
+fn switch_arm_or_pattern_parses() {
+    use juxc_ast::Pattern;
+    let ast = parse_clean(
+        r#"public void main() {
+               var n = 5;
+               switch (n) {
+                   case 1 | 2 | 3 -> print("low");
+                   default -> print("high");
+               }
+           }"#,
+    );
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Switch(s)) = &body.statements[1] else { panic!() };
+    let Pattern::Or(alts, _) = &s.arms[0].pattern else {
+        panic!("expected Or pattern, got {:?}", s.arms[0].pattern);
+    };
+    assert_eq!(alts.len(), 3);
+    assert!(alts.iter().all(|p| matches!(p, Pattern::Literal(_, _))));
+}
+
 // ---------------------------------------------------------------------------
 // Enums (§7.7)
 // ---------------------------------------------------------------------------

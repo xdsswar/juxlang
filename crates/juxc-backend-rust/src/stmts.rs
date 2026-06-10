@@ -221,6 +221,11 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
                 return true;
             }
             for arm in &s.arms {
+                if let Some(g) = &arm.guard {
+                    if expr_moves_path_at_top(g, name) {
+                        return true;
+                    }
+                }
                 let arm_moves = match &arm.body {
                     juxc_ast::SwitchBody::Expr(e) => {
                         is_path_named(e, name) || expr_moves_path_at_top(e, name)

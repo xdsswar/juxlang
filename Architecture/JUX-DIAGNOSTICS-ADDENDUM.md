@@ -326,6 +326,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0443`  | Malformed explicit call-site type-argument list (`id<int>(5)`) | Generics (Gap 5)      |
 | `E0444`  | Bounded wildcard as a storage type over a user generic class (Phase-1 limitation) | Generics (Gap 4) |
 | `E0445`  | Const-generic form outside the Phase-1 core subset  | Type system §T.11.3 / Grammar §A.2.6 |
+| `E0447`  | Or-pattern alternative introduces bindings (`case A(var x) \| B ->`) | Grammar §A.3 |
 | `E0450`  | Ambiguous overload *(reserved)*                      | Type system §T.3.3            |
 | `E0451`  | No overload candidate produces required return type *(reserved)* | Type system §T.3.4 |
 | `E0452`  | No matching operator overload *(reserved)*          | Type system §T.3.5            |

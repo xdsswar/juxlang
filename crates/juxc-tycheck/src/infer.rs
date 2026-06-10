@@ -309,10 +309,14 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // right scrutinee type.
         if qn.segments.len() == 1 {
             let enum_name = &qn.segments[0].text;
-            if let Some(e) = symbols.enums.get(enum_name) {
+            // FQN-aware lookup: a bare `Tier` resolves to the
+            // table's `probe.Tier` key, and we return THAT name so
+            // exhaustiveness / variant checks downstream hit the
+            // table directly.
+            if let Some((fqn, e)) = symbols.lookup_enum(enum_name) {
                 if e.variants.contains_key(&f.field.text) {
                     return Ty::User {
-                        name: enum_name.clone(),
+                        name: fqn.to_string(),
                         generic_args: Vec::new(),
                     };
                 }

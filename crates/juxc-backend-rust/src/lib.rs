@@ -1206,6 +1206,9 @@ pub(crate) fn compute_aliased_classes(
             Expr::Switch(s) => {
                 walk_expr(&s.scrutinee, aliased, mark);
                 for arm in &s.arms {
+                    if let Some(g) = &arm.guard {
+                        walk_expr(g, aliased, mark);
+                    }
                     match &arm.body {
                         juxc_ast::SwitchBody::Expr(b) => walk_expr(b, aliased, mark),
                         juxc_ast::SwitchBody::Block(blk) => {
@@ -2122,6 +2125,9 @@ fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
         Expr::Switch(s) => {
             cast_targets_expr(&s.scrutinee, out);
             for arm in &s.arms {
+                if let Some(g) = &arm.guard {
+                    cast_targets_expr(g, out);
+                }
                 match &arm.body {
                     juxc_ast::SwitchBody::Expr(b) => cast_targets_expr(b, out),
                     juxc_ast::SwitchBody::Block(blk) => cast_targets_block(blk, out),

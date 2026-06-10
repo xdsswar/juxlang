@@ -421,6 +421,9 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
         Expr::Switch(s) => {
             collect_mutating_calls(&s.scrutinee, out, user_mut);
             for arm in &s.arms {
+                if let Some(g) = &arm.guard {
+                    collect_mutating_calls(g, out, user_mut);
+                }
                 match &arm.body {
                     juxc_ast::SwitchBody::Expr(e) => {
                         collect_mutating_calls(e, out, user_mut);
@@ -543,9 +546,12 @@ fn expr_contains_await(e: &Expr) -> bool {
         Expr::SizeOf(s) => expr_contains_await(&s.operand),
         Expr::Switch(s) => {
             expr_contains_await(&s.scrutinee)
-                || s.arms.iter().any(|a| match &a.body {
-                    juxc_ast::SwitchBody::Expr(e) => expr_contains_await(e),
-                    juxc_ast::SwitchBody::Block(b) => block_contains_await(b),
+                || s.arms.iter().any(|a| {
+                    a.guard.as_ref().is_some_and(expr_contains_await)
+                        || match &a.body {
+                            juxc_ast::SwitchBody::Expr(e) => expr_contains_await(e),
+                            juxc_ast::SwitchBody::Block(b) => block_contains_await(b),
+                        }
                 })
         }
         // Closures / lambdas open a new fn boundary — the `.await`
