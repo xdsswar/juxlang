@@ -59,6 +59,14 @@ pub struct SymbolTable {
     pub records: HashMap<String, RecordSig>,
     /// Top-level enums indexed by FQN. Same shape as `classes`.
     pub enums: HashMap<String, EnumSig>,
+    /// Constructor-overload selections recorded by the checker —
+    /// `new T(...)` / `super(...)` / `this(...)` call span → index
+    /// into the target class's `constructors` Vec. Index 0 emits as
+    /// `new`, index K as `new__K`. Populated AFTER the check walk
+    /// (the checker can't mutate the table it borrows); the backend
+    /// reads it at every constructor-call emission. Empty when the
+    /// program has no overloaded constructors.
+    pub ctor_selections: HashMap<juxc_source::Span, usize>,
     /// Top-level interfaces indexed by FQN. Same shape as `classes`.
     pub interfaces: HashMap<String, InterfaceSig>,
     /// Top-level functions (outside any class) indexed by FQN.
@@ -908,7 +916,7 @@ pub fn build_workspace(
     check_interface_on_exception_class(&table, diagnostics);
     check_polymorphic_base_generic_methods(&table, diagnostics);
     check_method_modifier_combinations(&table, diagnostics);
-    check_single_constructor(&table, diagnostics);
+    check_constructor_overloads(&table, diagnostics);
     check_top_level_visibility(&table, diagnostics);
     check_override_does_not_narrow_access(&table, diagnostics);
     check_imports_resolve(units, &table, diagnostics);
@@ -2163,25 +2171,62 @@ fn check_diamond_default_conflicts(
 /// constructors (`HashMap()` + `HashMap(int)`, JUX-BINDGEN §G.5.1/§G.5.2) —
 /// parse and resolve cleanly: the stub class is flagged `is_external` and
 /// exempted here, while ordinary user classes still get the limit enforced.
-fn check_single_constructor(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
+/// Constructor overloading (§7.3.1), Phase-1 rule: constructors are
+/// selected by **argument count**, so every pair of constructors on a
+/// class must have disjoint acceptable-count ranges. A constructor
+/// accepts `[required ..= max]` arguments where `required` counts the
+/// parameters without defaults and `max` is unbounded for a variadic
+/// last parameter. Overlapping ranges would make some call count
+/// unresolvable — flagged eagerly at the declaration with E0450.
+/// (Type-based §T.3 ranking arrives with method overloading.)
+fn check_constructor_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (class_name, class) in &table.classes {
         if class.is_external {
             continue;
         }
-        // The first constructor is allowed; every subsequent one fires.
-        for extra in class.constructors.iter().skip(1) {
-            diagnostics.push(
-                Diagnostic::error(
-                    code::Code::E0200_UnexpectedToken,
-                    format!(
-                        "class `{class_name}` declares more than one constructor — \
-                         Turn-1 classes support only one constructor (overloading lands later)",
-                    ),
-                )
-                .with_span(extra.span),
-            );
+        let ranges: Vec<(usize, Option<usize>)> = class
+            .constructors
+            .iter()
+            .map(|c| ctor_arity_range(&c.params))
+            .collect();
+        for j in 1..ranges.len() {
+            for i in 0..j {
+                let (lo_a, hi_a) = ranges[i];
+                let (lo_b, hi_b) = ranges[j];
+                let overlap = lo_a <= hi_b.unwrap_or(usize::MAX)
+                    && lo_b <= hi_a.unwrap_or(usize::MAX);
+                if overlap {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0450_AmbiguousOverload,
+                            format!(
+                                "ambiguous constructor overload on `{class_name}`: two \
+                                 constructors accept the same argument count (Phase 1 \
+                                 selects by count) — make the parameter counts disjoint, \
+                                 or merge them using default parameter values",
+                            ),
+                        )
+                        .with_span(class.constructors[j].span),
+                    );
+                }
+            }
         }
     }
+}
+
+/// `[required ..= max]` acceptable-argument-count range for a
+/// constructor parameter list. `None` max = variadic (unbounded).
+pub(crate) fn ctor_arity_range(params: &[ParamSig]) -> (usize, Option<usize>) {
+    let required = params
+        .iter()
+        .filter(|p| p.default.is_none() && !p.is_varargs)
+        .count();
+    let max = if params.last().is_some_and(|p| p.is_varargs) {
+        None
+    } else {
+        Some(params.len())
+    };
+    (required, max)
 }
 
 fn check_method_modifier_combinations(

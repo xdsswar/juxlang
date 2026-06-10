@@ -358,7 +358,18 @@ impl RustEmitter {
                     }
                     self.w.push('>');
                 }
-                self.w.push_str("::new(");
+                // Constructor-overload pick (§7.3.1): count-based
+                // suffix re-derived against the class's ctor list.
+                let ctor_bare = n
+                    .class_name
+                    .segments
+                    .last()
+                    .map(|s| s.text.clone())
+                    .unwrap_or_default();
+                let ctor_sfx = self.ctor_overload_suffix(&ctor_bare, n.args.len());
+                self.w.push_str("::new");
+                self.w.push_str(&ctor_sfx);
+                self.w.push('(');
                 // Constructor args consume their values, so any
                 // nested string literal needs the Fix-1 self-coerce
                 // — clear the format-arg flag for the arg emission.
@@ -1116,7 +1127,16 @@ impl RustEmitter {
             self.w.push_str(" { __parent: ");
             self.w.push_str(crate_prefix);
             self.w.push_str(&path);
-            self.w.push_str("::new(");
+            let ctor_bare = n
+                .class_name
+                .segments
+                .last()
+                .map(|s| s.text.clone())
+                .unwrap_or_default();
+            let ctor_sfx = self.ctor_overload_suffix(&ctor_bare, n.args.len());
+            self.w.push_str("::new");
+            self.w.push_str(&ctor_sfx);
+            self.w.push('(');
             let args = n.args.clone();
             let prev_fmt = self.emitting_format_arg;
             self.emitting_format_arg = false;
@@ -1467,7 +1487,7 @@ fn collect_bare_names_expr(e: &Expr, sink: &mut dyn FnMut(&str)) {
     }
 }
 
-fn collect_bare_names_block(b: &juxc_ast::Block, sink: &mut dyn FnMut(&str)) {
+pub(crate) fn collect_bare_names_block(b: &juxc_ast::Block, sink: &mut dyn FnMut(&str)) {
     use juxc_ast::Stmt;
     for s in &b.statements {
         match s {
