@@ -1303,6 +1303,10 @@ pub(crate) fn compute_aliased_classes(
                 walk_expr(&w.condition, aliased, mark);
                 walk_block(&w.body, aliased, mark);
             }
+            Stmt::DoWhile(d) => {
+                walk_block(&d.body, aliased, mark);
+                walk_expr(&d.condition, aliased, mark);
+            }
             Stmt::ForEach(f) => {
                 walk_expr(&f.iter, aliased, mark);
                 walk_block(&f.body, aliased, mark);
@@ -1458,6 +1462,10 @@ pub(crate) fn compute_aliased_classes(
                 Stmt::While(w) => {
                     mark_lambda_captures(&w.condition, aliased, mark);
                     mark_lambda_captures_block(&w.body, aliased, mark);
+                }
+                Stmt::DoWhile(d) => {
+                    mark_lambda_captures_block(&d.body, aliased, mark);
+                    mark_lambda_captures(&d.condition, aliased, mark);
                 }
                 Stmt::ForEach(f) => {
                     mark_lambda_captures(&f.iter, aliased, mark);
@@ -1961,6 +1969,10 @@ fn cast_targets_stmt(s: &juxc_ast::Stmt, out: &mut HashSet<String>) {
             cast_targets_expr(&w.condition, out);
             cast_targets_block(&w.body, out);
         }
+        Stmt::DoWhile(d) => {
+            cast_targets_block(&d.body, out);
+            cast_targets_expr(&d.condition, out);
+        }
         Stmt::ForEach(f) => {
             cast_targets_expr(&f.iter, out);
             cast_targets_block(&f.body, out);
@@ -2188,6 +2200,7 @@ fn collect_thrown_class_names(
                 walk_else(s.else_branch.as_deref(), out);
             }
             Stmt::While(s) => walk_block(&s.body, out),
+            Stmt::DoWhile(s) => walk_block(&s.body, out),
             Stmt::ForEach(s) => walk_block(&s.body, out),
             _ => {}
         }

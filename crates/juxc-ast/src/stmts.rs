@@ -39,6 +39,10 @@ pub enum Stmt {
     If(IfStmt),
     /// `while (cond) block` — see [`WhileStmt`].
     While(WhileStmt),
+    /// `do block while (cond);` per §A.2.8 — the body runs at least
+    /// once; the condition is evaluated AFTER each iteration. See
+    /// [`DoWhileStmt`].
+    DoWhile(DoWhileStmt),
     /// `for (var name : iter) block` (or `for (Type name : iter) block`).
     /// See [`ForEachStmt`]. Java-style "enhanced for" / Kotlin-style
     /// for-each; this is the only `for` form currently parsed.
@@ -204,6 +208,20 @@ pub struct WhileStmt {
     /// The block executed each iteration while `condition` is true.
     pub body: Block,
     /// Span of the entire `while` statement.
+    pub span: Span,
+}
+
+/// `do block while (cond);` per §A.2.8 `do-while-stmt`. Java
+/// semantics: the body executes once before the first condition
+/// check, then repeats while the condition holds. Lowered to a Rust
+/// `loop { body; if !(cond) { break; } }`.
+#[derive(Debug, Clone)]
+pub struct DoWhileStmt {
+    /// The block executed each iteration (at least once).
+    pub body: Block,
+    /// Boolean loop condition, evaluated AFTER each iteration.
+    pub condition: Expr,
+    /// Span of the entire `do … while (…);` statement.
     pub span: Span,
 }
 

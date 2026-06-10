@@ -76,6 +76,24 @@ impl<'a> Parser<'a> {
         if self.at_kw(Keyword::While) {
             return Some(Stmt::While(self.parse_while_stmt()?));
         }
+        if self.at_kw(Keyword::Do) {
+            // `do block while (cond);` per §A.2.8 — the body runs at
+            // least once; the condition is checked AFTER each pass.
+            let start = self.peek_span();
+            self.advance(); // 'do'
+            let body = self.parse_block();
+            self.expect_kw(Keyword::While, "`while` after `do` block");
+            self.expect(&TokenKind::LParen, "'(' before do-while condition");
+            let condition = self.parse_expr()?;
+            self.expect(&TokenKind::RParen, "')' after do-while condition");
+            let end = self.peek_span();
+            self.expect(&TokenKind::Semicolon, "';' after do-while condition");
+            return Some(Stmt::DoWhile(juxc_ast::DoWhileStmt {
+                body,
+                condition,
+                span: start.join(end),
+            }));
+        }
         if self.at_kw(Keyword::For) {
             // Disambiguate the C-style `for (init; cond; update)` from the
             // enhanced `for (var x : iter)` by scanning the header for the

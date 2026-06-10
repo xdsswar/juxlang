@@ -545,6 +545,12 @@ pub enum BinaryOp {
     Eq,
     /// `!=` — structural inequality.
     NotEq,
+    /// `===` — reference identity (§T.1.4): true iff both operands are
+    /// the SAME object (address identity), never structural. Not
+    /// overridable.
+    RefEq,
+    /// `!==` — negated reference identity.
+    RefNeq,
     /// `<`
     Lt,
     /// `<=`
@@ -575,6 +581,12 @@ impl BinaryOp {
             BinaryOp::Rem    => "%",
             BinaryOp::Eq     => "==",
             BinaryOp::NotEq  => "!=",
+            // Reference identity has no direct Rust operator token —
+            // the backend special-cases it to `Rc::ptr_eq` /
+            // `std::ptr::eq`; these spellings only surface in
+            // diagnostics.
+            BinaryOp::RefEq  => "===",
+            BinaryOp::RefNeq => "!==",
             BinaryOp::Lt     => "<",
             BinaryOp::Le     => "<=",
             BinaryOp::Gt     => ">",

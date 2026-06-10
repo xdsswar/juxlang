@@ -170,6 +170,10 @@ fn collect_anon_method_calls(
                     walk_expr(&w.condition, out, anon_locals);
                     walk_block(&w.body, out, anon_locals);
                 }
+                Stmt::DoWhile(d) => {
+                    walk_block(&d.body, out, anon_locals);
+                    walk_expr(&d.condition, out, anon_locals);
+                }
                 Stmt::ForEach(f) => {
                     walk_expr(&f.iter, out, anon_locals);
                     walk_block(&f.body, out, anon_locals);
@@ -212,6 +216,7 @@ fn collect_anon_bound_locals(block: &Block, out: &mut HashSet<String>) {
                 }
             }
             Stmt::While(w) => collect_anon_bound_locals(&w.body, out),
+            Stmt::DoWhile(d) => collect_anon_bound_locals(&d.body, out),
             Stmt::ForEach(f) => collect_anon_bound_locals(&f.body, out),
             _ => {}
         }
@@ -251,6 +256,10 @@ fn collect_mutated_names_real(
             Stmt::While(w) => {
                 collect_mutating_calls(&w.condition, out, user_mut);
                 collect_mutated_names(&w.body, out, user_mut);
+            }
+            Stmt::DoWhile(d) => {
+                collect_mutated_names(&d.body, out, user_mut);
+                collect_mutating_calls(&d.condition, out, user_mut);
             }
             Stmt::ForEach(f) => {
                 collect_mutating_calls(&f.iter, out, user_mut);
@@ -466,6 +475,7 @@ fn stmt_contains_await(stmt: &Stmt) -> bool {
         Stmt::Assign(a) => expr_contains_await(&a.value) || expr_contains_await(&a.target),
         Stmt::If(i) => if_contains_await(i),
         Stmt::While(w) => expr_contains_await(&w.condition) || block_contains_await(&w.body),
+        Stmt::DoWhile(d) => block_contains_await(&d.body) || expr_contains_await(&d.condition),
         Stmt::ForEach(f) => expr_contains_await(&f.iter) || block_contains_await(&f.body),
         Stmt::ForC(f) => {
             f.cond.as_ref().is_some_and(expr_contains_await) || block_contains_await(&f.body)
@@ -599,6 +609,11 @@ pub(crate) fn body_writes_to_this(block: &Block) -> bool {
             }
             Stmt::While(w) => {
                 if body_writes_to_this(&w.body) {
+                    return true;
+                }
+            }
+            Stmt::DoWhile(d) => {
+                if body_writes_to_this(&d.body) {
                     return true;
                 }
             }
@@ -908,6 +923,10 @@ fn stmt_calls_mut_method_on_this(stmt: &Stmt, mut_methods: &HashSet<String>) -> 
         Stmt::While(w) => {
             expr_calls_mut_method_on_this(&w.condition, mut_methods)
                 || body_calls_mut_method_on_this(&w.body, mut_methods)
+        }
+        Stmt::DoWhile(d) => {
+            body_calls_mut_method_on_this(&d.body, mut_methods)
+                || expr_calls_mut_method_on_this(&d.condition, mut_methods)
         }
         Stmt::ForEach(f) => {
             expr_calls_mut_method_on_this(&f.iter, mut_methods)

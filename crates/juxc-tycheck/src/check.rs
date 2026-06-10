@@ -1243,6 +1243,25 @@ impl<'a> Checker<'a> {
                 self.env.pop_scope();
             }
 
+            Stmt::DoWhile(d) => {
+                // Body first (Java: runs at least once), then the
+                // condition — same bool requirement as `while`.
+                self.env.push_scope();
+                self.check_block(&d.body);
+                self.env.pop_scope();
+                self.check_expr(&d.condition);
+                let cond_ty = infer_expr(&d.condition, &self.env, self.symbols);
+                if !is_boolish(&cond_ty) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0410_TypeMismatch,
+                            format!("expected bool condition, found {cond_ty}"),
+                        )
+                        .with_span(expr_span(&d.condition)),
+                    );
+                }
+            }
+
             Stmt::ForEach(f) => {
                 self.check_expr(&f.iter);
                 let iter_ty = infer_expr(&f.iter, &self.env, self.symbols);

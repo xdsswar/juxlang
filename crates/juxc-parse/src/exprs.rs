@@ -614,6 +614,10 @@ impl<'a> Parser<'a> {
         match self.peek() {
             TokenKind::EqEq  => Some(BinaryOp::Eq),
             TokenKind::NotEq => Some(BinaryOp::NotEq),
+            // Reference identity (§T.1.4) sits at the same precedence
+            // level as `==` and is left-associative with it.
+            TokenKind::StrictEq    => Some(BinaryOp::RefEq),
+            TokenKind::StrictNotEq => Some(BinaryOp::RefNeq),
             _ => None,
         }
     }

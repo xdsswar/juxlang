@@ -69,6 +69,10 @@ fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
             expr_moves_path_at_top(&s.condition, name)
                 || body_moves_path(&s.body, name)
         }
+        Stmt::DoWhile(s) => {
+            body_moves_path(&s.body, name)
+                || expr_moves_path_at_top(&s.condition, name)
+        }
         Stmt::ForEach(s) => {
             // A nested for-each that consumes the outer var
             // (`for y in xs` where xs shadows our name) is a move.
@@ -441,6 +445,7 @@ impl RustEmitter {
             Stmt::VarDecl(var) => self.emit_var_decl(var),
             Stmt::If(if_stmt) => self.emit_if(if_stmt),
             Stmt::While(w) => self.emit_while(w),
+            Stmt::DoWhile(d) => self.emit_do_while(d),
             Stmt::ForEach(f) => self.emit_for_each(f),
             Stmt::ForC(f) => self.emit_for_c(f),
             Stmt::Assign(a) => self.emit_assign(a),
@@ -1113,6 +1118,32 @@ impl RustEmitter {
         self.w.push_str("}\n");
     }
 
+    /// `do block while (cond);` → Rust has no do-while, so the body
+    /// runs inside a `loop` with the exit test at the BOTTOM —
+    /// preserving Java's run-at-least-once + check-after semantics:
+    ///
+    ///   loop { <body> if !(cond) { break; } }
+    ///
+    /// A literal-`true` condition drops the dead test entirely.
+    pub(crate) fn emit_do_while(&mut self, d: &juxc_ast::DoWhileStmt) {
+        self.w.push_str("loop {\n");
+        self.w.indent_inc();
+        self.emit_block_contents(&d.body);
+        if !matches!(d.condition, Expr::Literal(Literal::Bool(true))) {
+            self.w.emit_indent();
+            self.w.push_str("if !(");
+            self.emit_expr(&d.condition);
+            self.w.push_str(") {\n");
+            self.w.indent_inc();
+            self.w.line("break;");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+        self.w.indent_dec();
+        self.w.emit_indent();
+        self.w.push_str("}\n");
+    }
+
     /// `target = value ;` Jux → `target = value;` Rust.
     ///
     /// The target is whatever the parser validated as an lvalue —
@@ -1629,6 +1660,15 @@ impl RustEmitter {
     /// caller won't add a wrap and rustc will surface any real
     /// mismatch.
     pub(crate) fn assign_target_is_nullable(&self, target: &Expr) -> bool {
+        // Bare-Path target — a LOCAL with a `T?` declared type
+        // (`maybe = a;` where `C? maybe`). The nullable-locals set is
+        // the live source of truth (smart-cast narrowing removes a
+        // name for the narrowed region, where a raw assign would be
+        // assigning into the unwrapped binding).
+        if let Expr::Path(qn) = target {
+            return qn.segments.len() == 1
+                && self.nullable_locals.contains(&qn.segments[0].text);
+        }
         let Expr::Field(f) = target else { return false };
         let Some(juxc_tycheck::Ty::User { name, .. }) =
             self.expr_types.get(&expr_span_of(&f.object))
@@ -1814,6 +1854,7 @@ pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::VarDecl(v) => v.span,
         Stmt::If(i) => i.span,
         Stmt::While(w) => w.span,
+        Stmt::DoWhile(d) => d.span,
         Stmt::ForEach(f) => f.span,
         Stmt::ForC(f) => f.span,
         Stmt::Assign(a) => a.span,
@@ -1861,6 +1902,7 @@ fn stmt_contains_fn_return(s: &Stmt) -> bool {
             false
         }
         Stmt::While(w) => block_contains_fn_return(&w.body),
+        Stmt::DoWhile(d) => block_contains_fn_return(&d.body),
         Stmt::ForEach(f) => block_contains_fn_return(&f.body),
         Stmt::ForC(f) => block_contains_fn_return(&f.body),
         Stmt::Try(t) => {
