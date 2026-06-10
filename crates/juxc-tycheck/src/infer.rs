@@ -1124,6 +1124,7 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         | BinaryOp::Le
         | BinaryOp::Gt
         | BinaryOp::Ge
+        | BinaryOp::In
         | BinaryOp::And
         | BinaryOp::Or => Ty::Primitive(Primitive::Bool),
         // Arithmetic, bitwise, shift — take the left operand's type.

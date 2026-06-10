@@ -551,6 +551,10 @@ pub enum BinaryOp {
     RefEq,
     /// `!==` — negated reference identity.
     RefNeq,
+    /// `in` — containment test (§O.2.4): `x in xs`. Dispatches to the
+    /// CONTAINER's `operator in`, with builtin lowerings for arrays,
+    /// collections, ranges, and strings.
+    In,
     /// `<`
     Lt,
     /// `<=`
@@ -587,6 +591,7 @@ impl BinaryOp {
             // diagnostics.
             BinaryOp::RefEq  => "===",
             BinaryOp::RefNeq => "!==",
+            BinaryOp::In     => "in",
             BinaryOp::Lt     => "<",
             BinaryOp::Le     => "<=",
             BinaryOp::Gt     => ">",

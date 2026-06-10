@@ -600,6 +600,9 @@ pub enum OperatorKind {
     Range,
     /// `..=` — inclusive range (§O.2.4).
     RangeInclusive,
+    /// `in` — containment (§O.2.4), declared on the CONTAINER type:
+    /// `bool operator in(T element)`.
+    In,
 }
 
 /// A generic type parameter per §A.2.4 `generic-params`.

@@ -1960,6 +1960,12 @@ impl<'a> Parser<'a> {
                 self.advance();
                 OperatorKind::ToString
             }
+            // `operator in` — containment, declared on the CONTAINER
+            // (§O.2.4): `bool operator in(T element)`.
+            TokenKind::Ident(text) if text == "in" => {
+                self.advance();
+                OperatorKind::In
+            }
             _ => {
                 self.diagnostics.push(
                     Diagnostic::error(
