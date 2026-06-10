@@ -156,6 +156,50 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         )
     }
 
+    /**
+     * Generic clauses decompose into navigable PSI: type-parameter names, bound
+     * type references, and wildcards become real nodes (so find-usages /
+     * go-to-definition / rename reach type names inside `<…>`). Deeply nested
+     * generics — whose closing run lexes as merged `>>` tokens — must still
+     * balance without a stray error.
+     */
+    fun testGenericsDecomposeIntoReferences() {
+        val psi = createPsiFile(
+            "Generics.jux",
+            """
+            public abstract class Animal {}
+            public interface Speaks {}
+            public class Pair<A, B> { public A first; public B second; public Pair() {} }
+            public class Holder<T extends Animal & Speaks> { public T value; public Holder() {} }
+            public class Deep { public Pair<Pair<Pair<Pair<String>>>> nested; public Deep() {} }
+            public void describe(Pair<? extends Animal, ? super Speaks> p) {}
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertTrue(
+            "unexpected parse errors: " + errors.joinToString { "${it.errorDescription}@${it.textOffset}" },
+            errors.isEmpty(),
+        )
+
+        // Declared type-parameter names are TYPE_PARAMETER nodes (`A`, `B`, `T`).
+        val typeParams = PsiTreeUtil.collectElements(psi) {
+            it.elementType === JuxElementTypes.TYPE_PARAMETER
+        }.map { it.text.trim() }.toSet()
+        assertTrue("type params A,B,T decomposed (got $typeParams)", typeParams.containsAll(setOf("A", "B", "T")))
+
+        // Wildcards become WILDCARD_TYPE nodes (`? extends Animal`, `? super Speaks`).
+        val wildcards = PsiTreeUtil.collectElements(psi) {
+            it.elementType === JuxElementTypes.WILDCARD_TYPE
+        }
+        assertEquals("two wildcards decomposed", 2, wildcards.size)
+
+        // The bound `Animal` is a TYPE_REFERENCE inside a wildcard — navigable.
+        val refTexts = PsiTreeUtil.collectElements(psi) {
+            it.elementType === JuxElementTypes.TYPE_REFERENCE
+        }.map { it.text.trim() }
+        assertTrue("bound type reference Animal present (got $refTexts)", refTexts.any { it == "Animal" })
+    }
+
     /** A use of a type name resolves to its in-file declaration. */
     fun testReferenceResolvesToDeclaration() {
         val file = createPsiFile(
