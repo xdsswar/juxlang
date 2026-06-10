@@ -298,6 +298,12 @@ pub enum Code {
     /// call in the overlap would be unresolvable. Make the ranges
     /// disjoint, or fold the variants into one constructor with
     /// default parameters.
+    /// E0260 — An **if-expression without an `else` branch** —
+    /// `var x = if (cond) a;`. The value form must produce a value on
+    /// every path (grammar §A.2.9: `if-expr = 'if' '(' expr ')' expr
+    /// 'else' expr`), so `else` is mandatory; only the STATEMENT form
+    /// may omit it. Add the `else`, or restructure as a statement.
+    E0260_IfExprMissingElse,
     E0450_AmbiguousOverload,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
@@ -474,6 +480,7 @@ impl Code {
             Code::E0443_ExplicitTypeArgs         => "E0443",
             Code::E0444_WildcardStorageUnsupported => "E0444",
             Code::E0212_VarargsNotLast           => "E0212",
+            Code::E0260_IfExprMissingElse        => "E0260",
             Code::E0450_AmbiguousOverload        => "E0450",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",

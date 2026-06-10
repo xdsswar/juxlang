@@ -263,7 +263,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0220`  | Sealed type with `permits` clause needed *(reserved)* | Grammar §A.2.5                 |
 | `E0240`  | `try` block without `catch` or `finally` *(reserved)* | Grammar §A.2.8                 |
 | `E0241`  | Label-targeted `break`/`continue` mismatched *(reserved)* | Grammar §A.2.8              |
-| `E0260`  | `if`-expression missing `else` branch *(reserved)*   | Grammar §A.2.9                 |
+| `E0260`  | `if`-expression missing `else` branch                | Grammar §A.2.9                 |
 | `E0261`  | `switch` expression must be exhaustive *(reserved; statement form is `E0440`)* | Type system §T.5 |
 | `E0270`  | Or-pattern alternatives bind incompatible names *(reserved)* | Grammar §A.3            |
 | `E0271`  | Local-variable destructuring requires irrefutable pattern *(reserved)* | Grammar §A.3  |

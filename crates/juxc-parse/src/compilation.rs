@@ -30,6 +30,12 @@ impl<'a> Parser<'a> {
         let imports = self.parse_imports();
 
         let mut items = Vec::new();
+        // Script mode (§E.1.1): bare statements at the top level are
+        // collected here and wrapped in a synthetic `void main()` at
+        // the end of the unit. Declarations and statements may mix
+        // freely; the statements run in source order.
+        let mut script_stmts: Vec<juxc_ast::Stmt> = Vec::new();
+        let mut script_start: Option<Span> = None;
         while !self.at_eof() {
             // Remember the cursor so we can guarantee forward progress: a
             // `parse_top_level_decl` / `recover_to_top_level` pair that
@@ -37,19 +43,83 @@ impl<'a> Parser<'a> {
             // dispatch doesn't actually handle) would otherwise spin forever
             // and blow the heap. The guard below force-advances in that case.
             let before = self.pos;
-            if let Some(item) = self.parse_top_level_decl() {
-                items.push(item);
+            // Unambiguous statement-leading keywords never start a
+            // declaration — route them straight to the statement
+            // parser. Everything else tries the declaration grammar
+            // first, and on failure REWINDS and retries as a
+            // statement (covers `print("hi");`, `x = 1;`, etc.).
+            if self.at_script_stmt_keyword() {
+                if script_start.is_none() {
+                    script_start = Some(self.peek_span());
+                }
+                if let Some(stmt) = self.parse_stmt() {
+                    script_stmts.push(stmt);
+                    script_stmts.append(&mut self.pending_stmts);
+                } else {
+                    self.recover_to_stmt_boundary();
+                }
             } else {
-                // Recovery: jump to the next plausible top-level keyword.
-                self.recover_to_top_level();
+                let diags_before = self.diagnostics.len();
+                if let Some(item) = self.parse_top_level_decl() {
+                    items.push(item);
+                } else {
+                    // Speculative-rewind: stash the decl-attempt
+                    // diagnostics, retry from the same spot as a
+                    // statement. If the statement parse succeeds the
+                    // decl errors were misfires and stay dropped; if
+                    // it fails too, the decl diagnostics were the
+                    // better story — restore them and recover.
+                    let stashed: Vec<_> = self.diagnostics.drain(diags_before..).collect();
+                    self.pos = before;
+                    let stmt_diags_before = self.diagnostics.len();
+                    match self.parse_stmt() {
+                        Some(stmt) => {
+                            if script_start.is_none() {
+                                script_start = Some(self.peek_span());
+                            }
+                            script_stmts.push(stmt);
+                            script_stmts.append(&mut self.pending_stmts);
+                        }
+                        None => {
+                            self.diagnostics.truncate(stmt_diags_before);
+                            self.diagnostics.extend(stashed);
+                            self.pos = before;
+                            self.advance_past_decl_failure();
+                            // Recovery: jump to the next plausible top-level keyword.
+                            self.recover_to_top_level();
+                        }
+                    }
+                }
             }
             if self.pos == before {
                 // No token was consumed this iteration — the current token is
                 // a recovery anchor with no matching production. Step over it
-                // so the loop always terminates; the failed `parse_top_level_decl`
+                // so the loop always terminates; the failed parse attempts
                 // already emitted a diagnostic.
                 self.advance();
             }
+        }
+        // Wrap collected script statements in the synthetic entry
+        // (§E.1.1). Span: first statement through last. An explicit
+        // `main` in the same file collides in the symbol table and
+        // surfaces as the usual duplicate-declaration diagnostic.
+        if !script_stmts.is_empty() {
+            let start_span = script_start.unwrap_or(start);
+            let end_span = self.last_consumed_span();
+            let body_span = start_span.join(end_span);
+            items.push(TopLevelDecl::Function(juxc_ast::FnDecl {
+                annotations: Vec::new(),
+                visibility: Visibility::Public,
+                modifiers: Vec::new(),
+                return_type: juxc_ast::ReturnType::Void,
+                name: juxc_ast::Ident { text: "main".to_string(), span: start_span },
+                generic_params: Vec::new(),
+                params: Vec::new(),
+                throws: Vec::new(),
+                body: Some(juxc_ast::Block { statements: script_stmts, span: body_span }),
+                is_property: false,
+                span: body_span,
+            }));
         }
         // Flatten nested-type declarations out to the top level so
         // the symbol table, resolver, and backend treat them like
@@ -420,6 +490,32 @@ impl<'a> Parser<'a> {
         }
         let fn_decl = self.parse_fn_decl(annotations, visibility)?;
         Some(TopLevelDecl::Function(fn_decl))
+    }
+
+    /// True when the cursor sits on a keyword that can ONLY start a
+    /// statement (never a declaration) — the cheap script-mode
+    /// dispatch (§E.1.1). `if`/`for`/`while`/… have no top-level-decl
+    /// reading, so no speculation is needed for them.
+    fn at_script_stmt_keyword(&self) -> bool {
+        self.at_kw(Keyword::Var)
+            || self.at_kw(Keyword::If)
+            || self.at_kw(Keyword::While)
+            || self.at_kw(Keyword::Do)
+            || self.at_kw(Keyword::For)
+            || self.at_kw(Keyword::Switch)
+            || self.at_kw(Keyword::Try)
+            || self.at_kw(Keyword::Throw)
+            || self.at_kw(Keyword::Return)
+            || self.at_kw(Keyword::Break)
+            || self.at_kw(Keyword::Continue)
+            || self.at_kw(Keyword::Unsafe)
+    }
+
+    /// After both the declaration AND statement parses failed at the
+    /// same position, step past the offending token so the outer
+    /// loop's forward-progress guard doesn't have to.
+    fn advance_past_decl_failure(&mut self) {
+        self.advance();
     }
 
     /// Per §A.2.2 `visibility = 'public' | 'internal' | 'protected' | 'private'`.

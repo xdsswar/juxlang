@@ -1,0 +1,26 @@
+// Script mode (§E.1.1) + if-expressions (§A.2.9).
+//
+// - Bare statements at the top level are wrapped in a synthetic
+//   `void main()` — the simplest legal Jux program is one statement.
+//   Declarations mix freely; statements run in source order.
+// - `if (cond) a else b` in expression position produces a value;
+//   the `else` is mandatory there (E0260) — only the statement form
+//   may omit it.
+
+print("hello from script");
+var x = 21;
+var y = if (x > 10) "big" else "small";
+print(y);
+
+int twice(int n) {
+    return n * 2;
+}
+
+print(twice(x));
+
+var grade = if (x >= 90) "A" else if (x >= 20) "B" else "C";
+print(grade);
+
+for (var i : 0..3) {
+    print(i);
+}
