@@ -1100,6 +1100,44 @@ impl RustEmitter {
                 }
             }
         }
+        // Same interception for the BARE-NAME form inside the class's
+        // own body (`g = new Counter();` inside `class Reg` ≡
+        // `Reg.g = …`): a thread_local static slot has no place
+        // expression, so the generic lvalue path would emit the
+        // `.with(…clone())` READ shape as a target (rustc E0070).
+        if let Expr::Path(qn) = &a.target {
+            if qn.segments.len() == 1 {
+                if let Some(class_name) = self.enclosing_class.clone() {
+                    let name = &qn.segments[0].text;
+                    let shadowed = self.current_fn_params.contains(name)
+                        || self.local_types.iter().any(|s| s.contains_key(name));
+                    let tl = !shadowed
+                        && self
+                            .lookup_class_by_bare_or_fqn(&class_name)
+                            .and_then(|c| c.fields.get(name.as_str()))
+                            .filter(|fs| fs.is_static && !fs.is_final)
+                            .map(|fs| fs.ty.clone())
+                            .map(|ty| self.static_type_needs_thread_local(&ty))
+                            .unwrap_or(false);
+                    if tl {
+                        self.w.push_str(&class_name);
+                        self.w.push('_');
+                        self.w.push_str(name);
+                        self.w.push_str(".with(|__s| { *__s.borrow_mut() ");
+                        if let Some(op) = a.op {
+                            self.w.push_str(op.as_rust_str());
+                        }
+                        self.w.push_str("= ");
+                        self.emit_expr(&a.value);
+                        if self.wrapper_value_needs_clone(&a.value) {
+                            self.w.push_str(".clone()");
+                        }
+                        self.w.push_str("; });\n");
+                        return;
+                    }
+                }
+            }
+        }
         // **Property-setter routing (JUX-MISSING-DEFS §M.7).** When the
         // target is `obj.Prop` and `Prop` names a property with a
         // settable accessor (`set` / `init`), lower the write to a call

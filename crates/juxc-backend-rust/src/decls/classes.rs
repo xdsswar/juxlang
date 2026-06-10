@@ -351,7 +351,9 @@ impl RustEmitter {
             if !field.is_static {
                 continue;
             }
-            if field.is_final {
+            if field.is_final
+                && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field))
+            {
                 self.emit_static_field(field);
             }
         }
@@ -455,7 +457,13 @@ impl RustEmitter {
             .map(|p| p.name.text.as_str())
             .collect();
         for field in &class_decl.fields {
-            if field.is_static && !field.is_final {
+            // `final` statics normally emit as `pub const` associated
+            // items — EXCEPT when the payload is `!Send`/non-const
+            // (a wrapper-class object): those route here so the
+            // thread_local form carries them (rustc E0015 otherwise).
+            let final_needs_tl = field.is_final
+                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field));
+            if field.is_static && (!field.is_final || final_needs_tl) {
                 if type_ref_mentions_any(&juxc_tycheck::resolved_field_type(field), &generic_param_names) {
                     continue;
                 }
@@ -676,7 +684,10 @@ impl RustEmitter {
         // Static `final` fields → `pub const` associated items, same
         // as the legacy path.
         for field in &class_decl.fields {
-            if field.is_static && field.is_final {
+            if field.is_static
+                && field.is_final
+                && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field))
+            {
                 self.emit_static_field(field);
             }
         }
@@ -772,7 +783,11 @@ impl RustEmitter {
         // identical to the legacy path (statics live on the class,
         // not the instance, so the wrapper shape doesn't touch them).
         for field in &class_decl.fields {
-            if field.is_static && !field.is_final {
+            // `final`+`!Send` payloads route here too (thread_local form);
+            // see the inline-class site for the rationale.
+            let final_needs_tl = field.is_final
+                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field));
+            if field.is_static && (!field.is_final || final_needs_tl) {
                 self.emit_mutable_static_field(name, field);
             }
         }
@@ -2449,6 +2464,34 @@ impl RustEmitter {
         })
     }
 
+    /// True when a **`final` static** of this declared type can't emit
+    /// as a Rust `pub const` associated item: constructing a class or
+    /// record runs a non-`const` `new` (rustc E0015), so the slot needs
+    /// runtime initialization — the module-scope `LazyLock` shape (or
+    /// `thread_local!` when the payload is also `!Send`). Primitives,
+    /// `String` (as `&'static str`), and enum variants stay `pub const`.
+    pub(crate) fn final_static_needs_runtime_init(&self, ty: &juxc_ast::TypeRef) -> bool {
+        if self.static_type_needs_thread_local(ty) {
+            return true;
+        }
+        // Primitives and `String` are const-constructible (`&'static
+        // str` for String) — the stdlib's `String` CLASS stub in the
+        // symbol table must not drag them onto the runtime path.
+        if crate::types::jux_primitive_to_rust(ty).is_some()
+            || crate::analysis::is_jux_string_type(ty)
+        {
+            return false;
+        }
+        let Some(seg) = ty.name.segments.last() else { return false };
+        let bare = seg.text.as_str();
+        self.lookup_class_by_bare_or_fqn(bare).is_some()
+            || self
+                .symbols
+                .records
+                .keys()
+                .any(|k| k == bare || k.rsplit('.').next().unwrap_or(k) == bare)
+    }
+
     pub(crate) fn emit_mutable_static_field(
         &mut self,
         class_name: &str,
@@ -2805,7 +2848,10 @@ impl RustEmitter {
             self.emit_generic_params_as_args(&class_decl.generic_params);
             self.w.push_str(" {\n");
             for field in &class_decl.fields {
-                if field.is_static && field.is_final {
+                if field.is_static
+                    && field.is_final
+                    && !self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field))
+                {
                     self.emit_static_field(field);
                 }
             }
@@ -2817,7 +2863,10 @@ impl RustEmitter {
         // rule), so the value-class guard isn't needed here — sealed
         // statics are always concretely typed.
         for field in &class_decl.fields {
-            if field.is_static && !field.is_final {
+            // `final`+`!Send` payloads route here too (thread_local form).
+            let final_needs_tl = field.is_final
+                && self.final_static_needs_runtime_init(&juxc_tycheck::resolved_field_type(field));
+            if field.is_static && (!field.is_final || final_needs_tl) {
                 self.emit_mutable_static_field(&class_decl.name.text, field);
             }
         }
