@@ -321,6 +321,7 @@ fn check_for_each(s: &ForEachStmt, diags: &mut Vec<Diagnostic>) {
 fn check_expr(e: &Expr, diags: &mut Vec<Diagnostic>) {
     match e {
         Expr::Literal(_) | Expr::Path(_) | Expr::This(_) | Expr::Super(_) => {}
+        Expr::TypeTest(t) => check_expr(&t.value, diags),
         Expr::Call(c) => check_call(c, diags),
         Expr::Binary(b) => check_binary(b, diags),
         Expr::Unary(u) => check_unary(u, diags),

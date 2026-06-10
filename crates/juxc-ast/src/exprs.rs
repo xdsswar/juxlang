@@ -54,6 +54,11 @@ pub enum Expr {
     /// instance method per §7.3. Lowers to Rust `self` (in a method) or
     /// `__self` (in a constructor's struct-builder pattern).
     This(Span),
+    /// `x => Type` / `x => Type binder` — the type-test operator (§T.1.4).
+    /// Evaluates to `bool` (true when `x`'s runtime type is `Type` or a
+    /// subtype). The bound form introduces `binder: Type` as a smart-cast in
+    /// the enclosing `if`'s then-branch (`if (x => Dog d) { d.bark(); }`).
+    TypeTest(TypeTestExpr),
     /// `super` — a reference to the superclass slice, valid only as the
     /// receiver of a method call (`super.method(args)`, §6.9.4). It resolves
     /// **statically** to the nearest concrete ancestor's version of the named
@@ -384,6 +389,22 @@ pub struct CastExpr {
     /// The target type.
     pub ty: TypeRef,
     /// Span covering the whole `value as Type`.
+    pub span: Span,
+}
+
+/// `x => Type` / `x => Type binder` — the type-test operator (§T.1.4). Yields
+/// `bool`; the optional `binder` makes it a smart-cast in the enclosing `if`'s
+/// then-branch.
+#[derive(Debug, Clone)]
+pub struct TypeTestExpr {
+    /// The value being tested.
+    pub value: Box<Expr>,
+    /// The type tested against.
+    pub ty: TypeRef,
+    /// Optional smart-cast binder (`x => Dog d` binds `d`). `None` for the
+    /// bare boolean test (`x => Dog`).
+    pub binder: Option<Ident>,
+    /// Span covering the whole `value => Type [binder]`.
     pub span: Span,
 }
 

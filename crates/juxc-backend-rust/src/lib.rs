@@ -208,7 +208,16 @@ pub fn lower_workspace(
     // AND provably aliased — non-aliased eligible classes demote to the
     // legacy plain-struct ("Inline") shape via `compute_wrapped_set`.
     e.wrapper_classes = compute_wrapped_set(units, &e.expr_types);
-    e.poly_base_classes = compute_polymorphic_base_classes(units);
+    // A polymorphic base must also be a WRAPPER class for `Rc<dyn …Kind>`
+    // dispatch (populated Kind trait, accessors, etc.) to be sound — the
+    // delegations and accessors assume the interior-mutable `self.0` shape.
+    // Non-wrapper poly bases (e.g. exception classes, excluded from wrapping
+    // because `Rc<RefCell>` is `!Send`) stay on their legacy value path.
+    e.poly_base_classes = compute_polymorphic_base_classes(units)
+        .intersection(&e.wrapper_classes)
+        .cloned()
+        .collect();
+    e.downcast_targets = compute_downcast_targets(units);
     for unit in units {
         // Stub units carry no real class bodies to copy down parent chains.
         if unit.is_external {
@@ -332,7 +341,16 @@ pub fn lower_workspace_test(
     // Phase B (§CR.3.3): wrap only wrap-eligible AND aliased classes;
     // non-aliased eligible classes demote to the legacy Inline shape.
     e.wrapper_classes = compute_wrapped_set(units, &e.expr_types);
-    e.poly_base_classes = compute_polymorphic_base_classes(units);
+    // A polymorphic base must also be a WRAPPER class for `Rc<dyn …Kind>`
+    // dispatch (populated Kind trait, accessors, etc.) to be sound — the
+    // delegations and accessors assume the interior-mutable `self.0` shape.
+    // Non-wrapper poly bases (e.g. exception classes, excluded from wrapping
+    // because `Rc<RefCell>` is `!Send`) stay on their legacy value path.
+    e.poly_base_classes = compute_polymorphic_base_classes(units)
+        .intersection(&e.wrapper_classes)
+        .cloned()
+        .collect();
+    e.downcast_targets = compute_downcast_targets(units);
     for unit in units {
         // Stub units carry no real class bodies to copy down parent chains.
         if unit.is_external {
@@ -649,6 +667,12 @@ struct RustEmitter {
     /// upcast wraps instead of slicing. Empty until the Stage-2 emit paths
     /// consult it; populated alongside [`Self::wrapper_classes`].
     pub(crate) poly_base_classes: std::collections::HashSet<String>,
+    /// Bare names used as **cast / type-test targets** (`(T) e`, `e => T`) in
+    /// the program (see [`compute_downcast_targets`]). For each such target the
+    /// relevant dyn traits emit a `__jux_as_<T>` runtime-type downcast hook;
+    /// bounding to actually-used targets keeps non-downcasting programs'
+    /// emitted Rust unchanged.
+    pub(crate) downcast_targets: std::collections::HashSet<String>,
     /// True while emitting the body of a constructor / method /
     /// operator that belongs to a **wrapper-shape** class (one in
     /// [`Self::wrapper_classes`]). Drives the interior-mutability
@@ -1089,6 +1113,7 @@ pub(crate) fn compute_aliased_classes(
                 walk_expr(&r.end, aliased, mark);
             }
             Expr::Cast(c) => walk_expr(&c.value, aliased, mark),
+            Expr::TypeTest(t) => walk_expr(&t.value, aliased, mark),
             Expr::SizeOf(s) => walk_expr(&s.operand, aliased, mark),
             Expr::Index(i) => {
                 walk_expr(&i.array, aliased, mark);
@@ -1546,6 +1571,219 @@ fn compute_polymorphic_forced_classes(
     forced
 }
 
+/// Collect the bare names used as **cast / type-test targets** — the `T` in a
+/// `(T) e` / `e as T` cast or (later) an `e => T` type-test — anywhere in the
+/// program. "Finish polymorphism" emits a runtime-type `__jux_as_<T>` downcast
+/// hook per collected target; bounding emission to actually-used targets keeps
+/// the output of programs that never downcast unchanged. Mirrors the
+/// `compute_aliased_classes` body walker.
+fn compute_downcast_targets(units: &[juxc_ast::CompilationUnit]) -> HashSet<String> {
+    use juxc_ast::TopLevelDecl;
+    let mut out: HashSet<String> = HashSet::new();
+    for unit in units {
+        for item in &unit.items {
+            match item {
+                TopLevelDecl::Function(f) => {
+                    if let Some(b) = &f.body {
+                        cast_targets_block(b, &mut out);
+                    }
+                }
+                TopLevelDecl::Class(c) => {
+                    for m in &c.methods {
+                        if let Some(b) = &m.body {
+                            cast_targets_block(b, &mut out);
+                        }
+                    }
+                    for ctor in &c.constructors {
+                        cast_targets_block(&ctor.body, &mut out);
+                    }
+                    for b in c.init_blocks.iter().chain(&c.static_init_blocks) {
+                        cast_targets_block(b, &mut out);
+                    }
+                }
+                TopLevelDecl::Interface(i) => {
+                    for m in &i.methods {
+                        if let Some(b) = &m.body {
+                            cast_targets_block(b, &mut out);
+                        }
+                    }
+                }
+                TopLevelDecl::Record(r) => {
+                    for m in &r.methods {
+                        if let Some(b) = &m.body {
+                            cast_targets_block(b, &mut out);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+fn cast_targets_block(b: &juxc_ast::Block, out: &mut HashSet<String>) {
+    for s in &b.statements {
+        cast_targets_stmt(s, out);
+    }
+}
+
+fn cast_targets_stmt(s: &juxc_ast::Stmt, out: &mut HashSet<String>) {
+    use juxc_ast::Stmt;
+    match s {
+        Stmt::Expr(e) => cast_targets_expr(e, out),
+        Stmt::Return(Some(e)) => cast_targets_expr(e, out),
+        Stmt::Return(None) | Stmt::Break(_) | Stmt::Continue(_) => {}
+        Stmt::VarDecl(v) => {
+            if let Some(e) = &v.init {
+                cast_targets_expr(e, out);
+            }
+        }
+        Stmt::If(i) => {
+            cast_targets_expr(&i.condition, out);
+            cast_targets_block(&i.then_block, out);
+            cast_targets_else(i.else_branch.as_deref(), out);
+        }
+        Stmt::While(w) => {
+            cast_targets_expr(&w.condition, out);
+            cast_targets_block(&w.body, out);
+        }
+        Stmt::ForEach(f) => {
+            cast_targets_expr(&f.iter, out);
+            cast_targets_block(&f.body, out);
+        }
+        Stmt::ForC(f) => {
+            if let Some(i) = &f.init {
+                cast_targets_stmt(i, out);
+            }
+            if let Some(c) = &f.cond {
+                cast_targets_expr(c, out);
+            }
+            if let Some(u) = &f.update {
+                cast_targets_stmt(u, out);
+            }
+            cast_targets_block(&f.body, out);
+        }
+        Stmt::Assign(a) => {
+            cast_targets_expr(&a.target, out);
+            cast_targets_expr(&a.value, out);
+        }
+        Stmt::SuperCall(args, _) => {
+            for e in args {
+                cast_targets_expr(e, out);
+            }
+        }
+        Stmt::Throw(e, _) => cast_targets_expr(e, out),
+        Stmt::Try(t) => {
+            cast_targets_block(&t.body, out);
+            for c in &t.catches {
+                cast_targets_block(&c.body, out);
+            }
+            if let Some(f) = &t.finally {
+                cast_targets_block(f, out);
+            }
+        }
+        Stmt::Unsafe(b) => cast_targets_block(b, out),
+    }
+}
+
+fn cast_targets_else(b: Option<&juxc_ast::ElseBranch>, out: &mut HashSet<String>) {
+    match b {
+        Some(juxc_ast::ElseBranch::If(i)) => {
+            cast_targets_expr(&i.condition, out);
+            cast_targets_block(&i.then_block, out);
+            cast_targets_else(i.else_branch.as_deref(), out);
+        }
+        Some(juxc_ast::ElseBranch::Block(b)) => cast_targets_block(b, out),
+        None => {}
+    }
+}
+
+fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
+    use juxc_ast::Expr;
+    match e {
+        Expr::Cast(c) => {
+            if let Some(seg) = c.ty.name.segments.last() {
+                out.insert(seg.text.clone());
+            }
+            cast_targets_expr(&c.value, out);
+        }
+        Expr::TypeTest(t) => {
+            if let Some(seg) = t.ty.name.segments.last() {
+                out.insert(seg.text.clone());
+            }
+            cast_targets_expr(&t.value, out);
+        }
+        Expr::Call(c) => {
+            cast_targets_expr(&c.callee, out);
+            for a in &c.args {
+                cast_targets_expr(a, out);
+            }
+        }
+        Expr::NewObject(n) => {
+            for a in &n.args {
+                cast_targets_expr(a, out);
+            }
+        }
+        Expr::NewArrayLit(n) => {
+            for el in &n.elements {
+                cast_targets_expr(el, out);
+            }
+        }
+        Expr::NewArray(n) => cast_targets_expr(&n.size, out),
+        Expr::Binary(b) => {
+            cast_targets_expr(&b.left, out);
+            cast_targets_expr(&b.right, out);
+        }
+        Expr::Unary(u) => cast_targets_expr(&u.operand, out),
+        Expr::Range(r) => {
+            cast_targets_expr(&r.start, out);
+            cast_targets_expr(&r.end, out);
+        }
+        Expr::SizeOf(s) => cast_targets_expr(&s.operand, out),
+        Expr::Index(i) => {
+            cast_targets_expr(&i.array, out);
+            cast_targets_expr(&i.index, out);
+        }
+        Expr::Field(f) => cast_targets_expr(&f.object, out),
+        Expr::InterpString(s) => {
+            for seg in &s.segments {
+                if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                    cast_targets_expr(inner, out);
+                }
+            }
+        }
+        Expr::Elvis(el) => {
+            cast_targets_expr(&el.value, out);
+            cast_targets_expr(&el.fallback, out);
+        }
+        Expr::Ternary(t) => {
+            cast_targets_expr(&t.condition, out);
+            cast_targets_expr(&t.then_branch, out);
+            cast_targets_expr(&t.else_branch, out);
+        }
+        Expr::Await(inner, _) => cast_targets_expr(inner, out),
+        Expr::Lambda(l) => match &l.body {
+            juxc_ast::LambdaBody::Expr(b) => cast_targets_expr(b, out),
+            juxc_ast::LambdaBody::Block(blk) => cast_targets_block(blk, out),
+        },
+        Expr::Switch(s) => {
+            cast_targets_expr(&s.scrutinee, out);
+            for arm in &s.arms {
+                match &arm.body {
+                    juxc_ast::SwitchBody::Expr(b) => cast_targets_expr(b, out),
+                    juxc_ast::SwitchBody::Block(blk) => cast_targets_block(blk, out),
+                }
+            }
+        }
+        Expr::Literal(_)
+        | Expr::Path(_)
+        | Expr::This(_)
+        | Expr::Super(_)
+        | Expr::MethodRef(_) => {}
+    }
+}
+
 /// Collect the **bare names of every class that is `throw`n or named
 /// in a `catch`** across a workspace.
 ///
@@ -1873,6 +2111,7 @@ impl RustEmitter {
             class_asts: std::collections::HashMap::new(),
             wrapper_classes: std::collections::HashSet::new(),
             poly_base_classes: std::collections::HashSet::new(),
+            downcast_targets: std::collections::HashSet::new(),
             emitting_wrapper_class: false,
             in_value_type_position: false,
             emitting_class_has_static_init: false,
@@ -1943,7 +2182,13 @@ impl RustEmitter {
                 self.wrapper_classes.insert(w);
             }
             for b in compute_polymorphic_base_classes(std::slice::from_ref(unit)) {
-                self.poly_base_classes.insert(b);
+                // Only wrapper poly bases support `Rc<dyn …Kind>` dispatch.
+                if self.wrapper_classes.contains(&b) {
+                    self.poly_base_classes.insert(b);
+                }
+            }
+            for t in compute_downcast_targets(std::slice::from_ref(unit)) {
+                self.downcast_targets.insert(t);
             }
             for item in &unit.items {
                 if let TopLevelDecl::Class(cd) = item {

@@ -4050,3 +4050,39 @@ fn cargo_toml_registry_dep_is_linked() {
     // futures (async) and the registry dep share one [dependencies] table.
     assert_eq!(toml.matches("[dependencies]").count(), 1, "{toml}");
 }
+
+/// A class downcast target (`x as Dog`) makes the base's `<Name>Kind` trait
+/// carry a `__jux_as_Dog` runtime-type hook (default `None`), and the concrete
+/// `impl AnimalKind for Dog` overrides it with `Some(self.clone())`.
+#[test]
+fn downcast_target_emits_runtime_type_hook() {
+    let rust = emit(
+        r#"
+        public abstract class Animal { public abstract String sound(); }
+        public class Dog extends Animal { public Dog() {} public String sound() { return "woof"; } }
+        public void main() { Animal a = new Dog(); var d = a as Dog; }
+        "#,
+    );
+    assert!(
+        rust.contains("fn __jux_as_Dog(&self) -> Option<Dog> { None }"),
+        "trait default hook: {rust}",
+    );
+    assert!(
+        rust.contains("fn __jux_as_Dog(&self) -> Option<Dog> { Some(self.clone()) }"),
+        "impl hook override: {rust}",
+    );
+}
+
+/// A program with NO class downcasts emits NO runtime-type hooks — the
+/// bounded-emission invariant (non-downcasting programs are unchanged).
+#[test]
+fn no_downcast_no_hooks() {
+    let rust = emit(
+        r#"
+        public abstract class Animal { public abstract String sound(); }
+        public class Dog extends Animal { public Dog() {} public String sound() { return "woof"; } }
+        public void main() { Animal a = new Dog(); print(a.sound()); }
+        "#,
+    );
+    assert!(!rust.contains("__jux_as_"), "no hooks expected: {rust}");
+}

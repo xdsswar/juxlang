@@ -743,6 +743,109 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Validate a **reference cast** (`(T) x` / `x as T`) between user types
+    /// (E0442): the source and target must be in a subtype relationship in
+    /// either direction (a downcast or an upcast), or the target must be
+    /// `any`. An unrelated cast can never succeed and would lower to a
+    /// guaranteed-panicking downcast — reject it. Primitive / numeric casts
+    /// and casts where either side is an inference hole are left alone.
+    fn check_reference_cast(&mut self, c: &juxc_ast::CastExpr) {
+        if !is_plain_user_typeref(&c.ty) {
+            return;
+        }
+        let target_ty = ty_from_ref(&c.ty, &self.env, self.symbols);
+        if !matches!(target_ty, Ty::User { .. }) {
+            return;
+        }
+        let src_ty = infer_expr(&c.value, &self.env, self.symbols);
+        if self.ref_relation_possible(&src_ty, &target_ty) {
+            return;
+        }
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0442_UnrelatedCast,
+                format!(
+                    "cannot cast `{src_ty}` to `{target_ty}`: the types are unrelated \
+                     (neither is a subtype of the other), so the cast can never succeed",
+                ),
+            )
+            .with_span(c.span),
+        );
+    }
+
+    /// Validate a type-test `x => T [binder]`. Checks the tested value,
+    /// rejects a misplaced binder (E0441 — binders are only meaningful as/in
+    /// an `if` condition; `allow_binder` is set by the `if`-condition path),
+    /// and rejects an impossible test (E0442 — `x` could never be a `T`).
+    fn check_typetest(&mut self, t: &juxc_ast::TypeTestExpr, allow_binder: bool) {
+        self.check_expr(&t.value);
+        if let Some(binder) = &t.binder {
+            if !allow_binder {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0441_TypeTestBinderMisplaced,
+                        format!(
+                            "the type-test binder `{}` is only valid in an `if` condition \
+                             (`if (x => T {})`); use the bare test `x => T` here",
+                            binder.text, binder.text,
+                        ),
+                    )
+                    .with_span(binder.span),
+                );
+            }
+        }
+        if !is_plain_user_typeref(&t.ty) {
+            return;
+        }
+        let target_ty = ty_from_ref(&t.ty, &self.env, self.symbols);
+        if !matches!(target_ty, Ty::User { .. }) {
+            return;
+        }
+        let src_ty = infer_expr(&t.value, &self.env, self.symbols);
+        if self.ref_relation_possible(&src_ty, &target_ty) {
+            return;
+        }
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0442_UnrelatedCast,
+                format!(
+                    "`{src_ty} => {target_ty}` can never be true: the types are unrelated",
+                ),
+            )
+            .with_span(t.span),
+        );
+    }
+
+    /// True iff a reference cast / type-test from `src_ty` to `target_ty`
+    /// could ever succeed: they're in a subtype relationship (either
+    /// direction), the target is `any`, the source isn't a concrete user type
+    /// (inference hole — don't flag), or some class is a subtype of BOTH (an
+    /// interface sidecast). Two unrelated classes have no common instance
+    /// under single inheritance, so that case returns `false`.
+    fn ref_relation_possible(&self, src_ty: &Ty, target_ty: &Ty) -> bool {
+        if let Ty::User { name, .. } = target_ty {
+            if name == "any" {
+                return true;
+            }
+        }
+        if !matches!(src_ty, Ty::User { .. }) {
+            return true;
+        }
+        if crate::ty::is_subtype(src_ty, target_ty, self.symbols)
+            || crate::ty::is_subtype(target_ty, src_ty, self.symbols)
+        {
+            return true;
+        }
+        self.symbols.classes.keys().any(|fqn| {
+            let cty = Ty::User {
+                name: fqn.clone(),
+                generic_args: Vec::new(),
+            };
+            crate::ty::is_subtype(&cty, src_ty, self.symbols)
+                && crate::ty::is_subtype(&cty, target_ty, self.symbols)
+        })
+    }
+
     /// Run [`Self::check_iface_value_type`] on the `TypeRef` inside a
     /// [`ReturnType`], if any (skips `void`).
     fn check_iface_return_type(&mut self, rt: &ReturnType) {
@@ -996,18 +1099,36 @@ impl<'a> Checker<'a> {
             }
 
             Stmt::If(if_stmt) => {
-                self.check_expr(&if_stmt.condition);
-                let cond_ty = infer_expr(&if_stmt.condition, &self.env, self.symbols);
-                if !is_boolish(&cond_ty) {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::Code::E0410_TypeMismatch,
-                            format!("expected bool condition, found {cond_ty}"),
-                        )
-                        .with_span(expr_span(&if_stmt.condition)),
-                    );
-                }
+                // Type-test smart-cast: `if (x => Dog d)` allows the binder and
+                // introduces `d: Dog` into the then-branch only (§T.6.2).
+                let smartcast: Option<(String, Ty)> =
+                    if let Expr::TypeTest(t) = &if_stmt.condition {
+                        self.check_typetest(t, true);
+                        t.binder.as_ref().map(|b| {
+                            (
+                                b.text.clone(),
+                                ty_from_ref(&t.ty, &self.env, self.symbols),
+                            )
+                        })
+                    } else {
+                        self.check_expr(&if_stmt.condition);
+                        let cond_ty =
+                            infer_expr(&if_stmt.condition, &self.env, self.symbols);
+                        if !is_boolish(&cond_ty) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0410_TypeMismatch,
+                                    format!("expected bool condition, found {cond_ty}"),
+                                )
+                                .with_span(expr_span(&if_stmt.condition)),
+                            );
+                        }
+                        None
+                    };
                 self.env.push_scope();
+                if let Some((name, ty)) = &smartcast {
+                    self.env.declare(name, ty.clone());
+                }
                 self.check_block(&if_stmt.then_block);
                 self.env.pop_scope();
                 if let Some(else_branch) = &if_stmt.else_branch {
@@ -1165,18 +1286,32 @@ impl<'a> Checker<'a> {
     fn check_else_branch(&mut self, branch: &ElseBranch) {
         match branch {
             ElseBranch::If(if_stmt) => {
-                self.check_expr(&if_stmt.condition);
-                let cond_ty = infer_expr(&if_stmt.condition, &self.env, self.symbols);
-                if !is_boolish(&cond_ty) {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::Code::E0410_TypeMismatch,
-                            format!("expected bool condition, found {cond_ty}"),
-                        )
-                        .with_span(expr_span(&if_stmt.condition)),
-                    );
-                }
+                // Same type-test smart-cast handling as a top-level `if`, so
+                // `else if (x => Dog d)` binds `d` in its then-branch.
+                let smartcast: Option<(String, Ty)> =
+                    if let Expr::TypeTest(t) = &if_stmt.condition {
+                        self.check_typetest(t, true);
+                        t.binder.as_ref().map(|b| {
+                            (b.text.clone(), ty_from_ref(&t.ty, &self.env, self.symbols))
+                        })
+                    } else {
+                        self.check_expr(&if_stmt.condition);
+                        let cond_ty = infer_expr(&if_stmt.condition, &self.env, self.symbols);
+                        if !is_boolish(&cond_ty) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0410_TypeMismatch,
+                                    format!("expected bool condition, found {cond_ty}"),
+                                )
+                                .with_span(expr_span(&if_stmt.condition)),
+                            );
+                        }
+                        None
+                    };
                 self.env.push_scope();
+                if let Some((name, ty)) = &smartcast {
+                    self.env.declare(name, ty.clone());
+                }
                 self.check_block(&if_stmt.then_block);
                 self.env.pop_scope();
                 if let Some(nested) = &if_stmt.else_branch {
@@ -1286,7 +1421,17 @@ impl<'a> Checker<'a> {
                 }
             }
 
-            Expr::Cast(c) => self.check_expr(&c.value),
+            Expr::Cast(c) => {
+                self.check_expr(&c.value);
+                self.check_reference_cast(c);
+            }
+
+            Expr::TypeTest(t) => {
+                // Generic position (not an `if` condition — those are handled
+                // in `check_stmt`): the bare boolean test is fine; a binder
+                // here has nowhere to bind → E0441.
+                self.check_typetest(t, false);
+            }
 
             Expr::Range(r) => {
                 self.check_expr(&r.start);
@@ -1952,27 +2097,32 @@ impl<'a> Checker<'a> {
                 if let Some((field, declaring_class)) =
                     self.symbols.lookup_field(name, field_name)
                 {
-                    // **Stage-2 (E0437): data-field access through a
-                    // polymorphic-base reference is deferred.** When the
-                    // receiver's static type is a polymorphic base, it lowers
-                    // to a `Rc<dyn …Kind>` trait object that can't expose the
-                    // underlying struct's fields. `this` (the concrete self
-                    // inside a method) and concrete (non-base) receivers are
-                    // unaffected — only an external base-typed reference hits
-                    // the trait-object representation.
+                    // **Field access through a polymorphic-base reference.**
+                    // The receiver lowers to a `Rc<dyn …Kind>` trait object
+                    // that can't expose struct fields directly — a generated
+                    // `__get_<f>` / `__set_<f>` accessor handles **public /
+                    // protected** fields (so those are allowed). A **private**
+                    // field has no accessor and is unreachable through a base
+                    // reference → E0437. `this` (concrete self) and concrete
+                    // receivers are unaffected.
                     let recv_bare = name.rsplit('.').next().unwrap_or(name);
                     if !matches!(f.object.as_ref(), Expr::This(_))
                         && self.poly_bases.contains(recv_bare)
                     {
+                        use juxc_ast::Visibility;
+                        if matches!(field.visibility, Visibility::Public | Visibility::Protected) {
+                            // Allowed — the backend rewrites to the accessor.
+                            return;
+                        }
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0437_FieldThroughPolymorphicBase,
                                 format!(
-                                    "field `{field_name}` can't be accessed through a `{recv_bare}` \
-                                     reference — `{recv_bare}` is a polymorphic base, so the value is \
-                                     a dynamic-dispatch trait object that doesn't expose fields; add \
-                                     an accessor method on `{recv_bare}` (e.g. a getter) and call \
-                                     that, or hold the value at its concrete type",
+                                    "private field `{field_name}` can't be accessed through a \
+                                     `{recv_bare}` reference — `{recv_bare}` is a polymorphic base \
+                                     (a dynamic-dispatch trait object), and a private field has no \
+                                     accessor; make it public/protected, add a method, or hold the \
+                                     value at its concrete type",
                                 ),
                             )
                             .with_span(f.span),
@@ -3008,6 +3158,13 @@ fn operator_kind_user_spelling(kind: OperatorKind) -> &'static str {
 /// Reach into an expression for its span, mirroring the parser's
 /// `expr_span`. Synth literals from inference don't carry a span, so
 /// `Span::DUMMY` is the fallback.
+/// True when `ty` is a plain user-type reference — a single named class /
+/// interface with no array / nullable / pointer / function-type markers. Only
+/// these can be a reference-cast or type-test target.
+fn is_plain_user_typeref(ty: &juxc_ast::TypeRef) -> bool {
+    ty.array_shape.is_none() && !ty.nullable && ty.ptr_depth == 0 && ty.fn_shape.is_none()
+}
+
 fn expr_span(e: &Expr) -> Span {
     match e {
         Expr::Literal(_) => Span::DUMMY,
@@ -3017,6 +3174,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::Unary(u) => u.span,
         Expr::Range(r) => r.span,
         Expr::Cast(c) => c.span,
+        Expr::TypeTest(t) => t.span,
         Expr::SizeOf(s) => s.span,
         Expr::NewArray(n) => n.span,
         Expr::NewArrayLit(n) => n.span,
@@ -4609,9 +4767,24 @@ mod tests {
     // Stage-2 deferred-case diagnostics (E0437 / E0438)
     // ----------------------------------------------------------------
 
-    /// Reading a data field through a polymorphic-base reference → E0437.
+    /// Reading a PRIVATE field through a polymorphic-base reference → E0437
+    /// (no accessor is generated for private fields).
     #[test]
-    fn field_through_polymorphic_base_emits_e0437() {
+    fn private_field_through_polymorphic_base_emits_e0437() {
+        let d = run(
+            r#"
+            public class Animal { private String name; public Animal(String n){ this.name = n; } public String speak(){ return "..."; } }
+            public class Dog extends Animal { public Dog(String n){ super(n); } public String speak(){ return "woof"; } }
+            public void main() { Animal a = new Dog("Rex"); print(a.speak()); var n = a.name; }
+            "#,
+        );
+        assert!(has(&d, code::Code::E0437_FieldThroughPolymorphicBase), "expected E0437: {d:?}");
+    }
+
+    /// Reading a PUBLIC field through a polymorphic-base reference is allowed
+    /// (the generated `__get_<f>` accessor handles it) — no E0437.
+    #[test]
+    fn public_field_through_polymorphic_base_is_allowed() {
         let d = run(
             r#"
             public class Animal { public String name; public Animal(String n){ this.name = n; } public String speak(){ return "..."; } }
@@ -4619,7 +4792,7 @@ mod tests {
             public void main() { Animal a = new Dog("Rex"); print(a.name); }
             "#,
         );
-        assert!(has(&d, code::Code::E0437_FieldThroughPolymorphicBase), "expected E0437: {d:?}");
+        assert!(!has(&d, code::Code::E0437_FieldThroughPolymorphicBase), "public field via accessor: {d:?}");
     }
 
     /// Accessing a field on `this` (concrete self) or on a concrete subclass
@@ -4647,6 +4820,72 @@ mod tests {
             "#,
         );
         assert!(has(&d, code::Code::E0438_GenericVirtualMethod), "expected E0438: {d:?}");
+    }
+
+    /// A cast between two unrelated classes can never succeed → E0442.
+    #[test]
+    fn unrelated_class_cast_emits_e0442() {
+        let d = run(
+            r#"
+            public abstract class Animal { public abstract String sound(); }
+            public class Dog extends Animal { public Dog() {} public String sound() { return "w"; } }
+            public class Cat extends Animal { public Cat() {} public String sound() { return "m"; } }
+            public void main() { var dog = new Dog(); var c = dog as Cat; }
+            "#,
+        );
+        assert!(has(&d, code::Code::E0442_UnrelatedCast), "expected E0442: {d:?}");
+    }
+
+    /// A type-test binder outside an `if` condition is rejected (E0441).
+    #[test]
+    fn typetest_binder_outside_if_emits_e0441() {
+        let d = run(
+            r#"
+            public abstract class Animal { public abstract String s(); }
+            public class Dog extends Animal { public Dog() {} public String s() { return "w"; } }
+            public void main() { Animal a = new Dog(); var b = a => Dog d; }
+            "#,
+        );
+        assert!(has(&d, code::Code::E0441_TypeTestBinderMisplaced), "expected E0441: {d:?}");
+    }
+
+    /// `if (x => Dog d)` binds `d: Dog` in the then-branch and is clean.
+    #[test]
+    fn typetest_smartcast_binder_in_if_is_ok() {
+        let d = run(
+            r#"
+            public abstract class Animal { public abstract String s(); }
+            public class Dog extends Animal { public Dog() {} public String s() { return "w"; } public String fetch() { return "f"; } }
+            public void main() {
+                Animal a = new Dog();
+                if (a => Dog d) { print(d.fetch()); }
+            }
+            "#,
+        );
+        assert!(
+            !has(&d, code::Code::E0441_TypeTestBinderMisplaced)
+                && !has(&d, code::Code::E0413_UnresolvedMethod)
+                && !has(&d, code::Code::E0442_UnrelatedCast),
+            "valid smart-cast should be clean: {d:?}",
+        );
+    }
+
+    /// A downcast to a subclass and an interface sidecast are valid (no E0442).
+    #[test]
+    fn downcast_and_interface_sidecast_are_ok() {
+        let d = run(
+            r#"
+            public abstract class Animal { public abstract String sound(); }
+            public interface Named { String label(); }
+            public class Dog extends Animal { public Dog() {} public String sound() { return "w"; } }
+            public class Tagged extends Animal implements Named { public Tagged() {} public String sound() { return "t"; } public String label() { return "T"; } }
+            public void main() {
+                Animal a = new Dog(); var d = a as Dog;        // downcast
+                Animal t = new Tagged(); var n = t as Named;    // interface sidecast
+            }
+            "#,
+        );
+        assert!(!has(&d, code::Code::E0442_UnrelatedCast), "valid downcast/sidecast: {d:?}");
     }
 
     /// `super.method()` in a class with no superclass is rejected.
