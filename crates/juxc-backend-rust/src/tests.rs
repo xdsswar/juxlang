@@ -2599,6 +2599,55 @@ fn bare_import_lowers_to_use() {
     );
 }
 
+/// A `? super B` parameter wildcard lifts to an UNBOUNDED synthetic
+/// function generic — Rust can't express "supertype of B", and reusing
+/// the `B` marker bound would wrongly reject the legal supertype caller
+/// (`Animal: DogKind not satisfied`). The param still carries the
+/// machinery `Clone`/`Debug` bounds, but NOT `DogKind`.
+#[test]
+fn super_wildcard_param_lifts_to_unbounded_generic() {
+    let rust = emit(
+        r#"
+        public class Animal { public String name; public Animal(String n) { this.name = n; } }
+        public class Dog extends Animal { public Dog(String n) { super(n); } }
+        public class Bag<T> { public T item; public Bag(T item) { this.item = item; } }
+        public void store(Bag<? super Dog> b) {}
+        public void main() {}
+        "#,
+    );
+    // The lifted generic must NOT carry a `__W0: DogKind` BOUND (the bug
+    // that leaked rustc E0277). `DogKind` still appears elsewhere as
+    // Dog's own marker trait, so we check the bound position specifically.
+    assert!(
+        !rust.contains("__W0: DogKind"),
+        "`? super Dog` should not bound `__W0` by `DogKind`, got: {rust}",
+    );
+    // It IS still a function-generic lift over the container.
+    assert!(
+        rust.contains("fn store<__W0"),
+        "expected a `store<__W0…>` function-generic lift, got: {rust}",
+    );
+}
+
+/// A `? extends B` parameter wildcard keeps its marker bound — the
+/// covariant producer case is sound to constrain.
+#[test]
+fn extends_wildcard_param_keeps_marker_bound() {
+    let rust = emit(
+        r#"
+        public class Animal { public String name; public Animal(String n) { this.name = n; } }
+        public class Dog extends Animal { public Dog(String n) { super(n); } }
+        public class Bag<T> { public T item; public Bag(T item) { this.item = item; } }
+        public void describe(Bag<? extends Animal> b) {}
+        public void main() {}
+        "#,
+    );
+    assert!(
+        rust.contains("__W0: AnimalKind"),
+        "`? extends Animal` should bound `__W0` by `AnimalKind`, got: {rust}",
+    );
+}
+
 /// Wildcard imports lower to the Rust `::*` form.
 #[test]
 fn wildcard_import_lowers_to_glob_use() {

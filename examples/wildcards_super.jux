@@ -1,0 +1,51 @@
+// Contravariant wildcards — `? super B`, the PECS *consumer* side.
+//
+// `Bag<? super Dog>` is "a Bag I can put Dogs into" — it accepts a
+// Bag of Dog OR any supertype of Dog (Animal, …). In parameter
+// position the backend lifts the wildcard to a synthetic function
+// generic, but UNBOUNDED:
+//
+//     void store(Bag<? super Dog> b)
+//   ⇒ fn store<__W0>(b: Bag<__W0>) { … }
+//
+// Why unbounded? Rust generics can't express "supertype of Dog", and
+// reusing Dog's marker bound would wrongly reject the legal `Bag<Animal>`
+// caller (`Animal: DogKind not satisfied`, rustc E0277). The unbounded
+// lift accepts any concrete `Bag<X>`, which is sound because Phase-1
+// wildcard values are pass-through only. Tycheck still enforces the
+// variance via PECS: a `Bag<Cat>` (Cat is not a supertype of Dog) is
+// rejected with E0410.
+//
+// Storage-position `? super` (a field / local / return) is diagnosed
+// with E0444, same as `? extends` — see `wildcards_storage.jux`.
+
+public class Animal {
+    public String name;
+    public Animal(String name) { this.name = name; }
+}
+
+public class Dog extends Animal {
+    public Dog(String name) { super(name); }
+}
+
+public class Bag<T> {
+    public T item;
+    public Bag(T item) {
+        this.item = item;
+    }
+}
+
+// Contravariant consumer — accepts a Bag of Dog or any Dog supertype.
+public void store(Bag<? super Dog> b) {
+    print("ready to store dogs");
+}
+
+public void main() {
+    // Exact match: a Bag<Dog>.
+    var dogs = new Bag<Dog>(new Dog("Rex"));
+    store(dogs);
+
+    // Supertype: a Bag<Animal> — also accepted by `? super Dog`.
+    var animals = new Bag<Animal>(new Animal("generic"));
+    store(animals);
+}
