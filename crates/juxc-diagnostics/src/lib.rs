@@ -115,6 +115,22 @@ impl Diagnostic {
         }
     }
 
+    /// Start building a warning-severity diagnostic. Warnings print
+    /// but never block compilation (`Severity::Warning` doesn't trip
+    /// the driver's has-errors gate).
+    pub fn warning(code: code::Code, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            severity: Severity::Warning,
+            message: message.into(),
+            primary_span: None,
+            file: None,
+            labels: Vec::new(),
+            help: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
+
     /// Attach the primary span the diagnostic points at.
     pub fn with_span(mut self, span: Span) -> Self {
         self.primary_span = Some(span);
