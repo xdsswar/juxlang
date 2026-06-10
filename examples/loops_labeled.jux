@@ -1,0 +1,39 @@
+// Loop completion — `do-while` (§A.2.8) and labeled loops with
+// `break label;` / `continue label;`.
+//
+// Lowering notes:
+//   - `do { } while (cond);` → Rust `loop { body if !(cond) { break } }`
+//     (run-at-least-once, condition checked AFTER each pass);
+//   - `name: for/while/do` → Rust loop label `'name:`, attached to the
+//     INNER `loop` for the C-style `for` (whose init lives in a scope
+//     block a Rust block-label couldn't `continue`).
+
+public void main() {
+    // do-while: body runs before the first check.
+    int i = 0;
+    do {
+        print(i);
+        i = i + 1;
+    } while (i < 3);
+
+    // Run-at-least-once even when the condition starts false.
+    int n = 99;
+    do { print("once"); } while (n < 0);
+
+    // Labeled continue + break across nesting.
+    outer: for (int a = 0; a < 3; a = a + 1) {
+        for (int b = 0; b < 3; b = b + 1) {
+            if (b == 2) { continue outer; }
+            if (a == 2) { break outer; }
+            print(a * 10 + b);
+        }
+    }
+
+    // Labeled while + break from inside a nested do-while.
+    search: while (true) {
+        do {
+            break search;
+        } while (false);
+    }
+    print("done");
+}

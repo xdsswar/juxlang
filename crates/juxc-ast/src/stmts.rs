@@ -53,12 +53,22 @@ pub enum Stmt {
     /// but we model it as a statement here so the backend lowers it
     /// directly to a Rust statement and not a value-bearing expression.
     Assign(AssignStmt),
-    /// `break ;` — exit the innermost enclosing loop. Label-targeted
-    /// `break <label>;` per §A.2.8 is a future addition.
-    Break(Span),
-    /// `continue ;` — skip to the next iteration of the innermost
-    /// enclosing loop. Label-targeted form is a future addition.
-    Continue(Span),
+    /// `break [label] ;` — exit the innermost enclosing loop, or the
+    /// loop named by `label` (§A.2.8 `break-stmt = 'break' identifier? ';'`).
+    Break(Option<Ident>, Span),
+    /// `continue [label] ;` — skip to the next iteration of the
+    /// innermost enclosing loop, or of the loop named by `label`.
+    Continue(Option<Ident>, Span),
+    /// `label: <loop>` — a labeled loop statement (§A.2.8). The inner
+    /// statement is always one of the loop forms (the parser enforces
+    /// it); `break label;` / `continue label;` target it. Lowers to a
+    /// Rust loop label (`'label: while …`).
+    Labeled {
+        /// The label name (no trailing `:`).
+        label: Ident,
+        /// The labeled loop statement (While / DoWhile / ForEach / ForC).
+        stmt: Box<Stmt>,
+    },
     /// `super(args) ;` — parent-constructor delegation per §7.3.1.
     /// Must be the first statement of a constructor body (the parser
     /// enforces this when more validation lands). Lowered by the

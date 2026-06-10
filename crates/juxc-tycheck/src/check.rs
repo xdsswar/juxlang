@@ -1386,7 +1386,8 @@ impl<'a> Checker<'a> {
                 self.check_block(b);
                 self.in_unsafe = saved_unsafe;
             }
-            Stmt::Break(_) | Stmt::Continue(_) => {}
+            Stmt::Break(..) | Stmt::Continue(..) => {}
+            Stmt::Labeled { stmt, .. } => self.check_stmt(stmt),
         }
     }
 

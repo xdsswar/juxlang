@@ -742,7 +742,8 @@ impl Resolver {
             Stmt::Assign(a) => self.visit_assign(a),
             // break/continue introduce no names and reference none.
             // Validating they're inside a loop is a future check.
-            Stmt::Break(_) | Stmt::Continue(_) => {}
+            Stmt::Break(..) | Stmt::Continue(..) => {}
+            Stmt::Labeled { stmt, .. } => self.visit_stmt(stmt),
             Stmt::SuperCall(args, _) => {
                 // Walk the super-call arguments — they live in the
                 // enclosing constructor's scope, so all the usual name

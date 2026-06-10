@@ -52,6 +52,7 @@ fn body_moves_path(block: &Block, name: &str) -> bool {
 
 fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
     match stmt {
+        Stmt::Labeled { stmt, .. } => stmt_moves_path(stmt, name),
         Stmt::Expr(e) => expr_moves_path_at_top(e, name),
         Stmt::VarDecl(v) => v.init.as_ref().map_or(false, |e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
         Stmt::Return(opt) => opt.as_ref().map_or(false, |e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
@@ -106,7 +107,7 @@ fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
             false
         }
         Stmt::Unsafe(b) => body_moves_path(b, name),
-        Stmt::Break(_) | Stmt::Continue(_) => false,
+        Stmt::Break(..) | Stmt::Continue(..) => false,
     }
 }
 
@@ -446,11 +447,36 @@ impl RustEmitter {
             Stmt::If(if_stmt) => self.emit_if(if_stmt),
             Stmt::While(w) => self.emit_while(w),
             Stmt::DoWhile(d) => self.emit_do_while(d),
+            // Labeled loop: Rust spells it `'label: while …`. The label
+            // parks in `pending_loop_label`; the inner loop's emitter
+            // attaches it directly to its loop keyword (for `for_c`
+            // that's the INNER `loop`, past the init-scope block).
+            Stmt::Labeled { label, stmt } => {
+                self.pending_loop_label = Some(label.text.clone());
+                self.emit_stmt(stmt);
+            }
             Stmt::ForEach(f) => self.emit_for_each(f),
             Stmt::ForC(f) => self.emit_for_c(f),
             Stmt::Assign(a) => self.emit_assign(a),
-            Stmt::Break(_) => self.w.push_str("break;\n"),
-            Stmt::Continue(_) => self.w.push_str("continue;\n"),
+            // Loop-control statements — the optional label targets an
+            // enclosing `Stmt::Labeled` loop (`break outer;` →
+            // `break 'outer;`).
+            Stmt::Break(label, _) => {
+                self.w.push_str("break");
+                if let Some(l) = label {
+                    self.w.push_str(" '");
+                    self.w.push_str(&l.text);
+                }
+                self.w.push_str(";\n");
+            }
+            Stmt::Continue(label, _) => {
+                self.w.push_str("continue");
+                if let Some(l) = label {
+                    self.w.push_str(" '");
+                    self.w.push_str(&l.text);
+                }
+                self.w.push_str(";\n");
+            }
             Stmt::SuperCall(_, _) => {
                 // `super(args);` is lifted out of the body by
                 // `emit_constructor` into the child struct's literal
@@ -763,6 +789,7 @@ impl RustEmitter {
     /// **Ranges** (`0..10`) keep their naked form. They're cheap-to-
     /// move self-iterators with `Item = isize`; no borrow needed.
     pub(crate) fn emit_for_each(&mut self, f: &ForEachStmt) {
+        self.emit_pending_loop_label();
         if matches!(&f.iter, Expr::Range(_)) {
             self.w.push_str("for ");
             self.w.push_str(&f.var_name.text);
@@ -1063,6 +1090,9 @@ impl RustEmitter {
     /// condition → body (exactly C semantics); `break` exits the loop. The
     /// outer `{ }` scopes the init's loop variable.
     pub(crate) fn emit_for_c(&mut self, f: &juxc_ast::ForCStmt) {
+        // The label (if any) belongs on the INNER `loop`, not the
+        // init-scope block — a Rust block label can't `continue`.
+        let label = self.pending_loop_label.take();
         self.w.push_str("{\n");
         self.w.indent_inc();
         // Init clause.
@@ -1071,7 +1101,14 @@ impl RustEmitter {
             self.emit_stmt(init);
         }
         self.w.line("let mut __jux_for_first = true;");
-        self.w.line("loop {");
+        if let Some(l) = &label {
+            self.w.emit_indent();
+            self.w.push('\'');
+            self.w.push_str(l);
+            self.w.push_str(": loop {\n");
+        } else {
+            self.w.line("loop {");
+        }
         self.w.indent_inc();
         // Update (skipped on the first iteration).
         if let Some(upd) = f.update.as_deref() {
@@ -1103,7 +1140,18 @@ impl RustEmitter {
         self.w.push_str("}\n");
     }
 
+    /// Emit a parked loop label (`'name: `) if the enclosing statement
+    /// was `Stmt::Labeled` — see `pending_loop_label`.
+    pub(crate) fn emit_pending_loop_label(&mut self) {
+        if let Some(l) = self.pending_loop_label.take() {
+            self.w.push('\'');
+            self.w.push_str(&l);
+            self.w.push_str(": ");
+        }
+    }
+
     pub(crate) fn emit_while(&mut self, w: &WhileStmt) {
+        self.emit_pending_loop_label();
         if matches!(w.condition, Expr::Literal(Literal::Bool(true))) {
             self.w.push_str("loop {\n");
         } else {
@@ -1126,6 +1174,7 @@ impl RustEmitter {
     ///
     /// A literal-`true` condition drops the dead test entirely.
     pub(crate) fn emit_do_while(&mut self, d: &juxc_ast::DoWhileStmt) {
+        self.emit_pending_loop_label();
         self.w.push_str("loop {\n");
         self.w.indent_inc();
         self.emit_block_contents(&d.body);
@@ -1855,11 +1904,12 @@ pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::If(i) => i.span,
         Stmt::While(w) => w.span,
         Stmt::DoWhile(d) => d.span,
+        Stmt::Labeled { label, .. } => label.span,
         Stmt::ForEach(f) => f.span,
         Stmt::ForC(f) => f.span,
         Stmt::Assign(a) => a.span,
-        Stmt::Break(s) => *s,
-        Stmt::Continue(s) => *s,
+        Stmt::Break(_, s) => *s,
+        Stmt::Continue(_, s) => *s,
         Stmt::SuperCall(_, s) => *s,
         Stmt::Throw(_, s) => *s,
         Stmt::Try(t) => t.span,
@@ -1903,6 +1953,7 @@ fn stmt_contains_fn_return(s: &Stmt) -> bool {
         }
         Stmt::While(w) => block_contains_fn_return(&w.body),
         Stmt::DoWhile(d) => block_contains_fn_return(&d.body),
+        Stmt::Labeled { stmt, .. } => stmt_contains_fn_return(stmt),
         Stmt::ForEach(f) => block_contains_fn_return(&f.body),
         Stmt::ForC(f) => block_contains_fn_return(&f.body),
         Stmt::Try(t) => {

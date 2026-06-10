@@ -1521,7 +1521,16 @@ fn collect_bare_names_block(b: &juxc_ast::Block, sink: &mut dyn FnMut(&str)) {
                 }
             }
             Stmt::Unsafe(b) => collect_bare_names_block(b, sink),
-            Stmt::Break(_) | Stmt::Continue(_) => {}
+            Stmt::Break(..) | Stmt::Continue(..) => {}
+            Stmt::Labeled { stmt, .. } => {
+                collect_bare_names_block(
+                    &juxc_ast::Block {
+                        statements: vec![(**stmt).clone()],
+                        span: juxc_source::Span::DUMMY,
+                    },
+                    sink,
+                );
+            }
         }
     }
 }

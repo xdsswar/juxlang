@@ -355,7 +355,24 @@ fn rewrite_block_implicit_this(
                 }
                 rewrite_block_implicit_this(&mut f.body, members, &mut inner.clone());
             }
-            Stmt::Break(_) | Stmt::Continue(_) => {}
+            Stmt::Break(..) | Stmt::Continue(..) => {}
+            Stmt::Labeled { stmt, .. } => {
+                // The label carries no expressions of its own; rewrite
+                // the inner loop by round-tripping it through a
+                // one-statement scratch block (keeps this arm robust
+                // to future loop kinds without duplicating their
+                // walkers).
+                let inner = std::mem::replace(
+                    &mut **stmt,
+                    Stmt::Break(None, juxc_source::Span::DUMMY),
+                );
+                let mut tmp = Block {
+                    statements: vec![inner],
+                    span: juxc_source::Span::DUMMY,
+                };
+                rewrite_block_implicit_this(&mut tmp, members, locals);
+                **stmt = tmp.statements.pop().expect("scratch block keeps its one stmt");
+            }
         }
     }
 }
@@ -555,7 +572,8 @@ fn rewrite_stmt_property_writes(
             }
             rewrite_block_property_writes(&mut f.body, auto_props);
         }
-        Stmt::Break(_) | Stmt::Continue(_) => {}
+        Stmt::Break(..) | Stmt::Continue(..) => {}
+        Stmt::Labeled { stmt, .. } => rewrite_stmt_property_writes(stmt, auto_props),
     }
 }
 

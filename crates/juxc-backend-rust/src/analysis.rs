@@ -290,6 +290,17 @@ fn collect_mutated_names_real(
                 }
                 collect_mutated_names(&f.body, out, user_mut);
             }
+            // A labeled loop wraps a real loop — its body's assignments
+            // still promote locals to `let mut`. Round-trip the inner
+            // statement through a one-element scratch block so the full
+            // loop walkers above handle it.
+            Stmt::Labeled { stmt, .. } => {
+                let scratch = Block {
+                    statements: vec![(**stmt).clone()],
+                    span: juxc_source::Span::DUMMY,
+                };
+                collect_mutated_names(&scratch, out, user_mut);
+            }
             // Other statement kinds — Return(None), Break, Continue,
             // SuperCall — don't carry assignments that promote a local.
             _ => {}
@@ -487,7 +498,8 @@ fn stmt_contains_await(stmt: &Stmt) -> bool {
         }
         Stmt::SuperCall(args, _) => args.iter().any(expr_contains_await),
         Stmt::Unsafe(b) => block_contains_await(b),
-        Stmt::Break(_) | Stmt::Continue(_) => false,
+        Stmt::Break(..) | Stmt::Continue(..) => false,
+        Stmt::Labeled { stmt, .. } => stmt_contains_await(stmt),
     }
 }
 
@@ -954,7 +966,8 @@ fn stmt_calls_mut_method_on_this(stmt: &Stmt, mut_methods: &HashSet<String>) -> 
             false
         }
         Stmt::Unsafe(b) => body_calls_mut_method_on_this(b, mut_methods),
-        Stmt::Break(_) | Stmt::Continue(_) => false,
+        Stmt::Break(..) | Stmt::Continue(..) => false,
+        Stmt::Labeled { stmt, .. } => stmt_calls_mut_method_on_this(stmt, mut_methods),
     }
 }
 
