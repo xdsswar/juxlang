@@ -63,6 +63,8 @@ log("b");   // tags = []   — fresh list each call
 
 Default-argument expressions can reference earlier parameters of the same function (`f(int n, int[] buf = new int[n])`), but not later ones. They are otherwise plain expressions evaluated in the caller's scope.
 
+> **Phase-1 implementation note.** The current compiler lowers a default by cloning its expression into each omitting call site, where parameter names aren't in scope — so defaults that reference another parameter are rejected with `E0449` for now. The earlier-parameter form above becomes legal when the temp-hoisting lowering lands. Additionally, when named arguments are written out of declaration order, Phase 1 evaluates them in parameter-slot order rather than the call-site lexical order promised by §S.1.4; only side-effecting reordered arguments can observe the difference.
+
 ### S.1.4. Named-Argument and Variadic Order
 
 When a call mixes positional and named arguments, evaluation order follows **call-site lexical order**, not parameter declaration order:

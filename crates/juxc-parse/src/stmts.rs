@@ -185,7 +185,16 @@ impl<'a> Parser<'a> {
             let start = self.peek_span();
             self.advance(); // 'super'
             self.expect(&TokenKind::LParen, "'(' after `super`");
-            let args = self.parse_arg_list();
+            let (args, arg_names) = self.parse_arg_list();
+            if let Some(named) = arg_names.iter().flatten().next() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        "named arguments aren't supported in `super(...)` — pass the parent-constructor arguments positionally",
+                    )
+                    .with_span(named.span),
+                );
+            }
             self.expect(&TokenKind::RParen, "')' to close super-call args");
             self.expect(&TokenKind::Semicolon, "';' after `super(...)`");
             let end = self.last_consumed_span();

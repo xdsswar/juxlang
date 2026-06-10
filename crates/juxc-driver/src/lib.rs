@@ -174,8 +174,12 @@ where
     // function from every unit, then run the per-expression type
     // walker against each unit using that shared table. tycheck tags its
     // own diagnostics with the matching unit/source index.
-    let typed = juxc_tycheck::typecheck_workspace(&units);
-    diagnostics.extend(typed.diagnostics);
+    let mut typed = juxc_tycheck::typecheck_workspace(&units);
+    diagnostics.append(&mut typed.diagnostics);
+    // Rewrite named-argument / default-parameter call sugar into plain
+    // positional calls (per the checker's recorded plans) so the
+    // backend and its analyses never see the sugar.
+    juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
 
     // `.jux.d` declaration stubs are trusted, signature-only views of foreign
     // APIs — never validated. Drop any diagnostic they produced so the build
@@ -236,8 +240,12 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
     stubs::mark_external_units(&mut units, &sources);
     // Source-layout rule (§B.1), same as the main compile path.
     diagnostics.extend(package_check::check_package_paths(&units, &sources));
-    let typed = juxc_tycheck::typecheck_workspace(&units);
-    diagnostics.extend(typed.diagnostics);
+    let mut typed = juxc_tycheck::typecheck_workspace(&units);
+    diagnostics.append(&mut typed.diagnostics);
+    // Rewrite named-argument / default-parameter call sugar into plain
+    // positional calls (per the checker's recorded plans) so the
+    // backend and its analyses never see the sugar.
+    juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
     // Trusted foreign-API stubs are never validated — drop their diagnostics.
     stubs::drop_external_diagnostics(&mut diagnostics, &sources);
     let has_errors = diagnostics
@@ -362,8 +370,12 @@ pub fn check_workspace_with(sources: Vec<SourceFile>, profile: juxc_tycheck::Pro
     // `expr_types` so the LSP can serve hover/completion/goto without
     // re-running the front end. tycheck tags its own diagnostics with the
     // matching unit/source index.
-    let typed = juxc_tycheck::typecheck_workspace(&units);
-    diagnostics.extend(typed.diagnostics);
+    let mut typed = juxc_tycheck::typecheck_workspace(&units);
+    diagnostics.append(&mut typed.diagnostics);
+    // Rewrite named-argument / default-parameter call sugar into plain
+    // positional calls (per the checker's recorded plans) so the
+    // backend and its analyses never see the sugar.
+    juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
 
     // Trusted foreign-API stubs are never validated (see
     // `stubs::drop_external_diagnostics`): the LSP must not surface false errors

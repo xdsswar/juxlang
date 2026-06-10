@@ -256,6 +256,13 @@ pub(crate) struct Checker<'a> {
     /// dummy span. The backend's lookup site treats a missing entry as
     /// "fall back to the conservative behavior."
     pub(crate) expr_types: HashMap<Span, Ty>,
+    /// Call-sugar expansion plans recorded while checking — one entry
+    /// per call that used named arguments and/or omitted
+    /// default-valued parameters, keyed by the call's span. The
+    /// driver applies these to the AST (`apply_call_expansions`)
+    /// before the backend runs, so emission only ever sees plain
+    /// positional calls.
+    pub(crate) call_expansions: HashMap<Span, Vec<crate::ArgSource>>,
     /// True while we're walking the body of a `static` method (or
     /// a `static` field initializer once those land). Drives the
     /// `E0425_ThisInStaticContext` diagnostic in `check_expr`.
@@ -313,6 +320,7 @@ impl<'a> Checker<'a> {
             diagnostics,
             current_return: None,
             expr_types: HashMap::new(),
+            call_expansions: HashMap::new(),
             in_static: false,
             in_async: false,
             in_unsafe: false,
@@ -410,11 +418,12 @@ impl<'a> Checker<'a> {
                 .any(|m| matches!(m, juxc_ast::FnModifier::Async))
     }
 
-    /// Consume the checker, returning the per-expression type map it
-    /// built up during [`Self::check_unit`]. Called once at the end of
-    /// the top-level `typecheck()` driver.
-    pub(crate) fn into_expr_types(self) -> HashMap<Span, Ty> {
-        self.expr_types
+    /// Consume the checker, returning both span-keyed maps it built:
+    /// the per-expression types AND the call-sugar expansion plans.
+    pub(crate) fn into_maps(
+        self,
+    ) -> (HashMap<Span, Ty>, HashMap<Span, Vec<crate::ArgSource>>) {
+        (self.expr_types, self.call_expansions)
     }
 
     /// Seed the checker's [`TypeEnv`] with the per-unit
@@ -551,8 +560,70 @@ impl<'a> Checker<'a> {
     /// Walk a top-level function. Pushes a parameter scope, sets the
     /// expected return type, walks the body, then restores both.
     /// Abstract / native functions (body = None) are skipped.
+    /// Validate the default-value expressions of a parameter list at
+    /// the declaration (§S.1.3):
+    ///
+    /// - the default's type must be assignable to the parameter's
+    ///   declared type (E0410), and
+    /// - Phase 1 forbids a default from referencing ANY parameter of
+    ///   the same declaration (E0449) — the expansion pass clones the
+    ///   default into call sites, where parameter names don't exist.
+    ///   (The spec allows earlier-parameter references; that needs a
+    ///   temp-hoisting lowering that lands later.)
+    ///
+    /// Called BEFORE the parameters are declared into the body scope,
+    /// so the default is inferred in the surrounding (caller-like)
+    /// environment.
+    fn check_param_defaults(&mut self, params: &[juxc_ast::Param]) {
+        for param in params {
+            let Some(default) = &param.default else { continue };
+            for other in params {
+                let mut hit_span: Option<Span> = None;
+                collect_bare_name_reads(default, &mut |qn| {
+                    if qn.segments.len() == 1 && qn.segments[0].text == other.name.text {
+                        hit_span.get_or_insert(qn.segments[0].span);
+                    }
+                });
+                if let Some(span) = hit_span {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0449_DefaultArgParamRef,
+                            format!(
+                                "default value of `{}` references parameter `{}` — \
+                                 a default is evaluated at the call site (Phase 1), \
+                                 where parameters aren't in scope; compute it inside \
+                                 the body instead",
+                                param.name.text, other.name.text,
+                            ),
+                        )
+                        .with_span(span),
+                    );
+                }
+            }
+            self.check_expr(default);
+            let expected = ty_from_ref(&param.ty, &self.env, self.symbols);
+            let found = infer_expr(default, &self.env, self.symbols);
+            if !compatible(&expected, &found, self.symbols) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0410_TypeMismatch,
+                        format!(
+                            "default value of `{}`: expected {}, found {}",
+                            param.name.text, expected, found,
+                        ),
+                    )
+                    .with_span(match expr_span(default) {
+                        s if s == Span::DUMMY => param.span,
+                        s => s,
+                    }),
+                );
+            }
+        }
+    }
+
     fn check_function(&mut self, fn_decl: &FnDecl) {
         let Some(body) = &fn_decl.body else { return };
+        self.check_param_defaults(&fn_decl.params);
         self.env.push_scope();
         // Declare each parameter into the new scope so name lookups
         // inside the body resolve.
@@ -657,6 +728,7 @@ impl<'a> Checker<'a> {
     /// expected return type (constructors don't return values) and with
     /// `this` pre-declared.
     fn check_constructor(&mut self, ctor: &ConstructorDecl, this_ty: &Ty) {
+        self.check_param_defaults(&ctor.params);
         self.env.push_scope();
         self.env.declare("this", this_ty.clone());
         for param in &ctor.params {
@@ -681,6 +753,7 @@ impl<'a> Checker<'a> {
     /// skipped.
     fn check_method(&mut self, method: &FnDecl, this_ty: &Ty) {
         let Some(body) = &method.body else { return };
+        self.check_param_defaults(&method.params);
         let is_static = method
             .modifiers
             .iter()
@@ -1945,10 +2018,14 @@ impl<'a> Checker<'a> {
                     .get(declaring_class)
                     .map(|c| c.package.as_slice())
                     .unwrap_or(&[]);
+                // Top-level code (`accessor == None`) and classes the
+                // table can't resolve still belong to the UNIT's
+                // package — fall back to it so a free `main()` can
+                // reach package-private members of its own package.
                 let accessor_pkg: &[String] = accessor
                     .and_then(|name| self.symbols.classes.get(name))
                     .map(|c| c.package.as_slice())
-                    .unwrap_or(&[]);
+                    .unwrap_or(&self.env.current_package);
                 declaring_pkg == accessor_pkg
             }
         }
@@ -2007,10 +2084,14 @@ impl<'a> Checker<'a> {
                     .get(declaring_class)
                     .map(|c| c.package.as_slice())
                     .unwrap_or(&[]);
+                // Top-level code (`accessor == None`) still belongs to
+                // the UNIT's package — fall back to it so a free
+                // `main()` reaches package-private members of its own
+                // package.
                 let accessor_pkg: &[String] = accessor
                     .and_then(|name| self.symbols.classes.get(name))
                     .map(|c| c.package.as_slice())
-                    .unwrap_or(&[]);
+                    .unwrap_or(&self.env.current_package);
                 if declaring_pkg == accessor_pkg {
                     return;
                 }
@@ -2695,6 +2776,7 @@ impl<'a> Checker<'a> {
                         name,
                         &params,
                         &c.args,
+                        &c.arg_names,
                         c.span,
                         None,
                         &subst_params,
@@ -2758,6 +2840,7 @@ impl<'a> Checker<'a> {
                                     method_name,
                                     &method.params,
                                     &c.args,
+                                    &c.arg_names,
                                     c.span,
                                     Some(&class_fqn),
                                     &[],
@@ -2825,6 +2908,7 @@ impl<'a> Checker<'a> {
                                     method_name,
                                     &method.params,
                                     &c.args,
+                                    &c.arg_names,
                                     c.span,
                                     Some(&iface_fqn),
                                     &[],
@@ -2995,6 +3079,7 @@ impl<'a> Checker<'a> {
                         method_name,
                         &params,
                         &c.args,
+                        &c.arg_names,
                         c.span,
                         Some(&owner_name),
                         &subst_params,
@@ -3043,6 +3128,7 @@ impl<'a> Checker<'a> {
                             method_name,
                             &params,
                             &c.args,
+                            &c.arg_names,
                             c.span,
                             Some(&name),
                             &subst_params,
@@ -3072,6 +3158,7 @@ impl<'a> Checker<'a> {
                             method_name,
                             &params,
                             &c.args,
+                            &c.arg_names,
                             c.span,
                             Some(&name),
                             &subst_params,
@@ -3089,6 +3176,7 @@ impl<'a> Checker<'a> {
                             method_name,
                             &params,
                             &c.args,
+                            &c.arg_names,
                             c.span,
                             Some(&name),
                             &[],
@@ -3133,10 +3221,14 @@ impl<'a> Checker<'a> {
         for arg in &n.args {
             self.check_expr(arg);
         }
-        let class_name = match n.class_name.segments.last() {
-            Some(seg) => seg.text.clone(),
-            None => return,
-        };
+        // FQN-aware resolution (same map `ty_from_ref` consults) —
+        // the symbol table keys classes by FQN, so the old
+        // bare-last-segment lookup silently skipped constructor
+        // checking in any file with a `package` declaration.
+        let class_name = crate::infer::resolve_class_name(&n.class_name, &self.env, self.symbols);
+        if class_name.is_empty() {
+            return;
+        }
 
         // Lower the explicit generic args (if any) into `Ty`s. Empty
         // when the user wrote the bare `new Box(...)` form — in that
@@ -3151,7 +3243,16 @@ impl<'a> Checker<'a> {
         // const-vs-type slot kind + literal-kind checks (E0445). A
         // const-generic class also REQUIRES the explicit form: its
         // value can't be inferred from constructor args.
-        if let Some(class) = self.symbols.classes.get(&class_name) {
+        // External (`.jux.d` stub) classes are exempt: their stubs
+        // mirror Rust signatures with DEFAULTED generic params (e.g.
+        // `Vec<T, A = Global>`), which Jux call sites legitimately
+        // omit — rustc validates those for real.
+        if let Some(class) = self
+            .symbols
+            .classes
+            .get(&class_name)
+            .filter(|c| !c.is_external)
+        {
             let class_generic_params = class.generic_params.clone();
             if !n.generic_args.is_empty() {
                 self.check_explicit_type_args(
@@ -3239,6 +3340,7 @@ impl<'a> Checker<'a> {
                 &class_name,
                 &params,
                 &n.args,
+                &n.arg_names,
                 n.span,
                 Some(&class_name),
                 &subst_params,
@@ -3255,6 +3357,7 @@ impl<'a> Checker<'a> {
                     name: c.name.clone(),
                     ty: c.ty.clone(),
                     is_ref: false,
+                    default: None,
                 })
                 .collect();
             let subst_params = record.generic_params.clone();
@@ -3268,6 +3371,7 @@ impl<'a> Checker<'a> {
                 &class_name,
                 &params,
                 &n.args,
+                &n.arg_names,
                 n.span,
                 Some(&class_name),
                 &subst_params,
@@ -3387,6 +3491,7 @@ impl<'a> Checker<'a> {
             &format!("super (={parent_name})"),
             &params_owned,
             args,
+            &[],
             call_span,
             Some(&parent_name),
             &subst_params,
@@ -3486,17 +3591,97 @@ impl<'a> Checker<'a> {
         callee_name: &str,
         params: &[ParamSig],
         args: &[Expr],
+        arg_names: &[Option<juxc_ast::Ident>],
         call_span: Span,
         declaring_class: Option<&str>,
         subst_params: &[TypeParam],
         subst_args: &[Ty],
     ) {
-        if params.len() != args.len() {
+        // ---- argument-to-slot mapping (§T.3.2 / §S.1.4) ----
+        //
+        // Positional args fill parameter slots left-to-right; named
+        // args fill the slot their label names; every slot at most
+        // once. Slots left empty must carry a default (§S.1.3) — the
+        // recorded expansion plan clones the default into the call
+        // site, so the backend only ever sees full positional calls.
+        let has_named = arg_names.iter().any(Option::is_some);
+        // `arg_to_param[i]` = the parameter slot arg `i` lands in.
+        let mut arg_to_param: Vec<Option<usize>> = vec![None; args.len()];
+        // `param_filled[j]` = the arg index that filled slot `j`.
+        let mut param_filled: Vec<Option<usize>> = vec![None; params.len()];
+        let mut seen_named = false;
+        let mut mapping_broken = false;
+        for i in 0..args.len() {
+            let label = arg_names.get(i).and_then(|n| n.as_ref());
+            match label {
+                None => {
+                    if seen_named {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0448_BadNamedArgument,
+                                format!(
+                                    "positional argument after a named one in call to `{callee_name}` — \
+                                     once a label appears, every later argument must be labeled",
+                                ),
+                            )
+                            .with_span(match expr_span(&args[i]) {
+                                s if s == Span::DUMMY => call_span,
+                                s => s,
+                            }),
+                        );
+                        mapping_broken = true;
+                        break;
+                    }
+                    if i < params.len() {
+                        arg_to_param[i] = Some(i);
+                        param_filled[i] = Some(i);
+                    }
+                }
+                Some(ident) => {
+                    seen_named = true;
+                    match params.iter().position(|p| p.name == ident.text) {
+                        None => {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0448_BadNamedArgument,
+                                    format!(
+                                        "`{}` has no parameter named `{}`",
+                                        callee_name, ident.text,
+                                    ),
+                                )
+                                .with_span(ident.span),
+                            );
+                            mapping_broken = true;
+                        }
+                        Some(j) => {
+                            if param_filled[j].is_some() {
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        code::Code::E0448_BadNamedArgument,
+                                        format!(
+                                            "parameter `{}` of `{}` is supplied more than once",
+                                            ident.text, callee_name,
+                                        ),
+                                    )
+                                    .with_span(ident.span),
+                                );
+                                mapping_broken = true;
+                            } else {
+                                param_filled[j] = Some(i);
+                                arg_to_param[i] = Some(j);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Arity: more arguments than parameter slots.
+        if args.len() > params.len() {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0411_WrongArgCount,
                     format!(
-                        "`{}` expects {} argument{}, got {}",
+                        "`{}` expects at most {} argument{}, got {}",
                         callee_name,
                         params.len(),
                         if params.len() == 1 { "" } else { "s" },
@@ -3505,12 +3690,56 @@ impl<'a> Checker<'a> {
                 )
                 .with_span(call_span),
             );
-            // Still check the overlapping prefix for type mismatches so
-            // the user gets every problem at once.
+        }
+        let mut missing: Vec<&str> = Vec::new();
+        if !mapping_broken {
+            for (j, p) in params.iter().enumerate() {
+                if param_filled[j].is_none() && p.default.is_none() {
+                    missing.push(p.name.as_str());
+                }
+            }
+        }
+        if !missing.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0411_WrongArgCount,
+                    format!(
+                        "missing required argument{} {} in call to `{}`",
+                        if missing.len() == 1 { "" } else { "s" },
+                        missing
+                            .iter()
+                            .map(|n| format!("`{n}`"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        callee_name,
+                    ),
+                )
+                .with_span(call_span),
+            );
+        }
+        // Record the expansion plan when the call used sugar (named
+        // args and/or omitted defaults) and mapped cleanly. The driver
+        // applies it to the AST before the backend runs.
+        if !mapping_broken
+            && missing.is_empty()
+            && args.len() <= params.len()
+            && (has_named || args.len() < params.len())
+        {
+            let plan: Vec<crate::ArgSource> = params
+                .iter()
+                .enumerate()
+                .map(|(j, p)| match param_filled[j] {
+                    Some(i) => crate::ArgSource::Explicit(i),
+                    None => crate::ArgSource::Default(
+                        p.default.clone().expect("missing-default slots reported above"),
+                    ),
+                })
+                .collect();
+            self.call_expansions.insert(call_span, plan);
         }
         for (i, arg) in args.iter().enumerate() {
             self.check_expr(arg);
-            let Some(param) = params.get(i) else { break };
+            let Some(param) = arg_to_param[i].and_then(|j| params.get(j)) else { continue };
             let expected_raw = match declaring_class {
                 Some(class) => lower_member_type(&param.ty, class, self.symbols),
                 None => ty_from_ref(&param.ty, &self.env, self.symbols),
