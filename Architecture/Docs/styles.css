@@ -234,13 +234,14 @@ body {
     min-width: 0;
     background: var(--bg);
     display: flex;
-    justify-content: center;
+    align-items: stretch;
     gap: 0;
 }
 
 .content {
+    flex: 1;
+    min-width: 0;
     width: 100%;
-    max-width: 940px;
     padding: 48px 56px 96px;
 }
 
