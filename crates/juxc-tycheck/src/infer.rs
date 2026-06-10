@@ -172,6 +172,7 @@ pub(crate) fn infer_literal(lit: &Literal) -> Ty {
         Literal::Float(FloatLit { kind, .. }) => Ty::Primitive(primitive_from_float_kind(*kind)),
         Literal::String(_) => Ty::String,
         Literal::Bool(_) => Ty::Primitive(Primitive::Bool),
+        Literal::Char(_) => Ty::Primitive(Primitive::Char),
         // `null` has no concrete inner type until context fixes
         // it (e.g. `String? x = null;`). We model it as a nullable
         // wrapper around `Unknown`; the compatibility predicate

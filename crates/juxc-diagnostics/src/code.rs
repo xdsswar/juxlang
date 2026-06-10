@@ -303,6 +303,15 @@ pub enum Code {
     /// declaring an `async` function/method is a compile error; rewrite it with
     /// `Result<T, E>` and explicit state machines (§16.7).
     E0701_AsyncNotInProfile,
+    /// E0702 — A **class object captured by a `Worker.spawn` closure**.
+    /// `Worker.spawn` runs its closure on another OS thread (async
+    /// addendum §18.2), but Phase-1 Jux objects are single-threaded
+    /// shared references (`Rc<RefCell<…>>` — `!Send`), so the capture
+    /// can't cross the thread boundary. Catching it here keeps rustc's
+    /// `Rc<…> cannot be sent between threads safely` (E0277) from
+    /// leaking. Pass primitive / `String` data into the closure and
+    /// return results out; share state after `block_on` joins the task.
+    E0702_ObjectCapturedBySpawn,
     /// E0720 — An unreachable `catch` clause. Per the exceptions addendum
     /// §X.3.4, catch clauses are tried in source order; a clause whose type is
     /// the same as, or a subtype of, an earlier clause's type can never run
@@ -424,6 +433,7 @@ impl Code {
             Code::E0445_ConstGenericUnsupported  => "E0445",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0701_AsyncNotInProfile        => "E0701",
+            Code::E0702_ObjectCapturedBySpawn    => "E0702",
             Code::E0710_ThrowRequiresException   => "E0710",
             Code::E0720_UnreachableCatch         => "E0720",
             Code::E0506_UnsafeOpOutsideUnsafe    => "E0506",

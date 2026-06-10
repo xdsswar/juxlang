@@ -1608,6 +1608,16 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
+            // **Nullable element slot** — storing into a container whose
+            // element type-arg is `T?` (`ArrayList<int?>` → `Vec<Option
+            // <isize>>`): a non-null value lifts into `Some(...)`; a
+            // `null` literal / already-`Option` value passes through.
+            let wrap_some = self
+                .builtin_arg_elem_nullable(call, i)
+                && !self.expression_is_already_nullable(arg);
+            if wrap_some {
+                self.w.push_str("Some(");
+            }
             self.emit_expr(arg);
             // **Wrapper-class share-on-pass (§CR.4.1)** for the builtin
             // collection dispatches (`xs.add(obj)` → `xs.push(obj)`):
@@ -1619,7 +1629,62 @@ impl RustEmitter {
             if self.wrapper_value_needs_clone(arg) {
                 self.w.push_str(".clone()");
             }
+            if wrap_some {
+                self.w.push(')');
+            }
         }
         self.emitting_format_arg = prev;
+    }
+
+    /// True when argument `i` of a **builtin container call** lands in
+    /// an element slot whose generic type-arg is nullable — `xs.add(v)`
+    /// on an `ArrayList<int?>`, `m.put(k, v)` on a `HashMap<String,
+    /// int?>`, etc. Maps the arg index to the receiver's generic-arg
+    /// position per method: list `add`/`set@1`/`insert@1`, set `add`,
+    /// map `put@1` (values; keys stay non-null). Non-container shapes
+    /// answer `false`.
+    fn builtin_arg_elem_nullable(&self, call: &CallExpr, arg_idx: usize) -> bool {
+        let Expr::Field(f) = call.callee.as_ref() else { return false };
+        let method = f.field.text.as_str();
+        // Which generic-arg slot does this argument store into?
+        let generic_idx = match (method, arg_idx) {
+            ("add", 0) => 0,                  // list/set value
+            ("set", 1) | ("insert", 1) => 0,  // list value (idx, value)
+            ("put", 1) => 1,                  // map value (key, value)
+            _ => return false,
+        };
+        // Receiver type: span-keyed `expr_types` first, then the
+        // name-keyed `local_types` fallback (span collisions and
+        // unrecorded `Path` leaves miss the first map — same fallback
+        // the field/receiver resolvers use).
+        let recv_ty = self
+            .expr_types
+            .get(&crate::exprs::expr_span_of(&f.object))
+            .cloned()
+            .or_else(|| {
+                if let Expr::Path(qn) = f.object.as_ref() {
+                    if qn.segments.len() == 1 {
+                        return self
+                            .local_types
+                            .iter()
+                            .rev()
+                            .find_map(|s| s.get(&qn.segments[0].text))
+                            .cloned();
+                    }
+                }
+                None
+            });
+        match recv_ty {
+            // `ArrayList<T>` lowers to `Ty::Array { element }` (dynamic
+            // kind), not `Ty::User` — the element IS generic-arg 0.
+            Some(juxc_tycheck::Ty::Array { element, .. }) => {
+                generic_idx == 0 && matches!(*element, juxc_tycheck::Ty::Nullable(_))
+            }
+            Some(juxc_tycheck::Ty::User { generic_args, .. }) => matches!(
+                generic_args.get(generic_idx),
+                Some(juxc_tycheck::Ty::Nullable(_)),
+            ),
+            _ => false,
+        }
     }
 }

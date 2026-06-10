@@ -44,7 +44,6 @@ use juxc_source::Span;
 pub mod check;
 pub mod env;
 pub mod infer;
-mod nullable_check;
 pub mod symbol_table;
 pub mod ty;
 
@@ -215,13 +214,15 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     for (idx, unit) in units.iter().enumerate() {
         let before = tc.diagnostics.len();
         tc.check_unit(unit);
-        // Reject `T?` where T is a non-nullable value-type primitive
-        // (`int?`, `bool?`, `double?`, …). Per spec, only reference
-        // types — `String`, user classes/records/enums, arrays of
-        // references — can carry the nullable marker. Primitives are
-        // value types that always have a meaningful default and
-        // never hold null.
-        nullable_check::check_nullable_primitives(unit, &mut tc.diagnostics);
+        // NOTE: nullable PRIMITIVES (`int?`, `bool?`, `<int?>` generic
+        // args, …) are legal — the spec's `T?` ≡ `Option<T>` mapping
+        // carries no reference-type restriction (JUX-LANG-V1's
+        // `int? readByte();`, type-system §T.2's `List<Dog?>`). The
+        // old `check_nullable_primitives` rejection pre-pass
+        // contradicted that and was removed: `int?` lowers to
+        // `Option<isize>` — `None` is a stack discriminant, so a null
+        // primitive costs NO allocation (no Java-style `Integer`
+        // boxing).
         for d in &mut tc.diagnostics[before..] {
             d.file = Some(idx);
         }

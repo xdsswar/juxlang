@@ -2481,6 +2481,64 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// **E0702** — reject class-typed objects captured by a
+    /// `Worker.spawn` closure. The closure runs on another OS thread;
+    /// Phase-1 objects are `Rc`-backed shared references (`!Send`), so
+    /// the capture can never cross the boundary — rustc would reject
+    /// the emitted `std::thread::spawn` with E0277. Detection: every
+    /// bare name read inside the closure body (minus the closure's own
+    /// params) that resolves in the CURRENT env to a class-typed value
+    /// (`Ty::User`, possibly under `T?` / `T[]`) is a capture. Locals
+    /// declared inside the closure aren't in the env yet, so they're
+    /// naturally excluded.
+    fn check_spawn_captures(&mut self, args: &[Expr]) {
+        let Some(Expr::Lambda(l)) = args.first() else { return };
+        let mut names: Vec<(String, Span)> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut sink = |qn: &juxc_ast::QualifiedName| {
+            if qn.segments.len() == 1 && seen.insert(qn.segments[0].text.clone()) {
+                names.push((qn.segments[0].text.clone(), qn.span));
+            }
+        };
+        match &l.body {
+            juxc_ast::LambdaBody::Expr(e) => collect_bare_name_reads(e, &mut sink),
+            juxc_ast::LambdaBody::Block(b) => {
+                for s in &b.statements {
+                    collect_bare_name_reads_stmt(s, &mut sink);
+                }
+            }
+        }
+        let params: std::collections::HashSet<&str> =
+            l.params.iter().map(|p| p.name.text.as_str()).collect();
+        for (name, span) in names {
+            if params.contains(name.as_str()) {
+                continue;
+            }
+            fn is_object_ty(ty: &Ty) -> bool {
+                match ty {
+                    Ty::User { .. } => true,
+                    Ty::Nullable(inner) => is_object_ty(inner),
+                    Ty::Array { element, .. } => is_object_ty(element),
+                    _ => false,
+                }
+            }
+            if self.env.lookup(&name).map(is_object_ty).unwrap_or(false) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0702_ObjectCapturedBySpawn,
+                        format!(
+                            "`{name}` is a class object captured by a `Worker.spawn` \
+                             closure — objects are single-threaded shared references and \
+                             can't cross threads; pass primitive/String data in and \
+                             return results out",
+                        ),
+                    )
+                    .with_span(span),
+                );
+            }
+        }
+    }
+
     fn check_call(&mut self, c: &CallExpr) {
         // Always walk args first, regardless of callee shape, so nested
         // checks still fire.
@@ -2579,6 +2637,18 @@ impl<'a> Checker<'a> {
 
             Expr::Field(field) => {
                 let method_name = field.field.text.as_str();
+                // **`Worker.spawn(closure)` thread-capture gate (E0702).**
+                // The closure crosses an OS-thread boundary, but Phase-1
+                // objects are `Rc`-backed (`!Send`) — a class-typed
+                // capture would leak rustc E0277. Checked on the bare
+                // shape before resolution; valid spawns fall through.
+                if method_name == "spawn" {
+                    if let Expr::Path(qn) = field.object.as_ref() {
+                        if qn.segments.len() == 1 && qn.segments[0].text == "Worker" {
+                            self.check_spawn_captures(&c.args);
+                        }
+                    }
+                }
                 // `ClassName.staticMethod(args)` — receiver is a
                 // type name; resolve and check as a static call
                 // before treating the object as a value. Mirrors
@@ -3474,6 +3544,128 @@ fn operator_kind_user_spelling(kind: OperatorKind) -> &'static str {
 /// these can be a reference-cast or type-test target.
 fn is_plain_user_typeref(ty: &juxc_ast::TypeRef) -> bool {
     ty.array_shape.is_none() && !ty.nullable && ty.ptr_depth == 0 && ty.fn_shape.is_none()
+}
+
+/// Report every bare `Path` leaf in `e` to `sink` — drives the
+/// `Worker.spawn` capture scan ([`Checker::check_spawn_captures`]).
+/// Field accesses report the root; unmatched expression shapes are
+/// skipped (conservative: a missed read only skips the diagnostic and
+/// falls back to the rustc error).
+fn collect_bare_name_reads(e: &Expr, sink: &mut dyn FnMut(&juxc_ast::QualifiedName)) {
+    match e {
+        Expr::Path(qn) => sink(qn),
+        Expr::Call(c) => {
+            collect_bare_name_reads(&c.callee, sink);
+            for a in &c.args {
+                collect_bare_name_reads(a, sink);
+            }
+        }
+        Expr::Binary(b) => {
+            collect_bare_name_reads(&b.left, sink);
+            collect_bare_name_reads(&b.right, sink);
+        }
+        Expr::Unary(u) => collect_bare_name_reads(&u.operand, sink),
+        Expr::Cast(c) => collect_bare_name_reads(&c.value, sink),
+        Expr::NotNullAssert(inner, _) => collect_bare_name_reads(inner, sink),
+        Expr::Field(f) => collect_bare_name_reads(&f.object, sink),
+        Expr::Index(ix) => {
+            collect_bare_name_reads(&ix.array, sink);
+            collect_bare_name_reads(&ix.index, sink);
+        }
+        Expr::Ternary(t) => {
+            collect_bare_name_reads(&t.condition, sink);
+            collect_bare_name_reads(&t.then_branch, sink);
+            collect_bare_name_reads(&t.else_branch, sink);
+        }
+        Expr::Elvis(el) => {
+            collect_bare_name_reads(&el.value, sink);
+            collect_bare_name_reads(&el.fallback, sink);
+        }
+        Expr::InterpString(s) => {
+            for seg in &s.segments {
+                if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                    collect_bare_name_reads(inner, sink);
+                }
+            }
+        }
+        Expr::NewObject(n) => {
+            for a in &n.args {
+                collect_bare_name_reads(a, sink);
+            }
+        }
+        Expr::Await(inner, _) => collect_bare_name_reads(inner, sink),
+        Expr::Lambda(l) => match &l.body {
+            juxc_ast::LambdaBody::Expr(b) => collect_bare_name_reads(b, sink),
+            juxc_ast::LambdaBody::Block(blk) => {
+                for s in &blk.statements {
+                    collect_bare_name_reads_stmt(s, sink);
+                }
+            }
+        },
+        _ => {}
+    }
+}
+
+/// Statement-level driver for [`collect_bare_name_reads`].
+fn collect_bare_name_reads_stmt(s: &Stmt, sink: &mut dyn FnMut(&juxc_ast::QualifiedName)) {
+    match s {
+        Stmt::Expr(e) | Stmt::Throw(e, _) => collect_bare_name_reads(e, sink),
+        Stmt::Return(Some(e)) => collect_bare_name_reads(e, sink),
+        Stmt::VarDecl(v) => {
+            if let Some(init) = &v.init {
+                collect_bare_name_reads(init, sink);
+            }
+        }
+        Stmt::Assign(a) => {
+            collect_bare_name_reads(&a.target, sink);
+            collect_bare_name_reads(&a.value, sink);
+        }
+        Stmt::If(i) => {
+            collect_bare_name_reads(&i.condition, sink);
+            for st in &i.then_block.statements {
+                collect_bare_name_reads_stmt(st, sink);
+            }
+            let mut cursor = i.else_branch.as_deref();
+            while let Some(branch) = cursor {
+                match branch {
+                    juxc_ast::ElseBranch::If(inner) => {
+                        collect_bare_name_reads(&inner.condition, sink);
+                        for st in &inner.then_block.statements {
+                            collect_bare_name_reads_stmt(st, sink);
+                        }
+                        cursor = inner.else_branch.as_deref();
+                    }
+                    juxc_ast::ElseBranch::Block(blk) => {
+                        for st in &blk.statements {
+                            collect_bare_name_reads_stmt(st, sink);
+                        }
+                        cursor = None;
+                    }
+                }
+            }
+        }
+        Stmt::While(w) => {
+            collect_bare_name_reads(&w.condition, sink);
+            for st in &w.body.statements {
+                collect_bare_name_reads_stmt(st, sink);
+            }
+        }
+        Stmt::ForEach(f) => {
+            collect_bare_name_reads(&f.iter, sink);
+            for st in &f.body.statements {
+                collect_bare_name_reads_stmt(st, sink);
+            }
+        }
+        Stmt::ForC(f) => {
+            if let Some(cond) = &f.cond {
+                collect_bare_name_reads(cond, sink);
+            }
+            for st in &f.body.statements {
+                collect_bare_name_reads_stmt(st, sink);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// True when `e` contains a bare single-segment `Path` whose name is in
@@ -5449,6 +5641,43 @@ mod tests {
         assert!(
             has(&d, code::Code::E0445_ConstGenericUnsupported),
             "expected E0445 for const arithmetic in an array size: {d:?}",
+        );
+    }
+
+    /// A class object captured by a `Worker.spawn` closure → E0702
+    /// (Rc-backed objects are !Send; rustc E0277 would leak).
+    #[test]
+    fn object_captured_by_spawn_emits_e0702() {
+        let d = run(
+            r#"
+            public class Counter { public int n; public Counter() { this.n = 0; } }
+            public void main() {
+                var c = new Counter();
+                var t = Worker.spawn(() -> { return c.n; });
+            }
+            "#,
+        );
+        assert!(
+            has(&d, code::Code::E0702_ObjectCapturedBySpawn),
+            "expected E0702 for object capture in spawn: {d:?}",
+        );
+    }
+
+    /// Primitive / String captures cross threads fine — no E0702.
+    #[test]
+    fn primitive_captures_in_spawn_are_ok() {
+        let d = run(
+            r#"
+            public void main() {
+                int n = 5;
+                String tag = "x";
+                var t = Worker.spawn(() -> { return n + tag.length(); });
+            }
+            "#,
+        );
+        assert!(
+            !has(&d, code::Code::E0702_ObjectCapturedBySpawn),
+            "primitive captures must not fire E0702: {d:?}",
         );
     }
 

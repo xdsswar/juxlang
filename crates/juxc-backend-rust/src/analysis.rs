@@ -1265,6 +1265,17 @@ impl crate::RustEmitter {
                 return self.nullable_locals.contains(&qn.segments[0].text);
             }
         }
+        // **Arithmetic/comparison results are never `Option` values.**
+        // Inside a null smart-cast (`if (b != null) { print(b + 1) }`)
+        // tycheck's recorded type for the BINARY may still carry the
+        // operand's declared nullable wrap, but the emitted operand is
+        // narrowed (`if let Some(b) = b`) — so consulting `expr_types`
+        // here would wrap a plain `isize` in `JuxOpt` (rustc E0308).
+        // An actual Option can't appear as a binary operand in valid
+        // Rust anyway, so the answer is unconditionally "not nullable".
+        if matches!(expr, juxc_ast::Expr::Binary(_)) {
+            return false;
+        }
         // For non-Path shapes, ask tycheck directly. With the
         // `Ty::Nullable` refactor, every expression visited by
         // `check::Checker` carries its full type — including the
