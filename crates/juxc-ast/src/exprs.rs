@@ -100,6 +100,11 @@ pub enum Expr {
     /// `Expr` is the awaited operand; the `Span` covers
     /// `await expr` in source.
     Await(Box<Expr>, Span),
+    /// `(a, b, ...)` — tuple literal (§5.3). Two or more elements
+    /// (`()` is reserved unit syntax with no v1 meaning; one element
+    /// is plain grouping). Lowers verbatim to a Rust tuple — value
+    /// semantics, stack-allocated, no boxing.
+    TupleLit(Vec<Expr>, Span),
     /// `expr!!` — **non-null assertion** (grammar §A.4 level 19,
     /// postfix; conversion table `T?` → `T!!`). Asserts the nullable
     /// operand holds a value and unwraps it; a `null` operand throws

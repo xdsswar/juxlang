@@ -95,6 +95,19 @@ impl RustEmitter {
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Literal(lit) => self.emit_literal(lit),
+            // Tuple literal (§5.3) — Rust's identical `(a, b)` form.
+            // Value semantics for free; elements emit as ordinary
+            // value-position expressions.
+            Expr::TupleLit(elems, _) => {
+                self.w.push('(');
+                for (i, el) in elems.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str(", ");
+                    }
+                    self.emit_expr(el);
+                }
+                self.w.push(')');
+            }
             Expr::Path(qn) => {
                 // Bare-name rewrite for enclosing-class static fields:
                 // inside `class Test`, the name `a` resolves to
@@ -1229,6 +1242,7 @@ impl RustEmitter {
 pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
     match e {
         Expr::Literal(_) => juxc_source::Span::DUMMY,
+        Expr::TupleLit(_, s) => *s,
         Expr::NotNullAssert(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,

@@ -1551,6 +1551,12 @@ impl<'a> Checker<'a> {
         let _ = self.infer_and_record(expr);
         match expr {
             Expr::Literal(_) => {}
+            // Tuple literal — walk each element for nested checks.
+            Expr::TupleLit(elems, _) => {
+                for e in elems {
+                    self.check_expr(e);
+                }
+            }
             // Record a bare-name reference so the E0431 "uninferable `new`"
             // flush can tell whether a `var x = new X<>()` is ever used.
             Expr::Path(qn) => {
@@ -2331,6 +2337,29 @@ impl<'a> Checker<'a> {
         let receiver_ty = infer_expr(&f.object, &self.env, self.symbols);
         let field_name = f.field.text.as_str();
 
+        // Tuple element access — `pair.0` (§5.3). Validate the index
+        // against the element count so an out-of-range read gets a
+        // clean E0412 instead of leaking rustc's E0609.
+        if let Ty::User { name, generic_args } = &receiver_ty {
+            if name == juxc_ast::TUPLE_SENTINEL {
+                match field_name.parse::<usize>() {
+                    Ok(idx) if idx < generic_args.len() => {}
+                    _ => {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0412_UnresolvedField,
+                                format!(
+                                    "no element `{field_name}` on tuple `{receiver_ty}` — valid indices are 0..{}",
+                                    generic_args.len(),
+                                ),
+                            )
+                            .with_span(f.span),
+                        );
+                    }
+                }
+                return;
+            }
+        }
         match &receiver_ty {
             // Arrays: allow .length and friends silently.
             Ty::Array { .. } => {
@@ -4194,6 +4223,7 @@ pub(crate) fn expr_span_pub(e: &Expr) -> Span {
 fn expr_span(e: &Expr) -> Span {
     match e {
         Expr::Literal(_) => Span::DUMMY,
+        Expr::TupleLit(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
         Expr::Binary(b) => b.span,

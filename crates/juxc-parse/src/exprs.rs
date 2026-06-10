@@ -1113,8 +1113,24 @@ impl<'a> Parser<'a> {
                 // (If we ever need to round-trip source faithfully —
                 // e.g. for `juxc fmt` — we'll add an `Expr::Paren`
                 // wrapper here.)
+                let start = self.peek_span();
                 self.advance(); // '('
                 let inner = self.parse_expr();
+                // `(a, b, …)` — tuple literal (§5.3, 2+ elements;
+                // a single parenthesized expression is plain
+                // grouping). Trailing comma tolerated.
+                if self.at(&TokenKind::Comma) {
+                    let mut elems = vec![inner?];
+                    while self.eat(&TokenKind::Comma) {
+                        if self.at(&TokenKind::RParen) {
+                            break;
+                        }
+                        elems.push(self.parse_expr()?);
+                    }
+                    let end = self.peek_span();
+                    self.expect(&TokenKind::RParen, "')' to close tuple literal");
+                    return Some(Expr::TupleLit(elems, start.join(end)));
+                }
                 self.expect(&TokenKind::RParen, "')' to close parenthesized expression");
                 inner
             }
@@ -1284,6 +1300,7 @@ impl<'a> Parser<'a> {
 pub(crate) fn expr_span(e: &Expr) -> Span {
     match e {
         Expr::Literal(_) => Span::DUMMY,
+        Expr::TupleLit(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
         Expr::Binary(b) => b.span,

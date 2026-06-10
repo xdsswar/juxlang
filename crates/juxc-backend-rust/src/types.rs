@@ -80,6 +80,19 @@ impl RustEmitter {
         // pass-through inside the array-shape recursion preserves
         // `ty.nullable` so the inner element-type emit hits the
         // nullable branch with the right per-element type.
+        // Tuple type — `(A, B)` (§5.3, `__tuple` sentinel encoding)
+        // emits as Rust's structurally identical tuple type.
+        if let Some(elems) = ty.tuple_elems() {
+            self.w.push('(');
+            for (i, el) in elems.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.emit_type_as_rust(el);
+            }
+            self.w.push(')');
+            return;
+        }
         if let Some(fn_shape) = &ty.fn_shape {
             self.w.push_str("std::rc::Rc<dyn Fn(");
             for (i, p) in fn_shape.params.iter().enumerate() {

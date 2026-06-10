@@ -883,6 +883,12 @@ impl Resolver {
     fn visit_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Literal(_) => {}
+            // Tuple literal — each element resolves independently.
+            Expr::TupleLit(elems, _) => {
+                for e in elems {
+                    self.visit_expr(e);
+                }
+            }
             Expr::Path(qn) => self.check_path(qn),
             Expr::Call(c) => self.visit_call(c),
             Expr::Binary(b) => {
