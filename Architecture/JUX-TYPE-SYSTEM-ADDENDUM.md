@@ -132,6 +132,16 @@ The compiler infers `T = Dog` from the source argument; verifies the dest argume
 
 ## §T.3 — Overload Resolution
 
+> **Phase-1 implementation note.** The current compiler implements a
+> count-based subset of this section: overloads of one name (methods
+> and constructors) are selected by **argument count**, and each
+> group's acceptable-count ranges (counting omittable defaults and
+> varargs) must be pairwise disjoint — `E0450` otherwise. Type-based
+> applicability filtering and the specificity ordering below land
+> with a later phase. Phase 1 also keeps method overload groups out
+> of inheritance (no overriding into/out of a group) and out of
+> interfaces.
+
 When multiple declarations share a name, the resolver picks one. The algorithm runs in compiler phase 8.
 
 ### T.3.1. Inputs

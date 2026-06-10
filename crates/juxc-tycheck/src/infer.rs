@@ -479,8 +479,16 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             // declared return type (lowered in the class's scope).
             if let Expr::Path(qn) = field.object.as_ref() {
                 if let Some(class_fqn) = path_resolves_to_class(qn, env, symbols) {
+                    // Overload-group pick (§T.3 Phase-1, count rule) —
+                    // overloads may differ in return type, so the
+                    // selected member's return drives inference.
+                    let picked = symbols
+                        .select_method_overload(&class_fqn, method_name, c.args.len())
+                        .map(|(_, m)| m);
                     if let Some(class) = symbols.classes.get(&class_fqn) {
-                        if let Some(method) = class.methods.get(method_name) {
+                        if let Some(method) =
+                            picked.or_else(|| class.methods.get(method_name))
+                        {
                             if method.is_static {
                                 return return_type_in_class(
                                     &method.return_type,
@@ -498,6 +506,12 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 if let Some((method, declaring_class)) =
                     symbols.lookup_method(name, method_name)
                 {
+                    // Overload-group pick (§T.3 Phase-1): a group's
+                    // members may differ in return type.
+                    let method = symbols
+                        .select_method_overload(name, method_name, c.args.len())
+                        .map(|(_, m)| m)
+                        .unwrap_or(method);
                     // Lower in the declaring class's generic scope AND the
                     // method's own generic params so both `T get()` (class
                     // param) and `<U> U pick()` (method param) read as
@@ -1161,6 +1175,16 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     if let Some(kind) = binary_op_to_kind(b.op) {
         if let Some(ret) = lookup_user_operator_return_type(&left_ty, kind, env, symbols) {
             return ret;
+        }
+    }
+    // String concatenation is symmetric (`"v" + n` AND `n + "v"` are
+    // both String, like Java) — the left-type rule below would call
+    // `int + String` an int.
+    if matches!(b.op, BinaryOp::Add) {
+        if matches!(left_ty, Ty::String)
+            || matches!(infer_expr(&b.right, env, symbols), Ty::String)
+        {
+            return Ty::String;
         }
     }
     match b.op {

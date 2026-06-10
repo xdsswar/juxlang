@@ -373,7 +373,14 @@ impl RustEmitter {
         }
         // `static { }` first-use initializer (§S.4.1), if any.
         self.emit_static_init_fn(class_decl);
+        let mut seen_names: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for method in &class_decl.methods {
+            let occ = seen_names.entry(method.name.text.clone()).or_insert(0);
+            if *occ > 0 {
+                self.pending_decl_suffix = Some(format!("__ov{occ}"));
+            }
+            *occ += 1;
             self.emit_method(method);
         }
         // **Method body inlining for virtual dispatch.** Walk the
@@ -709,7 +716,14 @@ impl RustEmitter {
         }
         // `static { }` first-use initializer (§S.4.1), if any.
         self.emit_static_init_fn(class_decl);
+        let mut seen_names: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for method in &class_decl.methods {
+            let occ = seen_names.entry(method.name.text.clone()).or_insert(0);
+            if *occ > 0 {
+                self.pending_decl_suffix = Some(format!("__ov{occ}"));
+            }
+            *occ += 1;
             self.emit_method(method);
         }
         // **Inherited-method inlining (§CR.5.1).** Same pass the legacy
@@ -2622,6 +2636,7 @@ impl RustEmitter {
         }
         self.w.push_str("fn ");
         self.w.push_str(&method.name.text);
+        if let Some(sfx) = self.pending_decl_suffix.take() { self.w.push_str(&sfx); }
         // Method's own generic parameters plus any synthetic wildcards.
         if combined_method_generics.is_empty() {
             self.emit_generic_params(&method.generic_params);
@@ -2728,6 +2743,7 @@ impl RustEmitter {
             self.w.emit_indent();
             self.w.push_str("unimplemented!(\"abstract method ");
             self.w.push_str(&method.name.text);
+        if let Some(sfx) = self.pending_decl_suffix.take() { self.w.push_str(&sfx); }
             self.w.push_str("\")\n");
         }
         self.w.indent_dec();
@@ -2938,6 +2954,7 @@ impl RustEmitter {
             self.w.push_str("fn ");
         }
         self.w.push_str(&method.name.text);
+        if let Some(sfx) = self.pending_decl_suffix.take() { self.w.push_str(&sfx); }
         self.w.push_str("(&self");
         for param in &method.params {
             self.w.push_str(", ");
@@ -2969,6 +2986,7 @@ impl RustEmitter {
             self.w.push_str(&permitted.text);
             self.w.push_str("(__variant) => __variant.");
             self.w.push_str(&method.name.text);
+        if let Some(sfx) = self.pending_decl_suffix.take() { self.w.push_str(&sfx); }
             self.w.push('(');
             for (i, param) in method.params.iter().enumerate() {
                 if i > 0 {

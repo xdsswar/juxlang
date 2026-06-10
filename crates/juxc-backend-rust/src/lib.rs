@@ -616,6 +616,18 @@ struct RustEmitter {
     /// read (rustc E0382). Maintained per-statement by
     /// `emit_ctor_body_stmts`; empty outside constructor bodies.
     pub(crate) ctor_live_after: std::collections::HashSet<String>,
+    /// Pending `__ovK` suffix for the method NAME of the call
+    /// currently being emitted — set by `emit_call` from
+    /// `SymbolTable::method_selections` (overload pick, §T.3
+    /// Phase-1), consumed exactly once by whichever path writes the
+    /// member name (field-position callee, bare implicit-this call,
+    /// `Class::method` static). `None` for non-overloaded calls.
+    pub(crate) pending_method_suffix: Option<String>,
+    /// Pending `__ovK` suffix for the method DECLARATION being
+    /// emitted — set by the class-decl loops (position of the decl
+    /// among same-name siblings), consumed by `emit_method`'s name
+    /// write.
+    pub(crate) pending_decl_suffix: Option<String>,
     /// The bare enum name of the scrutinee for the `switch` currently being
     /// emitted, when it resolves to an enum. Lets bare `case Variant ->`
     /// patterns (which parse as `Pattern::Bind`, Java-style unqualified labels)
@@ -2484,6 +2496,8 @@ impl RustEmitter {
             emitted_uses_in_module: std::collections::HashSet::new(),
             local_types: vec![std::collections::HashMap::new()],
             ctor_live_after: std::collections::HashSet::new(),
+            pending_method_suffix: None,
+            pending_decl_suffix: None,
             current_switch_enum: None,
             test_mode: false,
             current_unit_idx: None,
