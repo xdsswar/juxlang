@@ -453,6 +453,40 @@ impl RustEmitter {
             Expr::MethodRef(m) => self.emit_method_ref(m),
             Expr::Ternary(t) => self.emit_ternary(t),
             Expr::Await(inner, _) => self.emit_await(inner),
+            // `expr!!` — non-null assertion (§A.4 level 19). A nullable
+            // operand is an `Option<T>` in the emitted Rust: unwrap it,
+            // panicking `NullPointerException` on `None` (same panic
+            // convention as the ClassCastException downcast hook). A
+            // non-nullable operand makes the assert a no-op — emit the
+            // operand bare rather than a broken `.unwrap_or_else` on a
+            // non-Option value.
+            Expr::NotNullAssert(inner, _) => {
+                if self.expression_is_already_nullable(inner) {
+                    // Parenthesize so postfix chains bind to the
+                    // unwrapped value (`(expr).unwrap…().id`). The
+                    // operand emits with the format/comparison flags
+                    // cleared — the asserted value is consumed by the
+                    // unwrap, not by the surrounding Display slot, so a
+                    // wrapper-borrowed field read must keep its normal
+                    // clone-out (`a.0.borrow().peer.clone()`); the
+                    // suppressed form would try to MOVE the Option out
+                    // of the `Ref` (rustc E0507).
+                    let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
+                    let prev_cmp =
+                        std::mem::take(&mut self.emitting_comparison_operand);
+                    self.w.push('(');
+                    self.emit_expr(inner);
+                    self.w.push(')');
+                    self.emitting_format_arg = prev_fmt;
+                    self.emitting_comparison_operand = prev_cmp;
+                    self.w.push_str(
+                        ".unwrap_or_else(|| panic!(\"NullPointerException: \
+                         `!!` asserted on a null value\"))",
+                    );
+                } else {
+                    self.emit_expr(inner);
+                }
+            }
         }
     }
 
@@ -779,6 +813,47 @@ impl RustEmitter {
         }
     }
 
+    /// Collect the **wrapper-class captures** of a lambda — bare names
+    /// read in the body (minus the lambda's own params) whose type
+    /// resolves to a wrapper class. Each needs a share-clone before the
+    /// `move` (see `emit_lambda`): without it the closure would STEAL
+    /// the caller's `Rc` handle, killing the binding for code after the
+    /// lambda (rustc E0382) — Java closures capture the reference, not
+    /// the variable.
+    fn collect_wrapper_captures(&self, l: &juxc_ast::LambdaExpr) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        collect_bare_names_in_lambda(l, &mut |name| {
+            if seen.insert(name.to_string()) {
+                names.push(name.to_string());
+            }
+        });
+        let params: std::collections::HashSet<&str> =
+            l.params.iter().map(|p| p.name.text.as_str()).collect();
+        names.retain(|n| {
+            if params.contains(n.as_str()) {
+                return false;
+            }
+            // Resolve the name's class via the local-type registry; a
+            // name we can't type keeps the old capture-by-move shape.
+            let class = self
+                .local_types
+                .iter()
+                .rev()
+                .find_map(|s| s.get(n))
+                .and_then(|ty| match ty {
+                    juxc_tycheck::Ty::User { name, .. } => {
+                        Some(name.rsplit('.').next().unwrap_or(name).to_string())
+                    }
+                    _ => None,
+                });
+            class
+                .map(|c| self.wrapper_classes.contains(&c))
+                .unwrap_or(false)
+        });
+        names
+    }
+
     pub(crate) fn emit_lambda(&mut self, l: &juxc_ast::LambdaExpr) {
         // `move` is unconditional: Phase-1 lambdas wrap in
         // `Rc<dyn Fn>`, which often outlives the enclosing scope
@@ -788,6 +863,24 @@ impl RustEmitter {
         // escaping-closure cases. The cost is one extra clone per
         // captured value, which Rust optimizes away when the
         // capture is a single use.
+        //
+        // **Wrapper-class captures share, not steal.** A captured
+        // wrapper variable gets a shadowing `let c = c.clone();`
+        // (cheap `Rc` refcount bump) in a block around the closure, so
+        // `move` grabs the CLONE and the caller's binding stays live —
+        // both handles point at the same `RefCell`, matching Java's
+        // capture-the-reference semantics.
+        let captures = self.collect_wrapper_captures(l);
+        if !captures.is_empty() {
+            self.w.push_str("{ ");
+            for name in &captures {
+                self.w.push_str("let ");
+                self.w.push_str(name);
+                self.w.push_str(" = ");
+                self.w.push_str(name);
+                self.w.push_str(".clone(); ");
+            }
+        }
         self.w.push_str("std::rc::Rc::new(move ");
         self.w.push('|');
         for (i, p) in l.params.iter().enumerate() {
@@ -815,6 +908,9 @@ impl RustEmitter {
             }
         }
         self.w.push(')');
+        if !self.collect_wrapper_captures(l).is_empty() {
+            self.w.push_str(" }");
+        }
     }
 
     /// Emit `e` inside a parent context with the given precedence,
@@ -1066,6 +1162,7 @@ impl RustEmitter {
 pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
     match e {
         Expr::Literal(_) => juxc_source::Span::DUMMY,
+        Expr::NotNullAssert(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
         Expr::Binary(b) => b.span,
@@ -1209,3 +1306,150 @@ pub(crate) fn binary_prec(op: BinaryOp) -> u8 {
     }
 }
 
+
+/// Walk a lambda's body and report every **single-segment bare name**
+/// read anywhere inside it — the superset of the closure's captures
+/// (locals declared inside the body and the lambda's own params are
+/// filtered by the caller, `RustEmitter::collect_wrapper_captures`).
+/// Field accesses (`x.f`) report the root `x`; multi-segment paths
+/// (`pkg.Class`) are type names, not captures, and are skipped.
+pub(crate) fn collect_bare_names_in_lambda(
+    l: &juxc_ast::LambdaExpr,
+    sink: &mut dyn FnMut(&str),
+) {
+    match &l.body {
+        juxc_ast::LambdaBody::Expr(e) => collect_bare_names_expr(e, sink),
+        juxc_ast::LambdaBody::Block(b) => collect_bare_names_block(b, sink),
+    }
+}
+
+fn collect_bare_names_expr(e: &Expr, sink: &mut dyn FnMut(&str)) {
+    match e {
+        Expr::Path(qn) => {
+            if qn.segments.len() == 1 {
+                sink(&qn.segments[0].text);
+            }
+        }
+        Expr::Call(c) => {
+            collect_bare_names_expr(&c.callee, sink);
+            for a in &c.args {
+                collect_bare_names_expr(a, sink);
+            }
+        }
+        Expr::NewObject(n) => {
+            for a in &n.args {
+                collect_bare_names_expr(a, sink);
+            }
+        }
+        Expr::NewArrayLit(n) => {
+            for el in &n.elements {
+                collect_bare_names_expr(el, sink);
+            }
+        }
+        Expr::NewArray(n) => collect_bare_names_expr(&n.size, sink),
+        Expr::Binary(b) => {
+            collect_bare_names_expr(&b.left, sink);
+            collect_bare_names_expr(&b.right, sink);
+        }
+        Expr::Unary(u) => collect_bare_names_expr(&u.operand, sink),
+        Expr::Range(r) => {
+            collect_bare_names_expr(&r.start, sink);
+            collect_bare_names_expr(&r.end, sink);
+        }
+        Expr::Cast(c) => collect_bare_names_expr(&c.value, sink),
+        Expr::TypeTest(t) => collect_bare_names_expr(&t.value, sink),
+        Expr::Index(i) => {
+            collect_bare_names_expr(&i.array, sink);
+            collect_bare_names_expr(&i.index, sink);
+        }
+        Expr::Field(f) => collect_bare_names_expr(&f.object, sink),
+        Expr::InterpString(s) => {
+            for seg in &s.segments {
+                if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                    collect_bare_names_expr(inner, sink);
+                }
+            }
+        }
+        Expr::Elvis(el) => {
+            collect_bare_names_expr(&el.value, sink);
+            collect_bare_names_expr(&el.fallback, sink);
+        }
+        Expr::Ternary(t) => {
+            collect_bare_names_expr(&t.condition, sink);
+            collect_bare_names_expr(&t.then_branch, sink);
+            collect_bare_names_expr(&t.else_branch, sink);
+        }
+        Expr::Await(inner, _) => collect_bare_names_expr(inner, sink),
+        Expr::Lambda(inner) => collect_bare_names_in_lambda(inner, sink),
+        _ => {}
+    }
+}
+
+fn collect_bare_names_block(b: &juxc_ast::Block, sink: &mut dyn FnMut(&str)) {
+    use juxc_ast::Stmt;
+    for s in &b.statements {
+        match s {
+            Stmt::Expr(e) => collect_bare_names_expr(e, sink),
+            Stmt::Return(Some(e)) => collect_bare_names_expr(e, sink),
+            Stmt::Return(None) => {}
+            Stmt::VarDecl(v) => {
+                if let Some(init) = &v.init {
+                    collect_bare_names_expr(init, sink);
+                }
+            }
+            Stmt::Assign(a) => {
+                collect_bare_names_expr(&a.target, sink);
+                collect_bare_names_expr(&a.value, sink);
+            }
+            Stmt::Throw(e, _) => collect_bare_names_expr(e, sink),
+            Stmt::SuperCall(args, _) => {
+                for a in args {
+                    collect_bare_names_expr(a, sink);
+                }
+            }
+            Stmt::If(i) => {
+                collect_bare_names_expr(&i.condition, sink);
+                collect_bare_names_block(&i.then_block, sink);
+                let mut cursor = i.else_branch.as_deref();
+                while let Some(branch) = cursor {
+                    match branch {
+                        juxc_ast::ElseBranch::If(inner) => {
+                            collect_bare_names_expr(&inner.condition, sink);
+                            collect_bare_names_block(&inner.then_block, sink);
+                            cursor = inner.else_branch.as_deref();
+                        }
+                        juxc_ast::ElseBranch::Block(blk) => {
+                            collect_bare_names_block(blk, sink);
+                            cursor = None;
+                        }
+                    }
+                }
+            }
+            Stmt::While(w) => {
+                collect_bare_names_expr(&w.condition, sink);
+                collect_bare_names_block(&w.body, sink);
+            }
+            Stmt::ForEach(f) => {
+                collect_bare_names_expr(&f.iter, sink);
+                collect_bare_names_block(&f.body, sink);
+            }
+            Stmt::ForC(f) => {
+                if let Some(cond) = &f.cond {
+                    collect_bare_names_expr(cond, sink);
+                }
+                collect_bare_names_block(&f.body, sink);
+            }
+            Stmt::Try(t) => {
+                collect_bare_names_block(&t.body, sink);
+                for c in &t.catches {
+                    collect_bare_names_block(&c.body, sink);
+                }
+                if let Some(fin) = &t.finally {
+                    collect_bare_names_block(fin, sink);
+                }
+            }
+            Stmt::Unsafe(b) => collect_bare_names_block(b, sink),
+            Stmt::Break(_) | Stmt::Continue(_) => {}
+        }
+    }
+}

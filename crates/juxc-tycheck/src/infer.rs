@@ -149,6 +149,12 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // `T` everywhere outside the emission boundary), so the
         // operand's type is the right answer.
         Expr::Await(inner, _) => infer_expr(inner, env, symbols),
+        // `expr!!` asserts non-null: the result type is the operand's
+        // type with the nullable layer peeled (conversion table T? -> T).
+        Expr::NotNullAssert(inner, _) => match infer_expr(inner, env, symbols) {
+            Ty::Nullable(t) => *t,
+            other => other,
+        },
     }
 }
 

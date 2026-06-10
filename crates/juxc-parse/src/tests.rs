@@ -274,6 +274,22 @@ fn const_generic_param_long_is_diagnosed() {
     assert!(c.generic_params[0].is_const());
 }
 
+/// Non-null assertion `!!` is a chaining postfix (§A.4 level 19):
+/// `a.peer!!.id` parses as Field(NotNullAssert(Field(a, peer)), id).
+#[test]
+fn not_null_assert_chains_postfix() {
+    let ast = parse_clean("public void main() { var x = a.peer!!.id; }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let Some(Expr::Field(outer)) = &v.init else { panic!("expected outer field read") };
+    assert_eq!(outer.field.text, "id");
+    let Expr::NotNullAssert(inner, _) = &*outer.object else {
+        panic!("expected !! under the .id access");
+    };
+    let Expr::Field(peer) = &**inner else { panic!("expected a.peer under !!") };
+    assert_eq!(peer.field.text, "peer");
+}
+
 /// `bool` and `null` literals lex as their own token kinds; the parser
 /// must propagate them through `parse_primary`.
 #[test]

@@ -100,6 +100,13 @@ pub enum Expr {
     /// `Expr` is the awaited operand; the `Span` covers
     /// `await expr` in source.
     Await(Box<Expr>, Span),
+    /// `expr!!` — **non-null assertion** (grammar §A.4 level 19,
+    /// postfix; conversion table `T?` → `T!!`). Asserts the nullable
+    /// operand holds a value and unwraps it; a `null` operand throws
+    /// `NullPointerException` at run time. Chains like any postfix
+    /// (`a.peer!!.id`). The boxed `Expr` is the asserted operand; the
+    /// `Span` covers `expr!!`.
+    NotNullAssert(Box<Expr>, Span),
 }
 
 /// Ternary expression: `condition ? then_branch : else_branch`.

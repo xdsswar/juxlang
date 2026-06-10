@@ -619,6 +619,25 @@ impl RustEmitter {
                 }
             }
         }
+        // **Borrow-hoist pre-pass.** `a.addTwice(a.bump())` on a plain
+        // (non-wrapper) class would emit two overlapping `&mut a`
+        // borrows — rustc E0499 (two-phase borrows only cover SHARED
+        // argument borrows). Java semantics evaluate the argument
+        // first, so when any argument contains a call to a mutating
+        // method on the SAME receiver place, hoist every argument into
+        // a temp inside a block expression:
+        //
+        //   { let __jux_arg0 = a.bump(); a.addTwice(__jux_arg0) }
+        //
+        // Hoisting ALL args (not just the offending one) preserves the
+        // left-to-right evaluation order. Wrapper-class receivers don't
+        // need this (their methods take `&self`, interior-mutable), but
+        // applying the hoist there too would be harmless — the trigger
+        // simply fires on the textual shape.
+        if self.call_needs_borrow_hoist(call) {
+            self.emit_call_with_hoisted_args(call);
+            return;
+        }
         // Generic call: emit `callee(args, …)` literally. Post Fix 1
         // every Jux `String` value is already an owned Rust `String`,
         // so the previous per-arg enum-variant payload coercion is
@@ -684,42 +703,12 @@ impl RustEmitter {
         self.emitting_format_arg = false;
         for (i, arg) in call.args.iter().enumerate() {
             if i > 0 { self.w.push_str(", "); }
-            // Interface-typed param slot: wrap a class value in `Rc<dyn
-            // Trait>` / clone a dyn handle, before the sealed/nullable/by-ref
-            // paths (which never apply to an interface value slot).
-            if let Some(pty) = self.callee_param_type(&call.callee, i) {
-                if !matches!(
-                    self.iface_coercion_to(&pty, arg),
-                    crate::analysis::IfaceCoercion::None,
-                ) {
-                    self.emit_expr_coerced_to_iface(&pty, arg);
-                    continue;
-                }
-            }
-            let nullable = self.callee_param_is_nullable(&call.callee, i);
-            let upcast = self.arg_needs_sealed_upcast(&call.callee, i, arg);
             // §G.9.2: a borrowed parameter (`&T`) of an external method gets the
             // call-site `&` back — `m.containsKey("a")` → `m.contains_key(&"a"…)`.
-            let by_ref = self.callee_param_is_ref(&call.callee, i);
-            if by_ref {
+            if self.callee_param_is_ref(&call.callee, i) {
                 self.w.push('&');
             }
-            if upcast {
-                self.emit_arg_with_nullable_wrap(arg, nullable);
-                self.w.push_str(".into()");
-            } else {
-                self.emit_arg_with_nullable_wrap(arg, nullable);
-                // **Wrapper-class share-on-pass (§CR.4.1).** A wrapped
-                // place passed as an argument hands the callee a SHARED
-                // handle — append the cheap `Rc` refcount-bump clone so
-                // the caller's binding stays live and both point at the
-                // same `RefCell` (mutation through the param is observed
-                // by the caller). Skipped under nullable/upcast wraps,
-                // which never carry a bare wrapped place.
-                if !nullable && self.wrapper_value_needs_clone(arg) {
-                    self.w.push_str(".clone()");
-                }
-            }
+            self.emit_call_arg_value(call, i, arg);
         }
         self.emitting_format_arg = prev;
         self.w.push(')');
@@ -736,6 +725,197 @@ impl RustEmitter {
                 self.w.push_str(".unwrap()");
             }
         }
+    }
+
+    /// Emit ONE call argument through the full coercion ladder —
+    /// interface/poly-base `Rc<dyn>` wrap, sealed upcast `.into()`,
+    /// nullable `Some(…)` wrap, and the wrapper share-on-pass
+    /// `.clone()` (§CR.4.1). Shared between the regular inline arg
+    /// loop and the borrow-hoisted form (`let __jux_argN = …;`), so
+    /// both produce identical values. The by-ref `&` prefix is NOT
+    /// emitted here — it stays at the call slot (a hoisted temp is
+    /// borrowed at the call, `x.m(&__jux_arg0)`).
+    fn emit_call_arg_value(&mut self, call: &CallExpr, i: usize, arg: &Expr) {
+        // Interface-typed param slot: wrap a class value in `Rc<dyn
+        // Trait>` / clone a dyn handle, before the sealed/nullable
+        // paths (which never apply to an interface value slot).
+        if let Some(pty) = self.callee_param_type(&call.callee, i) {
+            if !matches!(
+                self.iface_coercion_to(&pty, arg),
+                crate::analysis::IfaceCoercion::None,
+            ) {
+                self.emit_expr_coerced_to_iface(&pty, arg);
+                return;
+            }
+        }
+        let nullable = self.callee_param_is_nullable(&call.callee, i);
+        let upcast = self.arg_needs_sealed_upcast(&call.callee, i, arg);
+        if upcast {
+            self.emit_arg_with_nullable_wrap(arg, nullable);
+            self.w.push_str(".into()");
+        } else {
+            self.emit_arg_with_nullable_wrap(arg, nullable);
+            // **Wrapper-class share-on-pass (§CR.4.1).** A wrapped
+            // place passed as an argument hands the callee a SHARED
+            // handle — append the cheap `Rc` refcount-bump clone so
+            // the caller's binding stays live and both point at the
+            // same `RefCell` (mutation through the param is observed
+            // by the caller). Skipped under nullable/upcast wraps,
+            // which never carry a bare wrapped place.
+            if !nullable && self.wrapper_value_needs_clone(arg) {
+                self.w.push_str(".clone()");
+            }
+        }
+    }
+
+    /// True when `call` needs the **borrow-hoist** form — the callee is
+    /// a method on a simple place (`x.m(…)` / `this.m(…)`) and some
+    /// argument contains a call to a *mutating* method on that same
+    /// place. Emitted inline, receiver and argument would hold two
+    /// overlapping `&mut` borrows (rustc E0499/E0502 — two-phase
+    /// borrows only cover shared argument borrows). Wrapper-class
+    /// receivers are exempt: their methods take `&self` and mutate
+    /// through the interior `RefCell`, so no conflict exists.
+    fn call_needs_borrow_hoist(&self, call: &CallExpr) -> bool {
+        let Expr::Field(f) = call.callee.as_ref() else { return false };
+        let root: &str = match f.object.as_ref() {
+            Expr::Path(qn) if qn.segments.len() == 1 => &qn.segments[0].text,
+            Expr::This(_) => "this",
+            _ => return false,
+        };
+        // A class-named receiver is a static call (no instance borrow);
+        // a wrapper-class instance dispatches through `&self`.
+        if root != "this" {
+            if self.lookup_class_by_bare_or_fqn(root).is_some() {
+                return false;
+            }
+            let recv_class = self
+                .local_types
+                .iter()
+                .rev()
+                .find_map(|s| s.get(root))
+                .and_then(|ty| match ty {
+                    juxc_tycheck::Ty::User { name, .. } => {
+                        Some(name.rsplit('.').next().unwrap_or(name).to_string())
+                    }
+                    _ => None,
+                });
+            if let Some(c) = recv_class {
+                if self.wrapper_classes.contains(&c) {
+                    return false;
+                }
+            }
+        } else if let Some(enclosing) = &self.enclosing_class {
+            // Inside a wrapper class's own method, `this.m(this.bump())`
+            // dispatches through `&self` too.
+            if self.wrapper_classes.contains(enclosing) {
+                return false;
+            }
+        }
+        call.args
+            .iter()
+            .any(|a| self.contains_mut_call_on(a, root))
+    }
+
+    /// Recursive walk: does `e` contain a call to a mutating method
+    /// (per `user_mut_methods`) whose receiver is the bare place
+    /// `root` (`x.bump()` for root `x`, `this.bump()` for `this`)?
+    fn contains_mut_call_on(&self, e: &Expr, root: &str) -> bool {
+        match e {
+            Expr::Call(c) => {
+                if let Expr::Field(f) = c.callee.as_ref() {
+                    let on_root = match f.object.as_ref() {
+                        Expr::Path(qn) => {
+                            qn.segments.len() == 1 && qn.segments[0].text == root
+                        }
+                        Expr::This(_) => root == "this",
+                        _ => false,
+                    };
+                    if on_root && self.user_mut_methods.contains(&f.field.text) {
+                        return true;
+                    }
+                }
+                self.contains_mut_call_on(&c.callee, root)
+                    || c.args.iter().any(|a| self.contains_mut_call_on(a, root))
+            }
+            Expr::Binary(b) => {
+                self.contains_mut_call_on(&b.left, root)
+                    || self.contains_mut_call_on(&b.right, root)
+            }
+            Expr::Unary(u) => self.contains_mut_call_on(&u.operand, root),
+            Expr::Field(f) => self.contains_mut_call_on(&f.object, root),
+            Expr::Index(ix) => {
+                self.contains_mut_call_on(&ix.array, root)
+                    || self.contains_mut_call_on(&ix.index, root)
+            }
+            Expr::Cast(c) => self.contains_mut_call_on(&c.value, root),
+            _ => false,
+        }
+    }
+
+    /// Emit `x.m(args…)` in the **borrow-hoisted** block form — every
+    /// argument lands in a `let __jux_argN` temp (evaluated left to
+    /// right, full coercion ladder via `emit_call_arg_value`), then the
+    /// call reads only the temps:
+    ///
+    ///   { let __jux_arg0 = a.bump(); a.addTwice(__jux_arg0) }
+    ///
+    /// The argument's `&mut` borrow ends at its `;`, so the receiver
+    /// borrow that follows is the only live one. Mirrors the regular
+    /// path's callee flag discipline, turbofish, by-ref `&`, and the
+    /// `pop()`-unwrap special.
+    fn emit_call_with_hoisted_args(&mut self, call: &CallExpr) {
+        self.w.push_str("{ ");
+        let prev_args_fmt = self.emitting_format_arg;
+        self.emitting_format_arg = false;
+        for (i, arg) in call.args.iter().enumerate() {
+            self.w.push_str("let __jux_arg");
+            self.w.push_str(&i.to_string());
+            self.w.push_str(" = ");
+            self.emit_call_arg_value(call, i, arg);
+            self.w.push_str("; ");
+        }
+        self.emitting_format_arg = prev_args_fmt;
+        let prev_callee = self.emitting_call_callee;
+        self.emitting_call_callee = true;
+        let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
+        let prev_cmp = std::mem::take(&mut self.emitting_comparison_operand);
+        self.emit_expr(&call.callee);
+        self.emitting_format_arg = prev_fmt;
+        self.emitting_comparison_operand = prev_cmp;
+        self.emitting_call_callee = prev_callee;
+        if !call.explicit_generic_args.is_empty() {
+            self.w.push_str("::<");
+            for (i, ty) in call.explicit_generic_args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                if crate::analysis::is_jux_string_type(ty) {
+                    self.w.push_str("String");
+                } else {
+                    self.emit_value_type_as_rust(ty);
+                }
+            }
+            self.w.push('>');
+        }
+        self.w.push('(');
+        for i in 0..call.args.len() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            if self.callee_param_is_ref(&call.callee, i) {
+                self.w.push('&');
+            }
+            self.w.push_str("__jux_arg");
+            self.w.push_str(&i.to_string());
+        }
+        self.w.push(')');
+        if let Expr::Field(f) = &*call.callee {
+            if f.field.text == "pop" && call.args.is_empty() {
+                self.w.push_str(".unwrap()");
+            }
+        }
+        self.w.push_str(" }");
     }
 
     /// Lower `obj?.method(args)` to
@@ -1429,6 +1609,16 @@ impl RustEmitter {
                 self.w.push_str(", ");
             }
             self.emit_expr(arg);
+            // **Wrapper-class share-on-pass (§CR.4.1)** for the builtin
+            // collection dispatches (`xs.add(obj)` → `xs.push(obj)`):
+            // storing a wrapped place must SHARE the handle (`Rc`
+            // refcount bump), not move it — `l1.add(c); l2.add(c);`
+            // would otherwise be a rustc E0382 on the second use, and
+            // a mutation through the container element must stay
+            // visible through the original binding.
+            if self.wrapper_value_needs_clone(arg) {
+                self.w.push_str(".clone()");
+            }
         }
         self.emitting_format_arg = prev;
     }

@@ -1064,6 +1064,7 @@ impl Resolver {
                 self.visit_expr(&t.then_branch);
                 self.visit_expr(&t.else_branch);
             }
+            Expr::NotNullAssert(inner, _) => self.visit_expr(inner),
             Expr::Await(inner, _) => {
                 // `await expr` just walks its operand — the operand
                 // is a normal expression whose names need resolving.

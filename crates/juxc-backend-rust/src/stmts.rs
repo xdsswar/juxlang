@@ -184,6 +184,9 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
             .iter()
             .any(|el| is_path_named(el, name) || expr_moves_path_at_top(el, name)),
         Expr::Cast(c) => is_path_named(&c.value, name) || expr_moves_path_at_top(&c.value, name),
+        Expr::NotNullAssert(inner, _) => {
+            is_path_named(inner, name) || expr_moves_path_at_top(inner, name)
+        }
         Expr::TypeTest(t) => expr_moves_path_at_top(&t.value, name),
         Expr::Binary(b) => {
             // String concat (`+` with a string operand) emits as
@@ -1054,6 +1057,45 @@ impl RustEmitter {
                         self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                         self.w.push_str("::__static_init();\n");
                         self.w.emit_indent();
+                    }
+                }
+            }
+        }
+        // **Direct write to a `!Send` (thread_local) static slot** —
+        // `Registry.global = new Counter()`. The thread_local form has
+        // no place expression to assign into, so the write routes
+        // through the slot's own `RefCell`:
+        //   Class_field.with(|__s| { *__s.borrow_mut() = <rhs>; });
+        // Compound ops keep their operator on the deref'd place.
+        // (Chained writes `Registry.global.n = 5` don't come here —
+        // the target root is read as an rvalue handle and the write
+        // goes through the OBJECT's wrapper RefCell.)
+        if let Expr::Field(tf) = &a.target {
+            if let Expr::Path(qn) = &*tf.object {
+                if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                    let tl_field = self
+                        .symbols
+                        .classes
+                        .get(&class_fqn)
+                        .and_then(|c| c.fields.get(tf.field.text.as_str()))
+                        .filter(|fs| fs.is_static && !fs.is_final)
+                        .map(|fs| fs.ty.clone())
+                        .filter(|ty| self.static_type_needs_thread_local(ty));
+                    if tl_field.is_some() {
+                        self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                        self.w.push('_');
+                        self.w.push_str(&tf.field.text);
+                        self.w.push_str(".with(|__s| { *__s.borrow_mut() ");
+                        if let Some(op) = a.op {
+                            self.w.push_str(op.as_rust_str());
+                        }
+                        self.w.push_str("= ");
+                        self.emit_expr(&a.value);
+                        if self.wrapper_value_needs_clone(&a.value) {
+                            self.w.push_str(".clone()");
+                        }
+                        self.w.push_str("; });\n");
+                        return;
                     }
                 }
             }

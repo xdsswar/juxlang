@@ -370,6 +370,7 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
             collect_mutating_calls(&r.end, out, user_mut);
         }
         Expr::Cast(c) => collect_mutating_calls(&c.value, out, user_mut),
+        Expr::NotNullAssert(inner, _) => collect_mutating_calls(inner, out, user_mut),
         Expr::TypeTest(t) => collect_mutating_calls(&t.value, out, user_mut),
         Expr::Index(idx) => {
             collect_mutating_calls(&idx.array, out, user_mut);
@@ -493,6 +494,7 @@ fn if_contains_await(i: &juxc_ast::IfStmt) -> bool {
 fn expr_contains_await(e: &Expr) -> bool {
     match e {
         Expr::Await(_, _) => true,
+        Expr::NotNullAssert(inner, _) => expr_contains_await(inner),
         Expr::Call(c) => {
             expr_contains_await(&c.callee) || c.args.iter().any(expr_contains_await)
         }
@@ -1794,6 +1796,16 @@ impl crate::RustEmitter {
         }
         self.emit_expr(arg);
         if wrap {
+            // **Wrapper share inside the `Some(...)` wrap (§CR.4.1).**
+            // A wrapped PLACE flowing into a nullable slot must hand
+            // over a shared handle, not the binding itself — `a.peer =
+            // b;` followed by another use of `b` would otherwise be a
+            // move-then-use (rustc E0382). The clone is the cheap `Rc`
+            // refcount bump and goes INSIDE the wrap so the original
+            // binding survives.
+            if self.wrapper_value_needs_clone(arg) {
+                self.w.push_str(".clone()");
+            }
             self.w.push(')');
             return;
         }

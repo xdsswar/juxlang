@@ -256,6 +256,30 @@ impl RustEmitter {
                             .get(&class_fqn)
                             .map(|c| c.has_static_init)
                             .unwrap_or(false);
+                        // **`!Send` static → `thread_local!` slot.** Reads
+                        // hand out a shared handle (`Rc` bump) via
+                        // `.with(|__s| __s.borrow().clone())`. The direct
+                        // slot WRITE (`Registry.global = …`) never reaches
+                        // this lvalue path — `emit_assign` intercepts it
+                        // with the `.with(|__s| *__s.borrow_mut() = …)`
+                        // form; a chained write (`Registry.global.n = 5`)
+                        // mutates through the read-out handle's own
+                        // `RefCell`, so the rvalue shape is correct there.
+                        if self.static_type_needs_thread_local(&field.ty) {
+                            if has_si {
+                                self.w.push_str("({ ");
+                                self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                                self.w.push_str("::__static_init(); ");
+                            }
+                            self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                            self.w.push('_');
+                            self.w.push_str(&f.field.text);
+                            self.w.push_str(".with(|__s| __s.borrow().clone())");
+                            if has_si {
+                                self.w.push_str(" })");
+                            }
+                            return;
+                        }
                         if self.emitting_lvalue {
                             self.w.push('*');
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
@@ -492,6 +516,23 @@ impl RustEmitter {
             self.w.push_str(class_name);
             self.w.push_str("::");
             self.w.push_str(field_name);
+            return;
+        }
+        // `!Send` static (thread_local slot) — read out a shared handle;
+        // see the matching branch in `emit_field` for the write story.
+        let is_thread_local = self
+            .lookup_class_by_bare_or_fqn(class_name)
+            .and_then(|c| c.fields.get(field_name))
+            .map(|fs| {
+                let ty = fs.ty.clone();
+                self.static_type_needs_thread_local(&ty)
+            })
+            .unwrap_or(false);
+        if is_thread_local {
+            self.w.push_str(class_name);
+            self.w.push('_');
+            self.w.push_str(field_name);
+            self.w.push_str(".with(|__s| __s.borrow().clone())");
             return;
         }
         if self.emitting_lvalue {

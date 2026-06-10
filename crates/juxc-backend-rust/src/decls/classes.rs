@@ -2425,11 +2425,65 @@ impl RustEmitter {
         }
     }
 
+    /// True when a static slot of this declared type can't live in the
+    /// default `LazyLock<Mutex<T>>` shape because the lowered Rust type
+    /// is **`!Send`** — a wrapper class (`Rc<RefCell<…>>`), an interface
+    /// or polymorphic-base value (`Rc<dyn …>`), or a container carrying
+    /// one as a generic arg / element. Those statics lower to a
+    /// `thread_local!` + `RefCell` instead (sound for Phase 1's
+    /// single-threaded execution model; a `Mutex` over an `Rc` would be
+    /// a rustc E0277 leak).
+    pub(crate) fn static_type_needs_thread_local(&self, ty: &juxc_ast::TypeRef) -> bool {
+        if let Some(seg) = ty.name.segments.last() {
+            let bare = seg.text.as_str();
+            if self.wrapper_classes.contains(bare)
+                || self.poly_base_classes.contains(bare)
+                || self.lookup_interface_by_bare_or_fqn(bare).is_some()
+            {
+                return true;
+            }
+        }
+        ty.generic_args.iter().any(|a| match a {
+            juxc_ast::GenericArg::Type(t) => self.static_type_needs_thread_local(t),
+            juxc_ast::GenericArg::Wildcard(_) => true,
+        })
+    }
+
     pub(crate) fn emit_mutable_static_field(
         &mut self,
         class_name: &str,
         field: &juxc_ast::FieldDecl,
     ) {
+        // **`!Send` payload → `thread_local!` storage.** See
+        // `static_type_needs_thread_local`. The `RefCell` makes the
+        // SLOT reassignable (`Registry.global = new Counter()`);
+        // sharing/mutation of the held object goes through the
+        // object's own wrapper. Reads hand out a shared handle via
+        // `.with(|__s| __s.borrow().clone())` — an `Rc` refcount bump,
+        // identical semantics to an instance-field read.
+        if self.static_type_needs_thread_local(&juxc_tycheck::resolved_field_type(field)) {
+            self.w.emit_indent();
+            self.w.push_str("thread_local! {\n");
+            self.w.indent_inc();
+            self.w.emit_indent();
+            self.w.push_str("pub static ");
+            self.w.push_str(class_name);
+            self.w.push('_');
+            self.w.push_str(&field.name.text);
+            self.w.push_str(": std::cell::RefCell<");
+            self.emit_field_type_as_rust(&juxc_tycheck::resolved_field_type(field));
+            self.w.push_str("> = std::cell::RefCell::new(");
+            if let Some(init) = &field.default {
+                self.emit_expr(init);
+            } else {
+                self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
+            }
+            self.w.push_str(");\n");
+            self.w.indent_dec();
+            self.w.emit_indent();
+            self.w.push_str("}\n");
+            return;
+        }
         self.w.emit_indent();
         // `pub` so cross-package reads (`other_pkg.MyClass.x`) can see
         // the module-scope static through the emitted `pub mod`

@@ -89,7 +89,23 @@ impl RustEmitter {
                 self.emit_type_as_rust(p);
             }
             self.w.push_str(") -> ");
-            self.emit_type_as_rust(&fn_shape.return_type);
+            // `(int) -> void` returns Rust unit — `void` is a return-
+            // slot keyword, not a type name `emit_type_as_rust` knows.
+            let returns_void = fn_shape.return_type.array_shape.is_none()
+                && !fn_shape.return_type.nullable
+                && fn_shape.return_type.fn_shape.is_none()
+                && fn_shape
+                    .return_type
+                    .name
+                    .segments
+                    .last()
+                    .map(|s| s.text == "void")
+                    .unwrap_or(false);
+            if returns_void {
+                self.w.push_str("()");
+            } else {
+                self.emit_type_as_rust(&fn_shape.return_type);
+            }
             self.w.push('>');
             return;
         }

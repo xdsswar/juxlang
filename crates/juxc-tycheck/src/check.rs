@@ -1708,6 +1708,10 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
+            // `expr!!` — walk the asserted operand; the null-or-not
+            // outcome is a runtime property (NullPointerException), not a
+            // static one, so no extra diagnostic fires here.
+            Expr::NotNullAssert(inner, _) => self.check_expr(inner),
             Expr::Await(inner, span) => {
                 // `await` is permitted ONLY inside an async context — an
                 // `async` function/method or an async lambda (§18.1.2). Outside
@@ -3523,6 +3527,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::MethodRef(m) => m.span,
         Expr::Ternary(t) => t.span,
         Expr::Await(_, s) => *s,
+        Expr::NotNullAssert(_, s) => *s,
     }
 }
 
