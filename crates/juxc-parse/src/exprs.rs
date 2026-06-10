@@ -4,9 +4,9 @@
 //! reorganization. Behavior is identical to the original methods.
 
 use juxc_ast::{
-    BinaryExpr, BinaryOp, CallExpr, CastExpr, Expr, FieldExpr, IndexExpr, InterpStringExpr,
-    Literal, NewArrayExpr, NewArrayLitExpr, NewObjectExpr, QualifiedName, RangeExpr, SizeOfExpr,
-    TypeRef, UnaryExpr, UnaryOp,
+    BinaryExpr, BinaryOp, CallExpr, CastExpr, Expr, FieldExpr, Ident, IndexExpr,
+    InterpStringExpr, Literal, NewArrayExpr, NewArrayLitExpr, NewObjectExpr, QualifiedName,
+    RangeExpr, SizeOfExpr, TypeRef, UnaryExpr, UnaryOp,
 };
 use juxc_diagnostics::{code, Diagnostic};
 use juxc_lex::{Keyword, TokenKind};
@@ -675,7 +675,7 @@ impl<'a> Parser<'a> {
                 TokenKind::LParen => {
                     // call: callee(args)
                     self.advance(); // '('
-                    let args = self.parse_arg_list();
+                    let (args, arg_names) = self.parse_arg_list();
                     let end = self.peek_span();
                     self.expect(&TokenKind::RParen, "')' to close argument list");
                     let span = expr_span(&expr).join(end);
@@ -683,6 +683,7 @@ impl<'a> Parser<'a> {
                         callee: Box::new(expr),
                         explicit_generic_args: Vec::new(),
                         args,
+                        arg_names,
                         span,
                     });
                 }
@@ -693,7 +694,7 @@ impl<'a> Parser<'a> {
                 TokenKind::Lt if self.looks_like_explicit_type_args() => {
                     let explicit_generic_args = self.parse_generic_args_concrete();
                     self.advance(); // '(' — guaranteed present by the lookahead
-                    let args = self.parse_arg_list();
+                    let (args, arg_names) = self.parse_arg_list();
                     let end = self.peek_span();
                     self.expect(&TokenKind::RParen, "')' to close argument list");
                     let span = expr_span(&expr).join(end);
@@ -701,6 +702,7 @@ impl<'a> Parser<'a> {
                         callee: Box::new(expr),
                         explicit_generic_args,
                         args,
+                        arg_names,
                         span,
                     });
                 }
@@ -975,7 +977,7 @@ impl<'a> Parser<'a> {
                 // synthetic struct's namespace and are skipped.
                 if self.at(&TokenKind::LParen) {
                     self.advance(); // '('
-                    let args = self.parse_arg_list();
+                    let (args, arg_names) = self.parse_arg_list();
                     let mut end = self.peek_span();
                     self.expect(&TokenKind::RParen, "')' to close constructor arguments");
                     let mut anonymous_body: Option<juxc_ast::AnonymousBody> = None;
@@ -1028,6 +1030,7 @@ impl<'a> Parser<'a> {
                         class_name: element_name,
                         generic_args,
                         args,
+                        arg_names,
                         anonymous_body,
                         span: start.join(end),
                     }));
@@ -1127,20 +1130,41 @@ impl<'a> Parser<'a> {
 
     /// Per §A.2.9 `arg-list = argument ( ',' argument )*`, where
     /// `argument = expression | identifier ':' expression | 'out' expr |
-    /// 'move' expr`. Milestone-1 supports only positional expression args.
-    pub(crate) fn parse_arg_list(&mut self) -> Vec<Expr> {
+    /// 'move' expr`. Positional and named (`port: 443`) arguments are
+    /// supported; `out` / `move` arrive later. Returns the argument
+    /// expressions plus a parallel label vector (`None` = positional).
+    pub(crate) fn parse_arg_list(&mut self) -> (Vec<Expr>, Vec<Option<Ident>>) {
         let mut args = Vec::new();
+        let mut names: Vec<Option<Ident>> = Vec::new();
         if self.at(&TokenKind::RParen) {
-            return args;
+            return (args, names);
         }
         loop {
+            // Named argument — `identifier ':' expression`. The two-token
+            // lookahead keeps every expression that merely STARTS with an
+            // identifier (calls, field chains, comparisons ...) on the
+            // positional path; only `name ':'` flips to named. (`::` is a
+            // distinct ColonColon token, so method refs can't misfire.)
+            if matches!(self.peek(), TokenKind::Ident(_))
+                && matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::Colon)
+                )
+            {
+                names.push(self.parse_ident());
+                self.advance(); // ':'
+            } else {
+                names.push(None);
+            }
             let Some(arg) = self.parse_expr() else { break };
             args.push(arg);
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
         }
-        args
+        // Keep the vectors parallel if the last expression failed to parse.
+        names.truncate(args.len());
+        (args, names)
     }
 
     // ------------------------------------------------------------------

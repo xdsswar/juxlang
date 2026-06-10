@@ -630,6 +630,11 @@ pub struct ParamSig {
     /// The parameter is a foreign borrow (`&T`) — codegen re-adds the call-site
     /// `&` when invoking this (external) method (§G.9.2). False for user params.
     pub is_ref: bool,
+    /// Default-value expression (`int port = 80`), cloned from the
+    /// declaration. The call-sugar expansion pass clones it again into
+    /// every call site that omits the argument (§S.1.3 call-site
+    /// evaluation — never shared, never evaluated at the decl).
+    pub default: Option<juxc_ast::Expr>,
 }
 
 /// Signature of a top-level record declaration.
@@ -2956,6 +2961,7 @@ fn param_sig(p: &juxc_ast::Param) -> ParamSig {
         name: p.name.text.clone(),
         ty: p.ty.clone(),
         is_ref: p.is_ref,
+        default: p.default.clone(),
     }
 }
 

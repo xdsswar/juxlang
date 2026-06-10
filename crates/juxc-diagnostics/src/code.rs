@@ -284,6 +284,24 @@ pub enum Code {
     /// Split the arm into one `case` per alternative, or drop the
     /// binders and re-test inside the body.
     E0447_OrPatternBinding,
+    /// E0448 — A **malformed named-argument list**: a positional
+    /// argument after a named one, a name that doesn't match any
+    /// declared parameter, or the same parameter supplied twice
+    /// (by name, or by name AND position). Named arguments
+    /// (`connect("h", port: 443)`) per grammar §A.2.9 / type-system
+    /// §T.3.2: positional args fill parameter slots left-to-right,
+    /// named args fill their named slot, every slot at most once.
+    E0448_BadNamedArgument,
+    /// E0449 — A **default-value expression references another
+    /// parameter** (`int[] buf = new int[n]`). §S.1.3 allows
+    /// defaults to read EARLIER parameters, but Phase 1 lowers a
+    /// default by cloning it into the call site, where the
+    /// parameter name doesn't exist — so any parameter reference
+    /// is rejected with this code until the temp-hoisting lowering
+    /// lands. Inline the computation into the function body
+    /// (`if (buf == null) buf = new int[n];` with a `T?` param)
+    /// as the Phase-1 workaround.
+    E0449_DefaultArgParamRef,
     /// E0445 — A **const-generic form outside the Phase-1 core subset**.
     /// The core subset (grammar §A.2.6, type-system §T.11.3) covers:
     /// declaring `<int N>` / `<bool B>` params, using `N` as a fixed
@@ -440,6 +458,8 @@ impl Code {
             Code::E0443_ExplicitTypeArgs         => "E0443",
             Code::E0444_WildcardStorageUnsupported => "E0444",
             Code::E0447_OrPatternBinding         => "E0447",
+            Code::E0448_BadNamedArgument         => "E0448",
+            Code::E0449_DefaultArgParamRef       => "E0449",
             Code::E0445_ConstGenericUnsupported  => "E0445",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0701_AsyncNotInProfile        => "E0701",

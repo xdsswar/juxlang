@@ -2137,7 +2137,11 @@ impl<'a> Parser<'a> {
         let is_ref = self.eat(&TokenKind::Amp);
         let ty = self.parse_type_ref()?;
         let name = self.parse_ident()?;
+        // Optional default value — `int port = 80` (spec 7.2). Evaluated
+        // at the call site when the argument is omitted (S.1.3); the
+        // expansion pass clones it into each such call.
+        let default = if self.eat(&TokenKind::Eq) { self.parse_expr() } else { None };
         let end = self.last_consumed_span();
-        Some(Param { name, ty, is_final, is_ref, default: None, span: start.join(end) })
+        Some(Param { name, ty, is_final, is_ref, default, span: start.join(end) })
     }
 }

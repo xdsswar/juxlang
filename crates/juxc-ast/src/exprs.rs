@@ -217,6 +217,9 @@ pub struct NewObjectExpr {
     pub generic_args: Vec<TypeRef>,
     /// Constructor arguments in source order.
     pub args: Vec<Expr>,
+    /// Per-argument label, parallel to [`Self::args`] — same named
+    /// argument / default-filling story as [`CallExpr::arg_names`].
+    pub arg_names: Vec<Option<Ident>>,
     /// Anonymous-class body — `Some(_)` when the user wrote
     /// `new Iface() { method overrides }` per spec §1379's
     /// anonymous-class form. Holds method declarations PLUS the
@@ -611,8 +614,17 @@ pub struct CallExpr {
     /// caller relied on inference (`id(5)`). Concrete types only —
     /// wildcards are meaningless at a call site.
     pub explicit_generic_args: Vec<TypeRef>,
-    /// Positional arguments. Named/`out`/`move` arguments arrive later.
+    /// Arguments in call-site source order. Named arguments
+    /// (`port: 443`) record their label in the parallel
+    /// [`Self::arg_names`] slot; positional ones record `None`.
     pub args: Vec<Expr>,
+    /// Per-argument label, parallel to [`Self::args`] (§A.2.9
+    /// `argument = identifier ':' expression`). The tycheck-level
+    /// expansion pass (`juxc_tycheck::expand_call_sugar`) re-orders
+    /// named args into parameter slots and fills omitted
+    /// default-valued parameters, then clears the labels — so the
+    /// backend only ever sees plain positional calls.
+    pub arg_names: Vec<Option<Ident>>,
     /// Span covering callee and argument list.
     pub span: Span,
 }

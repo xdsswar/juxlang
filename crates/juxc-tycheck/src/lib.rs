@@ -43,6 +43,7 @@ use juxc_source::Span;
 
 pub mod check;
 pub mod env;
+pub mod expand;
 pub mod infer;
 pub mod symbol_table;
 pub mod ty;
@@ -152,6 +153,20 @@ pub fn resolved_const_type(decl: &juxc_ast::ConstDecl) -> juxc_ast::TypeRef {
     symbol_table::resolve_decl_type(decl.ty.as_ref(), Some(&decl.value), decl.span)
 }
 
+/// One parameter slot of a call-sugar expansion plan — where the
+/// value for that slot comes from after named arguments are mapped
+/// and omitted defaults filled (§T.3.2 / §S.1.3).
+#[derive(Debug, Clone)]
+pub enum ArgSource {
+    /// The value is the call's `args[i]` (positional, or named and
+    /// re-ordered into this slot).
+    Explicit(usize),
+    /// The slot was omitted; the value is this clone of the
+    /// parameter's declared default expression, evaluated at the
+    /// call site (fresh per call — §S.1.3's no-shared-default rule).
+    Default(juxc_ast::Expr),
+}
+
 /// Output of [`typecheck`]. Empty `diagnostics` means everything checked.
 pub struct TypeCheckResult {
     /// Type-check diagnostics (E0323_… and friends).
@@ -168,6 +183,11 @@ pub struct TypeCheckResult {
     /// earlier error short-circuited the walk) won't have entries here;
     /// callers should fall back conservatively when a lookup misses.
     pub expr_types: HashMap<Span, Ty>,
+    /// Call-sugar expansion plans (named arguments / omitted
+    /// defaults), keyed by call span. The driver hands these to
+    /// [`expand::apply_call_expansions`] to rewrite the AST into
+    /// plain positional calls before the backend runs.
+    pub call_expansions: HashMap<Span, Vec<ArgSource>>,
 }
 
 impl TypeCheckResult {
@@ -228,6 +248,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
         }
     }
     let mut all_expr_types = std::collections::HashMap::new();
+    let mut all_call_expansions = std::collections::HashMap::new();
     for (idx, unit) in units.iter().enumerate() {
         let before = tc.diagnostics.len();
         let mut checker = check::Checker::new(&symbols, &mut tc.diagnostics);
@@ -239,7 +260,9 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
             checker.seed_unit_context(&ctx.package, &ctx.unqualified);
         }
         checker.check_unit(unit);
-        all_expr_types.extend(checker.into_expr_types());
+        let (expr_types, call_expansions) = checker.into_maps();
+        all_expr_types.extend(expr_types);
+        all_call_expansions.extend(call_expansions);
         for d in &mut tc.diagnostics[before..] {
             d.file = Some(idx);
         }
@@ -248,6 +271,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
         diagnostics: tc.diagnostics,
         symbols,
         expr_types: all_expr_types,
+        call_expansions: all_call_expansions,
     }
 }
 

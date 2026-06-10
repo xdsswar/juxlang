@@ -932,7 +932,7 @@ pub(crate) fn path_resolves_to_interface(
     None
 }
 
-fn resolve_class_name(
+pub(crate) fn resolve_class_name(
     qn: &juxc_ast::QualifiedName,
     env: &TypeEnv,
     symbols: &SymbolTable,
