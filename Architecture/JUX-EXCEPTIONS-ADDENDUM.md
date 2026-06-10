@@ -74,7 +74,9 @@ public class IllegalStateException extends Exception { ... }
 public class CancellationException extends Exception { ... }
 public class TimeoutException extends Exception { ... }
 
-// Compiler-emitted ("panic-class") exceptions.
+// Panic-mirror ("panic-class") exceptions. These are ordinary user-throwable
+// types named after panic conditions; per ERRATA.md E1 the runtime itself
+// never throws them — a real panic aborts and cannot be caught.
 public final class NullPointerException extends RuntimeException { ... }
 public final class IndexOutOfBoundsException extends RuntimeException { ... }
 public final class ArithmeticException extends RuntimeException { ... }
@@ -516,29 +518,26 @@ A **panic** is the runtime's response to a violated language invariant. Distinct
 - **Exceptions** are programmer-modeled error conditions, declared in `throws` clauses, expected to be caught and handled.
 - **Panics** are bugs — null deref of a non-nullable, integer overflow in debug, array OOB, `.unwrap()` on `Err`, division by zero, exception in static initializer, exhausted const-eval limits, stack overflow.
 
-Per `JUX-SEMANTICS-ADDENDUM.md` §S.7, panics either:
+Per `JUX-SEMANTICS-ADDENDUM.md` §S.7 and `ERRATA.md` E1, a panic reports the condition (message, source location, stack trace where the profile supports it) and then calls the panic handler, which terminates the program. This holds in **every** profile; `jux-full` differs from `jux-core` only in how rich the report is.
 
-- Throw a `RuntimeException` subclass that can be caught (in `jux-full` and `jux-embedded` with exceptions enabled).
-- Call the panic handler and abort (in `jux-core` and exception-disabled profiles).
+### X.8.1. Panics Are Not Catchable
 
-### X.8.1. Catching Panics
-
-In profiles with exceptions, panic-class events are catchable as `RuntimeException`:
+`catch` clauses match only `Exception` subclasses. Panic conditions do not produce an exception value — there is no user-visible `Panic` type, and a `catch (RuntimeException e)` clause catches only *user-thrown* `RuntimeException`s, never a runtime panic (`ERRATA.md` E1).
 
 ```jux
 try {
-    riskyMath();
+    riskyMath();              // overflow here PANICS — the catch below never runs
 } catch (ArithmeticException e) {
-    log.warn("math overflowed", e);
-} catch (RuntimeException e) {
-    log.error("internal error — should not have happened", e);
+    // reached only if riskyMath *threw* an ArithmeticException itself
+    log.warn("math reported overflow", e);
 }
 ```
 
-But: catching `RuntimeException` is generally wrong. A panic indicates a bug; the right response is fix-the-bug, not catch-and-continue. The Jux conventions:
+The conventions that follow:
 
-- **Don't catch `RuntimeException` in production code.** Catching it masks bugs.
-- **Do catch panic-class events at the top of a request/task boundary.** A web server's request handler should catch any panic and return 500, rather than abort the whole process.
+- **A panic indicates a bug.** The right response is fix-the-bug, not catch-and-continue; the language enforces this by making panics uncatchable.
+- **For recoverable failure, use the value-shaped APIs.** `a.checkedAdd(b)`, `a.checkedDiv(b)`, and friends return `Result` so the failure is part of the type.
+- **For request/task isolation, isolate at the task boundary.** A server that must survive a buggy handler runs the handler in a supervised task/worker, not under a catch-all.
 - **Tests should let panics fail the test.** No catch-all.
 
 ### X.8.2. Panic Hook for Diagnostics
@@ -551,7 +550,7 @@ import core.panic.{set_panic_hook, PanicInfo};
 set_panic_hook((info: PanicInfo) -> {
     crash_log.write("panic at " + info.location + ": " + info.message);
     crash_log.flush();
-    -- continue to default behavior (throw or abort)
+    -- continue to default behavior (abort)
 });
 ```
 
@@ -606,7 +605,7 @@ The remainder of §7.11 (specific class examples) is superseded by §X.1.
 | `throws ↔ Result` lowering        | §X.5    | Rule-level only; here's the algorithm           |
 | Unwinding model                 | §X.6    | DWARF/SEH, cleanup tables, drop-during-unwind  |
 | Async exception propagation     | §X.7    | Through awaits, unawaited tasks, cancellation   |
-| Panics                           | §X.8    | Distinguished from exceptions; catch policy    |
+| Panics                           | §X.8    | Distinguished from exceptions; abort-only, never catchable |
 
 With this addendum:
 

@@ -5,14 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Inheritance × Borrow Inference — Jux</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+/* Apply the persisted theme before first paint to avoid a flash. */
+try { var t = localStorage.getItem('jux-docs-theme');
+      if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
 </head>
 <body>
 <div class="layout">
 <aside class="sidebar">
-  <a class="sidebar-brand" href="index.html">
-    <span class="sidebar-brand-mark">J</span>
-    <span>Jux</span>
-  </a>
+  <div class="sidebar-top">
+    <a class="sidebar-brand" href="index.html">
+      <span class="sidebar-brand-mark">J</span>
+      <span>Jux</span>
+    </a>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme">☾</button>
+  </div>
   <div class="sidebar-section">
     <div class="sidebar-section-title">Start Here</div>
     <a href="index.html">Overview</a>
@@ -33,16 +41,26 @@
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
   </div>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Compiler &amp; Tooling</div>
+    <div class="sidebar-section-title">Compiler</div>
     <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
     <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+    <a href="JUX-CLASS-REPRESENTATION-ADDENDUM.html">Class Representation</a>
     <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
     <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
     <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
     <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+    <a href="JUX-CODEGEN-FIXES.html">Codegen Fixes</a>
   </div>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Earlier Addenda</div>
+    <div class="sidebar-section-title">Tooling &amp; IDE</div>
+    <a href="JUX-BINDGEN-ADDENDUM.html">Bindgen & Interface Stubs</a>
+    <a href="JUX-LSP-SERVER-ADDENDUM.html">Language Server (juxc-lsp)</a>
+    <a href="JUX-EDITOR-TOOLING-ADDENDUM.html">Editor & IDE Tooling</a>
+    <a href="JUX-INTELLIJ-PLUGIN-ADDENDUM.html">IntelliJ Platform Plugin</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Process &amp; History</div>
+    <a href="ERRATA.html">ERRATA — Spec Reconciliations</a>
     <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
     <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
     <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
@@ -58,6 +76,7 @@
       <div class="breadcrumb"><a href="index.html">← Jux Specification</a></div>
       <div id="rendered"></div>
     </div>
+    <nav class="toc-rail" id="toc" aria-label="On this page"></nav>
   </main>
 </div>
 
@@ -227,6 +246,10 @@ Because `super` is statically resolved, it does not contribute to the virtual un
 ### 6.9.5. `protected` Fields and Subclass Mutation
 
 Subclasses may read and write `protected` fields of their superclass. The borrow checker treats every such access as a borrow of the receiver, with the same whole-object rule as §6.9.1. A subclass cannot hold a borrow on `super.field` independent of `this`.
+
+Per `ERRATA.md` E4, `protected` follows the inheritance chain **regardless of package boundary** — a subclass in any package may read/write `protected` members it inherits from an ancestor in any other package. "Same package" is not an additional restriction (that's the role of `internal` / package-private; see the visibility table in `JUX-LANG-V1.md` §7.4).
+
+Construction-order interactions (when an inherited field becomes readable during `new`) follow `ERRATA.md` E2: the parent constructs fully before the child's field initializers, `init { }` blocks, and constructor body run, in that order — see `JUX-SEMANTICS-ADDENDUM.md` §S.4.4.
 
 ```jux
 public class Animal {

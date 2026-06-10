@@ -1,6 +1,6 @@
 # Jux Spec — Gap Analysis and Roadmap
 
-**Status:** Living document. Tracks specification gaps in the v0.1 dossier. Updated as addenda land.
+**Status:** Living document — but the per-gap prose below predates most of the addenda; check the **Resolved** list first. A gap whose addendum has landed is listed there even if its body text below still reads as open.
 
 **Purpose:** A single place to see what's left to write. Each gap is sized, prioritized, and given a recommended next step. When an addendum lands, the corresponding gap is moved to "Resolved" at the bottom.
 
@@ -23,6 +23,14 @@ Gaps are grouped by category, not priority. The summary table at the end orders 
 
 - ✅ **Inheritance × borrow checker.** Addendum §6.9, §7.4.1.
 - ✅ **Async / await.** Addendum §18 (v2, Kotlin-shaped).
+- ✅ **Error type hierarchy + Result lowering** (gap 1.2). `JUX-EXCEPTIONS-ADDENDUM.md`.
+- ✅ **Minimal core library** (gaps 1.1, 1.3, 1.4 — Phase-1 surface). `JUX-CORE-LIB-ADDENDUM.md`; Phase 1 backs it with the Rust std (collections wrap `Vec` / `HashMap` / …).
+- ✅ **Operator overloading policy + equality/hash pairing** (gaps 2.1, 2.2). `JUX-OPERATORS-ADDENDUM.md`.
+- ✅ **Build system and package manager** (gap 3.1). `JUX-BUILD-SYSTEM-ADDENDUM.md`.
+- ✅ **Tooling / IDE commitment** (gap 3.3). `JUX-EDITOR-TOOLING-ADDENDUM.md`, `JUX-LSP-SERVER-ADDENDUM.md`, `JUX-INTELLIJ-PLUGIN-ADDENDUM.md`.
+- ✅ **Memory layout and ABI** (gap 4.2). `JUX-LAYOUT-ABI-ADDENDUM.md`, `JUX-RUNTIME-ABI-ADDENDUM.md`.
+- ✅ **Compiler diagnostics specification** (gap 4.4). `JUX-DIAGNOSTICS-ADDENDUM.md`.
+- ✅ **Nested / inner / anonymous classes — positioned** (gap 2.3). `JUX-MISSING-DEFS-ADDENDUM.md` §M.9 (explicitly unsupported in Phase 1, codes E0991–E0993).
 
 ---
 

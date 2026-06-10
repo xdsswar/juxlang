@@ -5,14 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Formal Grammar — Jux</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+/* Apply the persisted theme before first paint to avoid a flash. */
+try { var t = localStorage.getItem('jux-docs-theme');
+      if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
 </head>
 <body>
 <div class="layout">
 <aside class="sidebar">
-  <a class="sidebar-brand" href="index.html">
-    <span class="sidebar-brand-mark">J</span>
-    <span>Jux</span>
-  </a>
+  <div class="sidebar-top">
+    <a class="sidebar-brand" href="index.html">
+      <span class="sidebar-brand-mark">J</span>
+      <span>Jux</span>
+    </a>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme">☾</button>
+  </div>
   <div class="sidebar-section">
     <div class="sidebar-section-title">Start Here</div>
     <a href="index.html">Overview</a>
@@ -33,16 +41,26 @@
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
   </div>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Compiler &amp; Tooling</div>
+    <div class="sidebar-section-title">Compiler</div>
     <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
     <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+    <a href="JUX-CLASS-REPRESENTATION-ADDENDUM.html">Class Representation</a>
     <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
     <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
     <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
     <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+    <a href="JUX-CODEGEN-FIXES.html">Codegen Fixes</a>
   </div>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Earlier Addenda</div>
+    <div class="sidebar-section-title">Tooling &amp; IDE</div>
+    <a href="JUX-BINDGEN-ADDENDUM.html">Bindgen & Interface Stubs</a>
+    <a href="JUX-LSP-SERVER-ADDENDUM.html">Language Server (juxc-lsp)</a>
+    <a href="JUX-EDITOR-TOOLING-ADDENDUM.html">Editor & IDE Tooling</a>
+    <a href="JUX-INTELLIJ-PLUGIN-ADDENDUM.html">IntelliJ Platform Plugin</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Process &amp; History</div>
+    <a href="ERRATA.html">ERRATA — Spec Reconciliations</a>
     <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
     <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
     <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
@@ -58,6 +76,7 @@
       <div class="breadcrumb"><a href="index.html">← Jux Specification</a></div>
       <div id="rendered"></div>
     </div>
+    <nav class="toc-rail" id="toc" aria-label="On this page"></nav>
   </main>
 </div>
 
@@ -130,17 +149,17 @@ identifier        = id-start id-continue*
 id-start          = 'A'..'Z' | 'a'..'z' | '_'
 id-continue       = id-start | '0'..'9'
 
-keyword           = 'abstract' | 'annotation' | 'async' | 'await' | 'break'
-                  | 'case' | 'catch' | 'class' | 'const' | 'default' | 'do'
-                  | 'drop' | 'else' | 'enum' | 'extends' | 'final'
-                  | 'finally' | 'for' | 'if' | 'implements' | 'import'
-                  | 'init' | 'interface' | 'internal' | 'move' | 'native'
-                  | 'new' | 'package' | 'permits' | 'private'
-                  | 'protected' | 'public' | 'record' | 'return' | 'sealed'
-                  | 'static' | 'struct' | 'super' | 'switch'
-                  | 'this' | 'throw' | 'throws' | 'try' | 'type'
-                  | 'unsafe' | 'var' | 'void' | 'volatile' | 'when'
-                  | 'while' | 'yield'
+keyword           = 'abstract' | 'annotation' | 'as' | 'async' | 'await'
+                  | 'break' | 'case' | 'catch' | 'class' | 'const'
+                  | 'continue' | 'default' | 'do' | 'drop' | 'else'
+                  | 'enum' | 'extends' | 'final' | 'finally' | 'for'
+                  | 'if' | 'implements' | 'import' | 'init' | 'interface'
+                  | 'internal' | 'move' | 'native' | 'new' | 'package'
+                  | 'permits' | 'private' | 'protected' | 'public' | 'record'
+                  | 'return' | 'sealed' | 'sizeof' | 'static' | 'struct'
+                  | 'super' | 'switch' | 'this' | 'throw' | 'throws'
+                  | 'try' | 'type' | 'unsafe' | 'var' | 'void'
+                  | 'volatile' | 'when' | 'while' | 'yield'
 
 contextual-kw     = 'get' | 'set' | 'operator' | 'out' | 'step' | 'in'
 ```
@@ -212,7 +231,7 @@ String literals are UTF-8 sequences of Unicode scalar values. Surrogate code poi
 ```
 punct             = '(' | ')' | '[' | ']' | '{' | '}'
                   | ',' | ';' | ':' | '::' | '.' | '..' | '..='
-                  | '?' | '?.' | '?:' | '@'
+                  | '?' | '?.' | '?:' | '??' | '@'
                   | '->' | '=>'
                   | '=' | '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|='
                   | '^=' | '<<=' | '>>='
@@ -380,12 +399,12 @@ binding-immut     = 'const' | 'final'                      -- synonyms; either d
 
 property-decl     = modifier* type identifier property-body? property-init? ';'?
 property-body     = '{' accessor-list '}'
-                  | '=>' expression                           -- expression-bodied read-only
+                  | '->' expression                           -- expression-bodied read-only ('->', not '=>': '=>' is instanceof)
 accessor-list     = accessor (accessor)*
 accessor          = visibility? accessor-kind accessor-body
 accessor-kind     = 'get' | 'set' | 'init'
 accessor-body     = ';'                                       -- auto: synthesize body
-                  | '=>' expression ';'                       -- expression-bodied
+                  | '->' expression ';'                       -- expression-bodied
                   | block                                      -- full body
 property-init     = '=' expression                            -- field-initializer
 
@@ -408,6 +427,17 @@ interface-const   = 'const' type identifier '=' expression ';'
 
 struct-decl       = visibility? 'struct' identifier generic-params? struct-body
 struct-body       = '{' ( field-decl | function-decl | drop-decl )* '}'
+
+-- Phase-1 representation note: the parser accepts `struct-decl` and routes it
+-- through the same node as `class-decl`, flagged `is_struct` (an implicitly
+-- `final` class with no `extends`/`implements`). This lets struct types parse,
+-- resolve, type-check, and populate the symbol table today — chiefly so
+-- bindgen-generated `.jux.d` stubs of Rust structs (§G.6.3) autocomplete in Jux
+-- syntax. The distinct value-type semantics of a struct (copy-on-assign, no
+-- inheritance as a checked rule, lowering to a Rust `struct` rather than the
+-- class handle representation) are a later turn; `is_struct` preserves the
+-- origin so that turn needs no re-parse. `drop-decl` in a struct body is not yet
+-- parsed (no generated stub emits one).
 
 record-decl       = visibility? 'record' identifier generic-params?
                     '(' record-component-list? ')'
@@ -579,7 +609,9 @@ conditional       = elvis-expr ( '?' expression ':' expression )?
                   | if-expr
                   | try-expr
 
-elvis-expr        = logic-or ( '?:' elvis-expr )?
+elvis-expr        = logic-or ( ( '?:' | '??' ) elvis-expr )?
+                                                              -- '??' is an alias for '?:'; they
+                                                              -- produce the same AST node.
 
 logic-or          = logic-and ( '||' logic-and )*
 logic-and         = bit-or ( '&&' bit-or )*
@@ -797,7 +829,7 @@ The table is from loosest binding (top) to tightest (bottom). Within each level,
 |-----|------------------------------------------------------------------|---------------|---------------|-----------------------------------------------------------------------------|
 | 1   | `=`  `+=`  `-=`  `*=`  `/=`  `%=`  `&=`  `|=`  `^=`  `<<=`  `>>=` | right         | binary        | Compound forms desugar via the binary operator (§7.14, last paragraph).     |
 | 2   | `?` `:`                                                          | right         | ternary       | `c ? a : b`; `a` and `b` must have a common type.                           |
-| 3   | `?:`                                                             | right         | binary        | Elvis. `a ?: b` is `a` if non-null, else `b`.                               |
+| 3   | `?:`  `??`                                                       | right         | binary        | Elvis / null-coalescing. `a ?: b` (Kotlin/Groovy) and `a ?? b` (C#/JS) are aliases producing the same AST. Returns `a`'s inner value when non-null, else `b`. |
 | 4   | `||`                                                             | left          | binary        | Short-circuit. Not overloadable.                                            |
 | 5   | `&&`                                                             | left          | binary        | Short-circuit. Not overloadable.                                            |
 | 6   | `|`                                                              | left          | binary        | Bitwise OR.                                                                  |

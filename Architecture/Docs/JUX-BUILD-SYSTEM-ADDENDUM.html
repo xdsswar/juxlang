@@ -5,14 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Build System — Jux</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+/* Apply the persisted theme before first paint to avoid a flash. */
+try { var t = localStorage.getItem('jux-docs-theme');
+      if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
 </head>
 <body>
 <div class="layout">
 <aside class="sidebar">
-  <a class="sidebar-brand" href="index.html">
-    <span class="sidebar-brand-mark">J</span>
-    <span>Jux</span>
-  </a>
+  <div class="sidebar-top">
+    <a class="sidebar-brand" href="index.html">
+      <span class="sidebar-brand-mark">J</span>
+      <span>Jux</span>
+    </a>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme">☾</button>
+  </div>
   <div class="sidebar-section">
     <div class="sidebar-section-title">Start Here</div>
     <a href="index.html">Overview</a>
@@ -33,16 +41,26 @@
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
   </div>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Compiler &amp; Tooling</div>
+    <div class="sidebar-section-title">Compiler</div>
     <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
     <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+    <a href="JUX-CLASS-REPRESENTATION-ADDENDUM.html">Class Representation</a>
     <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
     <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
     <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
     <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+    <a href="JUX-CODEGEN-FIXES.html">Codegen Fixes</a>
   </div>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Earlier Addenda</div>
+    <div class="sidebar-section-title">Tooling &amp; IDE</div>
+    <a href="JUX-BINDGEN-ADDENDUM.html">Bindgen & Interface Stubs</a>
+    <a href="JUX-LSP-SERVER-ADDENDUM.html">Language Server (juxc-lsp)</a>
+    <a href="JUX-EDITOR-TOOLING-ADDENDUM.html">Editor & IDE Tooling</a>
+    <a href="JUX-INTELLIJ-PLUGIN-ADDENDUM.html">IntelliJ Platform Plugin</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Process &amp; History</div>
+    <a href="ERRATA.html">ERRATA — Spec Reconciliations</a>
     <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
     <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
     <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
@@ -58,6 +76,7 @@
       <div class="breadcrumb"><a href="index.html">← Jux Specification</a></div>
       <div id="rendered"></div>
     </div>
+    <nav class="toc-rail" id="toc" aria-label="On this page"></nav>
   </main>
 </div>
 
@@ -136,6 +155,18 @@ Rules:
 - Subdirectories of `src/` correspond to package path segments separated by `.`.
 - A file's top-level `package` declaration **must** match its directory location, or the build fails (`E0301`).
 
+**Enforcement (juxc, pre-codegen).** A file's package identity is *derived from its path under the source root*; `juxc` validates the written `package` line against that derived value before lowering, so a stale layout never reaches `rustc`. Concretely, for a file under a `src/` root:
+
+| File location | `package` declaration | Result |
+|---|---|---|
+| directly in `src/` | absent | OK — package-less (root) file |
+| directly in `src/` | present | `E0301` — a root file must be package-less |
+| `src/a/b/` | absent | `E0301` — missing required `package a.b;` |
+| `src/a/b/` | `package a.b;` | OK |
+| `src/a/b/` | `package a.x;` (mismatch) | `E0301` — *expected `a.b`* |
+
+The diagnostic points at the offending `package` line (or the file head for a missing declaration) and names the expected package. This is what turns the classic failure — a file in `…/other/` declaring `package xss.it;` while a consumer writes `import xss.it.other.Other;` — from a cryptic emitted-Rust `E0432` into a precise Jux error. Files **not** under a `src/` root (a loose `juxc foo.jux`, the auto-loaded `jux.std`, `.jux.d` stubs) are unconstrained: their package comes from the declaration alone.
+
 ### B.1.2. Test Layout
 
 Tests live in a parallel `test/` directory mirroring `src/`. A file `test/com/example/myapp/FooTest.jux` is associated with `src/com/example/myapp/Foo.jux` for tooling purposes (run-tests-for-this-source navigation, coverage report grouping). The test file itself declares its own package, conventionally `com.example.myapp.test` (the production package's name with `.test` appended).
@@ -181,6 +212,29 @@ documentation = "https://docs.example.com/myapp"
 readme = "README.md"                    # Optional. Path.
 keywords = ["cli", "tool"]              # Optional. Up to 5 strings.
 categories = ["command-line-utilities"] # Optional. Registry categories.
+
+# Binary resource metadata. `[package]` `version`/`authors`/`description`/
+# `license`/`homepage` flow into every emitted target's resource block.
+# Executables additionally embed an icon and a Windows version-info resource
+# (CompanyName, FileVersion, ProductVersion, FileDescription, LegalCopyright)
+# via the compiler-generated build script. Per-target overrides live on the
+# `[lib]` / `[[bin]]` block.
+icon = "assets/app.ico"                 # Optional. Windows executable icon (.ico).
+company = "XTREME SOFTWARE SOLUTIONS"   # Optional. CompanyName resource (defaults to authors).
+copyright = "© 2026 XSS"                # Optional. LegalCopyright resource.
+
+# Code signing (optional). Reserved so an executable target can be signed as a
+# post-build step when required — e.g. Authenticode on Windows (signtool /
+# osslsigncode) or codesign on macOS. The toolchain runs the configured signer
+# on the produced binary after `cargo build`; absence of `[package.sign]` (or
+# `[[bin]].sign`) means no signing. Per-target overrides on `[lib]` / `[[bin]]`.
+[package.sign]
+# enabled    = false                    # Default. Set true to sign the produced exe.
+# tool       = "signtool"               # or "osslsigncode" / "codesign" / a custom command.
+# certificate = "path/to/cert.pfx"      # or a store identity / thumbprint.
+# timestamp-url = "http://timestamp..." # Optional RFC-3161 timestamp authority.
+# Credentials (e.g. the .pfx password) come from the environment, never the
+# manifest. This block is a reserved seam; the signing step is a later addendum.
 
 [lib]
 # A library target. Optional; absent for executable-only projects.

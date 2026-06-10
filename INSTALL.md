@@ -147,7 +147,7 @@ The first build downloads the IntelliJ Platform and (via the foojay resolver) a
 **JDK 21** toolchain — no manual JDK install needed. The result is
 `build/distributions/jux-intellij-0.0.1.zip`.
 
-> The plugin builds with **Gradle 9** and targets **JDK 21 bytecode**, which
+> The plugin builds with **Gradle 9.1** and targets **JDK 21 bytecode**, which
 > loads cleanly in IntelliJ's JBR. See `ide/intellij-plugin/README.md` for the
 > toolchain rationale.
 

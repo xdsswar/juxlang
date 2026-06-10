@@ -15,7 +15,7 @@
 
 Compiler diagnostics are the most-read part of any compiler's output. They must be:
 
-- **Stable.** A code (`E0420`) means the same thing forever. Programmers who memorize codes shouldn't be retrained.
+- **Stable.** A code (`E0450`) means the same thing forever. Programmers who memorize codes shouldn't be retrained.
 - **Machine-readable.** CI systems, IDEs, and editor plugins parse diagnostics. JSON output is mandatory.
 - **Human-readable.** The default terminal output is multi-line, color-coded, and context-rich.
 - **Catalogued.** Every code has a docs page with description, example, and remediation.
@@ -31,7 +31,7 @@ Rust set the bar here. Jux follows it.
 
 Every diagnostic carries:
 
-- **`code`** — the stable identifier (e.g., `E0420`).
+- **`code`** — the stable identifier (e.g., `E0450`).
 - **`severity`** — `error`, `warning`, `lint`, or `note`.
 - **`message`** — a one-line summary in plain English.
 - **`primary_span`** — the source location the diagnostic is "about."
@@ -52,7 +52,7 @@ Every diagnostic carries:
 ### D.1.3. Default Terminal Format
 
 ```
-error[E0420]: ambiguous overload of `log`
+error[E0450]: ambiguous overload of `log`
   --> src/foo.jux:14:5
    |
 14 |     log(value);
@@ -73,7 +73,7 @@ help: cast the argument to disambiguate
 14 |     log(value as int);
    |        +++++++++++
 
-For more information about this error, see https://docs.jux-lang.org/diag/E0420
+For more information about this error, see https://docs.jux-lang.org/diag/E0450
 ```
 
 The format is identical to Rust's. Color: red for `error` markers, yellow for `warning`, blue for `note`, green for `help`.
@@ -83,7 +83,7 @@ The format is identical to Rust's. Color: red for `error` markers, yellow for `w
 `--diagnostic-format=compact` produces one line per diagnostic, suitable for older tooling:
 
 ```
-src/foo.jux:14:5: error[E0420]: ambiguous overload of `log`
+src/foo.jux:14:5: error[E0450]: ambiguous overload of `log`
 src/util.jux:8:5: note: candidate `log(int)` defined here
 src/util.jux:12:5: note: candidate `log(String)` defined here
 ```
@@ -93,7 +93,7 @@ src/util.jux:12:5: note: candidate `log(String)` defined here
 `--diagnostic-format=short` produces one line per diagnostic with no notes/hints, only the primary message:
 
 ```
-src/foo.jux:14:5: error[E0420]: ambiguous overload of `log`
+src/foo.jux:14:5: error[E0450]: ambiguous overload of `log`
 ```
 
 ---
@@ -106,7 +106,7 @@ src/foo.jux:14:5: error[E0420]: ambiguous overload of `log`
 
 ```json
 {
-  "code": "E0420",
+  "code": "E0450",
   "severity": "error",
   "message": "ambiguous overload of `log`",
   "primary_span": {
@@ -164,7 +164,7 @@ src/foo.jux:14:5: error[E0420]: ambiguous overload of `log`
       }
     ]
   },
-  "docs_url": "https://docs.jux-lang.org/diag/E0420"
+  "docs_url": "https://docs.jux-lang.org/diag/E0450"
 }
 ```
 
@@ -238,6 +238,8 @@ Cross-phase codes (e.g., overflow detected in const eval and runtime) reuse the 
 
 The complete catalog of error and warning codes referenced across JUX-LANG-V1 and all addenda. Each entry includes a one-line description and, where useful, the addendum and section that introduced it.
 
+The catalog contains two kinds of entries: codes **implemented** in the compiler (the `juxc_diagnostics::Code` enum mirrors this catalog) and codes **reserved** for checks that are specced but not yet implemented — the latter are marked *(reserved)*. Where the implementation and an older draft of this table disagreed, the implementation's meaning is canonical (codes already emitted to users cannot be reassigned; see §D.5.1).
+
 ### Lexical (`E0100–E0199`)
 
 | Code     | Description                                         | Source                        |
@@ -257,47 +259,91 @@ The complete catalog of error and warning codes referenced across JUX-LANG-V1 an
 | `E0200`  | Unexpected token                                     | Generic parse error            |
 | `E0210`  | `super(...)` or `this(...)` not first statement      | Grammar §A.2.4                 |
 | `E0211`  | Constructor missing required `super(...)` call      | Grammar §A.2.4                 |
-| `E0220`  | Sealed type with `permits` clause needed              | Grammar §A.2.5                 |
-| `E0240`  | `try` block without `catch` or `finally`             | Grammar §A.2.8                 |
-| `E0241`  | Label-targeted `break`/`continue` mismatched          | Grammar §A.2.8                 |
-| `E0260`  | `if`-expression missing `else` branch                | Grammar §A.2.9                 |
-| `E0261`  | `switch` expression must be exhaustive               | Type system §T.5               |
-| `E0270`  | Or-pattern alternatives bind incompatible names      | Grammar §A.3                   |
-| `E0271`  | Local-variable destructuring requires irrefutable pattern | Grammar §A.3              |
-| `E0272`  | Pattern guard expression must have type `bool`       | Grammar §A.3                   |
+| `E0212`  | Varargs (`T...`) parameter is not the last parameter *(reserved)* | Entry Points §E (varargs) |
+| `E0220`  | Sealed type with `permits` clause needed *(reserved)* | Grammar §A.2.5                 |
+| `E0240`  | `try` block without `catch` or `finally` *(reserved)* | Grammar §A.2.8                 |
+| `E0241`  | Label-targeted `break`/`continue` mismatched *(reserved)* | Grammar §A.2.8              |
+| `E0260`  | `if`-expression missing `else` branch *(reserved)*   | Grammar §A.2.9                 |
+| `E0261`  | `switch` expression must be exhaustive *(reserved; statement form is `E0440`)* | Type system §T.5 |
+| `E0270`  | Or-pattern alternatives bind incompatible names *(reserved)* | Grammar §A.3            |
+| `E0271`  | Local-variable destructuring requires irrefutable pattern *(reserved)* | Grammar §A.3  |
+| `E0272`  | Pattern guard expression must have type `bool` *(reserved)* | Grammar §A.3             |
+
+### Resolution (`E0300–E0399`)
+
+| Code     | Description                                         | Source                        |
+|----------|-----------------------------------------------------|-------------------------------|
 | `E0301`  | Name not found in scope                              | Build system §B.4.1           |
-| `E0302`  | Cyclic module import                                 | Build system §B.4.6           |
-| `E0303`  | Multiple resolution candidates for name              | Build system §B.4.1           |
+| `E0302`  | Cyclic module import *(reserved)*                    | Build system §B.4.6           |
+| `E0303`  | Multiple resolution candidates for name *(reserved)* | Build system §B.4.1           |
 | `E0304`  | Duplicate local declaration in the same scope        | JUX-LANG-V1 §6.1 / Semantics §S.1.4 |
-| `E0307`  | Duplicate annotation name (case-insensitive collision) | JUX-LANG-V1 §3.6 / Annotations §A.13 |
+| `E0307`  | Duplicate annotation name (case-insensitive collision) *(reserved)* | JUX-LANG-V1 §3.6 / Annotations §A.13 |
 | `E0320`  | Entry file has both top-level statements and a `main` function | Entry Points §E.6     |
-| `E0321`  | Multiple functions carry `@entry` in the same binary | Entry Points §E.6              |
-| `E0322`  | `@entry(convention = ...)` unsupported on current target | Entry Points §E.6          |
+| `E0321`  | Multiple functions carry `@entry` in the same binary *(reserved)* | Entry Points §E.6   |
+| `E0322`  | `@entry(convention = ...)` unsupported on current target *(reserved)* | Entry Points §E.6 |
 | `E0323`  | `main`'s signature does not match any accepted form  | Entry Points §E.6              |
-| `E0324`  | `@entry` function's signature incompatible with its symbol's ABI | Entry Points §E.6  |
-| `E0325`  | `freestanding = true` but no `@entry` function declared | Entry Points §E.6           |
+| `E0324`  | `@entry` function's signature incompatible with its symbol's ABI *(reserved)* | Entry Points §E.6 |
+| `E0325`  | `freestanding = true` but no `@entry` function declared *(reserved)* | Entry Points §E.6 |
+| `E0326`  | A class member named `main` with an entry-shaped signature is not `static` | Entry Points §E.1.2.2 |
 
 ### Type Checking (`E0400–E0499`)
 
 | Code     | Description                                         | Source                        |
 |----------|-----------------------------------------------------|-------------------------------|
-| `E0400`  | Type mismatch                                       | Generic type error             |
-| `E0401`  | Undefined type                                      | Generic                        |
-| `E0410`  | Mixed-type arithmetic without explicit `as`         | Semantics §S.2.6              |
-| `E0411`  | Cannot satisfy generic constraints                  | Type system §T.4               |
-| `E0420`  | Ambiguous overload                                   | Type system §T.3.3            |
-| `E0421`  | No overload candidate produces required return type | Type system §T.3.4            |
-| `E0422`  | No matching operator overload                       | Type system §T.3.5            |
-| `E0430`  | Generic type inference is ambiguous                  | Type system §T.4.2            |
-| `E0431`  | Generic type inference has no solution               | Type system §T.4.2            |
+| `E0400`  | Duplicate top-level declaration (class, record, enum, interface, or function) | Single-namespace rule |
+| `E0401`  | Duplicate field in the same class body              | —                              |
+| `E0402`  | Duplicate method in the same class body (lifted once overload resolution lands) | Type system §T.3 |
+| `E0403`  | Duplicate variant in the same enum body             | —                              |
+| `E0410`  | Type mismatch — assignments, returns, call arguments; also mixed-type arithmetic without explicit `as` and nullable-primitive types | Semantics §S.2.6 / ERRATA E5 |
+| `E0411`  | Wrong number of positional call arguments           | —                              |
+| `E0412`  | `obj.field` doesn't exist on the receiver (inheritance chain walked) | —             |
+| `E0413`  | `obj.method(...)` / `new T(...)` target doesn't resolve | —                          |
+| `E0414`  | Access to a `private` member from outside the declaring class | —                    |
+| `E0415`  | Access to a `protected` member from outside the extends-chain | ERRATA E4            |
+| `E0416`  | Access to a package-private / `internal` member from outside its package | —         |
+| `E0420`  | `class C extends F` where `F` is `final`            | JUX-LANG-V1 §7.4               |
+| `E0421`  | Override of a `final` method                        | JUX-LANG-V1 §7.4.1             |
+| `E0422`  | Sealed class extended outside its `permits` list    | JUX-LANG-V1 §7.4               |
+| `E0423`  | `extends` target is not a class                     | classes-rules §1.2             |
+| `E0424`  | `implements` target is not an interface             | classes-rules §3               |
+| `E0425`  | `this` referenced in a static context               | —                              |
+| `E0426`  | `@Override` on a method that overrides nothing      | Annotations                    |
+| `E0427`  | Static method called via an instance receiver       | —                              |
+| `E0428`  | `new X(...)` where `X` is not instantiable (interface, enum, alias) | —             |
+| `E0429`  | Interface abstract method(s) not implemented        | classes-rules §3               |
+| `E0430`  | Conflicting default methods (diamond) — class must override explicitly | Type system §T.8.2 |
+| `E0431`  | Invalid method-modifier combination (see collision note below) | classes-rules §1.4  |
+| `E0432`  | Invalid visibility on a top-level type (`private` / `protected`) | classes-rules §1.1 / §3.1 |
+| `E0433`  | Override narrows visibility relative to the overridden method | classes-rules §1.4   |
+| `E0434`  | Cyclic `extends` chain                              | classes-rules §1.2             |
+| `E0435`  | Interface not usable as a dyn-dispatched value type (generic interface / generic method) | Interface dispatch, stage 1 |
+| `E0436`  | Exception-hierarchy class also `implements` an interface (deferred combination) | Interface dispatch, stage 1 |
+| `E0437`  | Data field accessed through a polymorphic-base reference | Polymorphism, stage 2     |
+| `E0438`  | Generic virtual method on a polymorphic base class  | Polymorphism, stage 2          |
 | `E0440`  | Switch is not exhaustive                             | Type system §T.5.5            |
-| `E0441`  | Conflicting default methods (diamond)                | Type system §T.8.2            |
-| `E0442`  | Default method conflict requires explicit override   | Type system §T.8.2            |
-| `E0470`  | Annotation applied outside its `@Target` set         | Annotations §A.13              |
-| `E0471`  | Runtime annotation read requires reflection          | Annotations §A.13              |
-| `E0472`  | Missing required annotation parameter                | Annotations §A.13              |
-| `E0473`  | Annotation is not `@Repeatable` but appears more than once | Annotations §A.13        |
-| `E0474`  | Wrong type for annotation parameter                  | Annotations §A.13              |
+| `E0441`  | Type-test smart-cast binder (`x => T name`) used outside an `if` condition | Polymorphism |
+| `E0442`  | Reference cast / type-test between unrelated types  | Polymorphism                   |
+| `E0443`  | Malformed explicit call-site type-argument list (`id<int>(5)`) | Generics (Gap 5)      |
+| `E0444`  | Bounded wildcard as a storage type over a user generic class (Phase-1 limitation) | Generics (Gap 4) |
+| `E0445`  | Const-generic form outside the Phase-1 core subset  | Type system §T.11.3 / Grammar §A.2.6 |
+| `E0450`  | Ambiguous overload *(reserved)*                      | Type system §T.3.3            |
+| `E0451`  | No overload candidate produces required return type *(reserved)* | Type system §T.3.4 |
+| `E0452`  | No matching operator overload *(reserved)*          | Type system §T.3.5            |
+| `E0453`  | Generic type inference is ambiguous *(reserved)*     | Type system §T.4.2            |
+| `E0470`  | Annotation applied outside its `@Target` set *(reserved)* | Annotations §A.13        |
+| `E0471`  | Runtime annotation read requires reflection *(reserved)* | Annotations §A.13         |
+| `E0472`  | Missing required annotation parameter *(reserved)*   | Annotations §A.13              |
+| `E0473`  | Annotation is not `@Repeatable` but appears more than once *(reserved)* | Annotations §A.13 |
+| `E0474`  | Wrong type for annotation parameter *(reserved)*     | Annotations §A.13              |
+
+> **Known collision (implementation bug, to be fixed in the compiler):** the
+> `juxc_diagnostics::Code` enum currently carries a second variant that also
+> prints `E0431` — "generic type inference has no solution" (a bare
+> `new X<>()` whose type argument can't be inferred, Type system §T.4.2).
+> Two meanings cannot share one number; the inference-failure check should be
+> renumbered to **`E0446`** (next free slot) in a follow-up compiler change.
+> `E0446` is reserved here for that purpose and must not be allocated to
+> anything else.
 
 ### Borrow Checker (`E0500–E0599`)
 
@@ -308,7 +354,7 @@ The complete catalog of error and warning codes referenced across JUX-LANG-V1 an
 | `E0502`  | Cannot mutate while borrowed (whole-object rule)            | Inheritance §6.9.1, §6.9.7    |
 | `E0503`  | Cannot move while borrowed                                  | Type system §T.7               |
 | `E0504`  | Use after move                                              | Lowering §C.6.1                |
-| `E0505`  | Cannot hold exclusive borrow across `await`                  | Async §10.1.6                 |
+| `E0505`  | Cannot hold exclusive borrow across `await`                  | Async §18.1.6                 |
 | `E0506`  | `unsafe` operation outside `unsafe` block                    | Layout-ABI §L.5.2              |
 
 ### Lowering (`E0600–E0699`)
@@ -324,8 +370,9 @@ The complete catalog of error and warning codes referenced across JUX-LANG-V1 an
 
 | Code     | Description                                                | Source                         |
 |----------|------------------------------------------------------------|--------------------------------|
-| `E0700`  | `await` requires async context                              | Async §10.1.2                 |
-| `E0701`  | `async` not available in current profile                     | Async §10.1.11                |
+| `E0700`  | `await` requires async context                              | Async §18.1.2                 |
+| `E0701`  | `async` not available in current profile                     | Async §18.1.11                |
+| `E0702`  | Class object captured by a `Worker.spawn` closure (Phase-1 objects are `!Send`) | Async §18.2 |
 | `E0710`  | `throw` requires `Exception` or subtype                      | Exceptions §X.2.1              |
 | `E0720`  | Unreachable `catch` clause                                   | Exceptions §X.3.4              |
 | `E0721`  | Multi-catch types must be unrelated                         | Exceptions §X.3.6              |
@@ -353,15 +400,17 @@ The complete catalog of error and warning codes referenced across JUX-LANG-V1 an
 | `E0905`  | Cannot resolve dependency                                   | Build system §B.5.4            |
 | `E0908`  | Dynamic linkage unavailable in `core` profile                | Build system §B.14.6           |
 | `E0910`  | `init` block escapes `this`                                  | Missing-defs §M.1.3            |
-| `E0930`  | Auto-derive cannot satisfy required interface               | Operators §O.5.1               |
-| `E0931`  | `operator==` defined without `hashCode`                      | Operators §O.2.5               |
-| `E0935`  | Call to `delete`d method                                     | Operators §O.4.5               |
+| `E0930`  | Conflicting operator declarations (`<=>` plus an individual ordering operator); also: auto-derive cannot satisfy required interface | Operators §O.2.1 / §O.5.1 |
+| `E0931`  | `operator==` defined without `operator hash`                 | Operators §O.2.7               |
+| `E0935`  | Call to a `delete`d operator                                 | Operators §O.3.4               |
 | `E0940`  | Out-parameter not assigned on every path                    | Missing-defs §M.4.2            |
 | `E0941`  | No matching operator definition for required capability     | Operators §O.5.1               |
 | `E0950`  | Orphan operator overload                                    | Runtime/ABI §R.3.3             |
 | `E0951`  | Duplicate operator overload across modules                  | Runtime/ABI §R.3.3             |
 | `E0952`  | Orphan free-function operator definition                    | Runtime/ABI §R.3.6             |
 | `E0961`  | Mutable static requires thread-safe wrapper                  | Missing-defs §M.12.3           |
+| `E0970`  | Write to a read-only or `init`-only property outside its settable window | Missing-defs §M.7.2 |
+| `E0972`  | Property accessor visibility violation (e.g. `private set` written from outside) | Missing-defs §M.7.2 / §M.7.7 |
 | `E0980`  | Method reference is ambiguous                               | Missing-defs §M.8.3            |
 | `E0991`  | Inner classes not supported                                 | Missing-defs §M.9.2            |
 | `E0992`  | Anonymous classes not supported                             | Missing-defs §M.9.2            |
@@ -389,8 +438,8 @@ Notes don't have stable codes; they are auxiliary spans attached to a primary er
 
 ### D.5.1. Code Allocation Discipline
 
-- **A code, once published, cannot be reassigned.** `E0420` means "ambiguous overload" forever.
-- **A code can be marked `deprecated`** when a check is removed (because the underlying language rule changed). The code then reports `note: code E0420 is deprecated; this check no longer applies` if a stale tool emits it. The number is not reused.
+- **A code, once published, cannot be reassigned.** `E0450` means "ambiguous overload" forever.
+- **A code can be marked `deprecated`** when a check is removed (because the underlying language rule changed). The code then reports `note: code E0450 is deprecated; this check no longer applies` if a stale tool emits it. The number is not reused.
 - **New codes** are allocated at the end of each phase's range. The compiler maintainer keeps a registry; PRs that introduce diagnostics also update this catalog.
 
 ### D.5.2. Documentation Per Code
@@ -406,7 +455,7 @@ Every code gets a docs page at `https://docs.jux-lang.org/diag/E####` containing
 The docs page is auto-generated from a `diag.toml` file in the compiler repository:
 
 ```toml
-[E0420]
+[E0450]
 title = "Ambiguous overload"
 since = "0.1.0"
 phase = "tycheck"
@@ -415,7 +464,7 @@ Multiple overloads of a function or method are applicable to a call,
 and the resolution rules in §T.3 cannot pick a unique most-specific candidate.
 """
 
-[[E0420.example]]
+[[E0450.example]]
 title = "Untyped literal"
 code = '''
 public void log(int code) { ... }
@@ -423,7 +472,7 @@ public void log(String message) { ... }
 log(value);    // ambiguous if value's type is too general
 '''
 
-[[E0420.fix]]
+[[E0450.fix]]
 title = "Cast the argument"
 code = '''
 log(value as int);
@@ -433,7 +482,7 @@ log(value as int);
 ### D.5.3. The `juxc explain` Subcommand
 
 ```
-juxc explain E0420
+juxc explain E0450
 ```
 
 Prints the docs page for the named code in the terminal. This works offline (the doc text is bundled with the compiler).

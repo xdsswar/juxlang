@@ -5,14 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Language V1 — Architecture & Design — Jux</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+/* Apply the persisted theme before first paint to avoid a flash. */
+try { var t = localStorage.getItem('jux-docs-theme');
+      if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
 </head>
 <body>
 <div class="layout">
 <aside class="sidebar">
-  <a class="sidebar-brand" href="index.html">
-    <span class="sidebar-brand-mark">J</span>
-    <span>Jux</span>
-  </a>
+  <div class="sidebar-top">
+    <a class="sidebar-brand" href="index.html">
+      <span class="sidebar-brand-mark">J</span>
+      <span>Jux</span>
+    </a>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme">☾</button>
+  </div>
   <div class="sidebar-section">
     <div class="sidebar-section-title">Start Here</div>
     <a href="index.html">Overview</a>
@@ -33,16 +41,26 @@
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
   </div>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Compiler &amp; Tooling</div>
+    <div class="sidebar-section-title">Compiler</div>
     <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
     <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+    <a href="JUX-CLASS-REPRESENTATION-ADDENDUM.html">Class Representation</a>
     <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
     <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
     <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
     <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+    <a href="JUX-CODEGEN-FIXES.html">Codegen Fixes</a>
   </div>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Earlier Addenda</div>
+    <div class="sidebar-section-title">Tooling &amp; IDE</div>
+    <a href="JUX-BINDGEN-ADDENDUM.html">Bindgen & Interface Stubs</a>
+    <a href="JUX-LSP-SERVER-ADDENDUM.html">Language Server (juxc-lsp)</a>
+    <a href="JUX-EDITOR-TOOLING-ADDENDUM.html">Editor & IDE Tooling</a>
+    <a href="JUX-INTELLIJ-PLUGIN-ADDENDUM.html">IntelliJ Platform Plugin</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Process &amp; History</div>
+    <a href="ERRATA.html">ERRATA — Spec Reconciliations</a>
     <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
     <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
     <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
@@ -58,6 +76,7 @@
       <div class="breadcrumb"><a href="index.html">← Jux Specification</a></div>
       <div id="rendered"></div>
     </div>
+    <nav class="toc-rail" id="toc" aria-label="On this page"></nav>
   </main>
 </div>
 
@@ -223,19 +242,20 @@ Profile defaults:
 ### 3.2. Keywords (Reserved)
 
 ```
-abstract     annotation   async        await        break
-case         catch        class        const        default
-do           drop         else         enum         extends
-final        finally      for          if           implements
-import       init         interface    internal     move
-native       new          package      permits      private
-protected    public       record       return       sealed
-static       struct       super        switch       this
-throw        throws       try          type         var
-void         while        yield
+abstract     annotation   as           async        await
+break        case         catch        class        const
+continue     default      do           drop         else
+enum         extends      final        finally      for
+if           implements   import       init         interface
+internal     move         native       new          package
+permits      private      protected    public       record
+return       sealed       sizeof       static       struct
+super        switch       this         throw        throws
+try          type         var          void         while
+yield
 ```
 
-The keywords `async` and `await` are reserved at the lexical level even when not all features are available in the current profile. `annotation` declares user-defined annotation types (see `JUX-ANNOTATIONS-ADDENDUM.md`).
+The keywords `async` and `await` are reserved at the lexical level even when not all features are available in the current profile. `annotation` declares user-defined annotation types (see `JUX-ANNOTATIONS-ADDENDUM.md`). `break` and `continue` are loop-flow keywords (§A.2.8). `as` is the cast operator (§A.5) and the import-alias keyword (§4.2). `sizeof` is the compile-time size query (§5.9).
 
 ### 3.3. Identifiers
 
@@ -421,21 +441,46 @@ For top-level (non-class) declarations: `private` means file-scope.
 
 ### 5.1. Primitive Types
 
-| Type     | Size   | Range                              |
-|----------|--------|------------------------------------|
-| `bool`   | 1 byte | `true`, `false`                    |
-| `byte`   | 8-bit  | -128 to 127 (signed)               |
-| `ubyte`  | 8-bit  | 0 to 255 (unsigned)                |
-| `short`  | 16-bit | signed                             |
-| `ushort` | 16-bit | unsigned                           |
-| `int`    | 32-bit | signed                             |
-| `uint`   | 32-bit | unsigned                           |
-| `long`   | 64-bit | signed                             |
-| `ulong`  | 64-bit | unsigned                           |
-| `float`  | 32-bit | IEEE 754 single                    |
-| `double` | 64-bit | IEEE 754 double                    |
-| `char`   | 32-bit | Unicode scalar value               |
-| `void`   | —      | absence of value (return type only)|
+Jux has two parallel naming styles for the integer/float primitives:
+
+- **Java-family names** — `byte`, `short`, `int`, `long`, … `float`, `double`. Primary names; most readable for general code.
+- **Width-explicit names** — `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`. Used when the bit width is load-bearing (embedded code, FFI, protocols, fixed array sizes).
+
+Most pairs are **exact aliases** (same width, same Rust type). The `int`/`uint` pair is the deliberate exception — `int` is platform-sized, while `i32` is always 32-bit, so they are not aliases.
+
+| Java-family | Width-explicit | Size               | Range                              |
+|-------------|----------------|--------------------|------------------------------------|
+| `bool`      | —              | 1 byte             | `true`, `false`                    |
+| `byte`      | `i8`           | 8-bit              | -128 to 127 (signed)               |
+| `ubyte`     | `u8`           | 8-bit              | 0 to 255 (unsigned)                |
+| `short`     | `i16`          | 16-bit             | signed                             |
+| `ushort`    | `u16`          | 16-bit             | unsigned                           |
+| **`int`**   | — (none)       | **pointer-sized**  | signed; 32-bit on 32-bit targets, 64-bit on 64-bit targets |
+| **`uint`**  | — (none)       | **pointer-sized**  | unsigned                           |
+| —           | `i32`          | 32-bit             | signed (use when 32-bit is required) |
+| —           | `u32`          | 32-bit             | unsigned (use when 32-bit is required) |
+| `long`      | `i64`          | 64-bit             | signed                             |
+| `ulong`     | `u64`          | 64-bit             | unsigned                           |
+| `float`     | `f32`          | 32-bit             | IEEE 754 single                    |
+| `double`    | `f64`          | 64-bit             | IEEE 754 double                    |
+| `char`      | —              | 32-bit             | Unicode scalar value               |
+| `void`      | —              | —                  | absence of value (return type only)|
+
+### `int` is platform-dependent
+
+**`int` is the platform's native signed integer**: 32 bits on a 32-bit target, 64 bits on a 64-bit target. This is the "natural" integer for the current build target — pick it when you want efficient arithmetic and don't care about exact wire format.
+
+When you need an **exact width** — protocol/FFI/MCU register code, serialization, fixed array sizes, etc. — use the width-explicit name (`i32`, `i64`, etc.). Those never change size across targets.
+
+There is **no width-explicit synonym for `int`/`uint`**. The platform-sized type already has a name: `int` (or `uint`). Width-explicit names exist precisely to express "exactly N bits, always" — that's meaningless for a platform-sized type, so the table simply doesn't list one.
+
+The Java-family `int` predates the explicit-width style, so reading `int x = 0;` carries the "I don't care about size" intent the spec endorses. If you DO care, the explicit name spells it out.
+
+### Default for unsuffixed integer literals
+
+An unsuffixed integer literal like `42` defaults to `i32` (matching the Rust toolchain's literal defaulting). Code that needs `int` semantics should annotate the binding explicitly (`int x = 42;`) or use an `as` cast. This avoids surprise overflow when porting a `var x = 2_000_000_000;` from a 64-bit build environment to a 32-bit target.
+
+### Value semantics
 
 Primitives are value types. They are copied on assignment and passed by value. No boxing required for use as generic type parameters (this differs from Java; see §7.8 on generics).
 
@@ -637,6 +682,85 @@ var p = buffer as byte*;         // (in unsafe { } only)
 Both produce the same conversion, the same runtime check (when applicable), and the same exception on failure. Use whichever reads more naturally — programmers from C/Java/C# typically prefer `(int) x`, programmers from Rust/Kotlin prefer `x as int`. The compiler treats them identically and never warns about which form you chose.
 
 The conversion rules are documented in `JUX-GRAMMAR-ADDENDUM.md` §A.5 and are the same regardless of which form you write. Both forms are also available inside `unsafe { }` blocks for raw-pointer casts.
+
+### 5.9. Compile-Time Type Queries
+
+Jux provides one compile-time type query: `sizeof`.
+
+#### 5.9.1. `sizeof(T)` — size of a type
+
+`sizeof(T)` returns the size in bytes of the type `T` as a `uint`. It is a **compile-time constant** — evaluated by the compiler, not at runtime. Usable in any context that accepts an integer constant expression (array sizes, const initializers, embedded register layouts).
+
+```java
+print(sizeof(byte));     // 1
+print(sizeof(int));      // 4 or 8 — platform-dependent (int is platform-sized per §5.1)
+print(sizeof(i32));      // 4 — always
+print(sizeof(long));     // 8
+print(sizeof(double));   // 8
+print(sizeof(bool));     // 1
+print(sizeof(Point));    // depends on Point's layout
+```
+
+#### 5.9.2. `sizeof(expr)` — size of a value's type
+
+`sizeof(expr)` returns the size in bytes of the **type of `expr`**, also as a `uint`. The expression is **not evaluated** — only its type contributes to the result, so `sizeof(arr[i])` is safe even if `i` is out of bounds, and `sizeof(some_function_call())` does not call the function.
+
+```java
+var x = 5;
+print(sizeof(x));        // same as sizeof(int) — x's declared type
+
+var arr = new int[10];
+print(sizeof(arr[0]));   // sizeof(int) — element type, never indexes arr
+```
+
+#### 5.9.3. Disambiguation rule
+
+A `sizeof(...)` body may syntactically be either a type or a value-expression. Disambiguation uses a purely **syntactic** rule (no semantic analysis required):
+
+1. **Primitive names** — `bool`, `byte`, `ubyte`, `short`, `ushort`, `int`, `uint`, `long`, `ulong`, `float`, `double`, `char` and width-explicit aliases (`i8`/`u8`/…/`f64`) — are always treated as **types**.
+2. **Uppercase-leading single identifiers** are treated as **types** (Java convention: types are PascalCase).
+3. **Lowercase-leading single identifiers** are treated as **values** (Java convention: variables are camelCase).
+4. **Multi-segment paths** (`foo.Bar`, `std.io.Stream`) are treated as **types**.
+5. **Compound expressions** (anything with operators, indexing, function calls) are treated as **values**.
+
+If the convention doesn't fit your code (a lowercase-named type, or an uppercase-named variable), prefix with an explicit cast or use the value form via a temporary: `sizeof(someVarOfThatType)`.
+
+#### 5.9.4. Operand restrictions
+
+| Operand shape                                    | Status                                   |
+|--------------------------------------------------|------------------------------------------|
+| Primitive (`byte`, `int`, `f64`, …)              | OK                                       |
+| Fully-applied generic (`List<int>`)              | OK                                       |
+| User type (PascalCase)                           | OK                                       |
+| Local variable (camelCase)                       | OK                                       |
+| Compound expression (`arr[3]`, `x + y`)          | OK                                       |
+| Unbound generic (`List`, `T` outside mono)       | `E0461 sizeof of unbound generic type`   |
+| Open wildcard (`?`, `? extends T`)               | `E0462 sizeof of wildcard type`          |
+| `void`                                            | `E0463 sizeof of void`                   |
+
+#### 5.9.5. Return type
+
+`sizeof(...)` returns `uint` (platform-sized unsigned per §5.1). The value is non-negative and fits in the platform's address space.
+
+#### 5.9.6. Lowering (Phase 1)
+
+- **Type form**: `sizeof(T)` lowers to `std::mem::size_of::<T_rust>()` where `T_rust` is the Rust spelling of `T`.
+- **Value form**: `sizeof(expr)` lowers to `std::mem::size_of_val(&(expr_rust))`.
+
+Both are `const fn` in current Rust, so the constant-expression property propagates into the emitted code.
+
+#### 5.9.7. Grammar
+
+```
+primary     = … | sizeof-expr
+sizeof-expr = 'sizeof' '(' (type | expression) ')'
+```
+
+The parser parses the operand as a generic expression; the type-vs-value classification (§5.9.3) is applied during lowering. `sizeof` joins the reserved keywords list in §3.2.
+
+#### 5.9.8. Future siblings
+
+Future revisions may add `alignof(T)` (alignment of T) and `typeof(expr)` (the type of an expression, useful in generic code) here as §5.9.9 and §5.9.10. Both follow the same parens-required, compile-time-constant style.
 
 ---
 
@@ -1300,7 +1424,7 @@ public class Dog extends Animal {
 }
 ```
 
-`super(...)` must be the first statement of the constructor body. If a class has a non-trivial parent constructor (no zero-arg form) and the subclass does not invoke `super(...)` explicitly, the compiler reports `E0312` (missing super call).
+`super(...)` must be the first statement of the constructor body. If a class has a non-trivial parent constructor (no zero-arg form) and the subclass does not invoke `super(...)` explicitly, the compiler reports `E0211` (missing super call, per `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4).
 
 **Default constructor.** If no constructor is declared, the compiler synthesizes an implicit zero-argument constructor that calls `super()` (when a parent exists) and initializes fields to their declared defaults. Declaring *any* constructor removes the implicit one.
 
@@ -1323,6 +1447,15 @@ public class Singleton {
 
 **Init blocks.** For initialization logic shared across multiple constructors, see `JUX-MISSING-DEFS-ADDENDUM.md` §M.1 (`init { ... }` blocks).
 
+**Construction order.** Per `ERRATA.md` E2 (and `JUX-SEMANTICS-ADDENDUM.md` §S.4.4), `new C(args)` initializes in this order:
+
+1. **`super(args)` resolves first** — the parent's constructor (including its own ancestor chain, init blocks, and constructor body) completes before any code of `C` runs. (`this(...)` delegation instead runs the named sibling constructor's full chain.)
+2. **Field initializers** of `C` are evaluated in textual order.
+3. **`init { }` blocks** of `C` run, in textual order — before the constructor body. An init block may reference inherited fields because the parent has already constructed.
+4. **The constructor body** runs.
+
+This matches Java semantics.
+
 **Record constructors.** Records get an implicit primary constructor from their declaration plus optional compact-form validation; see §7.6.
 
  Mark a class `final`/`const` to forbid extension; otherwise, a subclass elsewhere in the same module (or, for `public` classes, in any consuming module) can `extends` it.
@@ -1335,7 +1468,26 @@ public const class Baz { }            // identical to `final` — not extendable
 
 For methods: `public const void render() { ... }` ≡ `public final void render() { ... }` — both forbid override (per §7.4.1).
 
-**Nested types.** A class may declare other types inside it — nested classes, structs, records, enums, and interfaces. All nested types are **static** by definition (they have no implicit reference to the enclosing instance). Per `JUX-MISSING-DEFS-ADDENDUM.md` §M.9, inner classes (Java's non-static nested with implicit outer reference), anonymous classes, and local classes are **not** supported — lambdas and explicit composition cover those cases more cleanly.
+**Nested types.** A class may declare other types inside it — nested classes, structs, records, enums, and interfaces. All nested types are **static** by definition (they have no implicit reference to the enclosing instance). Per `JUX-MISSING-DEFS-ADDENDUM.md` §M.9, inner classes (Java's non-static nested with implicit outer reference) and local classes are **not** supported — lambdas and explicit composition cover those cases more cleanly.
+
+**Anonymous-class expressions.** Jux supports the Java-style `new Iface() { … }` expression form for implementing an interface (or extending a non-abstract class with method overrides) at a single use site. The body is restricted to method overrides — no fields, no constructors, no static members. The anonymous instance has no implicit reference to the enclosing class's `this`; only parameters and local variables in scope are visible inside the body (closures over locals are not captured today — Phase-1 limitation that mirrors Rust's struct/method semantics; the recommended pattern is to thread state through parameters or a sibling lambda when capture is needed).
+
+```jux
+public interface Initializable {
+    void initialize(int location);
+}
+
+public void main() {
+    var init = new Initializable() {
+        public void initialize(int location) {
+            print($"location=${location}");
+        }
+    };
+    init.initialize(42);
+}
+```
+
+The compiler synthesizes a fresh struct + `impl Trait for Struct` per anonymous-class expression at the point of use; each `new Iface() { … }` produces a distinct concrete type whose only purpose is to carry the user's method bodies. Functional-interface auto-conversion (Java's "lambda where an interface is expected") is the lighter-weight path for single-abstract-method targets; the anonymous-class form is the multi-method or "I need a named impl right here" escape hatch.
 
 ```java
 public class HttpServer {
@@ -1392,7 +1544,7 @@ public interface Trainable {
     }
 }
 
-public class Dog extends Animal implements Trainable {  // final by default
+public class Dog extends Animal implements Trainable {
     private List<String> tricks;
 
     public Dog(String name, int age = 0) {
@@ -1412,7 +1564,17 @@ public class Dog extends Animal implements Trainable {  // final by default
 }
 ```
 
-A class may extend exactly one class and implement any number of interfaces. The `final` modifier (default) prevents further inheritance. The `open` modifier permits it. To extend a class, the parent must be marked `open` or `abstract`.
+A class may extend exactly one **non-final** class and implement any number of interfaces (Java's rule). Classes are extendable by default; mark a class `final` to forbid extension (`E0420` fires on `extends`-ing a final class). There is no `open` keyword in Jux.
+
+**Visibility across the hierarchy.** Per `ERRATA.md` E4, `protected` follows the inheritance chain regardless of package boundary — a subclass in any package may use `protected` members it inherits. The full table:
+
+| Modifier            | Subclass access? | Same-package access? |
+|---------------------|------------------|----------------------|
+| `private`           | No               | No                   |
+| `package` (default) | No               | Yes                  |
+| `protected`         | Yes              | Yes                  |
+| `internal`          | No               | Yes (same module)    |
+| `public`            | Yes              | Yes                  |
 
 #### 7.4.1. Method Overridability — The Rule
 
@@ -2128,15 +2290,26 @@ public void main() {
         print(name);                        // smart-cast: name is non-null here
     }
 
-    // Elvis operator for default value
+    // Elvis / null-coalescing for default value. `?:` and `??` are
+    // aliases — same operator, same AST. Pick whichever reads
+    // better at the call site.
     var displayName = findName(42) ?: "unknown";
+    var altName     = findName(42) ?? "unknown";
 
-    // Safe navigation
-    var length = findName(42)?.length();    // returns int?
+    // Safe navigation — the chain short-circuits to null when the
+    // receiver is null. The result here is a reference type (String?).
+    var upper = findName(42)?.toUpperCase();    // String?
+
+    // For a chain that would end in a primitive, test-and-use instead
+    // (primitives cannot be nullable — see below):
+    var name = findName(42);
+    var length = name != null ? name.length() : 0;   // int
 }
 ```
 
 Nullability is tracked in the type system. Non-nullable references cannot hold null. This eliminates NullPointerException as a runtime failure mode.
+
+**Primitives cannot be nullable.** Per `ERRATA.md` E5, `T?` is well-formed only for reference types — `String`, user classes, records, enums, arrays of references. `int?`, `bool?`, `char?`, `float?`, and the width-explicit numerics are rejected at type-check time (`E0410` with a "primitive type X cannot be nullable" message). A `?.` chain whose last segment produces a primitive has no expressible result type yet — restructure with a null test / smart-cast (as above). Lifting such chains into a boxed shape (`Integer?`-style) is deferred until boxed primitive types land.
 
 ### 7.11. Error Handling
 
@@ -2360,7 +2533,7 @@ The following C++-overloadable operators are **not** overloadable in Jux. The re
 |----------|---------|
 | `&&`, `\|\|` | Would lose short-circuit evaluation — `a && b` would always evaluate `b`. C++ allows this and it is a known footgun. |
 | `?:` (ternary `c ? a : b`) | Bound to nullable/result semantics; overriding would break null-handling guarantees. |
-| `?:` (Elvis `a ?: b`) | Same — bound to nullable semantics. |
+| `?:` / `??` (Elvis `a ?: b` / `a ?? b`) | Same — bound to nullable semantics. The two spellings are interchangeable. |
 | `,` | The comma operator overload was a C++ mistake. Sequencing is not a value-producing operation worth overloading. |
 | `=` | Plain assignment. Jux's ownership and refcount semantics define what assignment means; user override would violate borrow-checker invariants. |
 | `.`, `?.` | Member access. Overload would essentially be macro magic; defeats `goto-definition`. |

@@ -5,14 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Entry Points — Jux</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+/* Apply the persisted theme before first paint to avoid a flash. */
+try { var t = localStorage.getItem('jux-docs-theme');
+      if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
 </head>
 <body>
 <div class="layout">
 <aside class="sidebar">
-  <a class="sidebar-brand" href="index.html">
-    <span class="sidebar-brand-mark">J</span>
-    <span>Jux</span>
-  </a>
+  <div class="sidebar-top">
+    <a class="sidebar-brand" href="index.html">
+      <span class="sidebar-brand-mark">J</span>
+      <span>Jux</span>
+    </a>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme">☾</button>
+  </div>
   <div class="sidebar-section">
     <div class="sidebar-section-title">Start Here</div>
     <a href="index.html">Overview</a>
@@ -33,16 +41,26 @@
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
   </div>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Compiler &amp; Tooling</div>
+    <div class="sidebar-section-title">Compiler</div>
     <a href="JUX-COMPILER-PIPELINE-ADDENDUM.html">Compiler Pipeline</a>
     <a href="JUX-TYPE-SYSTEM-ADDENDUM.html">Type System Algorithms</a>
+    <a href="JUX-CLASS-REPRESENTATION-ADDENDUM.html">Class Representation</a>
     <a href="JUX-CORE-LIB-ADDENDUM.html">Minimal Core Library</a>
     <a href="JUX-BUILD-SYSTEM-ADDENDUM.html">Build System</a>
     <a href="JUX-RUNTIME-ABI-ADDENDUM.html">Runtime / Mangling / Coherence</a>
     <a href="JUX-DIAGNOSTICS-ADDENDUM.html">Diagnostic Codes</a>
+    <a href="JUX-CODEGEN-FIXES.html">Codegen Fixes</a>
   </div>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Earlier Addenda</div>
+    <div class="sidebar-section-title">Tooling &amp; IDE</div>
+    <a href="JUX-BINDGEN-ADDENDUM.html">Bindgen & Interface Stubs</a>
+    <a href="JUX-LSP-SERVER-ADDENDUM.html">Language Server (juxc-lsp)</a>
+    <a href="JUX-EDITOR-TOOLING-ADDENDUM.html">Editor & IDE Tooling</a>
+    <a href="JUX-INTELLIJ-PLUGIN-ADDENDUM.html">IntelliJ Platform Plugin</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-title">Process &amp; History</div>
+    <a href="ERRATA.html">ERRATA — Spec Reconciliations</a>
     <a href="JUX-INHERITANCE-BORROW-ADDENDUM.html">Inheritance × Borrow Inference</a>
     <a href="JUX-ASYNC-ADDENDUM-v2.html">Async / Await (v2)</a>
     <a href="JUX-GAPS-ROADMAP.html">Gaps Roadmap (historical)</a>
@@ -58,6 +76,7 @@
       <div class="breadcrumb"><a href="index.html">← Jux Specification</a></div>
       <div id="rendered"></div>
     </div>
+    <nav class="toc-rail" id="toc" aria-label="On this page"></nav>
   </main>
 </div>
 
@@ -101,20 +120,51 @@ The compiler wraps top-level statements in a synthetic `main` and emits the prog
 The entry file may instead declare a `main` function. The compiler accepts any of these signatures, picking the first match in declaration order:
 
 ```java
-public void main()                            // no args, no exit code
-public void main(String[] args)               // args, no exit code
-public int main()                             // exit code
-public int main(String[] args)                // args and exit code
+void main()                            // no args, no exit code
+void main(String[] args)               // args, no exit code
+void main(String... args)              // varargs form of the above (§E.1.2.1)
+int main()                             // exit code
+int main(String[] args)                // args and exit code
+int main(String... args)               // args and exit code, varargs form
 ```
 
 Each signature may optionally declare `throws E` for any checked exception type `E`:
 
 ```java
-public void main(String[] args) throws IOError {
+void main(String[] args) throws IOError {
     var contents = readFile(args[0]);
     print(contents);
 }
 ```
+
+#### E.1.2.1. Argument forms — `String[]` and `String...`
+
+The `args` parameter may be written either as an array (`String[] args`) or as a
+**varargs** parameter (`String... args`). The two are the same type at the entry
+boundary — `String...` *is* `String[]` inside the body. The general varargs rule
+applies: a `T...` parameter is sugar for `T[]` and **must be the last parameter**
+of the function (an earlier `T...` is a compile error). For `main`, `args` is the
+only parameter, so the constraint is trivially met.
+
+#### E.1.2.2. Modifiers — where `main` may live
+
+`main` may be declared as a **top-level (free) function** or as a **`static`
+method of a class**. The required modifiers differ by location:
+
+| Location of `main` | `static` | `public` | Example |
+|--------------------|----------|----------|---------|
+| Top level (free function) | not allowed / not needed | not required | `void main(String[] args) { … }` |
+| Inside a `class`   | **required** | not required | `class App { static void main(String[] args) { … } }` |
+
+- A free `main` needs **no** `static` and **no** `public` — visibility and
+  static-ness are not part of the entry-point match for a free function.
+- A `main` inside a class **must be `static`** (it has no receiver — the runtime
+  invokes it without an instance), and `public` is **not** required.
+- A non-`static` `main` inside a class is **not** an entry point; it is an
+  ordinary method, and if no other valid entry exists the build fails with
+  `E0326` (`class main must be static`).
+- When both a free `main` and a class `static main` are visible in the entry
+  file, that is an ambiguous entry point (`E0320`).
 
 ### E.1.3. Rules and Semantics
 
@@ -279,9 +329,16 @@ Each `path` must contain exactly one entry (per §E.1.3 / §E.2).
 | `E0320` | Entry file contains both top-level statements and a `main` function        |
 | `E0321` | Multiple functions carry `@entry` in the same binary                       |
 | `E0322` | `@entry(convention = "...")` is unsupported on the current target          |
-| `E0323` | `main`'s signature does not match any accepted form                        |
+| `E0323` | `main`'s signature does not match any accepted form (§E.1.2)               |
 | `E0324` | `@entry` function's signature is incompatible with its `symbol`'s ABI      |
 | `E0325` | `freestanding = true` but no `@entry` function is declared                 |
+| `E0326` | A class member named `main` with an entry-shaped signature is not `static` (§E.1.2.2) |
+
+A varargs parameter that is not the last parameter of its function is rejected
+with **`E0212`** (a general declaration-syntax error, allocated in
+`JUX-DIAGNOSTICS-ADDENDUM.md` §D.4, not specific to `main`). Each diagnostic must
+carry an actionable `help:` line — e.g. `E0326` suggests "add `static`", and
+`E0212` suggests "move `T... name` to the end of the parameter list".
 
 ---
 

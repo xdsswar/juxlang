@@ -81,13 +81,14 @@ For variadic parameters, all variadic arguments are evaluated in source order be
 
 ### S.1.5. Constructor Initializer Order
 
-Inside a class:
+Inside a class (order per `ERRATA.md` E2 — matches Java):
 
-1. Field initializer expressions (`private int x = expr;`) are evaluated **in textual order** at the start of every constructor.
-2. Then the constructor body runs (after any explicit `this(...)` or `super(...)` call resolves first; see §S.4).
-3. Then `init { }` blocks run, in textual order, after the constructor body returns.
+1. The constructor's explicit or implicit `super(...)` / `this(...)` call resolves first (see §S.4) — the parent's construction completes before any code of this class runs.
+2. Field initializer expressions (`private int x = expr;`) are evaluated **in textual order**.
+3. Then `init { }` blocks run, in textual order — **before** the constructor body.
+4. Then the constructor body runs.
 
-This deterministic order eliminates the Java footgun where field initializer order across multiple constructors becomes confusing.
+This deterministic order eliminates the Java footgun where field initializer order across multiple constructors becomes confusing. Init blocks run before the body so the body can rely on every field — initializer- or init-block-assigned — being in its final pre-body state; an init block may reference inherited fields because the parent has already constructed.
 
 > **Edit to JUX-LANG-V1 §7.3:** The "Primary constructor with init block" example shows the body assigning to fields. With this addendum, field initializers run before the body, so `this.name = name` overwrites a default `""` rather than a fresh field. Update the example to use field initializer expressions where the field has a constant default, and constructor-body assignment only where the value is computed from parameters.
 
@@ -107,7 +108,7 @@ For each profile:
 | `jux-embedded`  | Panic on overflow         | Wrap                  |
 | `jux-core`      | Wrap                      | Wrap                  |
 
-Panic means: throw `ArithmeticException` if exceptions are available; otherwise abort with a message via the panic handler (see §S.7). Wrap means: produce the bit-equivalent result modulo `2^N`.
+Panic means: abort via the panic handler (see §S.7) after reporting the condition and source location. Per `ERRATA.md` E1, panics are **not catchable from Jux source** — they are not exceptions. Code that wants a recoverable overflow uses the checked methods below, which return a `Result`. Wrap means: produce the bit-equivalent result modulo `2^N`.
 
 This matches Rust's overflow story almost exactly. Programmers who *want* wrapping behavior unconditionally use the explicit wrapping operators:
 
@@ -129,7 +130,7 @@ The wrapping (`+%`, `-%`, `*%`, `<<%`, `>>%`) operators are added to the lexical
 
 ### S.2.2. Integer Division and Remainder
 
-- `a / 0` for integer `a` panics in all profiles. Throws `ArithmeticException` where exceptions are enabled; aborts otherwise. There is no "implementation-defined" or "undefined" case.
+- `a / 0` for integer `a` panics in all profiles — an uncatchable abort via the panic handler (`ERRATA.md` E1). There is no "implementation-defined" or "undefined" case. Code that wants a recoverable division uses `a.checkedDiv(b)` (`Result`-shaped).
 - `a % 0` panics with the same diagnostic.
 - `int.MIN_VALUE / -1` (the only signed-overflow case for division) panics in debug, wraps to `int.MIN_VALUE` in release. Same for `%`.
 - `a / b` truncates toward zero. `a % b` has the sign of `a` (the C99/Java/Rust convention). `(a / b) * b + (a % b) == a` always holds for valid `a`, `b`.
@@ -298,8 +299,8 @@ For `new C(args)`:
    - For `super(...)`: recursively initialize the superclass portion. The vtable pointer is set to point at C's vtable (not the superclass's) — so virtual calls to overridden methods from inside the superclass constructor dispatch to **C**'s overrides. Java's rule.
    - For `this(...)`: initialize via the named alternative constructor; that constructor's chain runs to completion, then we return to step 5.
 3. **Field initializers.** Field initializer expressions of class C are evaluated **in textual order** and assigned to their fields.
-4. **Constructor body.** The body of `new(...)` runs.
-5. **Init blocks.** All `init { }` blocks of class C are run, in textual order.
+4. **Init blocks.** All `init { }` blocks of class C are run, in textual order (per `ERRATA.md` E2 they run **before** the constructor body, after the parent's construction completes — Java's order).
+5. **Constructor body.** The body of `new(...)` runs.
 6. **Done.** The reference is returned to the caller.
 
 If any step throws:
@@ -309,7 +310,7 @@ If any step throws:
 
 ### S.4.5. Field Definite-Assignment
 
-Every non-nullable, non-`weak` field of a class must be definitely assigned by the end of step 5. The compiler verifies this by flow analysis (`E0540` if a field could remain unassigned on some path through the constructor and init blocks).
+Every non-nullable, non-`weak` field of a class must be definitely assigned by the end of step 5. The compiler verifies this by flow analysis (`E0600` per `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 if a field could remain unassigned on some path through the constructor and init blocks).
 
 A field with a textual initializer (`private String name = "";`) is trivially definitely assigned. A field without one must be assigned in every constructor (after `super(...)` resolves and before the constructor returns), and may not be read before being assigned.
 
@@ -474,8 +475,10 @@ A **panic** is the runtime response to a condition the language guarantees canno
 
 ### S.7.1. Per-Profile Behavior
 
-- **`jux-full`**: a panic throws `RuntimeException` (or a subclass — `ArithmeticException`, `IndexOutOfBoundsException`, `ClassCastException`, `NullPointerException`). The exception unwinds the stack normally, runs `drop` blocks, and may be caught.
-- **`jux-embedded`**: same as `jux-full` if exceptions are enabled in the build profile; otherwise as `jux-core`.
+Per `ERRATA.md` E1, panics and exceptions are **two orthogonal layers**: exceptions are the user-level error model (values, declared in `throws`, caught with `try`/`catch`); panics are an abort-only runtime mechanism. **A panic is never catchable from Jux source** — `catch` clauses match only `Exception` subclasses, and there is no user-visible `Panic` type.
+
+- **`jux-full`**: a panic reports the condition with its source location and a stack trace, then terminates the program. It does **not** unwind into user `catch` blocks. (Phase 1 lowers panics to Rust's own panic machinery, so the report format follows the Rust std.)
+- **`jux-embedded`**: same as `jux-full` if the runtime-report machinery is enabled in the build profile; otherwise as `jux-core`.
 - **`jux-core`**: a panic calls a configurable panic handler, which by default aborts the program (using whatever abort means on the target — `__builtin_trap`, a vendor-specific reset, a halt loop). Programs may set their own handler:
   ```jux
   import core.panic.{set_panic_handler, PanicInfo};
@@ -499,7 +502,7 @@ For "must-check at runtime even in release," use `requireOrThrow(condition, () -
 
 ### S.7.3. Stack Traces
 
-Stack traces are captured when a `RuntimeException` (or any `Exception`) is constructed:
+Stack traces are captured when an `Exception` is constructed, and reported when a panic fires:
 
 - `jux-full`: full DWARF-walked stack trace, function names demangled.
 - `jux-embedded`: addresses only by default; symbolicate via the linker map.
@@ -526,7 +529,7 @@ This addendum makes the following parts of JUX-LANG-V1 implementable rather than
 | String equality, hashing     | §S.3.3  | UTF-8-bytes definition                     |
 | `char` arithmetic            | §S.3.4  | Range-checked, panic-on-overflow           |
 | Initialization order         | §S.4    | Lazy, deterministic, observable            |
-| Constructor sequence         | §S.4.4  | Allocate → super → init exprs → body → init blocks |
+| Constructor sequence         | §S.4.4  | Allocate → super → field initializers → init blocks → body |
 | Definite assignment          | §S.4.5  | Required for non-nullable fields           |
 | Drop order                   | §S.5.2  | Reverse declaration; subclass before parent |
 | Drop exceptions              | §S.5.3  | Aggregation, no-throw in `jux-core`        |
