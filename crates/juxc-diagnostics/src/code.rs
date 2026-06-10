@@ -283,6 +283,12 @@ pub enum Code {
     /// `E0408 variable not bound in all patterns`; we catch it first.)
     /// Split the arm into one `case` per alternative, or drop the
     /// binders and re-test inside the body.
+    /// E0212 — A **variadic parameter that isn't last** —
+    /// `void f(int... xs, int y)`. The call-site packer maps every
+    /// trailing argument into the varargs slot, so no parameter can
+    /// follow it (§7.2, Entry Points §E.1.2.1). Move the `T...` to
+    /// the end of the parameter list.
+    E0212_VarargsNotLast,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -457,6 +463,7 @@ impl Code {
             Code::E0431_GenericInferenceNoSolution => "E0431",
             Code::E0443_ExplicitTypeArgs         => "E0443",
             Code::E0444_WildcardStorageUnsupported => "E0444",
+            Code::E0212_VarargsNotLast           => "E0212",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0449_DefaultArgParamRef       => "E0449",

@@ -1,0 +1,50 @@
+// Varargs — `T... name` (§7.2, §E.1.2.1).
+//
+// - A variadic parameter must be LAST (E0212) and binds as `T[]`
+//   inside the body.
+// - Call sites pass zero or more trailing values; the compiler packs
+//   them into an array literal. Passing one `T[]` forwards it as-is
+//   (Java's array-passthrough rule).
+// - `main(String... args)` is an accepted entry form; the generated
+//   entry shim feeds `std::env::args().skip(1)` (program name
+//   excluded, like Java).
+
+package varargs;
+
+int sum(int... xs) {
+    var total = 0;
+    for (var x : xs) {
+        total = total + x;
+    }
+    return total;
+}
+
+void log(String level, String... messages) {
+    for (var msg : messages) {
+        print($"[$level] $msg");
+    }
+}
+
+class Calc {
+    public static int max(int first, int... rest) {
+        var best = first;
+        for (var r : rest) {
+            if (r > best) {
+                best = r;
+            }
+        }
+        return best;
+    }
+}
+
+public void main() {
+    print(sum());
+    print(sum(1));
+    print(sum(1, 2, 3, 4));
+    int[] nums = new int[]{10, 20, 30};
+    print(sum(nums));
+    log("info", "one", "two");
+    log("warn");
+    print(Calc.max(5));
+    print(Calc.max(5, 9, 3));
+}

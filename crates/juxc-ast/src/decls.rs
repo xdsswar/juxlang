@@ -803,6 +803,13 @@ pub struct Param {
     pub is_ref: bool,
     /// Default value, if any.
     pub default: Option<Expr>,
+    /// `true` for a variadic parameter — `T... name` (§7.2). The
+    /// parser desugars the declared type to the array form (`T[]`),
+    /// so bodies and emission see an ordinary dynamic array; this
+    /// flag drives the CALL-SITE rules (trailing args packed into a
+    /// synthesized array literal, §E.1.2.1 / §S.1.4) and the
+    /// last-parameter-only check (E0212).
+    pub is_varargs: bool,
     /// Span of the entire parameter.
     pub span: Span,
 }

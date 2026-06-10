@@ -2628,12 +2628,19 @@ impl RustEmitter {
             // when so, the inner function was renamed to
             // `__jux_async_main` by `emit_fn_decl`, and the shim
             // must drive it through `futures::executor::block_on`.
-            let async_main = unit.items.iter().any(|item| matches!(
-                item,
-                TopLevelDecl::Function(fn_decl)
-                    if fn_decl.name.text == "main"
-                        && matches!(fn_decl.return_type, juxc_ast::ReturnType::AsyncType(_))
-            ));
+            let main_decl = unit.items.iter().find_map(|item| match item {
+                TopLevelDecl::Function(fn_decl) if fn_decl.name.text == "main" => Some(fn_decl),
+                _ => None,
+            });
+            let async_main = main_decl.is_some_and(|f| {
+                matches!(f.return_type, juxc_ast::ReturnType::AsyncType(_))
+            });
+            // `main(String[] args)` / `main(String... args)` — the
+            // shim feeds `std::env::args().skip(1)` (program name
+            // excluded, like Java). A sync param-taking main was
+            // renamed to `__jux_args_main` by `emit_fn_decl`.
+            let takes_args = main_decl.is_some_and(|f| !f.params.is_empty());
+            let args_expr = if takes_args { "std::env::args().skip(1).collect::<Vec<String>>()" } else { "" };
             self.w.newline();
             self.w.line("fn main() {");
             self.w.indent_inc();
@@ -2642,7 +2649,14 @@ impl RustEmitter {
             if async_main {
                 self.w.push_str("futures::executor::block_on(");
                 self.w.push_str(&path);
-                self.w.push_str("::__jux_async_main());\n");
+                self.w.push_str("::__jux_async_main(");
+                self.w.push_str(args_expr);
+                self.w.push_str("));\n");
+            } else if takes_args {
+                self.w.push_str(&path);
+                self.w.push_str("::__jux_args_main(");
+                self.w.push_str(args_expr);
+                self.w.push_str(");\n");
             } else {
                 self.w.push_str(&path);
                 self.w.push_str("::main();\n");
@@ -2770,6 +2784,11 @@ impl RustEmitter {
             let Some(main_fn) = main_fn else { continue };
             let is_async_main =
                 matches!(main_fn.return_type, juxc_ast::ReturnType::AsyncType(_));
+            // Param-taking main (`String[]` / `String...`, §E.1.2) —
+            // the shim feeds `std::env::args().skip(1)`. Sync forms
+            // were renamed to `__jux_args_main` by `emit_fn_decl`.
+            let takes_args = !main_fn.params.is_empty();
+            let args_expr = if takes_args { "std::env::args().skip(1).collect::<Vec<String>>()" } else { "" };
             let pkg: Vec<&str> = unit
                 .package
                 .as_ref()
@@ -2786,8 +2805,21 @@ impl RustEmitter {
                     self.w.line("fn main() {");
                     self.w.indent_inc();
                     self.w.emit_indent();
-                    self.w
-                        .push_str("futures::executor::block_on(__jux_async_main());\n");
+                    self.w.push_str("futures::executor::block_on(__jux_async_main(");
+                    self.w.push_str(args_expr);
+                    self.w.push_str("));\n");
+                    self.w.indent_dec();
+                    self.w.line("}");
+                } else if takes_args {
+                    // Crate-root sync `main(args)` was renamed to
+                    // `__jux_args_main`; this shim is the real entry.
+                    self.w.newline();
+                    self.w.line("fn main() {");
+                    self.w.indent_inc();
+                    self.w.emit_indent();
+                    self.w.push_str("__jux_args_main(");
+                    self.w.push_str(args_expr);
+                    self.w.push_str(");\n");
                     self.w.indent_dec();
                     self.w.line("}");
                 }
@@ -2804,7 +2836,14 @@ impl RustEmitter {
                 // renamed to `__jux_async_main` by `emit_fn_decl`.
                 self.w.push_str("futures::executor::block_on(");
                 self.w.push_str(&path);
-                self.w.push_str("::__jux_async_main());\n");
+                self.w.push_str("::__jux_async_main(");
+                self.w.push_str(args_expr);
+                self.w.push_str("));\n");
+            } else if takes_args {
+                self.w.push_str(&path);
+                self.w.push_str("::__jux_args_main(");
+                self.w.push_str(args_expr);
+                self.w.push_str(");\n");
             } else {
                 self.w.push_str(&path);
                 self.w.push_str("::main();\n");

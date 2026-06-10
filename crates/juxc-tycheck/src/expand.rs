@@ -338,6 +338,31 @@ fn splice_args(args: &mut Vec<Expr>, arg_names: &mut Vec<Option<juxc_ast::Ident>
                 }
             }
             ArgSource::Default(e) => rebuilt.push(e.clone()),
+            // Variadic slot — pack the listed args into a synthesized
+            // dynamic-array literal of the element type (§E.1.2.1).
+            // Span: the first packed arg's (or DUMMY for an empty
+            // pack) — synthesized nodes must not alias the call's own
+            // span in the span-keyed type map.
+            ArgSource::Variadic { element_type, indices } => {
+                let mut elements = Vec::with_capacity(indices.len());
+                for &i in indices {
+                    if let Some(slot) = originals.get_mut(i) {
+                        if let Some(e) = slot.take() {
+                            elements.push(e);
+                        }
+                    }
+                }
+                let span = elements
+                    .first()
+                    .map(crate::check::expr_span_pub)
+                    .unwrap_or(juxc_source::Span::DUMMY);
+                rebuilt.push(Expr::NewArrayLit(juxc_ast::NewArrayLitExpr {
+                    element_type: element_type.clone(),
+                    elements,
+                    fixed: false,
+                    span,
+                }));
+            }
         }
     }
     *args = rebuilt;

@@ -2109,6 +2109,23 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
+        // E0212 — a variadic parameter must be the LAST parameter
+        // (§7.2 / Entry Points §E): the packer maps every trailing
+        // call-site argument into it, so nothing can follow.
+        for (i, p) in params.iter().enumerate() {
+            if p.is_varargs && i + 1 != params.len() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0212_VarargsNotLast,
+                        format!(
+                            "variadic parameter `{}` must be the last parameter",
+                            p.name.text,
+                        ),
+                    )
+                    .with_span(p.span),
+                );
+            }
+        }
         params
     }
 
@@ -2135,13 +2152,30 @@ impl<'a> Parser<'a> {
         // (§G.9.2). It carries no Jux type meaning (borrows vanish, §G.3.4) — we
         // record it as a flag so codegen re-adds the call-site borrow.
         let is_ref = self.eat(&TokenKind::Amp);
-        let ty = self.parse_type_ref()?;
+        let mut ty = self.parse_type_ref()?;
+        // Variadic marker — `T... name` (§7.2). Desugars the declared
+        // type to the dynamic-array form so the body sees `T[]`; the
+        // flag drives call-site packing and the E0212 position check.
+        let is_varargs = self.eat(&TokenKind::Ellipsis);
+        if is_varargs {
+            if ty.array_shape.is_some() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        "`...` can't follow an array type — a variadic parameter is already an array of its element type",
+                    )
+                    .with_span(self.last_consumed_span()),
+                );
+            } else {
+                ty.array_shape = Some(juxc_ast::ArrayShape::Dynamic);
+            }
+        }
         let name = self.parse_ident()?;
         // Optional default value — `int port = 80` (spec 7.2). Evaluated
         // at the call site when the argument is omitted (S.1.3); the
         // expansion pass clones it into each such call.
         let default = if self.eat(&TokenKind::Eq) { self.parse_expr() } else { None };
         let end = self.last_consumed_span();
-        Some(Param { name, ty, is_final, is_ref, default, span: start.join(end) })
+        Some(Param { name, ty, is_final, is_ref, default, is_varargs, span: start.join(end) })
     }
 }
