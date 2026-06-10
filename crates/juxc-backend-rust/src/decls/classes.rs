@@ -363,8 +363,8 @@ impl RustEmitter {
             }
         }
         // Constructor → `pub fn new(args) -> Self` with the __self pattern.
-        for ctor in &class_decl.constructors {
-            self.emit_constructor(class_decl, ctor);
+        for (idx, ctor) in class_decl.constructors.iter().enumerate() {
+            self.emit_constructor(class_decl, ctor, idx);
         }
         // If no constructor was declared, synthesize an implicit zero-
         // arg `new()` per §7.3.1 (declaring any constructor removes it).
@@ -701,8 +701,8 @@ impl RustEmitter {
         // set so their bodies adopt the interior-mutability lowering.
         let prev_wrapper = self.emitting_wrapper_class;
         self.emitting_wrapper_class = true;
-        for ctor in &class_decl.constructors {
-            self.emit_wrapper_constructor(class_decl, ctor);
+        for (idx, ctor) in class_decl.constructors.iter().enumerate() {
+            self.emit_wrapper_constructor(class_decl, ctor, idx);
         }
         if class_decl.constructors.is_empty() {
             self.emit_wrapper_synthetic_default_constructor(class_decl);

@@ -33,6 +33,22 @@ fn init_is_same_named_ident(init_expr: &Expr, field_name: &str) -> bool {
 /// [`SimpleCtorInits`] instead; this helper covers the non-simple
 /// (mixed-statement) body. A constructor may legally hold at most one
 /// `super(...)` (tycheck enforces this), so the first match wins.
+/// First-statement `this(args)` delegation (§7.3.1), if present.
+/// Returns the delegated argument list and the remaining body
+/// statements (everything after the delegation). Tycheck enforces
+/// the first-statement rule, so only index 0 is consulted.
+fn extract_this_delegation(
+    ctor: &juxc_ast::ConstructorDecl,
+) -> Option<(Vec<Expr>, Vec<juxc_ast::Stmt>)> {
+    let first = ctor.body.statements.first()?;
+    if let juxc_ast::Stmt::Expr(Expr::Call(call)) = first {
+        if matches!(call.callee.as_ref(), Expr::This(_)) {
+            return Some((call.args.clone(), ctor.body.statements[1..].to_vec()));
+        }
+    }
+    None
+}
+
 fn extract_super_args(ctor: &juxc_ast::ConstructorDecl) -> Option<Vec<Expr>> {
     for stmt in &ctor.body.statements {
         if let juxc_ast::Stmt::SuperCall(args, _) = stmt {
@@ -42,7 +58,95 @@ fn extract_super_args(ctor: &juxc_ast::ConstructorDecl) -> Option<Vec<Expr>> {
     None
 }
 
+/// Names of constructor parameters whose type is OWNED at the Rust
+/// level (String, arrays) — assigning one to a field moves it, so a
+/// later read in the same body needs the assignment to `.clone()`.
+fn ctor_owned_param_names(params: &[juxc_ast::Param]) -> HashSet<String> {
+    params
+        .iter()
+        .filter(|p| {
+            p.ty.array_shape.is_some()
+                || p.ty
+                    .name
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.text == "String")
+        })
+        .map(|p| p.name.text.clone())
+        .collect()
+}
+
 impl RustEmitter {
+    /// Emit a constructor body's statements with per-statement
+    /// liveness for owned parameters: before each statement, record
+    /// which owned params are still read by a LATER statement, so the
+    /// assignment emitter can `.clone()` instead of moving
+    /// (`this.name = name; print(name);` would otherwise be a
+    /// use-after-move in the emitted Rust).
+    fn emit_ctor_body_stmts(
+        &mut self,
+        stmts: &[juxc_ast::Stmt],
+        owned_params: &HashSet<String>,
+    ) {
+        for (i, stmt) in stmts.iter().enumerate() {
+            let mut live = HashSet::new();
+            if !owned_params.is_empty() && i + 1 < stmts.len() {
+                let scratch = juxc_ast::Block {
+                    statements: stmts[i + 1..].to_vec(),
+                    span: juxc_source::Span::DUMMY,
+                };
+                crate::exprs::collect_bare_names_block(&scratch, &mut |name| {
+                    if owned_params.contains(name) {
+                        live.insert(name.to_string());
+                    }
+                });
+            }
+            self.ctor_live_after = live;
+            self.emit_source_marker(stmt_span(stmt));
+            self.w.emit_indent();
+            self.emit_stmt(stmt);
+        }
+        self.ctor_live_after.clear();
+    }
+
+    /// Constructor-overload **name suffix** for a call with
+    /// `arg_count` arguments against `class_name` (bare or FQN):
+    /// `""` for the first (or only) constructor, `"__K"` for overload
+    /// K (§7.3.1 Phase-1 count-based selection). Re-derived here
+    /// rather than threaded from tycheck because every transformed
+    /// call (named-arg expansion, default filling, varargs packing)
+    /// lands on a count INSIDE the same constructor's accepted range
+    /// — ranges are validated pairwise-disjoint at the declaration.
+    pub(crate) fn ctor_overload_suffix(&self, class_name: &str, arg_count: usize) -> String {
+        let class = self
+            .symbols
+            .classes
+            .get(class_name)
+            .or_else(|| {
+                self.symbols
+                    .find_fqn_by_bare(class_name)
+                    .and_then(|fqn| self.symbols.classes.get(&fqn))
+            });
+        let Some(class) = class else { return String::new() };
+        if class.constructors.len() <= 1 {
+            return String::new();
+        }
+        let idx = class.constructors.iter().position(|c| {
+            let required = c
+                .params
+                .iter()
+                .filter(|p| p.default.is_none() && !p.is_varargs)
+                .count();
+            let max_ok = c.params.last().is_some_and(|p| p.is_varargs)
+                || arg_count <= c.params.len();
+            arg_count >= required && max_ok
+        });
+        match idx {
+            Some(0) | None => String::new(),
+            Some(k) => format!("__{k}"),
+        }
+    }
+
     /// Emit the parent's CONSTRUCTOR base path for a `__parent:` init —
     /// the path only, no generic args (`Parent::new(...)` infers them
     /// from the field's declared type; `Parent<int>::new` would be
@@ -91,6 +195,7 @@ impl RustEmitter {
         &mut self,
         class_decl: &juxc_ast::ClassDecl,
         ctor: &juxc_ast::ConstructorDecl,
+        ctor_idx: usize,
     ) {
         // (Migrated to Writer indent-aware API)
         // Caller (`emit_class_decl`) is at level 0; the ctor signature
@@ -99,7 +204,11 @@ impl RustEmitter {
         self.w.indent_inc();
         self.w.emit_indent();
         self.emit_visibility(ctor.visibility);
-        self.w.push_str("fn new(");
+        self.w.push_str("fn new");
+        if ctor_idx > 0 {
+            self.w.push_str(&format!("__{ctor_idx}"));
+        }
+        self.w.push('(');
         for (i, param) in ctor.params.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
@@ -113,6 +222,25 @@ impl RustEmitter {
         // First-use trigger for `static { }` blocks (§S.4.1) — construction
         // is an observable use, so run the once-guarded static init here.
         self.emit_static_init_trigger();
+
+        // **`this(...)` delegation** (§7.3.1): run the sibling
+        // constructor first, then the rest of this body against the
+        // produced value. `let mut __self = Self::new__K(args);
+        // <rest>; __self` — the K pick is count-based, same rule as
+        // every other constructor call site.
+        if let Some((delegate_args, rest)) = extract_this_delegation(ctor) {
+            self.emit_ctor_delegation(
+                class_decl,
+                &delegate_args,
+                &rest,
+                "new",
+            );
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.newline();
+            self.w.indent_dec();
+            return;
+        }
 
         // Try the **simple-ctor fast path** first: when every statement
         // in the body is `this.field = expr;` (with an optional leading
@@ -203,11 +331,8 @@ impl RustEmitter {
         // `Other(String test){ this.test = test; }` shape), so they must NOT be
         // rewritten by the implicit-`this` pass.
         self.current_fn_params = ctor.params.iter().map(|p| p.name.text.clone()).collect();
-        for stmt in &ctor.body.statements {
-            self.emit_source_marker(stmt_span(stmt));
-            self.w.emit_indent();
-            self.emit_stmt(stmt);
-        }
+        let owned = ctor_owned_param_names(&ctor.params);
+        self.emit_ctor_body_stmts(&ctor.body.statements, &owned);
         // Constructor params are out of scope for init blocks (an init block is
         // shared across all constructors), so clear them before the init pass.
         self.current_fn_params.clear();
@@ -341,7 +466,17 @@ impl RustEmitter {
                 // cross-package parent (`extends Exception` →
                 // `crate::jux::std::exceptions::Exception`).
                 self.emit_parent_ctor_base_path(parent_ty);
-                self.w.push_str("::new(");
+                let parent_bare = parent_ty
+                    .name
+                    .segments
+                    .last()
+                    .map(|s| s.text.clone())
+                    .unwrap_or_default();
+                let n_super = simple.super_args.as_ref().map_or(0, |a| a.len());
+                let sfx = self.ctor_overload_suffix(&parent_bare, n_super);
+                self.w.push_str("::new");
+                self.w.push_str(&sfx);
+                self.w.push('(');
                 // If the constructor wrote `super(args);`, lift those args
                 // here. If it didn't, Phase 1 calls `Parent::new()` with
                 // no arguments — fine for parameterless parents, breaks
@@ -440,6 +575,7 @@ impl RustEmitter {
         &mut self,
         class_decl: &juxc_ast::ClassDecl,
         ctor: &juxc_ast::ConstructorDecl,
+        ctor_idx: usize,
     ) {
         // Emit two functions for each wrapper constructor:
         //
@@ -455,13 +591,16 @@ impl RustEmitter {
         // double-wrapping (the parent's own `Rc<RefCell>` would split
         // identity). For a leaf simple class with no `extends`, the two
         // collapse to the obvious shape.
-        self.emit_wrapper_inner_constructor(class_decl, ctor);
+        self.emit_wrapper_inner_constructor(class_decl, ctor, ctor_idx);
+        let suffix = if ctor_idx > 0 { format!("__{ctor_idx}") } else { String::new() };
 
         // Thin public `new` delegating to `new_inner`.
         self.w.indent_inc();
         self.w.emit_indent();
         self.emit_visibility(ctor.visibility);
-        self.w.push_str("fn new(");
+        self.w.push_str("fn new");
+        self.w.push_str(&suffix);
+        self.w.push('(');
         for (i, param) in ctor.params.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
@@ -474,7 +613,9 @@ impl RustEmitter {
         self.w.indent_inc();
         self.emit_static_init_trigger();
         self.w.emit_indent();
-        self.w.push_str("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner(");
+        self.w.push_str("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner");
+        self.w.push_str(&suffix);
+        self.w.push('(');
         for (i, param) in ctor.params.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
@@ -488,6 +629,63 @@ impl RustEmitter {
         self.w.indent_dec();
     }
 
+    /// Shared body of a delegating constructor: bind the sibling's
+    /// result to `__self`, run the remaining statements with `this`
+    /// aliased to it, and yield it. `base_fn` is `"new"` (plain
+    /// classes) or `"new_inner"` (wrapper inner ctors).
+    fn emit_ctor_delegation(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+        delegate_args: &[Expr],
+        rest: &[juxc_ast::Stmt],
+        base_fn: &str,
+    ) {
+        let sfx = self.ctor_overload_suffix(&class_decl.name.text, delegate_args.len());
+        self.w.emit_indent();
+        if rest.is_empty() {
+            // Pure delegation — no binding needed.
+            self.w.push_str("Self::");
+        } else {
+            self.w.push_str("let mut __self = Self::");
+        }
+        self.w.push_str(base_fn);
+        self.w.push_str(&sfx);
+        self.w.push('(');
+        for (i, arg) in delegate_args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.emit_expr(arg);
+            if self.wrapper_value_needs_clone(arg) {
+                self.w.push_str(".clone()");
+            }
+        }
+        self.w.push(')');
+        if rest.is_empty() {
+            self.w.push('\n');
+            return;
+        }
+        self.w.push_str(";\n");
+        // Remaining statements run against the delegated value.
+        let prev_alias = self.this_alias.take();
+        self.this_alias = Some("__self".to_string());
+        let mut muts = HashSet::new();
+        let scratch = juxc_ast::Block {
+            statements: rest.to_vec(),
+            span: class_decl.span,
+        };
+        collect_mutated_names(&scratch, &mut muts, &self.user_mut_methods);
+        let prev_muts = std::mem::replace(&mut self.mutated_in_fn, muts);
+        for stmt in rest {
+            self.emit_source_marker(stmt_span(stmt));
+            self.w.emit_indent();
+            self.emit_stmt(stmt);
+        }
+        self.mutated_in_fn = prev_muts;
+        self.this_alias = prev_alias;
+        self.w.line("__self");
+    }
+
     /// Emit `fn new_inner(args) -> C_Inner` for a wrapper class — the
     /// function that builds the flattened inner struct (parent slice +
     /// own fields). See [`Self::emit_wrapper_constructor`] for why this
@@ -496,13 +694,18 @@ impl RustEmitter {
         &mut self,
         class_decl: &juxc_ast::ClassDecl,
         ctor: &juxc_ast::ConstructorDecl,
+        ctor_idx: usize,
     ) {
         let inner = format!("{}_Inner", class_decl.name.text);
         self.w.indent_inc();
         self.w.emit_indent();
         // `pub` so a subclass in another package can call
         // `Parent::new_inner(...)` to build its `__parent` slot.
-        self.w.push_str("pub fn new_inner(");
+        self.w.push_str("pub fn new_inner");
+        if ctor_idx > 0 {
+            self.w.push_str(&format!("__{ctor_idx}"));
+        }
+        self.w.push('(');
         for (i, param) in ctor.params.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
@@ -528,6 +731,24 @@ impl RustEmitter {
         // `__self.f = v`.
         let prev_wrapper = self.emitting_wrapper_class;
         self.emitting_wrapper_class = false;
+
+        // **`this(...)` delegation** at the inner level: the sibling's
+        // `new_inner__K` builds the same flattened inner struct, then
+        // the rest of this body mutates it.
+        if let Some((delegate_args, rest)) = extract_this_delegation(ctor) {
+            self.emit_ctor_delegation(
+                class_decl,
+                &delegate_args,
+                &rest,
+                "new_inner",
+            );
+            self.emitting_wrapper_class = prev_wrapper;
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.newline();
+            self.w.indent_dec();
+            return;
+        }
 
         // A class with `init { }` blocks can't use the simple fast path —
         // its init blocks run after construction and mutate `this`.
@@ -559,7 +780,17 @@ impl RustEmitter {
                     self.w.emit_indent();
                     self.w.push_str("__parent: ");
                     self.emit_parent_ctor_base_path(parent_ty);
-                    self.w.push_str("::new_inner(");
+                    let parent_bare = parent_ty
+                        .name
+                        .segments
+                        .last()
+                        .map(|s| s.text.clone())
+                        .unwrap_or_default();
+                    let n_super = extract_super_args(ctor).map_or(0, |a| a.len());
+                    let sfx = self.ctor_overload_suffix(&parent_bare, n_super);
+                    self.w.push_str("::new_inner");
+                    self.w.push_str(&sfx);
+                    self.w.push('(');
                     // Lift `super(args)` if present in the body.
                     if let Some(super_args) = extract_super_args(ctor) {
                         for (i, arg) in super_args.iter().enumerate() {
@@ -609,11 +840,8 @@ impl RustEmitter {
                 }
             }
             self.current_fn_params = ctor.params.iter().map(|p| p.name.text.clone()).collect();
-            for stmt in &ctor.body.statements {
-                self.emit_source_marker(stmt_span(stmt));
-                self.w.emit_indent();
-                self.emit_stmt(stmt);
-            }
+            let owned = ctor_owned_param_names(&ctor.params);
+            self.emit_ctor_body_stmts(&ctor.body.statements, &owned);
             self.current_fn_params.clear();
             // §M.1 / §S.4.4 step 5: run each `init { }` block after the ctor
             // body, before returning the inner value. `this` → __self.
@@ -679,7 +907,17 @@ impl RustEmitter {
             {
                 self.w.push_str(" __parent: ");
                 self.emit_parent_ctor_base_path(parent_ty);
-                self.w.push_str("::new_inner(");
+                let parent_bare = parent_ty
+                    .name
+                    .segments
+                    .last()
+                    .map(|s| s.text.clone())
+                    .unwrap_or_default();
+                let n_super = simple.super_args.as_ref().map_or(0, |a| a.len());
+                let sfx = self.ctor_overload_suffix(&parent_bare, n_super);
+                self.w.push_str("::new_inner");
+                self.w.push_str(&sfx);
+                self.w.push('(');
                 if let Some(super_args) = &simple.super_args {
                     let super_args = super_args.clone();
                     for (i, arg) in super_args.iter().enumerate() {
@@ -766,7 +1004,10 @@ impl RustEmitter {
             if let Some(seg) = parent_ty.name.segments.first() {
                 self.w.push_str(" __parent: ");
                 self.w.push_str(&seg.text);
-                self.w.push_str("::new_inner()");
+                let sfx = self.ctor_overload_suffix(&seg.text, 0);
+                self.w.push_str("::new_inner");
+                self.w.push_str(&sfx);
+                self.w.push_str("()");
                 first = false;
             }
         }

@@ -289,6 +289,16 @@ pub enum Code {
     /// follow it (§7.2, Entry Points §E.1.2.1). Move the `T...` to
     /// the end of the parameter list.
     E0212_VarargsNotLast,
+    /// E0450 — An **ambiguous overload**: more than one candidate
+    /// (constructor today; methods when §T.3 lands) can accept the
+    /// call's argument count, and the Phase-1 arity-based selector
+    /// has no way to rank them. Declared eagerly at the DEFINITION
+    /// when two constructors' acceptable-argument-count ranges
+    /// overlap (counting omittable defaults and varargs), since any
+    /// call in the overlap would be unresolvable. Make the ranges
+    /// disjoint, or fold the variants into one constructor with
+    /// default parameters.
+    E0450_AmbiguousOverload,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -464,6 +474,7 @@ impl Code {
             Code::E0443_ExplicitTypeArgs         => "E0443",
             Code::E0444_WildcardStorageUnsupported => "E0444",
             Code::E0212_VarargsNotLast           => "E0212",
+            Code::E0450_AmbiguousOverload        => "E0450",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0449_DefaultArgParamRef       => "E0449",

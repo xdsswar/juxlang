@@ -263,6 +263,16 @@ pub(crate) struct Checker<'a> {
     /// before the backend runs, so emission only ever sees plain
     /// positional calls.
     pub(crate) call_expansions: HashMap<Span, Vec<crate::ArgSource>>,
+    /// Constructor-overload selections — `new T(...)` / `super(...)` /
+    /// `this(...)` call span → index into the class's constructor
+    /// list. Absorbed into `SymbolTable::ctor_selections` after the
+    /// walk so the backend can pick `new` vs `new__K` per call site.
+    pub(crate) ctor_selections: HashMap<Span, usize>,
+    /// `Some(index)` while walking constructor `index`'s body —
+    /// `this(...)` delegation is only legal there (and only as the
+    /// first statement), and a delegation may not resolve back to
+    /// the declaring constructor itself.
+    pub(crate) current_ctor: Option<usize>,
     /// True while we're walking the body of a `static` method (or
     /// a `static` field initializer once those land). Drives the
     /// `E0425_ThisInStaticContext` diagnostic in `check_expr`.
@@ -321,6 +331,8 @@ impl<'a> Checker<'a> {
             current_return: None,
             expr_types: HashMap::new(),
             call_expansions: HashMap::new(),
+            ctor_selections: HashMap::new(),
+            current_ctor: None,
             in_static: false,
             in_async: false,
             in_unsafe: false,
@@ -422,8 +434,12 @@ impl<'a> Checker<'a> {
     /// the per-expression types AND the call-sugar expansion plans.
     pub(crate) fn into_maps(
         self,
-    ) -> (HashMap<Span, Ty>, HashMap<Span, Vec<crate::ArgSource>>) {
-        (self.expr_types, self.call_expansions)
+    ) -> (
+        HashMap<Span, Ty>,
+        HashMap<Span, Vec<crate::ArgSource>>,
+        HashMap<Span, usize>,
+    ) {
+        (self.expr_types, self.call_expansions, self.ctor_selections)
     }
 
     /// Seed the checker's [`TypeEnv`] with the per-unit
@@ -697,8 +713,8 @@ impl<'a> Checker<'a> {
                 self.check_fixed_array_size_in_type(fty);
             }
         }
-        for ctor in &class.constructors {
-            self.check_constructor(ctor, &this_ty);
+        for (idx, ctor) in class.constructors.iter().enumerate() {
+            self.check_constructor(ctor, &this_ty, idx);
         }
         for method in &class.methods {
             self.check_method(method, &this_ty);
@@ -727,8 +743,41 @@ impl<'a> Checker<'a> {
     /// Walk a constructor body. Like [`check_function`] but with no
     /// expected return type (constructors don't return values) and with
     /// `this` pre-declared.
-    fn check_constructor(&mut self, ctor: &ConstructorDecl, this_ty: &Ty) {
+    fn check_constructor(&mut self, ctor: &ConstructorDecl, this_ty: &Ty, ctor_idx: usize) {
         self.check_param_defaults(&ctor.params);
+        // `this(...)` / `super(...)` position rules (§7.3.1, E0210):
+        // a delegation must be the FIRST statement, and a constructor
+        // can't both delegate to a sibling AND call `super(...)` —
+        // the delegated-to constructor owns parent initialization.
+        let mut saw_this_call = false;
+        for (i, stmt) in ctor.body.statements.iter().enumerate() {
+            if let Stmt::Expr(Expr::Call(call)) = stmt {
+                if matches!(call.callee.as_ref(), Expr::This(_)) {
+                    saw_this_call = true;
+                    if i != 0 {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0210_ConstructorCallNotFirst,
+                                "`this(...)` must be the first statement of the constructor",
+                            )
+                            .with_span(call.span),
+                        );
+                    }
+                }
+            }
+            if saw_this_call {
+                if let Stmt::SuperCall(_, sspan) = stmt {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0210_ConstructorCallNotFirst,
+                            "a constructor that delegates with `this(...)` can't also call `super(...)` — the delegated-to constructor owns parent initialization",
+                        )
+                        .with_span(*sspan),
+                    );
+                }
+            }
+        }
+        let saved_ctor = self.current_ctor.replace(ctor_idx);
         self.env.push_scope();
         self.env.declare("this", this_ty.clone());
         for param in &ctor.params {
@@ -744,6 +793,7 @@ impl<'a> Checker<'a> {
         self.check_block(&ctor.body);
         self.flush_uninferable_news();
         self.in_async = saved_async;
+        self.current_ctor = saved_ctor;
         self.current_return = saved;
         self.env.pop_scope();
     }
@@ -2727,6 +2777,76 @@ impl<'a> Checker<'a> {
         // Always walk args first, regardless of callee shape, so nested
         // checks still fire.
         match c.callee.as_ref() {
+            // `this(args)` — constructor delegation (§7.3.1). Only
+            // meaningful inside a constructor body (the first-statement
+            // rule is enforced by `check_constructor`); resolve the
+            // sibling by argument count, reject self-delegation, and
+            // run the ordinary per-arg checks against its params.
+            Expr::This(span) => {
+                let Some(current_idx) = self.current_ctor else {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0210_ConstructorCallNotFirst,
+                            "`this(...)` is only valid as the first statement of a constructor",
+                        )
+                        .with_span(*span),
+                    );
+                    for arg in &c.args {
+                        self.check_expr(arg);
+                    }
+                    return;
+                };
+                let Some(class_name) = self.env.current_class.clone() else { return };
+                let Some(class) = self.symbols.classes.get(&class_name) else { return };
+                let selected =
+                    Self::select_ctor_by_count(&class.constructors, c.args.len());
+                match selected {
+                    Some(k) if k == current_idx => {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0413_UnresolvedMethod,
+                                "`this(...)` resolves to the declaring constructor itself — a constructor can't delegate to itself",
+                            )
+                            .with_span(c.span),
+                        );
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                    }
+                    Some(k) => {
+                        self.ctor_selections.insert(c.span, k);
+                        let params = class.constructors[k].params.clone();
+                        let subst_params = class.generic_params.clone();
+                        self.check_call_args(
+                            &format!("this (={class_name} constructor)"),
+                            &params,
+                            &c.args,
+                            &c.arg_names,
+                            c.span,
+                            Some(&class_name),
+                            &subst_params,
+                            &[],
+                        );
+                    }
+                    None => {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0411_WrongArgCount,
+                                format!(
+                                    "no constructor of `{class_name}` accepts {} argument{}",
+                                    c.args.len(),
+                                    if c.args.len() == 1 { "" } else { "s" },
+                                ),
+                            )
+                            .with_span(c.span),
+                        );
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                    }
+                }
+                return;
+            }
             Expr::Path(qn) if qn.segments.len() == 1 => {
                 let name = &qn.segments[0].text;
                 // Built-in functions accept anything.
@@ -3336,16 +3456,25 @@ impl<'a> Checker<'a> {
                 // backend emission handles the synthesis.
                 return;
             }
-            // At most one constructor in Turn 1. If there are none, the
-            // synthesized default takes zero args.
+            // Constructor-overload selection by argument count
+            // (§7.3.1, Phase-1 rule — ranges validated disjoint at
+            // the declaration). A miss falls back to the first
+            // declared constructor so arg-count/type errors report
+            // against SOMETHING sensible; no class constructors at
+            // all means the synthesized zero-arg default.
+            let selected = Self::select_ctor_by_count(&class.constructors, n.args.len())
+                .unwrap_or(0);
+            if !class.constructors.is_empty() {
+                self.ctor_selections.insert(n.span, selected);
+            }
             let params: Vec<ParamSig> = class
                 .constructors
-                .first()
+                .get(selected)
                 .map(|c| c.params.clone())
                 .unwrap_or_default();
             let ctor_vis = class
                 .constructors
-                .first()
+                .get(selected)
                 .map(|c| c.visibility)
                 .unwrap_or(juxc_ast::Visibility::Public);
             let subst_params = class.generic_params.clone();
@@ -3507,9 +3636,17 @@ impl<'a> Checker<'a> {
             .collect();
 
         let Some(parent) = self.symbols.classes.get(&parent_name) else { return };
+        // Parent-constructor overload selection — same count rule as
+        // `new` sites; the backend reads the recorded index when it
+        // builds `__parent: Parent::new__K(args)`.
+        let selected = Self::select_ctor_by_count(&parent.constructors, args.len())
+            .unwrap_or(0);
+        if !parent.constructors.is_empty() {
+            self.ctor_selections.insert(call_span, selected);
+        }
         let params: Vec<ParamSig> = parent
             .constructors
-            .first()
+            .get(selected)
             .map(|c| c.params.clone())
             .unwrap_or_default();
         let subst_params = parent.generic_params.clone();
@@ -3614,6 +3751,23 @@ impl<'a> Checker<'a> {
             );
         }
         subst_params.extend(method_generic_params.iter().cloned());
+    }
+
+    /// Select a constructor overload by **argument count** (Phase-1
+    /// rule, §7.3.1): the unique constructor whose acceptable-count
+    /// range `[required ..= max]` covers `arg_count`. Declaration-time
+    /// validation (`check_constructor_overloads`) guarantees ranges
+    /// are pairwise disjoint, so at most one matches. `None` when no
+    /// constructor accepts the count (the caller falls back to the
+    /// first for error reporting) or when the class declares none.
+    fn select_ctor_by_count(
+        ctors: &[crate::symbol_table::ConstructorSig],
+        arg_count: usize,
+    ) -> Option<usize> {
+        ctors.iter().position(|c| {
+            let (lo, hi) = crate::symbol_table::ctor_arity_range(&c.params);
+            arg_count >= lo && hi.map_or(true, |h| arg_count <= h)
+        })
     }
 
     /// Variadic-callee arm of [`Self::check_call_args`]: positional

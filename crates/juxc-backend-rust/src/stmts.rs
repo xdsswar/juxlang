@@ -1213,6 +1213,25 @@ impl RustEmitter {
     /// owned `String` value (literal self-coerces inside
     /// `emit_literal`; identifiers refer to `String`-typed bindings).
     /// No `.to_string()` injection is needed here anymore.
+    /// Emit an assignment's RHS value, appending `.clone()` when the
+    /// value is a bare reference to an owned constructor parameter
+    /// that a LATER statement still reads (`this.name = name;
+    /// print(name);` — the move would poison the later read). The
+    /// liveness set is maintained by `emit_ctor_body_stmts` and is
+    /// empty outside constructor bodies, so this is a no-op
+    /// everywhere else.
+    fn emit_assign_rhs(&mut self, value: &Expr) {
+        self.emit_expr(value);
+        if let Expr::Path(qn) = value {
+            if qn.segments.len() == 1
+                && self.ctor_live_after.contains(&qn.segments[0].text)
+                && !self.wrapper_value_needs_clone(value)
+            {
+                self.w.push_str(".clone()");
+            }
+        }
+    }
+
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
         // **Static-block first-use trigger (§S.4.1).** Writing a static field is
         // an observable use, so run the class's once-guarded `__static_init()`
@@ -1271,7 +1290,7 @@ impl RustEmitter {
                             self.w.push_str(op.as_rust_str());
                         }
                         self.w.push_str("= ");
-                        self.emit_expr(&a.value);
+                        self.emit_assign_rhs(&a.value);
                         if self.wrapper_value_needs_clone(&a.value) {
                             self.w.push_str(".clone()");
                         }
@@ -1309,7 +1328,7 @@ impl RustEmitter {
                             self.w.push_str(op.as_rust_str());
                         }
                         self.w.push_str("= ");
-                        self.emit_expr(&a.value);
+                        self.emit_assign_rhs(&a.value);
                         if self.wrapper_value_needs_clone(&a.value) {
                             self.w.push_str(".clone()");
                         }
@@ -1372,7 +1391,7 @@ impl RustEmitter {
             // wasted `.to_string()`).
             let prev = self.emitting_format_arg;
             self.emitting_format_arg = true;
-            self.emit_expr(&a.value);
+            self.emit_assign_rhs(&a.value);
             self.emitting_format_arg = prev;
             self.w.push_str(");\n");
             return;
@@ -1391,7 +1410,7 @@ impl RustEmitter {
         let target_is_mutable_static = self.target_is_mutable_static(&a.target);
         if target_is_mutable_static {
             self.w.push_str("{ let __jux_v = ");
-            self.emit_expr(&a.value);
+            self.emit_assign_rhs(&a.value);
             self.w.push_str("; ");
             self.emitting_lvalue = true;
             self.emit_expr(&a.target);
@@ -1456,14 +1475,14 @@ impl RustEmitter {
                                 self.w.push_str("() ");
                                 self.w.push_str(op.as_rust_str());
                                 self.w.push(' ');
-                                self.emit_expr(&a.value);
+                                self.emit_assign_rhs(&a.value);
                             } else if !matches!(
                                 self.iface_coercion_to(&fty, &a.value),
                                 crate::analysis::IfaceCoercion::None,
                             ) {
                                 self.emit_expr_coerced_to_iface(&fty, &a.value);
                             } else {
-                                self.emit_expr(&a.value);
+                                self.emit_assign_rhs(&a.value);
                                 if self.wrapper_value_needs_clone(&a.value) {
                                     self.w.push_str(".clone()");
                                 }
@@ -1594,6 +1613,16 @@ impl RustEmitter {
             // never takes a bare wrapped place; the helper returns false too).
             if !is_compound && !assign_nullable && self.wrapper_value_needs_clone(&a.value) {
                 self.w.push_str(".clone()");
+            } else if !is_compound && !assign_nullable {
+                // Owned ctor param still read by a later statement —
+                // clone instead of moving (see `emit_assign_rhs`).
+                if let Expr::Path(qn) = &a.value {
+                    if qn.segments.len() == 1
+                        && self.ctor_live_after.contains(&qn.segments[0].text)
+                    {
+                        self.w.push_str(".clone()");
+                    }
+                }
             }
         }
         self.w.push_str(";\n");

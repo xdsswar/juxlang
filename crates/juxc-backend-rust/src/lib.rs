@@ -609,6 +609,13 @@ struct RustEmitter {
     /// interp-string synthetic sources). Push on function/block
     /// entry, pop on exit, `declare` on each `Stmt::VarDecl`.
     local_types: Vec<std::collections::HashMap<String, juxc_tycheck::Ty>>,
+    /// Owned-typed constructor parameters (String / arrays) that are
+    /// still READ by a later statement of the constructor body being
+    /// emitted. A `this.f = param;` assignment whose RHS is one of
+    /// these must `.clone()` — the plain move would poison the later
+    /// read (rustc E0382). Maintained per-statement by
+    /// `emit_ctor_body_stmts`; empty outside constructor bodies.
+    pub(crate) ctor_live_after: std::collections::HashSet<String>,
     /// The bare enum name of the scrutinee for the `switch` currently being
     /// emitted, when it resolves to an enum. Lets bare `case Variant ->`
     /// patterns (which parse as `Pattern::Bind`, Java-style unqualified labels)
@@ -2476,6 +2483,7 @@ impl RustEmitter {
             workspace_mode: false,
             emitted_uses_in_module: std::collections::HashSet::new(),
             local_types: vec![std::collections::HashMap::new()],
+            ctor_live_after: std::collections::HashSet::new(),
             current_switch_enum: None,
             test_mode: false,
             current_unit_idx: None,
