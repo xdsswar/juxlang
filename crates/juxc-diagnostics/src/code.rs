@@ -304,6 +304,13 @@ pub enum Code {
     /// 'else' expr`), so `else` is mandatory; only the STATEMENT form
     /// may omit it. Add the `else`, or restructure as a statement.
     E0260_IfExprMissingElse,
+    /// W0720 — A **`return` inside a `finally` block** (§X.3.5). The
+    /// finally's return wins over everything: it discards a value
+    /// being returned from the `try`/`catch` body AND swallows any
+    /// in-flight exception — almost never what was meant. Move the
+    /// return after the `try` statement, or compute the value in the
+    /// body and return it there.
+    W0720_ReturnInFinally,
     E0450_AmbiguousOverload,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
@@ -481,6 +488,7 @@ impl Code {
             Code::E0444_WildcardStorageUnsupported => "E0444",
             Code::E0212_VarargsNotLast           => "E0212",
             Code::E0260_IfExprMissingElse        => "E0260",
+            Code::W0720_ReturnInFinally          => "W0720",
             Code::E0450_AmbiguousOverload        => "E0450",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",

@@ -102,7 +102,7 @@ use crate::ty::{
 /// non-async context. If/when more built-ins land (`assert`, `panic`,
 /// …) they go here.
 const BUILTINS: &[&str] = &[
-    "print", "parallel", "block_on", "yield_now", "Worker", "now_ms",
+    "print", "parallel", "block_on", "yield_now", "Worker", "now_ms", "assert",
     // Stdlib I/O — `File.readText(path)`, `File.writeText(path, body)`.
     // The Jux-level shape is `File.readText(...)`, parsed as a
     // Field call on Path("File"). Registering `File` in BUILTINS
@@ -1527,6 +1527,24 @@ impl<'a> Checker<'a> {
                     self.env.pop_scope();
                 }
                 if let Some(fin) = &t.finally {
+                    // W0720 (§X.3.5): a `return` inside `finally`
+                    // overrides the body's return value AND swallows
+                    // any in-flight exception. Lambdas inside the
+                    // block open their own return scope and don't
+                    // count.
+                    let mut spans = Vec::new();
+                    collect_returns_in_block(fin, &mut spans);
+                    for span in spans {
+                        let span = if span == Span::DUMMY { fin.span } else { span };
+                        self.diagnostics.push(
+                            Diagnostic::warning(
+                                code::Code::W0720_ReturnInFinally,
+                                "`return` inside `finally` discards the try/catch result and swallows in-flight exceptions",
+                            )
+                            .with_span(span)
+                            .with_help("compute the value in the try body and return after the try statement"),
+                        );
+                    }
                     self.check_block(fin);
                 }
             }
@@ -2860,6 +2878,56 @@ impl<'a> Checker<'a> {
             }
             Expr::Path(qn) if qn.segments.len() == 1 => {
                 let name = &qn.segments[0].text;
+                // `assert(cond)` / `assert(cond, message)` (§S.7.2) —
+                // the one builtin with a checked shape: 1-2 args, the
+                // first must be bool, the optional second a String.
+                if name == "assert" {
+                    for arg in &c.args {
+                        self.check_expr(arg);
+                    }
+                    if c.args.is_empty() || c.args.len() > 2 {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0411_WrongArgCount,
+                                format!(
+                                    "`assert` takes a condition and an optional message, got {} arguments",
+                                    c.args.len(),
+                                ),
+                            )
+                            .with_span(c.span),
+                        );
+                        return;
+                    }
+                    let cond_ty = infer_expr(&c.args[0], &self.env, self.symbols);
+                    if !compatible(&Ty::Primitive(Primitive::Bool), &cond_ty, self.symbols) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0410_TypeMismatch,
+                                format!("`assert` condition must be bool, found {cond_ty}"),
+                            )
+                            .with_span(match expr_span(&c.args[0]) {
+                                s if s == Span::DUMMY => c.span,
+                                s => s,
+                            }),
+                        );
+                    }
+                    if let Some(msg) = c.args.get(1) {
+                        let msg_ty = infer_expr(msg, &self.env, self.symbols);
+                        if !compatible(&Ty::String, &msg_ty, self.symbols) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0410_TypeMismatch,
+                                    format!("`assert` message must be a String, found {msg_ty}"),
+                                )
+                                .with_span(match expr_span(msg) {
+                                    s if s == Span::DUMMY => c.span,
+                                    s => s,
+                                }),
+                            );
+                        }
+                    }
+                    return;
+                }
                 // Built-in functions accept anything.
                 if BUILTINS.contains(&name.as_str()) {
                     for arg in &c.args {
@@ -4448,6 +4516,53 @@ fn expr_span(e: &Expr) -> Span {
 /// bind, a payload binder inside a variant pattern, or a type-test
 /// binder. Used to enforce the §A.3 rule that or-pattern alternatives
 /// are binding-free.
+/// Collect the spans of every `return` statement lexically inside
+/// `block`, NOT crossing into lambda bodies (those return from the
+/// lambda, §X.3.5 doesn't apply to them). Drives W0720.
+fn collect_returns_in_block(block: &Block, out: &mut Vec<Span>) {
+    for stmt in &block.statements {
+        collect_returns_in_stmt(stmt, out);
+    }
+}
+
+fn collect_returns_in_if(i: &juxc_ast::IfStmt, out: &mut Vec<Span>) {
+    collect_returns_in_block(&i.then_block, out);
+    if let Some(else_branch) = &i.else_branch {
+        match &**else_branch {
+            ElseBranch::If(elif) => collect_returns_in_if(elif, out),
+            ElseBranch::Block(b) => collect_returns_in_block(b, out),
+        }
+    }
+}
+
+fn collect_returns_in_stmt(stmt: &Stmt, out: &mut Vec<Span>) {
+    match stmt {
+        Stmt::Return(e) => {
+            // Best span available: the returned expression's, else the
+            // statement has no own span — fall back to DUMMY (the
+            // caller anchors on the finally block if needed).
+            out.push(e.as_ref().map(expr_span).unwrap_or(Span::DUMMY));
+        }
+        Stmt::If(i) => collect_returns_in_if(i, out),
+        Stmt::While(w) => collect_returns_in_block(&w.body, out),
+        Stmt::DoWhile(d) => collect_returns_in_block(&d.body, out),
+        Stmt::ForEach(f) => collect_returns_in_block(&f.body, out),
+        Stmt::ForC(f) => collect_returns_in_block(&f.body, out),
+        Stmt::Labeled { stmt, .. } => collect_returns_in_stmt(stmt, out),
+        Stmt::Try(t) => {
+            collect_returns_in_block(&t.body, out);
+            for c in &t.catches {
+                collect_returns_in_block(&c.body, out);
+            }
+            if let Some(f) = &t.finally {
+                collect_returns_in_block(f, out);
+            }
+        }
+        Stmt::Unsafe(b) => collect_returns_in_block(b, out),
+        _ => {}
+    }
+}
+
 fn pattern_introduces_bindings(p: &Pattern) -> bool {
     match p {
         Pattern::Bind(_) | Pattern::TypeBind { .. } => true,

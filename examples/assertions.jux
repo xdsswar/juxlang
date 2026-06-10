@@ -1,0 +1,22 @@
+// `assert` builtin (§S.7.2) + W0720 return-in-finally warning (§X.3.5).
+//
+// - `assert(cond)` / `assert(cond, message)` checks in debug builds
+//   and elides in release (lowers to Rust's debug_assert!). A failed
+//   assertion is a PANIC — it is not a catchable Exception; the
+//   process reports `panic: <message>` and exits non-zero.
+// - The condition must be bool and the optional message a String
+//   (checked at compile time).
+
+package assertions;
+
+int clampPositive(int v) {
+    assert(v >= 0, "negative input");
+    return v;
+}
+
+public void main() {
+    assert(1 + 1 == 2);
+    assert(true, "never fires");
+    print(clampPositive(7));
+    print("all assertions passed");
+}

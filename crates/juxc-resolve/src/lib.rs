@@ -136,6 +136,10 @@ impl Resolver {
         // The milestone-1 built-in. Eventually this will be supplanted by
         // `import std.io.print;` and removed from here.
         builtins.insert("print");
+        // `assert(cond)` / `assert(cond, message)` — language builtin
+        // (§S.7.2). Checked in debug builds, elided in release
+        // (lowers to Rust's `debug_assert!`).
+        builtins.insert("assert");
         // Async-runtime builtin per JUX-ASYNC-ADDENDUM-v2: `parallel`
         // takes N async expressions and concurrently awaits them
         // all, returning a tuple of their results. Lowers to

@@ -3282,10 +3282,25 @@ impl RustEmitter {
             // user-declared `class Box` (some test programs do
             // this) doesn't shadow std's Box at the
             // `set_hook(Box::new(...))` call site.
-            source = source.replace(
+            // The hook stays quiet for thrown Jux exceptions (their
+            // payload is a user exception class — `catch` may absorb
+            // them, and the throw-time hook can't know). But a &str /
+            // String payload is a RUNTIME PANIC — assert failures
+            // (§S.7.2), arithmetic checks, index bounds — which no
+            // Jux `catch` clause can match, so it always reaches the
+            // top: print it, or the process dies with a bare 101.
+            let reporting_hook = concat!(
                 "fn main() {\n",
-                "fn main() {\n    std::panic::set_hook(::std::boxed::Box::new(|_| {}));\n",
+                "    std::panic::set_hook(::std::boxed::Box::new(|__jux_info| {\n",
+                "        let __jux_p = __jux_info.payload();\n",
+                "        if let Some(__jux_s) = __jux_p.downcast_ref::<&str>() {\n",
+                "            eprintln!(\"panic: {__jux_s}\");\n",
+                "        } else if let Some(__jux_s) = __jux_p.downcast_ref::<String>() {\n",
+                "            eprintln!(\"panic: {__jux_s}\");\n",
+                "        }\n",
+                "    }));\n",
             );
+            source = source.replace("fn main() {\n", reporting_hook);
         }
         RustCrate {
             cargo_toml: cargo_toml_for_with(CRATE_NAME, uses_async),

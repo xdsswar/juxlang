@@ -212,6 +212,30 @@ impl RustEmitter {
                 return self.emit_print_call(call);
             }
         }
+        // `assert(cond)` / `assert(cond, msg)` (§S.7.2) → Rust's
+        // `debug_assert!`: checked in debug builds, elided in release
+        // — exactly the jux-full profile defaults. The message slot
+        // goes through the format machinery so interpolated strings
+        // and String values both work; the macro evaluates it lazily
+        // (only on failure).
+        if let Expr::Path(qn) = &*call.callee {
+            if qn.segments.len() == 1 && qn.segments[0].text == "assert" {
+                self.w.push_str("debug_assert!(");
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                if let Some(cond) = call.args.first() {
+                    self.emit_expr(cond);
+                }
+                if let Some(msg) = call.args.get(1) {
+                    self.w.push_str(", \"{}\", ");
+                    self.emitting_format_arg = true;
+                    self.emit_expr(msg);
+                }
+                self.emitting_format_arg = prev;
+                self.w.push(')');
+                return;
+            }
+        }
         // `parallel(a, b, c, ...)` — async-runtime builtin per
         // JUX-ASYNC-ADDENDUM-v2. Wraps `futures::join!(...)` in an
         // `async { ... }` block, so the call evaluates to a **Future**
