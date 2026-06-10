@@ -1364,7 +1364,7 @@ pub(crate) fn binary_prec(op: BinaryOp) -> u8 {
         BinaryOp::And    => 5,
         // Reference identity (`===`/`!==`) shares the equality level.
         BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::RefEq | BinaryOp::RefNeq => 6,
-        BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => 7,
+        BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge | BinaryOp::In => 7,
         BinaryOp::BitOr  => 8,
         BinaryOp::BitXor => 9,
         BinaryOp::BitAnd => 10,

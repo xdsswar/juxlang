@@ -630,6 +630,12 @@ impl<'a> Parser<'a> {
             TokenKind::Le => Some(BinaryOp::Le),
             TokenKind::Gt => Some(BinaryOp::Gt),
             TokenKind::Ge => Some(BinaryOp::Ge),
+            // Containment test `x in xs` (§O.2.4) — same level as the
+            // comparisons. `in` is a CONTEXTUAL keyword (lexes as an
+            // identifier); two adjacent expressions are never valid,
+            // so an `in` identifier in operator position is
+            // unambiguous.
+            TokenKind::Ident(s) if s == "in" => Some(BinaryOp::In),
             _ => None,
         }
     }

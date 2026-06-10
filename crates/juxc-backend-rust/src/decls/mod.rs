@@ -39,6 +39,7 @@ pub(crate) mod records;
 pub(crate) fn synthetic_op_method_name(kind: OperatorKind) -> &'static str {
     match kind {
         OperatorKind::Eq => "__op_eq",
+        OperatorKind::In => "__op_in",
         OperatorKind::Cmp => "__op_cmp",
         OperatorKind::Lt => "__op_lt",
         OperatorKind::Le => "__op_le",

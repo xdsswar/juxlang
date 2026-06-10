@@ -2893,6 +2893,7 @@ fn operator_sig(op: &OperatorDecl) -> OperatorSig {
 fn operator_kind_display(kind: OperatorKind) -> &'static str {
     match kind {
         OperatorKind::Eq => "==",
+        OperatorKind::In => "in",
         OperatorKind::Cmp => "<=>",
         OperatorKind::Lt => "<",
         OperatorKind::Le => "<=",
@@ -2989,6 +2990,7 @@ fn check_operator_return_types(
 fn required_return_type_for_operator(kind: OperatorKind) -> Option<&'static str> {
     match kind {
         OperatorKind::Eq
+        | OperatorKind::In
         | OperatorKind::Lt
         | OperatorKind::Le
         | OperatorKind::Gt

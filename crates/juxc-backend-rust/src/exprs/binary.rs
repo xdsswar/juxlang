@@ -289,6 +289,72 @@ impl RustEmitter {
             self.w.push(')');
             return;
         }
+        // **Containment `x in xs` (§O.2.4).** Dispatch order:
+        //   1. the CONTAINER's user `operator in` → `xs.__op_in(x)`;
+        //   2. a map receiver → `.contains_key(&x)`;
+        //   3. everything else (arrays/Vec, sets, ranges, String) →
+        //      `.contains(&x)` — `&String` implements `Pattern`, so
+        //      the string case rides the same shape.
+        if b.op == BinaryOp::In {
+            // User-defined `operator in` on the right operand's class.
+            if let Some(Ty::User { name, .. }) =
+                self.expr_types.get(&expr_span_of(&b.right))
+            {
+                let has_user_in = self
+                    .symbols
+                    .classes
+                    .get(name)
+                    .map(|c| c.operators.contains_key(&OperatorKind::In))
+                    .unwrap_or(false);
+                if has_user_in {
+                    let needs_parens = receiver_needs_parens(&b.right);
+                    if needs_parens {
+                        self.w.push('(');
+                    }
+                    self.emit_expr(&b.right);
+                    if needs_parens {
+                        self.w.push(')');
+                    }
+                    self.w.push_str(".__op_in(");
+                    self.emit_expr(&b.left);
+                    if self.wrapper_value_needs_clone(&b.left) {
+                        self.w.push_str(".clone()");
+                    }
+                    self.w.push(')');
+                    return;
+                }
+            }
+            let is_map = matches!(
+                self.expr_types.get(&expr_span_of(&b.right)),
+                Some(Ty::User { name, .. })
+                    if name.rsplit('.').next().unwrap_or(name).contains("Map"),
+            );
+            let needs_parens = receiver_needs_parens(&b.right);
+            if needs_parens {
+                self.w.push('(');
+            }
+            self.emit_expr(&b.right);
+            if needs_parens {
+                self.w.push(')');
+            }
+            // A string LITERAL is already a `&str` — pass it bare
+            // (`contains_key("k")` via `Borrow<str>`, `contains("x")`
+            // via `Pattern`); any other operand borrows.
+            let bare_str = is_string_literal(&b.left);
+            self.w.push_str(if is_map { ".contains_key(" } else { ".contains(" });
+            if bare_str {
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = true; // keep the literal &str
+                self.emit_expr(&b.left);
+                self.emitting_format_arg = prev;
+            } else {
+                self.w.push_str("&(");
+                self.emit_expr(&b.left);
+                self.w.push(')');
+            }
+            self.w.push(')');
+            return;
+        }
         // Null-equality peephole: `x == null` and `x != null` lower
         // to `x.is_none()` / `x.is_some()` respectively, instead of
         // the literal `x == None` (which would require `T: PartialEq`

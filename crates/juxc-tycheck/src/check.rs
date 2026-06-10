@@ -3530,6 +3530,7 @@ fn op_kind_for_unary(op: UnaryOp) -> Option<OperatorKind> {
 fn operator_kind_user_spelling(kind: OperatorKind) -> &'static str {
     match kind {
         OperatorKind::Eq => "==",
+        OperatorKind::In => "in",
         OperatorKind::Cmp => "<=>",
         OperatorKind::Lt => "<",
         OperatorKind::Le => "<=",
