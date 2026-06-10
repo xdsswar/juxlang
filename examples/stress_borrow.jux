@@ -1,0 +1,88 @@
+// Borrow-checker stress — adversarial aliasing/mutation shapes that
+// Java permits freely and the Rc<RefCell> wrapper model must lower
+// without leaking rustc borrow errors (E0382/E0499/E0502/E0596/E0072).
+//
+// Each section was originally a leaking probe found by stress testing;
+// the runner asserts exact outputs so the fixes stay fixed:
+//
+//   1. Nested mutating call (`a.addTwice(a.bump())`) — borrow-hoisted
+//      into `{ let __jux_arg0 = a.bump(); a.addTwice(__jux_arg0) }`.
+//   2. Lambda capturing an object and mutating it — capture forces the
+//      wrapper, the closure shares the handle (Rc bump), the caller's
+//      binding survives the `move`.
+//   3. Static field holding an object — `!Send` payload lowers to a
+//      `thread_local!` slot; reads hand out shared handles.
+//   4. Objects stored in two containers — builtin `add` share-clones,
+//      mutation through one list is visible through the other.
+//   5. Cyclic references + `!!` non-null assertion chains
+//      (`a.peer!!.id`) — recursive classes stay wrapped (the Rc breaks
+//      the E0072 infinite-size cycle), `!!` unwraps with an NPE panic
+//      on null, and chains keep going (`a.peer!!.id = 99` writes
+//      through).
+
+import jux.std.collections.ArrayList;
+
+public class Acc {
+    public int sum;
+    public Acc() { this.sum = 0; }
+    public int bump() { this.sum = this.sum + 1; return this.sum; }
+    public void addTwice(int x) { this.sum = this.sum + x + x; }
+}
+
+public class Counter {
+    public int n;
+    public Counter() { this.n = 0; }
+    public void inc() { this.n = this.n + 1; }
+}
+
+public class Registry {
+    public static Counter global = new Counter();
+    public static int snapshot() { return global.n; }
+}
+
+public class Node {
+    public int id;
+    public Node? peer;
+    public Node(int id) { this.id = id; this.peer = null; }
+}
+
+public void main() {
+    // 1. Nested mutating call on the same receiver.
+    var a = new Acc();
+    a.addTwice(a.bump());
+    print(a.sum);
+
+    // 2. Lambda capture + mutation, observed by the caller.
+    var c = new Counter();
+    var tick = () -> { c.inc(); };
+    tick();
+    tick();
+    print(c.n);
+
+    // 3. Static object: mutate through the static, an alias, and a
+    //    static method's bare-name read.
+    Registry.global.inc();
+    var alias = Registry.global;
+    alias.inc();
+    print(Registry.snapshot());
+
+    // 4. One object in two containers — all three handles share.
+    var shared = new Counter();
+    var l1 = new ArrayList<Counter>();
+    var l2 = new ArrayList<Counter>();
+    l1.add(shared);
+    l2.add(shared);
+    l1.get(0).inc();
+    print(l2.get(0).n);
+    print(shared.n);
+
+    // 5. Cycle + `!!` chains: two nodes pointing at each other.
+    var n1 = new Node(1);
+    var n2 = new Node(2);
+    n1.peer = n2;
+    n2.peer = n1;
+    print(n1.peer!!.id);
+    print(n2.peer!!.id);
+    n1.peer!!.id = 99;
+    print(n2.id);
+}

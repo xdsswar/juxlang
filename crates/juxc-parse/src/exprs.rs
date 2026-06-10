@@ -743,6 +743,15 @@ impl<'a> Parser<'a> {
                         span,
                     });
                 }
+                TokenKind::BangBang => {
+                    // Non-null assertion `expr!!` (§A.4 level 19).
+                    // Postfix, so it chains: `a.peer!!.id` asserts
+                    // `peer` then reads `.id` off the unwrapped value.
+                    let end = self.peek_span();
+                    self.advance(); // '!!'
+                    let span = expr_span(&expr).join(end);
+                    expr = Expr::NotNullAssert(Box::new(expr), span);
+                }
                 TokenKind::QuestionDot => {
                     // Safe-navigation: `object?.field` and `object?.method(args)`.
                     // Same parse shape as `.`, but the resulting
@@ -1237,6 +1246,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::MethodRef(m) => m.span,
         Expr::Ternary(t) => t.span,
         Expr::Await(_, s) => *s,
+        Expr::NotNullAssert(_, s) => *s,
     }
 }
 

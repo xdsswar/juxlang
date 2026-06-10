@@ -1161,15 +1161,29 @@ pub(crate) fn compute_aliased_classes(
                 walk_expr(&t.else_branch, aliased, mark);
             }
             Expr::Await(inner, _) => walk_expr(inner, aliased, mark),
+            Expr::NotNullAssert(inner, _) => walk_expr(inner, aliased, mark),
             Expr::Lambda(l) => {
-                // A class captured by a lambda escapes its enclosing
-                // scope (it may outlive the frame). Be conservative and
-                // walk the body for stores/passes/returns; a bare capture
-                // is handled by whatever store/pass uses it. The
-                // lambda's own body statements are walked here.
+                // A class captured by a lambda IS an alias: the closure
+                // holds its own handle to the object, mutations through
+                // either handle must be visible through the other, and
+                // the closure may outlive the frame. A non-wrapper
+                // capture would `move` the struct by value (silently
+                // forking state) and make the closure `FnMut` — which
+                // the `Rc<closure>` storage can't even call (rustc
+                // E0596). So: mark EVERY class-typed bare name read
+                // inside the body as aliased — that's the (superset of
+                // the) capture set; lambda params are swept in too,
+                // which only over-wraps (the doctrine is "when in
+                // doubt, wrap").
                 match &l.body {
-                    juxc_ast::LambdaBody::Expr(b) => walk_expr(b, aliased, mark),
-                    juxc_ast::LambdaBody::Block(blk) => walk_block(blk, aliased, mark),
+                    juxc_ast::LambdaBody::Expr(b) => {
+                        mark_lambda_captures(b, aliased, mark);
+                        walk_expr(b, aliased, mark);
+                    }
+                    juxc_ast::LambdaBody::Block(blk) => {
+                        mark_lambda_captures_block(blk, aliased, mark);
+                        walk_block(blk, aliased, mark);
+                    }
                 }
             }
             Expr::Switch(s) => {
@@ -1304,6 +1318,163 @@ pub(crate) fn compute_aliased_classes(
         }
     }
 
+    /// Mark every class-typed **bare name** read anywhere inside a
+    /// lambda body as aliased — a (superset of the) closure's capture
+    /// set. A captured object IS an alias: the closure holds its own
+    /// handle, mutation through either handle must be visible through
+    /// the other, and the closure may outlive the frame. Without the
+    /// wrapper, the lambda would `move` the struct by value (silently
+    /// forking state) and a mutating body would make the closure
+    /// `FnMut` — which the `Rc<closure>` storage can't call (rustc
+    /// E0596). Lambda params and plain locals declared inside the body
+    /// are swept up too, which only over-wraps their classes ("when in
+    /// doubt, wrap").
+    fn mark_lambda_captures(
+        e: &Expr,
+        aliased: &mut HashSet<String>,
+        mark: &mut dyn FnMut(&Expr, &mut HashSet<String>),
+    ) {
+        match e {
+            Expr::Path(qn) => {
+                if qn.segments.len() == 1 {
+                    mark(e, aliased);
+                }
+            }
+            Expr::Call(c) => {
+                mark_lambda_captures(&c.callee, aliased, mark);
+                for a in &c.args {
+                    mark_lambda_captures(a, aliased, mark);
+                }
+            }
+            Expr::NewObject(n) => {
+                for a in &n.args {
+                    mark_lambda_captures(a, aliased, mark);
+                }
+            }
+            Expr::NewArrayLit(n) => {
+                for el in &n.elements {
+                    mark_lambda_captures(el, aliased, mark);
+                }
+            }
+            Expr::NewArray(n) => mark_lambda_captures(&n.size, aliased, mark),
+            Expr::Binary(b) => {
+                mark_lambda_captures(&b.left, aliased, mark);
+                mark_lambda_captures(&b.right, aliased, mark);
+            }
+            Expr::Unary(u) => mark_lambda_captures(&u.operand, aliased, mark),
+            Expr::Range(r) => {
+                mark_lambda_captures(&r.start, aliased, mark);
+                mark_lambda_captures(&r.end, aliased, mark);
+            }
+            Expr::Cast(c) => mark_lambda_captures(&c.value, aliased, mark),
+            Expr::TypeTest(t) => mark_lambda_captures(&t.value, aliased, mark),
+            Expr::Index(i) => {
+                mark_lambda_captures(&i.array, aliased, mark);
+                mark_lambda_captures(&i.index, aliased, mark);
+            }
+            Expr::Field(f) => mark_lambda_captures(&f.object, aliased, mark),
+            Expr::InterpString(s) => {
+                for seg in &s.segments {
+                    if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                        mark_lambda_captures(inner, aliased, mark);
+                    }
+                }
+            }
+            Expr::Elvis(el) => {
+                mark_lambda_captures(&el.value, aliased, mark);
+                mark_lambda_captures(&el.fallback, aliased, mark);
+            }
+            Expr::Ternary(t) => {
+                mark_lambda_captures(&t.condition, aliased, mark);
+                mark_lambda_captures(&t.then_branch, aliased, mark);
+                mark_lambda_captures(&t.else_branch, aliased, mark);
+            }
+            Expr::Await(inner, _) => mark_lambda_captures(inner, aliased, mark),
+            Expr::NotNullAssert(inner, _) => mark_lambda_captures(inner, aliased, mark),
+            Expr::Lambda(inner) => match &inner.body {
+                juxc_ast::LambdaBody::Expr(b) => mark_lambda_captures(b, aliased, mark),
+                juxc_ast::LambdaBody::Block(blk) => {
+                    mark_lambda_captures_block(blk, aliased, mark)
+                }
+            },
+            _ => {}
+        }
+    }
+
+    /// Statement-level driver for [`mark_lambda_captures`] — sweeps the
+    /// expressions of every statement in a lambda's block body.
+    fn mark_lambda_captures_block(
+        b: &juxc_ast::Block,
+        aliased: &mut HashSet<String>,
+        mark: &mut dyn FnMut(&Expr, &mut HashSet<String>),
+    ) {
+        for s in &b.statements {
+            match s {
+                Stmt::Expr(e) => mark_lambda_captures(e, aliased, mark),
+                Stmt::Return(Some(e)) => mark_lambda_captures(e, aliased, mark),
+                Stmt::Return(None) => {}
+                Stmt::VarDecl(v) => {
+                    if let Some(init) = &v.init {
+                        mark_lambda_captures(init, aliased, mark);
+                    }
+                }
+                Stmt::Assign(a) => {
+                    mark_lambda_captures(&a.target, aliased, mark);
+                    mark_lambda_captures(&a.value, aliased, mark);
+                }
+                Stmt::Throw(e, _) => mark_lambda_captures(e, aliased, mark),
+                Stmt::SuperCall(args, _) => {
+                    for a in args {
+                        mark_lambda_captures(a, aliased, mark);
+                    }
+                }
+                Stmt::If(i) => {
+                    mark_lambda_captures(&i.condition, aliased, mark);
+                    mark_lambda_captures_block(&i.then_block, aliased, mark);
+                    let mut cursor = i.else_branch.as_deref();
+                    while let Some(branch) = cursor {
+                        match branch {
+                            juxc_ast::ElseBranch::If(inner) => {
+                                mark_lambda_captures(&inner.condition, aliased, mark);
+                                mark_lambda_captures_block(&inner.then_block, aliased, mark);
+                                cursor = inner.else_branch.as_deref();
+                            }
+                            juxc_ast::ElseBranch::Block(blk) => {
+                                mark_lambda_captures_block(blk, aliased, mark);
+                                cursor = None;
+                            }
+                        }
+                    }
+                }
+                Stmt::While(w) => {
+                    mark_lambda_captures(&w.condition, aliased, mark);
+                    mark_lambda_captures_block(&w.body, aliased, mark);
+                }
+                Stmt::ForEach(f) => {
+                    mark_lambda_captures(&f.iter, aliased, mark);
+                    mark_lambda_captures_block(&f.body, aliased, mark);
+                }
+                Stmt::ForC(f) => {
+                    if let Some(cond) = &f.cond {
+                        mark_lambda_captures(cond, aliased, mark);
+                    }
+                    mark_lambda_captures_block(&f.body, aliased, mark);
+                }
+                Stmt::Try(t) => {
+                    mark_lambda_captures_block(&t.body, aliased, mark);
+                    for c in &t.catches {
+                        mark_lambda_captures_block(&c.body, aliased, mark);
+                    }
+                    if let Some(fin) = &t.finally {
+                        mark_lambda_captures_block(fin, aliased, mark);
+                    }
+                }
+                Stmt::Unsafe(b) => mark_lambda_captures_block(b, aliased, mark),
+                Stmt::Break(_) | Stmt::Continue(_) => {}
+            }
+        }
+    }
+
     // Drive the walk over every body in the workspace: free functions,
     // class methods, constructors, and operator overloads.
     for unit in units {
@@ -1425,22 +1596,90 @@ pub(crate) fn compute_wrapped_set(
     let aliased = compute_aliased_classes(units, expr_types);
     let iface_forced = compute_interface_forced_classes(units);
     let poly_forced = compute_polymorphic_forced_classes(units);
+    let recursive = compute_recursive_field_classes(units);
     // (eligible ∩ aliased) ∪ (eligible ∩ interface-implementer-closure)
-    //                     ∪ (eligible ∩ polymorphic-base-hierarchy-closure).
+    //                     ∪ (eligible ∩ polymorphic-base-hierarchy-closure)
+    //                     ∪ (eligible ∩ recursive-field-cycle).
     // Forcing interface implementers AND polymorphic-base hierarchies makes
     // their inherent methods `&self` (interior-mutable wrapper rule), which is
     // what the `&self` `Kind`/interface trait methods require, and keeps the
-    // upcast a shared-`Rc` bump (identity-preserving) instead of a slice. A
-    // component that isn't wrap-eligible (sealed / exception / generic …) is
-    // dropped by the `eligible` intersection here — sealed dispatches through
-    // `&self` match arms, and genuine conflicts are rejected at tycheck.
+    // upcast a shared-`Rc` bump (identity-preserving) instead of a slice.
+    // Recursive classes (a field-type cycle back to themselves — `Node {
+    // Node? peer; }`, or mutual A↔B) MUST stay wrapped regardless of
+    // aliasing: the inline demotion would emit an infinite-size struct
+    // (rustc E0072); the wrapper's `Rc` is the indirection that breaks the
+    // cycle. A component that isn't wrap-eligible (sealed / exception /
+    // generic …) is dropped by the `eligible` intersection here — sealed
+    // dispatches through `&self` match arms, and genuine conflicts are
+    // rejected at tycheck.
     eligible
         .iter()
         .filter(|n| {
-            aliased.contains(*n) || iface_forced.contains(*n) || poly_forced.contains(*n)
+            aliased.contains(*n)
+                || iface_forced.contains(*n)
+                || poly_forced.contains(*n)
+                || recursive.contains(*n)
         })
         .cloned()
         .collect()
+}
+
+/// Bare names of every class that sits on a **field-type cycle** — its own
+/// fields (or a chain of other classes' fields) eventually reference the
+/// class itself: `class Node { Node? peer; }`, mutual `A { B b; } / B { A
+/// a; }`, etc. Field types peel nullable / array / generic-arg layers so
+/// `Node?`, `Node[]`, and `Bag<Node>` edges all count. These classes need
+/// the wrapper's `Rc` indirection to be finite-sized (rustc E0072).
+pub(crate) fn compute_recursive_field_classes(
+    units: &[juxc_ast::CompilationUnit],
+) -> HashSet<String> {
+    // class name → field-referenced class names (one edge set per class).
+    let mut edges: HashMap<String, HashSet<String>> = HashMap::new();
+    fn add_type_edges(ty: &juxc_ast::TypeRef, out: &mut HashSet<String>) {
+        if let Some(seg) = ty.name.segments.last() {
+            out.insert(seg.text.clone());
+        }
+        for arg in &ty.generic_args {
+            if let juxc_ast::GenericArg::Type(t) = arg {
+                add_type_edges(t, out);
+            }
+        }
+    }
+    for unit in units {
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                let entry = edges.entry(cd.name.text.clone()).or_default();
+                for field in &cd.fields {
+                    if let Some(ty) = &field.ty {
+                        add_type_edges(ty, entry);
+                    }
+                }
+                // The embedded `__parent` of a subclass is a field too.
+                if let Some(parent) = &cd.extends {
+                    add_type_edges(parent, entry);
+                }
+            }
+        }
+    }
+    // A class is recursive iff its edge graph reaches back to itself.
+    let mut recursive: HashSet<String> = HashSet::new();
+    for start in edges.keys() {
+        let mut stack: Vec<&str> = edges[start].iter().map(|s| s.as_str()).collect();
+        let mut seen: HashSet<&str> = HashSet::new();
+        while let Some(name) = stack.pop() {
+            if name == start {
+                recursive.insert(start.clone());
+                break;
+            }
+            if !seen.insert(name) {
+                continue;
+            }
+            if let Some(next) = edges.get(name) {
+                stack.extend(next.iter().map(|s| s.as_str()));
+            }
+        }
+    }
+    recursive
 }
 
 /// Bare names of every class that must be **force-wrapped because it — or a
@@ -1839,6 +2078,7 @@ fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
             cast_targets_expr(&t.else_branch, out);
         }
         Expr::Await(inner, _) => cast_targets_expr(inner, out),
+        Expr::NotNullAssert(inner, _) => cast_targets_expr(inner, out),
         Expr::Lambda(l) => match &l.body {
             juxc_ast::LambdaBody::Expr(b) => cast_targets_expr(b, out),
             juxc_ast::LambdaBody::Block(blk) => cast_targets_block(blk, out),
@@ -2751,6 +2991,28 @@ impl RustEmitter {
                     emitted_any = true;
                 }
                 continue;
+            }
+            // **Intrinsic-class import suppression.** `import
+            // jux.std.collections.ArrayList;` names a class whose
+            // struct emission is suppressed (it lowers to Rust's `Vec`
+            // via the builtin dispatch tables), so the `use` would
+            // reference a symbol that doesn't exist (rustc E0432).
+            // Usage doesn't need the import — the dispatch is
+            // name-driven — so the whole declaration is dropped.
+            // Wildcard imports of the package still emit (the module
+            // exists and carries the non-intrinsic items).
+            if let ImportSpec::Path { name, wildcard: false, .. } = &import.spec {
+                if name.segments.len() >= 2 {
+                    let pkg = name.segments[..name.segments.len() - 1]
+                        .iter()
+                        .map(|s| s.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    let last = &name.segments[name.segments.len() - 1].text;
+                    if is_intrinsic_class(&pkg, last) {
+                        continue;
+                    }
+                }
             }
             if let Some(line) = render_use(&import.spec, inside_package_mod) {
                 // Per-module dedupe: when two units in the same

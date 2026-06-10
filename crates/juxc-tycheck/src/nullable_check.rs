@@ -363,6 +363,12 @@ fn check_expr(e: &Expr, diags: &mut Vec<Diagnostic>) {
             // nullable rules.
             check_expr(inner, diags);
         }
+        Expr::NotNullAssert(inner, _) => {
+            // `expr!!` unwraps a nullable; the operand is walked, the
+            // assertion itself imposes no nullable rules (a non-null
+            // operand is tolerated — the assert is just a no-op).
+            check_expr(inner, diags);
+        }
     }
 }
 
