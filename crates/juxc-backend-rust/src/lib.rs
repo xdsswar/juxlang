@@ -1600,6 +1600,11 @@ fn compute_downcast_targets(units: &[juxc_ast::CompilationUnit]) -> HashSet<Stri
                     for b in c.init_blocks.iter().chain(&c.static_init_blocks) {
                         cast_targets_block(b, &mut out);
                     }
+                    for op in &c.operators {
+                        if let Some(b) = &op.body {
+                            cast_targets_block(b, &mut out);
+                        }
+                    }
                 }
                 TopLevelDecl::Interface(i) => {
                     for m in &i.methods {
@@ -1723,6 +1728,17 @@ fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
         Expr::NewObject(n) => {
             for a in &n.args {
                 cast_targets_expr(a, out);
+            }
+            // Anonymous-class body: walk its init blocks and method bodies.
+            if let Some(body) = &n.anonymous_body {
+                for b in &body.init_blocks {
+                    cast_targets_block(b, out);
+                }
+                for m in &body.methods {
+                    if let Some(b) = &m.body {
+                        cast_targets_block(b, out);
+                    }
+                }
             }
         }
         Expr::NewArrayLit(n) => {

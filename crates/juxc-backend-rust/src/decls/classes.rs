@@ -1383,20 +1383,40 @@ impl RustEmitter {
     /// class IS-A `b` AND IS-A the target, and the target is not `b` itself or
     /// a supertype (that's an upcast, handled by coercion). These become the
     /// `__jux_as_<T>` hooks on `<b>Kind`. Sorted for deterministic output.
+    /// True iff some class is an instance of BOTH base `b` and target `t` —
+    /// i.e. a value statically typed `b` could, at run time, be a `t`. The
+    /// condition under which a `__jux_as_<t>` hook on `b`'s trait is meaningful.
+    pub(crate) fn target_reachable_from_base(&self, b: &str, t: &str) -> bool {
+        self.symbols.classes.keys().any(|fqn| {
+            let c = fqn.rsplit('.').next().unwrap_or(fqn);
+            self.class_is_a(c, b) && self.class_is_a(c, t)
+        })
+    }
+
     fn hook_targets_for_base(&self, b: &str) -> Vec<String> {
         if self.downcast_targets.is_empty() {
             return Vec::new();
         }
+        // A `<Name>Kind` trait's supertrait is its poly-base parent's `Kind`.
+        // To avoid the same `__jux_as_<T>` appearing on both a trait and its
+        // supertrait (which makes an unqualified call on a mid-hierarchy `dyn`
+        // value ambiguous — E0034), emit each hook only on the TOPMOST
+        // contiguous poly-base ancestor; lower bases inherit it via the
+        // supertrait chain.
+        let parent_base = self
+            .direct_parent_bare(b)
+            .filter(|p| self.poly_base_classes.contains(p));
         let mut out: Vec<String> = self
             .downcast_targets
             .iter()
             .filter(|t| {
                 // Skip upcasts (b IS-A t ⟹ t is b or a supertype).
                 !self.class_is_a(b, t)
-                    && self.symbols.classes.keys().any(|fqn| {
-                        let c = fqn.rsplit('.').next().unwrap_or(fqn);
-                        self.class_is_a(c, b) && self.class_is_a(c, t)
-                    })
+                    && self.target_reachable_from_base(b, t)
+                    // Skip if a supertrait (the poly-base parent) carries it.
+                    && parent_base
+                        .as_deref()
+                        .map_or(true, |p| !self.target_reachable_from_base(p, t))
             })
             .cloned()
             .collect();
@@ -1422,9 +1442,30 @@ impl RustEmitter {
         }
     }
 
+    /// The cast / type-test targets reachable from an **interface** source —
+    /// targets some implementer could also be. Unlike class `Kind` traits,
+    /// interface traits carry no `Kind` supertrait chain, so there is no
+    /// topmost-base skip (each interface gets its own hooks directly).
+    pub(crate) fn interface_hook_targets(&self, iface_bare: &str) -> Vec<String> {
+        if self.downcast_targets.is_empty() {
+            return Vec::new();
+        }
+        let mut out: Vec<String> = self
+            .downcast_targets
+            .iter()
+            .filter(|t| {
+                !self.class_is_a(iface_bare, t)
+                    && self.target_reachable_from_base(iface_bare, t)
+            })
+            .cloned()
+            .collect();
+        out.sort();
+        out
+    }
+
     /// Emit the `__jux_as_<t>(&self) -> Option<…> { None }` hook signature
     /// (default body) on a trait.
-    fn emit_downcast_hook_sig(&mut self, t: &str) {
+    pub(crate) fn emit_downcast_hook_sig(&mut self, t: &str) {
         self.w.emit_indent();
         self.w.push_str("fn __jux_as_");
         self.w.push_str(t);
@@ -1437,7 +1478,7 @@ impl RustEmitter {
     /// `Some(self.clone())` for a leaf target, or
     /// `Some(Rc::new(self.clone()) as <target>)` for a trait-object target
     /// (identity-preserving `Rc` bump sharing the inner cell).
-    fn emit_downcast_hook_impl(&mut self, t: &str) {
+    pub(crate) fn emit_downcast_hook_impl(&mut self, t: &str) {
         self.w.emit_indent();
         self.w.push_str("fn __jux_as_");
         self.w.push_str(t);
@@ -2170,6 +2211,16 @@ impl RustEmitter {
                 self.w.push('\n');
                 self.w.indent_dec();
                 self.w.line("}");
+            }
+            // Runtime-type downcast hook overrides: for each target this class
+            // IS-A, override the interface's `__jux_as_<T>` hook with
+            // `Some(self)` so `(T) ifaceRef` / `ifaceRef => T` works.
+            if let Some(iface_seg) = interface_ty.name.segments.first() {
+                for t in self.interface_hook_targets(&iface_seg.text) {
+                    if self.class_is_a(&class_decl.name.text, &t) {
+                        self.emit_downcast_hook_impl(&t);
+                    }
+                }
             }
             self.w.indent_dec();
             self.w.line("}");

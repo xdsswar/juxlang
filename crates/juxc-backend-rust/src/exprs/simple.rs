@@ -17,6 +17,46 @@ impl RustEmitter {
     /// operand needs parens too (range is the loosest expression form
     /// in Rust). Everything else — unary, postfix, path, literal,
     /// another cast — emits naked.
+    /// The bare class / interface name a downcast or type-test **source**
+    /// expression evaluates to, robust to two failure modes the raw span-keyed
+    /// `expr_types` lookup has: a `T?` nullable wrapper (peeled here) and a
+    /// span collision from interpolated `${…}` re-parsing (falls back to the
+    /// name-keyed `receiver_class_bare` / `local_types` path). Returns `None`
+    /// when the source isn't a user type.
+    pub(crate) fn cast_source_bare(&self, expr: &Expr) -> Option<String> {
+        // For a bare place (`Path`/`this`/field/index), the NAME-keyed lookup
+        // is immune to the span collisions that interpolated `${…}` re-parsing
+        // causes — prefer it so `${d => …} ${a => …}` doesn't alias `d`'s type
+        // to `a`'s.
+        if matches!(
+            expr,
+            Expr::Path(_) | Expr::This(_) | Expr::Field(_) | Expr::Index(_)
+        ) {
+            if let Some(b) = self.receiver_class_bare(expr) {
+                return Some(b);
+            }
+        }
+        // Otherwise the span-keyed inferred type, peeling any `T?` wrapper.
+        if let Some(ty) = self.expr_types.get(&crate::exprs::expr_span_of(expr)) {
+            let mut t = ty;
+            while let juxc_tycheck::Ty::Nullable(inner) = t {
+                t = inner;
+            }
+            if let juxc_tycheck::Ty::User { name, .. } = t {
+                return Some(name.rsplit('.').next().unwrap_or(name).to_string());
+            }
+        }
+        self.receiver_class_bare(expr)
+    }
+
+    /// True when a value statically typed `bare` is a **trait object**
+    /// (a polymorphic base or an interface) — i.e. it carries the
+    /// `__jux_as_<T>` runtime-type hooks. Concrete classes don't.
+    pub(crate) fn source_is_dyn(&self, bare: &str) -> bool {
+        self.poly_base_classes.contains(bare)
+            || self.lookup_interface_by_bare_or_fqn(bare).is_some()
+    }
+
     pub(crate) fn emit_cast(&mut self, c: &CastExpr) {
         // **Reference cast between user types** (class / interface): an upcast
         // coerces into the target trait object, a downcast goes through the
@@ -35,15 +75,7 @@ impl RustEmitter {
             });
         if target_is_user {
             let t = target_bare.unwrap();
-            let src_bare = self
-                .expr_types
-                .get(&crate::exprs::expr_span_of(&c.value))
-                .and_then(|ty| match ty {
-                    juxc_tycheck::Ty::User { name, .. } => {
-                        Some(name.rsplit('.').next().unwrap_or(name).to_string())
-                    }
-                    _ => None,
-                });
+            let src_bare = self.cast_source_bare(&c.value);
             if let Some(s) = src_bare {
                 if s == t {
                     // Identity cast — emit the value (share-clone a place).
@@ -58,18 +90,26 @@ impl RustEmitter {
                     self.emit_expr_coerced_to_iface(&c.ty, &c.value);
                     return;
                 }
-                // Downcast (T IS-A S) or interface sidecast (a common subtype
-                // exists) — runtime-type hook; panic `ClassCastException` on a
-                // miss. tycheck (E0442) already rejected casts with no possible
-                // common instance, so the `__jux_as_<T>` hook exists here.
-                self.w.push('(');
+                if self.source_is_dyn(&s) {
+                    // Downcast (T IS-A S) or interface sidecast (a common
+                    // subtype exists) — runtime-type hook; panics
+                    // `ClassCastException` on a miss. The hook lives on a single
+                    // trait per supertrait chain (topmost base), so the
+                    // unqualified call is unambiguous.
+                    self.w.push('(');
+                    self.emit_expr(&c.value);
+                    self.w.push_str(".__jux_as_");
+                    self.w.push_str(&t);
+                    self.w.push_str("().unwrap_or_else(|| panic!(\"ClassCastException: value is not a ");
+                    self.w.push_str(&t);
+                    self.w.push_str("\")))");
+                    return;
+                }
+                // Concrete source that's neither identity nor an upcast — a
+                // leaf can't narrow further, and tycheck (E0442) rejected
+                // unrelated casts, so this is unreachable for valid programs.
+                // Emit the value defensively rather than a broken hook call.
                 self.emit_expr(&c.value);
-                self.w.push_str(".__jux_as_");
-                self.w.push_str(&t);
-                self.w
-                    .push_str("().unwrap_or_else(|| panic!(\"ClassCastException: value is not a ");
-                self.w.push_str(&t);
-                self.w.push_str("\")))");
                 return;
             }
         }
@@ -101,18 +141,8 @@ impl RustEmitter {
             .last()
             .map(|s| s.text.clone())
             .unwrap_or_default();
-        let src = self
-            .expr_types
-            .get(&crate::exprs::expr_span_of(&t.value))
-            .and_then(|ty| match ty {
-                juxc_tycheck::Ty::User { name, .. } => {
-                    Some(name.rsplit('.').next().unwrap_or(name).to_string())
-                }
-                _ => None,
-            });
-        let src_is_dyn = src.as_deref().is_some_and(|s| {
-            self.poly_base_classes.contains(s) || self.lookup_interface_by_bare_or_fqn(s).is_some()
-        });
+        let src = self.cast_source_bare(&t.value);
+        let src_is_dyn = src.as_deref().is_some_and(|s| self.source_is_dyn(s));
         if src_is_dyn {
             self.w.push('(');
             self.emit_expr(&t.value);
@@ -121,15 +151,17 @@ impl RustEmitter {
             self.w.push_str("().is_some())");
         } else {
             // Concrete (or unknown) source — runtime type is statically known.
+            // The block is **parenthesized** so it's an expression in every
+            // position (binary operand, `return`, …), not a statement.
             let result = src
                 .as_deref()
                 .map(|s| self.class_is_a(s, &target))
                 .unwrap_or(false);
-            self.w.push_str("{ let _ = &(");
+            self.w.push_str("({ let _ = &(");
             self.emit_expr(&t.value);
             self.w.push_str("); ");
             self.w.push_str(if result { "true" } else { "false" });
-            self.w.push_str(" }");
+            self.w.push_str(" })");
         }
     }
 

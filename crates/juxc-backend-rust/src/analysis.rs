@@ -1310,11 +1310,22 @@ impl crate::RustEmitter {
                 // mirrors `assign_target_is_nullable` but as a
                 // read-side query — Phase 1 only checks the
                 // immediate class, not the inheritance chain.
-                let Some(juxc_tycheck::Ty::User { name, .. }) =
-                    self.expr_types.get(&crate::exprs::expr_span_of(&f.object))
-                else {
+                //
+                // A `this.field` receiver isn't always keyed in
+                // `expr_types`, so resolve it through the
+                // `enclosing_class` context (same fallback
+                // `assign_target_is_nullable` uses for writes).
+                let recv_name = match &*f.object {
+                    juxc_ast::Expr::This(_) => self.enclosing_class.clone(),
+                    other => match self.expr_types.get(&crate::exprs::expr_span_of(other)) {
+                        Some(juxc_tycheck::Ty::User { name, .. }) => Some(name.clone()),
+                        _ => None,
+                    },
+                };
+                let Some(name) = recv_name else {
                     return false;
                 };
+                let name = &name;
                 if let Some(class) = self.symbols.classes.get(name) {
                     if let Some(field) = class.fields.get(&f.field.text) {
                         return field.ty.nullable;
@@ -1640,9 +1651,21 @@ impl crate::RustEmitter {
         target_ty: &TypeRef,
         expr: &Expr,
     ) -> IfaceCoercion {
-        // Only a bare interface slot coerces here — array / nullable
-        // interface slots compose through their own wrappers.
-        if target_ty.array_shape.is_some() || target_ty.nullable {
+        // Array interface slots compose through their own wrappers and are
+        // out of scope here. A `T?` **nullable** dyn slot, however, coerces its
+        // INNER value (`Animal? a = new Dog()` → `Some(Rc<dyn AnimalKind>)`):
+        // the nullable flag doesn't change the type *name*, so we leave it in
+        // place and let [`Self::emit_expr_coerced_to_iface`] re-wrap the
+        // coerced value in `Some(...)`.
+        if target_ty.array_shape.is_some() {
+            return IfaceCoercion::None;
+        }
+        // A nullable dyn slot only coerces a NON-null value being lifted into
+        // the `Option`. A source that is *already* `Option`-shaped (`return
+        // this.nullableField;`, `Animal? y = maybeAnimal()`) flows through
+        // unchanged — `expr_types` may record a field read as non-nullable, so
+        // coercing here would double-wrap (`Some(Some(...))`).
+        if target_ty.nullable && self.expression_is_already_nullable(expr) {
             return IfaceCoercion::None;
         }
         let Some(target_bare) = target_ty.name.segments.last().map(|s| s.text.as_str()) else {
@@ -1696,13 +1719,31 @@ impl crate::RustEmitter {
     ///   shared identity of the underlying object).
     /// - **CloneDyn** → `<expr>[.clone()]` — already a trait object; clone the
     ///   `Rc` handle when the source is a reused place.
+    ///
+    /// When `target_ty` is a **nullable** dyn slot (`T?`), the whole result is
+    /// wrapped in `Some(...)` and the `as` cast uses the *peeled* (non-nullable)
+    /// trait-object type — so `Animal? a = new Dog()` lowers to
+    /// `Some(Rc::new(Dog) as Rc<dyn AnimalKind>)`. The call site must NOT add a
+    /// second `Some(...)` (see the return / var-init suppression).
     pub(crate) fn emit_expr_coerced_to_iface(
         &mut self,
         target_ty: &TypeRef,
         expr: &Expr,
     ) {
-        match self.iface_coercion_to(target_ty, expr) {
-            IfaceCoercion::None => self.emit_expr(expr),
+        let coercion = self.iface_coercion_to(target_ty, expr);
+        if matches!(coercion, IfaceCoercion::None) {
+            self.emit_expr(expr);
+            return;
+        }
+        // A nullable dyn slot owns its `Some(...)` wrap here so every call site
+        // (return, var-init, args, fields, array elements) gets a complete
+        // `Option<Rc<dyn …>>` value from one place.
+        let nullable = target_ty.nullable;
+        if nullable {
+            self.w.push_str("Some(");
+        }
+        match coercion {
+            IfaceCoercion::None => unreachable!("handled above"),
             IfaceCoercion::WrapClass { clone_first } => {
                 self.w.push_str("(std::rc::Rc::new(");
                 self.emit_expr(expr);
@@ -1711,7 +1752,15 @@ impl crate::RustEmitter {
                 }
                 self.w.push_str(") as ");
                 // Produces `std::rc::Rc<dyn Trait>` (value-position emission).
-                self.emit_value_type_as_rust(target_ty);
+                // For a `T?` slot the `as` targets the INNER trait object, not
+                // the `Option<…>` — peel the nullable for the cast type.
+                if nullable {
+                    let mut inner = target_ty.clone();
+                    inner.nullable = false;
+                    self.emit_value_type_as_rust(&inner);
+                } else {
+                    self.emit_value_type_as_rust(target_ty);
+                }
                 self.w.push(')');
             }
             IfaceCoercion::CloneDyn { clone_first } => {
@@ -1720,6 +1769,9 @@ impl crate::RustEmitter {
                     self.w.push_str(".clone()");
                 }
             }
+        }
+        if nullable {
+            self.w.push(')');
         }
     }
 

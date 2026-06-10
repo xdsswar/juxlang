@@ -1,0 +1,115 @@
+//! Nullable polymorphic-base and interface values (`T?` holding a trait
+//! object). Exercises every coercion site that lifts a concrete subtype into
+//! a nullable `Rc<dyn …>` slot — and the reverse, flowing an already-nullable
+//! value through without a double `Some`:
+//!
+//!   - nullable poly-base / interface VAR-INIT  (`Animal? a = new Dog();`)
+//!   - nullable RETURN of a fresh subtype       (`Animal? f() { return new Dog(); }`)
+//!   - nullable RETURN of an already-nullable    (`Animal? g() { return this.held; }`)
+//!   - nullable PARAM                            (`f(Animal? a)`)
+//!   - nullable FIELD init in a constructor      (`this.held = new Cat();`)
+//!   - nullable poly-base REASSIGN               (`a = new Cat();`)
+//!   - `null` into a nullable dyn slot
+//!   - downcast from a nullable-narrowed local   (`if (x != null) (Dog) x`)
+
+public interface Tagged {
+    String tag();
+}
+
+public abstract class Animal {
+    public abstract String sound();
+}
+
+public class Dog extends Animal implements Tagged {
+    public Dog() {}
+    public String sound() { return "woof"; }
+    public String tag() { return "dog-tag"; }
+    public String fetch() { return "fetched"; }
+}
+
+public class Cat extends Animal {
+    public Cat() {}
+    public String sound() { return "meow"; }
+}
+
+// Nullable poly-base return of a fresh subtype.
+public Animal? makeAnimal() {
+    return new Dog();
+}
+
+// Nullable interface return of a fresh subtype.
+public Tagged? makeTagged() {
+    return new Dog();
+}
+
+// Nullable poly-base parameter, narrowed before use.
+public void announce(Animal? a) {
+    if (a != null) {
+        print(a.sound());
+    }
+}
+
+// Holds a nullable poly-base field; `get` returns the already-nullable field
+// (must flow through WITHOUT a second `Some(...)`).
+public class Shelter {
+    public Animal? resident;
+    public Shelter() {
+        this.resident = new Cat();
+    }
+    public Animal? get() {
+        return this.resident;
+    }
+}
+
+public void main() {
+    // Nullable poly-base var-init, then narrow + virtual dispatch.
+    Animal? a = new Dog();
+    if (a != null) {
+        print(a.sound());
+    }
+
+    // Nullable interface var-init.
+    Tagged? t = new Dog();
+    if (t != null) {
+        print(t.tag());
+    }
+
+    // Nullable return into a nullable local.
+    Animal? r = makeAnimal();
+    if (r != null) {
+        print(r.sound());
+    }
+
+    if (makeTagged() != null) {
+        print("tagged ok");
+    }
+
+    // Nullable poly-base reassignment.
+    a = new Cat();
+    if (a != null) {
+        print(a.sound());
+    }
+
+    // Nullable poly-base argument.
+    announce(new Dog());
+
+    // Nullable field init + already-nullable field return.
+    Shelter s = new Shelter();
+    Animal? held = s.get();
+    if (held != null) {
+        print(held.sound());
+    }
+
+    // `null` into a nullable dyn slot.
+    Animal? none = null;
+    if (none == null) {
+        print("empty");
+    }
+
+    // Downcast from a nullable-narrowed local.
+    Animal? maybe = makeAnimal();
+    if (maybe != null) {
+        Dog d = (Dog) maybe;
+        print(d.fetch());
+    }
+}
