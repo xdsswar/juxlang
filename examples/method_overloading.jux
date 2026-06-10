@@ -1,0 +1,77 @@
+// Method overloading (§T.3 — Phase-1 count-based subset).
+//
+// - A class may declare several same-name methods; Phase 1 selects
+//   by ARGUMENT COUNT, so each group's acceptable counts must be
+//   pairwise disjoint (E0450 otherwise). Overloads may differ in
+//   return type.
+// - Phase 1 keeps overload groups out of inheritance: a group's name
+//   can't also exist on an ancestor, and a class whose parent
+//   declares a group can't be extended past it (clean E0450s).
+// - Works on instance methods, static methods, and implicit-this
+//   calls; reference semantics hold (aliased receivers share state).
+
+package overloads;
+
+class Calc {
+    private int base;
+
+    Calc(int base) {
+        this.base = base;
+    }
+
+    public int add(int a) {
+        return this.base + a;
+    }
+
+    public int add(int a, int b) {
+        return this.base + a + b;
+    }
+
+    public String add(int a, int b, int c) {
+        return "sum=" + (this.base + a + b + c);
+    }
+
+    public int chained() {
+        return this.add(1) + this.add(1, 2);
+    }
+
+    public static String fmt(int v) {
+        return "v" + v;
+    }
+
+    public static String fmt(int v, String unit) {
+        return v + unit;
+    }
+}
+
+class Acc {
+    private int total;
+
+    Acc() {
+        this.total = 0;
+    }
+
+    public void put(int v) { this.total = this.total + v; }
+    public void put(int v, int times) { this.total = this.total + v * times; }
+    public int value() { return this.total; }
+}
+
+void feed(Acc a) {
+    a.put(2);
+    a.put(3, 4);
+}
+
+public void main() {
+    var c = new Calc(10);
+    print(c.add(5));
+    print(c.add(5, 6));
+    print(c.add(1, 2, 3));
+    print(c.chained());
+    print(Calc.fmt(7));
+    print(Calc.fmt(7, "kg"));
+
+    var acc = new Acc();
+    var alias = acc;
+    feed(alias);
+    print(acc.value());
+}

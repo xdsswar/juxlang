@@ -172,6 +172,17 @@ impl RustEmitter {
     /// `println!(…)`. Every other callee is emitted verbatim (the
     /// resolver guarantees the name exists).
     pub(crate) fn emit_call(&mut self, call: &CallExpr) {
+        // Method-overload pick (§T.3 Phase-1): tycheck recorded which
+        // group member this call resolved to; member K > 0 emits
+        // under `name__ovK`. Armed here, consumed by the single path
+        // that writes the member name. Cleared first so a stale value
+        // from an aborted emission can't leak in.
+        self.pending_method_suffix = None;
+        if let Some(k) = self.symbols.method_selections.get(&call.span) {
+            if *k > 0 {
+                self.pending_method_suffix = Some(format!("__ov{k}"));
+            }
+        }
         // `super.method(args)` (§6.9.4) — a STATIC call to the nearest
         // concrete ancestor's version of `method`, bypassing virtual dispatch
         // for this one call. We emit `<self>.__jux_super_<method>(args)`, a
@@ -442,6 +453,9 @@ impl RustEmitter {
                     self.w.push_str(&class_name);
                     self.w.push_str("::");
                     self.w.push_str(name);
+                    if let Some(sfx) = self.pending_method_suffix.take() {
+                        self.w.push_str(&sfx);
+                    }
                     self.w.push('(');
                     let prev = self.emitting_format_arg;
                     self.emitting_format_arg = false;
@@ -460,6 +474,9 @@ impl RustEmitter {
                     self.w.push_str(alias);
                     self.w.push('.');
                     self.w.push_str(name);
+                    if let Some(sfx) = self.pending_method_suffix.take() {
+                        self.w.push_str(&sfx);
+                    }
                     self.w.push('(');
                     let prev = self.emitting_format_arg;
                     self.emitting_format_arg = false;
@@ -559,6 +576,9 @@ impl RustEmitter {
                         }
                         self.w.push_str("::");
                         self.w.push_str(&f.field.text);
+                        if let Some(sfx) = self.pending_method_suffix.take() {
+                            self.w.push_str(&sfx);
+                        }
                         self.w.push('(');
                         // Args of a regular call consume their values
                         // — clear the format-arg flag so any nested

@@ -67,6 +67,12 @@ pub struct SymbolTable {
     /// reads it at every constructor-call emission. Empty when the
     /// program has no overloaded constructors.
     pub ctor_selections: HashMap<juxc_source::Span, usize>,
+    /// Method-overload selections recorded by the checker — call span
+    /// → index into the method's overload GROUP (see
+    /// `ClassSig::method_overloads`). Index 0 emits under the plain
+    /// name, index K under `name__ovK`. The backend consults this at
+    /// method-call emission, falling back to count re-derivation.
+    pub method_selections: HashMap<juxc_source::Span, usize>,
     /// Top-level interfaces indexed by FQN. Same shape as `classes`.
     pub interfaces: HashMap<String, InterfaceSig>,
     /// Top-level functions (outside any class) indexed by FQN.
@@ -271,6 +277,40 @@ impl SymbolTable {
     /// A 64-step recursion cap guards against cycles the build pass
     /// somehow missed (today the build pass doesn't check for cycles at
     /// all — class hierarchies trust the resolver).
+    /// Method-overload pick (§T.3, Phase-1 count rule): when
+    /// `class_name` (exact key or unique FQN suffix) declares an
+    /// overload GROUP for `method_name`, return the group index and
+    /// signature whose acceptable-argument-count range covers
+    /// `arg_count`. `None` when the name has no group (single methods
+    /// resolve through [`Self::lookup_method`] as before) or no
+    /// member accepts the count.
+    pub fn select_method_overload<'a>(
+        &'a self,
+        class_name: &str,
+        method_name: &str,
+        arg_count: usize,
+    ) -> Option<(usize, &'a MethodSig)> {
+        let class = self.classes.get(class_name).or_else(|| {
+            if class_name.contains('.') {
+                return None;
+            }
+            let suffix = format!(".{class_name}");
+            let mut hits = self.classes.iter().filter(|(k, _)| k.ends_with(&suffix));
+            match (hits.next(), hits.next()) {
+                (Some((_, c)), None) => Some(c),
+                _ => None,
+            }
+        })?;
+        let group = class.method_overloads.get(method_name)?;
+        group
+            .iter()
+            .enumerate()
+            .find(|(_, m)| {
+                let (lo, hi) = ctor_arity_range(&m.params);
+                arg_count >= lo && hi.map_or(true, |h| arg_count <= h)
+            })
+    }
+
     pub fn lookup_method<'a>(
         &'a self,
         class_name: &str,
@@ -494,6 +534,13 @@ pub struct ClassSig {
     /// Constructors in declaration order. Multiple constructors aren't
     /// supported by the parser yet; the table records all that arrive.
     pub constructors: Vec<ConstructorSig>,
+    /// Method overload GROUPS (§T.3, Phase-1 count-based subset):
+    /// method name → every same-name declaration in source order
+    /// (including the first, which also lives in `methods`). Only
+    /// names declared 2+ times have an entry, so legacy single-method
+    /// lookups through `methods` stay exact. Overload 0 emits under
+    /// the plain name, overload K under `name__ovK`.
+    pub method_overloads: HashMap<String, Vec<MethodSig>>,
     /// Methods indexed by name. Overloads aren't supported yet — a
     /// duplicate emits `E0402`.
     pub methods: HashMap<String, MethodSig>,
@@ -917,6 +964,7 @@ pub fn build_workspace(
     check_polymorphic_base_generic_methods(&table, diagnostics);
     check_method_modifier_combinations(&table, diagnostics);
     check_constructor_overloads(&table, diagnostics);
+    check_method_overloads(&table, diagnostics);
     check_top_level_visibility(&table, diagnostics);
     check_override_does_not_narrow_access(&table, diagnostics);
     check_imports_resolve(units, &table, diagnostics);
@@ -2171,6 +2219,102 @@ fn check_diamond_default_conflicts(
 /// constructors (`HashMap()` + `HashMap(int)`, JUX-BINDGEN §G.5.1/§G.5.2) —
 /// parse and resolve cleanly: the stub class is flagged `is_external` and
 /// exempted here, while ordinary user classes still get the limit enforced.
+/// Method overloading (§T.3), Phase-1 rule — mirrors the
+/// constructor rule: overloads of one name are selected by ARGUMENT
+/// COUNT, so each group's acceptable-count ranges must be pairwise
+/// disjoint (E0450). Additionally, Phase 1 keeps overload groups out
+/// of the inheritance machinery: a group's name may not also exist on
+/// an ancestor class (override matching, virtual-dispatch traits, and
+/// body copy-down are all name-keyed today).
+fn check_method_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
+    for (class_name, class) in &table.classes {
+        if class.is_external {
+            continue;
+        }
+        for (name, group) in &class.method_overloads {
+            let ranges: Vec<(usize, Option<usize>)> =
+                group.iter().map(|m| ctor_arity_range(&m.params)).collect();
+            for j in 1..ranges.len() {
+                for i in 0..j {
+                    let (lo_a, hi_a) = ranges[i];
+                    let (lo_b, hi_b) = ranges[j];
+                    let overlap = lo_a <= hi_b.unwrap_or(usize::MAX)
+                        && lo_b <= hi_a.unwrap_or(usize::MAX);
+                    if overlap {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0450_AmbiguousOverload,
+                                format!(
+                                    "ambiguous overload of `{class_name}.{name}`: two \
+                                     declarations accept the same argument count (Phase 1 \
+                                     selects by count) — make the parameter counts \
+                                     disjoint, or merge them with default parameters",
+                                ),
+                            )
+                            .with_span(group[j].span),
+                        );
+                    }
+                }
+            }
+            // Inheritance restriction (forward): walk the extends chain.
+            let mut cursor = class.extends_fqn.clone();
+            let mut depth = 0usize;
+            while let Some(parent_name) = cursor {
+                if depth > 64 {
+                    break;
+                }
+                depth += 1;
+                let Some(parent) = table.classes.get(&parent_name) else { break };
+                if parent.methods.contains_key(name) {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0450_AmbiguousOverload,
+                            format!(
+                                "`{class_name}.{name}` is overloaded AND inherited from \
+                                 `{parent_name}` — Phase 1 doesn't combine overloading \
+                                 with overriding; rename the overloads or the inherited \
+                                 method",
+                            ),
+                        )
+                        .with_span(group[0].span),
+                    );
+                    break;
+                }
+                cursor = parent.extends_fqn.clone();
+            }
+        }
+        // Inheritance restriction (reverse): extending a class that
+        // declares ANY overload group is a Phase-1 error — the
+        // virtual-dispatch machinery (Kind traits, body copy-down,
+        // override matching) is name-keyed and doesn't understand
+        // mangled overload members yet.
+        if let Some(parent_name) = &class.extends_fqn {
+            if let Some(parent) = table.classes.get(parent_name) {
+                if !parent.method_overloads.is_empty() {
+                    let group_name = parent
+                        .method_overloads
+                        .keys()
+                        .next()
+                        .cloned()
+                        .unwrap_or_default();
+                    diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0450_AmbiguousOverload,
+                            format!(
+                                "`{class_name}` extends `{parent_name}`, which overloads \
+                                 `{group_name}` — Phase 1 doesn't combine method \
+                                 overloading with inheritance; rename the overloads or \
+                                 make the parent's methods distinct",
+                            ),
+                        )
+                        .with_span(class.span),
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Constructor overloading (§7.3.1), Phase-1 rule: constructors are
 /// selected by **argument count**, so every pair of constructors on a
 /// class must have disjoint acceptable-count ranges. A constructor
@@ -2506,23 +2650,24 @@ fn insert_class(
         })
         .collect();
 
-    // Methods — duplicates emit E0402.
-    let mut methods = HashMap::new();
+    // Methods — same-name declarations form an overload group
+    // (§T.3, Phase-1: selection by argument count; ranges validated
+    // disjoint in `check_method_overloads`). `methods` keeps the
+    // FIRST declaration (every legacy single-method lookup stays
+    // exact); `method_overloads` carries the full group for names
+    // declared 2+ times.
+    let mut methods: HashMap<String, MethodSig> = HashMap::new();
+    let mut method_overloads: HashMap<String, Vec<MethodSig>> = HashMap::new();
     for method in &class_decl.methods {
-        if methods.contains_key(&method.name.text) {
-            diagnostics.push(
-                Diagnostic::error(
-                    code::Code::E0402_DuplicateMethod,
-                    format!(
-                        "method `{}` is declared more than once in class `{}`",
-                        method.name.text, class_decl.name.text,
-                    ),
-                )
-                .with_span(method.span),
-            );
+        let sig = method_sig(method, is_external);
+        if let Some(first) = methods.get(&method.name.text) {
+            method_overloads
+                .entry(method.name.text.clone())
+                .or_insert_with(|| vec![first.clone()])
+                .push(sig);
             continue;
         }
-        methods.insert(method.name.text.clone(), method_sig(method, is_external));
+        methods.insert(method.name.text.clone(), sig);
     }
 
     // Operators — same E0402 treatment for duplicates, keyed by kind.
@@ -2606,6 +2751,7 @@ fn insert_class(
             implements: class_decl.implements.clone(),
             fields,
             constructors,
+        method_overloads,
             methods,
             operators,
             properties,
@@ -3454,10 +3600,11 @@ mod tests {
         assert_eq!(diags[0].code, code::Code::E0401_DuplicateField);
     }
 
-    /// Two methods with the same name in the same class → E0402.
-    /// (Will lift once overloads land.)
+    /// Two same-name methods whose argument counts OVERLAP → E0450
+    /// (Phase-1 overloading selects by count; identical zero-arg
+    /// signatures can never be disambiguated).
     #[test]
-    fn duplicate_method_emits_e0402() {
+    fn overlapping_method_overload_emits_e0450() {
         let (_table, diags) = build_table(
             r#"
             public class Foo {
@@ -3467,7 +3614,25 @@ mod tests {
             "#,
         );
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code, code::Code::E0402_DuplicateMethod);
+        assert_eq!(diags[0].code, code::Code::E0450_AmbiguousOverload);
+    }
+
+    /// Same-name methods with DISJOINT argument counts form a legal
+    /// overload group (§T.3 Phase-1) — no diagnostics, and the group
+    /// is recorded on `method_overloads`.
+    #[test]
+    fn disjoint_method_overload_group_is_legal() {
+        let (table, diags) = build_table(
+            r#"
+            public class Foo {
+                public void bar(int x) {}
+                public void bar(int x, int y) {}
+            }
+            "#,
+        );
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        let class = table.classes.get("Foo").expect("Foo in table");
+        assert_eq!(class.method_overloads.get("bar").map(|g| g.len()), Some(2));
     }
 
     /// Two `Red` variants in the same enum → E0403.

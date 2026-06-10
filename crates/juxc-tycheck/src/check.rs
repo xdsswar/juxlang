@@ -268,6 +268,10 @@ pub(crate) struct Checker<'a> {
     /// list. Absorbed into `SymbolTable::ctor_selections` after the
     /// walk so the backend can pick `new` vs `new__K` per call site.
     pub(crate) ctor_selections: HashMap<Span, usize>,
+    /// Method-overload selections (call span → group index), absorbed
+    /// into `SymbolTable::method_selections` after the walk. Mirrors
+    /// `ctor_selections`.
+    pub(crate) method_selections: HashMap<Span, usize>,
     /// `Some(index)` while walking constructor `index`'s body —
     /// `this(...)` delegation is only legal there (and only as the
     /// first statement), and a delegation may not resolve back to
@@ -332,6 +336,7 @@ impl<'a> Checker<'a> {
             expr_types: HashMap::new(),
             call_expansions: HashMap::new(),
             ctor_selections: HashMap::new(),
+            method_selections: HashMap::new(),
             current_ctor: None,
             in_static: false,
             in_async: false,
@@ -438,8 +443,14 @@ impl<'a> Checker<'a> {
         HashMap<Span, Ty>,
         HashMap<Span, Vec<crate::ArgSource>>,
         HashMap<Span, usize>,
+        HashMap<Span, usize>,
     ) {
-        (self.expr_types, self.call_expansions, self.ctor_selections)
+        (
+            self.expr_types,
+            self.call_expansions,
+            self.ctor_selections,
+            self.method_selections,
+        )
     }
 
     /// Seed the checker's [`TypeEnv`] with the per-unit
@@ -2964,12 +2975,22 @@ impl<'a> Checker<'a> {
                         &self.env,
                         self.symbols,
                     ) {
-                        let class_method = self
-                            .symbols
-                            .classes
-                            .get(&class_fqn)
-                            .and_then(|c| c.methods.get(method_name))
-                            .cloned();
+                        let class_method = match self.symbols.select_method_overload(
+                            &class_fqn,
+                            method_name,
+                            c.args.len(),
+                        ) {
+                            Some((k, picked)) => {
+                                self.method_selections.insert(c.span, k);
+                                Some(picked.clone())
+                            }
+                            None => self
+                                .symbols
+                                .classes
+                                .get(&class_fqn)
+                                .and_then(|c| c.methods.get(method_name))
+                                .cloned(),
+                        };
                         if let Some(method) = class_method {
                             if method.is_static {
                                 let vis = method.visibility;
@@ -3157,6 +3178,20 @@ impl<'a> Checker<'a> {
                 if let Some((method, declaring_class)) =
                     self.symbols.lookup_method(&name, method_name)
                 {
+                    // Overload-group pick (§T.3 Phase-1): when the
+                    // receiver's class declares several same-name
+                    // methods, the argument count selects the member;
+                    // the recorded index drives `name__ovK` emission.
+                    let method = match self
+                        .symbols
+                        .select_method_overload(&name, method_name, c.args.len())
+                    {
+                        Some((k, picked)) => {
+                            self.method_selections.insert(c.span, k);
+                            picked
+                        }
+                        None => method,
+                    };
                     let params = method.params.clone();
                     let method_generic_params = method.generic_params.clone();
                     let method_vis = method.visibility;

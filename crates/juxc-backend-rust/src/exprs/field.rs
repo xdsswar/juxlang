@@ -17,6 +17,14 @@ impl RustEmitter {
         // When set, the `.0.borrow()` wrapper rewrite below is
         // suppressed — the `.field` here names a method on the newtype.
         let is_call_callee = std::mem::take(&mut self.emitting_call_callee);
+        // Overload suffix for a METHOD-position member name — taken
+        // here (only when this field IS the call callee) so a nested
+        // receiver's own field emissions can't consume it.
+        let method_suffix: Option<String> = if is_call_callee {
+            self.pending_method_suffix.take()
+        } else {
+            None
+        };
         // Safe-navigation field access (`obj?.field`) lowers via
         // `Option::map`: the closure runs only when the receiver
         // is `Some`, and the result is `Option<FieldType>`. We
@@ -60,6 +68,7 @@ impl RustEmitter {
                         self.emit_expr(&f.object);
                         self.w.push_str(".__get_");
                         self.w.push_str(&f.field.text);
+                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                         self.w.push_str("()");
                         return;
                     }
@@ -117,6 +126,7 @@ impl RustEmitter {
                     self.emit_expr(&f.object);
                     self.w.push('.');
                     self.w.push_str(&f.field.text);
+                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                     self.w.push_str("()");
                     return;
                 }
@@ -156,6 +166,7 @@ impl RustEmitter {
                     self.w.push_str(bare);
                     self.w.push_str("::");
                     self.w.push_str(&f.field.text);
+                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                     return;
                 }
                 // Import-alias-aware: the current unit's
@@ -173,6 +184,7 @@ impl RustEmitter {
                                 self.w.push_str(bare);
                                 self.w.push_str("::");
                                 self.w.push_str(&f.field.text);
+                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                                 return;
                             }
                         }
@@ -188,6 +200,7 @@ impl RustEmitter {
                         self.w.push_str(bare);
                         self.w.push_str("::");
                         self.w.push_str(&f.field.text);
+                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                         return;
                     }
                 }
@@ -228,6 +241,7 @@ impl RustEmitter {
                         self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                         self.w.push_str("::");
                         self.w.push_str(&f.field.text);
+                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                         self.w.push_str("()");
                         return;
                     }
@@ -247,6 +261,7 @@ impl RustEmitter {
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                             self.w.push_str("::");
                             self.w.push_str(&f.field.text);
+                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                             return;
                         }
                         // Mutable static — guarded `LazyLock<Mutex<T>>`.
@@ -280,6 +295,7 @@ impl RustEmitter {
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                             self.w.push('_');
                             self.w.push_str(&f.field.text);
+                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                             self.w.push_str(".with(|__s| __s.borrow().clone())");
                             if has_si {
                                 self.w.push_str(" })");
@@ -291,6 +307,7 @@ impl RustEmitter {
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                             self.w.push('_');
                             self.w.push_str(&f.field.text);
+                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                             self.w.push_str(".lock().unwrap()");
                         } else {
                             // Parenthesize the block expression so it stays an
@@ -304,6 +321,7 @@ impl RustEmitter {
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                             self.w.push('_');
                             self.w.push_str(&f.field.text);
+                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                             self.w.push_str(".lock().unwrap().clone()");
                             if has_si {
                                 self.w.push_str(" })");
@@ -325,6 +343,7 @@ impl RustEmitter {
                     self.emit_fqn_path_in_rust(&iface_fqn, qn.segments.len() > 1);
                     self.w.push('_');
                     self.w.push_str(&f.field.text);
+                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                     return;
                 }
             }
@@ -372,6 +391,7 @@ impl RustEmitter {
         }
         self.w.push('.');
         self.w.push_str(&f.field.text);
+                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
         // Auto-`.clone()` on field reads in two cases:
         //   1. String-field reads — so `return this.name;` and similar
         //      don't move out of `&self`.
