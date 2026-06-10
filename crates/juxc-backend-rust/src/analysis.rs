@@ -1907,18 +1907,32 @@ impl WildcardLifter {
     }
 
     /// Mint a fresh `__Wn` TypeParam with the wildcard's bound and
-    /// return a TypeRef pointing at it. `? super B` collapses to the
-    /// same shape as `? extends B` here — Rust generics can't
-    /// express "supertype of B" directly, and Phase 1 treats the
-    /// bound as a marker constraint either way. (Tycheck still
-    /// enforces the variance distinction via PECS in `compatible`.)
+    /// return a TypeRef pointing at it.
+    ///
+    /// - `? extends B` (covariant producer) → `<__Wn: B>`: every value
+    ///   read out is a `B`, so the marker bound is exactly right.
+    /// - `? super B` (contravariant consumer) → `<__Wn>` (UNBOUNDED):
+    ///   Rust generics can't express "supertype of B", and reusing the
+    ///   `B` bound would wrongly require `__Wn: BKind` — rejecting the
+    ///   legal caller `Bag<Animal>` with `Animal: DogKind not satisfied`
+    ///   (rustc E0277). An unbounded param accepts any concrete `Bag<X>`,
+    ///   which is sound because Phase-1 wildcard values are pass-through
+    ///   only (no member access / write-through the bound). A future
+    ///   write-through phase would re-introduce a `From<B>`-style
+    ///   constraint here.
+    /// - bare `?` → `<__Wn>` (unbounded).
+    ///
+    /// Tycheck still enforces the variance distinction via PECS in
+    /// `compatible`, so the relaxation here doesn't widen what type-checks.
     fn synthesize(&mut self, bound: &Option<WildcardBound>) -> TypeRef {
         let name = format!("__W{}", self.next);
         self.next += 1;
         let bounds: Vec<TypeRef> = match bound {
             None => Vec::new(),
             Some(WildcardBound::Extends(b)) => vec![b.clone()],
-            Some(WildcardBound::Super(b)) => vec![b.clone()],
+            // `? super B` is contravariant — see the doc comment: an
+            // unbounded param is the sound pass-through lowering.
+            Some(WildcardBound::Super(_)) => Vec::new(),
         };
         let ident = Ident {
             text: name.clone(),
