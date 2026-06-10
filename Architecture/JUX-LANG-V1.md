@@ -840,13 +840,13 @@ public sealed interface Token permits Identifier, Number, Punctuation {
 }
 
 public final record Identifier(String value) implements Token {
-    public String name => "ident";
+    public String name -> "ident";
 }
 public final record Number(double value) implements Token {
-    public String name => "number";
+    public String name -> "number";
 }
 public final record Punctuation(char ch) implements Token {
-    public String name => "punct";
+    public String name -> "punct";
 }
 
 public void describe(Token t) {
@@ -1255,13 +1255,13 @@ The variadic parameter is bound to a `String[]` inside the function body. Variad
 ### 7.3. Class Declarations
 
 ```java
-public class User {                         // final by default
+public class User {
     // Fields and properties (C#-style; see §M.7)
     private String passwordHash;
     public String name { get; private set; }     // public read, private write
     public int age    { get; private set; }      // public read, private write
     public String email { get; set; }            // public read and write
-    public String fullId => $"user-${name}";     // expression-bodied read-only
+    public String fullId -> $"user-${name}";     // expression-bodied read-only
 
     // Primary constructor — name matches the class name (Java style)
     public User(String name, int age, String email = "") {
@@ -1651,7 +1651,7 @@ public interface Repository<T> {
     }
 
     // Default methods can be expression-bodied properties too
-    default bool isEmpty => count() == 0;
+    default bool isEmpty -> count() == 0;
 }
 ```
 

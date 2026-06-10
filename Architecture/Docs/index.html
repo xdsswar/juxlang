@@ -431,10 +431,10 @@ print(<span class="str">$"a = $a"</span>);          <span class="com">// "a = Ve
     <span class="kw">public</span> <span class="kw">int</span>    age   { <span class="kw">get</span>; <span class="kw">private</span> <span class="kw">set</span>; }            <span class="com">// asymmetric visibility</span>
     <span class="kw">public</span> <span class="typ">String</span> email { <span class="kw">get</span>; <span class="kw">set</span>; } = <span class="str">""</span>;              <span class="com">// with initializer</span>
 
-    <span class="kw">public</span> <span class="typ">String</span> displayName =&gt; <span class="str">$"$name (id: $id)"</span>;          <span class="com">// expression-bodied</span>
+    <span class="kw">public</span> <span class="typ">String</span> displayName -&gt; <span class="str">$"$name (id: $id)"</span>;          <span class="com">// expression-bodied</span>
 
     <span class="kw">public</span> <span class="typ">String</span> password {                                 <span class="com">// full body with validation</span>
-        <span class="kw">get</span> =&gt; _hash;
+        <span class="kw">get</span> -&gt; _hash;
         <span class="kw">set</span> {
             <span class="kw">if</span> (value.isEmpty()) <span class="kw">throw</span> <span class="kw">new</span> <span class="typ">IllegalArgumentException</span>();
             _hash = hash(value);
@@ -453,7 +453,7 @@ print(<span class="str">$"a = $a"</span>);          <span class="com">// "a = Ve
     <span class="typ">Iterable</span>&lt;T&gt; all();
 
     <span class="com">// Default — implementers inherit, may override</span>
-    <span class="kw">default</span> <span class="kw">bool</span> exists(<span class="kw">int</span> id) =&gt; findById(id) != <span class="kw">null</span>;
+    <span class="kw">default</span> <span class="kw">bool</span> exists(<span class="kw">int</span> id) -&gt; findById(id) != <span class="kw">null</span>;
 
     <span class="kw">default</span> <span class="kw">int</span> count() {
         <span class="kw">var</span> n = <span class="num">0</span>;
@@ -467,8 +467,8 @@ print(<span class="str">$"a = $a"</span>);          <span class="com">// "a = Ve
         <span class="kw">return</span> item;
     }
 
-    <span class="kw">default</span> <span class="typ">Iterable</span>&lt;T&gt; findWhere((T) -&gt; <span class="kw">bool</span> pred) =&gt; all().filter(pred);
-    <span class="kw">default</span> <span class="kw">bool</span> isEmpty =&gt; count() == <span class="num">0</span>;
+    <span class="kw">default</span> <span class="typ">Iterable</span>&lt;T&gt; findWhere((T) -&gt; <span class="kw">bool</span> pred) -&gt; all().filter(pred);
+    <span class="kw">default</span> <span class="kw">bool</span> isEmpty -&gt; count() == <span class="num">0</span>;
 }
 
 <span class="com">// Implementer writes only the 4 abstract methods. Everything else</span>
@@ -476,10 +476,10 @@ print(<span class="str">$"a = $a"</span>);          <span class="com">// "a = Ve
 <span class="kw">public</span> <span class="kw">final</span> <span class="kw">class</span> <span class="typ">UserRepo</span> <span class="kw">implements</span> <span class="typ">Repository</span>&lt;<span class="typ">User</span>&gt; {
     <span class="kw">private</span> <span class="typ">Map</span>&lt;<span class="kw">int</span>, <span class="typ">User</span>&gt; storage = <span class="kw">new</span> <span class="typ">Map</span>&lt;&gt;();
 
-    @<span class="typ">Override</span> <span class="kw">public</span> <span class="typ">User</span>? findById(<span class="kw">int</span> id) =&gt; storage.get(id);
+    @<span class="typ">Override</span> <span class="kw">public</span> <span class="typ">User</span>? findById(<span class="kw">int</span> id) -&gt; storage.get(id);
     @<span class="typ">Override</span> <span class="kw">public</span> <span class="kw">void</span> save(<span class="typ">User</span> u) { storage.put(u.id, u); }
     @<span class="typ">Override</span> <span class="kw">public</span> <span class="kw">void</span> deleteById(<span class="kw">int</span> id) { storage.remove(id); }
-    @<span class="typ">Override</span> <span class="kw">public</span> <span class="typ">Iterable</span>&lt;<span class="typ">User</span>&gt; all() =&gt; storage.values();
+    @<span class="typ">Override</span> <span class="kw">public</span> <span class="typ">Iterable</span>&lt;<span class="typ">User</span>&gt; all() -&gt; storage.values();
 }
 
 <span class="kw">var</span> repo = <span class="kw">new</span> <span class="typ">UserRepo</span>();
@@ -522,7 +522,7 @@ print(repo.isEmpty);              <span class="com">// false (default impl, comp
     <span class="typ">String</span> name { <span class="kw">get</span>; }
 }
 <span class="kw">public</span> <span class="kw">final</span> <span class="kw">record</span> <span class="typ">Ident</span>(<span class="typ">String</span> value) <span class="kw">implements</span> <span class="typ">Token</span> {
-    <span class="kw">public</span> <span class="typ">String</span> name =&gt; <span class="str">"ident"</span>;
+    <span class="kw">public</span> <span class="typ">String</span> name -&gt; <span class="str">"ident"</span>;
 }</code></pre>
 
       <h3>Method overridability — Java-style default</h3>
