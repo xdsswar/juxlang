@@ -452,11 +452,15 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 if let Some((method, declaring_class)) =
                     symbols.lookup_method(name, method_name)
                 {
-                    // Lower in the declaring class's generic scope so
-                    // `T get()` reads as `Param("T")`, not `Unknown`.
-                    let raw = return_type_in_class(
+                    // Lower in the declaring class's generic scope AND the
+                    // method's own generic params so both `T get()` (class
+                    // param) and `<U> U pick()` (method param) read as
+                    // `Param(..)`, not `Unknown` — the call-site inference then
+                    // substitutes the concrete type in.
+                    let raw = return_type_in_method(
                         &method.return_type,
                         declaring_class,
+                        &method.generic_params,
                         symbols,
                     );
                     // Compose the substitution through the
@@ -487,9 +491,10 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 // own generic params.
                 if let Some(record) = symbols.records.get(name) {
                     if let Some(method) = record.methods.get(method_name) {
-                        let raw = return_type_in_class(
+                        let raw = return_type_in_method(
                             &method.return_type,
                             name,
+                            &method.generic_params,
                             symbols,
                         );
                         let after_class =
@@ -509,9 +514,10 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 // interface's own generic params.
                 if let Some(iface) = symbols.interfaces.get(name) {
                     if let Some(method) = iface.methods.get(method_name) {
-                        let raw = return_type_in_class(
+                        let raw = return_type_in_method(
                             &method.return_type,
                             name,
+                            &method.generic_params,
                             symbols,
                         );
                         let after_class =
@@ -712,6 +718,24 @@ fn return_type_in_class(rt: &ReturnType, declaring_class: &str, symbols: &Symbol
         ReturnType::Void => Ty::Void,
         ReturnType::Type(t) | ReturnType::AsyncType(t) => {
             lower_member_type(t, declaring_class, symbols)
+        }
+    }
+}
+
+/// Like [`return_type_in_class`] but also brings the **method's** own generic
+/// params into scope, so a generic-method return (`<U> U pick()`) lowers to a
+/// [`Ty::Param`] the call-site inference can substitute (see
+/// [`crate::ty::lower_member_type_in_method`]).
+fn return_type_in_method(
+    rt: &ReturnType,
+    declaring_class: &str,
+    method_generics: &[juxc_ast::TypeParam],
+    symbols: &SymbolTable,
+) -> Ty {
+    match rt {
+        ReturnType::Void => Ty::Void,
+        ReturnType::Type(t) | ReturnType::AsyncType(t) => {
+            crate::ty::lower_member_type_in_method(t, declaring_class, method_generics, symbols)
         }
     }
 }

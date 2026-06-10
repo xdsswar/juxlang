@@ -707,11 +707,20 @@ impl RustEmitter {
                     // same gate `receiver_is_wrapper_class` uses.
                     return self.receiver_is_wrapper_class(expr);
                 }
-                if let Some(juxc_tycheck::Ty::User { name, .. }) =
-                    self.expr_types.get(&expr_span_of(expr))
-                {
-                    let bare = name.rsplit('.').next().unwrap_or(name);
-                    return self.wrapper_classes.contains(bare);
+                if let Some(ty) = self.expr_types.get(&expr_span_of(expr)) {
+                    // A **generic type-parameter**-typed place (`T x`) carries a
+                    // `Clone` bound in the emitted Rust, and at instantiation `T`
+                    // may be a non-`Copy` wrapper/struct — so a reused place must
+                    // `.clone()` rather than move (using it twice would be Rust
+                    // `E0382 use of moved value`). `.clone()` is always sound:
+                    // every emitted generic param is `T: Clone`.
+                    if matches!(ty, juxc_tycheck::Ty::Param(_)) {
+                        return true;
+                    }
+                    if let juxc_tycheck::Ty::User { name, .. } = ty {
+                        let bare = name.rsplit('.').next().unwrap_or(name);
+                        return self.wrapper_classes.contains(bare);
+                    }
                 }
                 // Span-collision fallback: a bare `Path` local that the
                 // span-keyed `expr_types` missed (interp-string reparse)
@@ -719,6 +728,22 @@ impl RustEmitter {
                 // that `receiver_class_bare` consults first.
                 if let Some(bare) = self.receiver_class_bare(expr) {
                     return self.wrapper_classes.contains(&bare);
+                }
+                // Generic-param local that the span-keyed `expr_types` lacks
+                // (e.g. an argument inside a generic-receiver method call,
+                // where the callee's param type can't be inferred) — consult
+                // the name-keyed `local_types` for a `Ty::Param`.
+                if let Expr::Path(qn) = expr {
+                    if qn.segments.len() == 1 {
+                        if let Some(juxc_tycheck::Ty::Param(_)) = self
+                            .local_types
+                            .iter()
+                            .rev()
+                            .find_map(|scope| scope.get(qn.segments[0].text.as_str()))
+                        {
+                            return true;
+                        }
+                    }
                 }
                 false
             }

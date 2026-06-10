@@ -593,6 +593,40 @@ pub fn lower_member_type(ty_ref: &TypeRef, declaring_class: &str, symbols: &Symb
     ty_from_ref(ty_ref, &env, symbols)
 }
 
+/// Like [`lower_member_type`] but ALSO seeds the env with a **method's own
+/// generic parameters**. A generic method `<T> T pick(T a, T b)` declares `T`
+/// at the method level, not the class level — without this, its return type
+/// `T` lowers to [`Ty::Unknown`] (the class scope has no `T`), and the
+/// call-site inference then has no [`Ty::Param`] to substitute the inferred
+/// concrete type into. Class/record/interface params are loaded first so a
+/// method return that mixes both (`<U> U convert()` inside `Box<T>`) resolves
+/// every parameter.
+pub fn lower_member_type_in_method(
+    ty_ref: &TypeRef,
+    declaring_class: &str,
+    method_generics: &[TypeParam],
+    symbols: &SymbolTable,
+) -> Ty {
+    let mut env = TypeEnv::new();
+    if let Some(class) = symbols.classes.get(declaring_class) {
+        for tp in &class.generic_params {
+            env.add_generic_param(&tp.name.text);
+        }
+    } else if let Some(record) = symbols.records.get(declaring_class) {
+        for tp in &record.generic_params {
+            env.add_generic_param(&tp.name.text);
+        }
+    } else if let Some(iface) = symbols.interfaces.get(declaring_class) {
+        for tp in &iface.generic_params {
+            env.add_generic_param(&tp.name.text);
+        }
+    }
+    for tp in method_generics {
+        env.add_generic_param(&tp.name.text);
+    }
+    ty_from_ref(ty_ref, &env, symbols)
+}
+
 // ============================================================================
 // Generic-parameter substitution (Phase E)
 // ============================================================================

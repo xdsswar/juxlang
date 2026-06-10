@@ -1916,8 +1916,13 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
     );
     assert!(rust.contains("#[derive(Clone, Debug)]"), "derive(Clone, Debug): {rust}");
     // Inline plain struct holds the generic field directly — no inner
-    // newtype, no `Rc<RefCell>` wrapper.
-    assert!(rust.contains("pub struct Box<T> {"), "inline struct header: {rust}");
+    // newtype, no `Rc<RefCell>` wrapper. The struct's own type params carry the
+    // `Clone + Debug` bound (the `#[derive]` needs it, and a generic field of a
+    // bounded type propagates the bound).
+    assert!(
+        rust.contains("pub struct Box<T: Clone + std::fmt::Debug> {"),
+        "inline struct header carries the Clone+Debug bound: {rust}",
+    );
     assert!(!rust.contains("Box_Inner"), "no inner newtype when Inline: {rust}");
     assert!(
         !rust.contains("std::cell::RefCell"),
