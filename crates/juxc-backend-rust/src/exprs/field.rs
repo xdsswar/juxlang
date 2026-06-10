@@ -237,7 +237,13 @@ impl RustEmitter {
                 let cls = self.symbols.classes.get(&class_fqn);
                 if let Some(field) = cls.and_then(|c| c.fields.get(f.field.text.as_str())) {
                     if field.is_static {
-                        if field.is_final {
+                        // A `final` static normally reads as the assoc
+                        // const `Class::field` — EXCEPT when the payload
+                        // is `!Send` (a wrapper object): those are stored
+                        // thread_local (Rust `const` can't run the
+                        // wrapper ctor), so they fall through to the
+                        // thread_local read below.
+                        if field.is_final && !self.final_static_needs_runtime_init(&field.ty) {
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                             self.w.push_str("::");
                             self.w.push_str(&f.field.text);
@@ -512,22 +518,33 @@ impl RustEmitter {
         field_name: &str,
         is_final: bool,
     ) {
-        if is_final {
+        // Two storage predicates, matched against the DECL routing in
+        // `emit_class_decl` / `emit_mutable_static_field`:
+        // - `is_thread_local` (`!Send` payload) → `thread_local!` slot,
+        //   reads hand out a shared handle. Applies to finals too.
+        // - `final_runtime` (class/record payload, `Send` or not) — a
+        //   final that can't be a `pub const` (non-const ctor); stored
+        //   module-scope like a mutable static, so its read takes the
+        //   lock shape below instead of the assoc-const path.
+        let field_ty = self
+            .lookup_class_by_bare_or_fqn(class_name)
+            .and_then(|c| c.fields.get(field_name))
+            .map(|fs| fs.ty.clone());
+        let is_thread_local = field_ty
+            .as_ref()
+            .map(|ty| self.static_type_needs_thread_local(ty))
+            .unwrap_or(false);
+        let final_runtime = is_final
+            && field_ty
+                .as_ref()
+                .map(|ty| self.final_static_needs_runtime_init(ty))
+                .unwrap_or(false);
+        if is_final && !final_runtime && !is_thread_local {
             self.w.push_str(class_name);
             self.w.push_str("::");
             self.w.push_str(field_name);
             return;
         }
-        // `!Send` static (thread_local slot) — read out a shared handle;
-        // see the matching branch in `emit_field` for the write story.
-        let is_thread_local = self
-            .lookup_class_by_bare_or_fqn(class_name)
-            .and_then(|c| c.fields.get(field_name))
-            .map(|fs| {
-                let ty = fs.ty.clone();
-                self.static_type_needs_thread_local(&ty)
-            })
-            .unwrap_or(false);
         if is_thread_local {
             self.w.push_str(class_name);
             self.w.push('_');
