@@ -140,6 +140,13 @@ impl RustEmitter {
                 self.w.push_str(";\n");
             }
         }
+        // Runtime-type downcast hooks (`__jux_as_<T>`) so a value typed as this
+        // interface (`Rc<dyn Iface>`) can be downcast / type-tested — one per
+        // cast/type-test target some implementer of this interface could also
+        // be. Implementing classes override them in `emit_class_trait_impls`.
+        for t in self.interface_hook_targets(&interface.name.text) {
+            self.emit_downcast_hook_sig(&t);
+        }
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();

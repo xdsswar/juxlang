@@ -15,7 +15,7 @@ use crate::RustEmitter;
 /// True when `e` is the AST `null` literal — used to decide
 /// whether a value flowing into a nullable slot needs the
 /// `Some(...)` wrap or is already `None`.
-fn is_null_literal(e: &Expr) -> bool {
+pub(crate) fn is_null_literal(e: &Expr) -> bool {
     matches!(e, Expr::Literal(Literal::Null))
 }
 
@@ -276,7 +276,12 @@ impl RustEmitter {
             Some(juxc_ast::ReturnType::AsyncType(t)) => t.nullable,
             _ => false,
         };
-        returns_nullable && !is_null_literal(expr)
+        // An expression that is *already* `Option`-shaped (`return
+        // this.nullableField;`, `return maybeX();`, `return nullableLocal;`)
+        // flows back unchanged — wrapping it would yield `Some(Some(...))`.
+        returns_nullable
+            && !is_null_literal(expr)
+            && !self.expression_is_already_nullable(expr)
     }
 }
 
@@ -380,7 +385,11 @@ impl RustEmitter {
                         }
                         _ => None,
                     };
-                    if wrap_some {
+                    // A nullable dyn return (`Animal? f() { return new Dog(); }`)
+                    // is `Some`-wrapped INSIDE the coercion helper — don't add a
+                    // second `Some(...)` here.
+                    let do_some = wrap_some && ret_iface_ty.is_none();
+                    if do_some {
                         self.w.push_str("Some(");
                     }
                     if let Some(ret_ty) = ret_iface_ty {
@@ -403,7 +412,7 @@ impl RustEmitter {
                             self.w.push_str(".into()");
                         }
                     }
-                    if wrap_some {
+                    if do_some {
                         self.w.push(')');
                     }
                 }
@@ -868,10 +877,6 @@ impl RustEmitter {
             // and the init isn't a `null` literal, wrap in `Some(...)`
             // so the assignment type-checks. A `null` init already
             // lowers to `None` via `emit_literal`, so no wrap there.
-            let wrap_some = declared_nullable && !is_null_literal(init);
-            if wrap_some {
-                self.w.push_str("Some(");
-            }
             // **Interface value slot.** When the local's declared type is an
             // interface (`Shape a = new Circle(...)`), the init must be
             // adapted into the `Rc<dyn Trait>` representation — a class value
@@ -884,6 +889,18 @@ impl RustEmitter {
                     crate::analysis::IfaceCoercion::None,
                 )
             });
+            // A nullable dyn local (`Animal? a = new Dog()`) is `Some`-wrapped
+            // INSIDE the coercion helper — only add the bare-nullable `Some(...)`
+            // when we're NOT routing through that helper. An init that is
+            // *already* `Option`-shaped (`Animal? r = maybeAnimal()`) flows
+            // through unwrapped — wrapping it would yield `Some(Some(...))`.
+            let wrap_some = declared_nullable
+                && !is_null_literal(init)
+                && !self.expression_is_already_nullable(init)
+                && iface_target.is_none();
+            if wrap_some {
+                self.w.push_str("Some(");
+            }
             if let Some(decl_ty) = iface_target {
                 self.emit_expr_coerced_to_iface(&decl_ty.clone(), init);
             } else {
@@ -1144,45 +1161,54 @@ impl RustEmitter {
         // scoped-temp shape above (§CR.5.7).
         // **Field WRITE through a polymorphic-base reference** → `__set_f(v)`.
         // A base-typed value is a `Rc<dyn …Kind>` that can't expose struct
-        // fields; the generated setter writes through interior mutability.
-        // Plain `=` only (compound `+=` through a `dyn` setter isn't modeled).
-        if a.op.is_none() {
-            if let Expr::Field(tf) = &a.target {
-                if !tf.safe && !matches!(&*tf.object, Expr::This(_)) {
-                    if let Some(bare) = self.receiver_class_bare(&tf.object) {
-                        if self.poly_base_classes.contains(&bare) {
-                            let field_info = self
-                                .symbols
-                                .lookup_field(&bare, &tf.field.text)
-                                .map(|(fsig, _)| {
-                                    (
-                                        matches!(
-                                            fsig.visibility,
-                                            juxc_ast::Visibility::Public
-                                                | juxc_ast::Visibility::Protected
-                                        ),
-                                        fsig.ty.clone(),
-                                    )
-                                });
-                            if let Some((true, fty)) = field_info {
+        // fields; the generated setter writes through interior mutability. A
+        // compound op (`+=`) becomes a read-modify-write through the accessors:
+        // `r.__set_f(r.__get_f() OP v)`.
+        if let Expr::Field(tf) = &a.target {
+            if !tf.safe && !matches!(&*tf.object, Expr::This(_)) {
+                if let Some(bare) = self.receiver_class_bare(&tf.object) {
+                    if self.poly_base_classes.contains(&bare) {
+                        let field_info = self
+                            .symbols
+                            .lookup_field(&bare, &tf.field.text)
+                            .map(|(fsig, _)| {
+                                (
+                                    matches!(
+                                        fsig.visibility,
+                                        juxc_ast::Visibility::Public
+                                            | juxc_ast::Visibility::Protected
+                                    ),
+                                    fsig.ty.clone(),
+                                )
+                            });
+                        if let Some((true, fty)) = field_info {
+                            let field = tf.field.text.clone();
+                            self.emit_expr(&tf.object);
+                            self.w.push_str(".__set_");
+                            self.w.push_str(&field);
+                            self.w.push('(');
+                            if let Some(op) = a.op {
+                                // Read-modify-write: `r.__get_f() OP value`.
                                 self.emit_expr(&tf.object);
-                                self.w.push_str(".__set_");
-                                self.w.push_str(&tf.field.text);
-                                self.w.push('(');
-                                if !matches!(
-                                    self.iface_coercion_to(&fty, &a.value),
-                                    crate::analysis::IfaceCoercion::None,
-                                ) {
-                                    self.emit_expr_coerced_to_iface(&fty, &a.value);
-                                } else {
-                                    self.emit_expr(&a.value);
-                                    if self.wrapper_value_needs_clone(&a.value) {
-                                        self.w.push_str(".clone()");
-                                    }
+                                self.w.push_str(".__get_");
+                                self.w.push_str(&field);
+                                self.w.push_str("() ");
+                                self.w.push_str(op.as_rust_str());
+                                self.w.push(' ');
+                                self.emit_expr(&a.value);
+                            } else if !matches!(
+                                self.iface_coercion_to(&fty, &a.value),
+                                crate::analysis::IfaceCoercion::None,
+                            ) {
+                                self.emit_expr_coerced_to_iface(&fty, &a.value);
+                            } else {
+                                self.emit_expr(&a.value);
+                                if self.wrapper_value_needs_clone(&a.value) {
+                                    self.w.push_str(".clone()");
                                 }
-                                self.w.push_str(");\n");
-                                return;
                             }
+                            self.w.push_str(");\n");
+                            return;
                         }
                     }
                 }
@@ -1262,19 +1288,34 @@ impl RustEmitter {
         // feed the shared coercion helper.
         let mut iface_tref: Option<juxc_ast::TypeRef> = None;
         if !is_compound {
-            if let Some(juxc_tycheck::Ty::User { name, .. }) = self
+            if let Some(ty) = self
                 .expr_types
                 .get(&crate::exprs::expr_span_of(&a.target))
                 .cloned()
             {
-                let bare = name.rsplit('.').next().unwrap_or(&name).to_string();
-                if self.lookup_interface_by_bare_or_fqn(&bare).is_some() {
-                    let tref = crate::analysis::synth_iface_type_ref(&bare, a.span);
-                    if !matches!(
-                        self.iface_coercion_to(&tref, &a.value),
-                        crate::analysis::IfaceCoercion::None,
-                    ) {
-                        iface_tref = Some(tref);
+                // Peel a `T?` wrapper — the LHS may be a nullable dyn slot
+                // (`shape = new Square()` where `shape: Shape?`). The synthesized
+                // `tref` carries the slot's nullability so the coercion helper
+                // wraps `Some(...)` exactly when the slot is `Option`-shaped.
+                let (inner, slot_nullable) = match ty {
+                    juxc_tycheck::Ty::Nullable(inner) => (*inner, true),
+                    other => (other, false),
+                };
+                if let juxc_tycheck::Ty::User { name, .. } = inner {
+                    let bare = name.rsplit('.').next().unwrap_or(&name).to_string();
+                    // Both an interface LHS and a polymorphic-base LHS hold a
+                    // trait object — the RHS must be coerced into it (`Rc<dyn …>`).
+                    let is_dyn = self.lookup_interface_by_bare_or_fqn(&bare).is_some()
+                        || self.poly_base_classes.contains(&bare);
+                    if is_dyn {
+                        let mut tref = crate::analysis::synth_iface_type_ref(&bare, a.span);
+                        tref.nullable = slot_nullable;
+                        if !matches!(
+                            self.iface_coercion_to(&tref, &a.value),
+                            crate::analysis::IfaceCoercion::None,
+                        ) {
+                            iface_tref = Some(tref);
+                        }
                     }
                 }
             }
@@ -1454,6 +1495,35 @@ impl RustEmitter {
     /// peephole stays the right shape for boolean-context uses
     /// (`var ok = x != null;`), while this branch handles the
     /// narrower `if` form.
+    /// Emit the `let Some(<binder>) = …` head of a type-test smart-cast (the
+    /// caller prepends `if ` / ` else if `). For a `dyn` source it's the
+    /// runtime hook `<value>.__jux_as_T()`; for a concrete source the test is a
+    /// statically-true upcast, so the binder gets `Some(<value coerced to T>)`.
+    fn emit_typetest_binder_head(&mut self, t: &juxc_ast::TypeTestExpr) {
+        let binder = t.binder.as_ref().expect("binder present");
+        let target = t
+            .ty
+            .name
+            .segments
+            .last()
+            .map(|s| s.text.clone())
+            .unwrap_or_default();
+        self.w.push_str("let Some(");
+        self.w.push_str(&binder.text);
+        self.w.push_str(") = ");
+        let src = self.cast_source_bare(&t.value);
+        if src.as_deref().is_some_and(|s| self.source_is_dyn(s)) {
+            self.emit_expr(&t.value);
+            self.w.push_str(".__jux_as_");
+            self.w.push_str(&target);
+            self.w.push_str("()");
+        } else {
+            self.w.push_str("Some(");
+            self.emit_expr_coerced_to_iface(&t.ty, &t.value);
+            self.w.push(')');
+        }
+    }
+
     pub(crate) fn emit_if(&mut self, if_stmt: &IfStmt) {
         // Smart-cast bookkeeping: when the condition is `name !=
         // null`, `name` inside the `then` block is the unwrapped
@@ -1477,21 +1547,9 @@ impl RustEmitter {
             _ => None,
         };
         if let Some(t) = typetest_binder {
-            let binder = t.binder.as_ref().unwrap();
-            let target = t
-                .ty
-                .name
-                .segments
-                .last()
-                .map(|s| s.text.clone())
-                .unwrap_or_default();
-            self.w.push_str("if let Some(");
-            self.w.push_str(&binder.text);
-            self.w.push_str(") = ");
-            self.emit_expr(&t.value);
-            self.w.push_str(".__jux_as_");
-            self.w.push_str(&target);
-            self.w.push_str("() {\n");
+            self.w.push_str("if ");
+            self.emit_typetest_binder_head(t);
+            self.w.push_str(" {\n");
         } else if let Some(name) = &cast_name {
             self.w.push_str("if let Some(");
             self.w.push_str(name);
@@ -1539,21 +1597,9 @@ impl RustEmitter {
                         _ => None,
                     };
                     if let Some(t) = binder_test {
-                        let binder = t.binder.as_ref().unwrap();
-                        let target = t
-                            .ty
-                            .name
-                            .segments
-                            .last()
-                            .map(|s| s.text.clone())
-                            .unwrap_or_default();
-                        self.w.push_str(" else if let Some(");
-                        self.w.push_str(&binder.text);
-                        self.w.push_str(") = ");
-                        self.emit_expr(&t.value);
-                        self.w.push_str(".__jux_as_");
-                        self.w.push_str(&target);
-                        self.w.push_str("() {\n");
+                        self.w.push_str(" else if ");
+                        self.emit_typetest_binder_head(t);
+                        self.w.push_str(" {\n");
                     } else {
                         self.w.push_str(" else if ");
                         self.emit_expr(&inner.condition);

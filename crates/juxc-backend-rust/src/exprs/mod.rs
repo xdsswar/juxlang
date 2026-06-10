@@ -371,11 +371,49 @@ impl RustEmitter {
                             })
                     })
                     .unwrap_or_default();
+                // Constructor parameter TYPES — for coercing a subclass /
+                // implementer argument into an interface / polymorphic-base
+                // (`Rc<dyn …>`) parameter slot, mirroring the function-call
+                // arg path. Without this, `new Holder(new Dog())` where the
+                // param is `Animal`/an interface would pass a raw value.
+                let ctor_param_types: Vec<juxc_ast::TypeRef> = n
+                    .class_name
+                    .segments
+                    .last()
+                    .map(|s| s.text.as_str())
+                    .and_then(|name| {
+                        self.lookup_class_by_bare_or_fqn(name)
+                            .and_then(|c| c.constructors.first())
+                            .map(|ctor| ctor.params.iter().map(|p| p.ty.clone()).collect())
+                            .or_else(|| {
+                                self.symbols
+                                    .records
+                                    .iter()
+                                    .find(|(k, _)| {
+                                        k.as_str() == name
+                                            || k.rsplit('.').next().unwrap_or(k.as_str()) == name
+                                    })
+                                    .map(|(_, r)| {
+                                        r.components.iter().map(|c| c.ty.clone()).collect()
+                                    })
+                            })
+                    })
+                    .unwrap_or_default();
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
                 for (i, arg) in n.args.iter().enumerate() {
                     if i > 0 {
                         self.w.push_str(", ");
+                    }
+                    // Interface / polymorphic-base parameter slot → coerce.
+                    if let Some(pty) = ctor_param_types.get(i) {
+                        if !matches!(
+                            self.iface_coercion_to(pty, arg),
+                            crate::analysis::IfaceCoercion::None,
+                        ) {
+                            self.emit_expr_coerced_to_iface(pty, arg);
+                            continue;
+                        }
                     }
                     let nullable = ctor_nullable_flags.get(i).copied().unwrap_or(false);
                     self.emit_arg_with_nullable_wrap(arg, nullable);

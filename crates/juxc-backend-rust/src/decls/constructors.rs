@@ -192,6 +192,42 @@ impl RustEmitter {
         self.w.indent_dec();
     }
 
+    /// Emit a single field's initializer inside a `Self { … }` /
+    /// `C_Inner { … }` literal, coercing the value into the field's declared
+    /// slot. Mirrors the var-init / assign coercion so a `Shape`/poly-base
+    /// field gets the `Rc<dyn …>` wrap and a nullable field gets its `Some(…)`:
+    ///
+    /// - interface / polymorphic-base field → [`Self::emit_expr_coerced_to_iface`]
+    ///   (which owns the `Some(…)` when the field is a *nullable* dyn slot);
+    /// - plain nullable field (`int? x`, `Dog? d`) → `Some(<value>)` for a
+    ///   non-null, not-already-`Option` value;
+    /// - everything else → the value verbatim.
+    pub(crate) fn emit_ctor_field_init(
+        &mut self,
+        field_ty: Option<&juxc_ast::TypeRef>,
+        init: &juxc_ast::Expr,
+    ) {
+        if let Some(fty) = field_ty {
+            if !matches!(
+                self.iface_coercion_to(fty, init),
+                crate::analysis::IfaceCoercion::None,
+            ) {
+                self.emit_expr_coerced_to_iface(fty, init);
+                return;
+            }
+            if fty.nullable
+                && !crate::stmts::is_null_literal(init)
+                && !self.expression_is_already_nullable(init)
+            {
+                self.w.push_str("Some(");
+                self.emit_expr(init);
+                self.w.push(')');
+                return;
+            }
+        }
+        self.emit_expr(init);
+    }
+
     /// Emit the direct `Self { field: expr, … }` body for a simple
     /// constructor — one whose body is purely `this.field = expr;`
     /// lines. `inits` carries one `(field-name, init-expr)` entry per
@@ -318,11 +354,11 @@ impl RustEmitter {
                 }
                 self.w.push_str(&field.name.text);
                 self.w.push_str(": ");
-                self.emit_expr(init_expr);
+                self.emit_ctor_field_init(field.ty.as_ref(), init_expr);
             } else if let Some(default) = &field.default {
                 self.w.push_str(&field.name.text);
                 self.w.push_str(": ");
-                self.emit_expr(default);
+                self.emit_ctor_field_init(field.ty.as_ref(), default);
             } else {
                 self.w.push_str(&field.name.text);
                 self.w.push_str(": ");
@@ -634,11 +670,11 @@ impl RustEmitter {
                 }
                 self.w.push_str(&field.name.text);
                 self.w.push_str(": ");
-                self.emit_expr(init_expr);
+                self.emit_ctor_field_init(field.ty.as_ref(), init_expr);
             } else if let Some(default) = &field.default {
                 self.w.push_str(&field.name.text);
                 self.w.push_str(": ");
-                self.emit_expr(default);
+                self.emit_ctor_field_init(field.ty.as_ref(), default);
             } else {
                 self.w.push_str(&field.name.text);
                 self.w.push_str(": ");
