@@ -59,6 +59,30 @@ impl<'a> Parser<'a> {
             return None;
         };
 
+        // Or-pattern alternatives: `case A | B | C ->` (§A.3). Folded
+        // into Pattern::Or when at least one `|` follows.
+        let pattern = if self.at(&TokenKind::Pipe) {
+            let pstart = self.last_consumed_span();
+            let mut alts = vec![pattern];
+            while self.eat(&TokenKind::Pipe) {
+                if let Some(next) = self.parse_pattern() {
+                    alts.push(next);
+                } else {
+                    break;
+                }
+            }
+            let pend = self.last_consumed_span();
+            Pattern::Or(alts, pstart.join(pend))
+        } else {
+            pattern
+        };
+        // Optional `when <cond>` guard (§A.2.8). Guarded arms don't
+        // count toward exhaustiveness (§T.5.6) — tycheck enforces.
+        let guard = if self.eat_kw(Keyword::When) {
+            self.parse_expr()
+        } else {
+            None
+        };
         self.expect(&TokenKind::Arrow, "'->' after pattern in switch arm");
 
         // Body: a `{`-led block, or a single expression terminated by `;`.
@@ -70,7 +94,7 @@ impl<'a> Parser<'a> {
             SwitchBody::Expr(Box::new(expr))
         };
         let end = self.last_consumed_span();
-        Some(SwitchArm { pattern, body, span: start.join(end) })
+        Some(SwitchArm { pattern, guard, body, span: start.join(end) })
     }
 
     /// Parse one pattern per §A.3 — Turn-1 subset: literal, wildcard,

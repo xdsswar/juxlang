@@ -275,6 +275,15 @@ pub enum Code {
     /// the value through a parameter instead. Full covariant-container
     /// storage is deferred to a later phase.
     E0444_WildcardStorageUnsupported,
+    /// E0447 — An **or-pattern alternative introduces bindings** —
+    /// `case Circle(var r) | Square(var s) ->` or `case var x | 0 ->`.
+    /// Per grammar §A.3, the alternatives of `p1 | p2` must be
+    /// binding-free: an arm body can't use a name that only exists
+    /// when one specific alternative matched. (Rust surfaces this as
+    /// `E0408 variable not bound in all patterns`; we catch it first.)
+    /// Split the arm into one `case` per alternative, or drop the
+    /// binders and re-test inside the body.
+    E0447_OrPatternBinding,
     /// E0445 — A **const-generic form outside the Phase-1 core subset**.
     /// The core subset (grammar §A.2.6, type-system §T.11.3) covers:
     /// declaring `<int N>` / `<bool B>` params, using `N` as a fixed
@@ -430,6 +439,7 @@ impl Code {
             Code::E0431_GenericInferenceNoSolution => "E0431",
             Code::E0443_ExplicitTypeArgs         => "E0443",
             Code::E0444_WildcardStorageUnsupported => "E0444",
+            Code::E0447_OrPatternBinding         => "E0447",
             Code::E0445_ConstGenericUnsupported  => "E0445",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0701_AsyncNotInProfile        => "E0701",

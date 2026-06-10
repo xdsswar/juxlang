@@ -42,6 +42,11 @@ pub struct SwitchExpr {
 pub struct SwitchArm {
     /// Pattern this arm matches against the scrutinee.
     pub pattern: Pattern,
+    /// Optional `when <cond>` guard (§A.2.8): the arm matches only
+    /// when the pattern matches AND the guard evaluates true. Pattern
+    /// bindings are in scope inside the guard. Guarded arms don't
+    /// count toward exhaustiveness (§T.5.6).
+    pub guard: Option<Expr>,
     /// What runs when the arm matches.
     pub body: SwitchBody,
     /// Span of the whole arm.
@@ -118,6 +123,11 @@ pub enum Pattern {
     /// hierarchies (the `ident` binds to the matched variant's
     /// underlying struct). Matches Java 21's record/type-pattern
     /// shape: `case Box b -> ...`.
+    /// Or-pattern — `case A | B | C ->` (§A.3). Matches when ANY
+    /// alternative matches. Alternatives can't introduce bindings
+    /// (each branch would need identical binders; deferred), so
+    /// sub-patterns here are literal / wildcard / variant shapes.
+    Or(Vec<Pattern>, Span),
     TypeBind {
         /// The class name being matched on.
         type_name: Ident,

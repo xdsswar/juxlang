@@ -1,0 +1,65 @@
+// Switch `when` guards (§A.2.8) and or-patterns (§A.3).
+//
+// - A guarded arm runs only when its pattern matches AND the guard
+//   condition holds; guards see the arm's pattern bindings.
+// - Guarded arms do NOT count toward exhaustiveness (§T.5.6) — the
+//   compiler can't prove a runtime condition, so each variant still
+//   needs an unguarded arm (or a wildcard).
+// - `case A | B ->` matches when ANY alternative matches; coverage is
+//   the union. Alternatives can't introduce bindings (E0447).
+
+package guards;
+
+enum Shape {
+    Circle(double radius),
+    Square(double side),
+    Point;
+}
+
+enum Tier {
+    Bronze, Silver, Gold, Platinum;
+}
+
+void classify(Shape s) {
+    // `when` guard with pattern binding in scope; guarded arms
+    // don't satisfy exhaustiveness, so the unguarded Circle arm
+    // and the rest are still required.
+    var label = switch (s) {
+        case Shape.Circle(var r) when r > 10.0 -> "big circle";
+        case Shape.Circle(var r) -> "circle " + r;
+        case Shape.Square(var d) when d == 0.0 -> "degenerate square";
+        case Shape.Square(var d) -> "square " + d;
+        case Shape.Point -> "point";
+    };
+    print(label);
+}
+
+String rate(Tier t) {
+    // Or-patterns: union coverage, no wildcard needed.
+    return switch (t) {
+        case Tier.Bronze | Tier.Silver -> "base";
+        case Tier.Gold | Tier.Platinum -> "premium";
+    };
+}
+
+int bucket(int n) {
+    // Literal or-patterns + guard over the scrutinee binding.
+    return switch (n) {
+        case 0 | 1 | 2 -> 10;
+        case var x when x < 0 -> -1;
+        case _ -> 99;
+    };
+}
+
+public void main() {
+    classify(Shape.Circle(12.0));
+    classify(Shape.Circle(2.0));
+    classify(Shape.Square(0.0));
+    classify(Shape.Square(3.0));
+    classify(Shape.Point);
+    print(rate(Tier.Silver));
+    print(rate(Tier.Platinum));
+    print(bucket(1));
+    print(bucket(-5));
+    print(bucket(50));
+}

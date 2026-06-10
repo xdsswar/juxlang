@@ -340,6 +340,28 @@ impl SymbolTable {
         None
     }
 
+    /// Look up an enum by name — exact FQN key first, then a unique
+    /// `.{name}`-suffix match. Locally-inferred types often carry the
+    /// bare name (`Tier`) while the table keys by FQN (`probe.Tier`);
+    /// the suffix fallback keeps variant-access inference and switch
+    /// exhaustiveness working for those. Ambiguous suffixes (two
+    /// packages declaring the same enum name) return `None` rather
+    /// than guessing.
+    pub fn lookup_enum<'a>(&'a self, name: &str) -> Option<(&'a str, &'a EnumSig)> {
+        if let Some((k, e)) = self.enums.get_key_value(name) {
+            return Some((k.as_str(), e));
+        }
+        if name.contains('.') {
+            return None;
+        }
+        let suffix = format!(".{name}");
+        let mut hits = self.enums.iter().filter(|(k, _)| k.ends_with(&suffix));
+        match (hits.next(), hits.next()) {
+            (Some((k, e)), None) => Some((k.as_str(), e)),
+            _ => None,
+        }
+    }
+
     /// Walk `class_name`'s `extends` chain looking for a field named
     /// `field_name`. Returns the matching [`FieldSig`] **and** the name
     /// of the class that actually declared it. See [`Self::lookup_method`]

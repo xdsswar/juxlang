@@ -281,6 +281,13 @@ impl Resolver {
             juxc_ast::Pattern::Wildcard(_)
             | juxc_ast::Pattern::Literal(_, _)
             | juxc_ast::Pattern::Range { .. } => {}
+            // Or-alternatives can't introduce bindings (parser-level
+            // rule); walk them for nested variant paths only.
+            juxc_ast::Pattern::Or(alts, _) => {
+                for alt in alts {
+                    self.declare_pattern_bindings(alt);
+                }
+            }
             juxc_ast::Pattern::Bind(name) => self.declare(&name.text),
             juxc_ast::Pattern::EnumVariant { args, .. } => {
                 for sub in args {
@@ -1019,6 +1026,11 @@ impl Resolver {
                 for arm in &s.arms {
                     self.push_scope();
                     self.declare_pattern_bindings(&arm.pattern);
+                    // `when` guards see the arm's pattern bindings
+                    // (`case Circle(var r) when r > 2.0 ->`).
+                    if let Some(g) = &arm.guard {
+                        self.visit_expr(g);
+                    }
                     match &arm.body {
                         juxc_ast::SwitchBody::Expr(e) => self.visit_expr(e),
                         juxc_ast::SwitchBody::Block(b) => self.visit_block(b),
