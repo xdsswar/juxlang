@@ -938,6 +938,40 @@ impl<'a> Parser<'a> {
                 self.advance();
                 return Some(Expr::Super(span));
             }
+            TokenKind::Kw(Keyword::If) => {
+                // If-expression (§A.2.9): `if (cond) expr else expr`,
+                // value form — `else` is MANDATORY (E0260; only the
+                // statement form may omit it). Desugars directly to
+                // the ternary node (`cond ? a : b`), which carries
+                // identical semantics through every later phase.
+                // Statement-position `if` never reaches here —
+                // `parse_stmt` claims it first — so this arm only
+                // fires in genuine expression positions
+                // (`var x = if (c) a else b;`).
+                self.advance(); // 'if'
+                self.expect(&TokenKind::LParen, "'(' after `if` in an if-expression");
+                let condition = self.parse_expr()?;
+                self.expect(&TokenKind::RParen, "')' after if-expression condition");
+                let then_branch = self.parse_expr()?;
+                if !self.eat_kw(Keyword::Else) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0260_IfExprMissingElse,
+                            "if-expression needs an `else` branch — the value form must produce a value on every path",
+                        )
+                        .with_span(span.join(self.last_consumed_span())),
+                    );
+                    return Some(then_branch);
+                }
+                let else_branch = self.parse_expr()?;
+                let end = self.last_consumed_span();
+                return Some(Expr::Ternary(juxc_ast::TernaryExpr {
+                    condition: Box::new(condition),
+                    then_branch: Box::new(then_branch),
+                    else_branch: Box::new(else_branch),
+                    span: span.join(end),
+                }));
+            }
             TokenKind::Kw(Keyword::Switch) => {
                 // `switch (expr) { case PATTERN -> body; … }` per
                 // §A.2.8. The same expression node serves the
