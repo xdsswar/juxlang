@@ -3358,6 +3358,7 @@ impl<'a> Checker<'a> {
                     ty: c.ty.clone(),
                     is_ref: false,
                     default: None,
+                    is_varargs: false,
                 })
                 .collect();
             let subst_params = record.generic_params.clone();
@@ -3586,6 +3587,144 @@ impl<'a> Checker<'a> {
         subst_params.extend(method_generic_params.iter().cloned());
     }
 
+    /// Variadic-callee arm of [`Self::check_call_args`]: positional
+    /// args fill the fixed prefix; the rest type-check against the
+    /// varargs ELEMENT type and pack into a synthesized array literal
+    /// via the recorded `Variadic` plan slot. A single trailing array
+    /// of the element type forwards as-is (no packing).
+    #[allow(clippy::too_many_arguments)]
+    fn check_varargs_call(
+        &mut self,
+        callee_name: &str,
+        params: &[ParamSig],
+        args: &[Expr],
+        call_span: Span,
+        declaring_class: Option<&str>,
+        subst_params: &[TypeParam],
+        subst_args: &[Ty],
+    ) {
+        let fixed = params.len() - 1;
+        if args.len() < fixed {
+            let missing: Vec<String> = params[args.len()..fixed]
+                .iter()
+                .filter(|p| p.default.is_none())
+                .map(|p| format!("`{}`", p.name))
+                .collect();
+            if !missing.is_empty() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0411_WrongArgCount,
+                        format!(
+                            "missing required argument{} {} in call to `{}`",
+                            if missing.len() == 1 { "" } else { "s" },
+                            missing.join(", "),
+                            callee_name,
+                        ),
+                    )
+                    .with_span(call_span),
+                );
+                return;
+            }
+        }
+        // Fixed prefix — same per-slot type checks as the plain path.
+        let lower = |param: &ParamSig, this: &Self| -> Ty {
+            let raw = match declaring_class {
+                Some(class) => lower_member_type(&param.ty, class, this.symbols),
+                None => ty_from_ref(&param.ty, &this.env, this.symbols),
+            };
+            substitute(&raw, subst_params, subst_args)
+        };
+        for (i, arg) in args.iter().enumerate() {
+            self.check_expr(arg);
+            if i >= fixed {
+                continue;
+            }
+            let expected = lower(&params[i], self);
+            let found = infer_expr(arg, &self.env, self.symbols);
+            if !compatible(&expected, &found, self.symbols) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0410_TypeMismatch,
+                        format!(
+                            "argument {} to `{}`: expected {}, found {}",
+                            i + 1,
+                            callee_name,
+                            expected,
+                            found,
+                        ),
+                    )
+                    .with_span(expr_span(arg)),
+                );
+            }
+        }
+        let va = &params[fixed];
+        let va_array_ty = lower(va, self);
+        // Element type: the declared array type minus its shape.
+        let mut element_type = va.ty.clone();
+        element_type.array_shape = None;
+        let element_ty = match &va_array_ty {
+            Ty::Array { element, .. } => (**element).clone(),
+            other => other.clone(),
+        };
+        let variadic: Vec<usize> = (fixed..args.len()).collect();
+        // Array passthrough: exactly one trailing arg whose type is
+        // already `T[]` forwards directly — plain positional call,
+        // no plan needed beyond defaults for the fixed prefix.
+        let passthrough = variadic.len() == 1 && {
+            let found = infer_expr(&args[fixed], &self.env, self.symbols);
+            compatible(&va_array_ty, &found, self.symbols)
+                && matches!(found, Ty::Array { .. })
+        };
+        if !passthrough {
+            for &i in &variadic {
+                let found = infer_expr(&args[i], &self.env, self.symbols);
+                if !compatible(&element_ty, &found, self.symbols) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0410_TypeMismatch,
+                            format!(
+                                "argument {} to `{}`: expected {} (the `{}...` element type), found {}",
+                                i + 1,
+                                callee_name,
+                                element_ty,
+                                element_ty,
+                                found,
+                            ),
+                        )
+                        .with_span(match expr_span(&args[i]) {
+                            s if s == Span::DUMMY => call_span,
+                            s => s,
+                        }),
+                    );
+                }
+            }
+        }
+        // Record the plan. Skipped only for the no-op shape: full
+        // fixed prefix supplied AND a passthrough array (the call is
+        // already plain positional).
+        let fixed_complete = args.len() >= fixed
+            && params[..fixed.min(args.len())].len() == fixed;
+        if passthrough && fixed_complete {
+            return;
+        }
+        let mut plan: Vec<crate::ArgSource> = Vec::with_capacity(params.len());
+        for (j, p) in params.iter().enumerate().take(fixed) {
+            if j < args.len() {
+                plan.push(crate::ArgSource::Explicit(j));
+            } else if let Some(d) = &p.default {
+                plan.push(crate::ArgSource::Default(d.clone()));
+            } else {
+                return; // missing-required already reported above
+            }
+        }
+        if passthrough {
+            plan.push(crate::ArgSource::Explicit(fixed));
+        } else {
+            plan.push(crate::ArgSource::Variadic { element_type, indices: variadic });
+        }
+        self.call_expansions.insert(call_span, plan);
+    }
+
     fn check_call_args(
         &mut self,
         callee_name: &str,
@@ -3597,6 +3736,37 @@ impl<'a> Checker<'a> {
         subst_params: &[TypeParam],
         subst_args: &[Ty],
     ) {
+        // ---- variadic callee (§7.2 / §E.1.2.1) ----
+        //
+        // The last parameter being `T...` switches the mapping:
+        // args fill the fixed prefix left-to-right, every trailing
+        // arg packs into a synthesized `T[]` literal (the recorded
+        // plan's `Variadic` slot). Passing ONE array of `T` forwards
+        // it directly (Java's array-passthrough rule).
+        if params.last().is_some_and(|p| p.is_varargs) {
+            if arg_names.iter().any(Option::is_some) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0448_BadNamedArgument,
+                        format!(
+                            "named arguments can't be combined with a variadic call to `{callee_name}` (Phase 1) — pass everything positionally",
+                        ),
+                    )
+                    .with_span(call_span),
+                );
+                return;
+            }
+            self.check_varargs_call(
+                callee_name,
+                params,
+                args,
+                call_span,
+                declaring_class,
+                subst_params,
+                subst_args,
+            );
+            return;
+        }
         // ---- argument-to-slot mapping (§T.3.2 / §S.1.4) ----
         //
         // Positional args fill parameter slots left-to-right; named
@@ -4013,6 +4183,12 @@ fn expr_mentions_name_of(e: &Expr, names: &std::collections::HashSet<String>) ->
         }
         _ => false,
     }
+}
+
+/// Public-in-crate alias for [`expr_span`] — used by the expansion
+/// pass to anchor synthesized array literals.
+pub(crate) fn expr_span_pub(e: &Expr) -> Span {
+    expr_span(e)
 }
 
 fn expr_span(e: &Expr) -> Span {

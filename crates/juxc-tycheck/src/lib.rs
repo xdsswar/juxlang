@@ -165,6 +165,16 @@ pub enum ArgSource {
     /// parameter's declared default expression, evaluated at the
     /// call site (fresh per call — §S.1.3's no-shared-default rule).
     Default(juxc_ast::Expr),
+    /// The slot is a variadic parameter (`T... name`): the listed
+    /// call args (in source order) are packed into a synthesized
+    /// array literal of the parameter's element type (§E.1.2.1).
+    Variadic {
+        /// The varargs element type `T` (the declared array type
+        /// with the array shape stripped).
+        element_type: juxc_ast::TypeRef,
+        /// Indices into the call's `args` to pack, in order.
+        indices: Vec<usize>,
+    },
 }
 
 /// Output of [`typecheck`]. Empty `diagnostics` means everything checked.

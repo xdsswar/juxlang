@@ -3089,6 +3089,7 @@ fn substitute_fn_signature(
             is_final: p.is_final,
             is_ref: p.is_ref,
             default: p.default.clone(),
+            is_varargs: p.is_varargs,
             span: p.span,
         })
         .collect();

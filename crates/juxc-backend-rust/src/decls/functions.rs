@@ -49,6 +49,17 @@ impl RustEmitter {
         // emitted symbol matches in either mode.
         let is_async_main = fn_decl.name.text == "main"
             && matches!(fn_decl.return_type, ReturnType::AsyncType(_));
+        // **Args-main rename.** Rust's entry `fn main()` takes no
+        // parameters, so a user `main(String[] args)` /
+        // `main(String... args)` (§E.1.2) can't BE the entry — we
+        // rename it to `__jux_args_main` and the shim (local or
+        // workspace) passes `std::env::args().skip(1)` (skip(1):
+        // Jux args exclude the program name, like Java). Async mains
+        // already rename to `__jux_async_main`; params just change
+        // what the shim passes.
+        let is_args_main = fn_decl.name.text == "main"
+            && !is_async_main
+            && !fn_decl.params.is_empty();
         let mut lifter = crate::analysis::WildcardLifter::new();
         let lifted_param_tys: Vec<juxc_ast::TypeRef> = fn_decl
             .params
@@ -89,9 +100,11 @@ impl RustEmitter {
             self.w.push_str("unsafe ");
         }
         self.w.push_str("fn ");
-        // Async-main rename — see `is_async_main` comment above.
+        // Async-main / args-main rename — see comments above.
         if is_async_main {
             self.w.push_str("__jux_async_main");
+        } else if is_args_main {
+            self.w.push_str("__jux_args_main");
         } else {
             self.w.push_str(&fn_decl.name.text);
         }
@@ -236,8 +249,26 @@ impl RustEmitter {
             self.w.line("fn main() {");
             self.w.indent_inc();
             self.w.emit_indent();
-            self.w
-                .push_str("futures::executor::block_on(__jux_async_main());\n");
+            if fn_decl.params.is_empty() {
+                self.w
+                    .push_str("futures::executor::block_on(__jux_async_main());\n");
+            } else {
+                self.w.push_str(
+                    "futures::executor::block_on(__jux_async_main(std::env::args().skip(1).collect::<Vec<String>>()));\n",
+                );
+            }
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.newline();
+        }
+        // Same-level shim for a crate-root `main(String[] args)` —
+        // mirrors the async shim above (single-unit path only;
+        // workspaces route through `emit_workspace_main_shim`).
+        if is_args_main && self.symbols.package.is_empty() && !self.workspace_mode {
+            self.w.line("fn main() {");
+            self.w.indent_inc();
+            self.w.emit_indent();
+            self.w.push_str("__jux_args_main(std::env::args().skip(1).collect::<Vec<String>>());\n");
             self.w.indent_dec();
             self.w.line("}");
             self.w.newline();

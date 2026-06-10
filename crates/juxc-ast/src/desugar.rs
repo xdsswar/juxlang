@@ -242,6 +242,7 @@ fn lower_one_property(
             is_final: false,
             is_ref: false,
             default: None,
+            is_varargs: false,
             span,
         };
         methods.push(FnDecl {

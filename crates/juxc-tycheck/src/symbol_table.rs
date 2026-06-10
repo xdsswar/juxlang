@@ -635,6 +635,10 @@ pub struct ParamSig {
     /// every call site that omits the argument (§S.1.3 call-site
     /// evaluation — never shared, never evaluated at the decl).
     pub default: Option<juxc_ast::Expr>,
+    /// `true` for a variadic parameter (`T... name`). The stored `ty`
+    /// is already the desugared array form; this flag switches the
+    /// call-site mapping to trailing-args packing.
+    pub is_varargs: bool,
 }
 
 /// Signature of a top-level record declaration.
@@ -2962,6 +2966,7 @@ fn param_sig(p: &juxc_ast::Param) -> ParamSig {
         ty: p.ty.clone(),
         is_ref: p.is_ref,
         default: p.default.clone(),
+        is_varargs: p.is_varargs,
     }
 }
 
