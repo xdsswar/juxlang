@@ -1647,6 +1647,36 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
+        // `operator[]=` dispatch (§O.2.4): `obj[i] = v` on a user type
+        // declaring the overload becomes `obj.__op_index_set(i, v)`.
+        // Compound forms (`obj[i] += v`) read-modify-write through
+        // `operator[]` first.
+        if let Expr::Index(ix) = &a.target {
+            if self.expr_declares_operator(&ix.array, juxc_ast::OperatorKind::IndexSet) {
+                self.emit_expr_with_parent_prec(&ix.array, u8::MAX, false);
+                self.w.push_str(".__op_index_set(");
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                self.emit_expr(&ix.index);
+                self.w.push_str(", ");
+                if let Some(op) = a.op {
+                    // Read-modify-write: obj.__op_index(i) <op> v.
+                    self.emit_expr_with_parent_prec(&ix.array, u8::MAX, false);
+                    self.w.push_str(".__op_index(");
+                    self.emit_expr(&ix.index);
+                    self.w.push_str(") ");
+                    self.w.push_str(op.as_rust_str());
+                    self.w.push(' ');
+                }
+                self.emit_expr(&a.value);
+                if self.wrapper_value_needs_clone(&a.value) {
+                    self.w.push_str(".clone()");
+                }
+                self.emitting_format_arg = prev;
+                self.w.push_str(");\n");
+                return;
+            }
+        }
         // **Static-block first-use trigger (§S.4.1).** Writing a static field is
         // an observable use, so run the class's once-guarded `__static_init()`
         // before the write. (`__static_init` is re-entrancy-safe, so a write

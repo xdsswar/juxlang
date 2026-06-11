@@ -1887,6 +1887,13 @@ impl<'a> Parser<'a> {
         };
 
         let end = self.last_consumed_span();
+        // Unary fix-up (§O.2.4): a zero-parameter `operator-` is the
+        // unary negation overload, distinct from binary subtraction.
+        let kind = if kind == OperatorKind::Minus && params.is_empty() {
+            OperatorKind::Neg
+        } else {
+            kind
+        };
         Some(OperatorDecl {
             visibility,
             kind,

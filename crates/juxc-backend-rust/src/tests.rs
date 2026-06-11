@@ -3306,7 +3306,7 @@ fn operator_minus_arity_dispatches_between_sub_and_neg() {
     );
     assert!(rust_unary.contains("impl std::ops::Neg for M"), "unary - → Neg: {rust_unary}");
     assert!(rust_unary.contains("fn neg(self) -> Self::Output"), "neg sig: {rust_unary}");
-    assert!(rust_unary.contains("self.__op_sub()"), "neg should call __op_sub: {rust_unary}");
+    assert!(rust_unary.contains("self.__op_neg()"), "neg should call __op_neg: {rust_unary}");
 }
 
 /// `operator~` (always unary) → `impl Not`. Maps to inherent `__op_not`.

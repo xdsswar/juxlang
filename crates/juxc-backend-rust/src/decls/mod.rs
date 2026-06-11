@@ -58,6 +58,7 @@ pub(crate) fn synthetic_op_method_name(kind: OperatorKind) -> &'static str {
         OperatorKind::BitNot => "__op_not",
         OperatorKind::Shl => "__op_shl",
         OperatorKind::Shr => "__op_shr",
+        OperatorKind::Neg => "__op_neg",
         OperatorKind::Index => "__op_index",
         OperatorKind::IndexSet => "__op_index_set",
         OperatorKind::Call => "__op_call",

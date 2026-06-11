@@ -22,6 +22,20 @@ impl RustEmitter {
     /// A future pass with a real type table can drop the cast when the
     /// index expression's static type is already `usize` (Jux `uint`).
     pub(crate) fn emit_index(&mut self, i: &IndexExpr) {
+        // `operator[]` dispatch (§O.2.4): a user type declaring the
+        // overload routes through its `__op_index` method. (Lvalue
+        // writes never reach here — `emit_assign` intercepts the
+        // whole `obj[i] = v` statement for `operator[]=`.)
+        if self.expr_declares_operator(&i.array, juxc_ast::OperatorKind::Index) {
+            self.emit_expr_with_parent_prec(&i.array, u8::MAX, false);
+            self.w.push_str(".__op_index(");
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            self.emit_expr(&i.index);
+            self.emitting_format_arg = prev;
+            self.w.push(')');
+            return;
+        }
         let emitting_lvalue = self.emitting_lvalue;
         self.emit_expr(&i.array);
         self.w.push('[');

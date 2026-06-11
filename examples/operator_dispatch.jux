@@ -1,0 +1,72 @@
+// User-operator dispatch completion (§O.2.4):
+//
+// - `operator [](i)`  — indexed read    (`g[4]`)
+// - `operator []=(i,v)` — indexed write (`g[4] = 9`, compound
+//   `g[4] += 5` reads through `[]` then writes through `[]=`)
+// - `operator ()(args)` — callable values (`add10(5)`)
+// - `operator -()` — unary negation (`-m`; distinct from the binary
+//   `operator-(other)` subtraction overload)
+
+package opdemo;
+
+class Grid {
+    private int[] cells;
+    private int w;
+
+    Grid(int w, int h) {
+        this.w = w;
+        this.cells = new int[]{};
+        for (var i : 0..(w * h)) {
+            this.cells.push(0);
+        }
+    }
+
+    public int operator [](int i) {
+        return this.cells[i];
+    }
+
+    public void operator []=(int i, int v) {
+        this.cells.set(i, v);
+    }
+}
+
+class Adder {
+    private int base;
+
+    Adder(int base) {
+        this.base = base;
+    }
+
+    public int operator ()(int x) {
+        return this.base + x;
+    }
+}
+
+class Money {
+    private int cents;
+
+    Money(int cents) {
+        this.cents = cents;
+    }
+
+    public Money operator -() {
+        return new Money(0 - this.cents);
+    }
+
+    public int value() { return this.cents; }
+}
+
+public void main() {
+    var g = new Grid(3, 3);
+    g[4] = 9;
+    print(g[4]);
+    g[4] += 5;
+    print(g[4]);
+
+    var add10 = new Adder(10);
+    print(add10(5));
+
+    var m = new Money(250);
+    var neg = -m;
+    print(neg.value());
+}

@@ -470,6 +470,47 @@ impl RustEmitter {
         }
     }
 
+    /// True when `e`'s recorded type is a user class (or record)
+    /// declaring the given operator overload — the dispatch gate for
+    /// `obj[i]`, `obj[i] = v`, `obj(args)`, and unary `-obj`
+    /// (§O.2.4).
+    pub(crate) fn expr_declares_operator(
+        &self,
+        e: &juxc_ast::Expr,
+        kind: OperatorKind,
+    ) -> bool {
+        // Span-keyed first; bare locals fall back to the name-keyed
+        // map (call CALLEES aren't walked by the checker, so their
+        // Path spans often have no expr_types entry).
+        let ty = self.expr_types.get(&expr_span_of(e)).cloned().or_else(|| {
+            if let juxc_ast::Expr::Path(qn) = e {
+                if qn.segments.len() == 1 {
+                    return self
+                        .local_types
+                        .iter()
+                        .rev()
+                        .find_map(|s| s.get(&qn.segments[0].text).cloned());
+                }
+            }
+            None
+        });
+        let Some(Ty::User { name, .. }) = ty else {
+            return false;
+        };
+        let name = &name;
+        if let Some(class) = self.symbols.classes.get(name) {
+            if class.operators.get(&kind).is_some_and(|o| !o.is_deleted) {
+                return true;
+            }
+        }
+        if let Some(record) = self.symbols.records.get(name) {
+            if record.operators.get(&kind).is_some_and(|o| !o.is_deleted) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// If `b`'s LHS is a known user class that defines the matching
     /// operator overload, return the synthetic inherent method name
     /// (`__op_add`, `__op_sub`, …) we should dispatch through. Returns

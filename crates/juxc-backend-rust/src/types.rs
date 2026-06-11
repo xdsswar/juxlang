@@ -706,6 +706,20 @@ impl RustEmitter {
     /// implement `Default + Copy`, otherwise Rust will surface the
     /// constraint failure.
     pub(crate) fn emit_default_value_for(&mut self, ty: &juxc_ast::TypeRef) {
+        // Shape modifiers come first — `int[]` is a Vec (its ELEMENT
+        // primitive must not leak through as the default), and a
+        // nullable slot's default is `None` regardless of the inner.
+        if ty.nullable {
+            self.w.push_str("None");
+            return;
+        }
+        if let Some(shape) = &ty.array_shape {
+            match shape {
+                juxc_ast::ArrayShape::Dynamic => self.w.push_str("Vec::new()"),
+                juxc_ast::ArrayShape::Fixed(_) => self.w.push_str("Default::default()"),
+            }
+            return;
+        }
         if let Some(rust_ty) = jux_primitive_to_rust(ty) {
             let default = match rust_ty {
                 "bool" => "false",

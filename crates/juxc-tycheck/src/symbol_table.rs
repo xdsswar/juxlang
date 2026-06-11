@@ -3183,6 +3183,7 @@ fn operator_kind_display(kind: OperatorKind) -> &'static str {
         OperatorKind::ToString => "string",
         OperatorKind::Plus => "+",
         OperatorKind::Minus => "-",
+        OperatorKind::Neg => "- (unary)",
         OperatorKind::Mul => "*",
         OperatorKind::Div => "/",
         OperatorKind::Rem => "%",
@@ -3278,6 +3279,8 @@ fn required_return_type_for_operator(kind: OperatorKind) -> Option<&'static str>
         | OperatorKind::Gt
         | OperatorKind::Ge => Some("bool"),
         OperatorKind::Cmp | OperatorKind::Hash => Some("int"),
+        // Unary negation's return is user-defined (usually Self).
+        OperatorKind::Neg => None,
         OperatorKind::ToString => Some("String"),
         // Free-form return types — no signature check.
         OperatorKind::Plus
