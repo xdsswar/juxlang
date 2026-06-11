@@ -1266,7 +1266,7 @@ pub(crate) fn resolve_class_name(
 /// call's actual arg types. Returns an empty vec when the named type
 /// isn't generic (or isn't known), so callers can still build a
 /// `Ty::User` with the raw shape Phase 1 already accepts.
-fn infer_ctor_generic_args(
+pub(crate) fn infer_ctor_generic_args(
     name: &str,
     args: &[Expr],
     env: &TypeEnv,

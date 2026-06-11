@@ -805,6 +805,54 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Enforce `extends` bounds on generic parameters (§T.4, E0446)
+    /// against a resolved instantiation — shared by `new` sites
+    /// (class params) and method calls (method params). Bounds lower
+    /// in the OWNER's scope. Lenient slots: `Unknown` args
+    /// (inference gaps), `Param` args (checked at THEIR
+    /// instantiation site), const-generic params, and bounds that
+    /// don't lower.
+    fn enforce_generic_bounds(
+        &mut self,
+        generic_params: &[TypeParam],
+        args: &[Ty],
+        owner: &str,
+        callee_desc: &str,
+        call_span: Span,
+    ) {
+        for (idx, param) in generic_params.iter().enumerate() {
+            if param.is_const() || param.bounds.is_empty() {
+                continue;
+            }
+            let Some(arg) = args.get(idx) else { continue };
+            let arg = match arg {
+                Ty::Nullable(inner) => inner.as_ref(),
+                other => other,
+            };
+            if matches!(arg, Ty::Unknown | Ty::Param(_)) {
+                continue;
+            }
+            for bound in &param.bounds {
+                let bound_ty = crate::ty::lower_member_type(bound, owner, self.symbols);
+                if matches!(bound_ty, Ty::Unknown) {
+                    continue;
+                }
+                if !compatible(&bound_ty, arg, self.symbols) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0446_GenericBoundNotSatisfied,
+                            format!(
+                                "type `{arg}` does not satisfy the bound `{} extends {bound_ty}` declared by {callee_desc}",
+                                param.name.text,
+                            ),
+                        )
+                        .with_span(call_span),
+                    );
+                }
+            }
+        }
+    }
+
     /// Enforce a callee's where-constraints (§O.5, E0941) against the
     /// inferred/explicit instantiation. `None` entries (uninferred
     /// slots) pass — they surface elsewhere.
@@ -3634,6 +3682,17 @@ impl<'a> Checker<'a> {
                         &subst_args,
                         c.span,
                     );
+                    // §T.4 (E0446): …and the generic params' declared
+                    // `extends` bounds. Free functions have no
+                    // declaring type — bounds lower in the empty
+                    // scope, which resolves package-level names fine.
+                    self.enforce_generic_bounds(
+                        &subst_params,
+                        &subst_args,
+                        "",
+                        &format!("function `{name}`"),
+                        c.span,
+                    );
                     self.check_call_args(
                         name,
                         &params,
@@ -4006,6 +4065,23 @@ impl<'a> Checker<'a> {
                         &mut subst_params,
                         &mut subst_args,
                     );
+                    // METHOD generic `extends` bounds (E0446) — check
+                    // the inferred/explicit method type args against
+                    // their declared bounds. The method's params sit
+                    // at the TAIL of the substitution lists (class
+                    // params were composed in first).
+                    let method_n = method_generic_params.len();
+                    if method_n > 0 && subst_args.len() >= method_n {
+                        let tail_args =
+                            subst_args[subst_args.len() - method_n..].to_vec();
+                        self.enforce_generic_bounds(
+                            &method_generic_params,
+                            &tail_args,
+                            &owner_name,
+                            &format!("method `{method_name}`"),
+                            c.span,
+                        );
+                    }
                     self.check_call_args(
                         method_name,
                         &params,
@@ -4205,6 +4281,29 @@ impl<'a> Checker<'a> {
                     .with_span(n.span),
                 );
             }
+            // §T.4 `extends` bound enforcement (E0446): each resolved
+            // generic argument — explicit or ctor-inferred — must
+            // satisfy its parameter's declared bounds, so the
+            // violation never leaks as rustc's E0277. Unknown args
+            // (inference gaps) and Param-typed args (checked at THEIR
+            // instantiation site) stay lenient.
+            let resolved_args: Vec<Ty> = if !explicit_generic_args.is_empty() {
+                explicit_generic_args.clone()
+            } else {
+                crate::infer::infer_ctor_generic_args(
+                    &class_name,
+                    &n.args,
+                    &self.env,
+                    self.symbols,
+                )
+            };
+            self.enforce_generic_bounds(
+                &class_generic_params,
+                &resolved_args,
+                &class_name,
+                &format!("class `{class_name}`"),
+                n.span,
+            );
         }
 
         if let Some(class) = self.symbols.classes.get(&class_name) {
