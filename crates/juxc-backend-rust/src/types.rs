@@ -13,23 +13,29 @@ use crate::RustEmitter;
 impl RustEmitter {
     /// Map a Jux [`TypeRef`] onto its Rust spelling.
     ///
-    /// Full primitive mapping table per `JUX-LANG-V1.md` §5.1:
+    /// Full primitive mapping table (must match `jux_primitive_to_rust` below):
     ///
-    /// | Jux       | Rust   | Notes |
-    /// |-----------|--------|-------|
-    /// | `bool`    | `bool` | Direct. |
-    /// | `byte`    | `i8`   | 8-bit signed. |
-    /// | `ubyte`   | `u8`   | 8-bit unsigned. |
-    /// | `short`   | `i16`  | 16-bit signed. |
-    /// | `ushort`  | `u16`  | 16-bit unsigned. |
-    /// | `int`     | `i32`  | 32-bit signed. Matches Java's `int`. |
-    /// | `uint`    | `u32`  | 32-bit unsigned. |
-    /// | `long`    | `i64`  | 64-bit signed. |
-    /// | `ulong`   | `u64`  | 64-bit unsigned. |
-    /// | `float`   | `f32`  | IEEE 754 single. |
-    /// | `double`  | `f64`  | IEEE 754 double. |
-    /// | `char`    | `char` | Unicode scalar. Rust's `char` is 32-bit; matches. |
-    /// | `String`  | `&str` | Borrowed slice — see note below. |
+    /// | Jux       | Rust    | Notes |
+    /// |-----------|---------|-------|
+    /// | `bool`    | `bool`  | Direct. |
+    /// | `byte`    | `i8`    | 8-bit signed. |
+    /// | `ubyte`   | `u8`    | 8-bit unsigned. |
+    /// | `short`   | `i16`   | 16-bit signed. |
+    /// | `ushort`  | `u16`   | 16-bit unsigned. |
+    /// | `int`     | `isize` | **Platform-sized** signed (pointer-width). For an exact 32-bit width use `i32`. |
+    /// | `uint`    | `usize` | **Platform-sized** unsigned. For an exact 32-bit width use `u32`. |
+    /// | `long`    | `i64`   | 64-bit signed. |
+    /// | `ulong`   | `u64`   | 64-bit unsigned. |
+    /// | `float`   | `f32`   | IEEE 754 single. |
+    /// | `double`  | `f64`   | IEEE 754 double. |
+    /// | `char`    | `char`  | Unicode scalar. Rust's `char` is 32-bit; matches. |
+    /// | `String`  | `String`| Owned (per JUX-CODEGEN-FIXES.md Fix 1) — see note below. |
+    ///
+    /// `int`/`uint` are platform-sized so they map cleanly onto Rust
+    /// `isize`/`usize` (array indices, pointer arithmetic, FFI `size_t`); the
+    /// width-explicit names `i8`…`i64` / `u8`…`u64` exist for code that needs a
+    /// fixed width. This matches the bindgen contract (`isize/usize ↔ int/uint`,
+    /// `i32 ↔ i32`).
     ///
     /// Anything else is emitted verbatim as a `::`-joined path, on faith
     /// that the surrounding project will provide it. When a real type
@@ -40,11 +46,12 @@ impl RustEmitter {
     ///   are ignored — they fall through to verbatim path emission. They
     ///   join the table when the type system carries them through.
     ///
-    /// **`String` → `&str`:** Java's `String` is immutable and reference-
-    /// shaped, which matches Rust's `&str` more naturally than `String`.
-    /// Borrowed parameters mean callers can pass string literals without
-    /// allocating. Owned-string semantics (mutation, storage in structs)
-    /// will need a more nuanced mapping when we get there.
+    /// **`String` → owned `String`** (per JUX-CODEGEN-FIXES.md Fix 1): every
+    /// Jux `String` — parameter, local, field, return, and string literal —
+    /// lowers to the same owned Rust `String`, so `match`-arm unification and
+    /// value flow Just Work. The cost is one heap alloc per string literal;
+    /// Java does exactly this. (An earlier pass mapped `String → &str`; that
+    /// was reverted because borrowed/owned mismatches broke value flow.)
     pub(crate) fn emit_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
         // Raw pointer `T*` is the OUTERMOST modifier (§5.5 / §A.2.7), peeled
         // first: each `*` level emits a Rust `*mut`, then we recurse on the

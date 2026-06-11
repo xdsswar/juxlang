@@ -1027,7 +1027,119 @@ pub fn build_workspace(
     check_top_level_visibility(&table, diagnostics);
     check_override_does_not_narrow_access(&table, diagnostics);
     check_imports_resolve(units, &table, diagnostics);
+    check_unannotated_cycles(&table, diagnostics);
     table
+}
+
+/// Collect the bare names of every class type a field's declared type
+/// references — the type's own last segment plus, recursively, its generic
+/// arguments (so `List<Child>`, `Child[]`, `Child?`, `Map<K, Child>` all
+/// surface `Child`).
+fn referenced_type_bares(ty: &TypeRef) -> Vec<String> {
+    let mut out = Vec::new();
+    fn go(ty: &TypeRef, out: &mut Vec<String>) {
+        if let Some(seg) = ty.name.segments.last() {
+            out.push(seg.text.clone());
+        }
+        for arg in &ty.generic_args {
+            if let juxc_ast::GenericArg::Type(t) = arg {
+                go(t, out);
+            }
+        }
+    }
+    go(ty, &mut out);
+    out
+}
+
+/// **W0457 — un-annotated reference cycle lint.** Classes are `Rc`-refcounted
+/// and `Rc` does not collect cycles, so a strong (non-`weak`, non-static) field
+/// whose type transitively references the owning class leaks the whole cycle.
+/// Warn (never error) on one cycle-forming field per class, suggesting `weak`.
+/// `weak` fields are excluded from the edge set, so a cycle the user already
+/// broke with `weak` does not warn.
+fn check_unannotated_cycles(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
+    // Strong field-reference edges between USER classes, keyed by FQN. Each
+    // edge keeps the originating field's span + name for the diagnostic.
+    let mut edges: HashMap<String, Vec<(String, Span, String)>> = HashMap::new();
+    for (fqn, sig) in &table.classes {
+        if sig.is_external {
+            continue;
+        }
+        let pkg = sig.package.join(".");
+        let mut outs: Vec<(String, Span, String)> = Vec::new();
+        for (fname, f) in &sig.fields {
+            if f.is_weak || f.is_static {
+                continue;
+            }
+            for bare in referenced_type_bares(&f.ty) {
+                if let Some(ref_fqn) = table.find_fqn_by_bare_in(&bare, &pkg) {
+                    if table.classes.get(&ref_fqn).is_some_and(|c| !c.is_external) {
+                        outs.push((ref_fqn, f.span, fname.clone()));
+                    }
+                }
+            }
+        }
+        edges.insert(fqn.clone(), outs);
+    }
+
+    // Does `from` reach `target` along strong edges? (DFS, cycle-guarded.)
+    fn reaches(
+        from: &str,
+        target: &str,
+        edges: &HashMap<String, Vec<(String, Span, String)>>,
+        seen: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        let Some(outs) = edges.get(from) else { return false };
+        for (next, _, _) in outs {
+            if next == target {
+                return true;
+            }
+            if seen.insert(next.clone()) && reaches(next, target, edges, seen) {
+                return true;
+            }
+        }
+        false
+    }
+
+    // Only warn on USER classes — the auto-loaded standard library
+    // (`jux.std.*`, `core.*`) has intentional internal cycles (e.g.
+    // `Exception.cause: Exception?`) that appear in every compilation and are
+    // not the user's concern.
+    let is_stdlib = |fqn: &str| {
+        fqn.starts_with("jux.std")
+            || fqn.starts_with("jux.core")
+            || fqn.starts_with("core.")
+            || fqn.starts_with("rust.")
+    };
+
+    // Warn once per class, on the first field that completes a cycle back to it.
+    for (fqn, outs) in &edges {
+        if is_stdlib(fqn) {
+            continue;
+        }
+        for (ref_fqn, span, fname) in outs {
+            let on_cycle = ref_fqn == fqn || {
+                let mut seen = std::collections::HashSet::new();
+                seen.insert(ref_fqn.clone());
+                reaches(ref_fqn, fqn, &edges, &mut seen)
+            };
+            if on_cycle {
+                let bare = fqn.rsplit('.').next().unwrap_or(fqn);
+                diagnostics.push(
+                    Diagnostic::warning(
+                        code::Code::W0457_UnannotatedRefCycle,
+                        format!(
+                            "field `{fname}` forms a reference cycle on class `{bare}` — \
+                             classes are `Rc`-refcounted and `Rc` does not collect cycles, \
+                             so this leaks; mark a back-edge field `weak` to break it (§6.5)",
+                        ),
+                    )
+                    .with_span(*span),
+                );
+                break;
+            }
+        }
+    }
 }
 
 /// Validate that every `import a.b.C;` names a declaration that actually
@@ -3643,6 +3755,30 @@ mod tests {
         // A bare `Foo` binds to the referrer's package.
         assert_eq!(table.find_fqn_by_bare_in("Foo", "a").as_deref(), Some("a.Foo"));
         assert_eq!(table.find_fqn_by_bare_in("Foo", "b").as_deref(), Some("b.Foo"));
+    }
+
+    /// W0457: a strong self-referential field forms a leaking `Rc` cycle.
+    #[test]
+    fn unannotated_cycle_warns_w0457() {
+        let u = parse_unit("public class Node { public Node? peer; }");
+        let mut d = Vec::new();
+        let _ = build_workspace(&[u], &mut d);
+        assert!(
+            d.iter().any(|x| x.code == code::Code::W0457_UnannotatedRefCycle),
+            "{d:?}",
+        );
+    }
+
+    /// A `weak` back-edge breaks the cycle — no W0457.
+    #[test]
+    fn weak_back_edge_avoids_w0457() {
+        let u = parse_unit("public class Node { weak Node peer; }");
+        let mut d = Vec::new();
+        let _ = build_workspace(&[u], &mut d);
+        assert!(
+            !d.iter().any(|x| x.code == code::Code::W0457_UnannotatedRefCycle),
+            "{d:?}",
+        );
     }
 
     /// A same-named enum in another package does not stop a same-package enum

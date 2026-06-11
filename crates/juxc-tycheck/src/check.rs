@@ -3634,8 +3634,9 @@ impl<'a> Checker<'a> {
                         code::Code::E0702_ObjectCapturedBySpawn,
                         format!(
                             "`{name}` is a class object captured by a `Worker.spawn` \
-                             closure — objects are single-threaded shared references and \
-                             can't cross threads; pass primitive/String data in and \
+                             closure — in Phase 1, objects are `Rc`-backed shared \
+                             references (`!Send`), so sharing one across threads is not \
+                             yet supported; for now pass primitive/String data in and \
                              return results out",
                         ),
                     )

@@ -400,6 +400,13 @@ pub enum Code {
     /// wired by later assignment, so an initializer (`weak P p = …;`) is
     /// rejected in Phase 1.
     E0456_WeakReadNeedsGet,
+    /// W0457 — A class field forms an **un-annotated reference cycle** that will
+    /// leak (§6.5). Classes are `Rc`-refcounted and `Rc` does not collect
+    /// cycles, so a strong field whose type transitively references the owning
+    /// class (parent↔child, a `Node next` list, observer↔subject) keeps the
+    /// whole cycle alive forever. Annotating one back-edge field `weak` breaks
+    /// it. A **warning**, not an error — the program still compiles and runs.
+    W0457_UnannotatedRefCycle,
 
     /// E0600 — A **non-nullable, non-`weak` field is not definitely assigned**
     /// by the end of construction (§S.4.5). A field with no textual initializer
@@ -565,6 +572,7 @@ impl Code {
             Code::E0446_GenericBoundNotSatisfied => "E0446",
             Code::E0455_WeakOnNonClass           => "E0455",
             Code::E0456_WeakReadNeedsGet         => "E0456",
+            Code::W0457_UnannotatedRefCycle      => "W0457",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0701_AsyncNotInProfile        => "E0701",
