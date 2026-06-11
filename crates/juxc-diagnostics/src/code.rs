@@ -340,6 +340,24 @@ pub enum Code {
     /// natively. Declare the operator on the type, or call with one
     /// that has it.
     E0941_ConstraintNotSatisfied,
+    /// E0940 — An **`out` parameter is not assigned on every path** (§M.4.2).
+    /// The callee must write the `out` parameter before every `return` and
+    /// before the body ends — the caller relies on it being initialized after
+    /// the call. The check is the same flow analysis as field definite-assignment.
+    E0940_OutParamNotDefinitelyAssigned,
+    /// E0942 — An **`out` argument is not an assignable place** (§M.4.2). The
+    /// `out` argument must be a variable, a field, or an array element the
+    /// caller can mutate — not a literal, a call result, or an arithmetic
+    /// expression.
+    E0942_OutArgNotPlace,
+    /// E0943 — An **`out` argument / parameter disagreement** (§M.4): an `out`
+    /// argument was passed to a non-`out` parameter, or an ordinary argument was
+    /// passed where the parameter is declared `out`.
+    E0943_OutArgMismatch,
+    /// E0944 — **Misuse of the `out` parameter modifier** (§M.4): `out` combined
+    /// with `final`, applied to a varargs or defaulted parameter, or used on a
+    /// constructor parameter.
+    E0944_OutParamModifierMisuse,
     E0730_QuestionIncompatibleReturn,
     /// E0731 — A **`?` propagation needs an explicit error-type
     /// conversion** (§X.4.3): the operand's error type isn't the
@@ -581,6 +599,10 @@ impl Code {
             Code::E0721_MultiCatchRelated        => "E0721",
             Code::E0711_UncaughtChecked          => "E0711",
             Code::E0941_ConstraintNotSatisfied   => "E0941",
+            Code::E0940_OutParamNotDefinitelyAssigned => "E0940",
+            Code::E0942_OutArgNotPlace           => "E0942",
+            Code::E0943_OutArgMismatch           => "E0943",
+            Code::E0944_OutParamModifierMisuse   => "E0944",
             Code::E0730_QuestionIncompatibleReturn => "E0730",
             Code::E0731_QuestionNeedsConversion  => "E0731",
             Code::E0450_AmbiguousOverload        => "E0450",

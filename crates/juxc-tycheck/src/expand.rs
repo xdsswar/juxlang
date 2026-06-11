@@ -225,6 +225,8 @@ fn expand_if(i: &mut juxc_ast::IfStmt, plans: &HashMap<Span, Vec<ArgSource>>) {
 
 fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
     match expr {
+        // `out <place>` (§M.4) — recurse into the place.
+        Expr::Out(inner, _) => expand_expr(inner, plans),
         Expr::Call(c) => {
             // Apply this call's plan FIRST (it re-orders/splices the
             // argument vector), then recurse into the result so

@@ -124,6 +124,9 @@ impl RustEmitter {
             }
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
+            if param.is_out {
+                self.w.push_str("&mut "); // `out T` (§M.4) lowers to `&mut T`
+            }
             self.emit_value_type_as_rust(&lifted_param_tys[i]);
         }
         self.w.push(')');
@@ -279,7 +282,18 @@ impl RustEmitter {
             let prev_type_params = self.current_type_params.clone();
             self.current_type_params
                 .extend(crate::collect_type_param_names(&fn_decl.generic_params));
+            // `out` params (§M.4): in scope for the body so reads/writes deref.
+            let prev_out = std::mem::replace(
+                &mut self.out_params,
+                fn_decl
+                    .params
+                    .iter()
+                    .filter(|p| p.is_out)
+                    .map(|p| p.name.text.clone())
+                    .collect(),
+            );
             self.emit_fn_body(body, &fn_decl.return_type);
+            self.out_params = prev_out;
             self.const_int_params = prev_const_ints;
             self.current_type_params = prev_type_params;
             self.current_return_type = saved;

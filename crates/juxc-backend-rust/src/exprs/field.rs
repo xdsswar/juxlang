@@ -453,7 +453,14 @@ impl RustEmitter {
         };
         self.emit_expr(&f.object);
         if let Some(depth) = wrapper_depth {
-            self.w.push_str(".0.borrow()");
+            // An `out` field place needs an exclusive `&mut` into the
+            // interior, so take the mutable borrow; the `RefMut` temporary
+            // lives to the end of the call statement (§M.4).
+            if self.emitting_out_place {
+                self.w.push_str(".0.borrow_mut()");
+            } else {
+                self.w.push_str(".0.borrow()");
+            }
             for _ in 0..depth {
                 self.w.push_str(".__parent");
             }

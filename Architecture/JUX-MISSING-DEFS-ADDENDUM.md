@@ -361,6 +361,46 @@ var (ok, n) = tryParse("42");
 
 `out` is for FFI compatibility and for the rare case where `Result<T, E>` and tuples are both awkward. Style guide: prefer return values and tuples; reach for `out` when interfacing with C or matching an external convention.
 
+### M.4.6. Implementation Notes (Phase 1)
+
+`out` is a **contextual** keyword: it introduces the parameter mode only when it
+precedes a type in a parameter list, and the call-site `out` only when it precedes
+a place argument — so an ordinary identifier named `out` (variable, field, label)
+continues to work.
+
+**Lowering to Rust.** An `out int result` parameter lowers to `result: &mut isize`.
+In the body, an assignment `result = v` lowers to `*result = v` and any read to
+`(*result)`. At the call site, `out <place>` lowers to `&mut <place>`:
+
+| Place form          | Jux               | Emitted Rust                     |
+|---------------------|-------------------|----------------------------------|
+| local               | `f(out n)`        | `f(&mut n)`                      |
+| plain-struct field  | `f(out c.value)`  | `f(&mut c.value)`                |
+| shared-ref field    | `f(out b.field)`  | `f(&mut b.0.borrow_mut().field)` |
+| array element       | `f(out a[i])`     | `f(&mut a[i])`                   |
+
+A shared-reference (aliased) class field takes the **mutable** interior borrow; the
+`RefMut` temporary lives to the end of the call statement (Rust temporary-lifetime
+extension), so the `&mut` into it stays valid for the callee. An uninitialized local
+out-arg (`int n;`) is default-initialized at its declaration so the `&mut` is
+well-formed (`let mut n: isize = 0;`).
+
+**Definite assignment.** The must-assign-on-every-normal-exit check (`E0940`) reuses
+the same forward dataflow engine as field definite-assignment (if/else intersection,
+loops don't escape, `return`/`throw` diverge).
+
+**Diagnostics.**
+
+| Code    | Condition                                                              |
+|---------|------------------------------------------------------------------------|
+| `E0940` | `out` parameter not assigned on some normal-exit path.                 |
+| `E0942` | `out` argument is not an assignable place (e.g. `out gen()`).          |
+| `E0943` | `out` arg/param disagreement (`out` on a plain param, or a plain arg to an `out` param). |
+| `E0944` | `out` combined with `final`/varargs/default, or on a constructor param. |
+
+**Deferred.** `out null` (§M.4.4) and the `move` call-site operator are follow-ups —
+both are FFI/ownership refinements not required by the Phase-1 (Jux-to-Rust) surface.
+
 ---
 
 ## §M.5 — Record `with(...)` and Withers

@@ -2781,6 +2781,9 @@ impl RustEmitter {
             first_param = false;
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
+            if param.is_out {
+                self.w.push_str("&mut "); // `out T` (§M.4) lowers to `&mut T`
+            }
             self.emit_value_type_as_rust(&lifted_param_tys[i]);
         }
         self.w.push(')');
@@ -2836,6 +2839,16 @@ impl RustEmitter {
             let prev_type_params = self.current_type_params.clone();
             self.current_type_params
                 .extend(crate::collect_type_param_names(&method.generic_params));
+            // `out` params (§M.4): in scope for the body so reads/writes deref.
+            let prev_out = std::mem::replace(
+                &mut self.out_params,
+                method
+                    .params
+                    .iter()
+                    .filter(|p| p.is_out)
+                    .map(|p| p.name.text.clone())
+                    .collect(),
+            );
             // First-use trigger for `static { }` blocks (§S.4.1): a static
             // method call is an observable use. (Instance methods aren't —
             // constructing the receiver already triggered init.)
@@ -2843,6 +2856,7 @@ impl RustEmitter {
                 self.emit_static_init_trigger();
             }
             self.emit_fn_body_at(body, &method.return_type);
+            self.out_params = prev_out;
             self.const_int_params = prev_const_ints;
             self.current_type_params = prev_type_params;
             self.current_return_type = saved;
@@ -3222,6 +3236,7 @@ fn substitute_fn_signature(
             is_ref: p.is_ref,
             default: p.default.clone(),
             is_varargs: p.is_varargs,
+            is_out: p.is_out,
             span: p.span,
         })
         .collect();

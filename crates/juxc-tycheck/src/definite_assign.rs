@@ -109,6 +109,34 @@ pub(crate) fn analyze_class(class: &ClassDecl) -> Vec<DaViolation> {
     out
 }
 
+/// Run the must-assign-on-every-exit flow analysis over a function body and
+/// return the names in `required` that are NOT assigned on some normal-exit
+/// path. Reused by the `out`-parameter check (§M.4, E0940): an out param must be
+/// assigned before every `return` and before the body ends. Same engine as the
+/// field check ([`analyze_class`]); the seed is empty (an out param is never
+/// pre-assigned), and a bare `name = …;` already counts as an assignment via
+/// [`Da::assign_target_field`] — the backend's `*name` deref is irrelevant here.
+pub(crate) fn unassigned_on_some_exit(
+    body: &Block,
+    required: &HashSet<String>,
+) -> Vec<String> {
+    if required.is_empty() {
+        return Vec::new();
+    }
+    let mut da = Da { required, exits: Vec::new() };
+    let flow = da.block(body, HashSet::new());
+    if flow.reachable {
+        da.exits.push(flow.assigned);
+    }
+    let mut missing: Vec<String> = required
+        .iter()
+        .filter(|n| da.exits.iter().any(|e| !e.contains(*n)))
+        .cloned()
+        .collect();
+    missing.sort();
+    missing
+}
+
 /// True when the constructor's first statement is a `this(…)` delegation — the
 /// delegated-to constructor owns field initialization, so this one is exempt.
 fn ctor_delegates_this(ctor: &ConstructorDecl) -> bool {

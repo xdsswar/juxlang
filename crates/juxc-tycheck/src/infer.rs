@@ -58,6 +58,9 @@ use crate::ty::{
 pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     match expr {
         Expr::Literal(lit) => infer_literal(lit),
+        // `out <place>` (§M.4) — the argument's type is the place's type, so
+        // the existing call-arg type check (E0410) fires on a mismatch.
+        Expr::Out(inner, _) => infer_expr(inner, env, symbols),
         // Tuple literal (§5.3) — encoded as the `__tuple` sentinel
         // user-type with the element types as generic args (same
         // encoding `ty_from_ref` produces for `(A, B)` type refs),

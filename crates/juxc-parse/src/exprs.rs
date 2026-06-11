@@ -1355,7 +1355,26 @@ impl<'a> Parser<'a> {
             } else {
                 names.push(None);
             }
-            let Some(arg) = self.parse_expr() else { break };
+            // `out <place>` argument (§M.4): the contextual `out` keyword before
+            // an assignable place. Lowers to `&mut <place>`. The place is parsed
+            // at postfix level (variable / field / index), so `out a = b` is a
+            // parse error rather than a silent mis-parse. `out` is the keyword
+            // only when followed by something that can start a place — a bare
+            // arg literally named/spelled `out` (`out,` / `out)`) stays an Ident.
+            let is_out_arg = matches!(self.peek(), TokenKind::Ident(s) if s == "out")
+                && matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::Ident(_)) | Some(TokenKind::Kw(Keyword::This))
+                );
+            let arg = if is_out_arg {
+                let s = self.peek_span();
+                self.advance(); // `out`
+                let Some(place) = self.parse_postfix() else { break };
+                Expr::Out(Box::new(place), s.join(self.last_consumed_span()))
+            } else {
+                let Some(a) = self.parse_expr() else { break };
+                a
+            };
             args.push(arg);
             if !self.eat(&TokenKind::Comma) {
                 break;
@@ -1486,6 +1505,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::TupleLit(_, s) => *s,
         Expr::TryExpr(t) => t.span,
         Expr::ErrorProp(_, s) => *s,
+        Expr::Out(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
         Expr::Binary(b) => b.span,
