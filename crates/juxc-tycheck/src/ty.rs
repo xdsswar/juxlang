@@ -564,6 +564,29 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
                 generic_args,
             };
         }
+        // §M.9 enclosing-class fallback: a bare `Config` written
+        // INSIDE `HttpServer` (or inside a sibling nested type)
+        // resolves to the lifted `HttpServer__Config`. Walk the
+        // owner chain outward: current class first, then each
+        // `__`-prefix of it, so the innermost declaration wins.
+        if let Some(current) = &env.current_class {
+            let mut scope: Option<&str> = Some(current.as_str());
+            while let Some(s) = scope {
+                let candidate = format!("{s}__{bare}");
+                if symbols.is_type_name(&candidate) {
+                    let generic_args = t
+                        .generic_args
+                        .iter()
+                        .map(|g| lower_generic_arg(g, env, symbols))
+                        .collect();
+                    return Ty::User {
+                        name: candidate,
+                        generic_args,
+                    };
+                }
+                scope = s.rsplit_once("__").map(|(outer, _)| outer);
+            }
+        }
         // Implicit auto-import: walk every known FQN looking
         // for one whose last segment matches `bare`.
         if let Some(fqn) = symbols.find_fqn_by_bare(bare) {
@@ -607,6 +630,41 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
                 generic_args,
             };
         }
+        // §M.9 nested-type access in a TYPE position:
+        // `HttpServer.Config x;` resolves the FIRST segment as a
+        // class (import / direct / suffix scan) and appends the
+        // rest in the lifted `__` form.
+        let first = &t.name.segments[0].text;
+        let rest = t.name.segments[1..]
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join("__");
+        let owner_fqn = env
+            .unqualified
+            .get(first)
+            .cloned()
+            .filter(|f| symbols.is_type_name(f))
+            .or_else(|| {
+                if symbols.is_type_name(first) {
+                    Some(first.clone())
+                } else {
+                    symbols.find_fqn_by_bare(first)
+                }
+            });
+        if let Some(candidate) =
+            owner_fqn.map(|o| format!("{o}__{rest}")).filter(|c| symbols.is_type_name(c))
+        {
+            let generic_args = t
+                .generic_args
+                .iter()
+                .map(|g| lower_generic_arg(g, env, symbols))
+                .collect();
+            return Ty::User {
+                name: candidate,
+                generic_args,
+            };
+        }
     }
 
     // 6. Fallthrough — unknown names, etc. Stay silent and let
@@ -627,6 +685,11 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
 /// case — caller is responsible for ensuring `declaring_class` exists).
 pub fn lower_member_type(ty_ref: &TypeRef, declaring_class: &str, symbols: &SymbolTable) -> Ty {
     let mut env = TypeEnv::new();
+    // The declaring class IS the enclosing scope — needed so a bare
+    // nested-type name in a member signature (`Config` inside
+    // `HttpServer`, lifted to `HttpServer__Config`) resolves through
+    // the §M.9 enclosing-class fallback.
+    env.current_class = Some(declaring_class.to_string());
     if let Some(class) = symbols.classes.get(declaring_class) {
         for tp in &class.generic_params {
             env.add_generic_param(&tp.name.text);

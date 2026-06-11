@@ -340,6 +340,25 @@ impl RustEmitter {
         let path = if ty.name.segments.len() == 1 {
             let bare = ty.name.segments[0].text.as_str();
             let mut resolved_path: Option<String> = None;
+            // §M.9 enclosing-class fallback: a bare `Config` inside
+            // `HttpServer` (or a sibling nested type) names the
+            // lifted `HttpServer__Config`. Walk the owner chain
+            // outward; the lifted sibling lives in the same module,
+            // so the mangled bare name resolves directly.
+            if let Some(enclosing) = self.enclosing_class.clone() {
+                let mut scope: Option<&str> = Some(enclosing.as_str());
+                while let Some(s) = scope {
+                    let candidate = format!("{s}__{bare}");
+                    if self.lookup_class_by_bare_or_fqn(&candidate).is_some()
+                        || self.symbols.records.contains_key(&candidate)
+                    {
+                        resolved_path = Some(candidate);
+                        break;
+                    }
+                    scope = s.rsplit_once("__").map(|(outer, _)| outer);
+                }
+            }
+            if resolved_path.is_none() {
             if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
                 if fqn.contains('.') {
                     let cur_pkg = self.symbols.package.join(".");
@@ -356,14 +375,34 @@ impl RustEmitter {
                     }
                 }
             }
+            }
             resolved_path.unwrap_or_else(|| bare.to_string())
         } else {
-            ty.name
-                .segments
+            // §M.9 qualified nested-type access in a TYPE position:
+            // `HttpServer.Config` names the lifted
+            // `HttpServer__Config`, not a module path. Resolve the
+            // first segment as a class and try the mangled form;
+            // package-qualified module paths fall through to the
+            // plain `::` join.
+            let first = ty.name.segments[0].text.as_str();
+            let rest = ty.name.segments[1..]
                 .iter()
                 .map(|s| s.text.as_str())
                 .collect::<Vec<_>>()
-                .join("::")
+                .join("__");
+            let mangled = format!("{first}__{rest}");
+            if self.lookup_class_by_bare_or_fqn(&mangled).is_some()
+                || self.symbols.records.contains_key(&mangled)
+            {
+                mangled
+            } else {
+                ty.name
+                    .segments
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::")
+            }
         };
         // **Interface in a value position → `Rc<dyn Trait>`.** When this
         // name resolves to an interface AND we're emitting a value slot

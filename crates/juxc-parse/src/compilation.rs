@@ -124,12 +124,16 @@ impl<'a> Parser<'a> {
         }
         // Flatten nested-type declarations out to the top level so
         // the symbol table, resolver, and backend treat them like
-        // any other top-level type. Their names stay unchanged
-        // (`new Inner()` resolves via the FQN-suffix scan); the
-        // Java `Outer.Inner` qualified-access path is a follow-up
-        // when nested types need real namespacing. Per spec §1379
-        // nested types are *all* implicitly `static` so this lift
-        // doesn't lose semantics.
+        // any other top-level type. The lift RENAMES each nested
+        // type to its owner-qualified form (`Config` inside
+        // `HttpServer` becomes `HttpServer.Config`, recursively for
+        // deeper nesting) — that is the §M.9 namespacing: two
+        // classes can both nest a `Config`, qualified access
+        // `new HttpServer.Config()` resolves naturally through the
+        // FQN machinery, and unqualified references from inside the
+        // owner resolve via the enclosing-class fallback in tycheck.
+        // Per spec §M.9.1 nested types are *all* implicitly
+        // `static`, so the lift doesn't lose semantics.
         let mut flattened: Vec<TopLevelDecl> = Vec::new();
         for item in items.drain(..) {
             collect_nested_flat(item, &mut flattened);
@@ -587,8 +591,34 @@ fn collect_nested_flat(item: TopLevelDecl, out: &mut Vec<TopLevelDecl>) {
     match item {
         TopLevelDecl::Class(mut class_decl) => {
             let nested = std::mem::take(&mut class_decl.nested_types);
+            let owner = class_decl.name.text.clone();
             out.push(TopLevelDecl::Class(class_decl));
-            for n in nested {
+            for mut n in nested {
+                // Owner-qualify the lifted name (§M.9.1 namespacing):
+                // `Config` inside `HttpServer` lifts as
+                // `HttpServer__Config` — a plain identifier, so the
+                // whole downstream pipeline (symbol table, backend
+                // struct emission) handles it like any other class.
+                // Tycheck resolves both access forms onto it: the
+                // qualified `HttpServer.Config` (owner-prefix
+                // rewrite) and bare `Config` from inside the owner
+                // (enclosing-class fallback). Recursion qualifies
+                // deeper levels (`A__B__C`).
+                match &mut n {
+                    TopLevelDecl::Class(c) => {
+                        c.name.text = format!("{owner}__{}", c.name.text);
+                    }
+                    TopLevelDecl::Record(r) => {
+                        r.name.text = format!("{owner}__{}", r.name.text);
+                    }
+                    TopLevelDecl::Enum(e) => {
+                        e.name.text = format!("{owner}__{}", e.name.text);
+                    }
+                    TopLevelDecl::Interface(i) => {
+                        i.name.text = format!("{owner}__{}", i.name.text);
+                    }
+                    _ => {}
+                }
                 collect_nested_flat(n, out);
             }
         }
