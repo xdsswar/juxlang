@@ -2068,6 +2068,40 @@ impl RustEmitter {
         }
         if let Expr::Field(tf) = &a.target {
             if !tf.safe && self.receiver_is_wrapper_class(&tf.object) {
+                // `weak` field store (§6.5): the slot holds a non-owning
+                // `Weak`, so a class RHS is downgraded and `null` clears it to
+                // an empty `Weak`. Only plain `=` is meaningful (a compound op
+                // on a weak ref has no meaning — tycheck never produces one).
+                // The RHS is computed into a temp first so any borrow it takes
+                // is released before the `borrow_mut()` for the write.
+                if a.op.is_none() {
+                    if self
+                        .wrapper_weak_field_target(&tf.object, &tf.field.text)
+                        .is_some()
+                    {
+                        let depth = self
+                            .wrapper_field_parent_depth(&tf.object, &tf.field.text)
+                            .unwrap_or(0);
+                        self.w.push_str("{ let __jux_v = ");
+                        if matches!(&a.value, Expr::Literal(juxc_ast::Literal::Null)) {
+                            self.w.push_str("std::rc::Weak::new()");
+                        } else {
+                            self.w.push_str("std::rc::Rc::downgrade(&(");
+                            self.emit_expr(&a.value);
+                            self.w.push_str(").0)");
+                        }
+                        self.w.push_str("; ");
+                        self.emit_expr(&tf.object);
+                        self.w.push_str(".0.borrow_mut()");
+                        for _ in 0..depth {
+                            self.w.push_str(".__parent");
+                        }
+                        self.w.push('.');
+                        self.w.push_str(&tf.field.text);
+                        self.w.push_str(" = __jux_v; }\n");
+                        return;
+                    }
+                }
                 // Walk the `__parent` chain to the slot that actually
                 // declares the field — inherited-field writes
                 // (`child.parentField = v`) land deeper in the inner

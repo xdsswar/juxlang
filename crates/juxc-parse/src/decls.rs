@@ -924,11 +924,17 @@ impl<'a> Parser<'a> {
         let start = self.peek_span();
         let mut is_static = false;
         let mut is_final = false;
+        let mut is_weak = false;
         loop {
             if self.eat_kw(Keyword::Static) {
                 is_static = true;
             } else if self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const) {
                 is_final = true;
+            } else if self.eat_kw(Keyword::Weak) {
+                // `weak` field (§6.5): does not contribute to refcount, read via
+                // `.get()` → `T?`. Validity (class-typed, non-generic, no
+                // initializer) is enforced in tycheck (`E0455`).
+                is_weak = true;
             } else {
                 break;
             }
@@ -962,6 +968,7 @@ impl<'a> Parser<'a> {
             visibility,
             is_static,
             is_final,
+            is_weak,
             ty,
             name,
             default,

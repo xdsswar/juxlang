@@ -841,6 +841,20 @@ impl RustEmitter {
         self.emit_default_value_for(ty);
     }
 
+    /// Emit the **no-initializer default** for a class field slot. A `weak`
+    /// field (§6.5) defaults to an empty `std::rc::Weak::new()` (a handle that
+    /// upgrades to `None` until assigned); every other field falls back to its
+    /// type's natural default. Used at the constructor field-init sites. (A
+    /// weak field can never have an explicit initializer — tycheck E0456 — so
+    /// this is the only place a weak slot is seeded.)
+    pub(crate) fn emit_field_storage_default(&mut self, field: &juxc_ast::FieldDecl) {
+        if field.is_weak {
+            self.w.push_str("std::rc::Weak::new()");
+        } else {
+            self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
+        }
+    }
+
     /// Emit `pub `/`pub(crate) `/`` (empty) for a visibility modifier.
     /// Trailing space included so call sites can paste it before a
     /// keyword without manual padding.

@@ -673,7 +673,22 @@ impl RustEmitter {
             self.emit_visibility(field.visibility);
             self.w.push_str(&field.name.text);
             self.w.push_str(": ");
-            self.emit_field_type_as_rust(&juxc_tycheck::resolved_field_type(field));
+            let fty = juxc_tycheck::resolved_field_type(field);
+            if field.is_weak {
+                // `weak` field (§6.5): store a non-owning `Weak` at the
+                // target class's inner cell, so it does NOT contribute to the
+                // refcount and breaks the cycle. The strong view is recovered
+                // by `.get()` (→ `upgrade().map(Target)`). The target is a
+                // plain class (tycheck E0455 guarantees it), so its payload is
+                // `Target_Inner`.
+                let target =
+                    fty.name.segments.last().map_or("", |s| s.text.as_str());
+                self.w.push_str("std::rc::Weak<std::cell::RefCell<");
+                self.w.push_str(target);
+                self.w.push_str("_Inner>>");
+            } else {
+                self.emit_field_type_as_rust(&fty);
+            }
             self.w.push_str(",\n");
         }
         self.w.indent_dec();

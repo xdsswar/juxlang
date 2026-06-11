@@ -299,6 +299,32 @@ fn infer_super(env: &TypeEnv, symbols: &SymbolTable) -> Ty {
 ///
 /// Everything else (field on a primitive, field on an enum, etc.)
 /// returns `Unknown`.
+/// If `inner` (`recv.fieldName`) reads a **`weak`** field (§6.5), return that
+/// field's declared type lowered in the receiver class's generic scope; else
+/// `None`. Powers the `weakField.get()` → `T?` typing — mirrors the field-type
+/// lowering in [`infer_field`] (lower in the declaring class's scope, then
+/// compose the extends-chain substitution), but gated on `is_weak` so an
+/// ordinary `obj.field.get()` is left untouched.
+fn weak_field_target_ty(inner: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Option<Ty> {
+    let object_ty = infer_expr(&inner.object, env, symbols);
+    let field_name = inner.field.text.as_str();
+    if let Ty::User { name, generic_args } = &object_ty {
+        if let Some((field, declaring_class)) = symbols.lookup_field(name, field_name) {
+            if !field.is_weak {
+                return None;
+            }
+            let raw = lower_member_type(&field.ty, declaring_class, symbols);
+            if let Some((params, args)) =
+                compose_extends_substitution(name, generic_args, declaring_class, symbols)
+            {
+                return Some(substitute(&raw, &params, &args));
+            }
+            return Some(raw);
+        }
+    }
+    None
+}
+
 fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     // `ClassName.STATIC_FIELD` — when the receiver is a bare or
     // multi-segment path that resolves to a class FQN, look the
@@ -580,6 +606,18 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                                 );
                             }
                         }
+                    }
+                }
+            }
+            // Weak-field promotion (§6.5): `weakField.get()` → `T?`. A weak
+            // field's strong view is reached only through `.get()`, which may
+            // fail because the target may have been dropped — hence the
+            // nullable result. Checked before the generic receiver path so the
+            // bare weak-field read of `field.object` is never typed as a value.
+            if method_name == "get" && c.args.is_empty() {
+                if let Expr::Field(inner) = field.object.as_ref() {
+                    if let Some(target) = weak_field_target_ty(inner, env, symbols) {
+                        return Ty::nullable(target);
                     }
                 }
             }

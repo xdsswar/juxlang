@@ -272,6 +272,14 @@ impl crate::RustEmitter {
     /// FQNs for a matching last segment. Used by emission helpers
     /// that hold `self.enclosing_class` (bare in the source) but
     /// need to access the FQN-keyed `symbols.classes` map.
+    ///
+    /// **Bare-name disambiguation.** A bare name can match several FQNs — most
+    /// commonly a user class whose name collides with an auto-loaded `rust.std`
+    /// stub (e.g. user `Child` vs `std::process::Child` → `rust.std.Child`). A
+    /// user declaration must SHADOW the foreign stub, so a non-`external` match
+    /// is preferred. Ties are then broken by FQN order so the result is
+    /// **deterministic** (a `HashMap` scan is otherwise iteration-order
+    /// dependent, which would make emission non-reproducible).
     pub(crate) fn lookup_class_by_bare_or_fqn(
         &self,
         name: &str,
@@ -282,7 +290,13 @@ impl crate::RustEmitter {
         self.symbols
             .classes
             .iter()
-            .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == name)
+            .filter(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == name)
+            // Prefer a user (non-external) class over a stub; then lowest FQN.
+            .min_by(|a, b| {
+                a.1.is_external
+                    .cmp(&b.1.is_external)
+                    .then_with(|| a.0.cmp(b.0))
+            })
             .map(|(_, c)| c)
     }
 

@@ -206,6 +206,36 @@ impl RustEmitter {
                 return;
             }
         }
+        // `weakField.get()` (§6.5) — promote a weak reference to a strong one.
+        // The field stores a `Weak<RefCell<Target_Inner>>`, so `.get()` lowers
+        // to `<recv>.0.borrow(){.__parent…}.<field>.upgrade().map(Target)`,
+        // yielding `Option<Target>` = Jux `Target?` (null when the target has
+        // already been dropped). Intercepted before the generic call paths so
+        // the bare weak-field read of the receiver is never emitted on its own.
+        if let Expr::Field(getf) = &*call.callee {
+            if getf.field.text == "get" && call.args.is_empty() && !getf.safe {
+                if let Expr::Field(wf) = getf.object.as_ref() {
+                    if let Some(target) =
+                        self.wrapper_weak_field_target(&wf.object, &wf.field.text)
+                    {
+                        let depth = self
+                            .wrapper_field_parent_depth(&wf.object, &wf.field.text)
+                            .unwrap_or(0);
+                        self.emit_expr(&wf.object);
+                        self.w.push_str(".0.borrow()");
+                        for _ in 0..depth {
+                            self.w.push_str(".__parent");
+                        }
+                        self.w.push('.');
+                        self.w.push_str(&wf.field.text);
+                        self.w.push_str(".upgrade().map(");
+                        self.w.push_str(&target);
+                        self.w.push(')');
+                        return;
+                    }
+                }
+            }
+        }
         // `operator()` dispatch (§O.2.4): the callee is a VALUE whose
         // type declares the call overload — `adder(5)` routes to
         // `adder.__op_call(5)`. Checked before the named-callee paths

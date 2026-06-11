@@ -301,7 +301,7 @@ impl RustEmitter {
             if let Some(default) = &field.default {
                 self.emit_expr(default);
             } else {
-                self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
+                self.emit_field_storage_default(field);
             }
             self.w.push_str(",\n");
         }
@@ -541,7 +541,7 @@ impl RustEmitter {
                 // the type's natural default. Generic-typed fields
                 // will surface a Rust compile error here, signaling
                 // the user has to assign them in the constructor body.
-                self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
+                self.emit_field_storage_default(field);
             }
             self.w.push_str(",\n");
         }
@@ -819,7 +819,7 @@ impl RustEmitter {
                 if let Some(default) = &field.default {
                     self.emit_expr(default);
                 } else {
-                    self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
+                    self.emit_field_storage_default(field);
                 }
                 self.w.push_str(",\n");
             }
@@ -956,7 +956,7 @@ impl RustEmitter {
             } else {
                 self.w.push_str(&field.name.text);
                 self.w.push_str(": ");
-                self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
+                self.emit_field_storage_default(field);
             }
         }
         if first {
@@ -1026,7 +1026,7 @@ impl RustEmitter {
             if let Some(default) = &field.default {
                 self.emit_expr(default);
             } else {
-                self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
+                self.emit_field_storage_default(field);
             }
         }
         if first {
@@ -1130,7 +1130,7 @@ impl RustEmitter {
             if let Some(default) = &field.default {
                 self.emit_expr(default);
             } else {
-                self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
+                self.emit_field_storage_default(field);
             }
             self.w.push_str(",\n");
         }

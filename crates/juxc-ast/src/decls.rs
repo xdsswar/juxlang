@@ -663,8 +663,8 @@ impl TypeParam {
 
 /// A class field per §7.3 + grammar §A.2.4 `field-decl`.
 ///
-/// **Turn-1 scope**: visibility + type + name + optional default value.
-/// No `static` / `const` / `final` / `volatile` / `weak` modifiers yet.
+/// **Scope**: visibility + `static` / `final` / `weak` modifiers + type +
+/// name + optional default value. (`volatile` is reserved but not yet wired.)
 #[derive(Debug, Clone)]
 pub struct FieldDecl {
     /// Annotations attached to this field.
@@ -682,6 +682,15 @@ pub struct FieldDecl {
     /// it picks the `pub const` over `pub static` shape in the
     /// emitted Rust.
     pub is_final: bool,
+    /// True if the field is declared `weak` (§6.5). A weak field does **not**
+    /// contribute to the owning class's refcount, so it breaks reference
+    /// cycles (the classic `Child` holding a back-reference to `Parent`).
+    /// Its storage lowers to `std::rc::Weak<RefCell<Target_Inner>>`; it is
+    /// read only via `.get()` (yielding `Target?`, since the target may be
+    /// gone), defaults to an empty `Weak::new()`, and is exempt from
+    /// definite-assignment (§S.4.5). Only valid on (non-generic, in Phase 1)
+    /// class-typed fields — see `E0455`.
+    pub is_weak: bool,
     /// Declared type, or `None` when the type is **inferred** from the
     /// initializer (`const I = 2;` → `int`). Inference requires an
     /// initializer; a type-less field with no initializer is an error.

@@ -765,6 +765,43 @@ impl RustEmitter {
         None
     }
 
+    /// For a wrapper-field place `recv.field_name`, return the **target
+    /// class's bare name** when that field is a `weak` field (§6.5), else
+    /// `None`. Resolves the owning class exactly like
+    /// [`Self::wrapper_field_parent_depth`] (`this`/`self` → `enclosing_class`,
+    /// everything else via the receiver's recorded type) and walks the
+    /// `extends` chain. The returned bare name is the weak field's target
+    /// class — used to re-wrap the upgraded `Rc<RefCell<Target_Inner>>` back
+    /// into its `Target` newtype on `.get()`, and (presence alone) to switch
+    /// a store to the `Rc::downgrade` form.
+    pub(crate) fn wrapper_weak_field_target(&self, recv: &Expr, field_name: &str) -> Option<String> {
+        let class_bare: Option<String> = if matches!(recv, Expr::This(_)) {
+            self.enclosing_class.clone()
+        } else {
+            self.receiver_class_bare(recv)
+        };
+        let mut cursor: Option<String> = class_bare;
+        let mut depth = 0usize;
+        while let Some(name) = cursor {
+            if depth > 64 {
+                return None;
+            }
+            let sig = self.lookup_class_by_bare_or_fqn(&name)?;
+            if let Some(field) = sig.fields.get(field_name) {
+                if field.is_weak {
+                    return field.ty.name.segments.last().map(|s| s.text.clone());
+                }
+                return None;
+            }
+            cursor = sig
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            depth += 1;
+        }
+        None
+    }
+
     /// True when an instance field named `field_name` on the wrapper
     /// class that `recv` evaluates to is non-`Copy` (so a read through a
     /// `.0.borrow()` guard must be cloned out — §CR.4.1 statement-scoped
