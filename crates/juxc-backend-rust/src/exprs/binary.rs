@@ -386,6 +386,20 @@ impl RustEmitter {
             self.emit_class_op_method_call(b, synth);
             return;
         }
+        // `<=>` without a user overload (§A.4 level 11): primitives
+        // and String go through partial_cmp; Ordering's repr makes
+        // the -1/0/+1 mapping a plain cast.
+        if matches!(b.op, juxc_ast::BinaryOp::Cmp) {
+            self.w.push('(');
+            self.emit_expr_with_parent_prec(&b.left, u8::MAX, false);
+            self.w.push_str(").partial_cmp(&(");
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            self.emit_expr(&b.right);
+            self.emitting_format_arg = prev;
+            self.w.push_str(")).map_or(0, |__o| __o as isize)");
+            return;
+        }
         let prec = binary_prec(b.op);
         // Comparison ops (`==`, `!=`, `<`, `<=`, `>`, `>=`) borrow
         // both operands through `PartialEq`/`PartialOrd` — String /
@@ -519,6 +533,8 @@ impl RustEmitter {
     /// declare the relevant operator.
     fn class_op_method_for_binary(&self, b: &BinaryExpr) -> Option<&'static str> {
         let kind = match b.op {
+            // `<=>` on a class with `operator<=>` → `__op_cmp`.
+            BinaryOp::Cmp => OperatorKind::Cmp,
             BinaryOp::Add => OperatorKind::Plus,
             BinaryOp::Sub => OperatorKind::Minus,
             BinaryOp::Mul => OperatorKind::Mul,

@@ -1226,6 +1226,10 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         }
     }
     match b.op {
+        // `<=>` (§A.4 level 11) always yields int: -1 / 0 / +1.
+        // (A user `operator<=>` was already consulted above via the
+        // operator-dispatch return lookup.)
+        BinaryOp::Cmp => Ty::Primitive(Primitive::Int),
         BinaryOp::Eq
         | BinaryOp::NotEq
         | BinaryOp::RefEq
@@ -1263,6 +1267,7 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
 fn binary_op_to_kind(op: BinaryOp) -> Option<OperatorKind> {
     Some(match op {
         BinaryOp::Eq => OperatorKind::Eq,
+        BinaryOp::Cmp => OperatorKind::Cmp,
         BinaryOp::Add => OperatorKind::Plus,
         BinaryOp::Sub => OperatorKind::Minus,
         BinaryOp::Mul => OperatorKind::Mul,

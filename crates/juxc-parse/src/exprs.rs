@@ -228,11 +228,25 @@ impl<'a> Parser<'a> {
     /// parses but should be rejected later. We accept it here and let a
     /// future tycheck pass complain. Operand is [`Self::parse_range`].
     pub(crate) fn parse_comparison(&mut self) -> Option<Expr> {
-        let mut left = self.parse_range()?;
+        let mut left = self.parse_three_way()?;
         while let Some(op) = self.peek_cmp_op() {
             self.advance();
-            let right = self.parse_range()?;
+            let right = self.parse_three_way()?;
             left = make_binary(op, left, right);
+        }
+        Some(left)
+    }
+
+    /// Three-way layer (§A.4 level 11): `a <=> b`, non-chaining —
+    /// grammar `three-way = type-test ('<=>' type-test)?`. Sits
+    /// between the comparison family and ranges so `a <=> b > 0`
+    /// reads as `(a <=> b) > 0`.
+    pub(crate) fn parse_three_way(&mut self) -> Option<Expr> {
+        let left = self.parse_range()?;
+        if matches!(self.peek(), TokenKind::Spaceship) {
+            self.advance();
+            let right = self.parse_range()?;
+            return Some(make_binary(BinaryOp::Cmp, left, right));
         }
         Some(left)
     }
