@@ -1103,6 +1103,7 @@ impl<'a> Checker<'a> {
         let saved_unsafe = self.in_unsafe;
         self.in_unsafe = fn_decl.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
+        self.check_out_params_assigned(&fn_decl.params, body, &fn_decl.name.text);
         // §X.1.3: every checked exception the body can raise must be
         // covered by the declared `throws` clause.
         self.enforce_declared_throws(&fn_decl.throws, &fn_decl.name.text);
@@ -1111,6 +1112,49 @@ impl<'a> Checker<'a> {
         self.in_async = saved_async;
         self.current_return = saved;
         self.env.pop_scope();
+    }
+
+    /// True when `e` is an assignable place that can back an `out` argument: a
+    /// variable, a field access, or an array element (§M.4.2). Everything else
+    /// (a literal, a call result, an arithmetic expression) is rejected (E0942).
+    fn is_assignable_place(e: &Expr) -> bool {
+        matches!(e, Expr::Path(_) | Expr::Field(_) | Expr::Index(_))
+    }
+
+    /// **E0940 (§M.4.2)** — every `out` parameter must be assigned on every path
+    /// that returns from / completes the body. Reuses the field
+    /// definite-assignment flow engine.
+    fn check_out_params_assigned(
+        &mut self,
+        params: &[juxc_ast::Param],
+        body: &juxc_ast::Block,
+        fn_name: &str,
+    ) {
+        let required: std::collections::HashSet<String> = params
+            .iter()
+            .filter(|p| p.is_out)
+            .map(|p| p.name.text.clone())
+            .collect();
+        if required.is_empty() {
+            return;
+        }
+        for name in crate::definite_assign::unassigned_on_some_exit(body, &required) {
+            let span = params
+                .iter()
+                .find(|p| p.name.text == name)
+                .map(|p| p.span)
+                .unwrap_or(Span::DUMMY);
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0940_OutParamNotDefinitelyAssigned,
+                    format!(
+                        "`out` parameter `{name}` is not assigned on every path through `{fn_name}` \
+                         — assign it before each `return` and before the body ends (§M.4)",
+                    ),
+                )
+                .with_span(span),
+            );
+        }
     }
 
     /// Walk a class declaration — for each constructor and each method,
@@ -1334,6 +1378,7 @@ impl<'a> Checker<'a> {
         let saved_unsafe = self.in_unsafe;
         self.in_unsafe = method.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
+        self.check_out_params_assigned(&method.params, body, &method.name.text);
         // §X.1.3: checked exceptions the method body raises must be
         // covered by its `throws` clause.
         self.enforce_declared_throws(&method.throws, &method.name.text);
@@ -2205,6 +2250,11 @@ impl<'a> Checker<'a> {
         let _ = self.infer_and_record(expr);
         match expr {
             Expr::Literal(_) => {}
+            // `out <place>` (§M.4) — recurse into the place so an undefined
+            // variable etc. is still reported. The place/agreement rules are in
+            // `check_call_args`; a bare `out` outside a call is meaningless but
+            // harmless to walk.
+            Expr::Out(inner, _) => self.check_expr(inner),
             // `expr?` — error propagation (§X.4.1). Validate the
             // operand/return-type pairing (E0730/E0731) and the
             // Phase-1 no-`?`-inside-try restriction.
@@ -4671,6 +4721,7 @@ impl<'a> Checker<'a> {
                     is_ref: false,
                     default: None,
                     is_varargs: false,
+                    is_out: false,
                 })
                 .collect();
             let subst_params = record.generic_params.clone();
@@ -5247,6 +5298,44 @@ impl<'a> Checker<'a> {
         for (i, arg) in args.iter().enumerate() {
             self.check_expr(arg);
             let Some(param) = arg_to_param[i].and_then(|j| params.get(j)) else { continue };
+            // **`out` argument rules (§M.4).** An `out` arg must line up with an
+            // `out` parameter and vice versa (E0943), and the arg must be an
+            // assignable place (E0942). The type check below (E0410) handles the
+            // place-vs-param type, since `infer_expr(Expr::Out(p)) = type of p`.
+            let arg_is_out = matches!(arg, Expr::Out(..));
+            if arg_is_out != param.is_out {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0943_OutArgMismatch,
+                        if arg_is_out {
+                            format!(
+                                "`out` argument passed to parameter `{}` of `{callee_name}`, \
+                                 which is not an `out` parameter",
+                                param.name,
+                            )
+                        } else {
+                            format!(
+                                "parameter `{}` of `{callee_name}` is `out` — the argument must \
+                                 be passed as `out <place>`",
+                                param.name,
+                            )
+                        },
+                    )
+                    .with_span(expr_span(arg)),
+                );
+            }
+            if let Expr::Out(place, _) = arg {
+                if !Self::is_assignable_place(place) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0942_OutArgNotPlace,
+                            "an `out` argument must be an assignable place — a variable, a field, \
+                             or an array element (§M.4.2)",
+                        )
+                        .with_span(expr_span(arg)),
+                    );
+                }
+            }
             let expected_raw = match declaring_class {
                 Some(class) => lower_member_type(&param.ty, class, self.symbols),
                 None => ty_from_ref(&param.ty, &self.env, self.symbols),
@@ -5511,6 +5600,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::TupleLit(_, s) => *s,
         Expr::TryExpr(t) => t.span,
         Expr::ErrorProp(_, s) => *s,
+        Expr::Out(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
         Expr::Binary(b) => b.span,

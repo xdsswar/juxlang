@@ -1201,6 +1201,12 @@ impl RustEmitter {
     /// emitted here — it stays at the call slot (a hoisted temp is
     /// borrowed at the call, `x.m(&__jux_arg0)`).
     fn emit_call_arg_value(&mut self, call: &CallExpr, i: usize, arg: &Expr) {
+        // `out <place>` argument (§M.4): pass `&mut <place>` — no value
+        // coercion / share-clone. `emit_expr` handles the `Expr::Out` shape.
+        if matches!(arg, Expr::Out(..)) {
+            self.emit_expr(arg);
+            return;
+        }
         // Interface-typed param slot: wrap a class value in `Rc<dyn
         // Trait>` / clone a dyn handle, before the sealed/nullable
         // paths (which never apply to an interface value slot).

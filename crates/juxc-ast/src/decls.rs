@@ -833,6 +833,12 @@ pub struct Param {
     /// synthesized array literal, §E.1.2.1 / §S.1.4) and the
     /// last-parameter-only check (E0212).
     pub is_varargs: bool,
+    /// `true` when the parameter carries the `out` mode (§M.4): the function
+    /// WRITES the parameter rather than reading it. Lowers to a Rust `&mut T`;
+    /// the caller passes `out <place>`. Mutually exclusive with `is_final`, and
+    /// rejected on varargs / defaulted / constructor parameters (E0944). The
+    /// callee must assign it on every normal-exit path (E0940).
+    pub is_out: bool,
     /// Span of the entire parameter.
     pub span: Span,
 }

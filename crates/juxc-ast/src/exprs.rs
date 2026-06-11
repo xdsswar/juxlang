@@ -26,6 +26,10 @@ pub enum Expr {
     /// A path — `foo` or `foo.bar.baz`. The resolver binds these to
     /// concrete definitions.
     Path(QualifiedName),
+    /// `out <place>` — an `out` argument at a call site (§M.4). Produced by the
+    /// parser ONLY in argument position; the inner expression is the assignable
+    /// place the callee writes through. Lowers to Rust `&mut <place>`.
+    Out(Box<Expr>, Span),
     /// A call expression — `callee(args…)`.
     Call(CallExpr),
     /// A binary expression — `left op right`. Precedence is encoded by

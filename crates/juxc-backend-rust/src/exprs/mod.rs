@@ -95,6 +95,22 @@ impl RustEmitter {
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Literal(lit) => self.emit_literal(lit),
+            // `out <place>` (§M.4) — pass the place by exclusive reference. The
+            // place is emitted as an lvalue (no value-read deref / clone), so
+            // `out n` → `&mut n`. (Normally reached via `emit_call_arg_value`,
+            // which routes here.)
+            Expr::Out(place, _) => {
+                self.w.push_str("&mut ");
+                let prev_lv = self.emitting_lvalue;
+                let prev_out = self.emitting_out_place;
+                self.emitting_lvalue = true;
+                // A wrapper-class field place must take the mutable interior
+                // borrow (`b.0.borrow_mut().f`) — see `emitting_out_place`.
+                self.emitting_out_place = true;
+                self.emit_expr(place);
+                self.emitting_lvalue = prev_lv;
+                self.emitting_out_place = prev_out;
+            }
             // Try-expression (§X.3.3) — produce-or-recover value form.
             Expr::TryExpr(t) => self.emit_try_expr(t),
             // `expr?` — error propagation (§X.4.1). Result operands
@@ -139,6 +155,28 @@ impl RustEmitter {
                 self.w.push(')');
             }
             Expr::Path(qn) => {
+                // **`out` parameter access** (§M.4): an out param lowers to
+                // `&mut T`, so a value read derefs to `(*result)` and an
+                // assignment LHS to `*result`. An inner block local that shadows
+                // the parameter name wins (and is NOT an out param).
+                if qn.segments.len() == 1
+                    && self.out_params.contains(&qn.segments[0].text)
+                    && !self
+                        .local_types
+                        .iter()
+                        .any(|s| s.contains_key(&qn.segments[0].text))
+                {
+                    let name = &qn.segments[0].text;
+                    if self.emitting_lvalue {
+                        self.w.push('*');
+                        self.w.push_str(name);
+                    } else {
+                        self.w.push_str("(*");
+                        self.w.push_str(name);
+                        self.w.push(')');
+                    }
+                    return;
+                }
                 // Bare-name rewrite for enclosing-class static fields:
                 // inside `class Test`, the name `a` resolves to
                 // `Test.a` (Java/Jux rule). Detect that case here and
@@ -823,6 +861,7 @@ impl RustEmitter {
                             is_ref: false,
                             default: None,
                             is_varargs: false,
+                            is_out: false,
                             span: m.span,
                         })
                         .collect()
@@ -1473,6 +1512,7 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
         Expr::TupleLit(_, s) => *s,
         Expr::TryExpr(t) => t.span,
         Expr::ErrorProp(_, s) => *s,
+        Expr::Out(_, s) => *s,
         Expr::NotNullAssert(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,

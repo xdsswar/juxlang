@@ -899,6 +899,8 @@ impl Resolver {
     fn visit_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Literal(_) => {}
+            // `out <place>` (§M.4) — resolve the inner place.
+            Expr::Out(inner, _) => self.visit_expr(inner),
             // Tuple literal — each element resolves independently.
             Expr::TupleLit(elems, _) => {
                 for e in elems {

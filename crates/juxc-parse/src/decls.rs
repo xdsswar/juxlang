@@ -2227,6 +2227,33 @@ impl<'a> Parser<'a> {
                 .with_span(final_span),
             );
         }
+        // Optional `out` mode (§M.4) — the contextual keyword `out` immediately
+        // before a type. A parameter literally NAMED `out` (`int out`) keeps
+        // working because there `out` isn't the leading token. `out` is the mode
+        // only when it's followed by something that begins a type (an
+        // identifier or `(` for a function type).
+        let out_span = self.peek_span();
+        let is_out = matches!(self.peek(), TokenKind::Ident(s) if s == "out")
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                // A type-start (identifier / `(` function type) — or a `final`
+                // / `const` binding mode, so `out final T x` is recognized as
+                // the `out` mode and rejected by E0944 (not mis-parsed as a
+                // parameter typed `out`). `final out T x` is handled by the
+                // `final`-first eat above.
+                Some(TokenKind::Ident(_))
+                    | Some(TokenKind::LParen)
+                    | Some(TokenKind::Kw(Keyword::Final))
+                    | Some(TokenKind::Kw(Keyword::Const))
+            );
+        // `out final` / `out const` — `out` then a trailing binding mode. Fold
+        // it into `is_final` so the E0944 check below fires in either order.
+        let is_final = if is_out {
+            self.advance(); // `out`
+            is_final || self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const)
+        } else {
+            is_final
+        };
         // A leading `&` marks a borrowed parameter in a bindgen-generated stub
         // (§G.9.2). It carries no Jux type meaning (borrows vanish, §G.3.4) — we
         // record it as a flag so codegen re-adds the call-site borrow.
@@ -2255,6 +2282,37 @@ impl<'a> Parser<'a> {
         // expansion pass clones it into each such call.
         let default = if self.eat(&TokenKind::Eq) { self.parse_expr() } else { None };
         let end = self.last_consumed_span();
-        Some(Param { name, ty, is_final, is_ref, default, is_varargs, span: start.join(end) })
+        // `out` misuse (§M.4.1, E0944): not combinable with `final`, not on a
+        // varargs / defaulted parameter, and not on a constructor parameter
+        // (those forward into a field — there's nothing to write back through).
+        if is_out {
+            let bad = if is_final {
+                Some("an `out` parameter can't also be `final`")
+            } else if is_varargs {
+                Some("a varargs parameter can't be `out`")
+            } else if default.is_some() {
+                Some("an `out` parameter can't have a default value")
+            } else if !allow_final {
+                Some("a constructor parameter can't be `out`")
+            } else {
+                None
+            };
+            if let Some(msg) = bad {
+                self.diagnostics.push(
+                    Diagnostic::error(code::Code::E0944_OutParamModifierMisuse, msg)
+                        .with_span(out_span),
+                );
+            }
+        }
+        Some(Param {
+            name,
+            ty,
+            is_final,
+            is_ref,
+            default,
+            is_varargs,
+            is_out,
+            span: start.join(end),
+        })
     }
 }

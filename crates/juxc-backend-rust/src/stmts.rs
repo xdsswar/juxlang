@@ -150,6 +150,8 @@ fn is_path_named(e: &Expr, name: &str) -> bool {
 /// safely emit `for x in &xs`.
 fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
     match e {
+        // `out <place>` borrows the place (`&mut`), it does not move it.
+        Expr::Out(_, _) => false,
         // Tuple literal: each element is a by-value consume site,
         // same as a call argument.
         Expr::TupleLit(elems, _) => elems
@@ -1565,6 +1567,13 @@ impl RustEmitter {
             if wrap_some {
                 self.w.push(')');
             }
+        } else if let Some(ty) = &var.ty {
+            // No initializer (`int n;`): seed a default. This makes the local
+            // usable as an `out <place>` argument right away (Rust `&mut n`
+            // needs an initialized binding) and removes a latent rustc
+            // use-before-assign error for an otherwise-unassigned typed local.
+            self.w.push_str(" = ");
+            self.emit_default_value_for(ty);
         }
         self.w.push_str(";\n");
     }

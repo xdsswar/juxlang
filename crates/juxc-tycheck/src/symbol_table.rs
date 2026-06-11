@@ -767,6 +767,10 @@ pub struct ParamSig {
     /// is already the desugared array form; this flag switches the
     /// call-site mapping to trailing-args packing.
     pub is_varargs: bool,
+    /// `true` for an `out` parameter (§M.4) — lowered to a Rust `&mut T`; the
+    /// call site must pass `out <place>`. Drives the call-arg agreement check
+    /// (E0943) and the backend `&mut` emission.
+    pub is_out: bool,
 }
 
 /// Signature of a top-level record declaration.
@@ -3393,6 +3397,7 @@ fn param_sig(p: &juxc_ast::Param) -> ParamSig {
         is_ref: p.is_ref,
         default: p.default.clone(),
         is_varargs: p.is_varargs,
+        is_out: p.is_out,
     }
 }
 

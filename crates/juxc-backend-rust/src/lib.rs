@@ -495,6 +495,14 @@ struct RustEmitter {
     /// suppresses the `.clone()` insertion in `emit_field` so we don't
     /// produce nonsense like `self.name.clone() = "x";`.
     emitting_lvalue: bool,
+    /// True while we're emitting the place behind an `out` argument
+    /// (§M.4) — `setIt(out b.field)`. The place is passed by exclusive
+    /// reference (`&mut`), so a wrapper-class field must take the
+    /// **mutable** interior borrow (`b.0.borrow_mut().field`) rather than
+    /// the default read-path `b.0.borrow()`. The `RefMut` temporary lives
+    /// to the end of the enclosing call statement (Rust temporary-lifetime
+    /// extension), so the `&mut` into it stays valid for the callee.
+    pub(crate) emitting_out_place: bool,
     /// True while we're emitting a `const NAME: T = …;` (or
     /// `pub static NAME: T = …;`) initializer. Rust's const evaluator
     /// can't run `String::from`/`.to_string()`, so the literal must
@@ -722,6 +730,11 @@ struct RustEmitter {
     /// cast and aren't tracked. Set around class / function body
     /// emission; cleared after.
     pub(crate) const_int_params: std::collections::HashSet<String>,
+    /// Names of the **`out` parameters** of the function/method whose body is
+    /// being emitted (§M.4). They lower to Rust `&mut T`, so every read of one
+    /// in the body emits `(*name)` and every assignment `name = v` emits
+    /// `*name = v`. Set/restored around each body, mirroring `const_int_params`.
+    pub(crate) out_params: std::collections::HashSet<String>,
     /// Names of the **ordinary type parameters** in scope (the `T` of
     /// an enclosing `class Ring<T, int N>` / `fn id<T>(…)`). Lets the
     /// array-creation emitter recognize a generic element (`new T[N]`)
@@ -1157,6 +1170,9 @@ pub(crate) fn compute_aliased_classes(
         mark: &mut dyn FnMut(&Expr, &mut HashSet<String>),
     ) {
         match e {
+            // `out <place>` — passed by `&mut`, not aliased into a value. Recurse
+            // into the place to catch nested calls.
+            Expr::Out(inner, _) => walk_expr(inner, aliased, mark),
             // Tuple literal — each element is a by-value capture into
             // the tuple, same aliasing consequence as a call argument.
             Expr::TupleLit(elems, _) => {
@@ -2174,6 +2190,7 @@ fn cast_targets_else(b: Option<&juxc_ast::ElseBranch>, out: &mut HashSet<String>
 fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
     use juxc_ast::Expr;
     match e {
+        Expr::Out(inner, _) => cast_targets_expr(inner, out),
         Expr::TupleLit(elems, _) => {
             for el in elems {
                 cast_targets_expr(el, out);
@@ -2724,6 +2741,7 @@ impl RustEmitter {
             enclosing_interface: None,
             user_mut_methods: HashSet::new(),
             emitting_lvalue: false,
+            emitting_out_place: false,
             emitting_const_context: false,
             emitting_format_arg: false,
             emitting_comparison_operand: false,
@@ -2750,6 +2768,7 @@ impl RustEmitter {
             wrapper_classes: std::collections::HashSet::new(),
             poly_base_classes: std::collections::HashSet::new(),
             const_int_params: std::collections::HashSet::new(),
+            out_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),
             in_array_size_position: false,
             pending_loop_label: None,

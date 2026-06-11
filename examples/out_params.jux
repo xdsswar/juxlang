@@ -1,0 +1,62 @@
+// `out` parameters (§M.4) — the C-style "status + write-through" pattern,
+// without raw pointers. An `out` parameter is written by the callee, never
+// read by it, and must be assigned on every normal-exit path (E0940).
+//
+// At the call site the argument is an assignable place prefixed with `out`
+// — a local, an object field, or an array element. It need not be
+// initialized before the call: the callee guarantees a value on return.
+//
+// Lowering: `out int result` → Rust `result: &mut isize`; in the body
+// `result = v` → `*result = v`; the call `tryParse(s, out n)` → `&mut n`.
+// A field place through a shared-reference class takes the mutable interior
+// borrow (`b.0.borrow_mut().field`), valid for the call's duration.
+
+package outparams;
+
+public class Parser {
+    // Returns whether `s` parsed; writes the parsed value through `result`.
+    // Note `result` is assigned on BOTH paths, satisfying E0940.
+    public bool tryParse(String s, out int result) {
+        if (s == "42") {
+            result = 42;
+            return true;
+        }
+        result = 0;
+        return false;
+    }
+}
+
+// A mutable holder, used to show an out-arg targeting an object field.
+public class Cell {
+    public int value;
+    public Cell() { this.value = 0; }
+}
+
+public void main() {
+    var p = new Parser();
+
+    // 1) Local out-arg — the canonical use; `n` starts uninitialized.
+    int n;
+    if (p.tryParse("42", out n)) {
+        print("ok " + n);                  // ok 42
+    } else {
+        print("fail " + n);
+    }
+
+    int m;
+    if (p.tryParse("xx", out m)) {
+        print("ok " + m);
+    } else {
+        print("fail " + m);                // fail 0
+    }
+
+    // 2) Field out-arg — the parsed value is written straight into a field.
+    var c = new Cell();
+    p.tryParse("42", out c.value);
+    print("cell " + c.value);              // cell 42
+
+    // 3) Array-element out-arg — write through `arr[i]`.
+    var slots = new int[2];
+    p.tryParse("42", out slots[1]);
+    print("slot " + slots[1]);             // slot 42
+}

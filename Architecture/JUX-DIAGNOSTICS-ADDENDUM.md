@@ -411,6 +411,9 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0931`  | `operator==` defined without `operator hash`                 | Operators §O.2.7               |
 | `E0935`  | Call to a `delete`d operator                                 | Operators §O.3.4               |
 | `E0940`  | Out-parameter not assigned on every path                    | Missing-defs §M.4.2            |
+| `E0942`  | `out` argument is not an assignable place                   | Missing-defs §M.4.2            |
+| `E0943`  | `out` argument / parameter disagreement                     | Missing-defs §M.4             |
+| `E0944`  | Misuse of the `out` parameter modifier                      | Missing-defs §M.4.1            |
 | `E0941`  | No matching operator definition for required capability     | Operators §O.5.1               |
 | `E0950`  | Orphan operator overload                                    | Runtime/ABI §R.3.3             |
 | `E0951`  | Duplicate operator overload across modules                  | Runtime/ABI §R.3.3             |
