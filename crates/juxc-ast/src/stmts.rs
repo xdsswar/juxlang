@@ -140,7 +140,14 @@ pub struct TryStmt {
 #[derive(Debug, Clone)]
 pub struct CatchClause {
     /// Declared exception type — `IOException`, `MyError`, …
+    /// For a multi-catch (`catch (E1 | E2 e)`, §X.3.6) this is the
+    /// FIRST listed type; the rest live in [`Self::alt_tys`].
     pub ty: TypeRef,
+    /// Additional `|`-separated types of a multi-catch clause —
+    /// empty for the ordinary single-type form. The listed types
+    /// must be pairwise unrelated (E0721); the bound name's static
+    /// type is their most specific common supertype.
+    pub alt_tys: Vec<TypeRef>,
     /// Bound name inside the catch block.
     pub name: Ident,
     /// Body executed when the catch matches.

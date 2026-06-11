@@ -264,12 +264,18 @@ impl<'a> Parser<'a> {
             self.advance(); // 'catch'
             self.expect(&TokenKind::LParen, "'(' to start catch parameter");
             let ty = self.parse_type_ref()?;
+            // Multi-catch alternatives — `catch (E1 | E2 e)` (§X.3.6).
+            let mut alt_tys = Vec::new();
+            while self.eat(&TokenKind::Pipe) {
+                alt_tys.push(self.parse_type_ref()?);
+            }
             let name = self.parse_ident()?;
             self.expect(&TokenKind::RParen, "')' to close catch parameter");
             let body = self.parse_block();
             let end = self.last_consumed_span();
             catches.push(CatchClause {
                 ty,
+                alt_tys,
                 name,
                 body,
                 span: c_start.join(end),
