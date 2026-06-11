@@ -457,6 +457,15 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // Top-level function — `helper(x)`.
         Expr::Path(qn) if qn.segments.len() == 1 => {
             let name = &qn.segments[0].text;
+            // `spawn(f)` builtin (§18.1.3) returns a Task handle the
+            // Jux type system doesn't model yet — Unknown keeps the
+            // method calls on it permissive (rustc verifies against
+            // the emitted JuxTask). Checked BEFORE the function
+            // lookup so the rust.std thread-spawn stub's JoinHandle
+            // doesn't capture the name.
+            if name == "spawn" {
+                return Ty::Unknown;
+            }
             if let Some((_, fn_sig)) = symbols.lookup_function(name) {
                 // Generic inference (spec §T.4): when the callee is
                 // generic and the call site didn't write explicit

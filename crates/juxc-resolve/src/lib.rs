@@ -140,6 +140,9 @@ impl Resolver {
         // (§S.7.2). Checked in debug builds, elided in release
         // (lowers to Rust's `debug_assert!`).
         builtins.insert("assert");
+        // `spawn(f)` — schedule async work on the event loop,
+        // returning a Task<T> handle (JUX-ASYNC v2 §18.1.3).
+        builtins.insert("spawn");
         // Async-runtime builtin per JUX-ASYNC-ADDENDUM-v2: `parallel`
         // takes N async expressions and concurrently awaits them
         // all, returning a tuple of their results. Lowers to

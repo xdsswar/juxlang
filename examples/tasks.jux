@@ -1,0 +1,36 @@
+// spawn(f) -> Task<T> (JUX-ASYNC v2 §18.1.3 / §18.1.4).
+//
+// - `spawn(f)` schedules the zero-arg lambda on the task pool and
+//   returns immediately; `await task` (in async code) or
+//   `task.blockingGet()` (from sync code) retrieves the value;
+//   `task.cancel()` drops the computation.
+// - Captures must be thread-safe — wrapper-class objects are
+//   rejected with E0702 (same rule as Worker.spawn).
+
+package tasks;
+
+async int fanIn() {
+    var a = spawn(() -> 20);
+    var b = spawn(() -> 22);
+    return await a + await b;
+}
+
+public void main() {
+    var t1 = spawn(() -> 6 * 7);
+    print(t1.blockingGet());
+
+    var t2 = spawn(() -> {
+        var total = 0;
+        for (var i : 1..=4) {
+            total = total + i;
+        }
+        total;
+    });
+    print(t2.blockingGet());
+
+    var t3 = spawn(() -> 1000);
+    t3.cancel();
+    print("cancelled ok");
+
+    print(block_on(fanIn()));
+}
