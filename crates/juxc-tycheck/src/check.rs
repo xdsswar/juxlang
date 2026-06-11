@@ -4639,7 +4639,9 @@ fn op_kind_for_binary(op: BinaryOp) -> Option<OperatorKind> {
 /// §O.2.5.
 fn op_kind_for_unary(op: UnaryOp) -> Option<OperatorKind> {
     Some(match op {
-        UnaryOp::Neg => OperatorKind::Minus,
+        // Unary `-` maps to the zero-param Neg kind (the parser
+        // re-kinds `operator-()` declarations from Minus to Neg).
+        UnaryOp::Neg => OperatorKind::Neg,
         UnaryOp::BitNot => OperatorKind::BitNot,
         // `!x`, raw-pointer `*p` / `&x` aren't overloadable (§O.2.5).
         UnaryOp::Not | UnaryOp::Deref | UnaryOp::AddrOf => return None,
@@ -4662,6 +4664,7 @@ fn operator_kind_user_spelling(kind: OperatorKind) -> &'static str {
         OperatorKind::ToString => "string",
         OperatorKind::Plus => "+",
         OperatorKind::Minus => "-",
+        OperatorKind::Neg => "- (unary)",
         OperatorKind::Mul => "*",
         OperatorKind::Div => "/",
         OperatorKind::Rem => "%",

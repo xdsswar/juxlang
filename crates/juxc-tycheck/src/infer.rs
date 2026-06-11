@@ -413,6 +413,11 @@ fn infer_index(i: &IndexExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     let array_ty = infer_expr(&i.array, env, symbols);
     match array_ty {
         Ty::Array { element, .. } => *element,
+        // `operator[]` (§O.2.4): the overload's declared return type.
+        ref user @ Ty::User { .. } => {
+            lookup_user_operator_return_type(user, OperatorKind::Index, env, symbols)
+                .unwrap_or(Ty::Unknown)
+        }
         _ => Ty::Unknown,
     }
 }
@@ -434,6 +439,20 @@ fn infer_index(i: &IndexExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
 /// rejects duplicates with `E0402`, so today there's at most one
 /// candidate per name.
 fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    // `operator()` (§O.2.4): a callee whose type declares the call
+    // overload produces the overload's return type. Checked before
+    // the named-function path so a callable LOCAL wins over a
+    // same-named free function (locals shadow).
+    {
+        let callee_ty = infer_expr(&c.callee, env, symbols);
+        if matches!(callee_ty, Ty::User { .. }) {
+            if let Some(ret) =
+                lookup_user_operator_return_type(&callee_ty, OperatorKind::Call, env, symbols)
+            {
+                return ret;
+            }
+        }
+    }
     match c.callee.as_ref() {
         // Top-level function — `helper(x)`.
         Expr::Path(qn) if qn.segments.len() == 1 => {
@@ -1170,7 +1189,7 @@ fn infer_unary(u: &UnaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
 /// `!x` isn't overridable per spec §O.2.5.
 fn unary_op_to_kind(op: UnaryOp) -> Option<OperatorKind> {
     Some(match op {
-        UnaryOp::Neg => OperatorKind::Minus,
+        UnaryOp::Neg => OperatorKind::Neg,
         UnaryOp::BitNot => OperatorKind::BitNot,
         UnaryOp::Not | UnaryOp::Deref | UnaryOp::AddrOf => return None,
     })

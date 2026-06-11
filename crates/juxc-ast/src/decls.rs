@@ -603,6 +603,12 @@ pub enum OperatorKind {
     IndexSet,
     /// `()` — call (§O.2.4) — makes the type callable.
     Call,
+    /// Unary `-` (`operator-()` with NO parameters, §O.2.4). The
+    /// parser re-kinds a zero-param `operator-` from Minus to this
+    /// so binary subtraction and unary negation coexist in the
+    /// per-kind operator maps. Unary `+` is the identity and isn't
+    /// overloadable in Phase 1.
+    Neg,
     /// `..` — exclusive range (§O.2.4).
     Range,
     /// `..=` — inclusive range (§O.2.4).

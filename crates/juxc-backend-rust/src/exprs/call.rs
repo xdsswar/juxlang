@@ -206,6 +206,28 @@ impl RustEmitter {
                 return;
             }
         }
+        // `operator()` dispatch (§O.2.4): the callee is a VALUE whose
+        // type declares the call overload — `adder(5)` routes to
+        // `adder.__op_call(5)`. Checked before the named-callee paths
+        // so a callable local never shadows into a function lookup.
+        if self.expr_declares_operator(&call.callee, juxc_ast::OperatorKind::Call) {
+            self.emit_expr_with_parent_prec(&call.callee, u8::MAX, false);
+            self.w.push_str(".__op_call(");
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            for (i, arg) in call.args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.emit_expr(arg);
+                if self.wrapper_value_needs_clone(arg) {
+                    self.w.push_str(".clone()");
+                }
+            }
+            self.emitting_format_arg = prev;
+            self.w.push(')');
+            return;
+        }
         // Recognize a single-segment path `print` for the built-in.
         if let Expr::Path(qn) = &*call.callee {
             if qn.segments.len() == 1 && qn.segments[0].text == "print" {

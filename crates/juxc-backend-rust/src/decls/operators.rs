@@ -196,7 +196,8 @@ impl RustEmitter {
                 self.emit_binary_op_wrapper(class_name, "std::ops::Shr", "shr", op, synth);
             }
             // Unary family — receiver-only, Output from return type.
-            OperatorKind::Minus if arity == 0 => {
+            // (The parser re-kinds a zero-param `operator-` to Neg.)
+            OperatorKind::Neg => {
                 self.emit_unary_op_wrapper(class_name, "std::ops::Neg", "neg", op, synth);
             }
             OperatorKind::BitNot if arity == 0 => {
