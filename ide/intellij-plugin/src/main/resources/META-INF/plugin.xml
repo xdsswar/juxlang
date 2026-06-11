@@ -210,6 +210,14 @@
         language="Jux"
         implementationClass="dev.jux.intellij.editor.JuxImportOptimizer"/>
 
+    <!-- Reformat Code (Ctrl+Alt+L): block-model formatter (indent + spacing,
+         preserve-line-breaks v1) and the Code Style | Jux settings page. -->
+    <lang.formatter
+        language="Jux"
+        implementationClass="dev.jux.intellij.format.JuxFormattingModelBuilder"/>
+    <langCodeStyleSettingsProvider
+        implementation="dev.jux.intellij.format.JuxLanguageCodeStyleSettingsProvider"/>
+
     <!-- New Project / New Module support: the "Jux" generator scaffolds a
          jux.toml + src/main.jux project (§I — project model). -->
     <moduleType
