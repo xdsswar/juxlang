@@ -1,0 +1,47 @@
+// AtomicInt / AtomicLong + MemoryOrder (§S.6.2, jux.std.concurrent).
+//
+// Thread-safe shared counters with C++20/Rust memory orderings. The
+// no-order overloads default to SeqCst (the safe choice); `fetch*`
+// return the PREVIOUS value. Handles share: passing one into
+// `Worker.spawn` / `spawn` shares the same underlying cell
+// (Arc<Atomic*>-backed), so workers really do bump one counter.
+// Phase-1 defers compareAndSwap (CasResult<T> not yet specified)
+// and AtomicRef<T>.
+
+package atomics;
+
+import jux.std.concurrent.AtomicInt;
+import jux.std.concurrent.AtomicLong;
+import jux.std.concurrent.MemoryOrder;
+
+public async void main() {
+    var c = new AtomicInt(10);
+    print(c.load());                     // 10
+    c.store(42);
+    print(c.load(MemoryOrder.Acquire));  // 42
+    print(c.fetchAdd(8));                // 42 — previous value
+    print(c.load());                     // 50
+    print(c.fetchSub(20, MemoryOrder.AcqRel)); // 50
+    print(c.fetchAnd(0xF));              // 30
+    print(c.fetchOr(0x10));              // 14
+    print(c.fetchXor(0xFF));             // 30
+    print(c.load());                     // 225
+
+    var big = new AtomicLong(5000000000);
+    print(big.fetchAdd(1));              // 5000000000
+    print(big.load());                   // 5000000001
+
+    // Cross-thread sharing: two workers bump the SAME counter.
+    var hits = new AtomicInt(0);
+    var t1 = Worker.spawn(() -> {
+        for (var i : 0..1000) { hits.fetchAdd(1); }
+        return 0;
+    });
+    var t2 = Worker.spawn(() -> {
+        for (var i : 0..1000) { hits.fetchAdd(1); }
+        return 0;
+    });
+    var a = await t1;
+    var b = await t2;
+    print(hits.load());                  // 2000
+}

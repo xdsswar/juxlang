@@ -432,6 +432,8 @@ The default ordering for the no-argument methods is **SeqCst**. This is the safe
 
 There are no fence intrinsics in v1 (`atomic_thread_fence`-equivalent). If experience shows a need, they can be added in a later edition without changing the rest of the model.
 
+**Phase-1 implementation notes.** `AtomicInt` / `AtomicLong` and `MemoryOrder` are available (`jux.std.concurrent`), lowered onto `std::sync::atomic::AtomicIsize` / `AtomicI64` behind `Arc` — handles share the same cell across `spawn` / `Worker.spawn` boundaries. The `fetch*` family carries both the SeqCst-default and explicit-order overloads. Deferred: `compareAndSwap` (its `CasResult<T>` return type is referenced above but not yet specified — it needs a definition here before implementation) and `AtomicRef<T>`.
+
 ### S.6.3. Volatile Access
 
 `@register` fields (per JUX-LANG-V1 §16.3) and any field declared `volatile` produce **un-elidable, un-reordered** loads and stores at the machine level. Specifically:

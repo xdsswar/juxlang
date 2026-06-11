@@ -580,7 +580,48 @@ impl RustEmitter {
                     && qn.segments[0].text == "Worker"
                     && f.field.text == "spawn"
                 {
-                    self.w.push_str("Worker::spawn(");
+                    // Crate-rooted: the Worker shim lives at the crate
+                    // root, while THIS call site may sit inside a
+                    // package's module nest.
+                    //
+                    // Clone-rebind shared captures (same rule as the
+                    // event-loop `spawn`): `move ||` would steal the
+                    // caller's handle, but Arc-backed values (atomics,
+                    // channels) are meant to be SHARED with the worker
+                    // — rebinding `let x = x.clone();` in a wrapper
+                    // block hands the closure its own handle.
+                    let mut rebinds: Vec<String> = Vec::new();
+                    if let Some(Expr::Lambda(l)) = call.args.first() {
+                        let mut names: Vec<String> = Vec::new();
+                        crate::exprs::collect_bare_names_in_lambda(l, &mut |n| {
+                            if !names.iter().any(|x| x == n) {
+                                names.push(n.to_string());
+                            }
+                        });
+                        for name in names {
+                            let known = self
+                                .local_types
+                                .iter()
+                                .rev()
+                                .find_map(|s| s.get(&name).cloned());
+                            if let Some(ty) = known {
+                                if !matches!(ty, juxc_tycheck::Ty::Primitive(_)) {
+                                    rebinds.push(name);
+                                }
+                            }
+                        }
+                    }
+                    self.w.push_str("crate::Worker::spawn(");
+                    if !rebinds.is_empty() {
+                        self.w.push_str("{ ");
+                        for name in &rebinds {
+                            self.w.push_str("let ");
+                            self.w.push_str(name);
+                            self.w.push_str(" = ");
+                            self.w.push_str(name);
+                            self.w.push_str(".clone(); ");
+                        }
+                    }
                     let prev = self.emitting_format_arg;
                     self.emitting_format_arg = false;
                     if let Some(arg) = call.args.first() {
@@ -593,6 +634,9 @@ impl RustEmitter {
                             // `FnOnce + Send + 'static` bound.
                             _ => self.emit_expr(arg),
                         }
+                    }
+                    if !rebinds.is_empty() {
+                        self.w.push_str(" }");
                     }
                     self.emitting_format_arg = prev;
                     self.w.push(')');
@@ -1574,6 +1618,61 @@ impl RustEmitter {
             };
             self.emit_expr(&f.object);
             self.w.push_str(suffix);
+            return true;
+        }
+        // `AtomicInt` / `AtomicLong` (§S.6.2) — Arc<Atomic*> handles.
+        // The no-order overloads default to SeqCst; explicit orders
+        // pass the Jux `MemoryOrder` through the emitted
+        // `__jux_order` adapter. `fetch*` return the PREVIOUS value.
+        if matches!(
+            &recv_ty,
+            juxc_tycheck::Ty::User { name, .. }
+                if matches!(
+                    name.rsplit('.').next().unwrap_or(name),
+                    "AtomicInt" | "AtomicLong"
+                )
+        ) {
+            let rust = match method {
+                "load" => "load",
+                "store" => "store",
+                "fetchAdd" => "fetch_add",
+                "fetchSub" => "fetch_sub",
+                "fetchAnd" => "fetch_and",
+                "fetchOr" => "fetch_or",
+                "fetchXor" => "fetch_xor",
+                _ => return false,
+            };
+            // The ordering is the LAST argument when the overload
+            // carries one: load(order) has 1 arg, store/fetch*(v,
+            // order) have 2.
+            let order_arg = match (method, call.args.len()) {
+                ("load", 1) => call.args.first(),
+                (_, 2) => call.args.get(1),
+                _ => None,
+            };
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            self.emit_expr(&f.object);
+            self.w.push('.');
+            self.w.push_str(rust);
+            self.w.push('(');
+            // The value operand (store / fetch* first arg).
+            if method != "load" {
+                if let Some(value) = call.args.first() {
+                    self.emit_expr(value);
+                    self.w.push_str(", ");
+                }
+            }
+            match order_arg {
+                Some(order) => {
+                    self.w.push_str("crate::__jux_order(");
+                    self.emit_expr(order);
+                    self.w.push(')');
+                }
+                None => self.w.push_str("std::sync::atomic::Ordering::SeqCst"),
+            }
+            self.w.push(')');
+            self.emitting_format_arg = prev;
             return true;
         }
         // Numeric / char intrinsics (§K.11) — Primitive-typed

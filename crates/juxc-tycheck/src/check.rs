@@ -3325,7 +3325,7 @@ impl<'a> Checker<'a> {
             Ty::User { name, .. }
                 if matches!(
                     name.rsplit('.').next().unwrap_or(name),
-                    "Channel" | "Task" | "AsyncMutex"
+                    "Channel" | "Task" | "AsyncMutex" | "AtomicInt" | "AtomicLong"
                 )
         )
     }

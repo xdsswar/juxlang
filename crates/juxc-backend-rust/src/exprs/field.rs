@@ -868,8 +868,12 @@ impl RustEmitter {
                         let bare = name.rsplit('.').next().unwrap_or(name);
                         // Async-runtime handles are Arc-backed —
                         // passing one shares it (refcount bump), the
-                        // same rule wrapper places follow.
-                        if matches!(bare, "Channel" | "AsyncMutex") {
+                        // same rule wrapper places follow. Atomic
+                        // counters share the same way (§S.6.2).
+                        if matches!(
+                            bare,
+                            "Channel" | "AsyncMutex" | "AtomicInt" | "AtomicLong"
+                        ) {
                             return true;
                         }
                         return self.wrapper_classes.contains(bare);
