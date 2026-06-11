@@ -1,0 +1,23 @@
+// Negative: using a GENERIC class as a polymorphic base is a Phase-1 limitation.
+// `Container<int> b = new Box<int>(7)` with `Box<T> extends Container<T>` would
+// need generic `Kind` traits and generic trait objects the backend doesn't emit
+// yet, so juxc rejects it up front with [E0454] rather than leaking a rustc
+// E0277/E0308. The supported routes are a generic INTERFACE (see
+// generic_iface_poly.jux) or a non-generic base class.
+
+public class Container<T> {
+    protected T value;
+    public Container(T v) { this.value = v; }
+    public T get() { return this.value; }
+    public String describe() { return "container"; }
+}
+
+public class Box<T> extends Container<T> {
+    public Box(T v) { super(v); }
+    public String describe() { return "box of " + this.get(); }
+}
+
+public void main() {
+    Container<int> b = new Box<int>(7);   // [E0454] generic base used polymorphically
+    print(b.describe());
+}

@@ -1795,6 +1795,53 @@ impl<'a> Checker<'a> {
     }
 
     /// Walk one statement, emitting diagnostics where types disagree.
+    /// Phase-1 limitation guard (E0454): reject a **generic class used as a
+    /// polymorphic base**. A subclass instance flowing into a slot typed as a
+    /// *generic* base **class** (`Container<int> b = new Box<int>(…)` where
+    /// `Box<T> extends Container<T>`) needs generic `Kind` traits and generic
+    /// trait objects the backend does not emit yet, so the lowering would leak a
+    /// rustc E0277/E0308. Catching it here gives a clean span instead.
+    ///
+    /// Dispatch through a generic **interface** uses `implements`, which is not
+    /// on the `extends` chain that [`crate::ty::walk_extends_reaches`] walks, so
+    /// this never fires for the supported generic-interface route. Non-generic
+    /// bases have no type args and are skipped; same-type storage is skipped.
+    fn check_generic_base_polymorphism(&mut self, declared: &Ty, inferred: &Ty, span: Span) {
+        let (
+            Ty::User { name: dn, generic_args: da },
+            Ty::User { name: in_, .. },
+        ) = (declared, inferred)
+        else {
+            return;
+        };
+        // Only a *generic* base slot is affected; non-generic bases dispatch fine.
+        if da.is_empty() {
+            return;
+        }
+        let dn_bare = dn.rsplit('.').next().unwrap_or(dn);
+        let in_bare = in_.rsplit('.').next().unwrap_or(in_);
+        // Same type is plain storage, not polymorphism.
+        if dn_bare == in_bare {
+            return;
+        }
+        // Fires only when the initializer's class *extends* the declared base
+        // class — the generic-interface route (`implements`) is not on this chain.
+        if crate::ty::walk_extends_reaches(in_, dn, self.symbols) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0454_GenericBasePolymorphic,
+                    format!(
+                        "a generic class cannot be used as a polymorphic base in \
+                         Phase 1: `{in_bare}` flows into a `{dn_bare}<…>` base slot \
+                         — use a generic interface for dispatch, or a non-generic \
+                         base class",
+                    ),
+                )
+                .with_span(span),
+            );
+        }
+    }
+
     fn check_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::VarDecl(v) => {
@@ -1829,6 +1876,10 @@ impl<'a> Checker<'a> {
                                 )
                                 .with_span(v.span),
                             );
+                        } else {
+                            // Otherwise-accepted subclass upcast — guard the
+                            // Phase-1 generic-base limitation (E0454).
+                            self.check_generic_base_polymorphism(d, i, v.span);
                         }
                         d.clone()
                     }
@@ -1895,6 +1946,8 @@ impl<'a> Checker<'a> {
                         )
                         .with_span(a.span),
                     );
+                } else {
+                    self.check_generic_base_polymorphism(&effective_target, &value_ty, a.span);
                 }
             }
 

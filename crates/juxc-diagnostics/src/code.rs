@@ -426,6 +426,15 @@ pub enum Code {
     /// wired by later assignment, so an initializer (`weak P p = …;`) is
     /// rejected in Phase 1.
     E0456_WeakReadNeedsGet,
+    /// E0454 — A **generic class used as a polymorphic base** (Phase-1
+    /// limitation). Assigning a subclass instance into a slot typed as a
+    /// *generic* base **class** (`Container<int> b = new Box<int>(…)` where
+    /// `Box<T> extends Container<T>`) needs generic `Kind` traits and generic
+    /// trait objects (`Rc<dyn ContainerKind<isize>>`) that Phase 1 does not yet
+    /// emit, so the lowering leaks a rustc E0277/E0308. juxc rejects it up front
+    /// with this code. Supported routes: dispatch through a generic **interface**
+    /// (`Container<T>` as `interface`), or use a **non-generic** base class.
+    E0454_GenericBasePolymorphic,
     /// W0457 — A class field forms an **un-annotated reference cycle** that will
     /// leak (§6.5). Classes are `Rc`-refcounted and `Rc` does not collect
     /// cycles, so a strong field whose type transitively references the owning
@@ -622,6 +631,7 @@ impl Code {
             Code::E0446_GenericBoundNotSatisfied => "E0446",
             Code::E0455_WeakOnNonClass           => "E0455",
             Code::E0456_WeakReadNeedsGet         => "E0456",
+            Code::E0454_GenericBasePolymorphic   => "E0454",
             Code::W0457_UnannotatedRefCycle      => "W0457",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",
             Code::E0840_ConstEvalLimitExceeded   => "E0840",
