@@ -269,6 +269,11 @@ pub fn lower_workspace(
             .unwrap_or_default();
         tree.insert(&pkg, i);
     }
+    // Emit one file per Jux compilation unit: packaged units land in their own
+    // `src/<pkg>/<file>.rs` (captured in `split_files`), while `main.rs` keeps
+    // the prelude, no-package units, `pub mod <top>;` declarations, and the
+    // `fn main` shim. (`_lib`/`_test` variants stay single-file for now.)
+    e.split_files = Some(Vec::new());
     e.emit_package_tree(&tree, units, sources);
     // One crate-root `fn main()` shim that delegates into whichever
     // unit declared `void main()` inside a package.
@@ -660,6 +665,13 @@ struct RustEmitter {
     /// emission (legacy single-file paths don't have an `units`
     /// table to consult).
     pub(crate) current_unit_idx: Option<usize>,
+    /// When `Some`, the crate is being emitted as **one file per Jux
+    /// compilation unit** (the multi-file output). Each packaged unit's body
+    /// and each package's `mod.rs` are captured here as `(rel-path, content)`
+    /// while `self.w` accumulates only `main.rs` (prelude + no-package units +
+    /// `pub mod <top>;` declarations + the `fn main` shim). `None` keeps the
+    /// legacy single-`main.rs` (nested `pub mod` blocks) emission.
+    pub(crate) split_files: Option<Vec<(String, String)>>,
     /// Monotonic counter for anonymous-class instances seen during
     /// emission. Each `new Iface() { … }` site mints a fresh struct
     /// name (`__JuxAnon0`, `__JuxAnon1`, …) at the use site so
@@ -1717,6 +1729,41 @@ pub(crate) fn compute_wrapped_set(
 /// non-existent `_Inner` / missing `.0`; seeding both endpoints here keeps the
 /// lowering well-formed. Returns the raw closure; [`compute_wrapped_set`]
 /// intersects it with the wrap-eligible set.
+/// Derive a valid Rust module identifier from a `.jux` file path's stem, for
+/// the per-unit file split. The stem is **lower-cased** so the module name can
+/// never collide with a PascalCase type the file defines (`Exception.jux` →
+/// module `exception`, which re-exports the type `Exception` flat — a `mod
+/// Exception;` would instead shadow the type, since modules and types share one
+/// namespace). Non-ident characters become `_`, a leading digit is prefixed
+/// with `_`, and a Rust-keyword stem gets a trailing `_` (so the name works as
+/// BOTH a file name and a `mod` identifier — `r#`-escaping is no good in a path).
+fn module_base_name(path: &str) -> String {
+    let stem = std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unit")
+        .to_ascii_lowercase();
+    let mut out = String::new();
+    for (i, ch) in stem.chars().enumerate() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            if i == 0 && ch.is_ascii_digit() {
+                out.push('_');
+            }
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        out.push_str("unit");
+    }
+    let ident = crate::backend_fqn::to_rust_ident(&out);
+    match ident.strip_prefix("r#") {
+        Some(stripped) => format!("{stripped}_"),
+        None => ident,
+    }
+}
+
 fn compute_weak_forced_classes(units: &[juxc_ast::CompilationUnit]) -> HashSet<String> {
     let mut forced = HashSet::new();
     for unit in units {
@@ -2697,6 +2744,7 @@ impl RustEmitter {
             current_switch_enum: None,
             test_mode: false,
             current_unit_idx: None,
+            split_files: None,
             anonymous_class_counter: 0,
             class_asts: std::collections::HashMap::new(),
             wrapper_classes: std::collections::HashSet::new(),
@@ -2913,17 +2961,29 @@ impl RustEmitter {
     ) {
         // No-package units (the bare crate-root tier) first, so the
         // overall ordering stays close to "input order modulo
-        // package grouping".
+        // package grouping". These stay inlined at the crate root
+        // (in `main.rs`) in both single-file and split modes.
         for &idx in &tree.unit_indices {
             self.source = sources.get(idx).cloned();
             self.emit_compilation_unit(&units[idx]);
         }
-        // Then each top-level package, with its descendants nested.
-        // Per-module dedupe of `use` lines: each `pub mod` opens a
-        // fresh Rust namespace, so the emitted-uses set is saved
-        // before recursing and restored after — that way nested
-        // packages don't accidentally suppress imports their
-        // parent already emitted (and vice versa).
+        // **Split mode:** each top-level package becomes a file tree under
+        // `src/<name>/`, declared in `main.rs` with `pub mod <name>;`. The
+        // bodies + per-package `mod.rs` files are captured into `split_files`.
+        if self.split_files.is_some() {
+            for (name, child) in &tree.children {
+                self.w.emit_indent();
+                self.w.push_str("pub mod ");
+                self.w.push_str(name);
+                self.w.push_str(";\n");
+                self.emit_package_files(child, units, sources, &[name.clone()]);
+            }
+            return;
+        }
+        // **Single-file mode (legacy):** each top-level package is a nested
+        // `pub mod <name> { … }` block in the one `main.rs`. Per-module dedupe
+        // of `use` lines: each `pub mod` opens a fresh Rust namespace, so the
+        // emitted-uses set is saved before recursing and restored after.
         for (name, child) in &tree.children {
             self.w.emit_indent();
             self.w.push_str("pub mod ");
@@ -2935,6 +2995,82 @@ impl RustEmitter {
             self.emitted_uses_in_module = saved_uses;
             self.w.indent_dec();
             self.w.line("}");
+        }
+    }
+
+    /// Split-mode generator for one package node at `pkg_path` (e.g.
+    /// `["shop", "cart"]`). For each unit at this node, emit its body into a
+    /// fresh file `src/<pkg_path>/<base>.rs` (no `pub mod` wrapper — the file
+    /// IS the module); synthesize `src/<pkg_path>/mod.rs` declaring each
+    /// unit-file (`mod <base>; pub use <base>::*;` — the re-export flattens
+    /// `crate::shop::cart::cart::Cart` back to `crate::shop::cart::Cart`) and
+    /// each sub-package (`pub mod <child>;`); then recurse into children.
+    fn emit_package_files(
+        &mut self,
+        node: &PackageNode,
+        units: &[CompilationUnit],
+        sources: &[SourceFile],
+        pkg_path: &[String],
+    ) {
+        let dir = pkg_path.join("/");
+        let mut mod_rs = String::from(
+            "// AUTO-GENERATED by juxc. DO NOT EDIT.\n\n",
+        );
+        let mut used_bases: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for &idx in &node.unit_indices {
+            let unit = &units[idx];
+            // Unique module base name from the `.jux` file stem.
+            let mut base = sources
+                .get(idx)
+                .map(|s| module_base_name(&s.path().display().to_string()))
+                .unwrap_or_else(|| format!("unit{idx}"));
+            while !used_bases.insert(base.clone()) {
+                base = format!("{base}_{idx}");
+            }
+            // Emit the unit body into a fresh writer (own file scope).
+            let saved_w = std::mem::replace(&mut self.w, writer::Writer::new());
+            let saved_uses = std::mem::take(&mut self.emitted_uses_in_module);
+            self.w.push_str("// AUTO-GENERATED by juxc. DO NOT EDIT.\n");
+            if let Some(src) = sources.get(idx) {
+                self.w.push_str(&format!("// Source: {}\n", src.path().display()));
+            }
+            // Bring every SAME-PACKAGE sibling into scope. The parent `mod.rs`
+            // re-exports each unit-file flat (`pub use <base>::*;`), so
+            // `use super::*;` resolves a bare reference to a sibling type
+            // (`Iterator` → `crate::<pkg>::Iterator`) — which in the old
+            // single-file output worked because all siblings shared one
+            // `pub mod` scope. The explicit glob also shadows Rust's prelude
+            // (so a Jux `Iterator` wins over `std::iter::Iterator`).
+            self.w.push_str("#[allow(unused_imports)]\nuse super::*;\n\n");
+            if !self.workspace_mode {
+                self.user_mut_methods = collect_user_mut_methods(unit);
+            }
+            let prev_unit = self.current_unit_idx.take();
+            self.current_unit_idx = Some(idx);
+            self.source = sources.get(idx).cloned();
+            self.emit_imports(&unit.imports, /*inside_package_mod=*/ true);
+            for item in &unit.items {
+                self.emit_top_level_decl(item);
+            }
+            self.current_unit_idx = prev_unit;
+            self.emitted_uses_in_module = saved_uses;
+            let body = std::mem::replace(&mut self.w, saved_w).into_string();
+            if let Some(files) = &mut self.split_files {
+                files.push((format!("src/{dir}/{base}.rs"), body));
+            }
+            mod_rs.push_str(&format!("mod {base};\npub use {base}::*;\n"));
+        }
+        // Declare sub-packages, then recurse to emit their files.
+        for name in node.children.keys() {
+            mod_rs.push_str(&format!("pub mod {name};\n"));
+        }
+        if let Some(files) = &mut self.split_files {
+            files.push((format!("src/{dir}/mod.rs"), mod_rs));
+        }
+        for (name, child) in &node.children {
+            let mut child_path = pkg_path.to_vec();
+            child_path.push(name.clone());
+            self.emit_package_files(child, units, sources, &child_path);
         }
     }
 
@@ -3450,9 +3586,18 @@ impl RustEmitter {
     /// substring scan — no false positives in well-formed emitted
     /// Rust (juxc never produces a literal `async fn` in any other
     /// context).
-    fn finish(self) -> RustCrate {
+    fn finish(mut self) -> RustCrate {
+        let split = self.split_files.take();
         let mut source = self.w.into_string();
-        let uses_async = source.contains("async fn ");
+        // In split mode, `async fn` / `panic_any` / `catch_unwind` may live in
+        // any per-unit body file, so the Cargo-feature and panic-hook decisions
+        // must scan EVERY file, not just `main.rs`.
+        let split_text: String = split
+            .as_ref()
+            .map(|fs| fs.iter().map(|(_, c)| c.as_str()).collect())
+            .unwrap_or_default();
+        let uses_async =
+            source.contains("async fn ") || split_text.contains("async fn ");
         // **Silent panic hook for try/throw programs.** When the
         // user's code throws and catches typed exceptions, the
         // emitted `panic_any` triggers the default Rust panic
@@ -3467,8 +3612,10 @@ impl RustEmitter {
         // `catch_unwind` in the emitted source. When present, we
         // prepend a `std::panic::set_hook(Box::new(|_| {}))` to
         // every `fn main()` definition.
-        let uses_panics =
-            source.contains("panic_any") || source.contains("catch_unwind");
+        let uses_panics = source.contains("panic_any")
+            || source.contains("catch_unwind")
+            || split_text.contains("panic_any")
+            || split_text.contains("catch_unwind");
         if uses_panics {
             // Replace each `fn main() {\n` opener with a variant
             // that begins by installing the silent hook. Splice
@@ -3498,9 +3645,16 @@ impl RustEmitter {
             );
             source = source.replace("fn main() {\n", reporting_hook);
         }
+        // `main.rs` first, then every per-unit body + `mod.rs` (split mode); the
+        // hook splice above only touched `main.rs`, which is where `fn main`
+        // lives. Single-file mode leaves `split` as `None` → just `main.rs`.
+        let mut sources = vec![("src/main.rs".to_string(), source)];
+        if let Some(files) = split {
+            sources.extend(files);
+        }
         RustCrate {
             cargo_toml: cargo_toml_for_with(CRATE_NAME, uses_async),
-            sources: vec![("src/main.rs".to_string(), source)],
+            sources,
         }
     }
 }
