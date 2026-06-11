@@ -574,7 +574,7 @@ impl RustEmitter {
                     && qn.segments[0].text == "Clock"
                     && f.field.text == "nowMs"
                 {
-                    self.w.push_str("__jux_now_ms()");
+                    self.w.push_str("crate::__jux_now_ms()");
                     return;
                 }
             }

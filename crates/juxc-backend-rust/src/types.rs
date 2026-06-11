@@ -871,9 +871,18 @@ impl RustEmitter {
             juxc_ast::Visibility::Internal | juxc_ast::Visibility::Protected => {
                 self.w.push_str("pub(crate) ");
             }
-            // Package-private and private fall through with no Rust
-            // visibility keyword — Rust's default is module-private.
-            juxc_ast::Visibility::Private | juxc_ast::Visibility::Package => {}
+            // Package-private and private: module-private in the single-file
+            // output (everything shares one scope). In the multi-file output
+            // each unit is its own module, so a same-crate `crate::pkg::Type`
+            // reference (and the `pub use <file>::*;` re-export) needs the item
+            // to be at least `pub(crate)`. Jux already enforces the real
+            // visibility at tycheck, so widening the Rust visibility within the
+            // single emitted crate is harmless.
+            juxc_ast::Visibility::Private | juxc_ast::Visibility::Package => {
+                if self.split_files.is_some() {
+                    self.w.push_str("pub(crate) ");
+                }
+            }
         }
     }
 }

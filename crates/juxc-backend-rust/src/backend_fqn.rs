@@ -391,6 +391,12 @@ impl crate::RustEmitter {
                 self.w.push_str(seg);
                 self.w.push_str("::");
             }
+        } else if self.split_files.is_some() {
+            // Multi-file output: a no-package user type lives at the crate root
+            // (in `main.rs`). A packaged unit now lives in its own deeper module
+            // file, where a bare `Foo` would resolve relative to that module —
+            // so crate-root it. `crate::Foo` also resolves fine from `main.rs`.
+            self.w.push_str("crate::");
         }
         self.w.push_str(fqn_bare(fqn));
     }
