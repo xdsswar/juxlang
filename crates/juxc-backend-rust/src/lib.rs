@@ -2355,7 +2355,7 @@ pub(crate) fn collect_extended_class_names(
 pub(crate) fn is_intrinsic_class(pkg: &str, name: &str) -> bool {
     match (pkg, name) {
         ("jux.std.collections", "ArrayList" | "HashMap" | "HashSet" | "Deque") => true,
-        ("jux.std.io", "File") => true,
+        ("jux.std.io", "File" | "Path" | "Console") => true,
         ("jux.std.concurrent", "Worker" | "Task") => true,
         ("jux.std.time", "Clock" | "Instant") => true,
         _ => false,

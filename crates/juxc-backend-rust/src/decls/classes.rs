@@ -71,7 +71,10 @@ impl RustEmitter {
                 return;
             }
         }
-        if class_decl.name.text == "File" {
+        if class_decl.name.text == "File"
+            || class_decl.name.text == "Path"
+            || class_decl.name.text == "Console"
+        {
             let pkg = self.symbols.package.join(".");
             if pkg == "jux.std.io" {
                 return;
