@@ -229,80 +229,78 @@ impl crate::RustEmitter {
             return Some(joined);
         }
         if qn.segments.len() == 1 {
-            let bare = &qn.segments[0].text;
-            // 1. Import-alias-aware lookup: the current unit's
-            //    `unqualified` map carries every name that's
-            //    visible bare in this unit, including aliased
-            //    grouped imports (`{ X as Y }` registers `Y → FQN`).
-            //    A hit here gets us the FQN even when the bare
-            //    name doesn't match any FQN's last segment (which
-            //    is the bog-standard "import alias renames the
-            //    target" case).
-            if let Some(idx) = self.current_unit_idx {
-                if let Some(ctx) = self.symbols.units.get(idx) {
-                    if let Some(fqn) = ctx.unqualified.get(bare.as_str()) {
-                        if self.symbols.classes.contains_key(fqn) {
-                            return Some(fqn.clone());
-                        }
-                    }
-                }
-            }
-            // 2. Fallback suffix scan — works for same-package
-            //    siblings and any class whose bare name matches
-            //    the source token (the common single-file or
-            //    no-alias case). Pick the lexicographically smallest
-            //    match: `classes` is a `HashMap`, so returning "the
-            //    first match" would be non-deterministic across runs
-            //    on a bare-name collision (flaky codegen).
-            if let Some(fqn) = self
-                .symbols
-                .classes
-                .keys()
-                .filter(|fqn| fqn_bare(fqn) == bare.as_str())
-                .min()
-            {
-                return Some(fqn.clone());
-            }
+            // Single bare segment: defer to the shared package-aware resolver
+            // (current unit's `unqualified` map → current package → a
+            // deterministic, user-preferring fallback). This keeps a bare
+            // `Child` bound to THIS unit's package even when another package
+            // (or a `rust.std` stub) declares a same-named class.
+            return self.resolve_bare_class_fqn(&qn.segments[0].text);
         }
         None
     }
 
-    /// Resolve a bare or FQN class name to the class signature in
-    /// the symbol table. Direct hit by key first; otherwise scans
-    /// FQNs for a matching last segment. Used by emission helpers
-    /// that hold `self.enclosing_class` (bare in the source) but
-    /// need to access the FQN-keyed `symbols.classes` map.
+    /// Resolve a bare (or already-FQN) class name to its FQN key in
+    /// `symbols.classes`, using the **current unit's package context** so that
+    /// same-named classes in different packages stay distinct and a user class
+    /// shadows an auto-loaded `rust.std` stub. Resolution order:
     ///
-    /// **Bare-name disambiguation.** A bare name can match several FQNs — most
-    /// commonly a user class whose name collides with an auto-loaded `rust.std`
-    /// stub (e.g. user `Child` vs `std::process::Child` → `rust.std.Child`). A
-    /// user declaration must SHADOW the foreign stub, so a non-`external` match
-    /// is preferred. Ties are then broken by FQN order so the result is
-    /// **deterministic** (a `HashMap` scan is otherwise iteration-order
-    /// dependent, which would make emission non-reproducible).
-    pub(crate) fn lookup_class_by_bare_or_fqn(
-        &self,
-        name: &str,
-    ) -> Option<&juxc_tycheck::symbol_table::ClassSig> {
-        if let Some(c) = self.symbols.classes.get(name) {
-            return Some(c);
+    /// 1. `name` is already a known FQN key → use it.
+    /// 2. the current unit's `unqualified` bare→FQN map — the authoritative
+    ///    answer for same-package siblings and explicit imports / aliases.
+    /// 3. the current package prefix (`pkg.name`) if that names a known class —
+    ///    a same-package safety net.
+    /// 4. fallback for an unqualified reference to another package (lenient
+    ///    Phase-1 behavior): prefer a non-`external` (user) match over a stub,
+    ///    then the lexicographically smallest FQN so the result is
+    ///    **deterministic** (a raw `HashMap` scan is iteration-order dependent,
+    ///    which would make emission non-reproducible).
+    pub(crate) fn resolve_bare_class_fqn(&self, name: &str) -> Option<String> {
+        if self.symbols.classes.contains_key(name) {
+            return Some(name.to_string());
+        }
+        if let Some(idx) = self.current_unit_idx {
+            if let Some(ctx) = self.symbols.units.get(idx) {
+                if let Some(fqn) = ctx.unqualified.get(name) {
+                    if self.symbols.classes.contains_key(fqn) {
+                        return Some(fqn.clone());
+                    }
+                }
+                if !ctx.package.is_empty() {
+                    let cand = format!("{}.{}", ctx.package.join("."), name);
+                    if self.symbols.classes.contains_key(&cand) {
+                        return Some(cand);
+                    }
+                }
+            }
         }
         self.symbols
             .classes
             .iter()
-            .filter(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == name)
-            // Prefer a user (non-external) class over a stub; then lowest FQN.
+            .filter(|(k, _)| fqn_bare(k) == name)
             .min_by(|a, b| {
                 a.1.is_external
                     .cmp(&b.1.is_external)
                     .then_with(|| a.0.cmp(b.0))
             })
-            .map(|(_, c)| c)
+            .map(|(k, _)| k.clone())
     }
 
-    /// Bare-or-FQN sibling of [`Self::lookup_class_by_bare_or_fqn`]
-    /// for interfaces. Direct hit by key first; otherwise scans
-    /// interface FQNs for a matching last segment.
+    /// Resolve a bare or FQN class name to its [`ClassSig`], package-aware via
+    /// [`Self::resolve_bare_class_fqn`]. Used by emission helpers that hold
+    /// `self.enclosing_class` (bare in the source) but need the FQN-keyed
+    /// `symbols.classes` entry.
+    pub(crate) fn lookup_class_by_bare_or_fqn(
+        &self,
+        name: &str,
+    ) -> Option<&juxc_tycheck::symbol_table::ClassSig> {
+        let fqn = self.resolve_bare_class_fqn(name)?;
+        self.symbols.classes.get(&fqn)
+    }
+
+    /// Bare-or-FQN sibling of [`Self::lookup_class_by_bare_or_fqn`] for
+    /// interfaces — same current-unit package-context resolution (unit
+    /// `unqualified` map, then current package, then a deterministic
+    /// lowest-FQN fallback).
     pub(crate) fn lookup_interface_by_bare_or_fqn(
         &self,
         name: &str,
@@ -310,10 +308,26 @@ impl crate::RustEmitter {
         if let Some((k, i)) = self.symbols.interfaces.get_key_value(name) {
             return Some((k.as_str(), i));
         }
+        if let Some(idx) = self.current_unit_idx {
+            if let Some(ctx) = self.symbols.units.get(idx) {
+                if let Some(fqn) = ctx.unqualified.get(name) {
+                    if let Some((k, i)) = self.symbols.interfaces.get_key_value(fqn) {
+                        return Some((k.as_str(), i));
+                    }
+                }
+                if !ctx.package.is_empty() {
+                    let cand = format!("{}.{}", ctx.package.join("."), name);
+                    if let Some((k, i)) = self.symbols.interfaces.get_key_value(&cand) {
+                        return Some((k.as_str(), i));
+                    }
+                }
+            }
+        }
         self.symbols
             .interfaces
             .iter()
-            .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == name)
+            .filter(|(k, _)| fqn_bare(k) == name)
+            .min_by(|a, b| a.0.cmp(b.0))
             .map(|(k, i)| (k.as_str(), i))
     }
 
