@@ -5947,10 +5947,22 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
                 if a1.len() != a2.len() {
                     return false;
                 }
+                // **Generic invariance (§T.4 / §6.9.6).** A same-name generic
+                // type's arguments are INVARIANT: `Box<Dog>` is NOT a `Box<Animal>`
+                // even though `Dog extends Animal` — the covariant upcast would let
+                // a caller `put()` a non-`Dog` through the `Box<Animal>` view.
+                // Require each argument pair to be MUTUALLY compatible (each
+                // assignable to the other), which is exact-type identity for
+                // concrete types while still letting a wildcard argument
+                // (`Box<? extends Animal>`) match via the wildcard arms — that
+                // is Jux's explicit variance mechanism. One-way `compatible`
+                // here was the covariance hole (gap N2).
                 return a1
                     .iter()
                     .zip(a2.iter())
-                    .all(|(x, y)| compatible(x, y, symbols));
+                    .all(|(x, y)| {
+                        compatible(x, y, symbols) && compatible(y, x, symbols)
+                    });
             }
             // Different names — try the upcast direction: is the
             // found type a subclass of the expected type? Walks
