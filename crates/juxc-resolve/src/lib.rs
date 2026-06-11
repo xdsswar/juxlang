@@ -143,6 +143,9 @@ impl Resolver {
         // `spawn(f)` — schedule async work on the event loop,
         // returning a Task<T> handle (JUX-ASYNC v2 §18.1.3).
         builtins.insert("spawn");
+        // `Channel<T>` — the async-runtime channel type (§18.3);
+        // lowers to the emitted JuxChannel helper, no Jux class.
+        builtins.insert("Channel");
         // Async-runtime builtin per JUX-ASYNC-ADDENDUM-v2: `parallel`
         // takes N async expressions and concurrently awaits them
         // all, returning a tuple of their results. Lowers to

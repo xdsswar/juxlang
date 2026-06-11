@@ -548,6 +548,20 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 }
             }
             let receiver_ty = infer_expr(&field.object, env, symbols);
+            // Channel<T> (§18.3) — async-runtime builtin: `receive()`
+            // yields `T?` (null when closed+drained); send/close are
+            // void. Typed here so nullable machinery (Some-lifting,
+            // `== null`, `!!`) works on channel reads.
+            if let Ty::User { name, generic_args } = &receiver_ty {
+                if name.rsplit('.').next() == Some("Channel") {
+                    return match method_name {
+                        "receive" => Ty::nullable(
+                            generic_args.first().cloned().unwrap_or(Ty::Unknown),
+                        ),
+                        _ => Ty::Void,
+                    };
+                }
+            }
             if let Ty::User { name, generic_args } = &receiver_ty {
                 // Walk the class extends-chain first.
                 if let Some((method, declaring_class)) =

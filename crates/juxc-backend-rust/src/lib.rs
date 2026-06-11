@@ -2463,7 +2463,22 @@ impl RustEmitter {
         w.push_str("        futures::executor::block_on(self.0.take().expect(\"task already consumed\"))\n");
         w.push_str("    }\n");
         w.push_str("    fn cancel(mut self) {\n");
-        w.push_str("        let _ = self.0.take();\n");
+        w.push_str("        // Dropping the RemoteHandle cancels the remote\n");
+        w.push_str("        // computation (the Drop impl would FORGET it).\n");
+        w.push_str("        if let Some(h) = self.0.take() {\n");
+        w.push_str("            std::mem::drop(h);\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        // Per section 18.1.3 an UNAWAITED task runs to completion - but
+        // RemoteHandle CANCELS its computation when dropped. The
+        // Drop impl forgets the handle instead (detaching the
+        // task); explicit `cancel()` drops the handle for real.
+        w.push_str("impl<T> Drop for JuxTask<T> {\n");
+        w.push_str("    fn drop(&mut self) {\n");
+        w.push_str("        if let Some(h) = self.0.take() {\n");
+        w.push_str("            h.forget();\n");
+        w.push_str("        }\n");
         w.push_str("    }\n");
         w.push_str("}\n");
         w.push_str("impl<T: 'static> std::future::Future for JuxTask<T> {\n");
@@ -2482,6 +2497,47 @@ impl RustEmitter {
         w.push_str("        futures::task::SpawnExt::spawn_with_handle(&mut &*__JUX_TASK_POOL, fut)\n");
         w.push_str("            .expect(\"spawn\"),\n");
         w.push_str("    ))\n");
+        w.push_str("}\n\n");
+        // Channel runtime — JUX-ASYNC v2 §18.3. A bounded async
+        // channel: `send` suspends when full, `receive` suspends
+        // when empty and resolves `null` once closed and drained.
+        // The handle is Arc-shared and Clone, so it crosses task
+        // boundaries (the spawn emission clone-rebinds captures).
+        w.push_str("struct JuxChannelInner<T> {\n");
+        w.push_str("    tx: std::sync::Mutex<Option<futures::channel::mpsc::Sender<T>>>,\n");
+        w.push_str("    rx: futures::lock::Mutex<futures::channel::mpsc::Receiver<T>>,\n");
+        w.push_str("}\n");
+        w.push_str("struct JuxChannel<T> {\n");
+        w.push_str("    inner: std::sync::Arc<JuxChannelInner<T>>,\n");
+        w.push_str("}\n");
+        w.push_str("impl<T> Clone for JuxChannel<T> {\n");
+        w.push_str("    fn clone(&self) -> Self {\n");
+        w.push_str("        JuxChannel { inner: self.inner.clone() }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("impl<T> JuxChannel<T> {\n");
+        w.push_str("    fn new(capacity: isize) -> Self {\n");
+        w.push_str("        let (tx, rx) = futures::channel::mpsc::channel(capacity.max(1) as usize);\n");
+        w.push_str("        JuxChannel {\n");
+        w.push_str("            inner: std::sync::Arc::new(JuxChannelInner {\n");
+        w.push_str("                tx: std::sync::Mutex::new(Some(tx)),\n");
+        w.push_str("                rx: futures::lock::Mutex::new(rx),\n");
+        w.push_str("            }),\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("    async fn send(&self, v: T) {\n");
+        w.push_str("        let tx = self.inner.tx.lock().unwrap().clone();\n");
+        w.push_str("        if let Some(mut tx) = tx {\n");
+        w.push_str("            let _ = futures::sink::SinkExt::send(&mut tx, v).await;\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("    async fn receive(&self) -> Option<T> {\n");
+        w.push_str("        let mut rx = self.inner.rx.lock().await;\n");
+        w.push_str("        futures::stream::StreamExt::next(&mut *rx).await\n");
+        w.push_str("    }\n");
+        w.push_str("    fn close(&self) {\n");
+        w.push_str("        *self.inner.tx.lock().unwrap() = None;\n");
+        w.push_str("    }\n");
         w.push_str("}\n\n");
         // Worker pool — per JUX-ASYNC-ADDENDUM §18.2. `Worker.spawn(f)`
         // runs `f` on a real OS thread from the system's thread

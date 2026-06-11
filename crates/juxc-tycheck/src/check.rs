@@ -3247,6 +3247,17 @@ impl<'a> Checker<'a> {
     /// (`Ty::User`, possibly under `T?` / `T[]`) is a capture. Locals
     /// declared inside the closure aren't in the env yet, so they're
     /// naturally excluded.
+    /// Capture types that legitimately cross task threads even
+    /// though they're class-shaped at the Jux level — the async
+    /// runtime's own handles (Arc-backed in the emitted helpers).
+    fn capture_is_thread_safe(ty: &Ty) -> bool {
+        matches!(
+            ty,
+            Ty::User { name, .. }
+                if matches!(name.rsplit('.').next().unwrap_or(name), "Channel" | "Task")
+        )
+    }
+
     fn check_spawn_captures(&mut self, args: &[Expr]) {
         let Some(Expr::Lambda(l)) = args.first() else { return };
         let mut names: Vec<(String, Span)> = Vec::new();
@@ -3277,6 +3288,16 @@ impl<'a> Checker<'a> {
                     Ty::Array { element, .. } => is_object_ty(element),
                     _ => false,
                 }
+            }
+            // Runtime handles (Channel, Task) are Arc-backed and
+            // Send — they exist to cross task boundaries.
+            if self
+                .env
+                .lookup(&name)
+                .map(Self::capture_is_thread_safe)
+                .unwrap_or(false)
+            {
+                continue;
             }
             if self.env.lookup(&name).map(is_object_ty).unwrap_or(false) {
                 self.diagnostics.push(
@@ -3732,6 +3753,17 @@ impl<'a> Checker<'a> {
                 // Rust expressions.
                 if let Ty::User { name, .. } = &receiver_ty {
                     let bare = name.rsplit('.').next().unwrap_or(name);
+                    // Channel<T> (§18.3) is an async-runtime builtin —
+                    // its methods live on the emitted JuxChannel
+                    // helper, not a Jux class.
+                    if bare == "Channel"
+                        && matches!(method_name, "send" | "receive" | "close")
+                    {
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
                     if bare == "HashMap" && BUILTIN_MAP_METHODS.contains(&method_name) {
                         for arg in &c.args {
                             self.check_expr(arg);

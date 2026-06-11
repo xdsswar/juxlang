@@ -265,7 +265,47 @@ impl RustEmitter {
         // and a sync body just computes its value.
         if let Expr::Path(qn) = &*call.callee {
             if qn.segments.len() == 1 && qn.segments[0].text == "spawn" {
-                self.w.push_str("crate::__jux_spawn(async move { ");
+                // Clone-rebind shared captures: a lambda capture
+                // moves into the task, but the caller usually keeps
+                // using the value (channels especially). Re-binding
+                // `let x = x.clone();` in a wrapper block hands the
+                // task its own handle. Only known non-primitive
+                // locals rebind (primitives are Copy; body-local
+                // names aren't in scope here).
+                let mut rebinds: Vec<String> = Vec::new();
+                if let Some(Expr::Lambda(l)) = call.args.first() {
+                    let mut names: Vec<String> = Vec::new();
+                    crate::exprs::collect_bare_names_in_lambda(l, &mut |n| {
+                        if !names.iter().any(|x| x == n) {
+                            names.push(n.to_string());
+                        }
+                    });
+                    for name in names {
+                        let known = self
+                            .local_types
+                            .iter()
+                            .rev()
+                            .find_map(|s| s.get(&name).cloned());
+                        if let Some(ty) = known {
+                            if !matches!(ty, juxc_tycheck::Ty::Primitive(_)) {
+                                rebinds.push(name);
+                            }
+                        }
+                    }
+                }
+                if rebinds.is_empty() {
+                    self.w.push_str("crate::__jux_spawn(async move { ");
+                } else {
+                    self.w.push_str("crate::__jux_spawn({ ");
+                    for name in &rebinds {
+                        self.w.push_str("let ");
+                        self.w.push_str(name);
+                        self.w.push_str(" = ");
+                        self.w.push_str(name);
+                        self.w.push_str(".clone(); ");
+                    }
+                    self.w.push_str("async move { ");
+                }
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
                 match call.args.first() {
@@ -303,7 +343,12 @@ impl RustEmitter {
                     None => {}
                 }
                 self.emitting_format_arg = prev;
-                self.w.push_str(" })");
+                if rebinds.is_empty() {
+                    self.w.push_str(" })");
+                } else {
+                    // close: async block, wrapper block, call paren.
+                    self.w.push_str(" } })");
+                }
                 return;
             }
         }
