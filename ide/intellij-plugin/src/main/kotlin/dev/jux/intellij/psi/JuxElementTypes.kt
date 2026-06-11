@@ -69,6 +69,7 @@ object JuxElementTypes {
     val PARAMETER_LIST = JuxElementType("PARAMETER_LIST")
     val PARAMETER = JuxElementType("PARAMETER")
     val THROWS_CLAUSE = JuxElementType("THROWS_CLAUSE")
+    val WHERE_CLAUSE = JuxElementType("WHERE_CLAUSE")
 
     // ---- statements -------------------------------------------------------
     val CODE_BLOCK = JuxElementType("CODE_BLOCK")

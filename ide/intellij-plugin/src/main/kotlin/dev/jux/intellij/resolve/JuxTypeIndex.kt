@@ -6,6 +6,7 @@ import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.util.PsiTreeUtil
 import dev.jux.intellij.JuxFileType
+import dev.jux.intellij.psi.JuxNamedElement
 import dev.jux.intellij.psi.JuxTypeDeclaration
 
 /**
@@ -30,8 +31,15 @@ object JuxTypeIndex {
         return out.toList()
     }
 
-    private inline fun forEachType(project: Project, action: (JuxTypeDeclaration) -> Unit) {
-        val scope = GlobalSearchScope.allScope(project)
+    /**
+     * Visits every type declaration in [scope] (Go-to-Class and friends).
+     * Public, scope-aware variant of the internal walk.
+     */
+    inline fun forEachType(
+        project: Project,
+        scope: GlobalSearchScope,
+        action: (JuxTypeDeclaration) -> Unit,
+    ) {
         val manager = PsiManager.getInstance(project)
         for (vf in FileTypeIndex.getFiles(JuxFileType, scope)) {
             val psi = manager.findFile(vf) ?: continue
@@ -40,4 +48,29 @@ object JuxTypeIndex {
             }
         }
     }
+
+    /**
+     * Visits every named declaration in [scope] — types, methods, fields,
+     * enum constants — for Go-to-Symbol. Parameters and locals are skipped:
+     * symbol search is about declarations worth jumping to from anywhere.
+     */
+    inline fun forEachSymbol(
+        project: Project,
+        scope: GlobalSearchScope,
+        action: (JuxNamedElement) -> Unit,
+    ) {
+        val manager = PsiManager.getInstance(project)
+        for (vf in FileTypeIndex.getFiles(JuxFileType, scope)) {
+            val psi = manager.findFile(vf) ?: continue
+            for (decl in PsiTreeUtil.findChildrenOfType(psi, JuxNamedElement::class.java)) {
+                if (decl is dev.jux.intellij.psi.JuxParameter ||
+                    decl is dev.jux.intellij.psi.JuxLocalVariable
+                ) continue
+                action(decl)
+            }
+        }
+    }
+
+    private inline fun forEachType(project: Project, action: (JuxTypeDeclaration) -> Unit) =
+        forEachType(project, GlobalSearchScope.allScope(project), action)
 }

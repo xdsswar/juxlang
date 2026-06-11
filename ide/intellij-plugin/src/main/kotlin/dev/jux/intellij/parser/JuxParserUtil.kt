@@ -92,6 +92,7 @@ val JUX_MODIFIERS: TokenSet = TokenSet.create(
     T.PUBLIC_KW, T.PRIVATE_KW, T.PROTECTED_KW, T.INTERNAL_KW,
     T.STATIC_KW, T.ABSTRACT_KW, T.FINAL_KW, T.CONST_KW, T.SEALED_KW,
     T.ASYNC_KW, T.NATIVE_KW, T.UNSAFE_KW, T.VOLATILE_KW, T.DEFAULT_KW,
+    T.WEAK_KW, // `weak` field modifier (§6.5)
 )
 
 /** Keywords that open a type declaration. */

@@ -16,6 +16,7 @@ import dev.jux.intellij.highlight.JuxTokenTypes
 import dev.jux.intellij.psi.JuxElementTypes
 import dev.jux.intellij.psi.JuxFieldDeclaration
 import dev.jux.intellij.psi.JuxTypeDeclaration
+import dev.jux.intellij.resolve.JuxHierarchy
 import dev.jux.intellij.resolve.JuxTypeIndex
 
 /** One instance field: its declared type text and its name. */
@@ -140,29 +141,29 @@ class JuxOverrideMethodsAction : AnAction() {
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
         val type = enclosingType(e) ?: return
 
-        val ownMethods = directChildren(type, JuxElementTypes.METHOD_DECLARATION)
+        val ownMethods = JuxHierarchy.directChildren(type, JuxElementTypes.METHOD_DECLARATION)
             .mapNotNull { (it as? dev.jux.intellij.psi.JuxNamedElement)?.name }
             .toMutableSet()
         val sb = StringBuilder()
         val seen = HashSet<String>()
         // Walk the supertype chain, breadth-ish, with a cycle/visited guard.
-        val queue = ArrayDeque(superTypeNames(type))
+        val queue = ArrayDeque(JuxHierarchy.superTypeNames(type))
         val visitedTypes = HashSet<String>()
         while (queue.isNotEmpty()) {
             val superName = queue.removeFirst()
             if (!visitedTypes.add(superName)) continue
             val superDecl = JuxTypeIndex.findType(project, superName) ?: continue
-            for (m in directChildren(superDecl, JuxElementTypes.METHOD_DECLARATION)) {
+            for (m in JuxHierarchy.directChildren(superDecl, JuxElementTypes.METHOD_DECLARATION)) {
                 val name = (m as? dev.jux.intellij.psi.JuxNamedElement)?.name ?: continue
                 if (name in ownMethods || !seen.add(name)) continue
-                if (!isOverridable(m)) continue
-                val sig = methodSignature(m) ?: continue
+                if (!JuxHierarchy.isOverridable(m)) continue
+                val sig = JuxHierarchy.methodSignature(m) ?: continue
                 sb.append("\n    @override\n    public ").append(sig)
                     .append(" {\n        throw new UnsupportedOperationException(\"TODO: ")
                     .append(name).append("\");\n    }\n")
             }
             // Climb further up this supertype's own hierarchy.
-            queue.addAll(superTypeNames(superDecl))
+            queue.addAll(JuxHierarchy.superTypeNames(superDecl))
         }
         if (sb.isEmpty()) return
         val text = sb.toString()
@@ -181,48 +182,5 @@ class JuxOverrideMethodsAction : AnAction() {
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return null
         val at = file.findElementAt(editor.caretModel.offset) ?: return null
         return PsiTreeUtil.getParentOfType(at, JuxTypeDeclaration::class.java)
-    }
-
-    /** Type names in `type`'s `extends` and `implements` clauses (bare last segment). */
-    private fun superTypeNames(type: JuxTypeDeclaration): List<String> {
-        val out = ArrayList<String>()
-        for (clauseType in listOf(JuxElementTypes.EXTENDS_CLAUSE, JuxElementTypes.IMPLEMENTS_CLAUSE)) {
-            val clause = type.node.findChildByType(clauseType)?.psi ?: continue
-            for (ref in PsiTreeUtil.findChildrenOfType(clause, PsiElement::class.java)) {
-                if (ref.node.elementType == JuxElementTypes.TYPE_REFERENCE) {
-                    ref.text.trim().substringAfterLast('.').substringBefore('<').trim()
-                        .takeIf { it.isNotEmpty() }?.let(out::add)
-                }
-            }
-        }
-        return out
-    }
-
-    private fun directChildren(type: JuxTypeDeclaration, et: com.intellij.psi.tree.IElementType): List<PsiElement> {
-        val body = type.node.findChildByType(JuxElementTypes.CLASS_BODY)?.psi ?: return emptyList()
-        return body.children.filter { it.node.elementType == et }
-    }
-
-    /** `static` / `private` / `final` methods can't be overridden. */
-    private fun isOverridable(m: PsiElement): Boolean {
-        val mods = m.node.findChildByType(JuxElementTypes.MODIFIER_LIST)?.psi ?: return true
-        val text = " ${mods.text} "
-        return !text.contains(" static ") && !text.contains(" private ") && !text.contains(" final ")
-    }
-
-    /** The method's signature text: return type + name + param list (+ throws), no modifiers/body. */
-    private fun methodSignature(m: PsiElement): String? {
-        val sb = StringBuilder()
-        var c: PsiElement? = m.firstChild
-        var sawParams = false
-        while (c != null) {
-            val t = c.node.elementType
-            if (t == JuxElementTypes.MODIFIER_LIST) { c = c.nextSibling; continue }
-            if (t == JuxElementTypes.CLASS_BODY || c.text == ";" || c.text == "{") break
-            sb.append(c.text)
-            if (t == JuxElementTypes.PARAMETER_LIST) sawParams = true
-            c = c.nextSibling
-        }
-        return if (sawParams) sb.toString().trim().replace(Regex("\\s+"), " ") else null
     }
 }

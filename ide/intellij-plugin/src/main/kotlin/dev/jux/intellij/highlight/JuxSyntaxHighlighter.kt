@@ -32,6 +32,18 @@ class JuxSyntaxHighlighter : SyntaxHighlighterBase() {
         val CLASS_NAME = key("JUX_CLASS_NAME", D.CLASS_NAME)
         val METHOD_DECLARATION = key("JUX_METHOD_DECLARATION", D.FUNCTION_DECLARATION)
         val FIELD = key("JUX_FIELD", D.INSTANCE_FIELD)
+        // Reference-side colours (decl-vs-use), also annotator-driven: a call
+        // site, a parameter/local read, a type-parameter use, an enum constant.
+        val METHOD_CALL = key("JUX_METHOD_CALL", D.FUNCTION_CALL)
+        val PARAMETER = key("JUX_PARAMETER", D.PARAMETER)
+        val LOCAL_VARIABLE = key("JUX_LOCAL_VARIABLE", D.LOCAL_VARIABLE)
+        val TYPE_PARAMETER = key("JUX_TYPE_PARAMETER", D.PARAMETER)
+        val ENUM_CONSTANT = key("JUX_ENUM_CONSTANT", D.STATIC_FIELD)
+        // String-interior colours ([JuxStringAnnotator]): `${…}` delimiters
+        // and escape sequences (valid vs malformed).
+        val INTERPOLATION = key("JUX_INTERPOLATION", D.KEYWORD)
+        val VALID_ESCAPE = key("JUX_VALID_ESCAPE", D.VALID_STRING_ESCAPE)
+        val INVALID_ESCAPE = key("JUX_INVALID_ESCAPE", D.INVALID_STRING_ESCAPE)
         val CONSTANT = key("JUX_CONSTANT", D.KEYWORD)
         val STRING = key("JUX_STRING", D.STRING)
         val CHAR = key("JUX_CHAR", D.STRING)

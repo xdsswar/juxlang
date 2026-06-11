@@ -10,28 +10,50 @@ import com.intellij.psi.PsiReferenceRegistrar
 import com.intellij.psi.util.elementType
 import com.intellij.util.ProcessingContext
 import dev.jux.intellij.highlight.JuxTokenTypes
+import dev.jux.intellij.psi.JuxCompositeElement
 import dev.jux.intellij.psi.JuxElementTypes as E
-import dev.jux.intellij.psi.JuxNamedElement
 
 /**
- * Attaches a [JuxReference] to every identifier that names a *use* of something
- * (a reference/type/member-access name) — but not to a declaration's own name,
- * which is the target, not a reference.
+ * Attaches a [JuxReference] to every node that names a *use* of something —
+ * a reference expression, type reference, or member access.
+ *
+ * The reference lives on the **composite** node, not the identifier leaf:
+ * provider-contributed references are only surfaced through
+ * `ASTDelegatePsiElement.getReferences()` (which consults the provider
+ * registry); plain leaves never ask the registry, so a leaf-targeted
+ * provider silently contributes nothing. The reference's range narrows to
+ * the *name* identifier inside the node (`obj.method` → `method`,
+ * `a.b.Type<T>` → `Type`).
  */
 class JuxReferenceContributor : PsiReferenceContributor() {
     override fun registerReferenceProviders(registrar: PsiReferenceRegistrar) {
         registrar.registerReferenceProvider(
-            PlatformPatterns.psiElement(JuxTokenTypes.IDENTIFIER),
+            PlatformPatterns.psiElement(JuxCompositeElement::class.java),
             object : PsiReferenceProvider() {
                 override fun getReferencesByElement(element: PsiElement, context: ProcessingContext): Array<PsiReference> {
-                    val parent = element.parent ?: return PsiReference.EMPTY_ARRAY
-                    if (parent.elementType !in REFERENCE_PARENTS) return PsiReference.EMPTY_ARRAY
-                    // A declaration's own name identifier is a definition, not a reference.
-                    if (parent is JuxNamedElement && parent.nameIdentifier === element) return PsiReference.EMPTY_ARRAY
-                    return arrayOf(JuxReference(element, TextRange(0, element.textLength)))
+                    if (element.elementType !in REFERENCE_PARENTS) return PsiReference.EMPTY_ARRAY
+                    val name = nameLeaf(element) ?: return PsiReference.EMPTY_ARRAY
+                    val range = TextRange.from(name.startOffsetInParent, name.textLength)
+                    return arrayOf(JuxReference(element, range))
                 }
             },
         )
+    }
+
+    /**
+     * The identifier leaf the reference points at: the **last direct**
+     * IDENTIFIER child — the simple name after any qualifier (`a.b.C` → `C`,
+     * `obj.field` → `field`); generic arguments are nested nodes, so they
+     * never shadow it.
+     */
+    private fun nameLeaf(element: PsiElement): PsiElement? {
+        var last: PsiElement? = null
+        var c: PsiElement? = element.firstChild
+        while (c != null) {
+            if (c.elementType === JuxTokenTypes.IDENTIFIER) last = c
+            c = c.nextSibling
+        }
+        return last
     }
 
     private companion object {

@@ -1,12 +1,16 @@
 package dev.jux.intellij.psi
 
 import com.intellij.extapi.psi.ASTWrapperPsiElement
+import com.intellij.icons.AllIcons
+import com.intellij.ide.projectView.PresentationData
 import com.intellij.lang.ASTNode
+import com.intellij.navigation.ItemPresentation
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiNameIdentifierOwner
 import com.intellij.psi.util.elementType
 import com.intellij.util.IncorrectOperationException
 import dev.jux.intellij.highlight.JuxTokenTypes
+import javax.swing.Icon
 
 /**
  * A Jux declaration that introduces a name (class, method, field, …). Mixes in
@@ -16,7 +20,17 @@ import dev.jux.intellij.highlight.JuxTokenTypes
 interface JuxNamedElement : PsiNameIdentifierOwner
 
 /** Generic backing element for composite nodes that need no special behaviour. */
-open class JuxCompositeElement(node: ASTNode) : ASTWrapperPsiElement(node)
+open class JuxCompositeElement(node: ASTNode) : ASTWrapperPsiElement(node) {
+    /**
+     * Surface provider-contributed references ([dev.jux.intellij.resolve.
+     * JuxReferenceContributor]). Custom-language PSI does NOT consult the
+     * provider registry by default — without this override, contributed
+     * references are invisible to `findReferenceAt`, rename, and Find Usages.
+     */
+    override fun getReferences(): Array<com.intellij.psi.PsiReference> =
+        com.intellij.psi.impl.source.resolve.reference.ReferenceProvidersRegistry
+            .getReferencesFromProviders(this)
+}
 
 /**
  * Base for named declarations. The name is the declaration's first
@@ -41,6 +55,26 @@ abstract class JuxNamedElementImpl(node: ASTNode) : JuxCompositeElement(node), J
             ?: throw IncorrectOperationException("declaration has no name to rename")
         id.replace(JuxElementFactory.createIdentifier(project, name))
         return this
+    }
+
+    /**
+     * Name + containing-file location + node icon — what the Go-to-Class /
+     * Go-to-Symbol popups and the navigation bar render for this declaration.
+     */
+    override fun getPresentation(): ItemPresentation =
+        PresentationData(name, containingFile?.name?.let { "($it)" }, presentationIcon(), null)
+
+    private fun presentationIcon(): Icon = when (elementType) {
+        JuxElementTypes.INTERFACE_DECLARATION -> AllIcons.Nodes.Interface
+        JuxElementTypes.ENUM_DECLARATION -> AllIcons.Nodes.Enum
+        JuxElementTypes.RECORD_DECLARATION -> AllIcons.Nodes.Record
+        JuxElementTypes.ANNOTATION_DECLARATION -> AllIcons.Nodes.Annotationtype
+        JuxElementTypes.CLASS_DECLARATION, JuxElementTypes.STRUCT_DECLARATION,
+        JuxElementTypes.TYPE_ALIAS_DECLARATION -> AllIcons.Nodes.Class
+        JuxElementTypes.METHOD_DECLARATION, JuxElementTypes.CONSTRUCTOR_DECLARATION,
+        JuxElementTypes.OPERATOR_DECLARATION -> AllIcons.Nodes.Method
+        JuxElementTypes.ENUM_CONSTANT -> AllIcons.Nodes.Constant
+        else -> AllIcons.Nodes.Field
     }
 }
 

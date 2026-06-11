@@ -38,7 +38,12 @@ class JuxCompletionContributor : CompletionContributor() {
                     // `for`/`if`/… to reach them), so bail out entirely.
                     if (isAfterDot(parameters)) return
 
-                    for (kw in JuxKeywords.KEYWORDS) {
+                    // Only the keywords the grammar accepts at this position
+                    // (statements in a block, members in a class body, …).
+                    // `position` is the dummy-identifier leaf in the completion
+                    // copy — always present and parsed, even in an empty file.
+                    val keywords = JuxKeywordContext.keywordsFor(parameters.position)
+                    for (kw in keywords) {
                         result.addElement(LookupElementBuilder.create(kw).bold())
                     }
                     val seen = HashSet<String>()

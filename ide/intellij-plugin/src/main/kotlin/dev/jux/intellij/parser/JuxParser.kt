@@ -41,10 +41,17 @@ class JuxParser : PsiParser {
                 b.at(T.IMPORT_KW) -> parseImport(b)
                 isDeclarationStart(b) -> parseDeclaration(b)
                 else -> {
-                    // Unexpected top-level token — flag and skip one to recover.
-                    val m = b.mark()
-                    b.advanceLexer()
-                    m.error("unexpected token")
+                    // Script mode (§E): a file may carry top-level statements
+                    // (`print(…)`, `var x = …`, loops, …). Anything that isn't
+                    // a declaration parses as a statement; the progress guard
+                    // turns a truly stuck token into an error node.
+                    val before = b.currentOffset
+                    b.parseStatement()
+                    if (b.currentOffset == before) {
+                        val m = b.mark()
+                        b.advanceLexer()
+                        m.error("unexpected token")
+                    }
                 }
             }
         }
@@ -80,8 +87,23 @@ class JuxParser : PsiParser {
 
     private fun isDeclarationStart(b: PsiBuilder): Boolean =
         b.at(T.AT) || b.atAny(JUX_MODIFIERS) || b.atAny(JUX_TYPE_DECL_KEYWORDS) ||
-            b.at(T.TYPE_KW) || b.at(T.IDENTIFIER) || b.at(T.VOID_KW) ||
-            b.at(T.NEW_KW) || b.at(T.OPERATOR_KW)
+            b.at(T.TYPE_KW) || b.at(T.VOID_KW) ||
+            b.at(T.NEW_KW) || b.at(T.OPERATOR_KW) ||
+            // Ambiguous starts (`Foo bar` decl vs `foo(…)` statement, tuple
+            // return types `(int, int) f(…)`, leading method generics
+            // `<T> T id(…)`) — settled by a speculative type+name probe so
+            // script-mode top-level statements aren't swallowed.
+            ((b.at(T.IDENTIFIER) || b.at(T.LPAREN) || b.at(T.LT)) && probeTypeThenName(b))
+
+    /** Speculative: does `‹generics?› Type Name` start here? Always rolls back. */
+    private fun probeTypeThenName(b: PsiBuilder): Boolean {
+        val probe = b.mark()
+        if (b.at(T.LT)) b.skipAngleBalanced()
+        b.parseType()
+        val ok = b.at(T.IDENTIFIER)
+        probe.rollbackTo()
+        return ok
+    }
 
     /** Top-level or nested declaration: annotations, modifiers, then a body. */
     private fun parseDeclaration(b: PsiBuilder) {
@@ -124,6 +146,7 @@ class JuxParser : PsiParser {
         if (b.at(T.LT)) parseTypeParameters(b)
         if (kind === T.RECORD_KW && b.at(T.LPAREN)) parseRecordComponents(b)
         parseSupertypeClauses(b)
+        parseWhereClause(b) // `class Pool<T> where T has …`
         if (b.at(T.LBRACE)) parseClassBody(b, isEnum = kind === T.ENUM_KW)
         decl.done(elementForTypeKeyword(kind))
     }
@@ -181,7 +204,8 @@ class JuxParser : PsiParser {
     private fun isMemberStart(b: PsiBuilder): Boolean =
         b.at(T.AT) || b.atAny(JUX_MODIFIERS) || b.atAny(JUX_TYPE_DECL_KEYWORDS) ||
             b.at(T.NEW_KW) || b.at(T.OPERATOR_KW) || b.at(T.DROP_KW) || b.at(T.INIT_KW) ||
-            b.at(T.LBRACE) || b.at(T.IDENTIFIER) || b.at(T.VOID_KW)
+            b.at(T.LBRACE) || b.at(T.IDENTIFIER) || b.at(T.VOID_KW) ||
+            b.at(T.LPAREN) || b.at(T.LT) // tuple-typed member / bare generic method
 
     private fun parseEnumConstants(b: PsiBuilder) {
         while (!b.eof() && b.at(T.IDENTIFIER)) {
@@ -199,18 +223,36 @@ class JuxParser : PsiParser {
         b.advanceLexer() // `new`
         if (b.at(T.LPAREN)) parseParameterList(b)
         parseThrows(b)
+        parseWhereClause(b)
         parseBodyOrSemicolon(b)
         decl.done(E.CONSTRUCTOR_DECLARATION)
     }
 
     private fun parseOperator(b: PsiBuilder, decl: PsiBuilder.Marker) {
         b.advanceLexer() // `operator`
-        // The operator token (or `[]`/`()`/`string`/`hash`) — consume up to `(`.
-        while (!b.eof() && !b.at(T.LPAREN) && !b.at(T.LBRACE) && !b.at(T.SEMICOLON)) b.advanceLexer()
+        parseOperatorSymbolAndRest(b)
+        decl.done(E.OPERATOR_DECLARATION)
+    }
+
+    /**
+     * After the `operator` keyword: the operator's symbol, then the parameter
+     * list, throws/where clauses, and body. The call operator `()` needs care —
+     * its symbol IS a paren pair (`operator ()(int x)`), so a `()` immediately
+     * followed by another `(` is consumed as the symbol rather than mistaken
+     * for an empty parameter list.
+     */
+    private fun parseOperatorSymbolAndRest(b: PsiBuilder) {
+        if (b.at(T.LPAREN) && b.lookAhead(1) === T.RPAREN && b.lookAhead(2) === T.LPAREN) {
+            b.advanceLexer() // `(`
+            b.advanceLexer() // `)`
+        } else {
+            // Any other symbol (`+`, `[]`, `string`, `hash`, `<=>`, …): consume up to `(`.
+            while (!b.eof() && !b.at(T.LPAREN) && !b.at(T.LBRACE) && !b.at(T.SEMICOLON)) b.advanceLexer()
+        }
         if (b.at(T.LPAREN)) parseParameterList(b)
         parseThrows(b)
+        parseWhereClause(b)
         parseBodyOrSemicolon(b)
-        decl.done(E.OPERATOR_DECLARATION)
     }
 
     /**
@@ -219,14 +261,13 @@ class JuxParser : PsiParser {
      * (`T name [= …];`).
      */
     private fun parseMethodOrField(b: PsiBuilder, decl: PsiBuilder.Marker) {
+        // Java-style leading method generics: `public <T extends Shape> T pick(…)`.
+        if (b.at(T.LT)) parseTypeParameters(b)
         parseType(b)
         // `ReturnType operator <op>( … )` — operator overload after the type.
         if (b.at(T.OPERATOR_KW)) {
             b.advanceLexer() // `operator`
-            while (!b.eof() && !b.at(T.LPAREN) && !b.at(T.LBRACE) && !b.at(T.SEMICOLON)) b.advanceLexer()
-            if (b.at(T.LPAREN)) parseParameterList(b)
-            parseThrows(b)
-            parseBodyOrSemicolon(b)
+            parseOperatorSymbolAndRest(b)
             decl.done(E.OPERATOR_DECLARATION)
             return
         }
@@ -234,6 +275,7 @@ class JuxParser : PsiParser {
             // The "type" we read was actually the constructor name.
             parseParameterList(b)
             parseThrows(b)
+            parseWhereClause(b)
             parseBodyOrSemicolon(b)
             decl.done(E.CONSTRUCTOR_DECLARATION)
             return
@@ -243,6 +285,7 @@ class JuxParser : PsiParser {
         if (b.at(T.LPAREN)) {
             parseParameterList(b)
             parseThrows(b)
+            parseWhereClause(b)
             parseBodyOrSemicolon(b)
             decl.done(E.METHOD_DECLARATION)
         } else {
@@ -264,6 +307,20 @@ class JuxParser : PsiParser {
         b.advanceLexer()
         parseTypeList(b)
         m.done(E.THROWS_CLAUSE)
+    }
+
+    /**
+     * Generic constraint clause (§T.10): `where T has operator<=>(T) -> int`.
+     * `where` is contextual (an identifier, not a keyword). The constraint
+     * grammar is rich, so the clause body is consumed as a balanced run up to
+     * the declaration's body/terminator — structure lands with a later pass.
+     */
+    private fun parseWhereClause(b: PsiBuilder) {
+        if (!b.at(T.IDENTIFIER) || b.tokenText != "where") return
+        val m = b.mark()
+        b.advanceLexer() // `where`
+        b.consumeBalancedUntil(WHERE_CLAUSE_END)
+        m.done(E.WHERE_CLAUSE)
     }
 
     /** A `{ … }` body, a `= expr;` single-expression body, or a bare `;`. */
@@ -330,5 +387,8 @@ class JuxParser : PsiParser {
 
     private companion object {
         val ENUM_SEP: TokenSet = TokenSet.create(T.COMMA, T.SEMICOLON)
+
+        /** Tokens ending a `where` constraint run: the body, terminator, or `= expr`. */
+        val WHERE_CLAUSE_END: TokenSet = TokenSet.create(T.LBRACE, T.SEMICOLON, T.EQ)
     }
 }

@@ -210,6 +210,13 @@ private fun PsiBuilder.tryLocalVarTail(): Boolean {
 }
 
 private fun PsiBuilder.parseTryStatement() {
+    parseTryCore()
+}
+
+/** `try { … } catch (…) { … }` in **expression** position — used by [parsePrimary]. */
+fun PsiBuilder.parseTryExpression(): PsiBuilder.Marker = parseTryCore()
+
+private fun PsiBuilder.parseTryCore(): PsiBuilder.Marker {
     val m = mark()
     advanceLexer() // `try`
     parseBlock()
@@ -217,7 +224,9 @@ private fun PsiBuilder.parseTryStatement() {
         val cm = mark()
         advanceLexer()
         if (expect(T.LPAREN)) {
+            // Multi-catch: `catch (NetError | TimeoutError e)`.
             parseType()
+            while (at(T.PIPE)) { advanceLexer(); parseType() }
             expectOrError(T.IDENTIFIER, "exception name expected")
             expectOrError(T.RPAREN, "')' expected")
         }
@@ -231,6 +240,7 @@ private fun PsiBuilder.parseTryStatement() {
         fm.done(E.FINALLY_CLAUSE)
     }
     m.done(E.TRY_STATEMENT)
+    return m
 }
 
 // ---- switch (shared by statement and expression positions) ----------------
@@ -262,7 +272,8 @@ private fun PsiBuilder.parseSwitchCase() {
         at(T.CASE_KW) -> {
             advanceLexer()
             parsePattern()
-            while (at(T.COMMA)) { advanceLexer(); parsePattern() }
+            // `,`-separated case lists and `|` or-patterns (`case A | B ->`).
+            while (at(T.COMMA) || at(T.PIPE)) { advanceLexer(); parsePattern() }
             if (at(T.WHEN_KW)) { val g = mark(); advanceLexer(); parseExpression(); g.done(E.PATTERN_GUARD) }
         }
         at(T.DEFAULT_KW) -> advanceLexer()
