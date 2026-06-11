@@ -1,0 +1,21 @@
+// Nullable generic field `T?` initialized from a nullable ctor param, on the
+// wrapped (Rc<RefCell>) representation a class gets when stored in a collection.
+//
+// The wrapped builder must not double-wrap the field: `data: d` where `d` is
+// already `Option<T>` — not `Some(d)`, which would be `Option<Option<T>>`. Then
+// `?.` safe-navigation chains off the nullable field. Correct output: `5` `-1`.
+
+public class Node<T> {
+    public T? data;
+    public Node(T? d) { this.data = d; }
+}
+
+public void main() {
+    var list = new ArrayList<Node<String>>();
+    list.add(new Node<String>("alpha"));
+    list.add(new Node<String>(null));
+
+    for (var n : list) {
+        print(n.data?.length() ?? -1);   // expect 5 then -1
+    }
+}

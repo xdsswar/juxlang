@@ -1,0 +1,24 @@
+// Two interacting rules around a polymorphic base variable:
+//
+//  1. Base-typed slot coercion: once `Animal` is used polymorphically (`Animal a
+//     = new Dog()`), it lowers to `Rc<dyn AnimalKind>`. A later `Animal other =
+//     new Animal()` constructs the base itself and must still be wrapped into the
+//     trait object — a fresh construction is concrete, not an existing handle.
+//  2. Smart-cast binding survives reassignment of the scrutinee: `if (a => Dog d)`
+//     introduces a FRESH name `d`; reassigning `a` afterwards does not invalidate
+//     `d` (§T.6.3). Correct output: `woof`.
+
+public class Animal { public Animal() {} }
+public class Dog extends Animal {
+    public Dog() {}
+    public void bark() { print("woof"); }
+}
+
+public void main() {
+    Animal a = new Dog();
+    Animal other = new Animal();
+    if (a => Dog d) {
+        a = other;     // reassign scrutinee — `d` is a fresh name, still a Dog
+        d.bark();
+    }
+}

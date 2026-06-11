@@ -1766,8 +1766,21 @@ impl crate::RustEmitter {
             return IfaceCoercion::None;
         };
         let src_bare = name.rsplit('.').next().unwrap_or(name);
-        // Already a trait-object value of the same type → clone the `Rc` handle.
+        // Same-name source flowing into the trait-object slot.
         if src_bare == target_bare {
+            // A *fresh construction* of the base type itself (`new Animal()`) into
+            // its own polymorphic-base slot is a CONCRETE value, not an existing
+            // `Rc<dyn Kind>` handle — it must be wrapped exactly like a subclass
+            // instance (`Rc::new(Animal::new()) as Rc<dyn AnimalKind>`). Detect the
+            // construction precisely (not just "non-place") so a call that already
+            // returns the dyn base type isn't double-wrapped.
+            if target_is_polybase && matches!(expr, Expr::NewObject(_)) {
+                return IfaceCoercion::WrapClass {
+                    clone_first: self.wrapper_value_needs_clone(expr),
+                };
+            }
+            // Otherwise it's already a trait-object value of the same type →
+            // clone the `Rc` handle.
             return IfaceCoercion::CloneDyn {
                 clone_first: expr_is_place(expr),
             };

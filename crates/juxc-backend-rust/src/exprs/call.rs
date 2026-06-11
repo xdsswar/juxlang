@@ -1301,7 +1301,16 @@ impl RustEmitter {
         callee: &'c Expr,
     ) -> Option<&'c juxc_ast::FieldExpr> {
         let Expr::Field(cf) = callee else { return None };
-        let Expr::Field(rf) = cf.object.as_ref() else { return None };
+        // Look through a `!!` non-null assertion on the receiver: `this.inner!!.m()`
+        // parses as `Field(NotNullAssert(Field(inner)), m)`. The `!!` doesn't change
+        // that `.inner` is read through the wrapper's `.0.borrow()` guard, so the
+        // same statement-scoped re-entrancy hazard applies and the receiver must
+        // still be hoisted into a temp before `m(...)` runs.
+        let recv = match cf.object.as_ref() {
+            Expr::NotNullAssert(inner, _) => inner.as_ref(),
+            other => other,
+        };
+        let Expr::Field(rf) = recv else { return None };
         if self.receiver_is_wrapper_class(&rf.object)
             && self
                 .wrapper_field_parent_depth(&rf.object, &rf.field.text)

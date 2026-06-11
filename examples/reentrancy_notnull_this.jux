@@ -1,0 +1,37 @@
+// Re-entrancy through a `!!`-asserted wrapped field receiver (`this.field!!.m()`).
+//
+// Classes lower to `Rc<RefCell<…>>`. Reading `this.inner` to obtain the call
+// receiver opens a `.0.borrow()` guard; the `!!` non-null assertion does not
+// change that. If the guard is held across `touch()` — which re-enters the same
+// Outer via `back.poke()` and takes `.0.borrow_mut()` — the program panics with
+// `RefCell already borrowed`. The receiver must be hoisted into a temp so the
+// read-borrow drops before the call. Correct output: `count=1`.
+
+public class Outer {
+    public int count;
+    public Inner? inner;
+    public Outer() { this.count = 0; this.inner = null; }
+    public void setup() { this.inner = new Inner(this); }
+    public void poke() { this.count = this.count + 1; }
+    public void run() {
+        this.inner!!.touch();
+        print("count=" + this.count);
+    }
+}
+
+public class Inner {
+    public int value;
+    public Outer back;
+    public Inner(Outer o) { this.value = 0; this.back = o; }
+    public void touch() {
+        this.value = this.value + 1;
+        this.back.poke();
+    }
+}
+
+public void main() {
+    var a = new Outer();
+    var alias = a;   // force the shared-reference (wrapped) representation
+    a.setup();
+    a.run();
+}
