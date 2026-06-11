@@ -102,7 +102,7 @@ use crate::ty::{
 /// non-async context. If/when more built-ins land (`assert`, `panic`,
 /// …) they go here.
 const BUILTINS: &[&str] = &[
-    "print", "parallel", "block_on", "yield_now", "Worker", "now_ms", "assert",
+    "print", "parallel", "block_on", "yield_now", "Worker", "now_ms", "assert", "spawn",
     // Stdlib I/O — `File.readText(path)`, `File.writeText(path, body)`.
     // The Jux-level shape is `File.readText(...)`, parsed as a
     // Field call on Path("File"). Registering `File` in BUILTINS
@@ -3418,6 +3418,16 @@ impl<'a> Checker<'a> {
                                 }),
                             );
                         }
+                    }
+                    return;
+                }
+                // `spawn(f)` (§18.1.3): the lambda's body runs on a
+                // pool thread — same Send gate as Worker.spawn
+                // (E0702: no wrapper-class captures).
+                if name == "spawn" {
+                    self.check_spawn_captures(&c.args);
+                    for arg in &c.args {
+                        self.check_expr(arg);
                     }
                     return;
                 }

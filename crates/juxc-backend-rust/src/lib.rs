@@ -2441,6 +2441,48 @@ impl RustEmitter {
         w.push_str("    }\n");
         w.push_str("}\n");
         w.push_str("fn __jux_yield_now() -> __JuxYieldNow { __JuxYieldNow(false) }\n\n");
+        // Task runtime — per JUX-ASYNC-ADDENDUM v2 §18.1.3/§18.1.4.
+        // `spawn(f)` schedules the lambda's body on a global
+        // ThreadPool and returns a `JuxTask<T>` handle immediately:
+        //
+        //   - `await task`     — JuxTask IS a Future (delegates to
+        //     the inner RemoteHandle), so the ordinary await
+        //     emission works unchanged.
+        //   - `task.blockingGet()` — drive to completion from sync
+        //     code (consumes the handle).
+        //   - `task.cancel()`  — drop the handle; RemoteHandle
+        //     cancels the remote computation on drop (consumes).
+        //
+        // Spawned bodies run on pool threads, so captures must be
+        // Send — tycheck's E0702 capture scan enforces the Jux-level
+        // rule (no wrapper-class objects).
+        w.push_str("struct JuxTask<T>(Option<futures::future::RemoteHandle<T>>);\n");
+        w.push_str("impl<T: 'static> JuxTask<T> {\n");
+        w.push_str("    #[allow(non_snake_case)]\n");
+        w.push_str("    fn blockingGet(mut self) -> T {\n");
+        w.push_str("        futures::executor::block_on(self.0.take().expect(\"task already consumed\"))\n");
+        w.push_str("    }\n");
+        w.push_str("    fn cancel(mut self) {\n");
+        w.push_str("        let _ = self.0.take();\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("impl<T: 'static> std::future::Future for JuxTask<T> {\n");
+        w.push_str("    type Output = T;\n");
+        w.push_str("    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<T> {\n");
+        w.push_str("        let h = self.0.as_mut().expect(\"awaiting a cancelled task\");\n");
+        w.push_str("        std::pin::Pin::new(h).poll(cx)\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("static __JUX_TASK_POOL: std::sync::LazyLock<futures::executor::ThreadPool> =\n");
+        w.push_str("    std::sync::LazyLock::new(|| futures::executor::ThreadPool::new().expect(\"task pool\"));\n");
+        w.push_str("fn __jux_spawn<T: Send + 'static>(\n");
+        w.push_str("    fut: impl std::future::Future<Output = T> + Send + 'static,\n");
+        w.push_str(") -> JuxTask<T> {\n");
+        w.push_str("    JuxTask(Some(\n");
+        w.push_str("        futures::task::SpawnExt::spawn_with_handle(&mut &*__JUX_TASK_POOL, fut)\n");
+        w.push_str("            .expect(\"spawn\"),\n");
+        w.push_str("    ))\n");
+        w.push_str("}\n\n");
         // Worker pool — per JUX-ASYNC-ADDENDUM §18.2. `Worker.spawn(f)`
         // runs `f` on a real OS thread from the system's thread
         // pool and returns a `Task<T>` (a Future yielding the
@@ -3544,7 +3586,7 @@ pub fn cargo_toml_for_with_meta(name: &str, uses_async: bool, meta: &CargoMeta) 
     }
 
     let deps = if uses_async {
-        "[dependencies]\nfutures = \"0.3\"\n\n"
+        "[dependencies]\nfutures = { version = \"0.3\", features = [\"thread-pool\"] }\n\n"
     } else {
         ""
     };
@@ -3695,7 +3737,7 @@ pub fn cargo_toml_for_target(
     if uses_async || !path_deps.is_empty() || !registry_deps.is_empty() {
         deps.push_str("[dependencies]\n");
         if uses_async {
-            deps.push_str("futures = \"0.3\"\n");
+            deps.push_str("futures = { version = \"0.3\", features = [\"thread-pool\"] }\n");
         }
         for d in registry_deps {
             deps.push_str(&format!(

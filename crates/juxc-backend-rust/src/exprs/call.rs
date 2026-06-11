@@ -258,6 +258,55 @@ impl RustEmitter {
                 return;
             }
         }
+        // `spawn(f)` — JUX-ASYNC v2 §18.1.3: schedule the zero-arg
+        // lambda's body on the task pool, returning a JuxTask<T>
+        // immediately. The body inlines into an `async move` block
+        // (no closure indirection), so an async lambda's awaits work
+        // and a sync body just computes its value.
+        if let Expr::Path(qn) = &*call.callee {
+            if qn.segments.len() == 1 && qn.segments[0].text == "spawn" {
+                self.w.push_str("crate::__jux_spawn(async move { ");
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                match call.args.first() {
+                    Some(Expr::Lambda(l)) if l.params.is_empty() => match &l.body {
+                        juxc_ast::LambdaBody::Expr(e) => self.emit_expr(e),
+                        juxc_ast::LambdaBody::Block(b) => {
+                            // Trailing-expression block: the last
+                            // expression statement is the task's
+                            // value (emitted without a semicolon).
+                            let (stmts, tail) = match b.statements.split_last() {
+                                Some((juxc_ast::Stmt::Expr(t), rest)) => (rest, Some(t)),
+                                _ => (&b.statements[..], None),
+                            };
+                            self.w.push('\n');
+                            self.w.indent_inc();
+                            for stmt in stmts {
+                                self.w.emit_indent();
+                                self.emit_stmt(stmt);
+                            }
+                            if let Some(tail) = tail {
+                                self.w.emit_indent();
+                                self.emit_expr(tail);
+                                self.w.push('\n');
+                            }
+                            self.w.indent_dec();
+                            self.w.emit_indent();
+                        }
+                    },
+                    Some(other) => {
+                        // Non-lambda argument: a future-valued
+                        // expression — await it inside the task.
+                        self.emit_expr(other);
+                        self.w.push_str(".await");
+                    }
+                    None => {}
+                }
+                self.emitting_format_arg = prev;
+                self.w.push_str(" })");
+                return;
+            }
+        }
         // `parallel(a, b, c, ...)` — async-runtime builtin per
         // JUX-ASYNC-ADDENDUM-v2. Wraps `futures::join!(...)` in an
         // `async { ... }` block, so the call evaluates to a **Future**
@@ -316,7 +365,7 @@ impl RustEmitter {
         // shape reads.
         if let Expr::Path(qn) = &*call.callee {
             if qn.segments.len() == 1 && qn.segments[0].text == "yield_now" {
-                self.w.push_str("__jux_yield_now()");
+                self.w.push_str("crate::__jux_yield_now()");
                 return;
             }
         }
