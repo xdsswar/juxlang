@@ -119,6 +119,58 @@ class JuxInspectionsTest : BasePlatformTestCase() {
         assertFalse("non-private fields are cross-file API", descriptions.any { it.contains("'visible'") })
     }
 
+    /**
+     * Pass-2 regression: names used ONLY inside `$"…${…}…"` interpolation
+     * holes (one lexer token — invisible to the resolver) must count as
+     * usages, for both the unused-import and unused-local inspections. The
+     * quick-fixes DELETE code, so a false positive here broke builds.
+     */
+    fun testInterpolationHoleUsageSuppressesUnusedFlags() {
+        val descriptions = highlightDescriptions(
+            """
+            package demo;
+            import rust.std.collections.Map;
+
+            public class A {
+                public void go() {
+                    int count = 3;
+                    print(${'$'}"have ${'$'}{count} in ${'$'}{Map.of()}");
+                }
+            }
+            """.trimIndent(),
+        )
+        assertFalse(
+            "import used in a hole must survive: $descriptions",
+            descriptions.any { it == "Unused import" },
+        )
+        assertFalse(
+            "local used in a hole must survive: $descriptions",
+            descriptions.any { it.contains("'count'") },
+        )
+    }
+
+    /** Names used only in switch-case patterns are resolver-blind — exempt. */
+    fun testPatternUsageSuppressesUnusedField() {
+        val descriptions = highlightDescriptions(
+            """
+            package demo;
+            public class A {
+                private int MAX = 9;
+                public int pick(int x) {
+                    return switch (x) {
+                        case MAX -> 1;
+                        default -> 0;
+                    };
+                }
+            }
+            """.trimIndent(),
+        )
+        assertFalse(
+            "field used in a case pattern must survive: $descriptions",
+            descriptions.any { it.contains("'MAX'") },
+        )
+    }
+
     // ---- missing @override --------------------------------------------------
 
     fun testMissingOverrideFlaggedAndFixAddsAnnotation() {

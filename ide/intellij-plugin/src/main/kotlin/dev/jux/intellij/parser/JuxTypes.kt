@@ -2,6 +2,7 @@ package dev.jux.intellij.parser
 
 import com.intellij.lang.PsiBuilder
 import com.intellij.psi.tree.IElementType
+import dev.jux.intellij.highlight.JuxKeywords
 import dev.jux.intellij.highlight.JuxTokenTypes as T
 import dev.jux.intellij.psi.JuxElementTypes as E
 
@@ -134,10 +135,13 @@ private fun PsiBuilder.parseAngleList(listType: IElementType, typeParams: Boolea
                     atSegmentHead = false
                 }
                 t === T.IDENTIFIER && atSegmentHead && typeParams -> {
-                    if (lookAhead(1) === T.IDENTIFIER) {
-                        // Const generic `<int N>` (§A.2.6) — two names at the
-                        // segment head: the first is the value's TYPE, the
-                        // second is the declared parameter.
+                    if (lookAhead(1) === T.IDENTIFIER && tokenText in JuxKeywords.PRIMITIVES) {
+                        // Const generic `<int N>` (§A.2.6) — a primitive type
+                        // then the declared parameter name. Gated on the
+                        // primitive set exactly like the compiler
+                        // (`is_known_primitive_type_name`), so an erroneous
+                        // `<Foo Bar>` labels `Foo` as the parameter on both
+                        // sides (rename/usages stay aligned in error states).
                         parseTypeRefName()
                         val p = mark(); advanceLexer(); p.done(E.TYPE_PARAMETER)
                     } else {

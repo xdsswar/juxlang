@@ -10,6 +10,8 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.util.elementType
+import dev.jux.intellij.editor.JuxImportSupport
+import dev.jux.intellij.highlight.JuxTokenTypes
 import dev.jux.intellij.psi.JuxCompositeElement
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxFieldDeclaration
@@ -51,10 +53,25 @@ class JuxUnusedLocalSymbolInspection : LocalInspectionTool() {
 
         // 2) Usage census: resolve every in-file reference once and count.
         val usedDecls = HashSet<PsiElement>()
+        // Names mentioned where the resolver is BLIND — interpolation holes
+        // (`$"${count}"` is one token), switch-case patterns (raw identifier
+        // leaves), and opaque runs (anonymous-class bodies, annotation args,
+        // where-clauses). A candidate whose name appears there might be used,
+        // so it must never be flagged (the quick-fix deletes code).
+        val blindMentions = HashSet<String>()
         PsiTreeUtil.processElements(file) { e ->
             if (e is JuxCompositeElement) {
                 val ref = e.references.firstOrNull() as? JuxReference
                 ref?.resolveLocally()?.let(usedDecls::add)
+            }
+            when (e.elementType) {
+                JuxTokenTypes.INTERP_STRING_LITERAL ->
+                    blindMentions.addAll(JuxImportSupport.interpolatedNames(e.text, raw = false))
+                JuxTokenTypes.INTERP_RAW_STRING_LITERAL ->
+                    blindMentions.addAll(JuxImportSupport.interpolatedNames(e.text, raw = true))
+                JuxTokenTypes.IDENTIFIER ->
+                    if (e.parent?.elementType in BLIND_PARENTS) blindMentions.add(e.text)
+                else -> {}
             }
             true
         }
@@ -65,6 +82,7 @@ class JuxUnusedLocalSymbolInspection : LocalInspectionTool() {
             val name = decl.name ?: continue
             if (name == "_") continue
             if (decl in usedDecls) continue
+            if (name in blindMentions) continue
             val target = decl.nameIdentifier ?: continue
             val kind = when (decl) {
                 is JuxLocalVariable -> "Variable"
@@ -118,6 +136,11 @@ class JuxUnusedLocalSymbolInspection : LocalInspectionTool() {
         val mods = field.node.findChildByType(E.MODIFIER_LIST)?.psi?.text ?: return false
         val padded = " $mods "
         return padded.contains(" private ") && !padded.contains(" static ")
+    }
+
+    private companion object {
+        /** Parents whose identifier leaves carry no resolvable reference. */
+        val BLIND_PARENTS = setOf(E.PATTERN, E.NEW_EXPRESSION, E.ANNOTATION, E.WHERE_CLAUSE)
     }
 
     /** Deletes the whole declaration (offered for locals and fields only). */

@@ -128,7 +128,14 @@ object JuxSpacingRules {
 
         // Headers: exactly one line break after `package` and each `import`
         // (the only place v1 forces a newline), keeping intentional blanks.
+        // A trailing same-line comment (`import a.b.C; // why`) is exempt —
+        // forcing the break would tear the comment onto its own line.
         if (l.elementType === E.PACKAGE_STATEMENT || l.elementType === E.IMPORT_STATEMENT) {
+            if (r.elementType === T.LINE_COMMENT || r.elementType === T.BLOCK_COMMENT ||
+                r.elementType === T.DOC_COMMENT
+            ) {
+                return Spacing.createSpacing(1, 1, 0, true, ctx.common.KEEP_BLANK_LINES_IN_DECLARATIONS)
+            }
             return Spacing.createSpacing(
                 0, 0, 1, true, ctx.common.KEEP_BLANK_LINES_IN_DECLARATIONS,
             )

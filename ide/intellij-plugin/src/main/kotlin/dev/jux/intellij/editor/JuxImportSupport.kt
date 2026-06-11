@@ -40,7 +40,10 @@ object JuxImportSupport {
     /**
      * All identifier texts referenced outside the import region — the usage
      * set an import must intersect to survive. Package and import statements
-     * are skipped so an import never counts as its own use.
+     * are skipped so an import never counts as its own use. Interpolated
+     * strings are one lexer token, so names used only inside their `${…}`
+     * holes (or `$name` shorthand) are extracted from the token text — a type
+     * referenced exclusively inside an interpolation must keep its import.
      */
     fun collectUsedNames(file: PsiFile, imports: List<ImportInfo>): Set<String> {
         val importNodes = imports.map { it.element }.toHashSet()
@@ -48,7 +51,13 @@ object JuxImportSupport {
         fun walk(node: PsiElement) {
             val type = node.elementType
             if (type === E.IMPORT_STATEMENT || type === E.PACKAGE_STATEMENT) return
-            if (type === JuxTokenTypes.IDENTIFIER) used.add(node.text)
+            when (type) {
+                JuxTokenTypes.IDENTIFIER -> used.add(node.text)
+                JuxTokenTypes.INTERP_STRING_LITERAL ->
+                    used.addAll(interpolatedNames(node.text, raw = false))
+                JuxTokenTypes.INTERP_RAW_STRING_LITERAL ->
+                    used.addAll(interpolatedNames(node.text, raw = true))
+            }
             var child = node.firstChild
             while (child != null) {
                 if (child !in importNodes) walk(child)
@@ -58,6 +67,55 @@ object JuxImportSupport {
         walk(file)
         return used
     }
+
+    /**
+     * Identifier-shaped words interpolated inside a `$"…"` / `$"""…"""` token:
+     * everything in `${…}` holes (depth-tracked) plus `$name` shorthand. In
+     * the cooked form a backslash escapes the next char (`\$` is no hole); in
+     * the raw form `\` is plain text and `\${x}` IS an active hole — matching
+     * `juxc-parse`'s interpolation segmentation. Over-collection is fine: the
+     * result feeds used-name / suppression sets where a false "used" is the
+     * safe direction.
+     */
+    fun interpolatedNames(text: String, raw: Boolean): Set<String> {
+        val names = HashSet<String>()
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            if (!raw && c == '\\') {
+                i += 2
+                continue
+            }
+            if (c == '$' && i + 1 < text.length) {
+                val next = text[i + 1]
+                if (next == '{') {
+                    var depth = 1
+                    var j = i + 2
+                    val start = j
+                    while (j < text.length && depth > 0) {
+                        when (text[j]) {
+                            '\\' -> if (!raw) j++ // escaped char inside the hole
+                            '{' -> depth++
+                            '}' -> depth--
+                        }
+                        j++
+                    }
+                    val end = (if (depth == 0) j - 1 else j).coerceIn(start, text.length)
+                    IDENT.findAll(text.substring(start, end)).forEach { names.add(it.value) }
+                    i = j
+                    continue
+                }
+                if (next.isLetter() || next == '_') {
+                    val m = IDENT.matchAt(text, i + 1)
+                    if (m != null) names.add(m.value)
+                }
+            }
+            i++
+        }
+        return names
+    }
+
+    private val IDENT = Regex("[A-Za-z_][A-Za-z0-9_]*")
 
     /** Extract the bound names and sort/dedup keys from one import statement. */
     private fun describe(stmt: PsiElement): ImportInfo {

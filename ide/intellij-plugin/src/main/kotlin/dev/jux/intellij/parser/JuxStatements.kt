@@ -39,6 +39,10 @@ fun PsiBuilder.parseStatement() {
         T.SWITCH_KW -> { parseSwitch(asExpression = false) }
         T.RETURN_KW -> parseSimple(E.RETURN_STATEMENT, hasOptionalExpr = true)
         T.THROW_KW -> parseSimple(E.THROW_STATEMENT, hasOptionalExpr = false, requireExpr = true)
+        // `yield expr;` — generators (§M.2) are specced but not yet compiled;
+        // the lenient-superset parser accepts the statement so the reserved
+        // keyword never paints a red squiggle (the compiler diagnoses it).
+        T.YIELD_KW -> parseSimple(E.EXPRESSION_STATEMENT, hasOptionalExpr = true)
         T.BREAK_KW -> parseBreakContinue(E.BREAK_STATEMENT)
         T.CONTINUE_KW -> parseBreakContinue(E.CONTINUE_STATEMENT)
         T.TRY_KW -> parseTryStatement()
