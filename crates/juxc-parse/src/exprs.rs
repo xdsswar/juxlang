@@ -253,10 +253,19 @@ impl<'a> Parser<'a> {
         };
         self.advance(); // `..` or `..=`
         let right = self.parse_shift()?;
-        let span = expr_span(&left).join(expr_span(&right));
+        // Contextual `step` modifier (§M.6.3): binds to the range it
+        // follows, looser than the bound expressions themselves.
+        let step = if matches!(self.peek(), TokenKind::Ident(s) if s == "step") {
+            self.advance(); // 'step'
+            self.parse_shift().map(Box::new)
+        } else {
+            None
+        };
+        let span = expr_span(&left).join(self.last_consumed_span());
         Some(Expr::Range(RangeExpr {
             start: Box::new(left),
             end: Box::new(right),
+            step,
             inclusive,
             span,
         }))

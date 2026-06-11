@@ -1214,6 +1214,54 @@ impl RustEmitter {
     /// move self-iterators with `Item = isize`; no borrow needed.
     pub(crate) fn emit_for_each(&mut self, f: &ForEachStmt) {
         self.emit_pending_loop_label();
+        // Stepped range (§M.6): sign-aware while loop — positive
+        // steps count up to the bound, negative steps count down,
+        // zero panics (ArithmeticException semantics).
+        if let Expr::Range(r) = &f.iter {
+            if let Some(step) = &r.step {
+                let var = f.var_name.text.clone();
+                self.w.push_str("{\n");
+                self.w.indent_inc();
+                self.w.emit_indent();
+                self.w.push_str("let __jux_step: isize = ");
+                self.emit_expr(step);
+                self.w.push_str(";\n");
+                self.w.line(
+                    "if __jux_step == 0 { panic!(\"range step must be non-zero\"); }",
+                );
+                self.w.emit_indent();
+                self.w.push_str("let __jux_end: isize = ");
+                self.emit_expr(&r.end);
+                self.w.push_str(";\n");
+                self.w.emit_indent();
+                self.w.push_str("let mut ");
+                self.w.push_str(&var);
+                self.w.push_str(": isize = ");
+                self.emit_expr(&r.start);
+                self.w.push_str(";\n");
+                self.w.emit_indent();
+                if r.inclusive {
+                    self.w.push_str(&format!(
+                        "while (__jux_step > 0 && {var} <= __jux_end) || (__jux_step < 0 && {var} >= __jux_end) {{\n",
+                    ));
+                } else {
+                    self.w.push_str(&format!(
+                        "while (__jux_step > 0 && {var} < __jux_end) || (__jux_step < 0 && {var} > __jux_end) {{\n",
+                    ));
+                }
+                self.w.indent_inc();
+                self.emit_block_contents(&f.body);
+                self.w.emit_indent();
+                self.w.push_str(&var);
+                self.w.push_str(" += __jux_step;\n");
+                self.w.indent_dec();
+                self.w.line("}");
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push_str("}\n");
+                return;
+            }
+        }
         if matches!(&f.iter, Expr::Range(_)) {
             self.w.push_str("for ");
             self.w.push_str(&f.var_name.text);

@@ -447,6 +447,11 @@ pub struct TypeTestExpr {
 pub struct RangeExpr {
     /// Lower bound (inclusive).
     pub start: Box<Expr>,
+    /// Optional `step` expression (§M.6.3) — `0..n step 2`. Phase 1
+    /// supports it on for-each headers over numeric ranges; the
+    /// lowering is a sign-aware while loop (negative steps count
+    /// down; a zero step panics).
+    pub step: Option<Box<Expr>>,
     /// Upper bound — exclusive when `inclusive == false` (`..`),
     /// inclusive when `inclusive == true` (`..=`).
     pub end: Box<Expr>,

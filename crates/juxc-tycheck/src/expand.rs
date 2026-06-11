@@ -261,6 +261,9 @@ fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
         Expr::Range(r) => {
             expand_expr(&mut r.start, plans);
             expand_expr(&mut r.end, plans);
+            if let Some(s) = &mut r.step {
+                expand_expr(s, plans);
+            }
         }
         Expr::Cast(c) => expand_expr(&mut c.value, plans),
         Expr::SizeOf(s) => expand_expr(&mut s.operand, plans),
