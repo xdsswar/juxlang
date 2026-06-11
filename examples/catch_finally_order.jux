@@ -1,0 +1,41 @@
+// Catch-body control flow vs `finally` (§X.3.2).
+//
+// - A `return` inside a catch block computes its value, runs the
+//   `finally`, THEN returns (Java ordering).
+// - A `throw` inside a catch block runs the `finally` first, then
+//   the new exception propagates to the enclosing handler.
+
+package catchfinally;
+
+int catchReturns() {
+    try {
+        throw new Exception("boom");
+    } catch (Exception e) {
+        print("handling");
+        return 7;
+    } finally {
+        print("cleanup A");
+    }
+    return -1;
+}
+
+int catchThrows() {
+    try {
+        try {
+            throw new Exception("first");
+        } catch (Exception e) {
+            throw new IllegalStateException("second");
+        } finally {
+            print("cleanup B");
+        }
+        return -1;
+    } catch (IllegalStateException e) {
+        print("outer caught: " + e.getMessage());
+        return 9;
+    }
+}
+
+public void main() {
+    print(catchReturns());
+    print(catchThrows());
+}

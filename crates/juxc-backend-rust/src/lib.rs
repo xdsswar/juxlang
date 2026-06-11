@@ -628,6 +628,13 @@ struct RustEmitter {
     /// among same-name siblings), consumed by `emit_method`'s name
     /// write.
     pub(crate) pending_decl_suffix: Option<String>,
+    /// True while emitting a STATEMENT-form catch arm's body. A
+    /// `return` there must run the try's `finally` first (§X.3.2), so
+    /// it parks its value in `__jux_ret` and breaks the dispatch
+    /// block; a `throw` parks its payload in `__jux_unhandled` the
+    /// same way. Cleared inside nested try closures (their own
+    /// machinery owns control flow there).
+    pub(crate) in_catch_arm: bool,
     /// The bare enum name of the scrutinee for the `switch` currently being
     /// emitted, when it resolves to an enum. Lets bare `case Variant ->`
     /// patterns (which parse as `Pattern::Bind`, Java-style unqualified labels)
@@ -2510,6 +2517,7 @@ impl RustEmitter {
             ctor_live_after: std::collections::HashSet::new(),
             pending_method_suffix: None,
             pending_decl_suffix: None,
+            in_catch_arm: false,
             current_switch_enum: None,
             test_mode: false,
             current_unit_idx: None,
