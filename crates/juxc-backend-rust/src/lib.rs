@@ -635,6 +635,12 @@ struct RustEmitter {
     /// same way. Cleared inside nested try closures (their own
     /// machinery owns control flow there).
     pub(crate) in_catch_arm: bool,
+    /// True while emitting an enum's `&self` method body. A
+    /// `switch (this)` there matches on the borrowed receiver, so
+    /// payload binders come out `&T` — the scrutinee emission clones
+    /// (`self.clone()`, enums always derive Clone) so binders own
+    /// their payloads and `return v;` type-checks for generic `T`.
+    pub(crate) in_enum_method: bool,
     /// The bare enum name of the scrutinee for the `switch` currently being
     /// emitted, when it resolves to an enum. Lets bare `case Variant ->`
     /// patterns (which parse as `Pattern::Bind`, Java-style unqualified labels)
@@ -1147,6 +1153,7 @@ pub(crate) fn compute_aliased_classes(
                     walk_expr(el, aliased, mark);
                 }
             }
+            Expr::ErrorProp(inner, _) => walk_expr(inner, aliased, mark),
             Expr::TryExpr(t) => {
                 walk_block(&t.body, aliased, mark);
                 for c in &t.catches {
@@ -2090,6 +2097,7 @@ fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
                 cast_targets_expr(el, out);
             }
         }
+        Expr::ErrorProp(inner, _) => cast_targets_expr(inner, out),
         Expr::TryExpr(t) => {
             cast_targets_block(&t.body, out);
             for c in &t.catches {
@@ -2518,6 +2526,7 @@ impl RustEmitter {
             pending_method_suffix: None,
             pending_decl_suffix: None,
             in_catch_arm: false,
+            in_enum_method: false,
             current_switch_enum: None,
             test_mode: false,
             current_unit_idx: None,

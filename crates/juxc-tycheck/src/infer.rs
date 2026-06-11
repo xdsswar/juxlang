@@ -66,6 +66,18 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             name: juxc_ast::TUPLE_SENTINEL.to_string(),
             generic_args: elems.iter().map(|e| infer_expr(e, env, symbols)).collect(),
         },
+        // `expr?` (§X.4.1): Ok-value of a Result operand, or the
+        // non-null value of a nullable one.
+        Expr::ErrorProp(inner, _) => match infer_expr(inner, env, symbols) {
+            Ty::Nullable(boxed) => *boxed,
+            Ty::User { name, generic_args }
+                if name.rsplit('.').next() == Some("Result")
+                    && generic_args.len() == 2 =>
+            {
+                generic_args[0].clone()
+            }
+            _ => Ty::Unknown,
+        },
         // Try-expression (§X.3.3): the value is the try block's
         // trailing expression (the catch blocks must produce the
         // same shape; rustc verifies exact agreement).

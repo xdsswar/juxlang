@@ -158,6 +158,7 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
         // Try-expression: the closure captures by reference (the
         // catch_unwind body), so treat reads conservatively as moves
         // only when the body's own statements move them.
+        Expr::ErrorProp(inner, _) => expr_moves_path_at_top(inner, name),
         Expr::TryExpr(t) => {
             body_moves_path(&t.body, name)
                 || t.catches.iter().any(|c| body_moves_path(&c.body, name))

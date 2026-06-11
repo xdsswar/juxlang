@@ -325,6 +325,18 @@ pub enum Code {
     /// without passing through `RuntimeException`. Catch it, or add
     /// `throws <Type>` to the signature.
     E0711_UncaughtChecked,
+    /// E0730 — The **`?` operator's enclosing function has an
+    /// incompatible return type** (§X.4.1): `expr?` on a
+    /// `Result<T, E>` needs the function to return `Result<U, E>`;
+    /// on a `T?` nullable it needs a nullable return. Also fires for
+    /// `?` on a non-propagatable operand type, and (Phase 1) for `?`
+    /// inside a `try` body, where the early return would bypass the
+    /// unwinding machinery.
+    E0730_QuestionIncompatibleReturn,
+    /// E0731 — A **`?` propagation needs an explicit error-type
+    /// conversion** (§X.4.3): the operand's error type isn't the
+    /// enclosing function's. Convert explicitly before propagating.
+    E0731_QuestionNeedsConversion,
     E0450_AmbiguousOverload,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
@@ -505,6 +517,8 @@ impl Code {
             Code::W0720_ReturnInFinally          => "W0720",
             Code::E0721_MultiCatchRelated        => "E0721",
             Code::E0711_UncaughtChecked          => "E0711",
+            Code::E0730_QuestionIncompatibleReturn => "E0730",
+            Code::E0731_QuestionNeedsConversion  => "E0731",
             Code::E0450_AmbiguousOverload        => "E0450",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",

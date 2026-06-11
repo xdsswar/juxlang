@@ -893,6 +893,7 @@ impl Resolver {
                     self.visit_expr(e);
                 }
             }
+            Expr::ErrorProp(inner, _) => self.visit_expr(inner),
             // Try-expression — body in its own scope; each catch
             // binds its name for its block.
             Expr::TryExpr(t) => {
