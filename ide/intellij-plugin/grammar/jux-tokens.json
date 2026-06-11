@@ -506,6 +506,26 @@
     {
       "name": "GT_GT_EQ",
       "spelling": ">>="
+    },
+    {
+      "name": "PLUS_PERCENT",
+      "spelling": "+%"
+    },
+    {
+      "name": "MINUS_PERCENT",
+      "spelling": "-%"
+    },
+    {
+      "name": "STAR_PERCENT",
+      "spelling": "*%"
+    },
+    {
+      "name": "LT_LT_PERCENT",
+      "spelling": "<<%"
+    },
+    {
+      "name": "GT_GT_PERCENT",
+      "spelling": ">>%"
     }
   ],
   "comments": [

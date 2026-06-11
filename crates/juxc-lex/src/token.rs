@@ -196,6 +196,16 @@ pub enum TokenKind {
     LtLtEq,
     /// `>>=`
     GtGtEq,
+    /// `+%` — wrapping add (§S.2.1). Never panics; wraps modulo 2^N.
+    PlusPercent,
+    /// `-%` — wrapping sub.
+    MinusPercent,
+    /// `*%` — wrapping mul.
+    StarPercent,
+    /// `<<%` — wrapping shift left.
+    LtLtPercent,
+    /// `>>%` — wrapping shift right.
+    GtGtPercent,
 
     /// End-of-file sentinel; always the final token. Has a zero-length
     /// span pointing at the EOF position so diagnostics that need to

@@ -559,6 +559,17 @@ pub enum BinaryOp {
     Shl,
     /// `>>` — right shift. Arithmetic on signed types, logical on unsigned.
     Shr,
+    /// `+%` — wrapping add (§S.2.1). Integers only; never panics —
+    /// wraps modulo 2^N at the operand width. Not user-overloadable.
+    WrapAdd,
+    /// `-%` — wrapping sub.
+    WrapSub,
+    /// `*%` — wrapping mul.
+    WrapMul,
+    /// `<<%` — wrapping shift left.
+    WrapShl,
+    /// `>>%` — wrapping shift right.
+    WrapShr,
     /// `+`
     Add,
     /// `-`
@@ -615,6 +626,14 @@ impl BinaryOp {
             BinaryOp::Cmp    => "<=>",
             BinaryOp::Shl    => "<<",
             BinaryOp::Shr    => ">>",
+            // The wrapping family lowers structurally to
+            // `wrapping_add` & co — these spellings feed
+            // diagnostics/display only.
+            BinaryOp::WrapAdd => "+%",
+            BinaryOp::WrapSub => "-%",
+            BinaryOp::WrapMul => "*%",
+            BinaryOp::WrapShl => "<<%",
+            BinaryOp::WrapShr => ">>%",
             BinaryOp::Add    => "+",
             BinaryOp::Sub    => "-",
             BinaryOp::Mul    => "*",

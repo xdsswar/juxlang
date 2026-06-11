@@ -118,6 +118,22 @@ fn lt_family_longest_match() {
 }
 
 #[test]
+fn wrapping_operator_family() {
+    // §S.2.1: `+%` `-%` `*%` `<<%` `>>%` — wrapping arithmetic. The
+    // `%` suffix must win over emitting the base operator + Percent.
+    let src = "+% -% *% <<% >>% + % +=";
+    assert_eq!(
+        kinds(src),
+        vec![
+            TokenKind::PlusPercent, TokenKind::MinusPercent, TokenKind::StarPercent,
+            TokenKind::LtLtPercent, TokenKind::GtGtPercent,
+            TokenKind::Plus, TokenKind::Percent, TokenKind::PlusEq,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
 fn gt_is_emitted_unsplit_even_when_doubled() {
     // §A.1.6: the lexer emits `>>` as a single token; parser splits.
     assert_eq!(

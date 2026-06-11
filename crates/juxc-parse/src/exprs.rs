@@ -302,6 +302,9 @@ impl<'a> Parser<'a> {
         match self.peek() {
             TokenKind::LtLt => Some(BinaryOp::Shl),
             TokenKind::GtGt => Some(BinaryOp::Shr),
+            // Wrapping shifts (§S.2.1) share the shift level.
+            TokenKind::LtLtPercent => Some(BinaryOp::WrapShl),
+            TokenKind::GtGtPercent => Some(BinaryOp::WrapShr),
             _ => None,
         }
     }
@@ -669,6 +672,9 @@ impl<'a> Parser<'a> {
         match self.peek() {
             TokenKind::Plus  => Some(BinaryOp::Add),
             TokenKind::Minus => Some(BinaryOp::Sub),
+            // Wrapping forms (§S.2.1) share the additive level.
+            TokenKind::PlusPercent  => Some(BinaryOp::WrapAdd),
+            TokenKind::MinusPercent => Some(BinaryOp::WrapSub),
             _ => None,
         }
     }
@@ -680,6 +686,8 @@ impl<'a> Parser<'a> {
             TokenKind::Star    => Some(BinaryOp::Mul),
             TokenKind::Slash   => Some(BinaryOp::Div),
             TokenKind::Percent => Some(BinaryOp::Rem),
+            // Wrapping mul (§S.2.1) shares the multiplicative level.
+            TokenKind::StarPercent => Some(BinaryOp::WrapMul),
             _ => None,
         }
     }

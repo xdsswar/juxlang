@@ -1,0 +1,27 @@
+// Wrapping arithmetic operators (§S.2.1): `+%` `-%` `*%` `<<%` `>>%`.
+//
+// Unconditional two's-complement wrap at the operand's exact width —
+// never panics, in any build profile. Integer-only (E0410 on float/
+// bool/char operands) and not user-overloadable: the `%`-suffixed
+// family is reserved. For recoverable overflow use checkedAdd & co
+// (§K.11); for clamping use saturatingAdd & co.
+
+package wrapping;
+
+public void main() {
+    print(5 +% 3);          // 8 — in-range wraps are plain arithmetic
+    print(10 -% 20);        // -10
+
+    // Width-faithful: a byte wraps at 8 bits...
+    byte b = 127;
+    print(b +% 1);          // -128
+    print(b *% 2);          // -2 — 254 mod 2^8, signed
+
+    // ...and a long at 64.
+    long x = 9223372036854775807;
+    print(x +% 1);          // -9223372036854775808
+
+    // Wrapping shifts mask the count to the width.
+    print(1 <<% 3);         // 8
+    print(16 >>% 2);        // 4
+}
