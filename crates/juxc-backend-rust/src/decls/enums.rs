@@ -80,7 +80,11 @@ impl RustEmitter {
         if has_inherent_ops || has_members {
             self.w.emit_indent();
             self.w.push_str("impl");
-            self.emit_generic_params(&enum_decl.generic_params);
+            // The Clone bound mirrors classes: enum `&self` method
+            // bodies clone the receiver for `switch (this)` dispatch
+            // (owned payload binders), and derived `Clone` on the
+            // enum needs `T: Clone` anyway.
+            self.emit_generic_params_with_clone_bound(&enum_decl.generic_params);
             self.w.push(' ');
             self.w.push_str(&enum_decl.name.text);
             self.emit_generic_params_as_args(&enum_decl.generic_params);
@@ -320,6 +324,8 @@ impl crate::RustEmitter {
         self.w.indent_inc();
         if let Some(body) = body {
             let prev_alias = self.this_alias.take();
+            let prev_enum_method = self.in_enum_method;
+            self.in_enum_method = true;
             if !is_static {
                 self.this_alias = Some("self".to_string());
             }
@@ -334,6 +340,7 @@ impl crate::RustEmitter {
             self.current_return_type = saved;
             self.current_fn_params.clear();
             self.this_alias = prev_alias;
+            self.in_enum_method = prev_enum_method;
         }
         self.w.indent_dec();
         self.w.line("}");

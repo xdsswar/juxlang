@@ -939,6 +939,120 @@ public class File {
     }
 }
 "###),
+    ("option/Option.jux", r###"/**
+ * jux.std.option.Option
+ *
+ * Explicitly-typed optional value (§K.3) - `Some(T)` or `None`.
+ * Distinct from the `T?` nullable syntax (the two do not implicitly
+ * interconvert); use Option when a generic signature wants a named
+ * type. Phase-1 surface: construction via the variant forms
+ * (`Option.Some(v)` / `Option.None`) plus the query/unwrap methods
+ * below; lambda combinators (map/flatMap) land with the
+ * function-typed-parameter work.
+ */
+package jux.std.option;
+
+public enum Option<T> {
+    Some(T),
+    None;
+
+    /**
+     * True when this Option holds a value.
+     */
+    public bool isSome() {
+        return switch (this) {
+            case Option.Some(var v) -> true;
+            case Option.None -> false;
+        };
+    }
+
+    /**
+     * True when this Option is empty.
+     */
+    public bool isNone() {
+        return !this.isSome();
+    }
+
+    /**
+     * The held value; throws IllegalStateException on None.
+     */
+    public T unwrap() {
+        return switch (this) {
+            case Option.Some(var v) -> v;
+            case Option.None -> {
+                throw new IllegalStateException("unwrap on None");
+            }
+        };
+    }
+
+    /**
+     * The held value, or `fallback` when None.
+     */
+    public T unwrapOr(T fallback) {
+        return switch (this) {
+            case Option.Some(var v) -> v;
+            case Option.None -> fallback;
+        };
+    }
+}
+"###),
+    ("result/Result.jux", r###"/**
+ * jux.std.result.Result
+ *
+ * Success-or-error value (§K.4 / §X.4) - `Ok(T)` or `Err(E)`. The
+ * `?` postfix propagates: `Ok(v)` unwraps to `v`, `Err(e)` returns
+ * `Err(e)` from the enclosing function (whose return type must be a
+ * Result with a compatible error type, E0730). Phase-1 surface:
+ * construction via the variant forms (`Result.Ok(v)` /
+ * `Result.Err(e)`) plus the query/unwrap methods; lambda combinators
+ * (map/mapErr/flatMap) land with the function-typed-parameter work.
+ */
+package jux.std.result;
+
+public enum Result<T, E> {
+    Ok(T),
+    Err(E);
+
+    /**
+     * True when this Result holds a success value.
+     */
+    public bool isOk() {
+        return switch (this) {
+            case Result.Ok(var v) -> true;
+            case Result.Err(var e) -> false;
+        };
+    }
+
+    /**
+     * True when this Result holds an error.
+     */
+    public bool isErr() {
+        return !this.isOk();
+    }
+
+    /**
+     * The success value; throws IllegalStateException on Err.
+     */
+    public T unwrap() {
+        return switch (this) {
+            case Result.Ok(var v) -> v;
+            case Result.Err(var e) -> {
+                throw new IllegalStateException("unwrap on Err");
+            }
+        };
+    }
+
+    /**
+     * The success value, or `fallback` when Err.
+     */
+    public T unwrapOr(T fallback) {
+        return switch (this) {
+            case Result.Ok(var v) -> v;
+            case Result.Err(var e) -> fallback;
+        };
+    }
+}
+"###),
     ("time/Clock.jux", r###"/**
  * jux.std.time.Clock
  *

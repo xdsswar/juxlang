@@ -748,6 +748,90 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Validate one `expr?` site (§X.4.1):
+    ///
+    /// - `Result<T, E>` operand → the enclosing function must return
+    ///   `Result<U, F>`; `E` must be compatible with `F` (E0731
+    ///   otherwise).
+    /// - `T?` operand → the enclosing return must be nullable.
+    /// - anything else (or a non-matching return) → E0730.
+    /// - Phase 1: `?` inside a `try` body is rejected — its early
+    ///   return would bypass the unwinding machinery.
+    fn check_error_prop(&mut self, inner: &Expr, span: Span) {
+        if !self.catch_absorb_stack.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0730_QuestionIncompatibleReturn,
+                    "`?` inside a `try` block isn't supported yet (Phase 1) — its early return would bypass the try machinery; restructure with a plain match or move the `?` call out of the try",
+                )
+                .with_span(span),
+            );
+            return;
+        }
+        let operand = infer_expr(inner, &self.env, self.symbols);
+        let ret = self.current_return.clone().unwrap_or(Ty::Unknown);
+        let is_result = |t: &Ty| -> Option<(Ty, Ty)> {
+            if let Ty::User { name, generic_args } = t {
+                if name.rsplit('.').next() == Some("Result") && generic_args.len() == 2 {
+                    return Some((generic_args[0].clone(), generic_args[1].clone()));
+                }
+            }
+            None
+        };
+        match (&operand, is_result(&operand)) {
+            (_, Some((_ok, err))) => match is_result(&ret) {
+                Some((_, ret_err)) => {
+                    if !compatible(&ret_err, &err, self.symbols) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0731_QuestionNeedsConversion,
+                                format!(
+                                    "`?` propagates error type {err}, but the function returns a Result with error type {ret_err} — convert explicitly before propagating",
+                                ),
+                            )
+                            .with_span(span),
+                        );
+                    }
+                }
+                None => {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0730_QuestionIncompatibleReturn,
+                            format!(
+                                "`?` on a Result needs the enclosing function to return a Result — it returns {ret}",
+                            ),
+                        )
+                        .with_span(span),
+                    );
+                }
+            },
+            (Ty::Nullable(_), _) => {
+                if !matches!(ret, Ty::Nullable(_)) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0730_QuestionIncompatibleReturn,
+                            format!(
+                                "`?` on a nullable needs the enclosing function to return a nullable — it returns {ret}",
+                            ),
+                        )
+                        .with_span(span),
+                    );
+                }
+            }
+            _ => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0730_QuestionIncompatibleReturn,
+                        format!(
+                            "`?` needs a Result or nullable operand, found {operand}",
+                        ),
+                    )
+                    .with_span(span),
+                );
+            }
+        }
+    }
+
     /// Most specific common SUPERCLASS of the given class types —
     /// the multi-catch binder type (§X.3.6). Walks each type's
     /// extends chain (self first) and returns the first entry of the
@@ -1888,6 +1972,13 @@ impl<'a> Checker<'a> {
         let _ = self.infer_and_record(expr);
         match expr {
             Expr::Literal(_) => {}
+            // `expr?` — error propagation (§X.4.1). Validate the
+            // operand/return-type pairing (E0730/E0731) and the
+            // Phase-1 no-`?`-inside-try restriction.
+            Expr::ErrorProp(inner, span) => {
+                self.check_expr(inner);
+                self.check_error_prop(inner, *span);
+            }
             // Tuple literal — walk each element for nested checks.
             Expr::TupleLit(elems, _) => {
                 for e in elems {
@@ -4757,6 +4848,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::Literal(_) => Span::DUMMY,
         Expr::TupleLit(_, s) => *s,
         Expr::TryExpr(t) => t.span,
+        Expr::ErrorProp(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
         Expr::Binary(b) => b.span,

@@ -113,6 +113,13 @@ pub enum Expr {
     /// clause structure; the parser guarantees `finally` is `None`
     /// and at least one catch exists.
     TryExpr(Box<crate::stmts::TryStmt>),
+    /// `expr?` — **error propagation** (§X.4.1, postfix level 19).
+    /// On a `Result<T, E>` operand: `Ok(v)` yields `v`, `Err(e)`
+    /// returns `Err(e)` from the enclosing function. On a `T?`
+    /// operand: a value yields it, `null` returns `null`. The
+    /// enclosing return type must match the propagation shape
+    /// (E0730/E0731).
+    ErrorProp(Box<Expr>, Span),
     /// `expr!!` — **non-null assertion** (grammar §A.4 level 19,
     /// postfix; conversion table `T?` → `T!!`). Asserts the nullable
     /// operand holds a value and unwraps it; a `null` operand throws

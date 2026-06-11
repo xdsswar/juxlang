@@ -194,15 +194,35 @@ impl RustEmitter {
                 // another package: scan all enum FQNs and pick one
                 // whose last segment matches. Same shape the
                 // class- and interface-FQN walks use elsewhere.
-                for enum_fqn in self.symbols.enums.keys() {
-                    let last = enum_fqn.rsplit('.').next().unwrap_or(enum_fqn.as_str());
-                    if last == bare.as_str() {
+                let enum_hit = self
+                    .symbols
+                    .enums
+                    .keys()
+                    .find(|fqn| {
+                        fqn.rsplit('.').next().unwrap_or(fqn.as_str()) == bare.as_str()
+                    })
+                    .cloned();
+                if let Some(enum_fqn) = enum_hit {
+                    // Cross-package auto-import: crate-root the path.
+                    // A bare `Option::Some` / `Result::Ok` would
+                    // otherwise resolve to Rust's PRELUDE types in
+                    // the emitted module — silently the wrong enum.
+                    let cur_pkg = self.symbols.package.join(".");
+                    let fqn_pkg = enum_fqn
+                        .rsplit_once('.')
+                        .map(|(p, _)| p.to_string())
+                        .unwrap_or_default();
+                    if enum_fqn.contains('.') && fqn_pkg != cur_pkg {
+                        self.w.push_str("crate::");
+                        self.w
+                            .push_str(&enum_fqn.split('.').collect::<Vec<_>>().join("::"));
+                    } else {
                         self.w.push_str(bare);
-                        self.w.push_str("::");
-                        self.w.push_str(&f.field.text);
-                        if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
-                        return;
                     }
+                    self.w.push_str("::");
+                    self.w.push_str(&f.field.text);
+                    if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
+                    return;
                 }
             }
         }

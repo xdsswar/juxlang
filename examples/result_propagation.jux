@@ -1,0 +1,37 @@
+// Result<T, E>, Option<T>, and the `?` propagation operator
+// (§K.3 / §K.4 / §X.4.1).
+//
+// - Construct with the variant forms (`Result.Ok(v)` /
+//   `Result.Err(e)`, `Option.Some(v)` / `Option.None`); query with
+//   isOk/isErr/isSome/isNone, unwrap/unwrapOr.
+// - `expr?` on a Result unwraps Ok or returns Err from the enclosing
+//   function (whose return must be a Result with a compatible error
+//   type — E0730/E0731). On a `T?` nullable it unwraps or returns
+//   null (enclosing return must be nullable).
+
+package results;
+
+Result<int, String> parsePort(String s) {
+    if (s == "80") {
+        return Result.Ok(80);
+    }
+    return Result.Err("bad port: " + s);
+}
+
+Result<String, String> describe(String s) {
+    var port = parsePort(s)?;
+    return Result.Ok("port is " + port);
+}
+
+String? firstWord(String? s) {
+    var v = s?;
+    return v + "!";
+}
+
+public void main() {
+    print(describe("80").unwrap());
+    print(describe("nope").isErr());
+    print(firstWord("hey"));
+    var n = firstWord(null);
+    print(n == null);
+}

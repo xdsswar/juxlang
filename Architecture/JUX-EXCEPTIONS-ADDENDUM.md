@@ -304,6 +304,17 @@ public sealed enum Result<T, E> permits Ok, Err {
 
 ### X.4.1. The `?` Operator
 
+> **Phase-1 implementation note.** `Result<T, E>` / `Option<T>` live
+> in `jux.std.result` / `jux.std.option`; construct with the variant
+> forms (`Result.Ok(v)`, `Result.Err(e)`, `Option.Some(v)`,
+> `Option.None` — the lowercase static factories and the lambda
+> combinators land with the function-typed-parameter work). `?` on a
+> Result requires a Result-returning enclosing function (the
+> `throws E` desugar form is deferred); `?` inside a `try` body is
+> rejected (E0730). The §X.4.3 `as`-convertible auto-conversion is
+> not yet applied — error types must be compatible directly (E0731
+> otherwise).
+
 `expr?` (postfix, per `JUX-GRAMMAR-ADDENDUM.md` §A.4 level 19) propagates errors:
 
 - If `expr` is of type `Result<T, E>`:

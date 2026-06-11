@@ -315,6 +315,7 @@ fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
                 expand_expr(e, plans);
             }
         }
+        Expr::ErrorProp(inner, _) => expand_expr(inner, plans),
         Expr::TryExpr(t) => {
             expand_block(&mut t.body, plans);
             for c in &mut t.catches {

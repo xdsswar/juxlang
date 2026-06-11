@@ -352,6 +352,7 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
                 collect_mutating_calls(el, out, user_mut);
             }
         }
+        Expr::ErrorProp(inner, _) => collect_mutating_calls(inner, out, user_mut),
         Expr::TryExpr(t) => {
             collect_mutated_names(&t.body, out, user_mut);
             for c in &t.catches {
@@ -531,6 +532,7 @@ fn expr_contains_await(e: &Expr) -> bool {
     match e {
         Expr::Await(_, _) => true,
         Expr::TupleLit(elems, _) => elems.iter().any(expr_contains_await),
+        Expr::ErrorProp(inner, _) => expr_contains_await(inner),
         Expr::TryExpr(t) => {
             block_contains_await(&t.body)
                 || t.catches.iter().any(|c| block_contains_await(&c.body))
@@ -1901,7 +1903,7 @@ impl crate::RustEmitter {
     /// args pass straight through.
     pub(crate) fn emit_format_arg(&mut self, arg: &juxc_ast::Expr) {
         if self.expression_is_already_nullable(arg) {
-            self.w.push_str("JuxOpt(&");
+            self.w.push_str("crate::JuxOpt(&");
             self.emit_expr(arg);
             self.w.push(')');
         } else {

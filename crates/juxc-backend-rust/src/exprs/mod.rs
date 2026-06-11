@@ -97,6 +97,34 @@ impl RustEmitter {
             Expr::Literal(lit) => self.emit_literal(lit),
             // Try-expression (§X.3.3) — produce-or-recover value form.
             Expr::TryExpr(t) => self.emit_try_expr(t),
+            // `expr?` — error propagation (§X.4.1). Result operands
+            // unwrap `Ok` / early-return `Err`; nullable operands
+            // unwrap the value / early-return `None`. The operand
+            // class comes from the recorded type (tycheck validated
+            // the enclosing return shape).
+            Expr::ErrorProp(inner, _) => {
+                let inner_ty = self
+                    .expr_types
+                    .get(&expr_span_of(inner))
+                    .cloned();
+                let is_result = matches!(
+                    &inner_ty,
+                    Some(juxc_tycheck::Ty::User { name, generic_args })
+                        if name.rsplit('.').next() == Some("Result")
+                            && generic_args.len() == 2
+                );
+                self.w.push_str("(match ");
+                self.emit_expr(inner);
+                if is_result {
+                    self.w.push_str(
+                        " { crate::jux::std::result::Result::Ok(__jux_q) => __jux_q, crate::jux::std::result::Result::Err(__jux_e) => return crate::jux::std::result::Result::Err(__jux_e) })",
+                    );
+                } else {
+                    self.w.push_str(
+                        " { Some(__jux_q) => __jux_q, None => return None })",
+                    );
+                }
+            }
             // Tuple literal (§5.3) — Rust's identical `(a, b)` form.
             // Value semantics for free; elements emit as ordinary
             // value-position expressions.
@@ -1266,6 +1294,7 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
         Expr::Literal(_) => juxc_source::Span::DUMMY,
         Expr::TupleLit(_, s) => *s,
         Expr::TryExpr(t) => t.span,
+        Expr::ErrorProp(_, s) => *s,
         Expr::NotNullAssert(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,

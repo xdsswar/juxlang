@@ -38,6 +38,12 @@ impl RustEmitter {
         let scrut_is_string = self.scrutinee_is_string(&s.scrutinee);
         self.w.push_str("match ");
         self.emit_expr(&s.scrutinee);
+        // Enum `&self` method dispatch: clone the receiver so payload
+        // binders own their values (`&T` wouldn't satisfy a generic
+        // `-> T` return). Enums always derive Clone.
+        if self.in_enum_method && matches!(&*s.scrutinee, juxc_ast::Expr::This(_)) {
+            self.w.push_str(".clone()");
+        }
         if scrut_is_string {
             self.w.push_str(".as_str()");
         }

@@ -706,6 +706,34 @@ impl<'a> Parser<'a> {
                         span,
                     });
                 }
+                TokenKind::Question => {
+                    // Postfix `?` — error propagation (§X.4.1). The
+                    // SAME token starts a ternary (`c ? a : b`), so
+                    // commit only when the NEXT token cannot begin an
+                    // expression: terminators, closers, member access.
+                    // Anything else parses as a ternary downstream.
+                    // (Write `(x?) - 1` to force the postfix reading
+                    // before an ambiguous operator.)
+                    let next = self.tokens.get(self.pos + 1).map(|t| &t.kind);
+                    let is_postfix = matches!(
+                        next,
+                        Some(TokenKind::Semicolon)
+                            | Some(TokenKind::RParen)
+                            | Some(TokenKind::RBracket)
+                            | Some(TokenKind::RBrace)
+                            | Some(TokenKind::Comma)
+                            | Some(TokenKind::Dot)
+                            | Some(TokenKind::QuestionDot)
+                            | Some(TokenKind::Eof)
+                    );
+                    if !is_postfix {
+                        break;
+                    }
+                    let qspan = self.peek_span();
+                    self.advance(); // '?'
+                    let span = expr_span(&expr).join(qspan);
+                    expr = Expr::ErrorProp(Box::new(expr), span);
+                }
                 TokenKind::LBracket => {
                     // index: array[index]
                     self.advance(); // '['
@@ -1395,6 +1423,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::Literal(_) => Span::DUMMY,
         Expr::TupleLit(_, s) => *s,
         Expr::TryExpr(t) => t.span,
+        Expr::ErrorProp(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
         Expr::Binary(b) => b.span,
