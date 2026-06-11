@@ -292,6 +292,9 @@ pub(crate) struct Checker<'a> {
     /// enclosing function (Phase 1 doesn't type lambda throws), so
     /// recording is suppressed when > 0.
     pub(crate) lambda_depth: usize,
+    /// True while checking a for-each header's iterable expression —
+    /// the one position a `step` range is legal in Phase 1.
+    pub(crate) in_foreach_iter: bool,
     /// True while we're walking the body of a `static` method (or
     /// a `static` field initializer once those land). Drives the
     /// `E0425_ThisInStaticContext` diagnostic in `check_expr`.
@@ -356,6 +359,7 @@ impl<'a> Checker<'a> {
             checked_escapes: Vec::new(),
             catch_absorb_stack: Vec::new(),
             lambda_depth: 0,
+            in_foreach_iter: false,
             in_static: false,
             in_async: false,
             in_unsafe: false,
@@ -1715,7 +1719,10 @@ impl<'a> Checker<'a> {
             }
 
             Stmt::ForEach(f) => {
+                let prev_fe = self.in_foreach_iter;
+                self.in_foreach_iter = true;
                 self.check_expr(&f.iter);
+                self.in_foreach_iter = prev_fe;
                 let iter_ty = infer_expr(&f.iter, &self.env, self.symbols);
                 // Loop-var binding: explicit annotation wins; else
                 // element-of-array if iter is an array; else Unknown.
@@ -2112,6 +2119,31 @@ impl<'a> Checker<'a> {
             Expr::Range(r) => {
                 self.check_expr(&r.start);
                 self.check_expr(&r.end);
+                // `step` (§M.6.3): integer-typed; Phase 1 supports it
+                // only as a for-each iterable (`for (i : a..b step s)`)
+                // — the ForEach arm clears this flag around its head.
+                if let Some(s) = &r.step {
+                    self.check_expr(s);
+                    let st = infer_expr(s, &self.env, self.symbols);
+                    if !compatible(&Ty::Primitive(Primitive::Int), &st, self.symbols) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0410_TypeMismatch,
+                                format!("range `step` must be an int, found {st}"),
+                            )
+                            .with_span(expr_span(s)),
+                        );
+                    }
+                    if !self.in_foreach_iter {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0410_TypeMismatch,
+                                "`step` ranges are only supported as for-each iterables in Phase 1 — `for (var i : a..b step s)`",
+                            )
+                            .with_span(r.span),
+                        );
+                    }
+                }
             }
 
             Expr::Unary(u) => {

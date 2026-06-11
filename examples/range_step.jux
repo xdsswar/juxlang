@@ -1,0 +1,22 @@
+// Range `step` modifier (§M.6) — `for (var i : a..b step s)`.
+//
+// Positive steps count up to the bound, negative steps count down
+// (`10..0 step -3`), inclusive ranges include the end, and a zero
+// step panics at runtime. Phase 1 supports `step` on for-each
+// headers over numeric ranges.
+
+package rangestep;
+
+public void main() {
+    for (var i : 0..10 step 3) {
+        print(i);
+    }
+    for (var i : 10..0 step -3) {
+        print(i);
+    }
+    var total = 0;
+    for (var i : 0..=6 step 2) {
+        total = total + i;
+    }
+    print(total);
+}
