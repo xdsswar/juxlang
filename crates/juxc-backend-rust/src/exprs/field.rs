@@ -45,6 +45,42 @@ impl RustEmitter {
             self.emit_safe_field(f);
             return;
         }
+        // AsyncMutex guard (§18.3): `guard.value` derefs the guard.
+        // Lvalue writes never reach here (emit_assign intercepts);
+        // non-Copy protected values clone out on read.
+        if f.field.text == "value" {
+            let recv_ty = self
+                .expr_types
+                .get(&crate::exprs::expr_span_of(&f.object))
+                .cloned()
+                .or_else(|| {
+                    if let Expr::Path(qn) = &*f.object {
+                        if qn.segments.len() == 1 {
+                            return self
+                                .local_types
+                                .iter()
+                                .rev()
+                                .find_map(|s| s.get(&qn.segments[0].text).cloned());
+                        }
+                    }
+                    None
+                });
+            if let Some(juxc_tycheck::Ty::User { name, generic_args }) = recv_ty {
+                if name == "__AsyncMutexGuard" {
+                    self.w.push_str("(*");
+                    self.emit_expr(&f.object);
+                    self.w.push(')');
+                    let copy = matches!(
+                        generic_args.first(),
+                        Some(juxc_tycheck::Ty::Primitive(_))
+                    );
+                    if !copy && !self.emitting_lvalue {
+                        self.w.push_str(".clone()");
+                    }
+                    return;
+                }
+            }
+        }
         // **Field READ through a polymorphic-base reference** → accessor call.
         // A base-typed value is a `Rc<dyn …Kind>` trait object that can't
         // expose struct fields, so `baseRef.f` reads via the generated
@@ -817,6 +853,12 @@ impl RustEmitter {
                     }
                     if let juxc_tycheck::Ty::User { name, .. } = ty {
                         let bare = name.rsplit('.').next().unwrap_or(name);
+                        // Async-runtime handles are Arc-backed —
+                        // passing one shares it (refcount bump), the
+                        // same rule wrapper places follow.
+                        if matches!(bare, "Channel" | "AsyncMutex") {
+                            return true;
+                        }
                         return self.wrapper_classes.contains(bare);
                     }
                 }

@@ -80,6 +80,37 @@ impl RustEmitter {
         // pass-through inside the array-shape recursion preserves
         // `ty.nullable` so the inner element-type emit hits the
         // nullable branch with the right per-element type.
+        // Async-runtime builtin types (§18.3): `Channel<T>` /
+        // `AsyncMutex<T>` in type positions map to the emitted
+        // helpers.
+        if ty.fn_shape.is_none() && ty.name.segments.len() == 1 {
+            let bare = ty.name.segments[0].text.as_str();
+            let mapped = match bare {
+                "Channel" if !self.symbols.classes.contains_key("Channel") => {
+                    Some("crate::JuxChannel")
+                }
+                "AsyncMutex" if !self.symbols.classes.contains_key("AsyncMutex") => {
+                    Some("crate::JuxAsyncMutex")
+                }
+                _ => None,
+            };
+            if let Some(path) = mapped {
+                self.w.push_str(path);
+                if !ty.generic_args.is_empty() {
+                    self.w.push('<');
+                    for (i, arg) in ty.generic_args.iter().enumerate() {
+                        if i > 0 {
+                            self.w.push_str(", ");
+                        }
+                        if let Some(t) = arg.as_type() {
+                            self.emit_type_as_rust(t);
+                        }
+                    }
+                    self.w.push('>');
+                }
+                return;
+            }
+        }
         // Tuple type — `(A, B)` (§5.3, `__tuple` sentinel encoding)
         // emits as Rust's structurally identical tuple type.
         if let Some(elems) = ty.tuple_elems() {

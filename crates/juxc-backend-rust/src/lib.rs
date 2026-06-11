@@ -2539,6 +2539,27 @@ impl RustEmitter {
         w.push_str("        *self.inner.tx.lock().unwrap() = None;\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
+        // AsyncMutex runtime — §18.3. `await m.lock()` suspends until
+        // acquired; the returned guard is the only handle to the
+        // protected value (`guard.value` reads/writes deref it) and
+        // releases on scope exit. Holding a guard across an await is
+        // the type's entire point.
+        w.push_str("struct JuxAsyncMutex<T> {\n");
+        w.push_str("    inner: std::sync::Arc<futures::lock::Mutex<T>>,\n");
+        w.push_str("}\n");
+        w.push_str("impl<T> Clone for JuxAsyncMutex<T> {\n");
+        w.push_str("    fn clone(&self) -> Self {\n");
+        w.push_str("        JuxAsyncMutex { inner: self.inner.clone() }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("impl<T> JuxAsyncMutex<T> {\n");
+        w.push_str("    fn new(v: T) -> Self {\n");
+        w.push_str("        JuxAsyncMutex { inner: std::sync::Arc::new(futures::lock::Mutex::new(v)) }\n");
+        w.push_str("    }\n");
+        w.push_str("    async fn lock(&self) -> futures::lock::MutexGuard<'_, T> {\n");
+        w.push_str("        self.inner.lock().await\n");
+        w.push_str("    }\n");
+        w.push_str("}\n\n");
         // Worker pool — per JUX-ASYNC-ADDENDUM §18.2. `Worker.spawn(f)`
         // runs `f` on a real OS thread from the system's thread
         // pool and returns a `Task<T>` (a Future yielding the
