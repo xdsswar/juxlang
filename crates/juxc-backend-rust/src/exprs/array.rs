@@ -22,6 +22,7 @@ impl RustEmitter {
     /// A future pass with a real type table can drop the cast when the
     /// index expression's static type is already `usize` (Jux `uint`).
     pub(crate) fn emit_index(&mut self, i: &IndexExpr) {
+        let emitting_lvalue = self.emitting_lvalue;
         self.emit_expr(&i.array);
         self.w.push('[');
         if matches!(&*i.index, Expr::Literal(Literal::Int(_))) {
@@ -32,6 +33,38 @@ impl RustEmitter {
             self.w.push_str(") as usize");
         }
         self.w.push(']');
+        // Rvalue index reads of non-Copy elements (String, value
+        // classes, nested arrays) clone out — `xs[0]` would otherwise
+        // move out of the Vec (rustc E0507). Lvalue positions
+        // (`xs[i] = v`) and wrapper-class elements (whose share-clone
+        // the wrapper machinery appends at the use site) are skipped.
+        if !emitting_lvalue {
+            if let Some(elem_ty) = self
+                .expr_types
+                .get(&i.span)
+                .cloned()
+            {
+                let needs = match &elem_ty {
+                    juxc_tycheck::Ty::String | juxc_tycheck::Ty::Array { .. } => true,
+                    juxc_tycheck::Ty::User { name, .. } => {
+                        let bare = name.rsplit('.').next().unwrap_or(name);
+                        // Wrapper classes share-clone at use sites; tuple
+                        // sentinel and unknown names stay un-cloned.
+                        !self.wrapper_classes.contains(bare)
+                            && (self.symbols.classes.contains_key(name.as_str())
+                                || self
+                                    .symbols
+                                    .classes
+                                    .keys()
+                                    .any(|k| k.rsplit('.').next().unwrap_or(k) == bare))
+                    }
+                    _ => false,
+                };
+                if needs {
+                    self.w.push_str(".clone()");
+                }
+            }
+        }
     }
 
     /// Lower `new T[size]` to Rust `[default_for_T; size]`.

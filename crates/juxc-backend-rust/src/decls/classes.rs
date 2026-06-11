@@ -199,7 +199,10 @@ impl RustEmitter {
         if let Some(parent_ty) = &class_decl.extends {
             if !parent_is_sealed {
                 self.w.emit_indent();
-                self.w.push_str("__parent: ");
+                // `pub` so cross-package consumers can reach the
+                // slice — catch-clause upcasts (`(*payload).__parent`)
+                // run in the CATCHING package, not the declaring one.
+                self.w.push_str("pub __parent: ");
                 self.emit_type_as_rust(parent_ty);
                 self.w.push_str(",\n");
             }
@@ -622,7 +625,9 @@ impl RustEmitter {
         if let Some(parent_ty) = &class_decl.extends {
             if let Some(seg) = parent_ty.name.segments.last() {
                 self.w.emit_indent();
-                self.w.push_str("__parent: ");
+                // `pub` for the same cross-package reach as the plain
+                // class shape (catch upcasts, subclass chains).
+                self.w.push_str("pub __parent: ");
                 self.w.push_str(&seg.text);
                 self.w.push_str("_Inner");
                 // Thread the parent's generic args onto its inner type

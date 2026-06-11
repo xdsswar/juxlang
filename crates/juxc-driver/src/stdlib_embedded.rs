@@ -609,10 +609,74 @@ package jux.std.exceptions;
 
 public class Exception extends Throwable {
     /**
-     * Construct an Exception with the given diagnostic message.
+     * Chained cause, boxed in a 0/1-element array. The array gives
+     * the recursive `Exception -> Exception` link heap indirection —
+     * a direct `Exception? cause` field would make the value type
+     * infinitely sized. Read through `getCause()` — the `__` prefix
+     * marks it compiler-internal (public only so the inlined
+     * accessor copies in subclass packages can reach it).
+     */
+    public Exception[] __causeBox;
+
+    /**
+     * Exceptions suppressed while this one was in flight (§X.1.1) —
+     * appended by `addSuppressed`, e.g. when a `finally` throws while
+     * an exception is already unwinding. `__`-prefixed internal —
+     * read through `getSuppressed()`.
+     */
+    public Exception[] __suppressed;
+
+    /**
+     * Construct an Exception with the given diagnostic message and
+     * no cause.
      */
     public Exception(String message) {
         super(message);
+        this.__causeBox = new Exception[]{};
+        this.__suppressed = new Exception[]{};
+    }
+
+    /**
+     * Construct an Exception with a message and the exception that
+     * caused it (§X.1.1 / §X.2.3) — the wrap-and-rethrow form:
+     * `throw new Exception("config load failed", e);`.
+     */
+    public Exception(String message, Exception cause) {
+        super(message);
+        this.__causeBox = new Exception[]{cause};
+        this.__suppressed = new Exception[]{};
+    }
+
+    /**
+     * The exception that caused this one, or `null` when this is the
+     * root of the chain. Walk `getCause()` repeatedly to print a
+     * full causal chain.
+     */
+    public Exception? getCause() {
+        if (this.__causeBox.length == 0) {
+            return null;
+        }
+        return this.__causeBox[0];
+    }
+
+    /**
+     * Record an exception suppressed while this one was in flight
+     * (§X.1.1). Used by cleanup paths that fail during unwinding.
+     */
+    public void addSuppressed(Exception e) {
+        this.__suppressed.push(e);
+    }
+
+    /**
+     * Every exception recorded via `addSuppressed`, in insertion
+     * order (defensive copy). Empty when nothing was suppressed.
+     */
+    public Exception[] getSuppressed() {
+        var out = new Exception[]{};
+        for (var s : this.__suppressed) {
+            out.push(s);
+        }
+        return out;
     }
 }
 "###),

@@ -1613,7 +1613,7 @@ fn extends_lowers_to_wrapper_hierarchy() {
     // Dog's inner embeds Animal's INNER as `__parent` (not the
     // wrapper newtype) so the whole chain shares one RefCell.
     assert!(
-        rust.contains("pub struct Dog_Inner {\n    __parent: Animal_Inner,"),
+        rust.contains("pub struct Dog_Inner {\n    pub __parent: Animal_Inner,"),
         "inner embed: {rust}",
     );
     // Both classes wrap in `Rc<RefCell<_Inner>>`.
@@ -2184,7 +2184,7 @@ fn wrapper_hierarchy_inherited_field_walks_parent() {
     );
     // Child inner embeds the parent's INNER as `__parent`.
     assert!(
-        rust.contains("pub struct Dog_Inner {\n    __parent: Animal_Inner,"),
+        rust.contains("pub struct Dog_Inner {\n    pub __parent: Animal_Inner,"),
         "inner embed: {rust}",
     );
     // The inherited `birthday()` is inlined into Dog's impl and reads
@@ -2250,11 +2250,11 @@ fn wrapper_three_level_hierarchy_walks_two_parents() {
     );
     // `Dog_Inner` embeds `Mammal_Inner`, which embeds `Animal_Inner`.
     assert!(
-        rust.contains("pub struct Dog_Inner {\n    __parent: Mammal_Inner,"),
+        rust.contains("pub struct Dog_Inner {\n    pub __parent: Mammal_Inner,"),
         "Dog inner: {rust}",
     );
     assert!(
-        rust.contains("pub struct Mammal_Inner {\n    __parent: Animal_Inner,"),
+        rust.contains("pub struct Mammal_Inner {\n    pub __parent: Animal_Inner,"),
         "Mammal inner: {rust}",
     );
     // The inherited `name()` reaches the grandparent field across two

@@ -537,15 +537,32 @@ impl RustEmitter {
     /// recovered value, run the body, break out of the dispatch
     /// block; thread the payload onward on miss. Closes the match
     /// AND its enclosing `if let` (the caller opened both).
-    fn emit_catch_arm_body(&mut self, binder: &str, body: &juxc_ast::Block) {
+    fn emit_catch_arm_body(
+        &mut self,
+        binder: &str,
+        body: &juxc_ast::Block,
+        slice_depth: usize,
+        binder_mut: bool,
+    ) {
         self.w.indent_inc();
         self.w.emit_indent();
         self.w.push_str("Ok(__jux_boxed) => {\n");
         self.w.indent_inc();
         self.w.emit_indent();
         self.w.push_str("let ");
+        if binder_mut {
+            self.w.push_str("mut ");
+        }
         self.w.push_str(binder);
-        self.w.push_str(" = *__jux_boxed;\n");
+        self.w.push_str(" = (*__jux_boxed)");
+        // Upcast slice: a subclass payload binds the BASE slice the
+        // body was type-checked against (`__parent` per inheritance
+        // step). Phase-1 note: a rethrown binder carries the sliced
+        // type, not the original concrete one.
+        for _ in 0..slice_depth {
+            self.w.push_str(".__parent");
+        }
+        self.w.push_str(";\n");
         self.emit_block_contents(body);
         self.w.line("break '__jux_catch;");
         self.w.indent_dec();
@@ -556,6 +573,78 @@ impl RustEmitter {
         self.w.line("}");
         self.w.indent_dec();
         self.w.line("}");
+    }
+
+    /// Resolve a catch-clause TypeRef to its FQN key in the class
+    /// table — multi-segment paths join verbatim; bare names try the
+    /// exact key, then the unique-suffix scan.
+    fn resolve_catch_ty_fqn(&self, ty: &juxc_ast::TypeRef) -> Option<String> {
+        if ty.name.segments.len() > 1 {
+            return Some(
+                ty.name
+                    .segments
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            );
+        }
+        let bare = ty.name.segments.first()?.text.clone();
+        if self.symbols.classes.contains_key(&bare) {
+            return Some(bare);
+        }
+        self.symbols.find_fqn_by_bare(&bare)
+    }
+
+    /// Number of `extends` steps from `from` up to `to` (0 when they
+    /// are the same class); `None` when `to` isn't an ancestor.
+    fn extends_chain_distance(&self, from: &str, to: &str) -> Option<usize> {
+        let mut cur = from.to_string();
+        let mut depth = 0usize;
+        loop {
+            if cur == to {
+                return Some(depth);
+            }
+            if depth > 64 {
+                return None;
+            }
+            depth += 1;
+            cur = self.symbols.classes.get(&cur)?.extends_fqn.clone()?;
+        }
+    }
+
+    /// The catch binder's static type as an FQN: the declared type
+    /// for a single-type clause, or the most specific common
+    /// superclass of a multi-catch's alternatives (§X.3.6) — chain
+    /// intersection, mirroring tycheck's computation.
+    fn catch_binder_fqn(&self, tys: &[&juxc_ast::TypeRef]) -> Option<String> {
+        let fqns: Vec<String> = tys
+            .iter()
+            .map(|t| self.resolve_catch_ty_fqn(t))
+            .collect::<Option<Vec<_>>>()?;
+        if fqns.len() == 1 {
+            return Some(fqns[0].clone());
+        }
+        let chain = |start: &str| -> Vec<String> {
+            let mut out = Vec::new();
+            let mut cur = Some(start.to_string());
+            let mut depth = 0usize;
+            while let Some(n) = cur {
+                if depth > 64 {
+                    break;
+                }
+                depth += 1;
+                cur = self.symbols.classes.get(&n).and_then(|c| c.extends_fqn.clone());
+                out.push(n);
+            }
+            out
+        };
+        let first = chain(&fqns[0]);
+        let rest: Vec<Vec<String>> = fqns[1..].iter().map(|f| chain(f)).collect();
+        first
+            .iter()
+            .find(|cand| rest.iter().all(|ch| ch.contains(cand)))
+            .cloned()
     }
 
     /// Every known transitive SUBCLASS of the catch type `ty`, by
@@ -800,10 +889,25 @@ impl RustEmitter {
                 // can ever match.
                 let mut clause_tys = vec![&clause.ty];
                 clause_tys.extend(clause.alt_tys.iter());
+                // The binder's STATIC type: the declared type for a
+                // single-type clause; the most specific common
+                // supertype of the alternatives for a multi-catch
+                // (§X.3.6) — same computation tycheck used to type
+                // the body. Every arm binds a value of exactly this
+                // type by slicing the concrete payload's `__parent`
+                // chain, so the (shared) body compiles uniformly.
+                let binder_fqn = self.catch_binder_fqn(&clause_tys);
+                // Bind mutably only when the body actually mutates
+                // the binder (e.g. `e.addSuppressed(...)`).
+                let mut muts = std::collections::HashSet::new();
+                crate::analysis::collect_mutated_names(&clause.body, &mut muts, &self.user_mut_methods);
+                let binder_mut = muts.contains(&clause.name.text);
                 for ty in clause_tys {
-                    // Arms: the declared type first (resolved through
-                    // the regular type emitter), then each transitive
-                    // subclass by its crate-rooted path.
+                    let arm_fqn = self.resolve_catch_ty_fqn(ty);
+                    let depth = match (&arm_fqn, &binder_fqn) {
+                        (Some(a), Some(b)) => self.extends_chain_distance(a, b).unwrap_or(0),
+                        _ => 0,
+                    };
                     self.w
                         .line("if let Some(__jux_p) = __jux_payload_slot.take() {");
                     self.w.indent_inc();
@@ -811,8 +915,14 @@ impl RustEmitter {
                     self.w.push_str("match __jux_p.downcast::<");
                     self.emit_type_as_rust(ty);
                     self.w.push_str(">() {\n");
-                    self.emit_catch_arm_body(&clause.name.text, &clause.body);
+                    self.emit_catch_arm_body(&clause.name.text, &clause.body, depth, binder_mut);
                     for sub_fqn in self.catch_subclass_fqns(ty) {
+                        let sub_depth = match &binder_fqn {
+                            Some(b) => {
+                                self.extends_chain_distance(&sub_fqn, b).unwrap_or(0)
+                            }
+                            None => 0,
+                        };
                         self.w
                             .line("if let Some(__jux_p) = __jux_payload_slot.take() {");
                         self.w.indent_inc();
@@ -820,7 +930,12 @@ impl RustEmitter {
                         self.w.push_str("match __jux_p.downcast::<");
                         self.emit_fqn_path_in_rust(&sub_fqn, sub_fqn.contains('.'));
                         self.w.push_str(">() {\n");
-                        self.emit_catch_arm_body(&clause.name.text, &clause.body);
+                        self.emit_catch_arm_body(
+                            &clause.name.text,
+                            &clause.body,
+                            sub_depth,
+                            binder_mut,
+                        );
                     }
                 }
             }
