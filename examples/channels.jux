@@ -1,0 +1,32 @@
+// Channel<T> (JUX-ASYNC v2 §18.3) — bounded async channels.
+//
+// - `new Channel<T>(capacity)`: `send` suspends when full, `receive`
+//   suspends when empty and resolves null once closed and drained.
+// - The handle crosses task boundaries (spawn clone-rebinds shared
+//   captures), giving the classic producer/consumer shape.
+
+package channels;
+
+async void pipeline() {
+    var ch = new Channel<int>(4);
+    spawn(async () -> {
+        for (var i : 1..=5) {
+            await ch.send(i * 10);
+        }
+        ch.close();
+    });
+    var total = 0;
+    while (true) {
+        var item = await ch.receive();
+        if (item == null) {
+            break;
+        }
+        total = total + item!!;
+    }
+    print(total);
+}
+
+public void main() {
+    block_on(pipeline());
+    print("done");
+}

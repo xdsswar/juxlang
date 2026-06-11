@@ -76,7 +76,10 @@ fn int_main_returns_isize() {
 fn var_lowers_to_let_not_let_mut() {
     let rust = emit("public void main() { var x = 10; print(x); }");
     assert!(rust.contains("let x = 10;"), "expected `let x = 10;`, got: {rust}");
-    assert!(!rust.contains("let mut"), "no `let mut` expected, got: {rust}");
+    // Scope the negative assertion to the user's binding — the
+    // emitted runtime prelude (channels, tasks) legitimately uses
+    // `let mut` internally.
+    assert!(!rust.contains("let mut x"), "no `let mut x` expected, got: {rust}");
 }
 
 /// Integer literals are emitted without a `i64` / `i32` suffix —
@@ -795,7 +798,9 @@ fn nint_and_nuint_are_not_primitives() {
     let rust = emit("public void f(nint x) {}");
     // Falls through to verbatim — `nint` emitted as-is, not mapped.
     assert!(rust.contains("fn f(x: nint)"), "got: {rust}");
-    assert!(!rust.contains("isize"), "should not silently map to isize: {rust}");
+    // Scoped: the runtime prelude uses isize internally (channel
+    // capacities); the PARAM must not silently map.
+    assert!(!rust.contains("x: isize"), "should not silently map to isize: {rust}");
 }
 
 // -----------------------------------------------------------------

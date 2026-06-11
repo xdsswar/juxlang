@@ -333,6 +333,26 @@ impl RustEmitter {
                 // `std::path::PathBuf::new()` — never the Jux
                 // `crate::rust::std::PathBuf`. The real path is recorded on
                 // `ClassSig::rust_path` from the `@rust("…")` annotation.
+                // `new Channel<T>(capacity)` — async-runtime builtin
+                // type (§18.3); lowers to the emitted JuxChannel
+                // helper. Recognized before user-class resolution so
+                // no stdlib stub is needed.
+                if n.class_name.segments.len() == 1
+                    && n.class_name.segments[0].text == "Channel"
+                    && !self.symbols.classes.contains_key("Channel")
+                {
+                    self.w.push_str("crate::JuxChannel::new(");
+                    let prev = self.emitting_format_arg;
+                    self.emitting_format_arg = false;
+                    if let Some(cap) = n.args.first() {
+                        self.emit_expr(cap);
+                    } else {
+                        self.w.push('1');
+                    }
+                    self.emitting_format_arg = prev;
+                    self.w.push(')');
+                    return;
+                }
                 let (path, prepend_crate) = if let Some(real) =
                     self.external_class_real_path(&n.class_name)
                 {
