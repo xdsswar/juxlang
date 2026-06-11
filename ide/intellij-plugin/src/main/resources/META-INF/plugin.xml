@@ -218,6 +218,32 @@
     <langCodeStyleSettingsProvider
         implementation="dev.jux.intellij.format.JuxLanguageCodeStyleSettingsProvider"/>
 
+    <!-- Native inspections (IDE-side, no LSP needed) with quick-fixes. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxUnusedImport"
+        displayName="Unused or duplicate import"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxUnusedImportInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxUnusedLocalSymbol"
+        displayName="Unused local variable, parameter, or private field"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxUnusedLocalSymbolInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxMissingOverride"
+        displayName="Missing @override annotation"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WEAK WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxMissingOverrideInspection"/>
+
     <!-- New Project / New Module support: the "Jux" generator scaffolds a
          jux.toml + src/main.jux project (§I — project model). -->
     <moduleType

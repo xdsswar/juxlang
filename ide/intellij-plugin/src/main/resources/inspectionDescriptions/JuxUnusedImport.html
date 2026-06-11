@@ -1,0 +1,11 @@
+<html>
+<body>
+Reports <code>import</code> statements that bind no name referenced anywhere in the file,
+and exact duplicates. The analysis matches <b>Optimize Imports</b> (Ctrl+Alt+O), so the
+quick-fix and the action always agree.
+<p>
+Wildcard imports (<code>import a.b.*</code>) are never flagged — their usage can't be
+proven from one file alone.
+</p>
+</body>
+</html>
