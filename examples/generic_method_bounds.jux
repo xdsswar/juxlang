@@ -1,0 +1,59 @@
+// Generic-parameter `extends` bounds, enforced at the Jux level
+// (§T.4, E0446) — on generic METHODS and on class instantiation.
+// A violation is a clean juxc diagnostic, never a leaked rustc
+// trait-bound error.
+
+package bounds;
+
+public interface Shape {
+    double area();
+}
+
+public class Circle implements Shape {
+    public double r;
+    public Circle(double r) { this.r = r; }
+
+    @Override
+    public double area() {
+        return 3.14159 * r * r;
+    }
+}
+
+public class Square implements Shape {
+    public double side;
+    public Square(double side) { this.side = side; }
+
+    @Override
+    public double area() {
+        return side * side;
+    }
+}
+
+public class Measurer {
+    public Measurer() {}
+
+    // Method-level bounded generic: T must implement Shape, so the
+    // body can call area() on it.
+    public <T extends Shape> double doubled(T shape) {
+        return shape.area() * 2.0;
+    }
+}
+
+// Class-level bounded generic.
+public class Holder<T extends Shape> {
+    public T item;
+    public Holder(T item) { this.item = item; }
+
+    public double itemArea() {
+        return item.area();
+    }
+}
+
+public void main() {
+    var m = new Measurer();
+    print(m.doubled(new Circle(1.0)));   // 6.28318
+    print(m.doubled(new Square(3.0)));   // 18
+
+    var h = new Holder<Square>(new Square(2.0));
+    print(h.itemArea());                 // 4
+}

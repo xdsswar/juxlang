@@ -365,6 +365,13 @@ pub enum Code {
     /// (`if (buf == null) buf = new int[n];` with a `T?` param)
     /// as the Phase-1 workaround.
     E0449_DefaultArgParamRef,
+    /// E0446 — A **generic argument violates its parameter's `extends`
+    /// bound**: `class Box<T extends Shape>` instantiated with a type
+    /// that neither implements nor extends `Shape`, or a generic
+    /// method `<T extends B> f(T x)` called with an out-of-bound
+    /// argument. Caught at the Jux level so the violation never leaks
+    /// as rustc's E0277 trait-bound error on the emitted crate.
+    E0446_GenericBoundNotSatisfied,
     /// E0445 — A **const-generic form outside the Phase-1 core subset**.
     /// The core subset (grammar §A.2.6, type-system §T.11.3) covers:
     /// declaring `<int N>` / `<bool B>` params, using `N` as a fixed
@@ -533,6 +540,7 @@ impl Code {
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0449_DefaultArgParamRef       => "E0449",
             Code::E0445_ConstGenericUnsupported  => "E0445",
+            Code::E0446_GenericBoundNotSatisfied => "E0446",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0701_AsyncNotInProfile        => "E0701",
             Code::E0702_ObjectCapturedBySpawn    => "E0702",
