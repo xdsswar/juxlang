@@ -7,15 +7,16 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import dev.jux.intellij.JuxFileType
-import dev.jux.intellij.run.JuxToolchain
+import dev.jux.intellij.run.JuxLspCommandLine
 
 /**
  * Wires `juxc-lsp` into the IDE's **native** LSP API (§I.6).
  *
  * Referenced only from `lsp.xml`, which loads exclusively when the
- * `com.intellij.modules.ultimate` module is present (the native LSP API lives
- * in paid IDEs). On IDEs without it, this class is never loaded — so it can't
- * crash a Community-only IDE.
+ * `com.intellij.modules.lsp` module is present (all commercial IDEs, and
+ * unified IDEA free mode since 2025.2). On IDEs without it, this class is
+ * never loaded — so it can't crash a Community-only IDE; those get the
+ * LSP4IJ fallback (`dev.jux.intellij.lsp4ij`) instead.
  *
  * When a `.jux` file opens, the IDE starts (or reuses) one project-wide
  * `juxc-lsp` process. All semantic features — diagnostics, hover, completion,
@@ -27,6 +28,10 @@ class JuxLspServerSupportProvider : LspServerSupportProvider {
         file: VirtualFile,
         serverStarter: LspServerSupportProvider.LspServerStarter,
     ) {
+        // Never spawn the server inside the headless test fixture — the LSP
+        // manager restarts the highlighting daemon, which the platform's
+        // test assertions (correctly) forbid mid-highlighting.
+        if (com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode) return
         // Defensive: a failure here must never surface as an IDE error.
         try {
             if (file.fileType == JuxFileType) {
@@ -43,14 +48,14 @@ class JuxLspServerSupportProvider : LspServerSupportProvider {
 }
 
 /**
- * Describes how to launch the Jux language server: the `juxc-lsp` binary,
- * resolved via [JuxToolchain] (`$JUX_HOME` → `PATH`). If it can't be found,
- * the LSP framework reports the server as failed-to-start in the IDE's
- * Language Servers tool window — it does not crash the IDE.
+ * Describes how to launch the Jux language server: the shared
+ * [JuxLspCommandLine] (toolchain-resolved `juxc-lsp`, same command the LSP4IJ
+ * fallback uses). If the binary can't be found, the LSP framework reports the
+ * server as failed-to-start in the IDE's Language Servers tool window — it
+ * does not crash the IDE.
  */
 class JuxLspDescriptor(project: Project) : ProjectWideLspServerDescriptor(project, "Jux") {
     override fun isSupportedFile(file: VirtualFile): Boolean = file.fileType == JuxFileType
 
-    override fun createCommandLine(): GeneralCommandLine =
-        GeneralCommandLine(JuxToolchain.resolveJuxcLsp())
+    override fun createCommandLine(): GeneralCommandLine = JuxLspCommandLine.create()
 }

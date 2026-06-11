@@ -19,11 +19,16 @@ class JuxSettingsEditor : SettingsEditor<JuxRunConfiguration>() {
     private val panel: JPanel
 
     init {
+        // TextBrowseFolderListener form: present on every platform since 242 —
+        // the 2-arg addBrowseFolderListener(Project, descriptor) overload only
+        // exists on newer builds (verifier flags NoSuchMethodError on 2024.2).
         fileField.addBrowseFolderListener(
-            null,
-            FileChooserDescriptorFactory.createSingleFileDescriptor("jux")
-                .withTitle("Select Jux File")
-                .withDescription("Choose the .jux file to run"),
+            com.intellij.openapi.ui.TextBrowseFolderListener(
+                FileChooserDescriptorFactory.createSingleFileDescriptor("jux")
+                    .withTitle("Select Jux File")
+                    .withDescription("Choose the .jux file to run"),
+                null,
+            ),
         )
         juxcField.emptyText.text = "auto ( \$JUX_HOME / PATH )"
         panel = FormBuilder.createFormBuilder()

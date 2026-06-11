@@ -30,10 +30,29 @@ dependencies {
         // 2025.3; `intellijIdea(...)` is the current entry point.)
         intellijIdea(providers.gradleProperty("platformVersion").get())
 
+        // LSP4IJ: compile-time API for the Community-edition fallback client
+        // (META-INF/lsp4ij.xml → dev.jux.intellij.lsp4ij). Optional at
+        // runtime via <depends optional="true">. Pinned: LSP4IJ is pre-1.0,
+        // bump deliberately and re-test. NEVER add an org.eclipse.lsp4j
+        // dependency here — LSP4J loads from LSP4IJ's classloader, and a
+        // second copy causes ClassCastExceptions.
+        plugin("com.redhat.devtools.lsp4ij:0.19.4")
+
         // Headless platform test fixtures (ParsingTestCase et al.).
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
     }
     testImplementation("junit:junit:4.13.2")
+}
+
+// Sandbox run on the last Community line (IC discontinued at 2025.3) with
+// LSP4IJ installed — verifies the fallback client end-to-end:
+//   .\gradlew.bat runIdeCommunity
+val runIdeCommunity by intellijPlatformTesting.runIde.registering {
+    type = org.jetbrains.intellij.platform.gradle.IntelliJPlatformType.IntellijIdeaCommunity
+    version = "2025.1.3"
+    plugins {
+        plugin("com.redhat.devtools.lsp4ij:0.19.4")
+    }
 }
 
 tasks.test {
@@ -47,6 +66,18 @@ intellijPlatform {
             // No untilBuild cap: track the latest stable on each push.
             untilBuild = provider { null }
         }
+    }
+    pluginVerification {
+        // Fail ONLY on real compatibility problems (unresolved classes/
+        // methods/fields → runtime linkage errors). Internal-API usage stays a
+        // report-only signal: on 2024.2 the verifier flags Kotlin
+        // interface-bridge artifacts (`ToolWindowFactory.getAnchor/getIcon/
+        // manage` "overridden" by our factory without any such source
+        // override) that cannot be removed by editing source — failing on
+        // them would make every verify run red regardless of our code.
+        failureLevel = listOf(
+            org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS,
+        )
     }
 }
 
