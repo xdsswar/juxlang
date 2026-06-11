@@ -35,6 +35,9 @@ juxc-parse       = { workspace = true }
 # LSP scaffolding (§L.4). We re-export lsp types through `tower_lsp::lsp_types`
 # so the LSP type version always matches `tower-lsp`'s.
 tower-lsp        = { workspace = true }
+# `completionItem/resolve` round-trips a small JSON payload (`data` on each
+# completion item) identifying the declaring symbol; serde_json builds/reads it.
+serde_json       = { workspace = true }
 tokio            = { workspace = true }
 dashmap          = { workspace = true }
 ropey            = { workspace = true }

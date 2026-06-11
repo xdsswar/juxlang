@@ -14,6 +14,7 @@ mod diagnostics;
 mod doc;
 mod intel;
 mod position;
+mod scope;
 mod server;
 mod workspace;
 
