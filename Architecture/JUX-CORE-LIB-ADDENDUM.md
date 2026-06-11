@@ -381,6 +381,7 @@ public final class String {                                  // operators only �
     public Iterable<char> chars();
 
     public String concat(String other);                          -- used by + and $"..."
+    public String repeat(int times);                             -- n copies concatenated; "" when times == 0
     public String substring(int charStart, int charEnd) throws IndexOutOfBoundsException;
     public String substringBytes(int byteStart, int byteEnd) throws EncodingException, IndexOutOfBoundsException;
 
@@ -606,6 +607,12 @@ public static char fromCodePoint(uint cp) throws IllegalArgumentException;
 These methods are **intrinsics**: the compiler recognizes them by name and may emit direct machine instructions for performance-critical ones (`countOnes` → `popcnt`, `leadingZeros` → `lzcnt`, `sqrt` → `sqrtsd`, etc.). On targets without the corresponding instruction, the compiler emits a portable software implementation.
 
 The full set is too large to specify here exhaustively; the canonical list is in `core.numeric`'s source as the implementation lands. The compiler must support every method named here and behave as documented.
+
+**Phase-1 implementation notes.** The instance-method surface above and the type-name constants (`int.MAX_VALUE`, `double.NAN`, `double.POSITIVE_INFINITY`, `double.EPSILON`, …; float `MIN_VALUE` is the smallest positive value, Java-style) lower to the matching Rust operations at the receiver's exact width — a `byte` `wrappingAdd` wraps at 8 bits. Deviations, to be closed in a later phase:
+
+- Integer `abs()` on `T.MIN_VALUE` follows the general overflow rule of `JUX-SEMANTICS-ADDENDUM.md` §S.2 (panic in debug, wrap in release) instead of throwing a catchable `ArithmeticException`. Use `saturatingAbs()` or `checkedAdd`-style guards where the edge matters.
+- The static constructors `fromBits(uint)` and `char.fromCodePoint(uint)` are not yet available.
+- `bits()` returns `uint` for both `float` and `double` (the spec's `ulong` for `double` is width-identical on 64-bit targets).
 
 ---
 

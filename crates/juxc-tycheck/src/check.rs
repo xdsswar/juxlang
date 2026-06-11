@@ -172,6 +172,8 @@ const BUILTIN_STRING_METHODS: &[&str] = &[
     "split", "trim", "contains", "startsWith", "endsWith",
     "toUpperCase", "toLowerCase", "replace", "indexOf",
     "substring", "charAt", "isEmpty",
+    // §K.7 surface: explicit byte/char length forms + repeat.
+    "byteLength", "charLength", "repeat",
 ];
 
 /// Methods we let through on **a Map receiver** without checking
@@ -3570,6 +3572,12 @@ impl<'a> Checker<'a> {
 
             Expr::Field(field) => {
                 let method_name = field.field.text.as_str();
+                // Record the receiver's inferred type up front so the
+                // backend can dispatch builtin/intrinsic methods on ANY
+                // receiver shape — including compound expressions like
+                // `(0.0 / 0.0).isNaN()` that no other recording path
+                // visits. Type-name receivers record Unknown; harmless.
+                self.infer_and_record(&field.object);
                 // **`Worker.spawn(closure)` thread-capture gate (E0702).**
                 // The closure crosses an OS-thread boundary, but Phase-1
                 // objects are `Rc`-backed (`!Send`) — a class-typed

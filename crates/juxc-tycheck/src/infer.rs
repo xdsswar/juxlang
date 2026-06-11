@@ -42,8 +42,8 @@ use crate::env::TypeEnv;
 use crate::symbol_table::{MethodSig, SymbolTable};
 use crate::ty::{
     compose_extends_substitution, explicit_generic_arg_map, infer_generic_args,
-    lower_member_type, substitute, substitute_via_inference, ty_from_ref, ArrayKind,
-    Primitive, Ty,
+    lower_member_type, primitive_from_name, substitute, substitute_via_inference,
+    ty_from_ref, ArrayKind, Primitive, Ty,
 };
 
 // ============================================================================
@@ -346,6 +346,25 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                         name: fqn.to_string(),
                         generic_args: Vec::new(),
                     };
+                }
+            }
+            // §K.11 primitive-type constants: `int.MAX_VALUE`,
+            // `double.NAN`, … typed as the primitive itself. The
+            // receiver is the type NAME (a keyword — no shadowing).
+            if let Some(prim) = primitive_from_name(&qn.segments[0].text) {
+                let is_float = matches!(
+                    prim,
+                    Primitive::Float | Primitive::Double | Primitive::F32 | Primitive::F64
+                );
+                let known = match f.field.text.as_str() {
+                    "MIN_VALUE" | "MAX_VALUE" => {
+                        !matches!(prim, Primitive::Bool | Primitive::Char)
+                    }
+                    "NAN" | "POSITIVE_INFINITY" | "NEGATIVE_INFINITY" | "EPSILON" => is_float,
+                    _ => false,
+                };
+                if known {
+                    return Ty::Primitive(prim);
                 }
             }
         }
@@ -740,9 +759,11 @@ fn infer_stdlib_method(
         Ty::String => match method_name {
             // String → String
             "trim" | "toUpperCase" | "toLowerCase" | "replace" | "substring"
-            | "to_string" | "clone" => Some(Ty::String),
+            | "repeat" | "to_string" | "clone" => Some(Ty::String),
             // String → int
-            "length" | "len" | "indexOf" => Some(Ty::Primitive(Primitive::Int)),
+            "length" | "len" | "indexOf" | "byteLength" | "charLength" => {
+                Some(Ty::Primitive(Primitive::Int))
+            }
             // String → bool
             "contains" | "startsWith" | "endsWith" | "isEmpty" => {
                 Some(Ty::Primitive(Primitive::Bool))
@@ -756,6 +777,66 @@ fn infer_stdlib_method(
             }),
             _ => None,
         },
+        // §K.11 numeric / char intrinsics on primitive receivers.
+        // Checked forms produce the Jux `Result<T, ArithmeticException>`
+        // enum so `switch`/`?`-propagation see the real shape.
+        Ty::Primitive(prim) => {
+            let prim = *prim;
+            let is_float = matches!(
+                prim,
+                Primitive::Float | Primitive::Double | Primitive::F32 | Primitive::F64
+            );
+            let is_char = matches!(prim, Primitive::Char);
+            let is_int = !is_float && !is_char && !matches!(prim, Primitive::Bool);
+            let checked_result = |ok: Ty| Ty::User {
+                name: "jux.std.result.Result".to_string(),
+                generic_args: vec![
+                    ok,
+                    Ty::User {
+                        name: "jux.std.exceptions.ArithmeticException".to_string(),
+                        generic_args: Vec::new(),
+                    },
+                ],
+            };
+            if is_char {
+                return match method_name {
+                    "isDigit" | "isAlphabetic" | "isWhitespace" | "isUppercase"
+                    | "isLowercase" => Some(Ty::Primitive(Primitive::Bool)),
+                    "toUppercase" | "toLowercase" => Some(Ty::Primitive(Primitive::Char)),
+                    "codePoint" => Some(Ty::Primitive(Primitive::Uint)),
+                    _ => None,
+                };
+            }
+            if is_float {
+                return match method_name {
+                    "sqrt" | "floor" | "ceil" | "round" | "abs" => Some(Ty::Primitive(prim)),
+                    "isNaN" | "isInfinite" | "isFinite" | "bitsEqual" => {
+                        Some(Ty::Primitive(Primitive::Bool))
+                    }
+                    "bits" => Some(Ty::Primitive(Primitive::Uint)),
+                    "totalOrder" => Some(Ty::Primitive(Primitive::Int)),
+                    "toFixed" => Some(Ty::String),
+                    _ => None,
+                };
+            }
+            if is_int {
+                return match method_name {
+                    "abs" | "saturatingAbs" | "saturatingAdd" | "saturatingSub"
+                    | "saturatingMul" | "wrappingAdd" | "wrappingSub" | "wrappingMul"
+                    | "rotateLeft" | "rotateRight" => Some(Ty::Primitive(prim)),
+                    "countOnes" | "leadingZeros" | "trailingZeros" | "saturatingToInt" => {
+                        Some(Ty::Primitive(Primitive::Int))
+                    }
+                    "checkedAdd" | "checkedSub" | "checkedMul" | "checkedDiv" => {
+                        Some(checked_result(Ty::Primitive(prim)))
+                    }
+                    "toInt" => Some(checked_result(Ty::Primitive(Primitive::Int))),
+                    "toHex" | "toBinary" | "toOctal" => Some(Ty::String),
+                    _ => None,
+                };
+            }
+            None
+        }
         // `Map<K, V>` — stdlib HashMap. Method return shapes
         // mirror the spec's expected behavior.
         Ty::User { name, generic_args } if name.rsplit('.').next().unwrap_or(name) == "HashMap" => {
