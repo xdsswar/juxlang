@@ -770,6 +770,18 @@ impl RustEmitter {
             None
         };
         if let Some(simple) = simple {
+            // Seed nullable-locals from this constructor's `T?` params, exactly
+            // as the inline simple-ctor (~:264) and `__self`-builder (~:848)
+            // paths do, so `emit_ctor_field_init` → `expression_is_already_nullable`
+            // sees a `T?` param assigned to a `T?` field and does NOT re-wrap it
+            // (`Some(Some(d))`). Without this the wrapped builder double-`Some`s a
+            // nullable generic field initialized from a nullable ctor param.
+            self.nullable_locals.clear();
+            for p in &ctor.params {
+                if p.ty.nullable {
+                    self.nullable_locals.insert(p.name.text.clone());
+                }
+            }
             // `C_Inner { __parent: Parent::new_inner(super_args), … }`.
             self.w.emit_indent();
             self.emit_wrapper_simple_ctor_inner(class_decl, &inner, &simple);

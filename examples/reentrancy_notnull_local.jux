@@ -1,0 +1,29 @@
+// Re-entrancy through a `!!`-asserted wrapped field receiver on a LOCAL (not
+// `this`): `a.inner!!.touch()`. Confirms the borrow-hoist isn't `this`-specific —
+// any `<wrappedField>!!.m()` must drop the field-read borrow before `m()` runs,
+// here because `touch()` re-enters and mutates `a`. Correct output: `count=1`.
+
+public class Outer {
+    public int count;
+    public Inner? inner;
+    public Outer() { this.count = 0; this.inner = null; }
+    public void setup() { this.inner = new Inner(this); }
+    public void poke() { this.count = this.count + 1; }
+}
+
+public class Inner {
+    public int value;
+    public Outer back;
+    public Inner(Outer o) { this.value = 0; this.back = o; }
+    public void touch() {
+        this.value = this.value + 1;
+        this.back.poke();
+    }
+}
+
+public void main() {
+    var a = new Outer();
+    a.setup();
+    a.inner!!.touch();
+    print("count=" + a.count);
+}

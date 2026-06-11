@@ -1,0 +1,25 @@
+// A generic class implementing a generic interface, used polymorphically through
+// the interface-typed slot. Generic dispatch through an *interface* is the
+// supported route in Phase 1 (a generic *class* base is not — see
+// generic_base_unsupported.jux). Correct output: `42` then `hi`.
+
+public interface Container<T> {
+    public T get();
+    public void put(T v);
+}
+
+public class Box<T> implements Container<T> {
+    private T value;
+    public Box(T v) { this.value = v; }
+    public T get() { return this.value; }
+    public void put(T v) { this.value = v; }
+}
+
+public void main() {
+    Container<int> c = new Box<int>(10);
+    c.put(42);
+    print(c.get());          // expect 42
+
+    Container<String> s = new Box<String>("hi");
+    print(s.get());          // expect hi
+}

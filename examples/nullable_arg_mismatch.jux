@@ -1,0 +1,18 @@
+// Negative: a nullable `Animal?` value must not flow into a non-null `Animal`
+// parameter slot without an unwrap. juxc must reject this itself with [E0410]
+// rather than leak a rustc type error on the generated code.
+
+public class Animal {
+    public String name;
+    public Animal(String name) { this.name = name; }
+}
+
+public String pluck(Animal a) {
+    return a.name;
+}
+
+public void main() {
+    Animal? maybe = null;
+    String s = pluck(maybe);   // [E0410] expected Animal, found Animal?
+    print(s);
+}
