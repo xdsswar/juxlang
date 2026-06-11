@@ -36,11 +36,20 @@ Gaps are grouped by category, not priority. The summary table at the end orders 
 
 ## Category 1 — Standard Library
 
-### 1.1. Foundational Interfaces
+### 1.1. Foundational Interfaces — ✅ RESOLVED (superseded design)
 
-**Priority:** Blocking
-**Size:** S (~150 lines)
-**Blocks:** Everything in std. Every example in §7.8 (generics) references `Comparable<T>` without defining it.
+> **Note (2026-06-11):** This gap is **resolved**, but NOT as the interface roster
+> sketched below — that design was **superseded**. `JUX-CORE-LIB-ADDENDUM.md` §72
+> and `JUX-OPERATORS-ADDENDUM.md` decided that Jux has **no** `Equatable`,
+> `Hashable`, `Comparable`, `Cloneable`, `Displayable`, or `Sized` interface.
+> Equality, ordering, hashing, and formatting are **operator overrides**
+> (`operator==`, `operator hash`, `operator string`, the four ordering operators),
+> C++-style — no interface ceremony, no magic method names. The compiler
+> implements and enforces this (consistency codes E0930 ordering-completeness /
+> E0931 equality⇔hashing). The **only** nominal foundational interfaces are
+> `Iterable<T>` / `Iterator<T>` (`next() -> T?`), specified in `JUX-CORE-LIB`
+> §K.5 and driving `for-each` desugaring — both implemented (`user_iterable.jux`).
+> The original interface-based sketch is retained below for historical context.
 
 The dossier mentions `Comparable`, `Iterable`, `Cloneable`, `Hashable` informally but never specifies them. These interfaces are the foundation every other std type builds on.
 
@@ -489,7 +498,7 @@ The order suggested for sequencing addenda:
 
 | # | Addendum | Priority | Size | Why now |
 |---|----------|----------|------|---------|
-| 1 | §19.1 — Foundational Interfaces | Blocking | S | Unblocks all of std, plus generic constraints already used in examples |
+| 1 | ~~§19.1 — Foundational Interfaces~~ | ✅ resolved | — | Superseded by the **operator-based** value-semantics design (`JUX-CORE-LIB` §72); only `Iterable`/`Iterator` are nominal, both implemented. See §1.1 note. |
 | 2 | §19.2 — Exception Hierarchy | Blocking | S | Every `throws` clause references undefined `Exception` |
 | 3 | §3.2 + §8 — `unsafe` and FFI Boundaries | Blocking | M | Decide before any real FFI work |
 | 4 | §18.6 — Async Streams | Blocking | S | Needed for real I/O examples |
