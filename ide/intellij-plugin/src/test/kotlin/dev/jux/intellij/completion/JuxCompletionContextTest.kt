@@ -52,4 +52,35 @@ class JuxCompletionContextTest : BasePlatformTestCase() {
         assertContainsElements(items, "package", "import", "public", "class")
         assertDoesntContain(items, "return", "this")
     }
+
+    /** Newer-surface keywords land in the right contexts (language-sync wave). */
+    fun testRecentKeywordsOfferedInTheirContexts() {
+        // `yield` / `case` / `default` are statement-position words (switch
+        // bodies); `sizeof` starts an expression.
+        val stmt = completionsAt(
+            """
+            public class A {
+                public void go() {
+                    <caret>
+                }
+            }
+            """.trimIndent(),
+        )
+        assertContainsElements(stmt, "yield", "case", "default", "sizeof")
+
+        // `permits` belongs to type headers — member context (nested types)
+        // and top level both offer it; statements must not.
+        val member = completionsAt(
+            """
+            public class A {
+                <caret>
+            }
+            """.trimIndent(),
+        )
+        assertContainsElements(member, "permits", "extends", "implements")
+        assertDoesntContain(stmt, "permits")
+
+        val top = completionsAt("<caret>")
+        assertContainsElements(top, "extends", "implements", "permits")
+    }
 }

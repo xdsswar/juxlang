@@ -167,9 +167,10 @@ object JuxSpacingRules {
     private val LOGICAL_OPS = TokenSet.create(T.AND_AND, T.OR_OR)
     private val EQUALITY_OPS = TokenSet.create(T.EQ_EQ, T.NOT_EQ, T.STRICT_EQ, T.STRICT_NOT_EQ)
     private val RELATIONAL_OPS = TokenSet.create(T.LT, T.LE, T.GT, T.GE)
-    private val SHIFT_OPS = TokenSet.create(T.LT_LT, T.GT_GT)
-    private val ADDITIVE_OPS = TokenSet.create(T.PLUS, T.MINUS)
-    private val MULTIPLICATIVE_OPS = TokenSet.create(T.STAR, T.SLASH, T.PERCENT)
+    // Wrapping variants (`+%`, `<<%`, …) space exactly like their base ops.
+    private val SHIFT_OPS = TokenSet.create(T.LT_LT, T.GT_GT, T.LT_LT_PERCENT, T.GT_GT_PERCENT)
+    private val ADDITIVE_OPS = TokenSet.create(T.PLUS, T.MINUS, T.PLUS_PERCENT, T.MINUS_PERCENT)
+    private val MULTIPLICATIVE_OPS = TokenSet.create(T.STAR, T.SLASH, T.PERCENT, T.STAR_PERCENT)
     private val BITWISE_OPS = TokenSet.create(T.AMP, T.PIPE, T.CARET)
     private val ELVIS_OPS = TokenSet.create(T.QUESTION_COLON, T.QUESTION_QUESTION)
 
