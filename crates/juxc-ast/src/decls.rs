@@ -741,6 +741,9 @@ pub struct FnDecl {
     pub params: Vec<Param>,
     /// `throws` clause, listing exception types that may escape.
     pub throws: Vec<QualifiedName>,
+    /// `where` constraints (§O.5) — empty for non-generic functions
+    /// and unconstrained generics.
+    pub wheres: Vec<WhereConstraint>,
     /// Body block, or `None` for `abstract`/`native` declarations.
     pub body: Option<Block>,
     /// True when this `FnDecl` was synthesized from an expression-
@@ -817,5 +820,24 @@ pub struct Param {
     /// last-parameter-only check (E0212).
     pub is_varargs: bool,
     /// Span of the entire parameter.
+    pub span: Span,
+}
+
+/// One `where T has operator OP(params) -> R` constraint (§O.5) on
+/// a generic function — a STRUCTURAL capability requirement on a
+/// type parameter. Phase 1 records the full shape but enforces
+/// operator PRESENCE at instantiation sites (E0941); the param/return
+/// shapes inform emission bounds.
+#[derive(Debug, Clone)]
+pub struct WhereConstraint {
+    /// The constrained type parameter (`T`).
+    pub param: Ident,
+    /// Required operator.
+    pub kind: OperatorKind,
+    /// Declared operand types of the operator shape (often `[T]`).
+    pub param_tys: Vec<TypeRef>,
+    /// Declared return type of the operator shape.
+    pub ret: Option<TypeRef>,
+    /// Span of the whole constraint.
     pub span: Span,
 }

@@ -3143,6 +3143,7 @@ fn substitute_fn_signature(
         generic_params: m.generic_params.clone(),
         params,
         throws: m.throws.clone(),
+        wheres: m.wheres.clone(),
         body: m.body.clone(),
         is_property: m.is_property,
         span: m.span,

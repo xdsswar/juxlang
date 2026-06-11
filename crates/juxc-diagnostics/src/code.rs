@@ -332,6 +332,14 @@ pub enum Code {
     /// `?` on a non-propagatable operand type, and (Phase 1) for `?`
     /// inside a `try` body, where the early return would bypass the
     /// unwinding machinery.
+    /// E0941 — A **where-constraint isn't satisfied** (§O.5): the
+    /// type bound to a constrained generic parameter doesn't declare
+    /// the required operator — `max<T>(..) where T has operator<=>(T)`
+    /// called with a class that has no `operator<=>`. Primitives and
+    /// String satisfy the comparison/equality/hash/string families
+    /// natively. Declare the operator on the type, or call with one
+    /// that has it.
+    E0941_ConstraintNotSatisfied,
     E0730_QuestionIncompatibleReturn,
     /// E0731 — A **`?` propagation needs an explicit error-type
     /// conversion** (§X.4.3): the operand's error type isn't the
@@ -517,6 +525,7 @@ impl Code {
             Code::W0720_ReturnInFinally          => "W0720",
             Code::E0721_MultiCatchRelated        => "E0721",
             Code::E0711_UncaughtChecked          => "E0711",
+            Code::E0941_ConstraintNotSatisfied   => "E0941",
             Code::E0730_QuestionIncompatibleReturn => "E0730",
             Code::E0731_QuestionNeedsConversion  => "E0731",
             Code::E0450_AmbiguousOverload        => "E0450",

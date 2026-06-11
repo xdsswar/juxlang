@@ -1669,6 +1669,59 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
 
+        // where-clause per §O.5.1: `where T has operator OP(types) -> R`
+        // (comma-separated). `where` and `has` are contextual — they
+        // lex as identifiers.
+        let mut wheres = Vec::new();
+        if matches!(self.peek(), TokenKind::Ident(s) if s == "where") {
+            self.advance(); // 'where'
+            loop {
+                let c_start = self.peek_span();
+                let Some(param) = self.parse_ident() else { break };
+                if !matches!(self.peek(), TokenKind::Ident(s) if s == "has") {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "expected `has` in where-constraint — `where T has operator OP(..) -> R`",
+                        )
+                        .with_span(self.peek_span()),
+                    );
+                    break;
+                }
+                self.advance(); // 'has'
+                self.expect_kw(Keyword::Operator, "`operator` in where-constraint");
+                let Some(kind) = self.parse_operator_symbol() else { break };
+                self.expect(&TokenKind::LParen, "'(' in where-constraint operator shape");
+                let mut param_tys = Vec::new();
+                if !self.at(&TokenKind::RParen) {
+                    loop {
+                        let Some(t) = self.parse_type_ref() else { break };
+                        param_tys.push(t);
+                        if !self.eat(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                self.expect(&TokenKind::RParen, "')' in where-constraint operator shape");
+                let ret = if self.eat(&TokenKind::Arrow) {
+                    self.parse_type_ref()
+                } else {
+                    None
+                };
+                let end = self.last_consumed_span();
+                wheres.push(juxc_ast::WhereConstraint {
+                    param,
+                    kind,
+                    param_tys,
+                    ret,
+                    span: c_start.join(end),
+                });
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+
         // function-body = block | '=' expression ';' | ';'
         let body = if self.eat(&TokenKind::Semicolon) {
             // Abstract or native — no body.
@@ -1687,6 +1740,7 @@ impl<'a> Parser<'a> {
             generic_params,
             params,
             throws,
+            wheres,
             body,
             is_property: false,
             span: start.join(end),

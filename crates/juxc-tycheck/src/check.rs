@@ -752,6 +752,82 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// True when `ty` can satisfy a `where T has operator KIND`
+    /// constraint (§O.5): user classes/records by declaring the
+    /// operator; primitives and String through their native operator
+    /// families. `Unknown`/`Param` pass (don't cascade).
+    fn ty_satisfies_operator(&self, ty: &Ty, kind: OperatorKind) -> bool {
+        use OperatorKind as K;
+        match ty {
+            Ty::Unknown | Ty::Param(_) => true,
+            Ty::Primitive(p) => match kind {
+                K::Eq | K::Cmp | K::Hash | K::ToString => true,
+                K::Plus | K::Minus | K::Mul | K::Div | K::Rem | K::Neg => {
+                    !matches!(p, Primitive::Bool)
+                }
+                K::BitAnd | K::BitOr | K::BitXor | K::BitNot | K::Shl | K::Shr => {
+                    !matches!(p, Primitive::Bool | Primitive::Float | Primitive::Double)
+                }
+                _ => false,
+            },
+            Ty::String => matches!(kind, K::Eq | K::Cmp | K::Hash | K::ToString | K::Plus),
+            Ty::User { name, .. } => {
+                let class_ok = self
+                    .symbols
+                    .classes
+                    .get(name)
+                    .or_else(|| {
+                        self.resolve_class_fqn(name)
+                            .and_then(|fqn| self.symbols.classes.get(&fqn))
+                    })
+                    .map(|c| c.operators.get(&kind).is_some_and(|o| !o.is_deleted))
+                    .unwrap_or(false);
+                let record_ok = self
+                    .symbols
+                    .records
+                    .get(name)
+                    .map(|r| r.operators.get(&kind).is_some_and(|o| !o.is_deleted))
+                    .unwrap_or(false);
+                class_ok || record_ok
+            }
+            _ => false,
+        }
+    }
+
+    /// Enforce a callee's where-constraints (§O.5, E0941) against the
+    /// inferred/explicit instantiation. `None` entries (uninferred
+    /// slots) pass — they surface elsewhere.
+    fn enforce_where_constraints(
+        &mut self,
+        callee_name: &str,
+        wheres: &[(String, OperatorKind)],
+        generic_params: &[TypeParam],
+        subst_args: &[Ty],
+        call_span: Span,
+    ) {
+        for (param_name, kind) in wheres {
+            let Some(idx) = generic_params
+                .iter()
+                .position(|g| g.name.text == *param_name)
+            else {
+                continue;
+            };
+            let Some(bound) = subst_args.get(idx) else { continue };
+            if !self.ty_satisfies_operator(bound, *kind) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0941_ConstraintNotSatisfied,
+                        format!(
+                            "type {bound} does not satisfy `{param_name} has operator {}` required by `{callee_name}`",
+                            operator_kind_user_spelling(*kind),
+                        ),
+                    )
+                    .with_span(call_span),
+                );
+            }
+        }
+    }
+
     /// Element type of a user iterable (§K.5): resolve the class's
     /// `iterator()` method, read its declared `Iterator<T>` return,
     /// and yield `T`. `None` when the class doesn't speak the
@@ -3378,6 +3454,7 @@ impl<'a> Checker<'a> {
                     // checked throws raise here.
                     let callee_throws = fn_sig.throws.clone();
                     self.record_callee_throws(&callee_throws, c.span);
+                    let callee_wheres = fn_sig.wheres.clone();
                     // §A.2.8: calling an `unsafe` fn needs an `unsafe` context.
                     self.require_unsafe_context(callee_unsafe, name, c.span);
                     // Validate any explicit `<…>` turbofish against the
@@ -3421,6 +3498,15 @@ impl<'a> Checker<'a> {
                                 .collect();
                             (generic_params, args)
                         };
+                    // §O.5 (E0941): the instantiation must satisfy the
+                    // callee's where-constraints.
+                    self.enforce_where_constraints(
+                        name,
+                        &callee_wheres,
+                        &subst_params,
+                        &subst_args,
+                        c.span,
+                    );
                     self.check_call_args(
                         name,
                         &params,

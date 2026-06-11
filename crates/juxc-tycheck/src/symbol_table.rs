@@ -820,6 +820,9 @@ pub struct InterfaceSig {
 pub struct FunctionSig {
     /// Function visibility.
     pub visibility: Visibility,
+    /// `where` constraints (§O.5) — (type-param name, required
+    /// operator) pairs, enforced at instantiation sites (E0941).
+    pub wheres: Vec<(String, OperatorKind)>,
     /// `throws` clause types as written (dotted names). Resolved
     /// against the class table at the call-site check (§X.1.3
     /// checked-exception propagation).
@@ -3011,6 +3014,11 @@ fn insert_function(
         fqn,
         FunctionSig {
             visibility: fn_decl.visibility,
+            wheres: fn_decl
+                .wheres
+                .iter()
+                .map(|w| (w.param.text.clone(), w.kind))
+                .collect(),
             throws: fn_decl
                 .throws
                 .iter()

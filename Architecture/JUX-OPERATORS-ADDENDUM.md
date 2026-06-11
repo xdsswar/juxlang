@@ -306,7 +306,7 @@ public List<T> sorted<T>(List<T> items) where T has operator<=>(T) -> int {
 ### O.5.3. Constraint Failures
 
 ```
-Error E0940: type `User` does not satisfy `T has operator<=>(T) -> int`
+Error E0941: type `User` does not satisfy `T has operator<=>(T) -> int`
   --> sorter.jux:14:5
    |
 14 |     var sorted = sorted(users);
