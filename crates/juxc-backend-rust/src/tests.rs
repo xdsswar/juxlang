@@ -3170,7 +3170,13 @@ fn class_without_operators_emits_no_op_method() {
     );
     assert!(!rust.contains("__op_"), "unexpected __op_* method: {rust}");
     assert!(!rust.contains("impl PartialEq for Plain"), "got: {rust}");
-    assert!(!rust.contains("impl std::fmt::Display for Plain"), "got: {rust}");
+    // §O.4.1: a class WITHOUT `operator string` still prints, via the
+    // identity-format Display (`Plain@<addr>`).
+    assert!(
+        rust.contains("impl std::fmt::Display for Plain"),
+        "identity Display expected: {rust}",
+    );
+    assert!(rust.contains("Plain@{:p}"), "identity format expected: {rust}");
 }
 
 /// `operator hash()` emits `__op_hash` + `impl Hash` that writes the

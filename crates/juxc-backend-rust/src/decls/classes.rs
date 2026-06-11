@@ -496,6 +496,15 @@ impl RustEmitter {
             for op in &class_decl.operators {
                 self.emit_operator_trait_impl(&class_decl.name.text, op);
             }
+            // §O.4.1 identity default: no `operator string` → the
+            // class still prints, as `ClassName@<addr>`.
+            let has_to_string = class_decl
+                .operators
+                .iter()
+                .any(|o| o.kind == OperatorKind::ToString && !o.is_deleted);
+            if !has_to_string {
+                self.emit_identity_display(&class_decl.name.text, false);
+            }
             let has_eq = class_decl
                 .operators
                 .iter()
@@ -832,6 +841,15 @@ impl RustEmitter {
         if class_decl.generic_params.is_empty() {
             for op in &class_decl.operators {
                 self.emit_operator_trait_impl(name, op);
+            }
+            // §O.4.1 identity default — wrapper shape: the address is
+            // the shared Rc cell, stable across aliases.
+            let has_to_string = class_decl
+                .operators
+                .iter()
+                .any(|o| o.kind == OperatorKind::ToString && !o.is_deleted);
+            if !has_to_string {
+                self.emit_identity_display(name, true);
             }
             let has_eq = class_decl
                 .operators

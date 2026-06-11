@@ -230,6 +230,38 @@ impl RustEmitter {
         self.w.newline();
     }
 
+    /// Identity-format Display (§O.4.1): a class with NO
+    /// `operator string` still prints — as `ClassName@<addr>`. The
+    /// address is the shared cell for wrapper classes (stable
+    /// identity across aliases) and the value's own address for
+    /// inline classes.
+    pub(crate) fn emit_identity_display(&mut self, class_name: &str, wrapper: bool) {
+        self.w.emit_indent();
+        self.w.push_str("impl std::fmt::Display for ");
+        self.w.push_str(class_name);
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        self.w
+            .line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        if wrapper {
+            self.w.push_str("write!(f, \"");
+            self.w.push_str(class_name);
+            self.w
+                .push_str("@{:p}\", std::rc::Rc::as_ptr(&self.0))\n");
+        } else {
+            self.w.push_str("write!(f, \"");
+            self.w.push_str(class_name);
+            self.w.push_str("@{:p}\", self as *const Self)\n");
+        }
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
+    }
+
     /// `impl Display for Class { fn fmt(...) { f.write_str(&self.__op_string()) } }`.
     fn emit_display_wrapper(&mut self, class_name: &str) {
         self.w.emit_indent();
