@@ -619,6 +619,8 @@ pub struct FieldSig {
 pub struct MethodSig {
     /// Method visibility.
     pub visibility: Visibility,
+    /// `throws` clause types as written (dotted names) — §X.1.3.
+    pub throws: Vec<String>,
     /// Source-order annotation list — `@Override`, `@Deprecated`,
     /// `@Cfg(...)`, etc. Built-in semantics are checked at
     /// build/finalize time; user-defined annotations are
@@ -818,6 +820,10 @@ pub struct InterfaceSig {
 pub struct FunctionSig {
     /// Function visibility.
     pub visibility: Visibility,
+    /// `throws` clause types as written (dotted names). Resolved
+    /// against the class table at the call-site check (§X.1.3
+    /// checked-exception propagation).
+    pub throws: Vec<String>,
     /// Generic parameters in declaration order.
     pub generic_params: Vec<TypeParam>,
     /// Formal parameters in declaration order.
@@ -3005,6 +3011,17 @@ fn insert_function(
         fqn,
         FunctionSig {
             visibility: fn_decl.visibility,
+            throws: fn_decl
+                .throws
+                .iter()
+                .map(|qn| {
+                    qn.segments
+                        .iter()
+                        .map(|s| s.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".")
+                })
+                .collect(),
             generic_params: fn_decl.generic_params.clone(),
             params: fn_decl.params.iter().map(param_sig).collect(),
             return_type: fn_decl.return_type.clone(),
@@ -3103,6 +3120,17 @@ fn synth_type_ref(name: &str, span: Span) -> TypeRef {
 fn method_sig(method: &FnDecl, is_external: bool) -> MethodSig {
     MethodSig {
         visibility: method.visibility,
+        throws: method
+            .throws
+            .iter()
+            .map(|qn| {
+                qn.segments
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+            .collect(),
         annotations: method.annotations.clone(),
         is_abstract: method.body.is_none(),
         is_property: method.is_property,

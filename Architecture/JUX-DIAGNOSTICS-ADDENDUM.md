@@ -378,6 +378,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0701`  | `async` not available in current profile                     | Async §18.1.11                |
 | `E0702`  | Class object captured by a `Worker.spawn` closure (Phase-1 objects are `!Send`) | Async §18.2 |
 | `E0710`  | `throw` requires `Exception` or subtype                      | Exceptions §X.2.1              |
+| `E0711`  | Uncaught checked exception must be caught or declared in `throws` | Exceptions §X.1.3        |
 | `E0720`  | Unreachable `catch` clause                                   | Exceptions §X.3.4              |
 | `E0721`  | Multi-catch types must be unrelated                         | Exceptions §X.3.6              |
 | `E0730`  | `?` operator's enclosing function has incompatible return    | Exceptions §X.4.1              |

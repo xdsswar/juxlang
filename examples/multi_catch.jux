@@ -20,7 +20,7 @@ class TimeoutError extends Exception {
     }
 }
 
-void risky(int kind) {
+void risky(int kind) throws NetError, TimeoutError {
     if (kind == 0) {
         throw new NetError("net down");
     }
