@@ -353,6 +353,13 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     let object_ty = infer_expr(&f.object, env, symbols);
     let field_name = f.field.text.as_str();
 
+    // AsyncMutex guard (§18.3): `guard.value` is the protected T.
+    if let Ty::User { name, generic_args } = &object_ty {
+        if name == "__AsyncMutexGuard" && field_name == "value" {
+            return generic_args.first().cloned().unwrap_or(Ty::Unknown);
+        }
+    }
+
     // Tuple element access — `pair.0` / `pair.1` (§5.3). The
     // receiver is the `__tuple` sentinel user-type; the numeric
     // field indexes its generic args.
@@ -466,6 +473,16 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             if name == "spawn" {
                 return Ty::Unknown;
             }
+            // `block_on(fut)` resolves to the future's value — for
+            // typed runtime calls (m.lock(), ch.receive()) the
+            // argument's inferred type IS the value type.
+            if name == "block_on" {
+                return c
+                    .args
+                    .first()
+                    .map(|a| infer_expr(a, env, symbols))
+                    .unwrap_or(Ty::Unknown);
+            }
             if let Some((_, fn_sig)) = symbols.lookup_function(name) {
                 // Generic inference (spec §T.4): when the callee is
                 // generic and the call site didn't write explicit
@@ -559,6 +576,15 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                             generic_args.first().cloned().unwrap_or(Ty::Unknown),
                         ),
                         _ => Ty::Void,
+                    };
+                }
+                // AsyncMutex<T> (§18.3): `lock()` yields the guard
+                // (a sentinel user-type carrying T); `guard.value`
+                // reads/writes route through infer_field below.
+                if name.rsplit('.').next() == Some("AsyncMutex") && method_name == "lock" {
+                    return Ty::User {
+                        name: "__AsyncMutexGuard".to_string(),
+                        generic_args: generic_args.clone(),
                     };
                 }
             }

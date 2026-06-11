@@ -458,6 +458,26 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         };
     }
 
+    // 1.6. Async-runtime builtin types (§18.1/§18.3): Channel<T> /
+    //    AsyncMutex<T> aren't Jux classes (they lower to emitted
+    //    helpers), but parameter/field positions still need their
+    //    typed shape so method dispatch (`receive()` → `T?`,
+    //    `lock()` → guard) works through them.
+    if t.name.segments.len() == 1
+        && matches!(t.name.segments[0].text.as_str(), "Channel" | "AsyncMutex")
+        && !symbols.classes.contains_key(t.name.segments[0].text.as_str())
+    {
+        let generic_args = t
+            .generic_args
+            .iter()
+            .map(|g| lower_generic_arg(g, env, symbols))
+            .collect();
+        return Ty::User {
+            name: t.name.segments[0].text.clone(),
+            generic_args,
+        };
+    }
+
     // 2–4. Single-segment shortcuts — primitives, String, generic params.
     if t.name.segments.len() == 1 && t.generic_args.is_empty() {
         let name = t.name.segments[0].text.as_str();

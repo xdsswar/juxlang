@@ -2912,6 +2912,13 @@ impl<'a> Checker<'a> {
         // Tuple element access — `pair.0` (§5.3). Validate the index
         // against the element count so an out-of-range read gets a
         // clean E0412 instead of leaking rustc's E0609.
+        // AsyncMutex guard (§18.3): `guard.value` is the protected T —
+        // always a legal read/write.
+        if let Ty::User { name, .. } = &receiver_ty {
+            if name == "__AsyncMutexGuard" && field_name == "value" {
+                return;
+            }
+        }
         if let Ty::User { name, generic_args } = &receiver_ty {
             if name == juxc_ast::TUPLE_SENTINEL {
                 match field_name.parse::<usize>() {
@@ -3254,7 +3261,10 @@ impl<'a> Checker<'a> {
         matches!(
             ty,
             Ty::User { name, .. }
-                if matches!(name.rsplit('.').next().unwrap_or(name), "Channel" | "Task")
+                if matches!(
+                    name.rsplit('.').next().unwrap_or(name),
+                    "Channel" | "Task" | "AsyncMutex"
+                )
         )
     }
 
@@ -3756,6 +3766,12 @@ impl<'a> Checker<'a> {
                     // Channel<T> (§18.3) is an async-runtime builtin —
                     // its methods live on the emitted JuxChannel
                     // helper, not a Jux class.
+                    if bare == "AsyncMutex" && method_name == "lock" {
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
                     if bare == "Channel"
                         && matches!(method_name, "send" | "receive" | "close")
                     {

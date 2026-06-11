@@ -1,0 +1,21 @@
+// AsyncMutex<T> (JUX-ASYNC v2 §18.3) — await-friendly mutual
+// exclusion. `await m.lock()` suspends until acquired; the guard is
+// the only handle to the protected value (`guard.value`), and the
+// lock releases when the guard goes out of scope.
+
+package asyncmutex;
+
+async int bumped(AsyncMutex<int> m) {
+    var guard = await m.lock();
+    guard.value = guard.value + 1;
+    return guard.value;
+}
+
+public void main() {
+    var m = new AsyncMutex<int>(10);
+    print(block_on(bumped(m)));
+    print(block_on(bumped(m)));
+    var g = block_on(m.lock());
+    g.value += 100;
+    print(g.value);
+}

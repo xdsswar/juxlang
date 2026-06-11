@@ -1736,6 +1736,45 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
+        // AsyncMutex guard write (§18.3): `guard.value = v` (and the
+        // compound forms) assign through the deref.
+        if let Expr::Field(tf) = &a.target {
+            if tf.field.text == "value" {
+                let recv_ty = self
+                    .expr_types
+                    .get(&expr_span_of(&tf.object))
+                    .cloned()
+                    .or_else(|| {
+                        if let Expr::Path(qn) = &*tf.object {
+                            if qn.segments.len() == 1 {
+                                return self
+                                    .local_types
+                                    .iter()
+                                    .rev()
+                                    .find_map(|s| s.get(&qn.segments[0].text).cloned());
+                            }
+                        }
+                        None
+                    });
+                if let Some(Ty::User { name, .. }) = recv_ty {
+                    if name == "__AsyncMutexGuard" {
+                        self.w.push_str("*");
+                        self.emit_expr(&tf.object);
+                        self.w.push(' ');
+                        if let Some(op) = a.op {
+                            self.w.push_str(op.as_rust_str());
+                        }
+                        self.w.push_str("= ");
+                        let prev = self.emitting_format_arg;
+                        self.emitting_format_arg = false;
+                        self.emit_expr(&a.value);
+                        self.emitting_format_arg = prev;
+                        self.w.push_str(";\n");
+                        return;
+                    }
+                }
+            }
+        }
         // `operator[]=` dispatch (§O.2.4): `obj[i] = v` on a user type
         // declaring the overload becomes `obj.__op_index_set(i, v)`.
         // Compound forms (`obj[i] += v`) read-modify-write through

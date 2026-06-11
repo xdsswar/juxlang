@@ -146,6 +146,8 @@ impl Resolver {
         // `Channel<T>` — the async-runtime channel type (§18.3);
         // lowers to the emitted JuxChannel helper, no Jux class.
         builtins.insert("Channel");
+        // `AsyncMutex<T>` — await-friendly mutual exclusion (§18.3).
+        builtins.insert("AsyncMutex");
         // Async-runtime builtin per JUX-ASYNC-ADDENDUM-v2: `parallel`
         // takes N async expressions and concurrently awaits them
         // all, returning a tuple of their results. Lowers to
