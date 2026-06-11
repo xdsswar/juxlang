@@ -901,6 +901,12 @@ fn run_rustfmt(files: &[PathBuf]) {
     if files.is_empty() {
         return;
     }
+    // Debug escape hatch (Fix 2): set `JUX_NO_RUSTFMT=1` to leave the raw
+    // emitter output unformatted, so codegen bugs are visible in the exact
+    // shape the backend produced rather than after rustfmt has reflowed them.
+    if std::env::var_os("JUX_NO_RUSTFMT").is_some() {
+        return;
+    }
     for path in files {
         // `--quiet` suppresses rustfmt's own "Formatting…" chatter so
         // a clean run stays silent. We still surface the spawn error
