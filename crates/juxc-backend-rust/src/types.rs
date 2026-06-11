@@ -272,6 +272,12 @@ impl RustEmitter {
                     self.w.push('>');
                     return;
                 }
+                // Monotonic time-point (jux.std.time) — a plain Copy
+                // value, not a wrapper class.
+                "Instant" if ty.generic_args.is_empty() => {
+                    self.w.push_str("std::time::Instant");
+                    return;
+                }
                 _ => {}
             }
         }

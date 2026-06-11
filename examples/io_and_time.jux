@@ -1,0 +1,58 @@
+// File / Path / Console I/O + monotonic time (jux.std.io, jux.std.time).
+//
+// - File statics: readText/writeText/appendText/readLines/exists/
+//   delete/listDir — synchronous, panic-on-error in Phase-1 (guard
+//   with File.exists / Path.isFile where it matters).
+// - Path statics: join (platform separator), parent/fileName/
+//   extension returning String? (null when absent), isDir/isFile.
+// - Console.readLine(): one stdin line without the terminator,
+//   null at end-of-input.
+// - Instant.now() + elapsedMs()/elapsedNanos(): monotonic stopwatch;
+//   Clock.nowMs() stays the wall-clock entry point.
+
+package io_time;
+
+import jux.std.io.Console;
+import jux.std.io.File;
+import jux.std.io.Path;
+import jux.std.time.Instant;
+
+public void main() {
+    // --- Files, through Path-built locations.
+    var dir = "target/it-io-time-data";
+    var file = Path.join(dir, "notes.txt");
+    File.writeText(file, "alpha\nbeta\n");
+    File.appendText(file, "gamma\n");
+    print(File.exists(file));        // true
+
+    var lines = File.readLines(file);
+    print(lines.length);             // 3
+    print(lines[0]);                 // alpha
+    print(lines[2]);                 // gamma
+
+    // --- Path queries.
+    print(Path.fileName(file));      // notes.txt
+    print(Path.extension(file));     // txt
+    print(Path.parent("a/b/c.txt")); // a/b
+    print(Path.extension("Makefile")); // null
+    print(Path.isDir(dir));          // true
+    print(Path.isFile(file));        // true
+
+    File.delete(file);
+    print(File.exists(file));        // false
+
+    // --- Monotonic stopwatch.
+    var t = Instant.now();
+    var acc = 0;
+    for (var i : 0..100000) { acc = acc +% i; }
+    print(t.elapsedMs() >= 0);       // true
+    print(t.elapsedNanos() > 0);     // true
+    print(acc != 0);                 // true
+
+    // --- Stdin (the test runner pipes two lines).
+    var name = Console.readLine();
+    print("hello " + name);          // hello ada
+    var rest = Console.readLine();
+    print(rest);                     // lovelace
+    print(Console.readLine() == null); // true — EOF
+}

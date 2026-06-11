@@ -1024,6 +1024,122 @@ public class File {
         throw new UnsupportedOperationException("intrinsic");
     }
 
+    /**
+     * Append `content` to the file at `path`, creating it first
+     * when it doesn't exist yet.
+     */
+    public static void appendText(String path, String content) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+
+    /**
+     * Read the file at `path` and split it into lines (UTF-8;
+     * line terminators stripped).
+     */
+    public static String[] readLines(String path) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+
+    /**
+     * Delete the file at `path`.
+     */
+    public static void delete(String path) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+
+    /**
+     * List the entry NAMES (not full paths) inside the directory
+     * at `path`, in OS order.
+     */
+    public static String[] listDir(String path) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+}
+"###),
+    ("io/Path.jux", r###"/**
+ * jux.std.io.Path
+ *
+ * Static path-string manipulation — join/parent/fileName/
+ * extension plus the directory/file probes. Paths are plain
+ * `String`s in Phase-1 (no wrapper type); the query forms return
+ * `String?` (`null` when the component doesn't exist, e.g. the
+ * parent of a root or the extension of `Makefile`).
+ *
+ * **Implementation status.** Compiler primitives — the backend
+ * lowers each call onto `std::path::Path` operations.
+ */
+package jux.std.io;
+
+import jux.std.exceptions.UnsupportedOperationException;
+
+public class Path {
+    /**
+     * Join two path segments with the platform separator.
+     */
+    public static String join(String base, String child) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+
+    /**
+     * The directory containing `path`, or `null` when there is
+     * none (root or a bare file name).
+     */
+    public static String? parent(String path) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+
+    /**
+     * The final component of `path`, or `null` when the path
+     * ends in `..` or is a root.
+     */
+    public static String? fileName(String path) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+
+    /**
+     * The extension (without the dot), or `null` when there is
+     * none.
+     */
+    public static String? extension(String path) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+
+    /** True when `path` exists and is a directory. */
+    public static bool isDir(String path) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+
+    /** True when `path` exists and is a regular file. */
+    public static bool isFile(String path) {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+}
+"###),
+    ("io/Console.jux", r###"/**
+ * jux.std.io.Console
+ *
+ * Standard-input access. `print` covers stdout; this class adds
+ * the read side. Mirrors the useful subset of Java's
+ * `java.io.Console` / `Scanner` pair with Jux's nullable
+ * protocol: `readLine()` returns `null` on end-of-input instead
+ * of throwing.
+ *
+ * **Implementation status.** Compiler primitive — the backend
+ * lowers `readLine` onto `std::io::stdin().read_line(..)`.
+ */
+package jux.std.io;
+
+import jux.std.exceptions.UnsupportedOperationException;
+
+public class Console {
+    /**
+     * Read one line from standard input, without the trailing
+     * newline. Returns `null` at end-of-input (EOF / closed
+     * pipe).
+     */
+    public static String? readLine() {
+        throw new UnsupportedOperationException("intrinsic");
+    }
 }
 "###),
     ("option/Option.jux", r###"/**
@@ -1163,6 +1279,44 @@ public class Clock {
      * epoch (1970-01-01T00:00:00Z).
      */
     public static long nowMs() {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+}
+"###),
+    ("time/Instant.jux", r###"/**
+ * jux.std.time.Instant
+ *
+ * A point on the MONOTONIC clock - made for measuring elapsed
+ * time (never jumps backward when the wall clock is adjusted).
+ * Take one with `Instant.now()`, read the distance from it with
+ * the `elapsed*` methods. For wall-clock time use `Clock.nowMs()`.
+ *
+ * **Implementation status.** Compiler primitive - lowers onto
+ * Rust's `std::time::Instant`.
+ */
+package jux.std.time;
+
+import jux.std.exceptions.UnsupportedOperationException;
+
+public class Instant {
+    /**
+     * Capture the current monotonic instant.
+     */
+    public static Instant now() {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+
+    /**
+     * Milliseconds elapsed since this instant was captured.
+     */
+    public long elapsedMs() {
+        throw new UnsupportedOperationException("intrinsic");
+    }
+
+    /**
+     * Nanoseconds elapsed since this instant was captured.
+     */
+    public long elapsedNanos() {
         throw new UnsupportedOperationException("intrinsic");
     }
 }

@@ -611,20 +611,23 @@ impl RustEmitter {
                     let method = f.field.text.as_str();
                     match method {
                         "readText" => {
-                            self.w.push_str("std::fs::read_to_string(");
+                            // Borrow the path (AsRef<Path>) so a String
+                            // path variable survives for later calls.
+                            self.w.push_str("std::fs::read_to_string(&(");
                             self.emit_call_args(call);
-                            self.w.push_str(").unwrap()");
+                            self.w.push_str(")).unwrap()");
                             return;
                         }
                         "writeText" => {
-                            // `std::fs::write(path, &content)` — borrow the
-                            // content (it satisfies `impl AsRef<[u8]>`) so the
-                            // caller can keep using its String after the write,
-                            // instead of moving it out (rustc E0382).
-                            self.w.push_str("std::fs::write(");
+                            // `std::fs::write(&path, &content)` — borrow
+                            // BOTH (they satisfy AsRef) so the caller can
+                            // keep using its Strings after the write,
+                            // instead of moving them out (rustc E0382).
+                            self.w.push_str("std::fs::write(&(");
                             if let Some(path) = call.args.first() {
                                 self.emit_expr(path);
                             }
+                            self.w.push(')');
                             if let Some(content) = call.args.get(1) {
                                 self.w.push_str(", &(");
                                 self.emit_expr(content);
@@ -639,8 +642,107 @@ impl RustEmitter {
                             self.w.push_str(")).exists()");
                             return;
                         }
+                        "appendText" => {
+                            // OpenOptions append+create, then write_all —
+                            // wrapped in a block so the handle drops (and
+                            // flushes) immediately.
+                            self.w.push_str("{ use std::io::Write as _; let mut __jux_f = std::fs::OpenOptions::new().create(true).append(true).open(&(");
+                            if let Some(path) = call.args.first() {
+                                self.emit_expr(path);
+                            }
+                            self.w.push_str(")).unwrap(); __jux_f.write_all((");
+                            if let Some(content) = call.args.get(1) {
+                                self.emit_expr(content);
+                            }
+                            self.w.push_str(").as_bytes()).unwrap(); }");
+                            return;
+                        }
+                        "readLines" => {
+                            self.w.push_str("std::fs::read_to_string(&(");
+                            self.emit_call_args(call);
+                            self.w.push_str(")).unwrap().lines().map(|l| l.to_string()).collect::<Vec<_>>()");
+                            return;
+                        }
+                        "delete" => {
+                            self.w.push_str("std::fs::remove_file(&(");
+                            self.emit_call_args(call);
+                            self.w.push_str(")).unwrap()");
+                            return;
+                        }
+                        "listDir" => {
+                            self.w.push_str("std::fs::read_dir(&(");
+                            self.emit_call_args(call);
+                            self.w.push_str(")).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>()");
+                            return;
+                        }
                         _ => {}
                     }
+                }
+                // `Path.join/parent/fileName/extension/isDir/isFile` —
+                // static path-string helpers (jux.std.io.Path). Paths
+                // are plain Strings in Phase-1; the query forms produce
+                // `Option<String>` (Jux `String?`).
+                if qn.segments.len() == 1 && qn.segments[0].text == "Path" {
+                    let method = f.field.text.as_str();
+                    match method {
+                        "join" => {
+                            self.w.push_str("{ let mut __jux_p = std::path::PathBuf::from(&(");
+                            if let Some(base) = call.args.first() {
+                                self.emit_expr(base);
+                            }
+                            self.w.push_str(")); __jux_p.push(&(");
+                            if let Some(child) = call.args.get(1) {
+                                self.emit_expr(child);
+                            }
+                            self.w.push_str(")); __jux_p.to_string_lossy().into_owned() }");
+                            return;
+                        }
+                        "parent" | "fileName" | "extension" => {
+                            let accessor = match method {
+                                "parent" => ".parent().map(|x| x.to_string_lossy().into_owned())",
+                                "fileName" => ".file_name().map(|x| x.to_string_lossy().into_owned())",
+                                _ => ".extension().map(|x| x.to_string_lossy().into_owned())",
+                            };
+                            self.w.push_str("std::path::Path::new(&(");
+                            self.emit_call_args(call);
+                            self.w.push_str("))");
+                            self.w.push_str(accessor);
+                            return;
+                        }
+                        "isDir" => {
+                            self.w.push_str("std::path::Path::new(&(");
+                            self.emit_call_args(call);
+                            self.w.push_str(")).is_dir()");
+                            return;
+                        }
+                        "isFile" => {
+                            self.w.push_str("std::path::Path::new(&(");
+                            self.emit_call_args(call);
+                            self.w.push_str(")).is_file()");
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+                // `Console.readLine()` — stdin line read with the Jux
+                // nullable protocol: `None` at EOF, trailing `\r\n` /
+                // `\n` stripped on success.
+                if qn.segments.len() == 1
+                    && qn.segments[0].text == "Console"
+                    && f.field.text == "readLine"
+                {
+                    self.w.push_str("{ let mut __jux_line = String::new(); match std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut __jux_line) { Ok(0) | Err(_) => None, Ok(_) => { while __jux_line.ends_with('\\n') || __jux_line.ends_with('\\r') { __jux_line.pop(); } Some(__jux_line) } } }");
+                    return;
+                }
+                // `Instant.now()` — monotonic time-point capture
+                // (jux.std.time). The elapsed readings are instance
+                // methods, dispatched in `try_emit_stdlib_method`.
+                if qn.segments.len() == 1
+                    && qn.segments[0].text == "Instant"
+                    && f.field.text == "now"
+                {
+                    self.w.push_str("std::time::Instant::now()");
+                    return;
                 }
             }
         }
@@ -1458,6 +1560,22 @@ impl RustEmitter {
             juxc_tycheck::Ty::User { name, .. }
                 if name.rsplit('.').next().unwrap_or(name) == "Deque"
         );
+        // `Instant` elapsed readings (jux.std.time) — the receiver is
+        // a Copy `std::time::Instant` value.
+        if matches!(
+            &recv_ty,
+            juxc_tycheck::Ty::User { name, .. }
+                if name.rsplit('.').next().unwrap_or(name) == "Instant"
+        ) {
+            let suffix = match method {
+                "elapsedMs" => ".elapsed().as_millis() as i64",
+                "elapsedNanos" => ".elapsed().as_nanos() as i64",
+                _ => return false,
+            };
+            self.emit_expr(&f.object);
+            self.w.push_str(suffix);
+            return true;
+        }
         // Numeric / char intrinsics (§K.11) — Primitive-typed
         // receivers get their own dispatch table.
         if let juxc_tycheck::Ty::Primitive(prim) = &recv_ty {
