@@ -1511,6 +1511,29 @@ pub(crate) fn ty_kind_from_ref_with_params(
     }
 }
 
+/// The exact Rust spelling of a tycheck [`juxc_tycheck::Primitive`].
+/// Width-faithful: casts through this name preserve each type's
+/// overflow/wrap behavior (a `byte` wraps at 8 bits, not pointer width).
+pub(crate) fn rust_primitive_name(p: juxc_tycheck::Primitive) -> &'static str {
+    use juxc_tycheck::Primitive as P;
+    match p {
+        P::Int => "isize",
+        P::Uint => "usize",
+        P::Byte | P::I8 => "i8",
+        P::Ubyte | P::U8 => "u8",
+        P::Short | P::I16 => "i16",
+        P::Ushort | P::U16 => "u16",
+        P::Long | P::I64 => "i64",
+        P::Ulong | P::U64 => "u64",
+        P::I32 => "i32",
+        P::U32 => "u32",
+        P::Float | P::F32 => "f32",
+        P::Double | P::F64 => "f64",
+        P::Bool => "bool",
+        P::Char => "char",
+    }
+}
+
 /// Precedence value for a binary operator. Higher = binds tighter.
 ///
 /// **Values match Rust's relative ordering**, not Jux's. The Jux source
@@ -1549,6 +1572,13 @@ pub(crate) fn binary_prec(op: BinaryOp) -> u8 {
         BinaryOp::Shl | BinaryOp::Shr => 11,
         BinaryOp::Add | BinaryOp::Sub => 12,
         BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => 13,
+        // The wrapping family (§S.2.1) lowers structurally to
+        // `wrapping_add` & co (method calls — postfix, max-tight), so
+        // these values only matter when a wrap result nests inside
+        // another operator; mirror their plain counterparts.
+        BinaryOp::WrapShl | BinaryOp::WrapShr => 11,
+        BinaryOp::WrapAdd | BinaryOp::WrapSub => 12,
+        BinaryOp::WrapMul => 13,
     }
 }
 

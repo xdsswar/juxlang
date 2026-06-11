@@ -8,7 +8,8 @@ use juxc_tycheck::Ty;
 
 use crate::analysis::is_string_literal;
 use crate::decls::synthetic_op_method_name;
-use crate::exprs::{binary_prec, expr_span_of};
+use crate::exprs::call::literal_numeric_ty;
+use crate::exprs::{binary_prec, expr_span_of, rust_primitive_name};
 use crate::RustEmitter;
 
 /// Recursively flatten a string-concat `Add` chain into a list of
@@ -218,6 +219,30 @@ impl RustEmitter {
     /// side of a left-associative parent, where missing parens would
     /// silently change grouping). This matches what a human would write
     /// and keeps the output rustfmt-shaped.
+    /// Resolve an operand expression to its primitive type, best-effort:
+    /// local-variable map first (span-collision-proof), then the tycheck
+    /// `expr_types` map, then structural typing for literal-only
+    /// expressions (whose spans are DUMMY and never reach the map).
+    pub(crate) fn operand_primitive(&self, e: &Expr) -> Option<juxc_tycheck::Primitive> {
+        if let Expr::Path(qn) = e {
+            if qn.segments.len() == 1 {
+                let bare = qn.segments[0].text.as_str();
+                if let Some(Ty::Primitive(p)) = self
+                    .local_types
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(bare))
+                {
+                    return Some(*p);
+                }
+            }
+        }
+        if let Some(Ty::Primitive(p)) = self.expr_types.get(&expr_span_of(e)) {
+            return Some(*p);
+        }
+        literal_numeric_ty(e)
+    }
+
     pub(crate) fn emit_binary(&mut self, b: &BinaryExpr) {
         // String-concat trigger fires when either operand is
         // **typed** as `String` — covers literals (parser sets
@@ -236,6 +261,45 @@ impl RustEmitter {
                 || self.operand_is_string_typed(&b.right))
         {
             self.emit_string_concat(b);
+            return;
+        }
+        // **Wrapping arithmetic (§S.2.1).** `a +% b` lowers to
+        // `wrapping_add` & co at the LEFT operand's exact width (the
+        // spec forbids mixed-width operands, so left decides). Both
+        // operands cast through the type name — that also resolves
+        // Rust's ambiguous-`{integer}` inference on literal operands.
+        // Shift counts cast to `u32`, the Rust shift-amount type.
+        if matches!(
+            b.op,
+            BinaryOp::WrapAdd
+                | BinaryOp::WrapSub
+                | BinaryOp::WrapMul
+                | BinaryOp::WrapShl
+                | BinaryOp::WrapShr
+        ) {
+            let prim = self
+                .operand_primitive(&b.left)
+                .or_else(|| self.operand_primitive(&b.right));
+            let ty_name = prim.map(rust_primitive_name).unwrap_or("isize");
+            let (method, rhs_cast) = match b.op {
+                BinaryOp::WrapAdd => ("wrapping_add", ty_name),
+                BinaryOp::WrapSub => ("wrapping_sub", ty_name),
+                BinaryOp::WrapMul => ("wrapping_mul", ty_name),
+                BinaryOp::WrapShl => ("wrapping_shl", "u32"),
+                BinaryOp::WrapShr => ("wrapping_shr", "u32"),
+                _ => unreachable!("guarded by the matches! above"),
+            };
+            self.w.push_str("((");
+            self.emit_expr(&b.left);
+            self.w.push_str(") as ");
+            self.w.push_str(ty_name);
+            self.w.push_str(").");
+            self.w.push_str(method);
+            self.w.push_str("((");
+            self.emit_expr(&b.right);
+            self.w.push_str(") as ");
+            self.w.push_str(rhs_cast);
+            self.w.push(')');
             return;
         }
         // **Reference identity `===` / `!==` (§T.1.4).** Address

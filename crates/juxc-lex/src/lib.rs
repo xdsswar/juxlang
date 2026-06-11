@@ -347,11 +347,17 @@ impl<'a> Lexer<'a> {
             }
             Some(b'<') => {
                 self.bump();
-                if self.peek() == Some(b'=') {
-                    self.bump();
-                    self.emit(TokenKind::LtLtEq, start, self.pos);
-                } else {
-                    self.emit(TokenKind::LtLt, start, self.pos);
+                match self.peek() {
+                    Some(b'=') => {
+                        self.bump();
+                        self.emit(TokenKind::LtLtEq, start, self.pos);
+                    }
+                    // `<<%` — wrapping shift left (§S.2.1).
+                    Some(b'%') => {
+                        self.bump();
+                        self.emit(TokenKind::LtLtPercent, start, self.pos);
+                    }
+                    _ => self.emit(TokenKind::LtLt, start, self.pos),
                 }
             }
             _ => self.emit(TokenKind::Lt, start, self.pos),
@@ -369,39 +375,52 @@ impl<'a> Lexer<'a> {
             Some(b'=') => { self.bump(); self.emit(TokenKind::Ge, start, self.pos); }
             Some(b'>') => {
                 self.bump();
-                if self.peek() == Some(b'=') {
-                    self.bump();
-                    self.emit(TokenKind::GtGtEq, start, self.pos);
-                } else {
-                    self.emit(TokenKind::GtGt, start, self.pos);
+                match self.peek() {
+                    Some(b'=') => {
+                        self.bump();
+                        self.emit(TokenKind::GtGtEq, start, self.pos);
+                    }
+                    // `>>%` — wrapping shift right (§S.2.1).
+                    Some(b'%') => {
+                        self.bump();
+                        self.emit(TokenKind::GtGtPercent, start, self.pos);
+                    }
+                    _ => self.emit(TokenKind::GtGt, start, self.pos),
                 }
             }
             _ => self.emit(TokenKind::Gt, start, self.pos),
         }
     }
 
-    /// `+` or `+=`.
+    /// `+`, `+=`, or `+%` (wrapping add, §S.2.1).
     fn lex_plus(&mut self, start: usize) {
         self.bump();
-        if self.peek() == Some(b'=') { self.bump(); self.emit(TokenKind::PlusEq, start, self.pos); }
-        else                          { self.emit(TokenKind::Plus, start, self.pos); }
+        match self.peek() {
+            Some(b'=') => { self.bump(); self.emit(TokenKind::PlusEq, start, self.pos); }
+            Some(b'%') => { self.bump(); self.emit(TokenKind::PlusPercent, start, self.pos); }
+            _          => self.emit(TokenKind::Plus, start, self.pos),
+        }
     }
 
-    /// `-`, `-=`, or `->`.
+    /// `-`, `-=`, `->`, or `-%` (wrapping sub, §S.2.1).
     fn lex_minus(&mut self, start: usize) {
         self.bump();
         match self.peek() {
             Some(b'=') => { self.bump(); self.emit(TokenKind::MinusEq, start, self.pos); }
             Some(b'>') => { self.bump(); self.emit(TokenKind::Arrow,   start, self.pos); }
+            Some(b'%') => { self.bump(); self.emit(TokenKind::MinusPercent, start, self.pos); }
             _          => self.emit(TokenKind::Minus, start, self.pos),
         }
     }
 
-    /// `*` or `*=`.
+    /// `*`, `*=`, or `*%` (wrapping mul, §S.2.1).
     fn lex_star(&mut self, start: usize) {
         self.bump();
-        if self.peek() == Some(b'=') { self.bump(); self.emit(TokenKind::StarEq, start, self.pos); }
-        else                          { self.emit(TokenKind::Star, start, self.pos); }
+        match self.peek() {
+            Some(b'=') => { self.bump(); self.emit(TokenKind::StarEq, start, self.pos); }
+            Some(b'%') => { self.bump(); self.emit(TokenKind::StarPercent, start, self.pos); }
+            _          => self.emit(TokenKind::Star, start, self.pos),
+        }
     }
 
     /// `/` or `/=`. The forms `//` and `/*` are handled by trivia.

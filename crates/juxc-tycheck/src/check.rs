@@ -2260,6 +2260,57 @@ impl<'a> Checker<'a> {
             Expr::Binary(b) => {
                 self.check_expr(&b.left);
                 self.check_expr(&b.right);
+                // §S.2.1 — the wrapping family (`+%` `-%` `*%` `<<%`
+                // `>>%`) is INTEGER-only: wrap-modulo-2^N has no
+                // meaning for floats (IEEE saturates to ±Inf), bools,
+                // chars, or user types, and the spec reserves the
+                // `%`-suffixed forms from overloading. Unknown operand
+                // types stay lenient (inference gaps must not flag).
+                if matches!(
+                    b.op,
+                    BinaryOp::WrapAdd
+                        | BinaryOp::WrapSub
+                        | BinaryOp::WrapMul
+                        | BinaryOp::WrapShl
+                        | BinaryOp::WrapShr
+                ) {
+                    for operand in [&b.left, &b.right] {
+                        let ty = infer_expr(operand, &self.env, self.symbols);
+                        let ok = match &ty {
+                            Ty::Primitive(p) => !matches!(
+                                p,
+                                Primitive::Float
+                                    | Primitive::Double
+                                    | Primitive::F32
+                                    | Primitive::F64
+                                    | Primitive::Bool
+                                    | Primitive::Char
+                            ),
+                            Ty::Unknown => true,
+                            _ => false,
+                        };
+                        if !ok {
+                            // A literal operand joins DUMMY into the
+                            // binary's span (a 0-anchored join, useless
+                            // for pointing) — prefer the offending
+                            // operand's own span when it's real.
+                            let span = [expr_span(operand), expr_span(&b.left), b.span]
+                                .into_iter()
+                                .find(|s| *s != Span::DUMMY)
+                                .unwrap_or(b.span);
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0410_TypeMismatch,
+                                    format!(
+                                        "wrapping operator `{}` requires integer operands, found {ty}",
+                                        b.op.as_rust_str(),
+                                    ),
+                                )
+                                .with_span(span),
+                            );
+                        }
+                    }
+                }
                 // §O.3.4 — binary operator on a user type whose
                 // matching operator was deleted with `= delete;`.
                 // The receiver is the LHS; that's what determines

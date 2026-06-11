@@ -1373,6 +1373,8 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         | BinaryOp::Or => Ty::Primitive(Primitive::Bool),
         // Arithmetic, bitwise, shift — take the left operand's type.
         // Phase D will promote when operands differ in width.
+        // The wrapping family (§S.2.1) is integer-only and preserves
+        // the operand type by construction (wrap = modulo 2^N).
         BinaryOp::Add
         | BinaryOp::Sub
         | BinaryOp::Mul
@@ -1382,7 +1384,12 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         | BinaryOp::BitXor
         | BinaryOp::BitAnd
         | BinaryOp::Shl
-        | BinaryOp::Shr => left_ty,
+        | BinaryOp::Shr
+        | BinaryOp::WrapAdd
+        | BinaryOp::WrapSub
+        | BinaryOp::WrapMul
+        | BinaryOp::WrapShl
+        | BinaryOp::WrapShr => left_ty,
     }
 }
 

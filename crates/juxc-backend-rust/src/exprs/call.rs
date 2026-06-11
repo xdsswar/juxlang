@@ -2241,7 +2241,7 @@ impl RustEmitter {
 /// ever land in `expr_types`. Mixed int/float arithmetic widens to
 /// `double`, matching the inference pass. Returns `None` as soon as a
 /// non-literal leaf appears (those have real spans and use the map).
-fn literal_numeric_ty(e: &Expr) -> Option<juxc_tycheck::Primitive> {
+pub(crate) fn literal_numeric_ty(e: &Expr) -> Option<juxc_tycheck::Primitive> {
     use juxc_tycheck::Primitive as P;
     match e {
         Expr::Literal(juxc_ast::Literal::Int(_)) => Some(P::Int),

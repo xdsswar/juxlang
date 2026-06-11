@@ -167,6 +167,12 @@ pub fn grammar_spec() -> GrammarSpec {
         NamedToken::fixed("GT_GT", ">>"),
         NamedToken::fixed("LT_LT_EQ", "<<="),
         NamedToken::fixed("GT_GT_EQ", ">>="),
+        // §S.2.1 wrapping arithmetic — the `%`-suffixed family.
+        NamedToken::fixed("PLUS_PERCENT", "+%"),
+        NamedToken::fixed("MINUS_PERCENT", "-%"),
+        NamedToken::fixed("STAR_PERCENT", "*%"),
+        NamedToken::fixed("LT_LT_PERCENT", "<<%"),
+        NamedToken::fixed("GT_GT_PERCENT", ">>%"),
     ];
 
     let comments = vec![
