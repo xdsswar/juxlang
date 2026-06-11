@@ -37,12 +37,18 @@ impl RustEmitter {
             return;
         }
         let body = op.body.as_ref();
-        let needs_mut_self = body
-            .map(|b| {
-                body_writes_to_this(b)
-                    || crate::analysis::body_calls_mut_method_on_this(b, &self.user_mut_methods)
-            })
-            .unwrap_or(false);
+        // A wrapper (Rc<RefCell>) class mutates through interior `self.0.borrow_mut()`,
+        // so EVERY method — operators included — takes `&self`, matching the rest of
+        // the wrapper's inherent methods. Only an inline class needs `&mut self` when
+        // its operator body writes to `this`; emitting `&mut self` on a wrapper forces
+        // a `let mut` at the call site that the binding emitter never produces (E0596).
+        let needs_mut_self = !self.emitting_wrapper_class
+            && body
+                .map(|b| {
+                    body_writes_to_this(b)
+                        || crate::analysis::body_calls_mut_method_on_this(b, &self.user_mut_methods)
+                })
+                .unwrap_or(false);
 
         self.w.indent_inc();
         self.w.emit_indent();
