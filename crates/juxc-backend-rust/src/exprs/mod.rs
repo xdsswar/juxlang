@@ -1504,6 +1504,10 @@ pub(crate) fn binary_prec(op: BinaryOp) -> u8 {
         // Reference identity (`===`/`!==`) shares the equality level.
         BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::RefEq | BinaryOp::RefNeq => 6,
         BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge | BinaryOp::In => 7,
+        // `<=>` lowers structurally (method call / partial_cmp), so
+        // its precedence slot only matters for paren decisions when
+        // nested — treat like comparisons, one notch tighter.
+        BinaryOp::Cmp => 7,
         BinaryOp::BitOr  => 8,
         BinaryOp::BitXor => 9,
         BinaryOp::BitAnd => 10,

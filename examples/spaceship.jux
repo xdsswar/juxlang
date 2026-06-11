@@ -1,0 +1,42 @@
+// Three-way comparison `<=>` (§A.4 level 11, §O.2.1).
+//
+// - `a <=> b` yields -1 / 0 / +1 for primitives and String.
+// - Classes overload it with `operator <=>` — which also
+//   auto-derives `<`, `<=`, `>`, `>=` (§7.14.4).
+// - Binds tighter than comparisons: `a <=> b > 0` is `(a<=>b) > 0`.
+
+package spaceship;
+
+class Version {
+    private int major;
+    private int minor;
+
+    Version(int major, int minor) {
+        this.major = major;
+        this.minor = minor;
+    }
+
+    public int operator <=>(Version other) {
+        if (this.major != other.major) {
+            return this.major <=> other.major;
+        }
+        return this.minor <=> other.minor;
+    }
+}
+
+int maxOf(int a, int b) {
+    return a <=> b > 0 ? a : b;
+}
+
+public void main() {
+    print(1 <=> 2);
+    print(2 <=> 2);
+    print(3 <=> 2);
+    print("apple" <=> "banana");
+    print(maxOf(7, 11));
+
+    var v1 = new Version(1, 9);
+    var v2 = new Version(2, 0);
+    print(v1 <=> v2);
+    print(v1 < v2);
+}

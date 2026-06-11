@@ -579,6 +579,11 @@ pub enum BinaryOp {
     RefEq,
     /// `!==` — negated reference identity.
     RefNeq,
+    /// `<=>` — three-way comparison (§A.4 level 11): negative when
+    /// left < right, zero when equal, positive when left > right.
+    /// Lowers to `partial_cmp` for primitives/String and to the
+    /// user's `operator<=>` (`__op_cmp`) for classes.
+    Cmp,
     /// `in` — containment test (§O.2.4): `x in xs`. Dispatches to the
     /// CONTAINER's `operator in`, with builtin lowerings for arrays,
     /// collections, ranges, and strings.
@@ -604,6 +609,10 @@ impl BinaryOp {
             BinaryOp::BitOr  => "|",
             BinaryOp::BitXor => "^",
             BinaryOp::BitAnd => "&",
+            // `<=>` has no single-token Rust spelling — the backend
+            // lowers it structurally (partial_cmp / __op_cmp); this
+            // table entry only feeds debug/display paths.
+            BinaryOp::Cmp    => "<=>",
             BinaryOp::Shl    => "<<",
             BinaryOp::Shr    => ">>",
             BinaryOp::Add    => "+",
