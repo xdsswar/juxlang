@@ -42,7 +42,8 @@ gaps) into a single status view. Status reflects the `polymorphism` branch.
 |------|--------|-----------|
 | String API, numerics, wrapping ops, Deque, I/O+Time, Atomics | ✅ | `project_wave5_progress` |
 | Collections (List/Map/Set/Deque) backed by Vec/HashMap/HashSet/VecDeque | ◐ | spec surface incomplete |
-| Foundational interfaces (Equatable/Hashable/Comparable/Iterable/…) | ⛔ | roadmap §19.1 — **#1 v0.1 priority** |
+| Value semantics — equality / ordering / hashing / formatting | ✅ | **operator** overrides (`==`/`hash`/`string`/ordering), C++-style, not interfaces; consistency enforced (E0930/E0931). See `JUX-CORE-LIB-ADDENDUM` §72 |
+| `Iterable<T>` / `Iterator<T>` (only nominal foundational interfaces) + `for-each` desugaring | ✅ | `JUX-CORE-LIB-ADDENDUM` §K.5; `user_iterable.jux` |
 | Exception hierarchy + Result lowering | ✅ | `JUX-EXCEPTIONS-ADDENDUM` |
 | Async streams (`Stream<T>`, `for await`) | ⛔ | roadmap §18.6 |
 | Networking / HTTP / JSON | ⏭ | needs metaprogramming (roadmap §3.4) |
@@ -62,9 +63,12 @@ gaps) into a single status view. Status reflects the `polymorphism` branch.
 
 ## What blocks calling it v0.1
 
-The ⛔ rows: **foundational interfaces (§19.1)**, **async streams (§18.6)**, a
-**testing framework (§21)**, and closing the remaining O-series miscompiles so
-juxc never leaks a rustc error. Everything else is either done or an explicit
-post-v0.1 deferral. Compiler soundness for the common feature set is in good
-shape — the recent hardening waves drove the suite from ~900 to 936 green with
-no known panics on valid input.
+The ⛔ rows: **async streams (§18.6)**, a **testing framework (§21)**, and
+closing the remaining O-series miscompiles so juxc never leaks a rustc error.
+Value semantics (equality/ordering/hashing/formatting) and the `Iterable`
+contract are done via the operator-based design — the roadmap's old
+interface-based §1.1/§19.1 plan was superseded by `JUX-CORE-LIB-ADDENDUM` and is
+not a gap. Everything else is either done or an explicit post-v0.1 deferral.
+Compiler soundness for the common feature set is in good shape — the recent
+hardening waves drove the suite from ~900 to 936 green with no known panics on
+valid input.
