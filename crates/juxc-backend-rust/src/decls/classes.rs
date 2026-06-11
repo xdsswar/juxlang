@@ -464,6 +464,11 @@ impl RustEmitter {
         self.w.line("}");
         self.w.newline();
 
+        // `drop { }` destructor (§6.6 / §S.5) — inline classes get
+        // `impl Drop` on the struct itself.
+        let inline_name = class_decl.name.text.clone();
+        self.emit_drop_impl(class_decl, &inline_name);
+
         // Mutable static fields — emitted at module scope as
         // `LazyLock<Mutex<T>>` because Rust forbids `static` items
         // inside `impl` blocks and unsynchronized mutable global
@@ -819,6 +824,13 @@ impl RustEmitter {
                 }
             }
         }
+
+        // `drop { }` destructor (§6.6 / §S.5) — wrapper classes get
+        // `impl Drop` on the INNER struct, so the body runs exactly
+        // once, when the LAST strong reference releases (the Rc's
+        // payload drop), never per-handle.
+        let inner_name = format!("{name}_Inner");
+        self.emit_drop_impl(class_decl, &inner_name);
 
         // Mutable static fields — module-scope `LazyLock<Mutex<T>>`,
         // identical to the legacy path (statics live on the class,
@@ -2603,6 +2615,58 @@ impl RustEmitter {
             self.emit_field_default_value_for(&juxc_tycheck::resolved_field_type(field));
         }
         self.w.push_str("));\n");
+    }
+
+    /// Emit `impl Drop for <target>` from the class's `drop { }`
+    /// block (§6.6 / §S.5). `target` is the struct that owns the
+    /// fields — the class itself for inline classes, `<C>_Inner` for
+    /// wrapper classes (so the body runs once, on last-handle
+    /// release). The body emits in INLINE style — `this.f` →
+    /// `self.f`, no `.0.borrow()` — which is achieved for wrapper
+    /// classes by lifting the class out of `wrapper_classes` for the
+    /// duration. Phase-1 limitation: instance METHOD calls inside a
+    /// wrapper class's `drop` don't resolve (methods live on the
+    /// wrapper handle, which no longer exists) — keep destructor
+    /// bodies to field access plus free/static calls.
+    fn emit_drop_impl(&mut self, class_decl: &juxc_ast::ClassDecl, target: &str) {
+        use crate::stmts::stmt_span;
+        if class_decl.drop_blocks.is_empty() {
+            return;
+        }
+        self.w.emit_indent();
+        self.w.push_str("impl");
+        self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+        self.w.push_str(" Drop for ");
+        self.w.push_str(target);
+        self.emit_generic_params_as_args(&class_decl.generic_params);
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        self.w.line("fn drop(&mut self) {");
+        self.w.indent_inc();
+        let removed = self.wrapper_classes.remove(&class_decl.name.text);
+        let prev_this = self.this_alias.replace("self".to_string());
+        let mut muts = std::collections::HashSet::new();
+        for block in &class_decl.drop_blocks {
+            collect_mutated_names(block, &mut muts, &self.user_mut_methods);
+        }
+        let prev_muts = std::mem::replace(&mut self.mutated_in_fn, muts);
+        for block in &class_decl.drop_blocks {
+            for stmt in &block.statements {
+                self.emit_source_marker(stmt_span(stmt));
+                self.w.emit_indent();
+                self.emit_stmt(stmt);
+            }
+        }
+        self.mutated_in_fn = prev_muts;
+        self.this_alias = prev_this;
+        if removed {
+            self.wrapper_classes.insert(class_decl.name.text.clone());
+        }
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
     }
 
     pub(crate) fn emit_method(&mut self, method: &FnDecl) {

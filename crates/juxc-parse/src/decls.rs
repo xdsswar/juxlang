@@ -115,6 +115,7 @@ impl<'a> Parser<'a> {
         let mut properties: Vec<juxc_ast::PropertyDecl> = Vec::new();
         let mut nested_types: Vec<juxc_ast::TopLevelDecl> = Vec::new();
         let mut init_blocks: Vec<juxc_ast::Block> = Vec::new();
+        let mut drop_blocks: Vec<juxc_ast::Block> = Vec::new();
         let mut static_init_blocks: Vec<juxc_ast::Block> = Vec::new();
 
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
@@ -143,6 +144,15 @@ impl<'a> Parser<'a> {
             {
                 self.advance(); // 'init'
                 init_blocks.push(self.parse_block());
+                continue;
+            }
+            // `drop { … }` — destructor block (§6.6 / §S.5). At most
+            // one per class; duplicates are diagnosed in tycheck.
+            if self.at_kw(Keyword::Drop)
+                && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::LBrace))
+            {
+                self.advance(); // 'drop'
+                drop_blocks.push(self.parse_block());
                 continue;
             }
 
@@ -476,6 +486,7 @@ impl<'a> Parser<'a> {
             nested_types,
             init_blocks,
             static_init_blocks,
+            drop_blocks,
             span: start.join(end),
         })
     }

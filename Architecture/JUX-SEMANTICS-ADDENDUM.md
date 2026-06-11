@@ -361,6 +361,10 @@ If a `drop { }` block throws an exception:
 
 This is stricter than C++ (which makes drop-from-drop *undefined behavior*) and less restrictive than Rust (which forbids `panic` in `drop` from causing UB by ad-hoc means). The promise: a Jux program never has corrupt state from a destructor failure. The cost: a small runtime structure for aggregating exceptions during unwind.
 
+### S.5.3a. Phase-1 Implementation Notes
+
+`drop { }` lowers onto Rust's `Drop` trait — for reference-semantics classes it lands on the refcounted payload, so the block runs exactly once, when the last strong reference releases (§S.5.5 for free). Deviations, to be closed later: fields inside an aggregate are destroyed in **declaration** order (Rust's order) rather than the reverse order specified in §S.5.2; an exception thrown from a `drop` block aborts instead of aggregating per §S.5.3; and within a reference-semantics class's `drop` block, calls to the instance's own methods are not available — keep destructor bodies to field access plus free/static calls.
+
 ### S.5.4. Drop During Move
 
 Move semantics (per JUX-LANG-V1 §6.4) **do not** call `drop`. The destination becomes the new owner of the moved-from value's storage, and only one drop runs — at the destination's end of life. The source binding becomes inaccessible (the borrow checker enforces this, per §6.4) and is not dropped.

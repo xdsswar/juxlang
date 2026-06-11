@@ -419,6 +419,11 @@ pub struct ClassDecl {
     /// source order. They run once, on first observable use of the class.
     /// Empty for classes with no `static` blocks.
     pub static_init_blocks: Vec<Block>,
+    /// Destructor blocks (`drop { … }`, §6.6 / §S.5). The spec allows
+    /// at most ONE per class — parsed as a list so tycheck can
+    /// diagnose duplicates with a span instead of silently dropping
+    /// them. Runs when the last strong reference is released.
+    pub drop_blocks: Vec<Block>,
     /// Span covering the whole `class Name { … }` declaration.
     pub span: Span,
 }

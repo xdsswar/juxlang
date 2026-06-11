@@ -1129,6 +1129,30 @@ impl<'a> Checker<'a> {
             self.in_async = saved_async;
             self.env.pop_scope();
         }
+        // Destructor block (§6.6 / §S.5). At most one per class; the
+        // body runs with `this` in scope, synchronously.
+        if class.drop_blocks.len() > 1 {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0400_DuplicateDeclaration,
+                    format!(
+                        "class `{}` declares {} `drop` blocks — a class may have at most one destructor",
+                        class.name.text,
+                        class.drop_blocks.len(),
+                    ),
+                )
+                .with_span(class.drop_blocks[1].span),
+            );
+        }
+        for block in &class.drop_blocks {
+            self.env.push_scope();
+            self.env.declare("this", this_ty.clone());
+            let saved_async = self.in_async;
+            self.in_async = false;
+            self.check_block(block);
+            self.in_async = saved_async;
+            self.env.pop_scope();
+        }
 
         self.env.clear_generic_params();
         self.env.clear_class();
