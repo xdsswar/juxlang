@@ -1513,7 +1513,16 @@ impl RustEmitter {
         if needs_parens {
             self.w.push(')');
         }
-        self.w.push_str(".as_ref().map(|__t| ");
+        // `.and_then` flattens when the called method itself returns `T?`
+        // (`a?.getC()` where `getC(): C?` yields `Option<C>`, not
+        // `Option<Option<C>>` — otherwise a further `?.` chains off the wrong
+        // type). `.map` for a non-nullable return. Stdlib methods stay `.map`
+        // (their nullable lowering is handled inside the closure).
+        if self.safe_method_returns_nullable(callee) {
+            self.w.push_str(".as_ref().and_then(|__t| ");
+        } else {
+            self.w.push_str(".as_ref().map(|__t| ");
+        }
         // **Route through the stdlib-method dispatch with `__t` as receiver**
         // (gap N7): a String/collection method on a nullable receiver
         // (`s?.length()`, `xs?.size()`) must map to its Rust equivalent
@@ -1576,6 +1585,37 @@ impl RustEmitter {
             self.w.push(')');
         }
         self.w.push(')');
+    }
+
+    /// True iff the user method named by a `?.`-call returns a nullable `T?`,
+    /// so [`Self::emit_safe_method_call`] flattens with `.and_then` instead of
+    /// `.map`. Resolves the receiver's underlying (non-nullable) class from
+    /// `expr_types` and walks the `extends` chain. Unknown / stdlib methods
+    /// return false — their `.map` form is correct (any nullable stdlib
+    /// lowering is produced inside the closure, already `Option`-shaped).
+    fn safe_method_returns_nullable(&self, callee: &juxc_ast::FieldExpr) -> bool {
+        // Resolve the receiver's class structurally (robust to unrecorded
+        // intermediate safe-nav spans, e.g. `a?.b()?.c()`).
+        let recvc = match self.safe_nav_member_class_bare(&callee.object) {
+            Some(c) => c,
+            None => return false,
+        };
+        let method = callee.field.text.as_str();
+        let mut cursor = self.lookup_class_by_bare_or_fqn(&recvc);
+        while let Some(sig) = cursor {
+            if let Some(m) = sig.methods.get(method) {
+                return matches!(
+                    &m.return_type,
+                    juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t)
+                        if t.nullable
+                );
+            }
+            cursor = sig
+                .extends_fqn
+                .as_deref()
+                .and_then(|p| self.symbols.classes.get(p));
+        }
+        false
     }
 
     /// Lower a call to the built-in `print(…)` into the most natural Rust
