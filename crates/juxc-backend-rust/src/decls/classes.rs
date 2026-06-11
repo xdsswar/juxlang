@@ -422,12 +422,12 @@ impl RustEmitter {
                     .get(bare)
                     .cloned()
                     .or_else(|| {
-                        self.class_asts
-                            .iter()
-                            .find(|(k, _)| {
-                                k.rsplit('.').next().unwrap_or(k.as_str()) == bare
-                            })
-                            .map(|(_, v)| v.clone())
+                        // Package-aware: resolve the parent's bare `extends`
+                        // name within the current unit's package so a same-named
+                        // class in another package can't be picked.
+                        self.resolve_bare_class_fqn(bare)
+                            .and_then(|fqn| self.class_asts.get(&fqn))
+                            .cloned()
                     });
                 let Some(parent) = parent_decl else { break };
                 let parent_methods = parent.methods.clone();
@@ -987,10 +987,12 @@ impl RustEmitter {
                 .get(bare)
                 .cloned()
                 .or_else(|| {
-                    self.class_asts
-                        .iter()
-                        .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
-                        .map(|(_, v)| v.clone())
+                    // Package-aware parent resolution (see the inherited-method
+                    // walk above) — avoids picking a same-named class from
+                    // another package on the `extends` chain.
+                    self.resolve_bare_class_fqn(bare)
+                        .and_then(|fqn| self.class_asts.get(&fqn))
+                        .cloned()
                 });
             let Some(parent) = parent_decl else { break };
             // Extend the substitution with this ancestor's bindings. The
@@ -1080,10 +1082,12 @@ impl RustEmitter {
                 .get(bare)
                 .cloned()
                 .or_else(|| {
-                    self.class_asts
-                        .iter()
-                        .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
-                        .map(|(_, v)| v.clone())
+                    // Package-aware parent resolution (see the inherited-method
+                    // walk above) — avoids picking a same-named class from
+                    // another package on the `extends` chain.
+                    self.resolve_bare_class_fqn(bare)
+                        .and_then(|fqn| self.class_asts.get(&fqn))
+                        .cloned()
                 });
             let Some(parent) = parent_decl else { break };
             for (param, arg) in parent

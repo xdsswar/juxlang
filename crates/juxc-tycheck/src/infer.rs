@@ -366,7 +366,9 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             // table's `probe.Tier` key, and we return THAT name so
             // exhaustiveness / variant checks downstream hit the
             // table directly.
-            if let Some((fqn, e)) = symbols.lookup_enum(enum_name) {
+            if let Some((fqn, e)) =
+                symbols.lookup_enum_in(enum_name, &env.current_package.join("."))
+            {
                 if e.variants.contains_key(&f.field.text) {
                     return Ty::User {
                         name: fqn.to_string(),
@@ -1210,10 +1212,12 @@ pub(crate) fn resolve_class_name(
             // Direct hit: the bare name is itself a registered FQN
             // (no-package class, or same-unit declaration).
             bare.clone()
-        } else if let Some(fqn) = symbols.find_fqn_by_bare(bare) {
-            // Implicit auto-import: bare name matches the last
-            // segment of a known FQN. Mirrors Java's `java.lang.*`
-            // rule applied across the whole stdlib tree.
+        } else if let Some(fqn) =
+            symbols.find_fqn_by_bare_in(bare, &env.current_package.join("."))
+        {
+            // Implicit auto-import: bare name matches the last segment of a
+            // known FQN. Mirrors Java's `java.lang.*` rule applied across the
+            // whole stdlib tree, preferring a same-package type on a collision.
             fqn
         } else {
             bare.clone()
@@ -1248,7 +1252,7 @@ pub(crate) fn resolve_class_name(
                     if symbols.is_type_name(first) {
                         Some(first.clone())
                     } else {
-                        symbols.find_fqn_by_bare(first)
+                        symbols.find_fqn_by_bare_in(first, &env.current_package.join("."))
                     }
                 });
             let via_owner = owner_fqn.map(|o| format!("{o}__{rest}"));

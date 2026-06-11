@@ -587,9 +587,10 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
                 scope = s.rsplit_once("__").map(|(outer, _)| outer);
             }
         }
-        // Implicit auto-import: walk every known FQN looking
-        // for one whose last segment matches `bare`.
-        if let Some(fqn) = symbols.find_fqn_by_bare(bare) {
+        // Implicit auto-import: walk every known FQN looking for one whose last
+        // segment matches `bare`, preferring this unit's package so a bare name
+        // binds to a same-package type over another package's same-named one.
+        if let Some(fqn) = symbols.find_fqn_by_bare_in(bare, &env.current_package.join(".")) {
             if let Some(expanded) = expand_alias(&fqn, &t.generic_args, env, symbols) {
                 return expanded;
             }
@@ -649,7 +650,7 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
                 if symbols.is_type_name(first) {
                     Some(first.clone())
                 } else {
-                    symbols.find_fqn_by_bare(first)
+                    symbols.find_fqn_by_bare_in(first, &env.current_package.join("."))
                 }
             });
         if let Some(candidate) =

@@ -2774,10 +2774,26 @@ impl<'a> Checker<'a> {
         if self.symbols.classes.contains_key(name) {
             return Some(name.to_string());
         }
-        // A bare name can match several FQNs (e.g. a user class colliding with
-        // an auto-loaded `rust.std` stub). Prefer a non-`external` (user) class
-        // so user code shadows the stub, and break ties by FQN so the result is
-        // deterministic across `HashMap` iteration orders.
+        // Package-aware resolution: a bare name can match several FQNs (two
+        // packages each declaring `Foo`, or a user class colliding with an
+        // auto-loaded `rust.std` stub). Resolve in THIS unit's context first —
+        // (1) the `unqualified` bare→FQN map (same-package siblings + imports /
+        // aliases), then (2) the current package prefix — so a bare `Foo` binds
+        // to the referrer's package, never another's.
+        if let Some(fqn) = self.env.unqualified.get(name) {
+            if self.symbols.classes.contains_key(fqn) {
+                return Some(fqn.clone());
+            }
+        }
+        if !self.env.current_package.is_empty() {
+            let cand = format!("{}.{}", self.env.current_package.join("."), name);
+            if self.symbols.classes.contains_key(&cand) {
+                return Some(cand);
+            }
+        }
+        // Fallback (unqualified cross-package reference): prefer a non-`external`
+        // (user) class so user code shadows a stub, then break ties by FQN so
+        // the result is deterministic across `HashMap` iteration orders.
         self.symbols
             .classes
             .iter()
@@ -2993,7 +3009,9 @@ impl<'a> Checker<'a> {
         // FQN-aware lookup (exact key, then unique suffix) so a
         // locally-inferred bare enum name still gets exhaustiveness
         // (and rustc's E0004 never leaks for it).
-        let kind = if let Some((_, e)) = self.symbols.lookup_enum(scrut_name) {
+        let kind = if let Some((_, e)) =
+            self.symbols.lookup_enum_in(scrut_name, &self.env.current_package.join("."))
+        {
             SealedKind::Enum {
                 name: scrut_name,
                 variants: e.variants.keys().cloned().collect(),

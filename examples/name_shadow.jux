@@ -1,0 +1,28 @@
+// A user class whose bare name collides with an auto-loaded `rust.std` stub
+// (here `Command` ~ `std::process::Command`) must SHADOW the stub: the bare
+// name binds to the user's class in this package, deterministically. This is
+// the single-file regression for package-aware name resolution.
+
+package shadowtest;
+
+public class Command {
+    public String name;
+    public int runs;
+
+    public Command(String name) {
+        this.name = name;
+        this.runs = 0;
+    }
+
+    public void invoke() {
+        this.runs = this.runs + 1;
+        print(name + " #" + this.runs);
+    }
+}
+
+public void main() {
+    var c = new Command("deploy");
+    c.invoke();
+    c.invoke();
+    print("total " + c.runs);
+}

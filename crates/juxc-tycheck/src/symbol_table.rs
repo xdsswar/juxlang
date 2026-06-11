@@ -157,48 +157,75 @@ impl SymbolTable {
     /// inside each category is HashMap-iteration which is stable
     /// per session.
     pub fn find_fqn_by_bare(&self, name: &str) -> Option<String> {
-        let matches_last = |fqn: &String| -> bool {
-            fqn.rsplit('.').next().is_some_and(|seg| seg == name)
+        self.find_fqn_by_bare_in(name, "")
+    }
+
+    /// Package-aware variant of [`Self::find_fqn_by_bare`]. `prefer_pkg` is the
+    /// dotted package of the unit making the reference (empty for the root
+    /// package). A **same-package** type of this name shadows everything else —
+    /// so two packages may each declare `Foo` and a bare `Foo` binds to the
+    /// referrer's own. Cross-package fallback keeps the existing precedence
+    /// (non-`external` class > record > enum > interface > alias > external
+    /// stub class), made **deterministic** with `min()` (a `HashMap`-order
+    /// `find()` would otherwise pick arbitrarily on a bare-name collision).
+    pub fn find_fqn_by_bare_in(&self, name: &str, prefer_pkg: &str) -> Option<String> {
+        let matches_last =
+            |fqn: &str| fqn.rsplit('.').next().is_some_and(|seg| seg == name);
+        // (A) Same-package match wins. A package can't declare two types of one
+        //     name (E0400), so at most one of these fires — category order only
+        //     disambiguates the (impossible-within-a-package) tie.
+        let pick_in_pkg = |keys: &mut dyn Iterator<Item = &String>| -> Option<String> {
+            keys.filter(|k| {
+                matches_last(k) && fqn_package(k).unwrap_or("") == prefer_pkg
+            })
+            .min()
+            .cloned()
         };
-        // Classes: an unqualified name must prefer a **non-external** class
-        // (the user's own / `jux.std`) over an auto-loaded `.jux.d` stub class
-        // (the Rust-std view). Names like `Box`, `String`, `Vec`, `HashMap`
-        // exist in BOTH `jux.std` and the generated `rust.std` surface; without
-        // this preference an unqualified `Box` could bind to `rust.std.Box` and
-        // the backend would emit a non-existent `rust::std::Box` path. The
-        // Rust-std type stays reachable through an explicit `import rust.std.Box`
-        // (exact-FQN resolution, which never comes here).
+        for found in [
+            pick_in_pkg(&mut self.classes.keys()),
+            pick_in_pkg(&mut self.records.keys()),
+            pick_in_pkg(&mut self.enums.keys()),
+            pick_in_pkg(&mut self.interfaces.keys()),
+            pick_in_pkg(&mut self.aliases.keys()),
+        ] {
+            if found.is_some() {
+                return found;
+            }
+        }
+        // (B) Cross-package fallback. A non-`external` class (the user's own /
+        //     `jux.std`) shadows an auto-loaded `.jux.d` stub (`Box`, `String`,
+        //     `HashMap` exist in both `jux.std` and the generated `rust.std`
+        //     surface); the stub stays reachable via an explicit `import`.
         if let Some(k) = self
             .classes
             .iter()
-            .find(|(k, sig)| matches_last(k) && !sig.is_external)
-            .map(|(k, _)| k.clone())
+            .filter(|(k, sig)| matches_last(k) && !sig.is_external)
+            .map(|(k, _)| k)
+            .min()
         {
-            return Some(k);
-        }
-        // A user-declared record / enum / interface / alias of this bare name
-        // takes precedence over an EXTERNAL (`rust.std`) class of the same name
-        // — e.g. a user `enum Dir` must shadow the `std::fs::Dir` stub class.
-        // These tables hold user declarations (stub types land in `classes`),
-        // so a match here is the user's own type.
-        if let Some(k) = self.records.keys().find(|k| matches_last(k)) {
             return Some(k.clone());
         }
-        if let Some(k) = self.enums.keys().find(|k| matches_last(k)) {
+        // A user record / enum / interface / alias shadows an external stub
+        // class of the same name (e.g. a user `enum Dir` over `std::fs::Dir`).
+        if let Some(k) = self.records.keys().filter(|k| matches_last(k)).min() {
             return Some(k.clone());
         }
-        if let Some(k) = self.interfaces.keys().find(|k| matches_last(k)) {
+        if let Some(k) = self.enums.keys().filter(|k| matches_last(k)).min() {
             return Some(k.clone());
         }
-        if let Some(k) = self.aliases.keys().find(|k| matches_last(k)) {
+        if let Some(k) = self.interfaces.keys().filter(|k| matches_last(k)).min() {
             return Some(k.clone());
         }
-        // Last resort: an external stub class (the Rust-std view). Reached only
-        // when no user type of this name exists.
-        if let Some(k) = self.classes.keys().find(|k| matches_last(k)) {
+        if let Some(k) = self.aliases.keys().filter(|k| matches_last(k)).min() {
             return Some(k.clone());
         }
-        None
+        // Last resort: an external stub class. Reached only when no user type
+        // of this name exists.
+        self.classes
+            .keys()
+            .filter(|k| matches_last(k))
+            .min()
+            .cloned()
     }
 
     /// Resolve an identifier to the location of its declaration: the index of
@@ -396,11 +423,30 @@ impl SymbolTable {
     /// packages declaring the same enum name) return `None` rather
     /// than guessing.
     pub fn lookup_enum<'a>(&'a self, name: &str) -> Option<(&'a str, &'a EnumSig)> {
+        self.lookup_enum_in(name, "")
+    }
+
+    /// Package-aware variant of [`Self::lookup_enum`]. `prefer_pkg` is the
+    /// dotted package of the referring unit; a **same-package** enum of this
+    /// bare name resolves even when another package declares an enum of the
+    /// same name. A cross-package ambiguity with no same-package match still
+    /// returns `None` (the user must qualify / import) rather than guessing.
+    pub fn lookup_enum_in<'a>(
+        &'a self,
+        name: &str,
+        prefer_pkg: &str,
+    ) -> Option<(&'a str, &'a EnumSig)> {
         if let Some((k, e)) = self.enums.get_key_value(name) {
             return Some((k.as_str(), e));
         }
         if name.contains('.') {
             return None;
+        }
+        if !prefer_pkg.is_empty() {
+            let want = format!("{prefer_pkg}.{name}");
+            if let Some((k, e)) = self.enums.get_key_value(&want) {
+                return Some((k.as_str(), e));
+            }
         }
         let suffix = format!(".{name}");
         let mut hits = self.enums.iter().filter(|(k, _)| k.ends_with(&suffix));
@@ -3568,6 +3614,50 @@ mod tests {
         let mut diags = Vec::new();
         let table = build(&parse_result.ast, &mut diags);
         (table, diags)
+    }
+
+    /// Parse one source string into a [`CompilationUnit`] for multi-unit tests.
+    fn parse_unit(src: &str) -> CompilationUnit {
+        let sf = SourceFile::new("t.jux", src);
+        let lex_result = lex(&sf);
+        assert!(lex_result.diagnostics.is_empty(), "lex: {:?}", lex_result.diagnostics);
+        let parse_result = parse(&lex_result.tokens);
+        assert!(parse_result.diagnostics.is_empty(), "parse: {:?}", parse_result.diagnostics);
+        parse_result.ast
+    }
+
+    /// Two classes with the same bare name in DIFFERENT packages are distinct,
+    /// and a bare reference resolves to the referrer's own package (never the
+    /// other's). Guards the package-aware `find_fqn_by_bare_in`.
+    #[test]
+    fn same_name_classes_in_different_packages_resolve_per_package() {
+        let a = parse_unit("package a; public class Foo { public int x; }");
+        let b = parse_unit("package b; public class Foo { public int y; }");
+        let mut diags = Vec::new();
+        let table = build_workspace(&[a, b], &mut diags);
+
+        // Both are stored distinctly, by FQN.
+        assert!(table.classes.contains_key("a.Foo"), "a.Foo missing: {:?}", table.classes.keys().collect::<Vec<_>>());
+        assert!(table.classes.contains_key("b.Foo"), "b.Foo missing");
+
+        // A bare `Foo` binds to the referrer's package.
+        assert_eq!(table.find_fqn_by_bare_in("Foo", "a").as_deref(), Some("a.Foo"));
+        assert_eq!(table.find_fqn_by_bare_in("Foo", "b").as_deref(), Some("b.Foo"));
+    }
+
+    /// A same-named enum in another package does not stop a same-package enum
+    /// from resolving (cross-package ambiguity used to return `None`).
+    #[test]
+    fn same_name_enum_resolves_in_its_own_package() {
+        let a = parse_unit("package a; public enum Color { Red, Green }");
+        let b = parse_unit("package b; public enum Color { On, Off }");
+        let mut diags = Vec::new();
+        let table = build_workspace(&[a, b], &mut diags);
+
+        assert_eq!(table.lookup_enum_in("Color", "a").map(|(k, _)| k), Some("a.Color"));
+        assert_eq!(table.lookup_enum_in("Color", "b").map(|(k, _)| k), Some("b.Color"));
+        // No package context → ambiguous → None (must qualify/import).
+        assert_eq!(table.lookup_enum_in("Color", "").map(|(k, _)| k), None);
     }
 
     /// A simple class lands in `table.classes` with its members captured.
