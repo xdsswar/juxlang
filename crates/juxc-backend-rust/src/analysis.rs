@@ -594,6 +594,8 @@ pub(crate) fn is_mutating_method(name: &str) -> bool {
         // `var xs = new List<int>(); xs.add(1);` without forcing
         // the user to write a manual `mut` annotation.
         | "add" | "put" | "set"
+        // Deque<T> mutators (VecDeque-backed).
+        | "addFirst" | "addLast" | "removeFirst" | "removeLast"
     )
 }
 

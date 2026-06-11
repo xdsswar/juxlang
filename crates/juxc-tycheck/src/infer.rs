@@ -858,6 +858,22 @@ fn infer_stdlib_method(
                 _ => None,
             }
         }
+        // `Deque<T>` — stdlib double-ended queue (VecDeque-backed).
+        // The remove/peek forms are nullable: `null` when empty.
+        Ty::User { name, generic_args }
+            if name.rsplit('.').next().unwrap_or(name) == "Deque" =>
+        {
+            let elem_ty = generic_args.first().cloned().unwrap_or(Ty::Unknown);
+            match method_name {
+                "size" => Some(Ty::Primitive(Primitive::Int)),
+                "isEmpty" | "contains" => Some(Ty::Primitive(Primitive::Bool)),
+                "removeFirst" | "removeLast" | "peekFirst" | "peekLast" => {
+                    Some(Ty::nullable(elem_ty))
+                }
+                "addFirst" | "addLast" | "clear" => Some(Ty::Unknown),
+                _ => None,
+            }
+        }
         // `HashSet<T>` — stdlib hash-backed set. Same dispatch
         // shape as HashMap; methods that mutate return Unknown
         // because Phase-1 doesn't carry their meaningful return

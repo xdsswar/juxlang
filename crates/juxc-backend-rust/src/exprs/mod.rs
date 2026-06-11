@@ -305,6 +305,14 @@ impl RustEmitter {
                         self.w.push_str(">::new()");
                         return;
                     }
+                    if bare == "Deque" && n.generic_args.len() == 1 {
+                        self.w.push_str("std::collections::VecDeque::<");
+                        if let Some(arg) = n.generic_args.first() {
+                            self.emit_type_as_rust(arg);
+                        }
+                        self.w.push_str(">::new()");
+                        return;
+                    }
                 }
                 // `new Foo(args)`              → `Foo::new(args)`.
                 // `new com.lib.Foo(args)`      → `crate::com::lib::Foo::new(args)`.

@@ -1,0 +1,36 @@
+// Deque<T> — double-ended queue (jux.std.collections).
+//
+// O(1) push/pop at both ends; use as a stack (addLast/removeLast),
+// a queue (addLast/removeFirst), or a sliding window. The remove/
+// peek forms follow Jux's nullable protocol — `T?`, `null` when
+// empty — instead of throwing. Lowers to Rust's VecDeque<T>.
+
+package deques;
+
+import jux.std.collections.Deque;
+
+public void main() {
+    var d = new Deque<int>();
+    d.addLast(2);
+    d.addLast(3);
+    d.addFirst(1);          // [1, 2, 3]
+    print(d.size());        // 3
+    print(d.peekFirst());   // 1
+    print(d.peekLast());    // 3
+    print(d.contains(2));   // true
+
+    // Queue front, stack back.
+    print(d.removeFirst()); // 1
+    print(d.removeLast());  // 3
+    print(d.removeFirst()); // 2
+    print(d.removeFirst()); // null — empty, no throw
+    print(d.isEmpty());     // true
+
+    // Works with any element type.
+    Deque<String> names = new Deque<String>();
+    names.addLast("ada");
+    names.addFirst("bob");
+    print(names.peekFirst()); // bob
+    names.clear();
+    print(names.size());      // 0
+}

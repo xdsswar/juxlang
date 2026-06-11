@@ -1453,12 +1453,17 @@ impl RustEmitter {
             juxc_tycheck::Ty::User { name, .. }
                 if name.rsplit('.').next().unwrap_or(name) == "HashSet"
         );
+        let is_deque = matches!(
+            &recv_ty,
+            juxc_tycheck::Ty::User { name, .. }
+                if name.rsplit('.').next().unwrap_or(name) == "Deque"
+        );
         // Numeric / char intrinsics (§K.11) — Primitive-typed
         // receivers get their own dispatch table.
         if let juxc_tycheck::Ty::Primitive(prim) = &recv_ty {
             return self.emit_numeric_stdlib_method(call, method, *prim);
         }
-        if !is_array && !is_string && !is_map && !is_set {
+        if !is_array && !is_string && !is_map && !is_set && !is_deque {
             return false;
         }
         if is_array {
@@ -1473,7 +1478,80 @@ impl RustEmitter {
         if is_set {
             return self.emit_set_stdlib_method(call, method);
         }
+        if is_deque {
+            return self.emit_deque_stdlib_method(call, method);
+        }
         false
+    }
+
+    /// Emit the Rust equivalent of a Jux `Deque<T>` method call —
+    /// lowered onto `std::collections::VecDeque<T>`. The remove/peek
+    /// forms return `T?` in Jux, which is exactly the `Option<T>` the
+    /// Rust methods produce (peeks clone the element out).
+    fn emit_deque_stdlib_method(&mut self, call: &CallExpr, method: &str) -> bool {
+        let Expr::Field(f) = &*call.callee else {
+            return false;
+        };
+        let receiver = &*f.object;
+        match method {
+            "addFirst" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".push_front(");
+                self.emit_call_args(call);
+                self.w.push(')');
+                true
+            }
+            "addLast" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".push_back(");
+                self.emit_call_args(call);
+                self.w.push(')');
+                true
+            }
+            "removeFirst" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".pop_front()");
+                true
+            }
+            "removeLast" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".pop_back()");
+                true
+            }
+            "peekFirst" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".front().cloned()");
+                true
+            }
+            "peekLast" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".back().cloned()");
+                true
+            }
+            "contains" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".contains(&(");
+                self.emit_call_args(call);
+                self.w.push_str("))");
+                true
+            }
+            "size" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".len() as isize");
+                true
+            }
+            "isEmpty" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".is_empty()");
+                true
+            }
+            "clear" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".clear()");
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Emit the Rust equivalent of a Jux `HashMap<K, V>` method

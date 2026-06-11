@@ -277,6 +277,60 @@ public class HashSet<T> implements Set<T> {
     public Iterator<T> iterator() { throw new UnsupportedOperationException("intrinsic"); }
 }
 "###),
+    ("collections/Deque.jux", r###"/**
+ * jux.std.collections.Deque<T>
+ *
+ * Double-ended queue — O(1) push/pop at BOTH ends. Use it as a
+ * stack (addLast/removeLast), a queue (addLast/removeFirst), or a
+ * sliding window. Mirrors `java.util.ArrayDeque<T>` with Jux's
+ * nullable-driven removal protocol: the remove/peek forms return
+ * `T?` (`null` when the deque is empty) instead of throwing.
+ *
+ * **Implementation status.** Deque is a "compiler primitive" —
+ * the backend lowers it to Rust's `std::collections::VecDeque<T>`
+ * at every use site.
+ */
+package jux.std.collections;
+
+import jux.std.exceptions.UnsupportedOperationException;
+
+public class Deque<T> {
+    /**
+     * Construct an empty deque.
+     */
+    public Deque() {}
+
+    /** Number of elements. */
+    public int size() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** True iff `size() == 0`. */
+    public bool isEmpty() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Membership test (O(N) scan). */
+    public bool contains(T value) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Insert at the FRONT. */
+    public void addFirst(T value) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Insert at the BACK. */
+    public void addLast(T value) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Remove and return the front element, or `null` when empty. */
+    public T? removeFirst() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Remove and return the back element, or `null` when empty. */
+    public T? removeLast() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Read the front element without removing it; `null` when empty. */
+    public T? peekFirst() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Read the back element without removing it; `null` when empty. */
+    public T? peekLast() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Drop every element. */
+    public void clear() { throw new UnsupportedOperationException("intrinsic"); }
+}
+"###),
     ("collections/Iterable.jux", r###"/**
  * jux.std.collections.Iterable<T>
  *
@@ -969,6 +1023,7 @@ public class File {
     public static bool exists(String path) {
         throw new UnsupportedOperationException("intrinsic");
     }
+
 }
 "###),
     ("option/Option.jux", r###"/**
