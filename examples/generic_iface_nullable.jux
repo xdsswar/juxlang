@@ -1,0 +1,50 @@
+// Three generic/nullable interactions that previously miscompiled:
+//
+//   N4 — a generic class implementing a generic interface, used through the
+//        interface type. The inherent-forwarding shim must emit a call-position
+//        turbofish (`Box::<T>::get(self)`), not `Box<T>::get(self)`.
+//   N6 — a nullable generic field initialized from a nullable constructor
+//        param (`T? data` from `Node(T? d)`) must not double-wrap to
+//        `Some(Some(d))`.
+//   N7 — a `?.` safe-call to a String stdlib method (`s?.length()`) must route
+//        through the stdlib method mapping (`length` → char count), not emit
+//        the raw Jux name.
+
+public interface Container<T> {
+    public T get();
+    public void put(T v);
+}
+
+public class Box<T> implements Container<T> {
+    private T value;
+    public Box(T v) { this.value = v; }
+    public T get() { return this.value; }
+    public void put(T v) { this.value = v; }
+}
+
+public class Node<T> {
+    public T? data;
+    public Node(T? d) { this.data = d; }
+}
+
+public void main() {
+    // N4: generic class through its generic interface.
+    Container<int> c = new Box<int>(10);
+    c.put(42);
+    print(c.get());                 // 42
+
+    Container<String> s = new Box<String>("hi");
+    print(s.get());                 // hi
+
+    // N6: nullable generic field from a nullable ctor param.
+    var n = new Node<int>(5);
+    print(n.data ?? -1);            // 5
+    var empty = new Node<int>(null);
+    print(empty.data ?? -1);        // -1
+
+    // N7: ?. safe-call to a String stdlib method.
+    String? text = "hello";
+    print(text?.length() ?? -1);    // 5
+    String? gone = null;
+    print(gone?.length() ?? -1);    // -1
+}

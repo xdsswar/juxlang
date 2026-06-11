@@ -255,6 +255,18 @@ impl RustEmitter {
         // working (the explicit inits avoid the `__self`-builder's `Default`
         // requirement); only a NON-simple ctor body falls to the builder.
         if let Some(simple) = extract_simple_ctor_inits(ctor) {
+            // Seed nullable-locals from this constructor's `T?` params so a
+            // simple `this.data = d;` of a `T?` param into a `T?` field doesn't
+            // double-wrap (`Some(Some(d))`). `expression_is_already_nullable`
+            // (consulted by `emit_ctor_field_init`) reads this set. The
+            // `__self`-builder fallback below already seeds it; the simple-ctor
+            // fast path was missing the step (gap N6).
+            self.nullable_locals.clear();
+            for p in &ctor.params {
+                if p.ty.nullable {
+                    self.nullable_locals.insert(p.name.text.clone());
+                }
+            }
             if class_decl.init_blocks.is_empty() {
                 self.emit_simple_ctor_body(class_decl, &simple, false);
             } else {
