@@ -16,31 +16,37 @@ import dev.jux.intellij.psi.JuxFile
 object JuxKeywordContext {
     private val MODIFIERS = curated(
         "public", "private", "protected", "internal", "static", "abstract",
-        "final", "const", "sealed", "async", "unsafe", "volatile", "default", "weak",
+        "final", "const", "sealed", "async", "unsafe", "volatile", "default",
+        "weak", "native",
     )
 
     private val TYPE_DECLS = curated(
         "class", "interface", "enum", "record", "struct", "annotation", "type",
     )
 
+    /** Supertype-clause keywords — type headers at file level AND nested. */
+    private val HEADER_CLAUSES = curated("extends", "implements", "permits")
+
     /** File level: package/import headers, modifiers, type declarations. */
-    val TOP_LEVEL: Set<String> = curated("package", "import", "void") + MODIFIERS + TYPE_DECLS
+    val TOP_LEVEL: Set<String> =
+        curated("package", "import", "void") + MODIFIERS + TYPE_DECLS + HEADER_CLAUSES
 
     /** Inside a class/interface/enum body: members, nested types, special blocks. */
     val MEMBER: Set<String> = curated(
-        "void", "new", "operator", "init", "drop", "extends", "implements", "throws",
-    ) + MODIFIERS + TYPE_DECLS
+        "void", "new", "operator", "init", "drop", "throws",
+    ) + MODIFIERS + TYPE_DECLS + HEADER_CLAUSES
 
     /** Expression starters — valid anywhere an expression can begin. */
     val EXPRESSION: Set<String> = curated(
-        "new", "this", "super", "true", "false", "null", "switch", "move", "await", "async",
+        "new", "this", "super", "true", "false", "null", "switch", "move",
+        "await", "async", "sizeof",
     )
 
     /** Inside a code block: statement keywords + locals + expression starters. */
     val STATEMENT: Set<String> = curated(
-        "if", "else", "while", "for", "do", "switch", "return", "throw", "try",
-        "catch", "finally", "break", "continue", "var", "final", "const",
-        "unsafe", "in", "as", "when",
+        "if", "else", "while", "for", "do", "switch", "case", "default",
+        "return", "throw", "try", "catch", "finally", "break", "continue",
+        "var", "final", "const", "unsafe", "in", "as", "when", "yield",
     ) + EXPRESSION
 
     /**

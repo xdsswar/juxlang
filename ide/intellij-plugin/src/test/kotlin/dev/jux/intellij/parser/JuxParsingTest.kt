@@ -200,6 +200,59 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         assertTrue("bound type reference Animal present (got $refTexts)", refTexts.any { it == "Animal" })
     }
 
+    /**
+     * Recent-language-surface constructs the plugin parser must produce the
+     * right PSI for (not merely accept):
+     *  - `static { }` initializer blocks become STATIC_BLOCK (distinct from
+     *    instance INIT_BLOCK), per §S.4.1;
+     *  - const generics `<int N>` (§A.2.6) — the parameter NAME `N` is the
+     *    TYPE_PARAMETER node, with `int` decomposed as a type reference;
+     *  - the wrapping operators `+%` / `-%` / `*%` / `<<%` / `>>%` lex as
+     *    single atoms and parse as ordinary binary expressions.
+     */
+    fun testStaticBlockConstGenericsAndWrappingOps() {
+        val psi = createPsiFile(
+            "Recent.jux",
+            """
+            public class Buffer<int N> {
+                public int used;
+                static { print("loaded"); }
+                init { this.used = 0; }
+                public Buffer() {}
+                public int grow(int a, int b) {
+                    var sum = a +% b;
+                    var diff = a -% b;
+                    var prod = a *% b;
+                    var shl = a <<% 1;
+                    var shr = a >>% 1;
+                    return sum +% diff *% prod + shl - shr;
+                }
+            }
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertTrue(
+            "unexpected parse errors: " + errors.joinToString { "${it.errorDescription}@${it.textOffset}" },
+            errors.isEmpty(),
+        )
+
+        // `static { }` is a STATIC_BLOCK; `init { }` stays an INIT_BLOCK.
+        val staticBlocks = PsiTreeUtil.collectElements(psi) {
+            it.elementType === JuxElementTypes.STATIC_BLOCK
+        }
+        assertEquals("one static block", 1, staticBlocks.size)
+        val initBlocks = PsiTreeUtil.collectElements(psi) {
+            it.elementType === JuxElementTypes.INIT_BLOCK
+        }
+        assertEquals("one init block", 1, initBlocks.size)
+
+        // The const-generic's declared name is `N`, not the value type `int`.
+        val typeParams = PsiTreeUtil.collectElements(psi) {
+            it.elementType === JuxElementTypes.TYPE_PARAMETER
+        }.map { it.text.trim() }
+        assertEquals("const-generic parameter name", listOf("N"), typeParams)
+    }
+
     /** A use of a type name resolves to its in-file declaration. */
     fun testReferenceResolvesToDeclaration() {
         val file = createPsiFile(

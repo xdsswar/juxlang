@@ -57,4 +57,45 @@
     <variable name="PARAMS" expression="" defaultValue="" alwaysStopAt="true"/>
     <context><option name="JUX" value="true"/></context>
   </template>
+  <template name="prop" value="public $TYPE$ $NAME$ -&gt; $EXPR$;$END$" description="expression-bodied property (§M.7.4)" toReformat="false" toShortenFQNames="false">
+    <variable name="TYPE" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+    <variable name="EXPR" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="propgs" value="public $TYPE$ $NAME$ {&#10;    get;&#10;    set;&#10;}$END$" description="property with get/set accessors (§M.7)" toReformat="true" toShortenFQNames="false">
+    <variable name="TYPE" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="initb" value="init {&#10;    $END$&#10;}" description="instance init block (§M.1)" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="sinit" value="static {&#10;    $END$&#10;}" description="static initializer block (§S.4.1)" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="drp" value="drop {&#10;    $END$&#10;}" description="drop (destructor) block (§6.6)" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="sw" value="switch ($EXPR$) {&#10;    case $PAT$ -&gt; $BODY$;&#10;    default -&gt; $END$;&#10;}" description="switch with case arms" toReformat="true" toShortenFQNames="false">
+    <variable name="EXPR" expression="" defaultValue="&quot;value&quot;" alwaysStopAt="true"/>
+    <variable name="PAT" expression="" defaultValue="" alwaysStopAt="true"/>
+    <variable name="BODY" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="swe" value="var $NAME$ = switch ($EXPR$) {&#10;    case $PAT$ -&gt; $VAL$;&#10;    default -&gt; $END$;&#10;};" description="switch expression into a local" toReformat="true" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue="&quot;result&quot;" alwaysStopAt="true"/>
+    <variable name="EXPR" expression="" defaultValue="&quot;value&quot;" alwaysStopAt="true"/>
+    <variable name="PAT" expression="" defaultValue="" alwaysStopAt="true"/>
+    <variable name="VAL" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="raws" value="var $NAME$ = &quot;&quot;&quot;&#10;$END$&#10;&quot;&quot;&quot;;" description="raw (triple-quoted) string" toReformat="false" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue="&quot;text&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="opeq" value="public bool operator==($OTHER$ o) {&#10;    return $END$;&#10;}" description="equality operator overload (§O.2)" toReformat="true" toShortenFQNames="false">
+    <variable name="OTHER" expression="" defaultValue="&quot;Other&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
 </templateSet>

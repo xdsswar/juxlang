@@ -134,7 +134,15 @@ private fun PsiBuilder.parseAngleList(listType: IElementType, typeParams: Boolea
                     atSegmentHead = false
                 }
                 t === T.IDENTIFIER && atSegmentHead && typeParams -> {
-                    val p = mark(); advanceLexer(); p.done(E.TYPE_PARAMETER)
+                    if (lookAhead(1) === T.IDENTIFIER) {
+                        // Const generic `<int N>` (§A.2.6) — two names at the
+                        // segment head: the first is the value's TYPE, the
+                        // second is the declared parameter.
+                        parseTypeRefName()
+                        val p = mark(); advanceLexer(); p.done(E.TYPE_PARAMETER)
+                    } else {
+                        val p = mark(); advanceLexer(); p.done(E.TYPE_PARAMETER)
+                    }
                     atSegmentHead = false
                 }
                 t === T.IDENTIFIER -> { parseTypeRefName(); atSegmentHead = false }

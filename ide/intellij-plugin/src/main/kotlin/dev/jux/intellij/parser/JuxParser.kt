@@ -109,14 +109,20 @@ class JuxParser : PsiParser {
     private fun parseDeclaration(b: PsiBuilder) {
         val decl = b.mark()
         parseAnnotations(b)
-        parseModifierList(b)
+        val sawStatic = parseModifierList(b)
         when {
             b.atAny(JUX_TYPE_DECL_KEYWORDS) -> parseTypeDeclaration(b, decl)
             b.at(T.TYPE_KW) -> parseTypeAlias(b, decl)
             b.at(T.NEW_KW) -> parseConstructor(b, decl)
             b.at(T.OPERATOR_KW) -> parseOperator(b, decl)
             b.at(T.INIT_KW) -> { b.advanceLexer(); parseCodeBlock(b); decl.done(E.INIT_BLOCK) }
-            b.at(T.LBRACE) -> { parseCodeBlock(b); decl.done(E.INIT_BLOCK) }
+            // A bare `{ … }` member: `static { … }` is the §S.4.1 static
+            // initializer (runs once, before first observable use); without
+            // `static` it's an instance init block.
+            b.at(T.LBRACE) -> {
+                parseCodeBlock(b)
+                decl.done(if (sawStatic) E.STATIC_BLOCK else E.INIT_BLOCK)
+            }
             b.at(T.DROP_KW) -> { b.advanceLexer(); parseCodeBlock(b); decl.done(E.DROP_BLOCK) }
             else -> parseMethodOrField(b, decl)
         }
@@ -132,11 +138,19 @@ class JuxParser : PsiParser {
         }
     }
 
-    private fun parseModifierList(b: PsiBuilder) {
-        if (!b.atAny(JUX_MODIFIERS)) return
+    /** Consume the modifier run; reports whether `static` was among them (the
+     * bare-`{}` member arm needs it to tell a static initializer from an
+     * instance init block). */
+    private fun parseModifierList(b: PsiBuilder): Boolean {
+        if (!b.atAny(JUX_MODIFIERS)) return false
+        var sawStatic = false
         val m = b.mark()
-        while (b.atAny(JUX_MODIFIERS)) b.advanceLexer()
+        while (b.atAny(JUX_MODIFIERS)) {
+            if (b.at(T.STATIC_KW)) sawStatic = true
+            b.advanceLexer()
+        }
         m.done(E.MODIFIER_LIST)
+        return sawStatic
     }
 
     private fun parseTypeDeclaration(b: PsiBuilder, decl: PsiBuilder.Marker) {

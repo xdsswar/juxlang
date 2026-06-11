@@ -132,9 +132,10 @@ private fun binaryPrecedence(op: IElementType?): Int = when (op) {
     T.SPACESHIP -> 8
     T.FAT_ARROW -> 9
     T.DOT_DOT, T.DOT_DOT_EQ -> 10
-    T.LT_LT, T.GT_GT -> 11
-    T.PLUS, T.MINUS -> 12
-    T.STAR, T.SLASH, T.PERCENT -> 13
+    // Wrapping variants bind exactly like their ordinary counterparts (§A.4).
+    T.LT_LT, T.GT_GT, T.LT_LT_PERCENT, T.GT_GT_PERCENT -> 11
+    T.PLUS, T.MINUS, T.PLUS_PERCENT, T.MINUS_PERCENT -> 12
+    T.STAR, T.SLASH, T.PERCENT, T.STAR_PERCENT -> 13
     T.AS_KW -> 14
     else -> -1
 }
