@@ -26,6 +26,11 @@ pub(crate) enum IfaceCoercion {
     /// Source is already an interface value (`Rc<dyn Trait>`) flowing into
     /// another interface slot — clone the `Rc` handle (or move when fresh).
     CloneDyn { clone_first: bool },
+    /// Source is a concrete subclass value flowing into a slot typed as its
+    /// **direct** base class under the non-sealed, non-polymorphic open
+    /// hierarchy (e.g. a `BaseErr` into an `Exception` cause slot) — slice it up
+    /// to the parent via the generated `From<Sub> for Parent` with `.into()`.
+    IntoBase,
 }
 
 /// A conservative "is this expression a place (lvalue) that may be used
@@ -1740,6 +1745,14 @@ impl crate::RustEmitter {
         if target_ty.array_shape.is_some() {
             return IfaceCoercion::None;
         }
+        // Concrete subclass → its direct base class under the non-sealed,
+        // non-polymorphic open hierarchy (the `From<Sub> for Parent` slicing
+        // model, e.g. exception causes). Detected here so every coercion call
+        // site — args, returns, var-init, assignment, array elements — picks it
+        // up through the same `!= None` guard the dyn cases use.
+        if self.needs_base_into_upcast(target_ty, expr) {
+            return IfaceCoercion::IntoBase;
+        }
         // A nullable dyn slot only coerces a NON-null value being lifted into
         // the `Option`. A source that is *already* `Option`-shaped (`return
         // this.nullableField;`, `Animal? y = maybeAnimal()`) flows through
@@ -1818,6 +1831,59 @@ impl crate::RustEmitter {
     /// trait-object type — so `Animal? a = new Dog()` lowers to
     /// `Some(Rc::new(Dog) as Rc<dyn AnimalKind>)`. The call site must NOT add a
     /// second `Some(...)` (see the return / var-init suppression).
+    /// True iff `expr` is a concrete subclass value flowing into a slot typed as
+    /// its **direct** base class under the non-sealed, non-polymorphic open
+    /// hierarchy — the exact case where the backend generated
+    /// `impl From<Sub> for Parent { fn from(v) { v.__parent } }`, so a `.into()`
+    /// slicing upcast is valid. Interfaces and polymorphic bases (the dyn model)
+    /// are handled by [`Self::iface_coercion_to`] and excluded here. The `From`
+    /// impl is one hop only, so this requires a *direct* parent match.
+    pub(crate) fn needs_base_into_upcast(&self, target_ty: &TypeRef, expr: &Expr) -> bool {
+        if target_ty.array_shape.is_some() || target_ty.fn_shape.is_some() {
+            return false;
+        }
+        let Some(target_bare) = target_ty.name.segments.last().map(|s| s.text.as_str()) else {
+            return false;
+        };
+        // Interfaces / polymorphic bases use the dyn-coercion path, not `From`.
+        if self.lookup_interface_by_bare_or_fqn(target_bare).is_some()
+            || self.poly_base_classes.contains(target_bare)
+        {
+            return false;
+        }
+        // A *sealed* target lowers to an enum with its own permit-based `From` +
+        // coercion path — skip. A target that isn't a known user class (the
+        // built-in `Exception` base, an external stub) is fine: the slicing
+        // `From<Sub> for Parent` was still generated on the subclass side.
+        if let Some(c) = self.lookup_class_by_bare_or_fqn(target_bare) {
+            if c.is_sealed {
+                return false;
+            }
+        }
+        // The argument's static class must DIRECTLY extend the target class.
+        // Resolve via `receiver_class_bare` so a local-variable argument (whose
+        // type lives in `local_types`, not `expr_types`) is handled too.
+        let Some(arg_bare) = self.receiver_class_bare(expr) else {
+            return false;
+        };
+        if arg_bare == target_bare {
+            return false;
+        }
+        let Some(sig) = self.lookup_class_by_bare_or_fqn(&arg_bare) else {
+            return false;
+        };
+        let parent_bare = sig
+            .extends_fqn
+            .as_deref()
+            .map(|p| p.rsplit('.').next().unwrap_or(p))
+            .or_else(|| {
+                sig.extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+            });
+        parent_bare == Some(target_bare)
+    }
+
     pub(crate) fn emit_expr_coerced_to_iface(
         &mut self,
         target_ty: &TypeRef,
@@ -1861,6 +1927,14 @@ impl crate::RustEmitter {
                 if clone_first {
                     self.w.push_str(".clone()");
                 }
+            }
+            IfaceCoercion::IntoBase => {
+                // Slicing upcast: `(expr).into()` invokes the generated
+                // `From<Sub> for Parent`. A nullable slot is wrapped in `Some(…)`
+                // by the surrounding `nullable` handling.
+                self.w.push('(');
+                self.emit_expr(expr);
+                self.w.push_str(").into()");
             }
         }
         if nullable {
