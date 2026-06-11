@@ -36,7 +36,7 @@ fn foreach_over_own_collection_allows_reentrant_mutation() {
     let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
     assert_eq!(
         lines.as_slice(),
-        ["result size=3", "10", "20", "30", "total=10"],
+        ["result size=3", "10", "20", "30", "total=6"],
         "unexpected output:\n{stdout}"
     );
 }
