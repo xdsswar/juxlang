@@ -78,13 +78,14 @@ abstract class JuxGenerateAction : AnAction() {
         return out
     }
 
+    /**
+     * Does the declaration carry modifier [kw]? Modifiers are always wrapped
+     * in a MODIFIER_LIST composite (never direct keyword children), so the
+     * check reads that list's text — same approach as `JuxHierarchy`.
+     */
     private fun hasKeyword(el: PsiElement, kw: String): Boolean {
-        var c: PsiElement? = el.firstChild
-        while (c != null) {
-            if (c.text == kw && c.elementType != JuxTokenTypes.IDENTIFIER) return true
-            c = c.nextSibling
-        }
-        return false
+        val mods = el.node.findChildByType(JuxElementTypes.MODIFIER_LIST)?.text ?: return false
+        return " $mods ".contains(" $kw ")
     }
 }
 

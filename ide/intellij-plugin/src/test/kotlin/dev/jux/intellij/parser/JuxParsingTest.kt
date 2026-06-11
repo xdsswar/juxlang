@@ -253,6 +253,46 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         assertEquals("const-generic parameter name", listOf("N"), typeParams)
     }
 
+    /**
+     * Pass-2 bug-hunt regressions:
+     *  - expression-bodied properties use `->` (§M.7.4) — the parser used to
+     *    accept only `=>` and painted red errors on spec-legal code;
+     *  - `sizeof` can follow `?` in a ternary (it's an expression starter, so
+     *    `flag ? sizeof(int) : 4` must not parse `flag?` as error-propagation)
+     *    and can follow a C-style cast;
+     *  - `yield expr;` parses as a lenient statement (reserved §M.2 keyword,
+     *    must not red-squiggle).
+     */
+    fun testPropertyArrowSizeofTernaryAndYieldParse() {
+        val psi = createPsiFile(
+            "Pass2.jux",
+            """
+            public class Config {
+                private int w;
+                public Config() {}
+                public String name -> "ident";
+                public int doubled -> this.w * 2;
+                public void gen() {
+                    yield 42;
+                }
+                public int pick(bool flag) {
+                    var r = flag ? sizeof(int) : 4;
+                    return (int) sizeof(long) + r;
+                }
+            }
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertTrue(
+            "unexpected parse errors: " + errors.joinToString { "${it.errorDescription}@${it.textOffset}" },
+            errors.isEmpty(),
+        )
+        // The properties land as FIELD_DECLARATIONs named `name` / `doubled`.
+        val fields = PsiTreeUtil.collectElementsOfType(psi, JuxFieldDeclaration::class.java).map { it.name }
+        assertTrue("property `name` parsed as a member (got $fields)", fields.contains("name"))
+        assertTrue("property `doubled` parsed as a member (got $fields)", fields.contains("doubled"))
+    }
+
     /** A use of a type name resolves to its in-file declaration. */
     fun testReferenceResolvesToDeclaration() {
         val file = createPsiFile(

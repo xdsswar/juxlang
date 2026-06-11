@@ -62,9 +62,13 @@ private class JuxStructureViewElement(private val element: NavigatablePsiElement
     override fun getAlphaSortKey(): String = (element as? PsiNamedElement)?.name.orEmpty()
 
     override fun getPresentation(): ItemPresentation {
-        val text = when (element) {
-            is JuxFile -> element.name
-            is PsiNamedElement -> element.name ?: "<anonymous>"
+        val text = when {
+            element is JuxFile -> element.name
+            // Constructors carry no IDENTIFIER name node (`new(...)`, or the
+            // name doubles as the type) — present them as `new(...)`.
+            element.elementType === E.CONSTRUCTOR_DECLARATION ->
+                (element as? PsiNamedElement)?.name ?: "new(...)"
+            element is PsiNamedElement -> element.name ?: "<anonymous>"
             else -> element.text
         }
         return PresentationData(text, null, iconFor(element), null)
@@ -76,17 +80,42 @@ private class JuxStructureViewElement(private val element: NavigatablePsiElement
         return out.toTypedArray()
     }
 
-    /** Add each named declaration found beneath [parent], descending through
-     *  non-declaration containers (the file root, class bodies) but not into the
-     *  declarations themselves — they supply their own children. */
+    /** Add each MEMBER-level named declaration found beneath [parent],
+     *  descending through non-declaration containers (the file root, class
+     *  bodies) but not into the declarations themselves — they supply their own
+     *  children. Parameters and local variables are named elements too, but
+     *  they're implementation detail, not structure: the outline shows types,
+     *  fields, methods, constructors, and enum constants only. */
     private fun collect(parent: PsiElement, out: MutableList<TreeElement>) {
         for (child in parent.children) {
-            if (child is JuxNamedElement && child is NavigatablePsiElement) {
-                out.add(JuxStructureViewElement(child))
-            } else {
-                collect(child, out)
+            val type = child.elementType
+            when {
+                type in MEMBER_TYPES && child is NavigatablePsiElement ->
+                    out.add(JuxStructureViewElement(child))
+                // Don't descend into method/constructor bodies — locals and
+                // parameters stay out of the outline.
+                type in NO_DESCEND -> {}
+                child is JuxNamedElement -> {} // param/local at this level: skip
+                else -> collect(child, out)
             }
         }
+    }
+
+    private companion object {
+        /** Declarations the outline lists. */
+        val MEMBER_TYPES = setOf(
+            E.CLASS_DECLARATION, E.STRUCT_DECLARATION, E.INTERFACE_DECLARATION,
+            E.ENUM_DECLARATION, E.RECORD_DECLARATION, E.ANNOTATION_DECLARATION,
+            E.METHOD_DECLARATION, E.CONSTRUCTOR_DECLARATION, E.OPERATOR_DECLARATION,
+            E.FIELD_DECLARATION, E.CONST_DECLARATION, E.PROPERTY_DECLARATION,
+            E.ENUM_CONSTANT, E.TYPE_ALIAS_DECLARATION,
+        )
+
+        /** Containers whose interiors are bodies, not structure. */
+        val NO_DESCEND = setOf(
+            E.CODE_BLOCK, E.INIT_BLOCK, E.STATIC_BLOCK, E.DROP_BLOCK,
+            E.PARAMETER_LIST,
+        )
     }
 
     private fun iconFor(e: PsiElement): Icon? = when (e.elementType) {

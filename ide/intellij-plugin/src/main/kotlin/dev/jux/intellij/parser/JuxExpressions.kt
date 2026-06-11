@@ -25,6 +25,7 @@ val JUX_EXPR_START: TokenSet = TokenSet.orSet(
     T.LITERALS,
     TokenSet.create(
         T.IDENTIFIER, T.THIS_KW, T.SUPER_KW, T.NEW_KW, T.SWITCH_KW, T.IF_KW, T.TRY_KW,
+        T.SIZEOF_KW,
         T.LPAREN, T.LBRACKET,
         T.BANG, T.MINUS, T.PLUS, T.TILDE, T.AMP, T.STAR, T.MOVE_KW, T.AWAIT_KW, T.ASYNC_KW,
     ),
@@ -43,7 +44,7 @@ private val PREFIX_OPS: TokenSet = TokenSet.create(
 private val CAST_FOLLOW: TokenSet = TokenSet.orSet(
     T.LITERALS,
     TokenSet.create(
-        T.IDENTIFIER, T.THIS_KW, T.SUPER_KW, T.NEW_KW, T.LPAREN,
+        T.IDENTIFIER, T.THIS_KW, T.SUPER_KW, T.NEW_KW, T.LPAREN, T.SIZEOF_KW,
         T.BANG, T.TILDE, T.MOVE_KW, T.AWAIT_KW,
     ),
 )

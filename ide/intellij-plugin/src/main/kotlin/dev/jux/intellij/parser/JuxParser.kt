@@ -217,6 +217,7 @@ class JuxParser : PsiParser {
 
     private fun isMemberStart(b: PsiBuilder): Boolean =
         b.at(T.AT) || b.atAny(JUX_MODIFIERS) || b.atAny(JUX_TYPE_DECL_KEYWORDS) ||
+            b.at(T.TYPE_KW) || // nested `type Alias = T;` (parseDeclaration handles it)
             b.at(T.NEW_KW) || b.at(T.OPERATOR_KW) || b.at(T.DROP_KW) || b.at(T.INIT_KW) ||
             b.at(T.LBRACE) || b.at(T.IDENTIFIER) || b.at(T.VOID_KW) ||
             b.at(T.LPAREN) || b.at(T.LT) // tuple-typed member / bare generic method
@@ -307,8 +308,11 @@ class JuxParser : PsiParser {
             if (b.at(T.LBRACE)) {
                 parseCodeBlock(b) // property accessor block (opaque for now)
             } else {
+                // `= expr` field initializer, or `-> expr` expression-bodied
+                // property (§M.7.4 — `->` is the body arrow; `=>` is the
+                // type-test operator, tolerated here only for error recovery).
                 if (b.at(T.EQ)) { b.advanceLexer(); b.parseExpression() }
-                else if (b.at(T.FAT_ARROW)) { b.advanceLexer(); b.parseExpression() }
+                else if (b.at(T.ARROW) || b.at(T.FAT_ARROW)) { b.advanceLexer(); b.parseExpression() }
                 b.semicolon()
             }
             decl.done(E.FIELD_DECLARATION)

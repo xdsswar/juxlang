@@ -31,11 +31,11 @@ class JuxStringAnnotator : Annotator {
                 annotateEscapes(element, holder, interp = false)
             JuxTokenTypes.INTERP_STRING_LITERAL -> {
                 annotateEscapes(element, holder, interp = true)
-                annotateInterpolations(element, holder)
+                annotateInterpolations(element, holder, raw = false)
             }
             JuxTokenTypes.INTERP_RAW_STRING_LITERAL ->
                 // Raw: no escapes, but `${…}` holes still interpolate.
-                annotateInterpolations(element, holder)
+                annotateInterpolations(element, holder, raw = true)
         }
     }
 
@@ -57,7 +57,8 @@ class JuxStringAnnotator : Annotator {
                 braceDepth = 1; i += 2; continue
             }
             if (braceDepth > 0) {
-                when (c) { '{' -> braceDepth++; '}' -> braceDepth-- }
+                // `\}` inside a hole is an escaped char, not the hole's close.
+                when (c) { '\\' -> i++; '{' -> braceDepth++; '}' -> braceDepth-- }
                 i++; continue
             }
             if (c != '\\' || i + 1 >= text.length) { i++; continue }
@@ -78,19 +79,29 @@ class JuxStringAnnotator : Annotator {
         return when (c) {
             'n', 'r', 't', 'b', 'f', '0', '\\', '\'', '"', '$' -> 2 to true
             'x' -> {
-                // `\xHH` — exactly two hex digits, ≤ 0x7F.
-                val hex = text.substring(start + 2, minOf(start + 4, text.length))
-                val ok = hex.length == 2 && hex.all { it.isHexDigit() } &&
-                    hex.toInt(16) <= 0x7F
+                // `\xHH` — exactly two hex digits, ≤ 0x7F. The reported range
+                // covers only the hex digits actually present, so a truncated
+                // `\x4"` never paints the closing quote.
+                var j = start + 2
+                while (j < text.length && j < start + 4 && text[j].isHexDigit()) j++
+                val hex = text.substring(start + 2, j)
+                val ok = hex.length == 2 && hex.toInt(16) <= 0x7F
                 (2 + hex.length) to ok
             }
             'u' -> {
-                // `\u{H+}` — up to six hex digits in braces.
+                // `\u{H+}` — 1–6 hex digits in braces, naming a real Unicode
+                // scalar: ≤ 0x10FFFF and not a surrogate (the same
+                // `char::from_u32` rule `process_string_escapes` applies).
                 if (text.getOrNull(start + 2) != '{') return 2 to false
                 val close = text.indexOf('}', start + 3)
                 if (close < 0) return 2 to false
                 val hex = text.substring(start + 3, close)
-                val ok = hex.isNotEmpty() && hex.length <= 6 && hex.all { it.isHexDigit() }
+                val value = if (hex.isNotEmpty() && hex.length <= 6 && hex.all { it.isHexDigit() }) {
+                    hex.toLong(16)
+                } else {
+                    -1L
+                }
+                val ok = value in 0..0x10FFFF && value !in 0xD800..0xDFFF
                 (close - start + 1) to ok
             }
             else -> 2 to false
@@ -102,23 +113,42 @@ class JuxStringAnnotator : Annotator {
     // ---- interpolation holes ----------------------------------------------
 
     /**
-     * Finds each `${…}` hole (brace-balanced, matching the lexer's scan),
-     * colours its delimiters, and re-lexes the interior so the embedded
-     * expression highlights like real code.
+     * Finds each `${…}` hole (brace-balanced, matching the lexer's scan) and
+     * each `$name` shorthand, colours the delimiters, and re-lexes hole
+     * interiors so the embedded expression highlights like real code.
+     *
+     * [raw] mirrors the compiler's segmentation: in `$"…"` a backslash escapes
+     * the next char (`\$` is no hole); in `$"""…"""` the backslash is plain
+     * text, so `\${x}` IS an active hole.
      */
-    private fun annotateInterpolations(element: PsiElement, holder: AnnotationHolder) {
+    private fun annotateInterpolations(element: PsiElement, holder: AnnotationHolder, raw: Boolean) {
         val text = element.text
         val base = element.textRange.startOffset
         var i = 0
         while (i < text.length - 1) {
-            if (text[i] == '\\') { i += 2; continue }
-            if (text[i] != '$' || text[i + 1] != '{') { i++; continue }
+            if (!raw && text[i] == '\\') { i += 2; continue }
+            if (text[i] != '$') { i++; continue }
+            val next = text[i + 1]
+
+            // `$name` shorthand (§3.4): the `$` and the identifier interpolate.
+            if (next.isLetter() || next == '_') {
+                var j = i + 1
+                while (j < text.length && (text[j].isLetterOrDigit() || text[j] == '_')) j++
+                mark(holder, TextRange(base + i, base + j), JuxSyntaxHighlighter.INTERPOLATION)
+                i = j
+                continue
+            }
+            if (next != '{') { i++; continue }
 
             val exprStart = i + 2
             var depth = 1
             var j = exprStart
             while (j < text.length && depth > 0) {
-                when (text[j]) { '{' -> depth++; '}' -> depth-- }
+                when (text[j]) {
+                    '\\' -> if (!raw) j++ // escaped char inside the hole
+                    '{' -> depth++
+                    '}' -> depth--
+                }
                 j++
             }
             val exprEnd = if (depth == 0) j - 1 else j // exclusive of `}` when closed
