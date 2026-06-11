@@ -1,0 +1,12 @@
+<html>
+<body>
+Reports local variables, parameters, and <code>private</code> instance fields that are
+never referenced in the file. Resolution is shadowing-aware: a use that resolves to a
+different declaration with the same name does not keep this one alive.
+<p>
+Parameters of bodyless (interface/abstract) and <code>@override</code> methods are
+skipped — their signatures are fixed by the contract. Names spelled <code>_</code> are
+treated as deliberate discards.
+</p>
+</body>
+</html>
