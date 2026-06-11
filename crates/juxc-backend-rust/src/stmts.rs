@@ -1345,6 +1345,26 @@ impl RustEmitter {
         let body_moves_var =
             !element_is_copy && body_moves_path(&f.body, &f.var_name.text);
 
+        // **Re-entrancy guard.** When the iterable is a collection field read
+        // through a wrapper's `.0.borrow()` (`for (n : this.items) …`), iterating
+        // it directly (`for n in &self.0.borrow().items`) holds that read-guard
+        // across the whole body. Any in-body call that re-enters the same object
+        // and takes `borrow_mut()` — even to a *different* field — then panics
+        // `already borrowed`. Snapshot the collection into an owned local first
+        // (cloning detaches the Rc element handles; element mutation still aliases
+        // the live objects) so the field borrow drops before the body runs. This
+        // also gives iterate-a-snapshot semantics if the body adds to the field.
+        let snapshot = self.for_each_iter_reads_through_borrow(&f.iter);
+        if snapshot {
+            self.w.push_str("{\n");
+            self.w.indent_inc();
+            self.w.emit_indent();
+            self.w.push_str("let __jux_fe_iter = ");
+            self.emit_expr(&f.iter);
+            self.w.push_str(".clone();\n");
+            self.w.emit_indent();
+        }
+
         self.w.push_str("for ");
         if element_is_copy {
             self.w.push('&');
@@ -1353,16 +1373,18 @@ impl RustEmitter {
         self.w.push_str(" in ");
         if element_is_copy {
             self.w.push('&');
-            self.emit_expr(&f.iter);
-        } else if body_moves_var {
-            self.emit_expr(&f.iter);
-            self.w.push_str(".iter().cloned()");
-        } else {
-            // Borrow-iter: yields `&T`, so `x.method()` /
-            // `format!("{}", x)` / `x == y` all work through
-            // auto-deref / `Display` / `PartialEq` blanket impls.
+        } else if !body_moves_var {
+            // Borrow-iter: yields `&T`, so `x.method()` / `format!("{}", x)` /
+            // `x == y` all work through auto-deref / `Display` / `PartialEq`.
             self.w.push('&');
+        }
+        if snapshot {
+            self.w.push_str("__jux_fe_iter");
+        } else {
             self.emit_expr(&f.iter);
+        }
+        if body_moves_var {
+            self.w.push_str(".iter().cloned()");
         }
         self.w.push_str(" {\n");
         self.w.indent_inc();
@@ -1383,6 +1405,26 @@ impl RustEmitter {
         self.w.indent_dec();
         self.w.emit_indent();
         self.w.push_str("}\n");
+        if snapshot {
+            self.w.indent_dec();
+            self.w.emit_indent();
+            self.w.push_str("}\n");
+        }
+    }
+
+    /// True iff a for-each iterable is a collection field read through a wrapper
+    /// class's `.0.borrow()` guard — `this.items` / `obj.items` where the owner
+    /// uses the `Rc<RefCell>` representation. Such an iterable must be snapshotted
+    /// into an owned local before the loop so the read-borrow drops before the
+    /// body runs (see [`Self::emit_for_each`]).
+    fn for_each_iter_reads_through_borrow(&self, iter: &Expr) -> bool {
+        if let Expr::Field(fe) = iter {
+            return self.receiver_is_wrapper_class(&fe.object)
+                && self
+                    .wrapper_field_parent_depth(&fe.object, &fe.field.text)
+                    .is_some();
+        }
+        false
     }
 
     /// The element type of a for-each iterable: the element of an array, or the

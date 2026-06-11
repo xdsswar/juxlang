@@ -1,0 +1,37 @@
+// for-each over a class's OWN collection field, while the loop body re-enters
+// and mutates the same object. The iterable is read through the wrapper's
+// `.0.borrow()`; iterating it directly would hold that guard across the body and
+// any re-entrant `borrow_mut()` (even to a different field) would panic
+// `RefCell already borrowed`. The iterable must be snapshotted first.
+// Expected output: result size=3 / 10 / 20 / 30 / total=10.
+
+import jux.std.collections.ArrayList;
+
+public class Acc {
+    public ArrayList<int> items;
+    public ArrayList<int> result;
+    public int total;
+    public Acc() {
+        this.items = new ArrayList<int>();
+        this.result = new ArrayList<int>();
+        this.total = 0;
+    }
+    public void seed() { this.items.add(1); this.items.add(2); this.items.add(3); }
+    public void bump(int v) { this.total = this.total + v; }
+    public void run() {
+        // mutate a DIFFERENT field while iterating items
+        for (var n : this.items) { this.result.add(n * 10); }
+        print("result size=" + this.result.size());
+        for (var r : this.result) { print(r); }
+        // re-entrant method call mutating the SAME object during iteration
+        for (var n : this.items) { this.bump(n); }
+        print("total=" + this.total);
+    }
+}
+
+public void main() {
+    var a = new Acc();
+    var alias = a;   // force the shared-reference (wrapped) representation
+    a.seed();
+    a.run();
+}
