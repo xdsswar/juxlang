@@ -386,14 +386,32 @@ impl RustEmitter {
                 // and the try lowering's post-`finally` step performs
                 // the real return. See `emit_try`.
                 let in_try = self.in_try_closure;
-                self.w.push_str("return");
-                if value.is_none() && in_try {
-                    self.w.push_str(" Some(());\n");
+                // **Catch-arm return parking** (§X.3.2): a `return`
+                // in a catch body must run the try's `finally` first.
+                // The value parks in `__jux_ret` and the dispatch
+                // block breaks; the post-`finally` tail performs the
+                // real return. (Inside a nested try's closure the
+                // closure-threading takes precedence.)
+                let park = self.in_catch_arm;
+                if park {
+                    self.w.push_str("{ __jux_ret = ");
+                } else {
+                    self.w.push_str("return");
+                }
+                let channel_wrap = in_try || park;
+                if value.is_none() && channel_wrap {
+                    if park {
+                        self.w.push_str("Some(()); break '__jux_catch; }\n");
+                    } else {
+                        self.w.push_str(" Some(());\n");
+                    }
                     return;
                 }
                 if let Some(e) = value {
-                    self.w.push(' ');
-                    if in_try {
+                    if !park {
+                        self.w.push(' ');
+                    }
+                    if channel_wrap {
                         self.w.push_str("Some(");
                     }
                     // Nullable-return coercion: when the enclosing
@@ -454,11 +472,15 @@ impl RustEmitter {
                     if do_some {
                         self.w.push(')');
                     }
-                    if in_try {
+                    if channel_wrap {
                         self.w.push(')');
                     }
                 }
-                self.w.push_str(";\n");
+                if park {
+                    self.w.push_str("; break '__jux_catch; }\n");
+                } else {
+                    self.w.push_str(";\n");
+                }
             }
             Stmt::VarDecl(var) => self.emit_var_decl(var),
             Stmt::If(if_stmt) => self.emit_if(if_stmt),
@@ -521,6 +543,19 @@ impl RustEmitter {
                 // String payload here — the typed object IS the
                 // payload, and the catch-site recovers it
                 // verbatim.
+                if self.in_catch_arm {
+                    // **Catch-arm throw parking** (§X.3.2): the new
+                    // exception runs `finally` first, then propagates
+                    // — same channel an unmatched payload uses.
+                    self.w.push_str(
+                        "{ __jux_unhandled = Some(::std::boxed::Box::new(",
+                    );
+                    self.emit_expr(e);
+                    self.w.push_str(
+                        ") as ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>); break '__jux_catch; }\n",
+                    );
+                    return;
+                }
                 self.w.push_str("std::panic::panic_any(");
                 self.emit_expr(e);
                 self.w.push_str(");\n");
@@ -561,6 +596,8 @@ impl RustEmitter {
             "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n",
         );
         self.w.indent_inc();
+        let prev_catch_arm = self.in_catch_arm;
+        self.in_catch_arm = false;
         for stmt in body_stmts {
             self.emit_source_marker(stmt_span(stmt));
             self.w.emit_indent();
@@ -571,6 +608,7 @@ impl RustEmitter {
             self.emit_expr(tail);
             self.w.push('\n');
         }
+        self.in_catch_arm = prev_catch_arm;
         self.w.indent_dec();
         self.w.emit_indent();
         self.w.push_str("})) {\n");
@@ -716,7 +754,10 @@ impl RustEmitter {
             self.w.push_str(".__parent");
         }
         self.w.push_str(";\n");
+        let prev_arm = self.in_catch_arm;
+        self.in_catch_arm = true;
         self.emit_block_contents(body);
+        self.in_catch_arm = prev_arm;
         self.w.line("break '__jux_catch;");
         self.w.indent_dec();
         self.w.line("}");
@@ -913,7 +954,11 @@ impl RustEmitter {
         //     runs `finally` FIRST, then resumes unwinding — the
         //     payload parks in `__jux_unhandled` across the finally.
         let is_async = crate::analysis::block_contains_await(&t.body);
-        let has_ret = block_contains_fn_return(&t.body);
+        // The return channel is needed when the BODY returns (threads
+        // through the closure) OR any CATCH body returns (parks from
+        // the dispatch arm — §X.3.2: finally runs before the return).
+        let has_ret = block_contains_fn_return(&t.body)
+            || t.catches.iter().any(|c| block_contains_fn_return(&c.body));
         // Wrap the whole thing in a block so locals introduced by
         // the lowering don't leak.
         self.w.push_str("{\n");
@@ -954,6 +999,10 @@ impl RustEmitter {
         }
         let prev_try_flag = self.in_try_closure;
         self.in_try_closure = has_ret;
+        // A nested try inside a catch arm: its body's throws/returns
+        // belong to ITS machinery, not the enclosing arm's parking.
+        let prev_catch_arm = self.in_catch_arm;
+        self.in_catch_arm = false;
         if is_async {
             // `futures::FutureExt::catch_unwind(...)` is fully
             // qualified so we don't need a `use` statement at the
@@ -983,6 +1032,7 @@ impl RustEmitter {
             self.w.push_str("}));\n");
         }
         self.in_try_closure = prev_try_flag;
+        self.in_catch_arm = prev_catch_arm;
         // Match on the result and run the appropriate catch.
         self.w.emit_indent();
         self.w.push_str("match __jux_try_result {\n");
