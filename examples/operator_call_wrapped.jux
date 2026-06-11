@@ -1,0 +1,18 @@
+// `operator()` (call) on a wrapped (Rc<RefCell>) class whose body mutates a
+// field. Like every other method on a wrapper, it must take `&self` and mutate
+// through the interior `self.0.borrow_mut()`; emitting `&mut self` forced a
+// `let mut` at the call site the binding emitter never produced (E0596).
+// Expected output: 5 / 8.
+
+public class Counter {
+    public int n;
+    public Counter() { this.n = 0; }
+    public int operator()(int by) { this.n = this.n + by; return this.n; }
+}
+
+public void main() {
+    var c = new Counter();
+    var alias = c;          // force the shared-reference (wrapped) representation
+    print(c(5));            // 5
+    print(c(3));            // 8
+}
