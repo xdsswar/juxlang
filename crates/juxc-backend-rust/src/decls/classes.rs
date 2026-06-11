@@ -2349,6 +2349,14 @@ impl RustEmitter {
                         // the trait, so this delegates without
                         // recursing.
                         self.w.push_str(&class_decl.name.text);
+                        // Turbofish in **call** position — `Box::<T>::get(self)`.
+                        // The leading `::` is required: `Box<T>::get` parses as
+                        // chained comparison operators ("comparison operators
+                        // cannot be chained"). `emit_generic_params_as_args` is
+                        // correct only in type position, so add the `::` here.
+                        if !class_decl.generic_params.is_empty() {
+                            self.w.push_str("::");
+                        }
                         self.emit_generic_params_as_args(&class_decl.generic_params);
                         self.w.push_str("::");
                         self.w.push_str(method_name);

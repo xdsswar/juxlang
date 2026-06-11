@@ -1504,19 +1504,69 @@ impl RustEmitter {
         if needs_parens {
             self.w.push(')');
         }
-        self.w.push_str(".as_ref().map(|__t| __t.");
-        self.w.push_str(&callee.field.text);
-        self.w.push('(');
-        let prev = self.emitting_format_arg;
-        self.emitting_format_arg = false;
-        for (i, arg) in call.args.iter().enumerate() {
-            if i > 0 {
-                self.w.push_str(", ");
-            }
-            self.emit_expr(arg);
+        self.w.push_str(".as_ref().map(|__t| ");
+        // **Route through the stdlib-method dispatch with `__t` as receiver**
+        // (gap N7): a String/collection method on a nullable receiver
+        // (`s?.length()`, `xs?.size()`) must map to its Rust equivalent
+        // (`length` → `.chars().count() as isize`), not emit the raw Jux name.
+        // `__t` is `&Underlying` from `as_ref()`; type it as the receiver's
+        // underlying (non-nullable) type and synthesize a plain `__t.method(args)`
+        // call for `try_emit_stdlib_method` to lower.
+        let underlying = self
+            .expr_types
+            .get(&crate::exprs::expr_span_of(&callee.object))
+            .map(|t| {
+                let mut u = t;
+                while let juxc_tycheck::Ty::Nullable(inner) = u {
+                    u = inner;
+                }
+                u.clone()
+            });
+        let mut handled = false;
+        if let Some(uty) = underlying {
+            let synth = CallExpr {
+                callee: Box::new(Expr::Field(juxc_ast::FieldExpr {
+                    object: Box::new(Expr::Path(juxc_ast::QualifiedName {
+                        segments: vec![juxc_ast::Ident {
+                            text: "__t".to_string(),
+                            span: callee.span,
+                        }],
+                        span: callee.span,
+                    })),
+                    field: callee.field.clone(),
+                    safe: false,
+                    span: callee.span,
+                })),
+                explicit_generic_args: Vec::new(),
+                args: call.args.clone(),
+                arg_names: vec![None; call.args.len()],
+                span: call.span,
+            };
+            // Expose `__t`'s type for the duration of the synthetic dispatch
+            // (the bare-receiver type lookup reads `local_types`).
+            let mut scope = std::collections::HashMap::new();
+            scope.insert("__t".to_string(), uty);
+            self.local_types.push(scope);
+            handled = self.try_emit_stdlib_method(&synth);
+            self.local_types.pop();
         }
-        self.emitting_format_arg = prev;
-        self.w.push_str("))");
+        if !handled {
+            // Plain user-method (or unknown receiver): emit `__t.method(args)`.
+            self.w.push_str("__t.");
+            self.w.push_str(&callee.field.text);
+            self.w.push('(');
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            for (i, arg) in call.args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.emit_expr(arg);
+            }
+            self.emitting_format_arg = prev;
+            self.w.push(')');
+        }
+        self.w.push(')');
     }
 
     /// Lower a call to the built-in `print(…)` into the most natural Rust
