@@ -1273,10 +1273,16 @@ pub fn walk_extends_reaches(
     ancestor: &str,
     symbols: &SymbolTable,
 ) -> bool {
-    if child == ancestor {
+    // Compare on BARE (last-segment) names throughout so a packaged program —
+    // whose classes are FQN-keyed (`pkg.Box`) — chains exactly like a
+    // no-package one. The arguments may arrive bare or qualified (call sites
+    // pass the inferred type's last segment vs. a written `extends` name), and
+    // `symbols.classes` is keyed by FQN, so a raw `get(bare)` would miss.
+    let ancestor_bare = bare_type_name(ancestor);
+    if bare_type_name(child) == ancestor_bare {
         return true;
     }
-    let mut current = symbols.classes.get(child);
+    let mut current = resolve_class_sig(child, symbols);
     let mut depth = 0usize;
     while let Some(class) = current {
         if depth > 64 {
@@ -1296,13 +1302,29 @@ pub fn walk_extends_reaches(
                 None => return false,
             },
         };
-        if parent_name == ancestor {
+        if bare_type_name(parent_name) == ancestor_bare {
             return true;
         }
-        current = symbols.classes.get(parent_name);
+        current = resolve_class_sig(parent_name, symbols);
         depth += 1;
     }
     false
+}
+
+/// Resolve a (possibly bare, possibly FQN) class name to its [`ClassSig`]:
+/// exact key first, then a bare-name lookup against the FQN-keyed table. Lets
+/// the inheritance walk follow a chain regardless of whether the program
+/// declared a `package`.
+fn resolve_class_sig<'a>(
+    name: &str,
+    symbols: &'a SymbolTable,
+) -> Option<&'a crate::symbol_table::ClassSig> {
+    if let Some(c) = symbols.classes.get(name) {
+        return Some(c);
+    }
+    symbols
+        .find_fqn_by_bare(bare_type_name(name))
+        .and_then(|fqn| symbols.classes.get(&fqn))
 }
 
 /// The bare (last-segment) form of a possibly-qualified type name —

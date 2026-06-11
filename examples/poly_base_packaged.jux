@@ -1,0 +1,28 @@
+// Virtual dispatch through a CONCRETE base class, in a PACKAGED program.
+//
+// A `Container`-typed variable holding a `Box` subclass instance must dispatch
+// the overridden `describe()` at run time (lowered to `Rc<dyn ContainerKind>`).
+// The inheritance walk that drives the upcast coercion compares class names —
+// in a packaged program those are FQN-keyed (`poly.Box`), so the walk has to
+// match on bare names or the coercion silently doesn't fire (emitting a plain
+// `Box` where `Rc<dyn ContainerKind>` is expected → rustc E0308).
+
+package poly;
+
+public class Container {
+    protected int value;
+    public Container(int v) { this.value = v; }
+    public int get() { return this.value; }
+    public String describe() { return "container"; }
+}
+
+public class Box extends Container {
+    public Box(int v) { super(v); }
+    public String describe() { return "box of " + this.get(); }
+}
+
+public void main() {
+    Container b = new Box(7);
+    print(b.get());        // 7 (inherited)
+    print(b.describe());   // box of 7 (virtual dispatch to the override)
+}
