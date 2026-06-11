@@ -105,6 +105,14 @@ pub enum Expr {
     /// is plain grouping). Lowers verbatim to a Rust tuple — value
     /// semantics, stack-allocated, no boxing.
     TupleLit(Vec<Expr>, Span),
+    /// `try { … } catch (E e) { … }` — **try-expression** (§X.3.1/
+    /// §X.3.3): evaluates to the try block's trailing expression, or
+    /// the matching catch block's trailing expression. No `finally`
+    /// (the grammar reserves the value form for pure
+    /// produce-or-recover shapes). Reuses [`crate::TryStmt`] for the
+    /// clause structure; the parser guarantees `finally` is `None`
+    /// and at least one catch exists.
+    TryExpr(Box<crate::stmts::TryStmt>),
     /// `expr!!` — **non-null assertion** (grammar §A.4 level 19,
     /// postfix; conversion table `T?` → `T!!`). Asserts the nullable
     /// operand holds a value and unwraps it; a `null` operand throws

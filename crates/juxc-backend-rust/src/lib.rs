@@ -1140,6 +1140,12 @@ pub(crate) fn compute_aliased_classes(
                     walk_expr(el, aliased, mark);
                 }
             }
+            Expr::TryExpr(t) => {
+                walk_block(&t.body, aliased, mark);
+                for c in &t.catches {
+                    walk_block(&c.body, aliased, mark);
+                }
+            }
             Expr::Call(c) => {
                 // Each argument is passed by value → the callee may
                 // retain it → alias the arg's class (fresh or not; a
@@ -2075,6 +2081,12 @@ fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
         Expr::TupleLit(elems, _) => {
             for el in elems {
                 cast_targets_expr(el, out);
+            }
+        }
+        Expr::TryExpr(t) => {
+            cast_targets_block(&t.body, out);
+            for c in &t.catches {
+                cast_targets_block(&c.body, out);
             }
         }
         Expr::Cast(c) => {

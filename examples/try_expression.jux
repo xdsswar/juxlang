@@ -1,0 +1,30 @@
+// Try-expressions (§X.3.1 / §X.3.3) — the value-producing form.
+//
+// `try { ... } catch (E e) { ... }` evaluates to the try block's
+// trailing expression, or the matching catch block's trailing
+// expression; an unmatched exception re-throws. No `finally` in the
+// expression form (it could produce no value) — use the statement
+// form for cleanup.
+
+package tryexpr;
+
+int parse(String s) {
+    if (s == "bad") {
+        throw new IllegalArgumentException("not a number");
+    }
+    return 42;
+}
+
+public void main() {
+    var ok = try { parse("good"); } catch (Exception e) { -1; };
+    print(ok);
+    var bad = try { parse("bad"); } catch (Exception e) { -1; };
+    print(bad);
+    var msg = try {
+        parse("bad");
+        "fine";
+    } catch (IllegalArgumentException e) {
+        "rejected: " + e.getMessage();
+    };
+    print(msg);
+}

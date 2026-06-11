@@ -352,6 +352,12 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
                 collect_mutating_calls(el, out, user_mut);
             }
         }
+        Expr::TryExpr(t) => {
+            collect_mutated_names(&t.body, out, user_mut);
+            for c in &t.catches {
+                collect_mutated_names(&c.body, out, user_mut);
+            }
+        }
         Expr::Call(c) => {
             if let Expr::Field(f) = &*c.callee {
                 // A method call counts as mutating the receiver when
@@ -525,6 +531,10 @@ fn expr_contains_await(e: &Expr) -> bool {
     match e {
         Expr::Await(_, _) => true,
         Expr::TupleLit(elems, _) => elems.iter().any(expr_contains_await),
+        Expr::TryExpr(t) => {
+            block_contains_await(&t.body)
+                || t.catches.iter().any(|c| block_contains_await(&c.body))
+        }
         Expr::NotNullAssert(inner, _) => expr_contains_await(inner),
         Expr::Call(c) => {
             expr_contains_await(&c.callee) || c.args.iter().any(expr_contains_await)

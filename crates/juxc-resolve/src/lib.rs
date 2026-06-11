@@ -893,6 +893,19 @@ impl Resolver {
                     self.visit_expr(e);
                 }
             }
+            // Try-expression — body in its own scope; each catch
+            // binds its name for its block.
+            Expr::TryExpr(t) => {
+                self.push_scope();
+                self.visit_block(&t.body);
+                self.pop_scope();
+                for c in &t.catches {
+                    self.push_scope();
+                    self.declare(&c.name.text);
+                    self.visit_block(&c.body);
+                    self.pop_scope();
+                }
+            }
             Expr::Path(qn) => self.check_path(qn),
             Expr::Call(c) => self.visit_call(c),
             Expr::Binary(b) => {
