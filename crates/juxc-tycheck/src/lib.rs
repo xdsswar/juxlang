@@ -47,6 +47,7 @@ pub(crate) mod definite_assign;
 pub mod env;
 pub mod expand;
 pub mod infer;
+pub(crate) mod return_check;
 pub mod symbol_table;
 pub mod ty;
 
@@ -485,16 +486,18 @@ mod tests {
         assert_eq!(check_count("public void main() {}"), 0);
     }
 
-    /// A non-main function with any shape is left alone.
+    /// A non-main function with any shape is left alone. (Body returns so the
+    /// E0451 missing-return check doesn't fire — this test is about entry rules.)
     #[test]
     fn non_main_functions_are_not_checked() {
-        assert_eq!(check_count("public bool helper() {}"), 0);
+        assert_eq!(check_count("public bool helper() { return true; }"), 0);
     }
 
-    /// `bool main()` is not in the accepted set — emits E0323.
+    /// `bool main()` is not in the accepted set — emits E0323. (Returning body
+    /// isolates the entry-shape diagnostic from the E0451 missing-return check.)
     #[test]
     fn bool_main_is_e0323() {
-        assert_eq!(check_count("public bool main() {}"), 1);
+        assert_eq!(check_count("public bool main() { return true; }"), 1);
     }
 
     /// A `static` class `main` with an entry shape is a valid entry point.
