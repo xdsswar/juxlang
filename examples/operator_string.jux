@@ -1,0 +1,40 @@
+// `operator string()` as the print / concat / interpolation hook
+// (§O.2.2, §O.7.1) + the §O.4.1 identity default.
+//
+// - A class declaring `operator string()` formats through it in
+//   print(), `+`-concatenation, and `$"..."` interpolation.
+// - A class WITHOUT it still prints — as `ClassName@<addr>`
+//   (identity format; the address is stable across aliases for
+//   reference-semantics objects).
+
+package opstring;
+
+class Point {
+    private int x;
+    private int y;
+
+    Point(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+
+    public String operator string() {
+        return "(" + this.x + ", " + this.y + ")";
+    }
+}
+
+class Plain {
+    private int v;
+    Plain(int v) { this.v = v; }
+}
+
+public void main() {
+    var p = new Point(3, 4);
+    print(p);
+    print("at " + p);
+    print($"point: $p");
+
+    var raw = new Plain(1);
+    var s = $"$raw";
+    print(s.contains("Plain@"));
+}
