@@ -2356,7 +2356,7 @@ pub(crate) fn is_intrinsic_class(pkg: &str, name: &str) -> bool {
     match (pkg, name) {
         ("jux.std.collections", "ArrayList" | "HashMap" | "HashSet" | "Deque") => true,
         ("jux.std.io", "File" | "Path" | "Console") => true,
-        ("jux.std.concurrent", "Worker" | "Task") => true,
+        ("jux.std.concurrent", "Worker" | "Task" | "AtomicInt" | "AtomicLong") => true,
         ("jux.std.time", "Clock" | "Instant") => true,
         _ => false,
     }
@@ -2406,6 +2406,19 @@ impl RustEmitter {
         w.push_str("            Some(v) => std::fmt::Display::fmt(v, f),\n");
         w.push_str("            None => f.write_str(\"null\"),\n");
         w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n\n");
+        // Memory-ordering adapter (§S.6.2): maps the Jux stdlib
+        // `MemoryOrder` enum onto Rust's `atomic::Ordering` for the
+        // explicit-order overloads of `AtomicInt`/`AtomicLong`.
+        // Always emitted (dead_code-allowed) like the other helpers.
+        w.push_str("fn __jux_order(o: crate::jux::std::concurrent::MemoryOrder) -> std::sync::atomic::Ordering {\n");
+        w.push_str("    match o {\n");
+        w.push_str("        crate::jux::std::concurrent::MemoryOrder::Relaxed => std::sync::atomic::Ordering::Relaxed,\n");
+        w.push_str("        crate::jux::std::concurrent::MemoryOrder::Acquire => std::sync::atomic::Ordering::Acquire,\n");
+        w.push_str("        crate::jux::std::concurrent::MemoryOrder::Release => std::sync::atomic::Ordering::Release,\n");
+        w.push_str("        crate::jux::std::concurrent::MemoryOrder::AcqRel => std::sync::atomic::Ordering::AcqRel,\n");
+        w.push_str("        crate::jux::std::concurrent::MemoryOrder::SeqCst => std::sync::atomic::Ordering::SeqCst,\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
         // Async-runtime helper: `__jux_yield_now()` returns a one-

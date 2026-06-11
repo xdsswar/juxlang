@@ -80,7 +80,11 @@ impl RustEmitter {
                 return;
             }
         }
-        if class_decl.name.text == "Worker" || class_decl.name.text == "Task" {
+        if class_decl.name.text == "Worker"
+            || class_decl.name.text == "Task"
+            || class_decl.name.text == "AtomicInt"
+            || class_decl.name.text == "AtomicLong"
+        {
             let pkg = self.symbols.package.join(".");
             if pkg == "jux.std.concurrent" {
                 return;

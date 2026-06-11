@@ -278,6 +278,18 @@ impl RustEmitter {
                     self.w.push_str("std::time::Instant");
                     return;
                 }
+                // Atomic counters (§S.6.2) — Arc-backed so handles
+                // share the same cell across spawn boundaries.
+                "AtomicInt" if ty.generic_args.is_empty() => {
+                    self.w
+                        .push_str("std::sync::Arc<std::sync::atomic::AtomicIsize>");
+                    return;
+                }
+                "AtomicLong" if ty.generic_args.is_empty() => {
+                    self.w
+                        .push_str("std::sync::Arc<std::sync::atomic::AtomicI64>");
+                    return;
+                }
                 _ => {}
             }
         }

@@ -564,6 +564,130 @@ package jux.std.collections;
 public interface Set<T> extends Collection<T> {
 }
 "###),
+    ("concurrent/Atomics.jux", r###"/**
+ * jux.std.concurrent - atomic integers + memory orderings (§S.6.2).
+ *
+ * `AtomicInt` / `AtomicLong` are thread-safe shared counters with
+ * C++20/Rust memory-ordering control. The no-order overloads use
+ * SeqCst - the safe default; profile before opting down. Handles
+ * have SHARE semantics: passing one into `spawn`/`Worker.spawn`
+ * shares the same underlying cell (Arc-backed).
+ *
+ * **Implementation status.** Compiler primitives - lowered onto
+ * `std::sync::atomic::AtomicIsize` / `AtomicI64` behind `Arc`.
+ * Phase-1 defers `compareAndSwap` (its `CasResult<T>` type is not
+ * yet specified) and `AtomicRef<T>`.
+ */
+package jux.std.concurrent;
+
+import jux.std.exceptions.UnsupportedOperationException;
+
+public enum MemoryOrder {
+    Relaxed,
+    Acquire,
+    Release,
+    AcqRel,
+    SeqCst;
+}
+
+public class AtomicInt {
+    /**
+     * Construct with an initial value.
+     */
+    public AtomicInt(int initial) {}
+
+    /** Read the value (SeqCst). */
+    public int load() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Read the value with an explicit ordering. */
+    public int load(MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Write `value` (SeqCst). */
+    public void store(int value) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Write `value` with an explicit ordering. */
+    public void store(int value, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Add `delta`, returning the PREVIOUS value (SeqCst). */
+    public int fetchAdd(int delta) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Add `delta` with an explicit ordering; returns the previous value. */
+    public int fetchAdd(int delta, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Subtract `delta`, returning the previous value (SeqCst). */
+    public int fetchSub(int delta) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Subtract `delta` with an explicit ordering; returns the previous value. */
+    public int fetchSub(int delta, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Bitwise-AND with `mask`, returning the previous value (SeqCst). */
+    public int fetchAnd(int mask) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Bitwise-AND with an explicit ordering; returns the previous value. */
+    public int fetchAnd(int mask, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Bitwise-OR with `mask`, returning the previous value (SeqCst). */
+    public int fetchOr(int mask) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Bitwise-OR with an explicit ordering; returns the previous value. */
+    public int fetchOr(int mask, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Bitwise-XOR with `mask`, returning the previous value (SeqCst). */
+    public int fetchXor(int mask) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Bitwise-XOR with an explicit ordering; returns the previous value. */
+    public int fetchXor(int mask, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+}
+
+public class AtomicLong {
+    /**
+     * Construct with an initial value.
+     */
+    public AtomicLong(long initial) {}
+
+    /** Read the value (SeqCst). */
+    public long load() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Read the value with an explicit ordering. */
+    public long load(MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Write `value` (SeqCst). */
+    public void store(long value) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Write `value` with an explicit ordering. */
+    public void store(long value, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Add `delta`, returning the PREVIOUS value (SeqCst). */
+    public long fetchAdd(long delta) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Add `delta` with an explicit ordering; returns the previous value. */
+    public long fetchAdd(long delta, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Subtract `delta`, returning the previous value (SeqCst). */
+    public long fetchSub(long delta) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Subtract `delta` with an explicit ordering; returns the previous value. */
+    public long fetchSub(long delta, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Bitwise-AND with `mask`, returning the previous value (SeqCst). */
+    public long fetchAnd(long mask) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Bitwise-AND with an explicit ordering; returns the previous value. */
+    public long fetchAnd(long mask, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Bitwise-OR with `mask`, returning the previous value (SeqCst). */
+    public long fetchOr(long mask) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Bitwise-OR with an explicit ordering; returns the previous value. */
+    public long fetchOr(long mask, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Bitwise-XOR with `mask`, returning the previous value (SeqCst). */
+    public long fetchXor(long mask) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Bitwise-XOR with an explicit ordering; returns the previous value. */
+    public long fetchXor(long mask, MemoryOrder order) { throw new UnsupportedOperationException("intrinsic"); }
+}
+"###),
     ("concurrent/Worker.jux", r###"/**
  * jux.std.concurrent.Worker
  *

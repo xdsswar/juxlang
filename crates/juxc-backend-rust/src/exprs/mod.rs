@@ -313,6 +313,30 @@ impl RustEmitter {
                         self.w.push_str(">::new()");
                         return;
                     }
+                    // Atomic counters (§S.6.2) — Arc-wrapped so the
+                    // handle shares across spawn boundaries.
+                    if (bare == "AtomicInt" || bare == "AtomicLong")
+                        && n.generic_args.is_empty()
+                    {
+                        let inner = if bare == "AtomicInt" {
+                            "AtomicIsize"
+                        } else {
+                            "AtomicI64"
+                        };
+                        self.w.push_str("std::sync::Arc::new(std::sync::atomic::");
+                        self.w.push_str(inner);
+                        self.w.push_str("::new(");
+                        let prev = self.emitting_format_arg;
+                        self.emitting_format_arg = false;
+                        if let Some(arg) = n.args.first() {
+                            self.emit_expr(arg);
+                        } else {
+                            self.w.push('0');
+                        }
+                        self.emitting_format_arg = prev;
+                        self.w.push_str("))");
+                        return;
+                    }
                 }
                 // `new Foo(args)`              → `Foo::new(args)`.
                 // `new com.lib.Foo(args)`      → `crate::com::lib::Foo::new(args)`.
