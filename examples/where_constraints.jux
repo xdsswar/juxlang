@@ -1,0 +1,36 @@
+// Generic where-constraints (§O.5) — structural capability bounds:
+// `where T has operator OP(params) -> R`.
+//
+// - The instantiation's type must declare the operator (or be a
+//   primitive/String with the native capability) — E0941 otherwise.
+// - The constraint also gives the BODY the capability: `a <=> b`
+//   on T compiles because the bound maps to the matching Rust trait.
+
+package wherec;
+
+class Version {
+    private int n;
+    Version(int n) { this.n = n; }
+    public int operator <=>(Version other) {
+        return this.n <=> other.n;
+    }
+    public String operator string() {
+        return "v" + this.n;
+    }
+}
+
+T maxOf<T>(T a, T b) where T has operator<=>(T) -> int {
+    return a <=> b > 0 ? a : b;
+}
+
+String describe<T>(T value) where T has operator string() -> String {
+    return "[" + value + "]";
+}
+
+public void main() {
+    print(maxOf(3, 7));
+    print(maxOf("apple", "pear"));
+    var w = maxOf(new Version(2), new Version(5));
+    print(describe(w));
+    print(describe(42));
+}

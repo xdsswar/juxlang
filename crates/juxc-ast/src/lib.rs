@@ -48,7 +48,7 @@ pub use decls::{
     AccessorBody, Annotation, AnnotationArg, ClassDecl, ConstDecl, ConstructorDecl, EnumDecl,
     EnumPayload, EnumVariant, FieldDecl, FnDecl, FnModifier, InterfaceDecl, OperatorDecl,
     OperatorKind, Param, PropertyAccessor, PropertyDecl, PropertySetter, RecordComponent,
-    RecordDecl, ReturnType, TopLevelDecl, TypeAliasDecl, TypeParam,
+    RecordDecl, ReturnType, TopLevelDecl, TypeAliasDecl, TypeParam, WhereConstraint,
 };
 pub use desugar::{
     backing_field_name as desugar_backing_field_name, desugar_properties,

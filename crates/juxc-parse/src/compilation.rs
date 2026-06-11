@@ -116,6 +116,7 @@ impl<'a> Parser<'a> {
                 generic_params: Vec::new(),
                 params: Vec::new(),
                 throws: Vec::new(),
+                wheres: Vec::new(),
                 body: Some(juxc_ast::Block { statements: script_stmts, span: body_span }),
                 is_property: false,
                 span: body_span,
