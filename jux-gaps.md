@@ -1,126 +1,178 @@
-# Jux — Gap Analysis (implementation vs. spec)
+# Jux — Gap Analysis (fresh scan)
 
-**Author:** Claude (Opus 4.8) — grounded review.
-**Last updated:** 2026-06-11 (re-verification pass; branch `polymorphism`)
+**Author:** Claude (Opus 4.8) — adversarial scan, not a re-list of prior ledger.
+**Date:** 2026-06-11 · **Branch:** `polymorphism`
 
-> Re-verification note (this pass): every Resolved row below was re-checked against
-> source and is accurate — `emit_call_with_hoisted_receiver` (`exprs/call.rs:1420`),
-> `compute_wrapped_set` (`lib.rs:210`/`:348`), `W0457`/`check_unannotated_cycles`
-> (`symbol_table.rs:1060`), `source_map.rs::rewrite_rustc_output`. The
-> `reentrancy_stress` and `exception_cause` tests both pass. **One correction:**
-> exception chaining (`getCause`/`addSuppressed`/`getSuppressed`/2-arg ctor) is in
-> fact wired and tested — moved from backlog to Resolved (G9).
+## Resolution status (updated 2026-06-11)
 
-## How to read this
+| ID | Status | Commit / note |
+|----|--------|---------------|
+| N1 | ✅ Fixed | Mutating collection method on a wrapped field → `borrow_mut()` + arg-hoist. Runner `wrapped_collection_mutation`. |
+| N2 | ✅ Fixed | Generic invariance enforced (mutual-compat on same-name args); covariant upcast now E0410, not a leaked E0308. Runner `generic_invariance`. |
+| N3 | ✅ Fixed | Return-completeness pass → E0460 (`return_check.rs`). Runner `return_paths`. |
+| N4 | ✅ Fixed | Call-position turbofish in the generic-iface forwarding shim. Runner `generic_iface_nullable`. |
+| N5 | ◐ Partial | The **packaged** base-class dispatch half was a distinct bug in `walk_extends_reaches` (FQN vs bare) — **fixed**, runner `poly_base_packaged`. The **generic** base half (a `Container<T>`-typed var holding a `Box<T>`, virtual dispatch + the `T: Display` bound on an inherited generic-returning method) remains a **Phase-1 limitation** — see below. |
+| N6 | ✅ Fixed | Nullable generic field from a nullable ctor param no longer double-`Some`. Runner `generic_iface_nullable`. |
+| N7 | ✅ Fixed | `?.` safe-call routes through the stdlib-method mapping. Runner `generic_iface_nullable`. |
 
-Each gap is marked with its **current** code state, re-verified against source with
-file:line anchors. The doc is a living ledger: when a gap is closed the row moves to
-**Resolved**, with the commit that closed it. Backlog items are real but each is its
-own multi-session effort.
+**N5 generic-base limitation (deferred, documented).** Making a *generic* class
+(`Container<T>`) a polymorphic base needs generic `Kind` traits
+(`ContainerKind<T>`) and generic trait objects (`Rc<dyn ContainerKind<isize>>`)
+threaded through trait decls, impls, downcast hooks, and the upcast cast — plus a
+cross-class, inherited-method return-type analysis to add `T: Display` when an
+inherited generic-returning method (`this.get()`) is formatted. That's a feature,
+not a bug-fix; it's the open-hierarchy + generics intersection and carries real
+risk to the working monomorphic/sealed dispatch. Use a sealed hierarchy or a
+non-generic base for polymorphism through a base *class* in Phase 1; generic
+dispatch through an **interface** (`Container<int> c = new Box<int>(…)` where
+`Container` is an `interface`) is the supported route.
 
----
+## How this was produced
 
-## Resolved
+Three parallel adversarial passes — codegen/borrow soundness, type-checker holes,
+and feature-combination miscompiles — each **writing real `.jux` probes and
+compiling/running them** against the committed `polymorphism` binary
+(`target/release/jux.exe`), not reasoning from docs. Every finding has a probe file
+(left in `examples/`, untracked) and a `file:line` culprit. The two type-checker
+holes (N2, N3) I additionally re-confirmed by reading the cited source myself.
 
-### G3. Statement-scoped borrow soundness — **was a real bug, now fixed** ✅
-**Closed:** this session. A re-entrancy stress test (`examples/reentrancy_stress.jux` +
-`bin/jux/tests/reentrancy_stress.rs`) surfaced a genuine soundness bug: a method call
-whose receiver was read through a `.0.borrow()` guard (`this.notifier.ping(this)`)
-held that guard across the call, and a re-entrant `borrow_mut()` panicked
-`already borrowed`. Fixed by a **receiver borrow-hoist** (`emit_call_with_hoisted_receiver`,
-`exprs/call.rs`): the receiver is bound to a temp so the guard drops before the call.
-The stress test (cross-object re-entry + self-recursion) now runs clean and is a CI
-guard. The discipline is no longer "asserted, not proven" for these cases.
-
-### G1 (Inline tier). Escape demotion — **done** ✅
-The headline "every class pays full `Rc<RefCell>`" is **outdated**. `compute_wrapped_set`
-(`backend/lib.rs:1671`) wraps only classes that are wrap-eligible AND aliased (or forced
-by interface/poly/recursive/weak); a non-aliased local class emits a plain
-`#[derive(Clone,Debug)] struct C { … }` (`decls/classes.rs:177`) with direct `self.field`
-access (`exprs/field.rs:449`) and `&mut self` methods. A purely-local `Point` pays no heap
-alloc / refcount / borrow check. (Box/Arc tiers remain — see backlog.)
-
-### G6. Source-map remapping — **done** ✅
-`juxc-driver/src/source_map.rs` `rewrite_rustc_output` rewrites rustc stderr back to `.jux`
-locations, wired into the build-failure path (`driver/lib.rs:560`). `// JUX:file:line:col`
-markers are ON for all real lowering entry points (`lower_with_source` / `lower_workspace`
-/ `_lib` / `_test`); only the legacy `lower_with_types` omits them.
-
-### G7. Backend file size — **done** ✅
-Split into `decls/`, `exprs/`, `stmts.rs`, `literals.rs`, etc.
-
-### G9. Try/catch/finally + exception chaining — **done** ✅
-Lowering (`stmts.rs:933`) via `catch_unwind`; return-in-catch parks past `finally`,
-return-in-finally overrides, multi-catch + subtype dispatch all implemented and tested
-(`catch_finally_order`, `multi_catch`, `try_finally_semantics`). **Exception chaining
-is also wired and tested** — `new Exception(message, cause)`, `getCause()`,
-`addSuppressed()` / `getSuppressed()` all work; `exception_cause` test passes
-(re-verified this pass). The earlier "chaining deferred" note is closed.
-
-### G16. CI compiles emitted Rust — **done** ✅
-Every `bin/jux/tests/*.rs` runner invokes `jux run` → `juxc_driver::build` → `cargo build`
-on the emitted crate (`driver/lib.rs:536`), then runs the binary. Grammar acceptance is
-not the gate — real rustc compilation is.
-
-### G8. `int` width doc mismatch — **fixed** ✅
-Closed this session. The **code** is consistent: `int→isize`, `uint→usize` (platform-sized,
-matching the bindgen `isize↔int` contract), `long→i64`, `ulong→u64`
-(`types.rs` `jux_primitive_to_rust`). The doc table claimed `i32`/`&str` — corrected to
-match the code. No code change needed; the implementation was right.
-
-### G18. E0702 message framing — **fixed** ✅
-Closed this session. Reworded to frame the no-objects-across-threads rule as a Phase-1
-interim ("…not yet supported … for now pass primitive/String data in") rather than a
-permanent law (`tycheck/check.rs`).
-
-### G4 / G17. Un-annotated cycle leak — **lint added** ✅
-Closed this session. New **W0457** warning (`tycheck/symbol_table.rs`
-`check_unannotated_cycles`): a strong (non-`weak`, non-static) field whose type
-transitively references the owning class forms a leaking `Rc` cycle; the lint points at the
-field and suggests `weak`. Stdlib packages are excluded (their internal cycles like
-`Exception.cause` are intentional). Verified: `weak_refs.jux` is clean; the lint flags
-exactly one real cycle (`stress_borrow.jux`'s `Node.peer`) across all 144 examples. The
-eventual cycle *collector* (trial-deletion) is still unscheduled (backlog).
-
-### G13. Multi-file Rust output — **done** ✅
-Closed (commit `4ff2df1`). The backend emits **one `.rs` per `.jux` file** mirroring the package
-tree (`emit_package_files` / `split_files` in `lib.rs`), with `mod.rs` re-exports
-(`mod x; pub use x::*;`) keeping type paths flat (`crate::pkg::Type`). Module/file names are
-lower-cased to avoid the module-vs-type name clash; `use super::*;` resolves same-package siblings;
-split-mode items are `pub(crate)`. `main.rs` keeps the prelude + no-package units + `pub mod` decls
-+ `fn main` shim. All ~144 example runners compile + run the multi-file output.
-
-### G15a. Const evaluation (§T.11 subset) — **done** ✅
-Closed this session. A shared const-expression evaluator (`juxc-tycheck/src/const_eval.rs`, used by
-both tycheck and the backend) folds integer/bool const expressions over concrete constants —
-literals, `const`/`final` binding reads, arithmetic/bitwise/comparison/logical ops, and calls to
-const-evaluable Java-style functions (const-ness is a property of the expression, §A.2.2 — **no `fn`
-keyword**). Wired into const-binding initializers (`const int CACHE = doubled(1024);` → `2048`),
-fixed-array sizes (`byte[SIZE + 1]` → `[u8; 33]`), and const-generic args (`Ring<float, SIZE>` →
-`Ring::<f32, 32>`). New codes `E0840`/`E0841`/`E0842`. Generic-`N` arithmetic (`byte[N+1]`) stays
-`E0445` (Rust-blocked — see G14). §T.11 spec corrected from Rust-flavored `const fn … -> T` to Jux.
+> **Note (resolved).** When this scan was written the tree had uncommitted WIP for
+> the `out` parameter feature that left it non-building; that work has since landed
+> (§M.4) and the tree builds clean. All fixes above were applied and verified
+> against a fresh build (suite 907/0). The original findings below are kept for
+> the record — see the resolution table for current status.
 
 ---
 
-## Backlog (real, tracked, each its own effort)
+## New findings
 
-| ID  | Gap                                                        | Notes |
-|-----|------------------------------------------------------------|-------|
-| G1b | Box / Arc class representations (beyond Inline + Rc)        | Further perf tiers; §CR.2–3. Inline + Rc shipped. |
-| G2  | Classes across threads (`Arc<Mutex>` rep)                  | Hard-errors today (E0702); depends on G1b. |
-| G5  | No MIR — flow analyses ride on the AST                      | Architectural; decide explicitly if Phase 1 ships without it. |
-| G10 | FFI (C/C++)                                                | Deferred by user; path known (build.rs + bindgen/autocxx). |
-| G11 | `StackString`, `Volatile`, `SharedRef`                     | Escape-selector / unsafe-dependent. |
-| G12 | Nested / inner / anonymous classes                         | Partially landed; full support post-Phase-1. |
-| G14 | Per-instantiation generic representation                   | One rep across instantiations today (§CR.5.3); blocks generic-`N` const arithmetic. |
-| G15 | Remaining wave-6 items (annotations, `module.jux`, out/move) | Tracked in wave-6 notes. |
+### N1. Mutating stdlib collection methods on a wrapped-class field — wrong mutability + guard held across re-entrant arg  ⚠️
+**Severity:** High (miscompile **and** runtime panic) · **Confirmed**
+
+The receiver-hoist fix (`callee_receiver_reads_through_borrow`, `exprs/call.rs:1293`)
+only fires for **user-method** calls through a wrapper borrow. The **stdlib
+mutating-collection** path (`add`/`put`/`set`/`remove`/`clear`/`insert`/…) never
+hoists and never upgrades to `borrow_mut()`. For a wrapped (aliased+mutated) class:
+
+```jux
+public class Bag {
+    public ArrayList<int> items;
+    public int counter;
+    public int next() { this.counter = this.counter + 1; return this.counter; }
+    public void fill() { this.items.add(this.next()); }
+}
+```
+emits `self.0.borrow().items.push(self.next());` — two defects in one line:
+- **A (mutability):** field read through immutable `borrow()` but `.push()` needs
+  `&mut` → **E0596** at compile time. Fires even without re-entrancy.
+- **B (guard across call):** once A is patched to `borrow_mut()`, the guard stays
+  alive while the arg `self.next()` re-enters the same cell → runtime
+  `RefCell already mutably borrowed` panic.
+
+**Culprits:** `exprs/call.rs` `emit_array_stdlib_method` (~`:2014-2029`),
+`emit_map_stdlib_method` (~`:1912`), `emit_set_stdlib_method` (~`:1972`),
+`emit_deque_stdlib_method` (~`:1832`) — all emit the receiver via plain
+`emit_expr`, which `exprs/field.rs:449-460` always lowers to `.0.borrow()`. The
+mutating-method name set already exists (`analysis.rs:591-598`) but isn't consulted
+on this path. **Repro:** `examples/probe_borrow7.jux` (A+B), `probe_borrow8.jux` (A only).
+
+### N2. Generic invariance not enforced — covariant upcast admitted (unsound)  ⚠️
+**Severity:** High (silent unsoundness) · **Confirmed (read myself)**
+
+`Box<Dog> dogs; Box<Animal> animals = dogs;` (with `Dog extends Animal`) compiles
+with **0 diagnostics**. The spec is explicit that generics are **invariant**
+(JUX-LANG-V1 §7.8, JUX-INHERITANCE-BORROW §6.9.6: "Pass `List<Dog>` where
+`List<Animal>` expected → Rejected (invariance)"). This lets you `set()` a non-`Dog`
+into a `Dog` box — classic covariance hole.
+
+**Culprit:** `check.rs:5899-5902` — for same-name `User` types, `compatible` recurses
+on type args with `compatible(x, y)`, and `compatible` itself permits subclass
+upcasting (`is_subtype`, line 5907). So `compatible(Animal, Dog)` → true, making
+`Box<Dog>` ⊑ `Box<Animal>`. Same covariant pattern in `ty.rs:1223-1226` (`is_subtype`).
+Same-name args must require **invariant equality**, not the upcast-permitting recursion.
+(Also note `check.rs:5893-5895` returns `true` when either side's arg list is empty —
+separate raw-type leniency worth a look.) **Repro:** `examples/probe_variance.jux`.
+
+### N3. No missing-return / return-completeness analysis
+**Severity:** Medium (rustc backstops it, but violates the "juxc catches its own
+errors" initiative) · **Confirmed (read myself)**
+
+A non-void function that falls off the end on some path (`int classify(int x){ if (x>0) return 1; }`)
+compiles with **0 juxc diagnostics**. There is no return-path pass anywhere in
+`juxc-tycheck/src` (grep for return-completeness → only an unrelated test name). rustc
+eventually rejects the emitted Rust, but per the diagnostics initiative juxc should
+catch it itself with a clean span, not leak a rustc error on generated code. Belongs
+alongside `definite_assign.rs`. **Repro:** `examples/probe_return.jux`.
+
+### N4. Generic class implementing a generic interface — missing turbofish in forwarding shim
+**Severity:** High (miscompile on a core feature) · **Confirmed**
+
+A generic class implementing a generic interface emits an inherent-forwarding shim
+as `Box<T>::get(self)` / `Box<T>::put(self, v)` — in call position Rust reads `<`/`>`
+as comparison ("comparison operators cannot be chained"). Must be `Box::<T>::get(self)`.
+
+**Culprit:** `decls/classes.rs:2351-2353` emits `class_name` +
+`emit_generic_params_as_args` (`<T>`, `types.rs:654`, correct only in *type* position)
++ `::method`, missing the leading `::` turbofish for value/call position.
+**Repro:** `examples/probe_combo1.jux`.
+
+### N5. Generic subclass → generic base-typed variable: no upcast coercion + missing `Display` bound
+**Severity:** High (miscompile) · **Confirmed**
+
+Two defects exercised by `Container<int> b = new Box<int>(7);` (`Box<T> extends Container<T>`):
+- **Upcast not coerced:** lowers to `let b: Container<isize> = Box::<isize>::new(7);`
+  with no upcast → `expected Container<isize>, found Box<isize>`.
+- **Missing bound:** `"box of " + this.get()` (concat with generic `T`) lowers to
+  `format!("box of {}", self.get())` without adding a `T: Display` bound → E0277.
+
+**Culprit:** base-typed-variable generic-subclass coercion in the let/assignment
+lowering (main-unit emission); `+`-concat-with-generic bound synthesis. **Repro:**
+`examples/probe_combo2.jux`.
+
+### N6. Double-`Some` on a nullable generic field initialized from a nullable ctor param
+**Severity:** High (miscompile) · **Confirmed**
+
+`class Node<T> { T? data; Node(T? d){ this.data = d; } }` emits `Self { data: Some(d) }`
+where `d` is already `Option<T>` → `expected T, found Option<T>`. The **simple-ctor**
+path never seeds `self.nullable_locals` from the ctor's `T?` params, so
+`expression_is_already_nullable` (`constructors.rs:385`) returns false and
+`emit_ctor_field_init` (`:387`) wraps again. The `__self`-builder fallback path seeds
+it correctly (`constructors.rs:324-329`) — the shortcut path is missing that step.
+**Culprit:** `decls/constructors.rs:257` (`emit_simple_ctor_body`). **Repro:**
+`examples/probe_combo3a.jux`.
+
+### N7. `?.` safe-call bypasses String stdlib method mapping
+**Severity:** Medium (miscompile on a common pattern) · **Confirmed**
+
+`s?.length()` (where `s` is `String?`) lowers to `.map(|__t| __t.length())` — the raw
+Jux method name instead of routing through `emit_string_stdlib_method` (`call.rs:2422`,
+which maps `length` → `.chars().count() as isize`). Result: `no method named 'length'
+for &String`. The non-optional `s.length()` works, so it's the optional-chain lowering
+that skips stdlib remapping. **Culprit:** the `?.` lowering doesn't reuse the
+stdlib-method dispatch. **Repro:** `examples/probe_combo3b.jux`.
 
 ---
 
-## The one-line take
+## Summary
 
-The two flagged risk hotspots are addressed: the escape-selector's biggest lever (Inline
-demotion) is shipped, and the one load-bearing soundness claim (G3) turned out to hide a
-real re-entrancy bug — now fixed and CI-guarded. What remains in the backlog is genuine but
-scheduled: further representation tiers, cross-thread sharing, MIR, and the deferred
-language/library features.
+| ID | Issue                                                            | Severity | Kind            |
+|----|------------------------------------------------------------------|----------|-----------------|
+| N1 | Mutating collection method on wrapped field: `borrow()` not `borrow_mut()` + guard across re-entrant arg | High | miscompile + panic |
+| N2 | Generic invariance not enforced (covariant upcast admitted)      | High     | unsoundness     |
+| N4 | Generic class impl generic interface: missing `::<T>` turbofish  | High     | miscompile      |
+| N5 | Generic subclass→base var: no upcast coerce + missing Display bound | High   | miscompile      |
+| N6 | Double-`Some` on nullable generic field from nullable ctor param | High     | miscompile      |
+| N7 | `?.` safe-call skips String stdlib method mapping                | Medium   | miscompile      |
+| N3 | No missing-return analysis (leaks to rustc)                      | Medium   | missing check   |
+
+**Themes:** the sharp edges cluster around **generics interacting with other
+features** — generic + interface (N4), generic + inheritance/upcast (N5), generic +
+nullable (N6), and generic *variance* (N2) — plus the **`Rc<RefCell>` borrow
+discipline not yet extended to the stdlib-collection mutation path** (N1, same class
+of bug the receiver-hoist fix closed for user methods). N2 is the one true silent
+unsoundness; N1 is the highest-impact because it hits ordinary "add to a list field"
+code. The rest are honest rustc-caught miscompiles, not silent-wrong.
+
+**Probe files** (untracked, in `examples/`): `probe_borrow7.jux`, `probe_borrow8.jux`,
+`probe_variance.jux`, `probe_return.jux`, `probe_combo1.jux`, `probe_combo2.jux`,
+`probe_combo3a.jux`, `probe_combo3b.jux`. Keep as regression seeds or delete once fixed.
