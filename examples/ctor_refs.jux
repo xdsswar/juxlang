@@ -1,0 +1,25 @@
+// Constructor references — `Type::new` (§M.8).
+//
+// A ctor ref is a function value constructing the type: pass it
+// where a function type is expected, or store it and call later.
+// (With overloaded constructors, Phase 1 binds the first declared.)
+
+package ctorrefs;
+
+class Wrap {
+    private int v;
+    Wrap(int v) { this.v = v; }
+    public int get() { return this.v; }
+}
+
+int apply((int) -> Wrap f, int x) {
+    var w = f(x);
+    return w.get();
+}
+
+public void main() {
+    print(apply(Wrap::new, 21));
+    var make = Wrap::new;
+    var w = make(2);
+    print(w.get());
+}

@@ -821,7 +821,16 @@ impl<'a> Parser<'a> {
                     // E0413 diagnostics, so the parser stays
                     // permissive here.
                     self.advance(); // '::'
-                    let member = self.parse_ident()?;
+                    // Constructor reference — `Type::new` (§M.8).
+                    // `new` lexes as a keyword, so it needs its own
+                    // acceptance ahead of the identifier path.
+                    let member = if self.at_kw(Keyword::New) {
+                        let span = self.peek_span();
+                        self.advance();
+                        juxc_ast::Ident { text: "new".to_string(), span }
+                    } else {
+                        self.parse_ident()?
+                    };
                     let receiver = match &expr {
                         Expr::Path(qn) => qn.clone(),
                         _ => {
