@@ -639,7 +639,17 @@ impl RustEmitter {
                     .map(|s| s.text.as_str())
                     .and_then(|name| {
                         self.lookup_class_by_bare_or_fqn(name)
-                            .and_then(|c| c.constructors.first())
+                            // Pick the constructor overload matching this call's
+                            // arity (was `constructors.first()`, which took the
+                            // wrong overload's param types — so args past the
+                            // first ctor's arity got no coercion). Fall back to
+                            // the first ctor when no arity matches (e.g. varargs).
+                            .and_then(|c| {
+                                c.constructors
+                                    .iter()
+                                    .find(|ctor| ctor.params.len() == n.args.len())
+                                    .or_else(|| c.constructors.first())
+                            })
                             .map(|ctor| ctor.params.iter().map(|p| p.ty.clone()).collect())
                             .or_else(|| {
                                 self.symbols

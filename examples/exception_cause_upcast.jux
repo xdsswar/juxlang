@@ -1,0 +1,17 @@
+// Exception chaining: a concrete exception subclass value passed where an
+// `Exception` cause parameter is expected. The subclass slices up to its base
+// via the generated `From<Sub> for Exception` (`.into()`); without the coercion
+// the constructor argument leaked a rustc E0308. Also exercises overloaded
+// constructors — the 2-arg `new AppError(msg, cause)` must resolve the 2-arg
+// ctor's param types for the coercion, not the 1-arg ctor's. Expected: nested.
+
+public class AppError extends Exception {
+    public AppError(String m) { super(m); }
+    public AppError(String m, Exception cause) { super(m, cause); }
+}
+
+public void main() {
+    var root = new AppError("root cause");
+    var wrapped = new AppError("nested", root);   // AppError -> Exception cause
+    print(wrapped.message);                        // nested
+}
