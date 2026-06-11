@@ -24,7 +24,7 @@ import dev.jux.intellij.psi.JuxElementTypes as E
 val JUX_EXPR_START: TokenSet = TokenSet.orSet(
     T.LITERALS,
     TokenSet.create(
-        T.IDENTIFIER, T.THIS_KW, T.SUPER_KW, T.NEW_KW, T.SWITCH_KW, T.IF_KW,
+        T.IDENTIFIER, T.THIS_KW, T.SUPER_KW, T.NEW_KW, T.SWITCH_KW, T.IF_KW, T.TRY_KW,
         T.LPAREN, T.LBRACKET,
         T.BANG, T.MINUS, T.PLUS, T.TILDE, T.AMP, T.STAR, T.MOVE_KW, T.AWAIT_KW, T.ASYNC_KW,
     ),
@@ -255,6 +255,7 @@ private fun PsiBuilder.parsePrimary(): PsiBuilder.Marker? {
         t === T.SIZEOF_KW -> parseSizeof()
         t === T.SWITCH_KW -> parseSwitchExpression()
         t === T.IF_KW -> parseIfExpression()
+        t === T.TRY_KW -> parseTryExpression() // `var v = try { … } catch (…) { … };`
         t === T.LPAREN -> parseParenthesized()
         t === T.LBRACKET -> parseArrayLiteral()
         t === T.LBRACE -> parseBraceInitializer()
@@ -367,6 +368,9 @@ private fun PsiBuilder.parseArgument() {
         advanceLexer() // name
         advanceLexer() // `:`
     }
+    // Out-arg mode (§6.x): `tryParse("42", out n)` — `out` is contextual, so
+    // it only counts when an identifier follows.
+    if (atContextual("out") && lookAhead(1) === T.IDENTIFIER) advanceLexer()
     parseExpression()
 }
 

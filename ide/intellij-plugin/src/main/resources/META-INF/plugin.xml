@@ -116,11 +116,18 @@
         language="Jux"
         implementationClass="dev.jux.intellij.folding.JuxFoldingBuilder"/>
 
-    <!-- PSI semantic highlighting: primitive type names, annotation names,
-         declaration names (decl-vs-reference colouring lands with Phase 5). -->
+    <!-- PSI semantic highlighting: declaration names, reference uses
+         (call sites, params, locals, type parameters, enum constants),
+         primitive type names, and annotation names. -->
     <annotator
         language="Jux"
         implementationClass="dev.jux.intellij.highlight.JuxAnnotator"/>
+    <!-- String interiors: escape sequences (valid vs malformed) and
+         `${…}` interpolation holes, re-lexed so embedded expressions
+         highlight like real code. -->
+    <annotator
+        language="Jux"
+        implementationClass="dev.jux.intellij.highlight.JuxStringAnnotator"/>
 
     <!-- IDE-side resolution: in-file Go-to-Declaration, Find Usages, and
          Rename for Jux declarations. Cross-file / std symbols defer to juxc-lsp. -->
@@ -136,6 +143,22 @@
     <completion.contributor
         language="Jux"
         implementationClass="dev.jux.intellij.completion.JuxCompletionContributor"/>
+
+    <!-- Go-to-Class (Ctrl+N) / Go-to-Symbol (Ctrl+Alt+Shift+N) over the
+         project's Jux declarations (backed by JuxTypeIndex's PSI walk). -->
+    <gotoClassContributor
+        implementation="dev.jux.intellij.resolve.JuxGotoClassContributor"/>
+    <gotoSymbolContributor
+        implementation="dev.jux.intellij.resolve.JuxGotoSymbolContributor"/>
+
+    <!-- Gutter icons: ▶ on a runnable `main`, and ↑ overrides/implements
+         arrows on methods that redeclare a supertype method. -->
+    <runLineMarkerContributor
+        language="Jux"
+        implementationClass="dev.jux.intellij.run.JuxRunLineMarkerContributor"/>
+    <codeInsight.lineMarkerProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.resolve.JuxLineMarkerProvider"/>
 
     <!-- Quick Documentation (Ctrl+Q) / nav-bar tooltip: render a declaration's
          signature + its doc comment from the PSI. Works without the LSP. -->
@@ -243,25 +266,25 @@
             class="dev.jux.intellij.actions.JuxGenerateConstructorAction"
             text="Constructor"
             description="Generate a constructor from the class's fields">
-      <add-to-group group-id="Generate" anchor="first"/>
+      <add-to-group group-id="GenerateGroup" anchor="first"/>
     </action>
     <action id="Jux.Generate.Getters"
             class="dev.jux.intellij.actions.JuxGenerateGettersAction"
             text="Getters"
             description="Generate a getter for each field">
-      <add-to-group group-id="Generate" anchor="after" relative-to-action="Jux.Generate.Constructor"/>
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.Constructor"/>
     </action>
     <action id="Jux.Generate.Setters"
             class="dev.jux.intellij.actions.JuxGenerateSettersAction"
             text="Setters"
             description="Generate a setter for each field">
-      <add-to-group group-id="Generate" anchor="after" relative-to-action="Jux.Generate.Getters"/>
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.Getters"/>
     </action>
     <action id="Jux.Generate.OverrideMethods"
             class="dev.jux.intellij.actions.JuxOverrideMethodsAction"
             text="Override/Implement Methods"
             description="Generate @override stubs for inherited methods not yet declared">
-      <add-to-group group-id="Generate" anchor="after" relative-to-action="Jux.Generate.Setters"/>
+      <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.Setters"/>
     </action>
   </actions>
 </idea-plugin>
