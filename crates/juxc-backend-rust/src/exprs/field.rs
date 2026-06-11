@@ -1044,14 +1044,81 @@ impl RustEmitter {
         if needs_parens {
             self.w.push(')');
         }
+        // `.and_then` flattens when the projected field is itself `T?`; `.map`
+        // otherwise. (`__t` is `&Underlying` from `as_ref()`.)
         let combinator = if self.safe_field_is_nullable(f) {
-            ".as_ref().and_then(|__t| __t."
+            ".as_ref().and_then(|__t| "
         } else {
-            ".as_ref().map(|__t| __t."
+            ".as_ref().map(|__t| "
         };
         self.w.push_str(combinator);
+        // A wrapped (Rc<RefCell>) class keeps its fields inside the flattened
+        // `_Inner` behind `.0.borrow()`; a bare `__t.field` would hit the tuple
+        // wrapper and fail (`no field … available field is: 0`). Inline classes
+        // and records access the field directly.
+        if self.safe_field_receiver_is_wrapper(f) {
+            self.w.push_str("__t.0.borrow().");
+        } else {
+            self.w.push_str("__t.");
+        }
         self.w.push_str(&f.field.text);
         self.w.push_str(".clone())");
+    }
+
+    /// True iff the receiver class of a `?.`-projected field uses the wrapper
+    /// (`Rc<RefCell>`) representation — so [`Self::emit_safe_field`] reads the
+    /// field through `.0.borrow()`.
+    fn safe_field_receiver_is_wrapper(&self, f: &FieldExpr) -> bool {
+        self.safe_nav_member_class_bare(&f.object)
+            .map(|bare| self.wrapper_classes.contains(&bare))
+            .unwrap_or(false)
+    }
+
+    /// Resolve the bare class name that an expression used as a `?.` receiver
+    /// evaluates to (nullability peeled). Falls back to structural resolution
+    /// through field/method chains when `expr_types` has no entry for an
+    /// intermediate safe-nav sub-expression — tycheck doesn't record those
+    /// spans, so a bare `expr_types` lookup misses on `a.b?.c?.…`.
+    pub(crate) fn safe_nav_member_class_bare(&self, obj: &Expr) -> Option<String> {
+        // Recorded-type / tracked-local fast path.
+        if let Some(bare) = self.receiver_class_bare(obj) {
+            return Some(bare);
+        }
+        match obj {
+            // `recv.field` (plain or `?.`): the field's declared type's class.
+            Expr::Field(f2) => {
+                let owner = self.safe_nav_member_class_bare(&f2.object)?;
+                let mut cur = self.lookup_class_by_bare_or_fqn(&owner);
+                while let Some(s) = cur {
+                    if let Some(fs) = s.fields.get(&f2.field.text) {
+                        let n = fs.ty.name.segments.last()?.text.as_str();
+                        return Some(n.rsplit('.').next().unwrap_or(n).to_string());
+                    }
+                    cur = s.extends_fqn.as_deref().and_then(|p| self.symbols.classes.get(p));
+                }
+                None
+            }
+            // `recv.method(...)` (plain or `?.`): the method's return type's class.
+            Expr::Call(c) => {
+                let Expr::Field(m) = c.callee.as_ref() else { return None };
+                let recvc = self.safe_nav_member_class_bare(&m.object)?;
+                let mut cur = self.lookup_class_by_bare_or_fqn(&recvc);
+                while let Some(s) = cur {
+                    if let Some(ms) = s.methods.get(&m.field.text) {
+                        let (juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t)) =
+                            &ms.return_type
+                        else {
+                            return None;
+                        };
+                        let n = t.name.segments.last()?.text.as_str();
+                        return Some(n.rsplit('.').next().unwrap_or(n).to_string());
+                    }
+                    cur = s.extends_fqn.as_deref().and_then(|p| self.symbols.classes.get(p));
+                }
+                None
+            }
+            _ => None,
+        }
     }
 
     /// True iff the field named by `f` is declared `T?` on the
@@ -1068,21 +1135,23 @@ impl RustEmitter {
     /// unknown field) returns false — `.map` is the safer default
     /// when in doubt; Rust surfaces real shape mismatches.
     fn safe_field_is_nullable(&self, f: &FieldExpr) -> bool {
-        let object_ty = self.expr_types.get(&crate::exprs::expr_span_of(&f.object));
-        let receiver_name = match object_ty {
-            Some(juxc_tycheck::Ty::Nullable(inner)) => match inner.as_ref() {
-                juxc_tycheck::Ty::User { name, .. } => name.as_str(),
-                _ => return false,
-            },
-            Some(juxc_tycheck::Ty::User { name, .. }) => name.as_str(),
-            _ => return false,
+        // Resolve the receiver's class structurally so nested safe-nav chains
+        // (`a.b?.c?.field`) — whose intermediate spans tycheck doesn't record —
+        // still pick `.and_then` when the projected field is itself `T?`.
+        let Some(recv_bare) = self.safe_nav_member_class_bare(&f.object) else {
+            return false;
         };
-        if let Some(class) = self.symbols.classes.get(receiver_name) {
+        let mut cur = self.lookup_class_by_bare_or_fqn(&recv_bare);
+        while let Some(class) = cur {
             if let Some(field) = class.fields.get(&f.field.text) {
                 return field.ty.nullable;
             }
+            cur = class.extends_fqn.as_deref().and_then(|p| self.symbols.classes.get(p));
         }
-        if let Some(record) = self.symbols.records.get(receiver_name) {
+        // Record fallback: records are FQN-keyed; match on the bare last segment.
+        if let Some(record) = self.symbols.records.iter().find_map(|(k, v)| {
+            (k.rsplit('.').next().unwrap_or(k) == recv_bare).then_some(v)
+        }) {
             if let Some(c) = record.components.iter().find(|c| c.name == f.field.text) {
                 return c.ty.nullable;
             }

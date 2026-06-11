@@ -1,0 +1,35 @@
+// Safe-navigation (`?.`) over wrapped (Rc<RefCell>) classes and multi-level
+// chains. Exercises: (1) `?.field` on a wrapped class — the field is read
+// through `.0.borrow()`, not as a tuple slot; (2) a chain of `?.method()`
+// calls where intermediate methods return `T?` — each link flattens with
+// `and_then` so the next `?.` sees the unwrapped value; (3) `?.field` chains
+// two levels deep with both non-null and nullable leaves. The `??` supplies a
+// default at each end. Expected output: 200 / -1 / 5 / -1 / 7 / 7 / -2.
+
+public class Engine { public int hp; public Engine(int hp) { this.hp = hp; } }
+public class Car { public Engine? engine; public Car(Engine? e) { this.engine = e; } }
+
+public class Leaf { public int v; public Leaf(int v) { this.v = v; } public int get() { return this.v; } }
+public class Mid { public Leaf? leaf; public Mid(Leaf? l) { this.leaf = l; } public Leaf? getLeaf() { return this.leaf; } }
+public class Top { public Mid? mid; public Top(Mid? m) { this.mid = m; } public Mid? getMid() { return this.mid; } }
+
+public class NC { public int? v; public NC(int? v) { this.v = v; } }
+public class NB { public NC? c; public NB(NC? c) { this.c = c; } }
+public class NA { public NB? b; public NA(NB? b) { this.b = b; } }
+
+public void main() {
+    // (1) ?.field on a wrapped class.
+    print(new Car(new Engine(200)).engine?.hp ?? -1);   // 200
+    print(new Car(null).engine?.hp ?? -1);              // -1
+
+    // (2) chained ?.method() with nullable returns.
+    Top t = new Top(new Mid(new Leaf(5)));
+    print(t.getMid()?.getLeaf()?.get() ?? -1);          // 5
+    print(new Top(null).getMid()?.getLeaf()?.get() ?? -1); // -1
+
+    // (3) two-level ?.field chains, non-null and nullable leaves.
+    print(new NA(new NB(new NC(7))).b?.c?.v ?? -1);     // 7  (non-null leaf path)
+    NA present = new NA(new NB(new NC(7)));
+    print(present.b?.c?.v ?? -1);                       // 7
+    print(new NA(new NB(new NC(null))).b?.c?.v ?? -2);  // -2 (nullable leaf is null)
+}
