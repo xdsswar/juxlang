@@ -142,7 +142,12 @@ impl RustEmitter {
             .map(|s| s.text.clone())
             .unwrap_or_default();
         let src = self.cast_source_bare(&t.value);
-        let src_is_dyn = src.as_deref().is_some_and(|s| self.source_is_dyn(s));
+        // An identity test (`z => Animal` where `z` is already `Animal`) is
+        // always true — there is no `__jux_as_<Self>` hook (subtypes only), so
+        // it must NOT take the dyn-hook path; the concrete branch below folds it
+        // to a constant `true` via `class_is_a`.
+        let src_is_dyn = src.as_deref().is_some_and(|s| self.source_is_dyn(s))
+            && src.as_deref() != Some(target.as_str());
         if src_is_dyn {
             self.w.push('(');
             self.emit_expr(&t.value);

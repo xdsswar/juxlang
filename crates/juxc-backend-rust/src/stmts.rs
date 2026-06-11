@@ -2468,7 +2468,14 @@ impl RustEmitter {
         self.w.push_str(&binder.text);
         self.w.push_str(") = ");
         let src = self.cast_source_bare(&t.value);
-        if src.as_deref().is_some_and(|s| self.source_is_dyn(s)) {
+        // A dynamic-dispatch source narrows via its runtime hook — UNLESS the
+        // target is the value's own static type (`if (z => Animal za)` where `z`
+        // is already `Animal`). That's an identity test: always matches, and no
+        // `__jux_as_<Self>` hook exists (hooks are generated only for subtypes).
+        // Bind the value itself; the iface coercion clones the dyn handle.
+        let dyn_downcast = src.as_deref().is_some_and(|s| self.source_is_dyn(s))
+            && src.as_deref() != Some(target.as_str());
+        if dyn_downcast {
             self.emit_expr(&t.value);
             self.w.push_str(".__jux_as_");
             self.w.push_str(&target);

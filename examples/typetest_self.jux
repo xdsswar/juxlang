@@ -1,0 +1,18 @@
+// `=>` type-test where the target is the value's OWN static (polymorphic-base)
+// type — an identity test that is always true. It must not emit a runtime
+// `__jux_as_<Self>` hook (those exist only for subtypes); the binding is the
+// value itself. Subtype downcasts and negative tests still work alongside it.
+// Expected output: meow / cat meow / not a dog / true.
+
+public abstract class Animal { public abstract String sound(); }
+public class Cat extends Animal { public Cat() {} public String sound() { return "meow"; } }
+public class Dog extends Animal { public Dog() {} public String sound() { return "woof"; } }
+
+public void main() {
+    Animal z = new Cat();
+    if (z => Animal za) { print(za.sound()); }            // identity: meow
+    if (z => Cat c) { print("cat " + c.sound()); }        // downcast: cat meow
+    if (z => Dog d) { print(d.sound()); } else { print("not a dog"); }
+    bool isAnimal = z => Animal;                          // bool identity form
+    print(isAnimal);                                      // true
+}
