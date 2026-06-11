@@ -364,6 +364,14 @@ pub enum Code {
     /// enclosing function's. Convert explicitly before propagating.
     E0731_QuestionNeedsConversion,
     E0450_AmbiguousOverload,
+    /// E0451 — A **non-void function can fall off its end without
+    /// returning a value** (`int f(int x) { if (x > 0) return 1; }` —
+    /// the false path reaches the closing brace). Every path through a
+    /// value-returning function must `return` (or `throw`); add a return
+    /// for the missing path. Mirrors Java's "missing return statement"
+    /// reachability rule (JLS 14.21) — conservative, so it only fires
+    /// when control CLEARLY falls through.
+    E0460_MissingReturn,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
     /// argument after a named one, a name that doesn't match any
@@ -606,6 +614,7 @@ impl Code {
             Code::E0730_QuestionIncompatibleReturn => "E0730",
             Code::E0731_QuestionNeedsConversion  => "E0731",
             Code::E0450_AmbiguousOverload        => "E0450",
+            Code::E0460_MissingReturn            => "E0460",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",
             Code::E0449_DefaultArgParamRef       => "E0449",

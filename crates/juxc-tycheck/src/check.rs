@@ -1104,6 +1104,12 @@ impl<'a> Checker<'a> {
         self.in_unsafe = fn_decl.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
         self.check_out_params_assigned(&fn_decl.params, body, &fn_decl.name.text);
+        self.check_missing_return(
+            &fn_decl.return_type,
+            body,
+            &fn_decl.name.text,
+            fn_decl.name.span,
+        );
         // §X.1.3: every checked exception the body can raise must be
         // covered by the declared `throws` clause.
         self.enforce_declared_throws(&fn_decl.throws, &fn_decl.name.text);
@@ -1153,6 +1159,45 @@ impl<'a> Checker<'a> {
                     ),
                 )
                 .with_span(span),
+            );
+        }
+    }
+
+    /// **E0451** — a non-`void` function/method must `return` (or `throw`) on
+    /// every path; report when control can fall off the end. `void` functions
+    /// (and bodiless abstract/interface methods, handled by the caller) are
+    /// exempt. Async functions return a value to awaiters, so they're checked
+    /// too. Conservative — see [`crate::return_check`].
+    fn check_missing_return(
+        &mut self,
+        return_type: &juxc_ast::ReturnType,
+        body: &juxc_ast::Block,
+        fn_name: &str,
+        name_span: Span,
+    ) {
+        // Only value-returning functions have a return obligation. `void` and
+        // `async void` are exempt — the latter parses as `AsyncType` over a
+        // synthesized `void` sentinel TypeRef (see juxc-parse `parse_return_type`).
+        let is_void = match return_type {
+            juxc_ast::ReturnType::Void => true,
+            juxc_ast::ReturnType::AsyncType(t) => {
+                t.name.segments.last().map(|s| s.text.as_str()) == Some("void")
+            }
+            juxc_ast::ReturnType::Type(_) => false,
+        };
+        if is_void {
+            return;
+        }
+        if crate::return_check::body_can_fall_through(body) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0460_MissingReturn,
+                    format!(
+                        "`{fn_name}` can finish without returning a value — every path must \
+                         `return` (or `throw`); add a return for the missing path",
+                    ),
+                )
+                .with_span(name_span),
             );
         }
     }
@@ -1379,6 +1424,12 @@ impl<'a> Checker<'a> {
         self.in_unsafe = method.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
         self.check_out_params_assigned(&method.params, body, &method.name.text);
+        self.check_missing_return(
+            &method.return_type,
+            body,
+            &method.name.text,
+            method.name.span,
+        );
         // §X.1.3: checked exceptions the method body raises must be
         // covered by its `throws` clause.
         self.enforce_declared_throws(&method.throws, &method.name.text);

@@ -336,6 +336,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0451`  | No overload candidate produces required return type *(reserved)* | Type system §T.3.4 |
 | `E0452`  | No matching operator overload *(reserved)*          | Type system §T.3.5            |
 | `E0453`  | Generic type inference is ambiguous *(reserved)*     | Type system §T.4.2            |
+| `E0460`  | Non-void function can finish without returning a value (missing return; conservative, JLS-14.21-style reachability) | Semantics §S.4.6 |
 | `E0470`  | Annotation applied outside its `@Target` set *(reserved)* | Annotations §A.13        |
 | `E0471`  | Runtime annotation read requires reflection *(reserved)* | Annotations §A.13         |
 | `E0472`  | Missing required annotation parameter *(reserved)*   | Annotations §A.13              |
