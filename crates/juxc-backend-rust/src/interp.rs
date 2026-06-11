@@ -125,6 +125,16 @@ impl RustEmitter {
             match ch {
                 '{' => self.w.push_str("{{"),
                 '}' => self.w.push_str("}}"),
+                // The segment text holds DECODED content (cooked
+                // strings) or VERBATIM bytes (raw strings) — both
+                // re-escape for the Rust string literal we are
+                // writing into. Without this a raw `\d` or an
+                // embedded newline would break the emitted source.
+                '\\' => self.w.push_str("\\\\"),
+                '"' => self.w.push_str("\\\""),
+                '\n' => self.w.push_str("\\n"),
+                '\r' => self.w.push_str("\\r"),
+                '\t' => self.w.push_str("\\t"),
                 _ => self.w.push(ch),
             }
         }

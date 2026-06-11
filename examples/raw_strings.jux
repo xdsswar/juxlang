@@ -1,0 +1,16 @@
+// Raw strings (§3.4): `"""…"""` keeps its bytes VERBATIM — no
+// escape decoding, embedded newlines allowed. The interpolated raw
+// form `$"""…"""` still substitutes `$name` / `${expr}` markers,
+// but backslashes stay literal — ideal for Windows paths and regex.
+
+package raw_strings;
+
+public void main() {
+    var name = "ada";
+    var s = $"""path C:\dir ${name} done""";
+    print(s);
+    var r = """plain raw \n stays""";
+    print(r);
+    print("""multi
+line""");
+}
