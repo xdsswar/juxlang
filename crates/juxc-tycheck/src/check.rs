@@ -217,6 +217,14 @@ const BUILTIN_SET_METHODS: &[&str] = &[
     "add", "contains", "remove", "size", "isEmpty", "clear",
 ];
 
+/// Methods we let through on a **Deque receiver** without checking
+/// against a class signature. Maps to Rust `VecDeque` operations;
+/// the remove/peek forms are nullable (`T?`) — `null` when empty.
+const BUILTIN_DEQUE_METHODS: &[&str] = &[
+    "addFirst", "addLast", "removeFirst", "removeLast",
+    "peekFirst", "peekLast", "contains", "size", "isEmpty", "clear",
+];
+
 /// Field/property names we allow on **any array receiver** without a
 /// class lookup. Today just `length`; the typechecker treats it as `Int`.
 const BUILTIN_ARRAY_FIELDS: &[&str] = &["length"];
@@ -3861,6 +3869,12 @@ impl<'a> Checker<'a> {
                         return;
                     }
                     if bare == "HashSet" && BUILTIN_SET_METHODS.contains(&method_name) {
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
+                    if bare == "Deque" && BUILTIN_DEQUE_METHODS.contains(&method_name) {
                         for arg in &c.args {
                             self.check_expr(arg);
                         }

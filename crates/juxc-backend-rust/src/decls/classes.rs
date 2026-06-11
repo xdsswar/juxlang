@@ -64,6 +64,7 @@ impl RustEmitter {
         if class_decl.name.text == "ArrayList"
             || class_decl.name.text == "HashMap"
             || class_decl.name.text == "HashSet"
+            || class_decl.name.text == "Deque"
         {
             let pkg = self.symbols.package.join(".");
             if pkg == "jux.std.collections" {
