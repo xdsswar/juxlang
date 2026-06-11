@@ -209,6 +209,10 @@
       "spelling": "volatile"
     },
     {
+      "name": "WEAK_KW",
+      "spelling": "weak"
+    },
+    {
       "name": "WHEN_KW",
       "spelling": "when"
     },

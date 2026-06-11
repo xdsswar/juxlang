@@ -148,6 +148,8 @@ fn lower_one_property(
             // backend's static-field shape and any final-aware path
             // agree. (Instance `final` is informational today.)
             is_final: prop.setter.as_ref().map_or(true, |s| s.is_init),
+            // Property backing fields are never `weak`.
+            is_weak: false,
             ty: Some(prop.ty.clone()),
             name: ident(&backing, span),
             default: prop.initializer.clone(),

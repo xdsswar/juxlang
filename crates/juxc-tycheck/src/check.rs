@@ -1154,6 +1154,14 @@ impl<'a> Checker<'a> {
                 self.check_wildcard_storage_type(fty);
                 self.check_fixed_array_size_in_type(fty);
             }
+            // `weak` field validity (§6.5). A weak field is exempt from
+            // definite-assignment (§S.4.5 — pass not yet implemented) and
+            // defaults to an empty `Weak`; it lowers to
+            // `Weak<RefCell<Target_Inner>>`, so its target must be a plain
+            // (non-generic, Phase-1) class reference.
+            if field.is_weak {
+                self.check_weak_field(field);
+            }
         }
         for (idx, ctor) in class.constructors.iter().enumerate() {
             self.check_constructor(ctor, &this_ty, idx);
@@ -1735,8 +1743,20 @@ impl<'a> Checker<'a> {
             }
 
             Stmt::Assign(a) => {
-                // Walk both sides for nested checks first.
-                self.check_expr(&a.target);
+                // A `weak` field WRITE (§6.5): `this.parent = p` / `= null`.
+                // The target is a write place, not a read, so the bare-read
+                // guard (E0456) must NOT fire — check only the receiver. And a
+                // weak slot accepts both a target-class value and `null`, so
+                // its assignability is checked against a NULLABLE view of the
+                // declared type.
+                let weak_target = self.assign_target_is_weak_field(&a.target);
+                if weak_target {
+                    if let Expr::Field(f) = &a.target {
+                        self.check_expr(&f.object);
+                    }
+                } else {
+                    self.check_expr(&a.target);
+                }
                 self.check_expr(&a.value);
                 // **Property write-access enforcement (§M.7.2).** A
                 // write to `obj.Prop` / `Class.Prop` where `Prop` is a
@@ -1749,7 +1769,12 @@ impl<'a> Checker<'a> {
                 self.check_property_write(&a.target);
                 let target_ty = infer_expr(&a.target, &self.env, self.symbols);
                 let value_ty = infer_expr(&a.value, &self.env, self.symbols);
-                if !compatible(&target_ty, &value_ty, self.symbols) {
+                let effective_target = if weak_target {
+                    Ty::nullable(target_ty.clone())
+                } else {
+                    target_ty.clone()
+                };
+                if !compatible(&effective_target, &value_ty, self.symbols) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0410_TypeMismatch,
@@ -2749,11 +2774,108 @@ impl<'a> Checker<'a> {
         if self.symbols.classes.contains_key(name) {
             return Some(name.to_string());
         }
+        // A bare name can match several FQNs (e.g. a user class colliding with
+        // an auto-loaded `rust.std` stub). Prefer a non-`external` (user) class
+        // so user code shadows the stub, and break ties by FQN so the result is
+        // deterministic across `HashMap` iteration orders.
         self.symbols
             .classes
-            .keys()
-            .find(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == name)
-            .cloned()
+            .iter()
+            .filter(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == name)
+            .min_by(|a, b| {
+                a.1.is_external
+                    .cmp(&b.1.is_external)
+                    .then_with(|| a.0.cmp(b.0))
+            })
+            .map(|(k, _)| k.clone())
+    }
+
+    /// Validate a `weak` field (§6.5). Phase-1 rules:
+    /// - the target type must resolve to a **non-generic class** (weak
+    ///   storage is `Weak<RefCell<Target_Inner>>`, which only exists for
+    ///   reference-semantics classes) — else **E0455**;
+    /// - the field may not carry an initializer (weak fields default to an
+    ///   empty `Weak` and are wired by later assignment) — else **E0456**.
+    fn check_weak_field(&mut self, field: &juxc_ast::FieldDecl) {
+        if field.default.is_some() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0456_WeakReadNeedsGet,
+                    format!(
+                        "`weak` field `{}` may not have an initializer — weak fields \
+                         default to null and are assigned later (§6.5)",
+                        field.name.text,
+                    ),
+                )
+                .with_span(field.span),
+            );
+        }
+        let target_ok = field
+            .ty
+            .as_ref()
+            .map_or(false, |t| self.type_ref_is_weakable_class(t));
+        if !target_ok {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0455_WeakOnNonClass,
+                    format!(
+                        "`weak` field `{}` must have a non-generic class type — `weak` \
+                         breaks a refcount cycle and applies only to class references (§6.5)",
+                        field.name.text,
+                    ),
+                )
+                .with_span(field.ty.as_ref().map_or(field.span, |t| t.span)),
+            );
+        }
+    }
+
+    /// True when `target` is an assignment place that writes a **`weak`**
+    /// field (§6.5) — `recv.weakField = …`. Used by the assignment checker to
+    /// (a) suppress the bare-weak-read guard on the write place and (b) treat
+    /// the slot as nullable for the assignability check (a weak field accepts
+    /// a target-class value or `null`).
+    fn assign_target_is_weak_field(&self, target: &juxc_ast::Expr) -> bool {
+        if let juxc_ast::Expr::Field(f) = target {
+            let recv = infer_expr(&f.object, &self.env, self.symbols);
+            if let Ty::User { name, .. } = &recv {
+                return self
+                    .symbols
+                    .lookup_field(name, &f.field.text)
+                    .map_or(false, |(fs, _)| fs.is_weak);
+            }
+        }
+        false
+    }
+
+    /// True iff `tref` denotes a plain, non-generic **class** type — the only
+    /// valid target of a `weak` field in Phase 1 (§6.5 / E0455). Rejects
+    /// nullable, array, function, pointer, and generic-applied forms outright,
+    /// and any name that resolves to an interface / record / enum / struct /
+    /// type-parameter (only the `classes` table is consulted) or to a class
+    /// that is itself generic.
+    fn type_ref_is_weakable_class(&self, tref: &juxc_ast::TypeRef) -> bool {
+        if tref.nullable
+            || tref.array_shape.is_some()
+            || tref.fn_shape.is_some()
+            || tref.ptr_depth > 0
+            || !tref.generic_args.is_empty()
+        {
+            return false;
+        }
+        let Some(seg) = tref.name.segments.last() else {
+            return false;
+        };
+        if self.env.generic_params.contains(seg.text.as_str()) {
+            return false;
+        }
+        match self.resolve_class_fqn(&seg.text) {
+            Some(fqn) => self
+                .symbols
+                .classes
+                .get(&fqn)
+                .map_or(false, |c| c.generic_params.is_empty()),
+            None => false,
+        }
     }
 
     fn check_visibility(
@@ -3042,6 +3164,34 @@ impl<'a> Checker<'a> {
         }
         let receiver_ty = infer_expr(&f.object, &self.env, self.symbols);
         let field_name = f.field.text.as_str();
+
+        // Bare `weak` field READ (§6.5): a weak field's strong view is reached
+        // ONLY through `.get()` (→ `T?`). The legitimate `.get()` receiver is
+        // intercepted in `check_call` (and returns before reaching here), and
+        // a weak-field WRITE place checks only its receiver — so any weak field
+        // that lands in this read path is a bare read in a value / argument /
+        // return position. Reject it, else the backend would expose the raw
+        // `Weak<…>` handle and leak a rustc type error.
+        if let Ty::User { name, .. } = &receiver_ty {
+            if self
+                .symbols
+                .lookup_field(name, field_name)
+                .map_or(false, |(fs, _)| fs.is_weak)
+            {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0456_WeakReadNeedsGet,
+                        format!(
+                            "`weak` field `{field_name}` can only be read via `.get()` \
+                             (which returns the target type, nullable) — a bare read would \
+                             expose the raw weak handle",
+                        ),
+                    )
+                    .with_span(f.span),
+                );
+                return;
+            }
+        }
 
         // Tuple element access — `pair.0` (§5.3). Validate the index
         // against the element count so an out-of-range read gets a
@@ -3714,6 +3864,29 @@ impl<'a> Checker<'a> {
 
             Expr::Field(field) => {
                 let method_name = field.field.text.as_str();
+                // `weakField.get()` (§6.5): a zero-arg `.get()` on a weak-field
+                // access is the valid weak→strong promotion (typed `T?` by
+                // `infer`). It has no backing method, so accept it here — check
+                // only the underlying receiver and return, skipping both method
+                // resolution (which would emit E0413 on the field's own class)
+                // and the bare-weak-read guard (E0456) that the receiver would
+                // otherwise trip.
+                if method_name == "get" && c.args.is_empty() {
+                    if let Expr::Field(inner) = field.object.as_ref() {
+                        let inner_recv =
+                            infer_expr(&inner.object, &self.env, self.symbols);
+                        if let Ty::User { name, .. } = &inner_recv {
+                            if self
+                                .symbols
+                                .lookup_field(name, &inner.field.text)
+                                .map_or(false, |(fs, _)| fs.is_weak)
+                            {
+                                self.check_expr(&inner.object);
+                                return;
+                            }
+                        }
+                    }
+                }
                 // Record the receiver's inferred type up front so the
                 // backend can dispatch builtin/intrinsic methods on ANY
                 // receiver shape — including compound expressions like

@@ -1,0 +1,61 @@
+// `weak` field modifier (§6.5).
+//
+// A `weak` reference does NOT contribute to the owning object's refcount, so
+// it never keeps its target alive — this is how Jux breaks reference cycles
+// (the classic `Child` holding a back-reference to its `Parent`) without a
+// tracing GC. A weak reference is promoted to a strong one via `.get()`, which
+// returns `T?`: null when the target is gone (or was never set / was cleared).
+
+package weakrefs;
+
+public class Parent {
+    public String name;
+
+    public Parent(String name) {
+        this.name = name;
+    }
+
+    public void greet() {
+        print("parent " + name);
+    }
+}
+
+public class Child {
+    public String label;
+    // Back-reference to the owner. `weak` ⇒ no refcount contribution, so a
+    // Parent ⇄ Child cycle does not leak. Defaults to null; wired by `attach`.
+    private weak Parent parent;
+
+    public Child(String label) {
+        this.label = label;
+    }
+
+    public void attach(Parent p) {
+        this.parent = p;          // stored as a downgraded (non-owning) handle
+    }
+
+    public void detach() {
+        this.parent = null;       // clears the weak reference
+    }
+
+    public void callUp() {
+        var p = this.parent.get();   // Parent? — promote weak → strong
+        if (p != null) {
+            print("child " + label + " ->");
+            p.greet();
+        } else {
+            print("child " + label + " -> (no parent)");
+        }
+    }
+}
+
+public void main() {
+    var mom = new Parent("Mom");
+    var kid = new Child("Kid");
+
+    kid.callUp();         // not attached yet -> "(no parent)"
+    kid.attach(mom);
+    kid.callUp();         // attached -> greets Mom through the weak ref
+    kid.detach();
+    kid.callUp();         // detached -> "(no parent)"
+}

@@ -604,6 +604,10 @@ pub struct FieldSig {
     /// fields, picks `pub const` over `pub static` in the emitted
     /// Rust.
     pub is_final: bool,
+    /// True if the field is declared `weak` (§6.5). Drives the
+    /// `Weak<RefCell<…>>` storage lowering, the `.get()` → `T?` typing,
+    /// the downgrade-on-store, and the definite-assignment exemption.
+    pub is_weak: bool,
     /// Declared type as written in source.
     pub ty: TypeRef,
     /// Default initializer expression (`= expr`) if present. Lifted
@@ -3062,6 +3066,7 @@ fn field_sig(field: &FieldDecl) -> FieldSig {
         visibility: field.visibility,
         is_static: field.is_static,
         is_final: field.is_final,
+        is_weak: field.is_weak,
         // Resolved type: the written type, or one inferred from the
         // initializer when the field omits it (`const I = 2;` → `int`).
         ty: resolve_decl_type(field.ty.as_ref(), field.default.as_ref(), field.span),

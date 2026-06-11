@@ -220,7 +220,7 @@ mod tests {
         for kw in Keyword::ALL {
             assert_eq!(Keyword::lookup(kw.as_str()), Some(*kw));
         }
-        assert_eq!(Keyword::ALL.len(), 55, "keyword count changed — update grammar spec consumers");
+        assert_eq!(Keyword::ALL.len(), 56, "keyword count changed — update grammar spec consumers");
     }
 
     /// The checked-in `jux-tokens.json` must equal the freshly built spec.

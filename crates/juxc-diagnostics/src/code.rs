@@ -386,6 +386,20 @@ pub enum Code {
     /// `generic_const_exprs` errors from leaking. (E0840–E0842 stay
     /// reserved for the real const-eval phase.)
     E0445_ConstGenericUnsupported,
+    /// E0455 — A **`weak` modifier on a non-class field type** (§6.5). A
+    /// weak field breaks a refcount cycle and lowers to
+    /// `std::rc::Weak<RefCell<Target_Inner>>`, which only exists for
+    /// reference-semantics *classes*. Applying `weak` to a primitive,
+    /// array, nullable, interface, record, enum, type parameter — or, in
+    /// Phase 1, a generic-applied class (`weak Box<int>`) — is an error.
+    E0455_WeakOnNonClass,
+    /// E0456 — A **`weak` field read without `.get()`**, or a **`weak`
+    /// field with an initializer** (§6.5). A weak field's strong view is
+    /// reached only through `.get()` (→ `T?`); reading it bare would
+    /// expose the raw `Weak<…>`. Weak fields also default to null and are
+    /// wired by later assignment, so an initializer (`weak P p = …;`) is
+    /// rejected in Phase 1.
+    E0456_WeakReadNeedsGet,
 
     // ---- Async / Generators (E0700–E0799) ----
     /// E0710 — `throw` of a non-`Exception` value. Per the exceptions
@@ -541,6 +555,8 @@ impl Code {
             Code::E0449_DefaultArgParamRef       => "E0449",
             Code::E0445_ConstGenericUnsupported  => "E0445",
             Code::E0446_GenericBoundNotSatisfied => "E0446",
+            Code::E0455_WeakOnNonClass           => "E0455",
+            Code::E0456_WeakReadNeedsGet         => "E0456",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0701_AsyncNotInProfile        => "E0701",
             Code::E0702_ObjectCapturedBySpawn    => "E0702",

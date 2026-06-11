@@ -1678,6 +1678,7 @@ pub(crate) fn compute_wrapped_set(
     let iface_forced = compute_interface_forced_classes(units);
     let poly_forced = compute_polymorphic_forced_classes(units);
     let recursive = compute_recursive_field_classes(units);
+    let weak_forced = compute_weak_forced_classes(units);
     // (eligible ∩ aliased) ∪ (eligible ∩ interface-implementer-closure)
     //                     ∪ (eligible ∩ polymorphic-base-hierarchy-closure)
     //                     ∪ (eligible ∩ recursive-field-cycle).
@@ -1700,9 +1701,43 @@ pub(crate) fn compute_wrapped_set(
                 || iface_forced.contains(*n)
                 || poly_forced.contains(*n)
                 || recursive.contains(*n)
+                || weak_forced.contains(*n)
         })
         .cloned()
         .collect()
+}
+
+/// Bare names of every class that must be **force-wrapped because it is an
+/// endpoint of a `weak` field** (§6.5). A weak field stores a
+/// `Weak<RefCell<Target_Inner>>`: the class that **declares** it reaches the
+/// field through `self.0.borrow()`, and the **target** class supplies both the
+/// `Target_Inner` payload the `Weak` points at and the `.0` that a store
+/// downgrades. A weak ref whose endpoints aren't otherwise wrapped (no cycle,
+/// alias, interface, or poly-base involvement) would therefore reference a
+/// non-existent `_Inner` / missing `.0`; seeding both endpoints here keeps the
+/// lowering well-formed. Returns the raw closure; [`compute_wrapped_set`]
+/// intersects it with the wrap-eligible set.
+fn compute_weak_forced_classes(units: &[juxc_ast::CompilationUnit]) -> HashSet<String> {
+    let mut forced = HashSet::new();
+    for unit in units {
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                for field in &cd.fields {
+                    if !field.is_weak {
+                        continue;
+                    }
+                    // The declaring class.
+                    forced.insert(cd.name.text.clone());
+                    // The weak field's target class (E0455 guarantees the type
+                    // resolves to a plain class).
+                    if let Some(seg) = field.ty.as_ref().and_then(|t| t.name.segments.last()) {
+                        forced.insert(seg.text.clone());
+                    }
+                }
+            }
+        }
+    }
+    forced
 }
 
 /// Bare names of every class that sits on a **field-type cycle** — its own
