@@ -1181,11 +1181,44 @@ pub(crate) fn resolve_class_name(
             bare.clone()
         }
     } else {
-        qn.segments
+        let joined = qn.segments
             .iter()
             .map(|s| s.text.as_str())
             .collect::<Vec<_>>()
-            .join(".")
+            .join(".");
+        // §M.9 nested-type access: `HttpServer.Config` names a
+        // NESTED type, lifted+registered as `HttpServer__Config`.
+        // Resolution order: the joined dotted name verbatim (a true
+        // package FQN), then the FIRST segment resolved as a class
+        // (unqualified map / direct / suffix scan) with the rest
+        // appended in the lifted `__` form.
+        if symbols.is_type_name(&joined) {
+            joined
+        } else {
+            let first = &qn.segments[0].text;
+            let rest = qn.segments[1..]
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join("__");
+            let owner_fqn = env
+                .unqualified
+                .get(first)
+                .cloned()
+                .filter(|f| symbols.is_type_name(f))
+                .or_else(|| {
+                    if symbols.is_type_name(first) {
+                        Some(first.clone())
+                    } else {
+                        symbols.find_fqn_by_bare(first)
+                    }
+                });
+            let via_owner = owner_fqn.map(|o| format!("{o}__{rest}"));
+            match via_owner.filter(|c| symbols.is_type_name(c)) {
+                Some(hit) => hit,
+                None => joined,
+            }
+        }
     };
     // Follow type aliases — `new Alias(args)` should land on the
     // underlying class. Walks at most a small chain (capped at 16)

@@ -1,0 +1,67 @@
+// Static nested types (§M.9): a class/record/enum/interface declared
+// inside a class is namespaced under it — no implicit outer
+// reference (all nesting is static, Java's `static class` semantics).
+//
+// - Qualified access from outside: `new HttpServer.Config()`.
+// - Unqualified access from inside the owner (and between sibling
+//   nested types): plain `Config`.
+// - Two classes can both nest a `Config` — no collision.
+// - Nesting recurses: `HttpServer.Config.Tls`.
+
+package nested;
+
+public class HttpServer {
+    public class Config {
+        public int port = 8080;
+        public String host = "localhost";
+
+        public class Tls {
+            public bool enabled = true;
+        }
+
+        public String describe() {
+            return host + ":" + port;
+        }
+    }
+
+    private Config config;
+
+    public HttpServer(Config config) {
+        this.config = config;
+    }
+
+    public String address() {
+        return this.config.describe();
+    }
+}
+
+public class Database {
+    public class Config {
+        public int poolSize = 4;
+    }
+
+    public record Endpoint(String host, int port) {}
+}
+
+public void main() {
+    // Qualified construction + the owner taking its own nested type.
+    var cfg = new HttpServer.Config();
+    print(cfg.port);              // 8080
+    cfg.port = 9090;
+    print(cfg.describe());        // localhost:9090
+    var server = new HttpServer(cfg);
+    print(server.address());      // localhost:9090
+
+    // Same-named nested types in different owners coexist.
+    var db = new Database.Config();
+    print(db.poolSize);           // 4
+
+    // Depth-2 nesting.
+    var tls = new HttpServer.Config.Tls();
+    print(tls.enabled);           // true
+
+    // Nested records construct and read like any record.
+    var ep = new Database.Endpoint("db01", 5432);
+    print(ep.host);               // db01
+    print(ep.port);               // 5432
+}

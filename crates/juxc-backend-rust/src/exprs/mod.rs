@@ -429,14 +429,50 @@ impl RustEmitter {
                         (bare.to_string(), false)
                     }
                 } else {
-                    let joined = n
-                        .class_name
-                        .segments
+                    // §M.9 qualified nested-type construction:
+                    // `new HttpServer.Config()` targets the lifted
+                    // `HttpServer__Config`. Try the mangled form
+                    // first (same-package bare / cross-package
+                    // crate-rooted); package-qualified class paths
+                    // fall through to the `::` join.
+                    let first = n.class_name.segments[0].text.as_str();
+                    let rest = n.class_name.segments[1..]
                         .iter()
                         .map(|s| s.text.as_str())
                         .collect::<Vec<_>>()
-                        .join("::");
-                    (joined, true)
+                        .join("__");
+                    let mangled = format!("{first}__{rest}");
+                    let is_lifted = |f: &String| {
+                        self.symbols.classes.contains_key(f)
+                            || self.symbols.records.contains_key(f)
+                            || self.symbols.enums.contains_key(f)
+                    };
+                    let mangled_fqn = if is_lifted(&mangled) {
+                        Some(mangled.clone())
+                    } else {
+                        self.symbols.find_fqn_by_bare(&mangled).filter(is_lifted)
+                    };
+                    if let Some(fqn) = mangled_fqn {
+                        let cur_pkg = self.symbols.package.join(".");
+                        let fqn_pkg = fqn
+                            .rsplit_once('.')
+                            .map(|(p, _)| p.to_string())
+                            .unwrap_or_default();
+                        if fqn.contains('.') && fqn_pkg != cur_pkg {
+                            (fqn.split('.').collect::<Vec<_>>().join("::"), true)
+                        } else {
+                            (mangled, false)
+                        }
+                    } else {
+                        let joined = n
+                            .class_name
+                            .segments
+                            .iter()
+                            .map(|s| s.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("::");
+                        (joined, true)
+                    }
                 };
                 if prepend_crate {
                     self.w.push_str("crate::");
@@ -457,11 +493,13 @@ impl RustEmitter {
                 }
                 // Constructor-overload pick (§7.3.1): count-based
                 // suffix re-derived against the class's ctor list.
-                let ctor_bare = n
-                    .class_name
-                    .segments
-                    .last()
-                    .map(|s| s.text.clone())
+                // Derived from the EMITTED path's final segment so a
+                // lifted nested type (`HttpServer__Config`) keys the
+                // lookup by its real registered name.
+                let ctor_bare = path
+                    .rsplit("::")
+                    .next()
+                    .map(|s| s.to_string())
                     .unwrap_or_default();
                 let ctor_sfx = self.ctor_overload_suffix(&ctor_bare, n.args.len());
                 self.w.push_str("::new");
