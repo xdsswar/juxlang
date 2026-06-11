@@ -66,6 +66,13 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             name: juxc_ast::TUPLE_SENTINEL.to_string(),
             generic_args: elems.iter().map(|e| infer_expr(e, env, symbols)).collect(),
         },
+        // Try-expression (§X.3.3): the value is the try block's
+        // trailing expression (the catch blocks must produce the
+        // same shape; rustc verifies exact agreement).
+        Expr::TryExpr(t) => match t.body.statements.last() {
+            Some(juxc_ast::Stmt::Expr(tail)) => infer_expr(tail, env, symbols),
+            _ => Ty::Unknown,
+        },
         Expr::Path(qn) => {
             // Single-segment path → look up as a local. Multi-segment
             // paths could resolve to enum-variants or imported names,

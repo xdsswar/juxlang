@@ -155,6 +155,13 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
         Expr::TupleLit(elems, _) => elems
             .iter()
             .any(|el| is_path_named(el, name) || expr_moves_path_at_top(el, name)),
+        // Try-expression: the closure captures by reference (the
+        // catch_unwind body), so treat reads conservatively as moves
+        // only when the body's own statements move them.
+        Expr::TryExpr(t) => {
+            body_moves_path(&t.body, name)
+                || t.catches.iter().any(|c| body_moves_path(&c.body, name))
+        }
         // Function / method call: each arg is a consume site
         // (passes by value). Method receivers (`x.method()`)
         // borrow via auto-deref, so we walk the callee for nested
@@ -531,6 +538,152 @@ impl RustEmitter {
                 self.w.push_str("}\n");
             }
         }
+    }
+
+    /// Lower a **try-expression** (§X.3.3) — the value-producing
+    /// form. The try block runs inside `catch_unwind` with its
+    /// trailing expression as the closure's value; on unwind, the
+    /// catch dispatch runs inside a value-labelled block where each
+    /// matching arm `break`s with ITS trailing expression; an
+    /// unmatched payload resumes the unwind (re-throw).
+    pub(crate) fn emit_try_expr(&mut self, t: &juxc_ast::TryStmt) {
+        // Split a block into (leading stmts, trailing value expr).
+        // Tycheck guarantees the trailing-expression shape; fall back
+        // to unit-yield on malformed recovery trees.
+        fn split_tail(b: &juxc_ast::Block) -> (&[juxc_ast::Stmt], Option<&Expr>) {
+            match b.statements.split_last() {
+                Some((juxc_ast::Stmt::Expr(tail), rest)) => (rest, Some(tail)),
+                _ => (&b.statements[..], None),
+            }
+        }
+        let (body_stmts, body_tail) = split_tail(&t.body);
+        self.w.push_str(
+            "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n",
+        );
+        self.w.indent_inc();
+        for stmt in body_stmts {
+            self.emit_source_marker(stmt_span(stmt));
+            self.w.emit_indent();
+            self.emit_stmt(stmt);
+        }
+        if let Some(tail) = body_tail {
+            self.w.emit_indent();
+            self.emit_expr(tail);
+            self.w.push('\n');
+        }
+        self.w.indent_dec();
+        self.w.emit_indent();
+        self.w.push_str("})) {\n");
+        self.w.indent_inc();
+        self.w.line("Ok(__jux_v) => __jux_v,");
+        self.w.line("Err(__jux_payload) => '__jux_catch_v: {");
+        self.w.indent_inc();
+        self.w.line(
+            "let mut __jux_payload_slot: Option<::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>> = Some(__jux_payload);",
+        );
+        for clause in &t.catches {
+            let mut clause_tys = vec![&clause.ty];
+            clause_tys.extend(clause.alt_tys.iter());
+            let binder_fqn = self.catch_binder_fqn(&clause_tys);
+            let mut muts = std::collections::HashSet::new();
+            crate::analysis::collect_mutated_names(
+                &clause.body,
+                &mut muts,
+                &self.user_mut_methods,
+            );
+            let binder_mut = muts.contains(&clause.name.text);
+            for ty in clause_tys {
+                let arm_fqn = self.resolve_catch_ty_fqn(ty);
+                let depth = match (&arm_fqn, &binder_fqn) {
+                    (Some(a), Some(b)) => self.extends_chain_distance(a, b).unwrap_or(0),
+                    _ => 0,
+                };
+                self.w
+                    .line("if let Some(__jux_p) = __jux_payload_slot.take() {");
+                self.w.indent_inc();
+                self.w.emit_indent();
+                self.w.push_str("match __jux_p.downcast::<");
+                self.emit_type_as_rust(ty);
+                self.w.push_str(">() {\n");
+                self.emit_try_expr_arm(clause, depth, binder_mut);
+                for sub_fqn in self.catch_subclass_fqns(ty) {
+                    let sub_depth = match &binder_fqn {
+                        Some(b) => self.extends_chain_distance(&sub_fqn, b).unwrap_or(0),
+                        None => 0,
+                    };
+                    self.w
+                        .line("if let Some(__jux_p) = __jux_payload_slot.take() {");
+                    self.w.indent_inc();
+                    self.w.emit_indent();
+                    self.w.push_str("match __jux_p.downcast::<");
+                    self.emit_fqn_path_in_rust(&sub_fqn, sub_fqn.contains('.'));
+                    self.w.push_str(">() {\n");
+                    self.emit_try_expr_arm(clause, sub_depth, binder_mut);
+                }
+            }
+        }
+        // No clause matched — re-throw (§X.3.3). `resume_unwind`
+        // diverges, so the labelled block's type stays the arms'.
+        self.w.line(
+            "std::panic::resume_unwind(__jux_payload_slot.take().expect(\"unmatched try-expression payload\"))",
+        );
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.emit_indent();
+        self.w.push('}');
+    }
+
+    /// One value-yielding downcast arm of a try-expression's catch
+    /// dispatch: bind (slicing to the binder's static type), run the
+    /// clause's leading statements, `break` the value block with the
+    /// trailing expression.
+    fn emit_try_expr_arm(
+        &mut self,
+        clause: &juxc_ast::CatchClause,
+        slice_depth: usize,
+        binder_mut: bool,
+    ) {
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("Ok(__jux_boxed) => {\n");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("let ");
+        if binder_mut {
+            self.w.push_str("mut ");
+        }
+        self.w.push_str(&clause.name.text);
+        self.w.push_str(" = (*__jux_boxed)");
+        for _ in 0..slice_depth {
+            self.w.push_str(".__parent");
+        }
+        self.w.push_str(";\n");
+        let (stmts, tail) = match clause.body.statements.split_last() {
+            Some((juxc_ast::Stmt::Expr(tail), rest)) => (rest, Some(tail)),
+            _ => (&clause.body.statements[..], None),
+        };
+        for stmt in stmts {
+            self.emit_source_marker(stmt_span(stmt));
+            self.w.emit_indent();
+            self.emit_stmt(stmt);
+        }
+        self.w.emit_indent();
+        self.w.push_str("break '__jux_catch_v ");
+        if let Some(tail) = tail {
+            self.emit_expr(tail);
+        } else {
+            self.w.push_str("()");
+        }
+        self.w.push_str(";\n");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w
+            .line("Err(__jux_rest) => { __jux_payload_slot = Some(__jux_rest); }");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.line("}");
     }
 
     /// One `downcast` match's arms for a catch clause: bind the

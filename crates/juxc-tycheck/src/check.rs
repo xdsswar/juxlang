@@ -1719,6 +1719,12 @@ impl<'a> Checker<'a> {
                     self.check_expr(e);
                 }
             }
+            // Try-expression (§X.3.3) — same per-clause checks as the
+            // statement form (E0720/E0721, binder typing), via the
+            // shared statement walker on a synthesized Stmt view.
+            Expr::TryExpr(t) => {
+                self.check_stmt(&Stmt::Try((**t).clone()));
+            }
             // Record a bare-name reference so the E0431 "uninferable `new`"
             // flush can tell whether a `var x = new X<>()` is ever used.
             Expr::Path(qn) => {
@@ -4564,6 +4570,7 @@ fn expr_span(e: &Expr) -> Span {
     match e {
         Expr::Literal(_) => Span::DUMMY,
         Expr::TupleLit(_, s) => *s,
+        Expr::TryExpr(t) => t.span,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
         Expr::Binary(b) => b.span,

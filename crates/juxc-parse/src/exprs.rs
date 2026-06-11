@@ -972,6 +972,65 @@ impl<'a> Parser<'a> {
                     span: span.join(end),
                 }));
             }
+            TokenKind::Kw(Keyword::Try) => {
+                // Try-expression (§X.3.1) — only reached in genuine
+                // expression positions (statement-position `try` is
+                // claimed by `parse_stmt` first). `finally` is
+                // rejected: the value form must produce a value on
+                // every path, and a finally produces none (§X.3.3).
+                let start = self.peek_span();
+                self.advance(); // 'try'
+                let body = self.parse_block();
+                let mut catches = Vec::new();
+                while self.at_kw(Keyword::Catch) {
+                    let c_start = self.peek_span();
+                    self.advance(); // 'catch'
+                    self.expect(&TokenKind::LParen, "'(' to start catch parameter");
+                    let ty = self.parse_type_ref()?;
+                    let mut alt_tys = Vec::new();
+                    while self.eat(&TokenKind::Pipe) {
+                        alt_tys.push(self.parse_type_ref()?);
+                    }
+                    let name = self.parse_ident()?;
+                    self.expect(&TokenKind::RParen, "')' to close catch parameter");
+                    let c_body = self.parse_block();
+                    let end = self.last_consumed_span();
+                    catches.push(juxc_ast::CatchClause {
+                        ty,
+                        alt_tys,
+                        name,
+                        body: c_body,
+                        span: c_start.join(end),
+                    });
+                }
+                if catches.is_empty() {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "a try-expression needs at least one `catch` clause",
+                        )
+                        .with_span(start),
+                    );
+                }
+                if self.at_kw(Keyword::Finally) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "a try-expression can't have `finally` — there's no value it could produce; use the statement form",
+                        )
+                        .with_span(self.peek_span()),
+                    );
+                    self.advance();
+                    let _ = self.parse_block();
+                }
+                let end = self.last_consumed_span();
+                return Some(Expr::TryExpr(Box::new(juxc_ast::TryStmt {
+                    body,
+                    catches,
+                    finally: None,
+                    span: start.join(end),
+                })));
+            }
             TokenKind::Kw(Keyword::Switch) => {
                 // `switch (expr) { case PATTERN -> body; … }` per
                 // §A.2.8. The same expression node serves the
@@ -1335,6 +1394,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
     match e {
         Expr::Literal(_) => Span::DUMMY,
         Expr::TupleLit(_, s) => *s,
+        Expr::TryExpr(t) => t.span,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
         Expr::Binary(b) => b.span,

@@ -95,6 +95,8 @@ impl RustEmitter {
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Literal(lit) => self.emit_literal(lit),
+            // Try-expression (§X.3.3) — produce-or-recover value form.
+            Expr::TryExpr(t) => self.emit_try_expr(t),
             // Tuple literal (§5.3) — Rust's identical `(a, b)` form.
             // Value semantics for free; elements emit as ordinary
             // value-position expressions.
@@ -1263,6 +1265,7 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
     match e {
         Expr::Literal(_) => juxc_source::Span::DUMMY,
         Expr::TupleLit(_, s) => *s,
+        Expr::TryExpr(t) => t.span,
         Expr::NotNullAssert(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,

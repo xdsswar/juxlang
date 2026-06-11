@@ -315,6 +315,15 @@ fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
                 expand_expr(e, plans);
             }
         }
+        Expr::TryExpr(t) => {
+            expand_block(&mut t.body, plans);
+            for c in &mut t.catches {
+                expand_block(&mut c.body, plans);
+            }
+            if let Some(f) = &mut t.finally {
+                expand_block(f, plans);
+            }
+        }
         Expr::Literal(_)
         | Expr::Path(_)
         | Expr::This(_)
