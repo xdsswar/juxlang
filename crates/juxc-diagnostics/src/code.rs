@@ -311,6 +311,12 @@ pub enum Code {
     /// return after the `try` statement, or compute the value in the
     /// body and return it there.
     W0720_ReturnInFinally,
+    /// E0721 — **Multi-catch types must be unrelated** (§X.3.6):
+    /// `catch (IOException | FileNotFoundException e)` is rejected
+    /// when one listed type is a subtype of another — the broader
+    /// type alone already catches both. List only the broader type,
+    /// or split into separate clauses.
+    E0721_MultiCatchRelated,
     E0450_AmbiguousOverload,
     E0447_OrPatternBinding,
     /// E0448 — A **malformed named-argument list**: a positional
@@ -489,6 +495,7 @@ impl Code {
             Code::E0212_VarargsNotLast           => "E0212",
             Code::E0260_IfExprMissingElse        => "E0260",
             Code::W0720_ReturnInFinally          => "W0720",
+            Code::E0721_MultiCatchRelated        => "E0721",
             Code::E0450_AmbiguousOverload        => "E0450",
             Code::E0447_OrPatternBinding         => "E0447",
             Code::E0448_BadNamedArgument         => "E0448",

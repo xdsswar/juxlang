@@ -601,6 +601,46 @@ impl<'a> Checker<'a> {
     /// Called BEFORE the parameters are declared into the body scope,
     /// so the default is inferred in the surrounding (caller-like)
     /// environment.
+    /// Most specific common SUPERCLASS of the given class types —
+    /// the multi-catch binder type (§X.3.6). Walks each type's
+    /// extends chain (self first) and returns the first entry of the
+    /// first chain present in every other chain; `Ty::Unknown` when
+    /// the types share no ancestor (or aren't classes), which keeps
+    /// the binder usable without cascading errors.
+    fn common_class_supertype(&self, tys: &[Ty]) -> Ty {
+        let chain = |t: &Ty| -> Vec<String> {
+            let mut out = Vec::new();
+            if let Ty::User { name, .. } = t {
+                let mut cur = Some(name.clone());
+                let mut depth = 0usize;
+                while let Some(n) = cur {
+                    if depth > 64 {
+                        break;
+                    }
+                    depth += 1;
+                    cur = self
+                        .symbols
+                        .classes
+                        .get(&n)
+                        .and_then(|c| c.extends_fqn.clone());
+                    out.push(n);
+                }
+            }
+            out
+        };
+        let first = chain(&tys[0]);
+        let rest: Vec<Vec<String>> = tys[1..].iter().map(chain).collect();
+        for cand in &first {
+            if rest.iter().all(|ch| ch.contains(cand)) {
+                return Ty::User {
+                    name: cand.clone(),
+                    generic_args: Vec::new(),
+                };
+            }
+        }
+        Ty::Unknown
+    }
+
     fn check_param_defaults(&mut self, params: &[juxc_ast::Param]) {
         for param in params {
             let Some(default) = &param.default else { continue };
@@ -1502,26 +1542,69 @@ impl<'a> Checker<'a> {
                 // an earlier clause's can never run.
                 let mut caught: Vec<Ty> = Vec::new();
                 for c in &t.catches {
-                    let ty = ty_from_ref(&c.ty, &self.env, self.symbols);
-                    if caught.iter().any(|earlier| is_subtype(&ty, earlier, self.symbols)) {
+                    // All listed types of the clause — one for the
+                    // ordinary form, several for a multi-catch
+                    // (`catch (E1 | E2 e)`, §X.3.6).
+                    let mut tys: Vec<Ty> =
+                        vec![ty_from_ref(&c.ty, &self.env, self.symbols)];
+                    for alt in &c.alt_tys {
+                        tys.push(ty_from_ref(alt, &self.env, self.symbols));
+                    }
+                    // E0721: alternatives must be pairwise UNRELATED —
+                    // a subtype alongside its supertype is dead weight
+                    // (the supertype alone already catches both).
+                    for j in 1..tys.len() {
+                        for i in 0..j {
+                            if is_subtype(&tys[i], &tys[j], self.symbols)
+                                || is_subtype(&tys[j], &tys[i], self.symbols)
+                            {
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        code::Code::E0721_MultiCatchRelated,
+                                        format!(
+                                            "multi-catch types must be unrelated: `{}` and \
+                                             `{}` are in a subtype relationship — keep only \
+                                             the broader type",
+                                            tys[i], tys[j],
+                                        ),
+                                    )
+                                    .with_span(c.span),
+                                );
+                            }
+                        }
+                    }
+                    // E0720 (§X.3.4): the clause is unreachable when
+                    // EVERY listed type is already covered by an
+                    // earlier clause.
+                    if tys.iter().all(|ty| {
+                        caught
+                            .iter()
+                            .any(|earlier| is_subtype(ty, earlier, self.symbols))
+                    }) {
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0720_UnreachableCatch,
                                 format!(
                                     "unreachable `catch ({})`: an earlier clause already \
                                      catches it",
-                                    ty,
+                                    tys[0],
                                 ),
                             )
                             .with_span(c.span)
                             .with_help("reorder catches so more specific types come first"),
                         );
                     }
-                    caught.push(ty);
+                    let bind_ty = if tys.len() == 1 {
+                        tys[0].clone()
+                    } else {
+                        // Multi-catch binder: the most specific COMMON
+                        // supertype of the listed types (§X.3.6).
+                        self.common_class_supertype(&tys)
+                    };
+                    caught.extend(tys);
                     self.env.push_scope();
-                    // Bind the caught name with the declared type
-                    // so the body sees `e` as a normal local.
-                    let bind_ty = ty_from_ref(&c.ty, &self.env, self.symbols);
+                    // Bind the caught name with the computed type so
+                    // the body sees `e` as a normal local.
                     self.env.declare(&c.name.text, bind_ty);
                     self.check_block(&c.body);
                     self.env.pop_scope();

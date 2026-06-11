@@ -533,6 +533,88 @@ impl RustEmitter {
         }
     }
 
+    /// One `downcast` match's arms for a catch clause: bind the
+    /// recovered value, run the body, break out of the dispatch
+    /// block; thread the payload onward on miss. Closes the match
+    /// AND its enclosing `if let` (the caller opened both).
+    fn emit_catch_arm_body(&mut self, binder: &str, body: &juxc_ast::Block) {
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("Ok(__jux_boxed) => {\n");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("let ");
+        self.w.push_str(binder);
+        self.w.push_str(" = *__jux_boxed;\n");
+        self.emit_block_contents(body);
+        self.w.line("break '__jux_catch;");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w
+            .line("Err(__jux_rest) => { __jux_payload_slot = Some(__jux_rest); }");
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.indent_dec();
+        self.w.line("}");
+    }
+
+    /// Every known transitive SUBCLASS of the catch type `ty`, by
+    /// FQN, sorted for deterministic emission. Drives the §X.3.4
+    /// subtype-matching arms — `Any::downcast` is exact-type, so the
+    /// clause tries each concrete descendant explicitly.
+    fn catch_subclass_fqns(&self, ty: &juxc_ast::TypeRef) -> Vec<String> {
+        let base_fqn: String = if ty.name.segments.len() > 1 {
+            ty.name
+                .segments
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(".")
+        } else {
+            let bare = match ty.name.segments.first() {
+                Some(s) => s.text.clone(),
+                None => return Vec::new(),
+            };
+            if self.symbols.classes.contains_key(&bare) {
+                bare
+            } else {
+                match self.symbols.find_fqn_by_bare(&bare) {
+                    Some(fqn) => fqn,
+                    None => return Vec::new(),
+                }
+            }
+        };
+        let mut out: Vec<String> = self
+            .symbols
+            .classes
+            .keys()
+            .filter(|fqn| **fqn != base_fqn)
+            .filter(|fqn| {
+                // Walk the extends chain up from the candidate.
+                let mut cur = self
+                    .symbols
+                    .classes
+                    .get(*fqn)
+                    .and_then(|c| c.extends_fqn.clone());
+                let mut depth = 0usize;
+                while let Some(p) = cur {
+                    if depth > 64 {
+                        return false;
+                    }
+                    depth += 1;
+                    if p == base_fqn {
+                        return true;
+                    }
+                    cur = self.symbols.classes.get(&p).and_then(|c| c.extends_fqn.clone());
+                }
+                false
+            })
+            .cloned()
+            .collect();
+        out.sort();
+        out
+    }
+
     /// Lower a Jux `try / catch / finally` statement to Rust using
     /// `std::panic::catch_unwind` as the unwinding mechanism. The
     /// shape per spec §X.3.2:
@@ -703,31 +785,44 @@ impl RustEmitter {
                 // Pull the payload back out, try the downcast, and
                 // either run the body (consuming the value) or thread
                 // the unrecovered payload back to the slot.
-                self.w
-                    .line("if let Some(__jux_p) = __jux_payload_slot.take() {");
-                self.w.indent_inc();
-                self.w.emit_indent();
-                self.w.push_str("match __jux_p.downcast::<");
-                self.emit_type_as_rust(&clause.ty);
-                self.w.push_str(">() {\n");
-                self.w.indent_inc();
-                self.w.emit_indent();
-                self.w.push_str("Ok(__jux_boxed) => {\n");
-                self.w.indent_inc();
-                self.w.emit_indent();
-                self.w.push_str("let ");
-                self.w.push_str(&clause.name.text);
-                self.w.push_str(" = *__jux_boxed;\n");
-                self.emit_block_contents(&clause.body);
-                self.w.line("break '__jux_catch;");
-                self.w.indent_dec();
-                self.w.line("}");
-                self.w
-                    .line("Err(__jux_rest) => { __jux_payload_slot = Some(__jux_rest); }");
-                self.w.indent_dec();
-                self.w.line("}");
-                self.w.indent_dec();
-                self.w.line("}");
+                //
+                // `Any::downcast` matches the payload's EXACT type, so
+                // a `catch (T e)` clause must also try every known
+                // SUBCLASS of `T` (§X.3.4: a clause catches its type
+                // and all subtypes) — one downcast arm per type, each
+                // running the same body. The binder holds the
+                // concrete value; inherited methods work via the
+                // copy-down pass, and a rethrow keeps the original.
+                //
+                // A multi-catch (`catch (E1 | E2 e)`, §X.3.6) expands
+                // each listed alternative the same way; alternatives
+                // are pairwise unrelated (E0721) so at most one arm
+                // can ever match.
+                let mut clause_tys = vec![&clause.ty];
+                clause_tys.extend(clause.alt_tys.iter());
+                for ty in clause_tys {
+                    // Arms: the declared type first (resolved through
+                    // the regular type emitter), then each transitive
+                    // subclass by its crate-rooted path.
+                    self.w
+                        .line("if let Some(__jux_p) = __jux_payload_slot.take() {");
+                    self.w.indent_inc();
+                    self.w.emit_indent();
+                    self.w.push_str("match __jux_p.downcast::<");
+                    self.emit_type_as_rust(ty);
+                    self.w.push_str(">() {\n");
+                    self.emit_catch_arm_body(&clause.name.text, &clause.body);
+                    for sub_fqn in self.catch_subclass_fqns(ty) {
+                        self.w
+                            .line("if let Some(__jux_p) = __jux_payload_slot.take() {");
+                        self.w.indent_inc();
+                        self.w.emit_indent();
+                        self.w.push_str("match __jux_p.downcast::<");
+                        self.emit_fqn_path_in_rust(&sub_fqn, sub_fqn.contains('.'));
+                        self.w.push_str(">() {\n");
+                        self.emit_catch_arm_body(&clause.name.text, &clause.body);
+                    }
+                }
             }
             // No clause matched — park the payload; `finally` runs
             // first, then the unwind resumes below.

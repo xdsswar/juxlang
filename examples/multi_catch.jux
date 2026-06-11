@@ -1,0 +1,43 @@
+// Multi-catch (§X.3.6) + catch-by-supertype (§X.3.4).
+//
+// - `catch (E1 | E2 e)` handles either type with one body; the
+//   listed types must be pairwise unrelated (E0721), and `e`'s
+//   static type is their most specific common supertype.
+// - A `catch (T e)` clause matches T AND every subclass of T — the
+//   `catch (Exception e)` below absorbs an IllegalStateException.
+
+package multicatch;
+
+class NetError extends Exception {
+    NetError(String m) {
+        super(m);
+    }
+}
+
+class TimeoutError extends Exception {
+    TimeoutError(String m) {
+        super(m);
+    }
+}
+
+void risky(int kind) {
+    if (kind == 0) {
+        throw new NetError("net down");
+    }
+    if (kind == 1) {
+        throw new TimeoutError("too slow");
+    }
+    throw new IllegalStateException("other");
+}
+
+public void main() {
+    for (var k : 0..3) {
+        try {
+            risky(k);
+        } catch (NetError | TimeoutError e) {
+            print("transient: " + e.getMessage());
+        } catch (Exception e) {
+            print("hard: " + e.getMessage());
+        }
+    }
+}
