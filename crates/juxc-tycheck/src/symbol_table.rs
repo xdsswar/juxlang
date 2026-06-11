@@ -897,6 +897,13 @@ pub struct FunctionSig {
     /// `use <rust_path> as <jux_name>;` so the snake_case Rust name resolves
     /// behind the camelCase Jux stub name. `None` for ordinary Jux functions.
     pub rust_path: Option<String>,
+    /// Body block, cloned **only** for a function that might be evaluated at
+    /// compile time (a Jux free function with a body) so the const-eval pass
+    /// (`crate::const_eval`) can walk it from `&SymbolTable` on both the tycheck
+    /// and backend sides. `None` for bodyless (abstract / `.jux.d` stub)
+    /// functions. Const-evaluability is a property of the body, not a modifier
+    /// (§A.2.2) — there is no `const fn` keyword in Jux.
+    pub body: Option<juxc_ast::Block>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -909,6 +916,9 @@ pub struct ConstSig {
     /// Declared type — the initializer must match (verified by
     /// tycheck's `check::Checker::check_unit`).
     pub ty: TypeRef,
+    /// The initializer expression, cloned so the const-eval pass can resolve a
+    /// const NAME → value without re-walking the AST.
+    pub init: juxc_ast::Expr,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -1546,6 +1556,7 @@ fn insert_const(
         ConstSig {
             visibility: decl.visibility,
             ty: resolve_decl_type(decl.ty.as_ref(), Some(&decl.value), decl.span),
+            init: decl.value.clone(),
             span: decl.span,
         },
     );
@@ -3210,6 +3221,9 @@ fn insert_function(
             } else {
                 None
             },
+            // Keep the body so a const-position call can be evaluated
+            // (§T.11 / §A.2.2). `None` for bodyless (abstract / stub) functions.
+            body: if is_external { None } else { fn_decl.body.clone() },
             span: fn_decl.span,
         },
     );

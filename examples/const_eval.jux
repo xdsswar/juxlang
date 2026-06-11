@@ -1,0 +1,37 @@
+// Compile-time const-expression evaluation (§T.11 subset).
+//
+// Integer/bool const expressions over concrete constants are folded to a value
+// at compile time and emitted as a literal: const-binding initializers (incl.
+// calls to const-evaluable functions), fixed-array sizes, and const-generic
+// arguments. (Const-evaluability is a property of the expression, not a `const
+// fn` modifier — Jux has no `fn` keyword; functions are Java-style.)
+
+package consteval;
+
+// An ordinary Java-style function — const-evaluable because its body only does
+// const-legal work, so a call to it in a const position folds at compile time.
+int doubled(int x) {
+    return x * 2;
+}
+
+const int SIZE = 32;
+const int CACHE = doubled(1024);     // folds to 2048
+
+public class Ring<T, int N> {
+    public T[N] storage;
+    public Ring(T fill) {
+        this.storage = new T[N];
+    }
+    public int capacity() {
+        return N;
+    }
+}
+
+public void main() {
+    var grown = new int[SIZE * 2];           // → [0isize; 64]
+    var r = new Ring<float, SIZE>(0.0f);     // → Ring::<f32, 32>
+    print(CACHE);                            // 2048
+    print(SIZE + 1);                         // 33
+    print(grown.length);                     // 64
+    print(r.capacity());                     // 32
+}

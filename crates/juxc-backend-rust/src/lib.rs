@@ -3548,7 +3548,17 @@ impl RustEmitter {
         self.emitting_const_context = true;
         self.emit_type_as_rust(&juxc_tycheck::resolved_const_type(decl));
         self.w.push_str(" = ");
-        self.emit_expr(&decl.value);
+        // An int/bool initializer that const-folds (`doubled(1024)`, `SIZE * 2`)
+        // emits the computed literal — a Rust `const` can't call the emitted
+        // (non-`const`) function, so we evaluate it ourselves (§T.11). Other
+        // initializers (String, double, …) emit verbatim as before.
+        if let Some(v) = self.try_const_int(&decl.value) {
+            self.w.push_str(&v.to_string());
+        } else if let Some(b) = self.try_const_bool(&decl.value) {
+            self.w.push_str(if b { "true" } else { "false" });
+        } else {
+            self.emit_expr(&decl.value);
+        }
         self.emitting_const_context = false;
         self.w.push_str(";\n");
         self.w.newline();

@@ -671,41 +671,46 @@ JUX-LANG-V1 §14.1 says "limited const evaluation only" without specifying limit
 
 ### T.11.1. What Is Const
 
-A **const fn** is a function declared with the `const` modifier, callable at compile time:
+Const-evaluability is a property of the **expression**, not a `const fn` keyword (§A.2.2) — Jux
+has no `fn` keyword and functions are Java-style (return type prefixed). An ordinary function whose
+body does only const-legal work is **const-evaluable**: a call to it in a const position is folded
+at compile time. (A function that does heap allocation, I/O, etc. simply isn't const-evaluable —
+calling it in a const position is an error, E0841.)
 
 ```jux
-public const fn doubled(int x) -> int {
+public int doubled(int x) {
     return x * 2;
 }
 
-public const int CACHE_SIZE = doubled(1024);
+public const int CACHE_SIZE = doubled(1024);   // folded to 2048 at compile time
 ```
 
 A **const expression** is one that evaluates to a value at compile time:
 
 - Literals.
 - Operations on `const` values.
-- Calls to `const fn`s with `const` arguments.
+- Calls to const-evaluable functions with const arguments.
 - `if`/`match` whose conditions are `const`.
 
 ### T.11.2. What Const Code Can Do
 
-Permitted in `const fn`:
+Permitted in a const-evaluable function body:
 
 - Arithmetic, bitwise, comparison, logical ops on primitives.
 - `if`, `match`, ternary.
 - `for` and `while` loops with bounded iteration count (up to a compile-time-configurable limit; default 10⁶ iterations).
 - Recursion with bounded depth (default 1024).
-- Calls to other `const fn`s.
+- Calls to other const-evaluable functions.
 - Construction of structs, records, enums, tuples, fixed-size arrays whose components are const.
 - Reading const-marked fields.
 - Inside `unsafe`, only operations that don't depend on runtime addresses (no FFI, no raw I/O).
 
-Forbidden in `const fn`:
+A function body that does any of the following is **not** const-evaluable — calling it in a const
+position is an error (E0841):
 
 - Heap allocation (no `new` for class types or growable collections).
 - I/O of any kind.
-- Calls to non-`const` functions.
+- Calls to non-const-evaluable functions.
 - Mutation of any value not local to the const evaluation.
 - Async/await/yield.
 - Threading or atomics (since there's no runtime).
@@ -735,20 +740,22 @@ Const evaluation is deterministic: the same inputs always produce the same outpu
 ### T.11.5. Worked Examples
 
 ```jux
-public const fn fibonacci(int n) -> int {
+public int fibonacci(int n) {
     if (n < 2) return n;
     return fibonacci(n - 1) + fibonacci(n - 2);
 }
 
 public const int FIB_10 = fibonacci(10);     -- evaluated at compile time → 55
 
-public class StackString<int N> {
-    private byte[N + 1] data;                 -- const generic arithmetic in array size
-    private int len;
-}
-
-var s = new StackString<32>();                -- 33-byte array, len field
+public const int SIZE = 32;
+public byte[SIZE + 1] buffer;                -- const arithmetic over a concrete const → [u8; 33]
 ```
+
+**Phase-1 note.** Const arithmetic over *concrete* constants (literals + `const`/`final` bindings +
+const-evaluable function calls) is folded and emitted as a literal. Const-generic *arithmetic over a
+generic param* (`class StackString<int N> { byte[N + 1] data; }`) is **not yet supported** (it needs
+per-instantiation specialization / nightly `generic_const_exprs`); the bare form `byte[N]` works, and
+`byte[N + 1]` reports `E0445` until that lands.
 
 ### T.11.6. Diagnostics
 
