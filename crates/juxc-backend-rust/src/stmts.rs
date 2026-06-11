@@ -1228,6 +1228,47 @@ impl RustEmitter {
             return;
         }
 
+        // **User iterable** (§O.6/§K.5): the receiver's class
+        // declares `iterator()` — drive the protocol directly:
+        //
+        //   { let mut __jux_it = recv.iterator();
+        //     while let Some(x) = __jux_it.next() { body } }
+        //
+        // `next()` returns Jux `T?` (= Option<T>), so `while let`
+        // IS the exhaustion check.
+        if let Some(Ty::User { name, .. }) = self.expr_types.get(&expr_span_of(&f.iter)) {
+            let speaks_protocol = self.symbols.lookup_method(name, "iterator").is_some()
+                || self
+                    .symbols
+                    .interfaces
+                    .get(name.as_str())
+                    .map(|i| i.methods.contains_key("iterator"))
+                    .unwrap_or(false);
+            if speaks_protocol {
+                self.w.push_str("{
+");
+                self.w.indent_inc();
+                self.w.emit_indent();
+                self.w.push_str("let mut __jux_it = ");
+                self.emit_expr_with_parent_prec(&f.iter, u8::MAX, false);
+                self.w.push_str(".iterator();
+");
+                self.w.emit_indent();
+                self.w.push_str("while let Some(");
+                self.w.push_str(&f.var_name.text);
+                self.w.push_str(") = __jux_it.next() {
+");
+                self.w.indent_inc();
+                self.emit_block_contents(&f.body);
+                self.w.indent_dec();
+                self.w.line("}");
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push_str("}
+");
+                return;
+            }
+        }
         // Three lowering shapes:
         //
         // - **Copy element type** (`int`, `bool`, `char`, `f64`, …):
