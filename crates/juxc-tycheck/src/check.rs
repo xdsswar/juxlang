@@ -3581,6 +3581,20 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
+                // `Task.all/race/delay` (§18.1.4) — runtime statics on
+                // the emitted helpers; args are task handles (or a
+                // millisecond count for delay).
+                if let Expr::Path(qn) = field.object.as_ref() {
+                    if qn.segments.len() == 1
+                        && qn.segments[0].text == "Task"
+                        && matches!(method_name, "all" | "race" | "delay")
+                    {
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
+                }
                 // `ClassName.staticMethod(args)` — receiver is a
                 // type name; resolve and check as a static call
                 // before treating the object as a value. Mirrors

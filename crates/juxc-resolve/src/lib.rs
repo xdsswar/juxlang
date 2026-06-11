@@ -148,6 +148,8 @@ impl Resolver {
         builtins.insert("Channel");
         // `AsyncMutex<T>` — await-friendly mutual exclusion (§18.3).
         builtins.insert("AsyncMutex");
+        // `Task.all/race/delay` static helpers (§18.1.4).
+        builtins.insert("Task");
         // Async-runtime builtin per JUX-ASYNC-ADDENDUM-v2: `parallel`
         // takes N async expressions and concurrently awaits them
         // all, returning a tuple of their results. Lowers to

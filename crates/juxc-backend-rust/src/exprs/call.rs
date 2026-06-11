@@ -258,6 +258,65 @@ impl RustEmitter {
                 return;
             }
         }
+        // `Task.all / Task.race / Task.delay` (§18.1.4) — statics on
+        // the task runtime. `all` joins same-typed tasks into a
+        // Task<List<T>>; `race` resolves with the first to settle;
+        // `delay(ms)` is a timer task (a pool thread sleeps — fine
+        // for Phase 1's pool sizes).
+        if let Expr::Field(f) = &*call.callee {
+            if let Expr::Path(qn) = &*f.object {
+                if qn.segments.len() == 1 && qn.segments[0].text == "Task" {
+                    let prev = self.emitting_format_arg;
+                    self.emitting_format_arg = false;
+                    match f.field.text.as_str() {
+                        "all" => {
+                            self.w.push_str(
+                                "crate::__jux_spawn(async move { futures::future::join_all(vec![",
+                            );
+                            for (i, arg) in call.args.iter().enumerate() {
+                                if i > 0 {
+                                    self.w.push_str(", ");
+                                }
+                                self.emit_expr(arg);
+                            }
+                            self.w.push_str("]).await })");
+                            self.emitting_format_arg = prev;
+                            return;
+                        }
+                        "race" => {
+                            self.w.push_str(
+                                "crate::__jux_spawn(async move { futures::future::select_all(vec![",
+                            );
+                            for (i, arg) in call.args.iter().enumerate() {
+                                if i > 0 {
+                                    self.w.push_str(", ");
+                                }
+                                self.emit_expr(arg);
+                            }
+                            self.w.push_str("]).await.0 })");
+                            self.emitting_format_arg = prev;
+                            return;
+                        }
+                        "delay" => {
+                            self.w.push_str(
+                                "crate::__jux_spawn(async move { std::thread::sleep(std::time::Duration::from_millis((",
+                            );
+                            if let Some(ms) = call.args.first() {
+                                self.emit_expr(ms);
+                            } else {
+                                self.w.push('0');
+                            }
+                            self.w.push_str(") as u64)) })");
+                            self.emitting_format_arg = prev;
+                            return;
+                        }
+                        _ => {
+                            self.emitting_format_arg = prev;
+                        }
+                    }
+                }
+            }
+        }
         // `spawn(f)` — JUX-ASYNC v2 §18.1.3: schedule the zero-arg
         // lambda's body on the task pool, returning a JuxTask<T>
         // immediately. The body inlines into an `async move` block
