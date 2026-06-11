@@ -503,6 +503,13 @@ struct RustEmitter {
     /// to the end of the enclosing call statement (Rust temporary-lifetime
     /// extension), so the `&mut` into it stays valid for the callee.
     pub(crate) emitting_out_place: bool,
+    /// True while emitting a mutating stdlib-collection call whose
+    /// arguments were already **hoisted into temps** (§CR.4.1 / gap N1).
+    /// The temps already carry the element coercion ladder (nullable
+    /// `Some(…)` wrap, wrapper share-`.clone()`), so `emit_collection_arg`
+    /// must emit the bare temp reference and NOT re-apply that ladder —
+    /// otherwise a nullable element double-wraps to `Some(Some(v))`.
+    pub(crate) collection_args_prehoisted: bool,
     /// True while we're emitting a `const NAME: T = …;` (or
     /// `pub static NAME: T = …;`) initializer. Rust's const evaluator
     /// can't run `String::from`/`.to_string()`, so the literal must
@@ -2742,6 +2749,7 @@ impl RustEmitter {
             user_mut_methods: HashSet::new(),
             emitting_lvalue: false,
             emitting_out_place: false,
+            collection_args_prehoisted: false,
             emitting_const_context: false,
             emitting_format_arg: false,
             emitting_comparison_operand: false,
