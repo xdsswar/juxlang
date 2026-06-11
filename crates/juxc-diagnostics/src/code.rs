@@ -401,6 +401,14 @@ pub enum Code {
     /// rejected in Phase 1.
     E0456_WeakReadNeedsGet,
 
+    /// E0600 — A **non-nullable, non-`weak` field is not definitely assigned**
+    /// by the end of construction (§S.4.5). A field with no textual initializer
+    /// must be assigned on every normal path through every constructor (and the
+    /// instance `init` blocks that run before it); a class with no constructor
+    /// can only satisfy this via an initializer or an init block. `weak` and
+    /// nullable fields default to null and are exempt.
+    E0600_FieldNotDefinitelyAssigned,
+
     // ---- Async / Generators (E0700–E0799) ----
     /// E0710 — `throw` of a non-`Exception` value. Per the exceptions
     /// addendum §X.2.1 (`JUX-EXCEPTIONS-ADDENDUM.md`), `throw expr`
@@ -557,6 +565,7 @@ impl Code {
             Code::E0446_GenericBoundNotSatisfied => "E0446",
             Code::E0455_WeakOnNonClass           => "E0455",
             Code::E0456_WeakReadNeedsGet         => "E0456",
+            Code::E0600_FieldNotDefinitelyAssigned => "E0600",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0701_AsyncNotInProfile        => "E0701",
             Code::E0702_ObjectCapturedBySpawn    => "E0702",
