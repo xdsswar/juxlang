@@ -130,30 +130,36 @@ The cleanest design (Rust's): panics are aborts, not catchable. Exceptions are v
 
 If you go this way, panics disappear from the user-facing language entirely — they're a runtime mechanism for "this should never happen, abort." That removes a whole class of user-facing complexity.
 
-### 3.4 The grammar has features without examples
+### 3.4 The grammar has features without examples — ✅ DONE
 
-The examples audit flagged that **no example exercises**: inheritance, interfaces, try/catch, async/await, sealed hierarchies, bounded generics, wildcards, nullable types, drop blocks, FFI. Every one of these is in the spec. Some are in the parser. **None of them are battle-tested.**
+*(Resolved. The `examples/` corpus now exceeds 150 programs and `bin/jux/tests/`
+holds 100+ end-to-end runners that compile each example to Rust, build it, and
+assert observed output — every feature below is exercised and gated.)*
 
-This isn't a small deal: the parser tests cover *grammar acceptance*, not *end-to-end compilation*. Things that parse may not lower. You don't know until you write the example.
-
-**Action:** add 6 example vehicles in this order:
-
-1. `inheritance.jux` — base class, override, virtual dispatch, upcast.
-2. `exception_try_catch.jux` — try/catch/finally, `throws`.
-3. `nullable_types.jux` — `T?`, `?.`, null narrowing.
-4. `interface_impl.jux` — interface decl, multiple `implements`, default methods.
-5. `async_await_basic.jux` — async fn, await, Task<T>, spawn.
-6. `sealed_hierarchy.jux` — sealed + permits, exhaustiveness.
+The original audit flagged that no example exercised: inheritance, interfaces,
+try/catch, async/await, sealed hierarchies, bounded generics, wildcards, nullable
+types, drop blocks, FFI. All are now covered by named examples + runners
+(e.g. `polymorphism`, `animals`, `checked_exceptions`/`catch_finally_order`,
+`async_basic`, `colors_match` (sealed), `bounded_generic`, `wildcard*`,
+`nullable_poly`/`safe_nav_chains`, `drop_blocks`). The end-to-end gate (§4.1)
+catches lowering bugs grammar-acceptance tests miss — and has, repeatedly: most
+fixes in `jux-gaps.md` were found exactly this way.
 
 ---
 
 ## Tier 4 — Code-quality and testing hygiene
 
-### 4.1 Add integration tests for examples
+### 4.1 Add integration tests for examples — ✅ DONE
 
-Right now, examples exist as files but no CI gate confirms they still compile to valid Rust. The parser has 1.5k lines of tests; the backend has 128. Neither verifies the end-to-end pipeline.
+*(Resolved. `bin/jux/tests/` holds 100+ end-to-end runners; each compiles a
+`.jux` source through `jux run`, builds the emitted Rust with `cargo`, and
+asserts the program's observed output. A leaked rustc error or a runtime panic
+fails the test — so lowering bugs surface as red CI, not silent surprises. The
+full workspace suite stands at 936/0.)*
 
-**Action:** a test runner that compiles every `.jux` example, runs `cargo build` on the output, and snapshots the emitted Rust. Failures become regressions, not silent surprises.
+The original gap: examples existed as files but no gate confirmed they still
+compiled to valid Rust. That gate now exists and is the primary bug-discovery
+mechanism for the project.
 
 ### 4.2 Thread `Span`s all the way through
 

@@ -176,3 +176,38 @@ code. The rest are honest rustc-caught miscompiles, not silent-wrong.
 **Probe files** (untracked, in `examples/`): `probe_borrow7.jux`, `probe_borrow8.jux`,
 `probe_variance.jux`, `probe_return.jux`, `probe_combo1.jux`, `probe_combo2.jux`,
 `probe_combo3a.jux`, `probe_combo3b.jux`. Keep as regression seeds or delete once fixed.
+
+---
+
+## Bug-hunt wave 2 (2026-06-11, production hardening)
+
+A second adversarial pass (three parallel agents over feature *intersections*)
+found a fresh batch. The probe corpus was also folded into the permanent suite
+(the `probe_*.jux` scratch files above were promoted to named `examples/` +
+`bin/jux/tests/` runners, or deleted as duplicates). Suite now 936/0.
+
+### Fixed (committed, each with an example + runner)
+
+| ID | Issue | Severity | Status |
+|----|-------|----------|--------|
+| H1 | `<field>!!.method()` held the field-read borrow across a re-entrant call → runtime `RefCell already borrowed` | High | ✅ receiver-hoist looks through `!!` |
+| H2 | Nullable generic field `T?` double-`Some`d on the wrapped builder path → E0308 | High | ✅ seed nullable params in wrapper builder |
+| H3 | `new Base()` into its own polymorphic-base slot not coerced → E0308 | High | ✅ wrap construction precisely |
+| H4 | Generic base CLASS used polymorphically leaked rustc E0277/E0308 | High | ✅ clean **E0454** diagnostic |
+| H5 | `?.field` on a wrapped class read a tuple slot; chained `?.` (2+) didn't flatten → E0609/E0599 | High | ✅ `.0.borrow()` + `.and_then`, structural receiver resolver |
+| H6 | for-each over an own collection field held the borrow across the body → re-entrancy panic | High | ✅ snapshot iterable before loop |
+| H7 | `=>` identity type-test emitted a non-existent `__jux_as_<Self>` hook → E0599 | Medium | ✅ identity test is always-true |
+| H8 | Concrete subclass not upcast to its base in arg position (exception causes) → E0308; overloaded-ctor arg coercion used wrong overload | High | ✅ `IntoBase` coercion + arity-resolved ctor |
+| H9 | `operator()` on a wrapped class emitted `&mut self` → E0596 | Medium | ✅ `&self` on wrappers |
+
+### Open (lower-frequency; tracked for a follow-up wave)
+
+| ID | Issue | Severity | Notes |
+|----|-------|----------|-------|
+| O1 | `try`/`catch`/`finally` inside a value-producing lambda hard-codes the carrier return type to `Option<()>` → E0308 | High | try-lowering × closure return-type inference |
+| O2 | `break`/`continue` inside a `try` *body* in a loop → E0267 (the body is a `catch_unwind` closure) | Medium | thread loop-control out of the closure like `return` |
+| O3 | A generic exception class (`class E<T> extends Exception`) emits `T` out of scope + spurious `Clone`/`Debug` bounds | Medium | generic-class × exception-base lowering |
+| O4 | Compound index-assign `g[i] += v` doesn't hoist the value arg → E0499 (operator[]= receiver + value both borrow `g`) | Medium | hoist the value before the `__op_index_set` call |
+| O5 | Block-bodied lambda as a call argument `f(() -> { … })` fails to parse → E0200; direct function-typed field call `obj.field(args)` → E0413 | Medium | blocks `spawn(() -> { … })`; parser + field-call dispatch |
+| O6 | Reading a `String` field on a by-value `Exception` parameter moves it → E0507 (field-read clone not applied for built-in Exception fields) | Medium | newly exposed once H8 let the upcast through |
+| O7 | Built-in `Exception(message, cause)` stub declares a non-null `cause` where the spec is `Exception?` | Low | stdlib stub signature |

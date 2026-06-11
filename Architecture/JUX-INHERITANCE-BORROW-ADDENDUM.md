@@ -193,6 +193,19 @@ Generic types are invariant in their type parameters (§7.8). Variance is expres
 
 The borrow checker treats wildcards as opaque: a `List<? extends Animal>` exposes only the read API, so its inferred mutation summary is the union of read-only methods. This composes with §6.9.3 cleanly because variance and mutability are decided independently.
 
+> **Phase-1 implementation limitation — a *generic class* cannot be a polymorphic
+> base.** Using a generic class as the base of a virtual-dispatch hierarchy
+> (`Container<int> b = new Box<int>(…)` where `class Box<T> extends Container<T>`)
+> requires generic `Kind` traits (`ContainerKind<T>`) and generic trait objects
+> (`Rc<dyn ContainerKind<isize>>`) threaded through the trait decls, impls,
+> downcast hooks and upcast cast — plus inherited-method return-type analysis to
+> add the needed bounds. Phase 1 does not yet emit this, so the compiler **rejects
+> the construct up front with `[E0454]`** rather than leaking a backend error.
+> Supported routes for Phase 1: dispatch through a *generic interface*
+> (`interface Container<T>` — the fully working path), or use a **non-generic**
+> base class. A *non-generic* base with generic *subclasses* is fine; only a
+> generic *base* is deferred. Tracked in `jux-gaps.md` (N5).
+
 ### 6.9.7. Sealed Hierarchies Give Exact Analysis
 
 Within a sealed hierarchy (§7.5), the compiler knows every subclass at compile time. This produces:
