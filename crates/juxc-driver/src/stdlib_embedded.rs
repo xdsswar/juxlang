@@ -307,36 +307,30 @@ public interface Iterable<T> {
     ("collections/Iterator.jux", r###"/**
  * jux.std.collections.Iterator<T>
  *
- * Cursor over an `Iterable<T>`. Mirrors `java.util.Iterator<T>`
- * minus `remove()` (a Phase-2 addition).
+ * Cursor over an `Iterable<T>` — the CANONICAL iteration protocol
+ * per `JUX-CORE-LIB-ADDENDUM.md` §K.5 / `JUX-MISSING-DEFS` §M.10.1:
+ * a single `next()` that yields the next element, or `null` when
+ * the sequence is exhausted. (The earlier Java-style
+ * `hasNext()`/`next()` pair was replaced by this nullable-driven
+ * shape; a for-each loop lowers to `while let` on it directly.)
  *
  * Typical use:
  *
  *     final Iterator<int> it = xs.iterator();
- *     while (it.hasNext()) {
- *         final int n = it.next();
- *         // ...
+ *     var n = it.next();
+ *     while (n != null) {
+ *         // ... use n ...
+ *         n = it.next();
  *     }
  */
 package jux.std.collections;
 
 public interface Iterator<T> {
     /**
-     * Cheap "is there more?" probe.
-     *
-     * @return true iff a subsequent `next()` call would succeed.
+     * Advance the cursor and yield the next element, or `null`
+     * when the sequence is exhausted.
      */
-    bool hasNext();
-
-    /**
-     * Advance the cursor and yield the value at the new
-     * position.
-     *
-     * @return the next element.
-     * @throws NoSuchElementException when no more elements
-     *         remain.
-     */
-    T next();
+    T? next();
 }
 "###),
     ("collections/List.jux", r###"/**

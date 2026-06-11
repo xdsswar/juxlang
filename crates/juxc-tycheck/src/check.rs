@@ -748,6 +748,24 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Element type of a user iterable (§K.5): resolve the class's
+    /// `iterator()` method, read its declared `Iterator<T>` return,
+    /// and yield `T`. `None` when the class doesn't speak the
+    /// protocol (the for-each then types its variable Unknown and
+    /// rustc reports the real story).
+    fn iterable_element_type(&self, class_name: &str) -> Option<Ty> {
+        let (method, declaring) = self.symbols.lookup_method(class_name, "iterator")?;
+        let ret = match &method.return_type {
+            juxc_ast::ReturnType::Type(t) => t,
+            _ => return None,
+        };
+        let _ = declaring;
+        // `Iterator<T>` — take the single generic arg as the element.
+        let arg = ret.generic_args.first()?;
+        let elem_ref = arg.as_type()?;
+        Some(ty_from_ref(elem_ref, &self.env, self.symbols))
+    }
+
     /// Validate one `expr?` site (§X.4.1):
     ///
     /// - `Result<T, E>` operand → the enclosing function must return
@@ -1704,8 +1722,15 @@ impl<'a> Checker<'a> {
                 let var_ty = if let Some(declared) = &f.var_type {
                     ty_from_ref(declared, &self.env, self.symbols)
                 } else {
-                    match iter_ty {
-                        Ty::Array { element, .. } => *element,
+                    match &iter_ty {
+                        Ty::Array { element, .. } => (**element).clone(),
+                        // User iterable (§O.6/§K.5): the protocol's
+                        // element type — `iterator()`'s Iterator<T>
+                        // argument, or the iterator's own `next()`
+                        // return with the `?` peeled.
+                        Ty::User { name, .. } => self
+                            .iterable_element_type(name)
+                            .unwrap_or(Ty::Unknown),
                         _ => Ty::Unknown,
                     }
                 };

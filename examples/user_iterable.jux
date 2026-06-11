@@ -1,0 +1,53 @@
+// User Iterable/Iterator protocol (§O.6, §K.5).
+//
+// - `Iterator<T>` is the canonical protocol: `T? next()` — the next
+//   element, or null when exhausted.
+// - A class implementing `Iterable<T>` (an `iterator()` factory)
+//   works directly in for-each: `for (var x : obj)` drives the
+//   protocol (`while let` on `next()` under the hood).
+
+package iterables;
+
+import jux.std.collections.Iterator;
+import jux.std.collections.Iterable;
+
+class Countdown implements Iterable<int> {
+    private int from;
+
+    Countdown(int from) {
+        this.from = from;
+    }
+
+    public Iterator<int> iterator() {
+        return new CountdownIter(this.from);
+    }
+}
+
+class CountdownIter implements Iterator<int> {
+    private int current;
+
+    CountdownIter(int start) {
+        this.current = start;
+    }
+
+    public int? next() {
+        if (this.current <= 0) {
+            return null;
+        }
+        var v = this.current;
+        this.current = this.current - 1;
+        return v;
+    }
+}
+
+public void main() {
+    var c = new Countdown(3);
+    for (var n : c) {
+        print(n);
+    }
+    var total = 0;
+    for (var n : new Countdown(4)) {
+        total = total + n;
+    }
+    print(total);
+}
