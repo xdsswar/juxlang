@@ -1166,6 +1166,23 @@ impl<'a> Checker<'a> {
         for (idx, ctor) in class.constructors.iter().enumerate() {
             self.check_constructor(ctor, &this_ty, idx);
         }
+        // Field definite-assignment (§S.4.5, E0600): every non-nullable,
+        // non-`weak`, initializer-less instance field must be assigned on every
+        // path through every constructor (and the instance `init` blocks).
+        for v in crate::definite_assign::analyze_class(class) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0600_FieldNotDefinitelyAssigned,
+                    format!(
+                        "field `{}` of class `{}` is not definitely assigned — give it an \
+                         initializer (`= …`) or assign it in every constructor before the \
+                         constructor returns (§S.4.5)",
+                        v.field, class.name.text,
+                    ),
+                )
+                .with_span(v.span),
+            );
+        }
         for method in &class.methods {
             self.check_method(method, &this_ty);
         }
@@ -6319,11 +6336,59 @@ mod tests {
     #[test]
     fn inherited_field_resolves() {
         let d = run(
-            "public class Animal { public int age; } \
+            "public class Animal { public int age = 0; } \
              public class Dog extends Animal {} \
              public void main() { var d = new Dog(); print(d.age); }",
         );
         assert!(d.is_empty(), "{d:?}");
+    }
+
+    /// E0600: a non-nullable field with no initializer and no constructor that
+    /// assigns it is not definitely assigned.
+    #[test]
+    fn unassigned_field_fires_e0600() {
+        let d = run("public class C { public int n; }");
+        assert!(
+            has(&d, code::Code::E0600_FieldNotDefinitelyAssigned),
+            "{d:?}",
+        );
+    }
+
+    /// A constructor that assigns the field on every path satisfies E0600.
+    #[test]
+    fn field_assigned_in_ctor_ok() {
+        let d = run("public class C { public int n; public C(int n) { this.n = n; } }");
+        assert!(
+            !has(&d, code::Code::E0600_FieldNotDefinitelyAssigned),
+            "{d:?}",
+        );
+    }
+
+    /// An initializer, a nullable field, and a `weak` field are all exempt.
+    #[test]
+    fn initializer_nullable_and_weak_fields_exempt_e0600() {
+        let d = run(
+            "public class P { public int x = 0; } \
+             public class C { public int n = 0; public P? p; weak P back; }",
+        );
+        assert!(
+            !has(&d, code::Code::E0600_FieldNotDefinitelyAssigned),
+            "{d:?}",
+        );
+    }
+
+    /// A field assigned on only ONE branch of an `if` is not definitely
+    /// assigned (the else path leaves it unset) → E0600.
+    #[test]
+    fn conditionally_assigned_field_fires_e0600() {
+        let d = run(
+            "public class C { public int n; \
+             public C(bool b) { if (b) { this.n = 1; } } }",
+        );
+        assert!(
+            has(&d, code::Code::E0600_FieldNotDefinitelyAssigned),
+            "{d:?}",
+        );
     }
 
     /// `print` accepts any single argument shape.
