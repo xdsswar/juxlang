@@ -133,6 +133,47 @@ pub enum Expr {
     NotNullAssert(Box<Expr>, Span),
 }
 
+impl Expr {
+    /// Source span covering the whole expression.
+    ///
+    /// Literals don't carry a span of their own yet, so they report
+    /// [`Span::DUMMY`] — matching the long-standing behavior of the
+    /// (duplicated) `expr_span` helpers in juxc-parse / juxc-tycheck /
+    /// juxc-backend-rust, which this accessor is the public home for.
+    pub fn span(&self) -> Span {
+        match self {
+            Expr::Literal(_) => Span::DUMMY,
+            Expr::TupleLit(_, s) => *s,
+            Expr::TryExpr(t) => t.span,
+            Expr::ErrorProp(_, s) => *s,
+            Expr::Out(_, s) => *s,
+            Expr::Path(qn) => qn.span,
+            Expr::Call(c) => c.span,
+            Expr::Binary(b) => b.span,
+            Expr::Unary(u) => u.span,
+            Expr::Range(r) => r.span,
+            Expr::Cast(c) => c.span,
+            Expr::TypeTest(t) => t.span,
+            Expr::SizeOf(s) => s.span,
+            Expr::NewArray(n) => n.span,
+            Expr::NewArrayLit(n) => n.span,
+            Expr::Index(i) => i.span,
+            Expr::Field(f) => f.span,
+            Expr::InterpString(s) => s.span,
+            Expr::This(s) => *s,
+            Expr::Super(s) => *s,
+            Expr::NewObject(n) => n.span,
+            Expr::Switch(s) => s.span,
+            Expr::Lambda(l) => l.span,
+            Expr::Elvis(e) => e.span,
+            Expr::MethodRef(m) => m.span,
+            Expr::Ternary(t) => t.span,
+            Expr::Await(_, s) => *s,
+            Expr::NotNullAssert(_, s) => *s,
+        }
+    }
+}
+
 /// Ternary expression: `condition ? then_branch : else_branch`.
 /// Right-associative — `a ? b : c ? d : e` parses as
 /// `a ? b : (c ? d : e)`. The condition must be a `bool`; the

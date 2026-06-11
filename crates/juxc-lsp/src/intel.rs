@@ -161,45 +161,211 @@ pub fn resolve_member<'a>(
     None
 }
 
-/// One completion candidate harvested from a receiver type — a method or field.
+/// What kind of declaration a completion [`Member`] candidate is — drives the
+/// item's icon (LSP `CompletionItemKind`) and its insert shape (methods get a
+/// parameter snippet, properties / fields / unit variants insert bare).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberKind {
+    /// An ordinary method — inserts `name(${1:arg}, …)`.
+    Method,
+    /// An expression-bodied property (`T name -> e;`) — read like a field at
+    /// the use site, so it inserts the bare name (no parens).
+    Property,
+    /// A field (or record component) — inserts the bare name.
+    Field,
+    /// An enum variant — inserts bare (unit) or `Name($1)` (payload).
+    EnumVariant,
+}
+
+/// How the receiver of a member completion was written — decides the
+/// static/instance split (`FieldSig`/`MethodSig` doc: statics resolve via
+/// `ClassName.member`, instance members via `obj.member`, never crosswise).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiverKind {
+    /// `obj.` — an expression receiver: instance members only.
+    Instance,
+    /// `Type.` — the type name itself: statics + enum variants only.
+    Static,
+    /// No receiver — a bare name inside a type's method body (implicit
+    /// `this`). Statics are always reachable; instance members only when the
+    /// enclosing method isn't itself `static`.
+    Implicit {
+        /// True when the enclosing method is `static`.
+        in_static_method: bool,
+    },
+}
+
+/// Where the completion request is being made FROM — what `member_visible`
+/// checks member visibility against (Jux uses Java's access rules: `private`
+/// inside the declaring class, `protected` for subclasses + same package,
+/// package-private within the package).
+#[derive(Debug, Default)]
+pub struct AccessCtx {
+    /// The open file's own `package a.b;` (None for a package-less file).
+    pub package: Option<String>,
+    /// FQN key of the class/type whose body contains the caret, or `None`
+    /// at the top level / inside a free function.
+    pub enclosing_class_fqn: Option<String>,
+}
+
+/// One completion candidate harvested from a receiver type.
 pub struct Member {
     /// The member's bare name (what the user types).
     pub name: String,
-    /// True for a method (gets a `name()` presentation + `()` insert), false
-    /// for a field.
-    pub is_method: bool,
+    /// What kind of declaration it is — drives icon + insert shape.
+    pub kind: MemberKind,
+    /// FQN key of the type that DECLARES this member (an inherited member
+    /// reports its ancestor) — completionItem/resolve reads the doc comment
+    /// from the declaring file through this.
+    pub owner_fqn: String,
+    /// Parameter names, for the method snippet (`name(${1:a}, ${2:b})`).
+    /// `Some(vec![])` for a no-arg method, `None` for non-methods. For a
+    /// payload enum variant: the rendered payload types (used as snippet
+    /// placeholder text since payload slots are unnamed).
+    pub params: Option<Vec<String>>,
     /// Rendered detail (the full signature) shown to the right in the list.
     pub detail: String,
 }
 
-/// Collect every method + field reachable on `recv`'s user type, walking the
-/// `extends` chain for classes (so inherited members appear) and the direct
-/// member tables for interfaces / records. Deduplicated by name (a subclass
-/// override shadows the ancestor). Returns an empty vec when `recv` isn't a
-/// resolvable user type — callers fall back to the flat name-bag.
-pub fn members_of(symbols: &SymbolTable, recv: &Ty) -> Vec<Member> {
+/// Is a member with visibility `vis`, declared by `owner_fqn`, accessible
+/// from `access`? Java rules (Jux follows them — `feedback_jux_inheritance_rule`):
+/// `public` everywhere; `private` only inside the declaring type; `protected`
+/// from subclasses or the same package; package-private within the package.
+/// `internal` (module-visible) is treated as visible — the editor workspace
+/// IS the module, and hiding something the checker would accept is worse
+/// than showing something it would flag.
+fn member_visible(
+    symbols: &SymbolTable,
+    vis: Visibility,
+    owner_fqn: &str,
+    access: &AccessCtx,
+) -> bool {
+    let same_package = || {
+        let owner_pkg = owner_fqn.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+        owner_pkg == access.package.as_deref().unwrap_or("")
+    };
+    match vis {
+        Visibility::Public | Visibility::Internal => true,
+        Visibility::Private => access.enclosing_class_fqn.as_deref() == Some(owner_fqn),
+        Visibility::Protected => match access.enclosing_class_fqn.as_deref() {
+            Some(enc) => {
+                enc == owner_fqn || extends_reaches(symbols, enc, owner_fqn) || same_package()
+            }
+            None => same_package(),
+        },
+        Visibility::Package => same_package(),
+    }
+}
+
+/// True when class `from` reaches `target` by walking its `extends` chain
+/// (the `protected`-from-a-subclass test). Depth-capped like every other
+/// chain walk so a cyclic `extends` (already a diagnostic) can't hang us.
+fn extends_reaches(symbols: &SymbolTable, from: &str, target: &str) -> bool {
+    let mut cursor: Option<String> = symbols.classes.get(from).and_then(next_parent_key);
+    let mut depth = 0usize;
+    while let Some(key) = cursor {
+        if depth > 64 {
+            return false;
+        }
+        // Exact-key hit, or a bare-name match when either side is itself
+        // unqualified (a no-package class). Two FULLY-qualified keys that
+        // merely share a last segment (`a.Base` vs `b.Base`) must NOT match —
+        // that would grant protected access across unrelated hierarchies.
+        let bare_ok = (!key.contains('.') || !target.contains('.'))
+            && bare_of(&key) == bare_of(target);
+        if key == target || bare_ok {
+            return true;
+        }
+        cursor = symbols.classes.get(&key).and_then(next_parent_key);
+        depth += 1;
+    }
+    false
+}
+
+/// The parent-class key to hop to from `class` — the resolved FQN when the
+/// finalize pass filled it, else the bare last segment of the `extends` type.
+fn next_parent_key(class: &ClassSig) -> Option<String> {
+    class.extends_fqn.clone().or_else(|| {
+        class
+            .extends
+            .as_ref()
+            .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+    })
+}
+
+/// Collect every member reachable on `recv`'s user type that is **accessible**
+/// (per `access`) and **shape-compatible** with how the receiver was written
+/// (per `recv_kind`): walking the class `extends` chain (inherited members),
+/// the `implements` interface chain (default methods + interface constants),
+/// and the direct member tables for interfaces / records / enums (variants
+/// included). Deduplicated by name (a subclass override shadows the ancestor
+/// — but only an *accessible* declaration claims the name, so a private
+/// shadow in a subclass never hides an inherited public member). Returns an
+/// empty vec when `recv` isn't a resolvable user type.
+pub fn members_of(
+    symbols: &SymbolTable,
+    recv: &Ty,
+    recv_kind: ReceiverKind,
+    access: &AccessCtx,
+) -> Vec<Member> {
     let Some(type_name) = user_type_name(recv) else {
         return Vec::new();
     };
     let mut out: Vec<Member> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    let push_method = |name: &str, sig: &MethodSig, seen: &mut std::collections::HashSet<String>, out: &mut Vec<Member>| {
+    // The static/instance gate for one member.
+    let static_ok = |is_static: bool| match recv_kind {
+        ReceiverKind::Instance => !is_static,
+        ReceiverKind::Static => is_static,
+        ReceiverKind::Implicit { in_static_method } => is_static || !in_static_method,
+    };
+
+    let push_method = |owner: &str,
+                       name: &str,
+                       sig: &MethodSig,
+                       seen: &mut std::collections::HashSet<String>,
+                       out: &mut Vec<Member>| {
+        if !static_ok(sig.is_static) || !member_visible(symbols, sig.visibility, owner, access) {
+            return;
+        }
         if seen.insert(name.to_string()) {
             out.push(Member {
                 name: name.to_string(),
-                is_method: true,
+                kind: if sig.is_property { MemberKind::Property } else { MemberKind::Method },
+                owner_fqn: owner.to_string(),
+                params: Some(sig.params.iter().map(|p| p.name.clone()).collect()),
                 detail: render_method(name, sig),
             });
         }
     };
-    let push_field = |name: &str, sig: &FieldSig, seen: &mut std::collections::HashSet<String>, out: &mut Vec<Member>| {
+    let push_field = |owner: &str,
+                      name: &str,
+                      sig: &FieldSig,
+                      seen: &mut std::collections::HashSet<String>,
+                      out: &mut Vec<Member>| {
+        if !static_ok(sig.is_static) || !member_visible(symbols, sig.visibility, owner, access) {
+            return;
+        }
         if seen.insert(name.to_string()) {
             out.push(Member {
                 name: name.to_string(),
-                is_method: false,
+                kind: MemberKind::Field,
+                owner_fqn: owner.to_string(),
+                params: None,
                 detail: render_field(name, sig),
             });
+        }
+    };
+
+    // Interfaces to harvest default methods / constants from, discovered
+    // while walking the class chain (each class level contributes its own
+    // `implements` list). Processed after the class chain so an inherited
+    // class member shadows an interface default of the same name.
+    let mut iface_keys: Vec<String> = Vec::new();
+    let queue_iface = |t: &TypeRef, iface_keys: &mut Vec<String>| {
+        if let Some(seg) = t.name.segments.last() {
+            iface_keys.push(seg.text.clone());
         }
     };
 
@@ -213,43 +379,92 @@ pub fn members_of(symbols: &SymbolTable, recv: &Ty) -> Vec<Member> {
             }
             let Some(class) = symbols.classes.get(&key) else { break };
             for (name, sig) in &class.methods {
-                push_method(name, sig, &mut seen, &mut out);
+                push_method(&key, name, sig, &mut seen, &mut out);
             }
             for (name, sig) in &class.fields {
-                push_field(name, sig, &mut seen, &mut out);
+                push_field(&key, name, sig, &mut seen, &mut out);
             }
-            cursor = class.extends_fqn.clone().or_else(|| {
-                class
-                    .extends
-                    .as_ref()
-                    .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
-            });
+            for iface in &class.implements {
+                queue_iface(iface, &mut iface_keys);
+            }
+            cursor = next_parent_key(class);
             depth += 1;
         }
     }
 
-    // Interface members.
-    if let Some((_, iface)) = lookup_by_bare(&symbols.interfaces, type_name) {
-        for (name, sig) in &iface.methods {
-            push_method(name, sig, &mut seen, &mut out);
+    // Interface receiver: the interface's own surface (plus what it extends).
+    if let Some((key, iface)) = lookup_by_bare(&symbols.interfaces, type_name) {
+        iface_keys.push(key.clone());
+        let _ = iface; // members harvested by the queue walk below
+    }
+
+    // Record methods + components (components are public instance fields).
+    if let Some((key, rec)) = lookup_by_bare(&symbols.records, type_name) {
+        for (name, sig) in &rec.methods {
+            push_method(key, name, sig, &mut seen, &mut out);
         }
-        for (name, sig) in &iface.fields {
-            push_field(name, sig, &mut seen, &mut out);
+        if matches!(recv_kind, ReceiverKind::Instance | ReceiverKind::Implicit { .. }) {
+            for comp in &rec.components {
+                if seen.insert(comp.name.clone()) {
+                    out.push(Member {
+                        name: comp.name.clone(),
+                        kind: MemberKind::Field,
+                        owner_fqn: key.clone(),
+                        params: None,
+                        detail: format!("public {} {}", render_type(&comp.ty), comp.name),
+                    });
+                }
+            }
+        }
+        for iface in &rec.implements {
+            queue_iface(iface, &mut iface_keys);
         }
     }
 
-    // Record methods + components (components are public fields).
-    if let Some((_, rec)) = lookup_by_bare(&symbols.records, type_name) {
-        for (name, sig) in &rec.methods {
-            push_method(name, sig, &mut seen, &mut out);
+    // Enum receiver: variants (static-shaped — `Color.Red`) + body methods
+    // (instance-shaped — they run on a value, `this` ≡ the variant).
+    if let Some((key, en)) = lookup_by_bare(&symbols.enums, type_name) {
+        if matches!(recv_kind, ReceiverKind::Static | ReceiverKind::Implicit { .. }) {
+            for (name, var) in &en.variants {
+                if seen.insert(name.clone()) {
+                    let payload: Vec<String> = var.payload.iter().map(render_type).collect();
+                    let detail = if payload.is_empty() {
+                        format!("{} variant {name}", bare_of(key))
+                    } else {
+                        format!("{} variant {name}({})", bare_of(key), payload.join(", "))
+                    };
+                    out.push(Member {
+                        name: name.clone(),
+                        kind: MemberKind::EnumVariant,
+                        owner_fqn: key.clone(),
+                        params: if payload.is_empty() { None } else { Some(payload) },
+                        detail,
+                    });
+                }
+            }
         }
-        for comp in &rec.components {
-            if seen.insert(comp.name.clone()) {
-                out.push(Member {
-                    name: comp.name.clone(),
-                    is_method: false,
-                    detail: format!("public {} {}", render_type(&comp.ty), comp.name),
-                });
+        for (name, sig) in &en.methods {
+            push_method(key, name, sig, &mut seen, &mut out);
+        }
+    }
+
+    // Interface chain: default methods are instance-shaped; interface fields
+    // are implicitly `public static final` constants (`classes-rules.md`
+    // §3.3), so the static gate naturally keeps them to `Type.` receivers.
+    let mut idx = 0usize;
+    while idx < iface_keys.len() && idx <= 64 {
+        let name = iface_keys[idx].clone();
+        idx += 1;
+        if let Some((key, iface)) = lookup_by_bare(&symbols.interfaces, &name) {
+            for (m_name, sig) in &iface.methods {
+                push_method(key, m_name, sig, &mut seen, &mut out);
+            }
+            for (f_name, sig) in &iface.fields {
+                push_field(key, f_name, sig, &mut seen, &mut out);
+            }
+            let key = key.clone();
+            for parent in &symbols.interfaces[&key].extends {
+                queue_iface(parent, &mut iface_keys);
             }
         }
     }

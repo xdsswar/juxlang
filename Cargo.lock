@@ -535,6 +535,7 @@ dependencies = [
  "juxc-source",
  "juxc-tycheck",
  "ropey",
+ "serde_json",
  "tokio",
  "tower-lsp",
 ]

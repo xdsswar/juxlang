@@ -424,7 +424,17 @@ mod tests {
     fn members_of_lists_receiver_members_only() {
         let (analysis, _uri, _rope) = analyze_one("members", "Greeter.jux", GREETER);
         let recv = Ty::User { name: "shop.Greeter".to_string(), generic_args: vec![] };
-        let members = crate::intel::members_of(&analysis.symbols, &recv);
+        // Complete from the same package — `int count;` is package-private.
+        let access = crate::intel::AccessCtx {
+            package: Some("shop".to_string()),
+            enclosing_class_fqn: None,
+        };
+        let members = crate::intel::members_of(
+            &analysis.symbols,
+            &recv,
+            crate::intel::ReceiverKind::Instance,
+            &access,
+        );
         let names: Vec<&str> = members.iter().map(|m| m.name.as_str()).collect();
         assert!(names.contains(&"greet"), "expected greet, got {names:?}");
         assert!(names.contains(&"count"), "expected count, got {names:?}");
@@ -435,7 +445,7 @@ mod tests {
         );
         // The method member is rendered with parameters for the `()` insert.
         let greet = members.iter().find(|m| m.name == "greet").unwrap();
-        assert!(greet.is_method, "greet should be a method");
+        assert!(greet.kind == crate::intel::MemberKind::Method, "greet should be a method");
         assert!(greet.detail.contains("(String who)"), "detail: {}", greet.detail);
     }
 
@@ -490,13 +500,18 @@ mod tests {
 
         // Member completion after `widget.` → the Rust-derived methods.
         let recv = Ty::User { name: "rust.demo.Widget".to_string(), generic_args: vec![] };
-        let members = crate::intel::members_of(&analysis.symbols, &recv);
+        let members = crate::intel::members_of(
+            &analysis.symbols,
+            &recv,
+            crate::intel::ReceiverKind::Instance,
+            &crate::intel::AccessCtx::default(),
+        );
         let names: Vec<&str> = members.iter().map(|m| m.name.as_str()).collect();
         assert!(names.contains(&"area"), "expected `area` from the stub, got {names:?}");
         assert!(names.contains(&"width"), "expected `width` from the stub, got {names:?}");
         // Rendered in Jux syntax: the method detail carries the Jux return type.
         let area = members.iter().find(|m| m.name == "area").unwrap();
-        assert!(area.is_method, "area should be a method");
+        assert!(area.kind == crate::intel::MemberKind::Method, "area should be a method");
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -587,7 +602,12 @@ mod tests {
         let rope = Rope::from_str(main_src);
         let analysis = analyze_workspace(&root, &main_uri, &rope);
         let recv = Ty::User { name: "rust.std.HashMap".to_string(), generic_args: vec![] };
-        let members = crate::intel::members_of(&analysis.symbols, &recv);
+        let members = crate::intel::members_of(
+            &analysis.symbols,
+            &recv,
+            crate::intel::ReceiverKind::Instance,
+            &crate::intel::AccessCtx::default(),
+        );
         let names: Vec<&str> = members.iter().map(|m| m.name.as_str()).collect();
         for expected in ["insert", "get", "len", "containsKey"] {
             assert!(

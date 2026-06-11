@@ -21,10 +21,13 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
+use juxc_tycheck::{SymbolTable, Ty};
+
 use crate::analysis::{analyze_single, analyze_workspace};
 use crate::doc::Document;
 use crate::intel;
 use crate::position::{position_to_offset, span_to_range};
+use crate::scope::{scope_at, LocalKind, ScopeInfo};
 use crate::workspace::Workspace;
 
 /// Jux keywords offered by completion. Java-shaped by design — this is the set
@@ -94,81 +97,168 @@ enum CtxKind {
     Statement,
 }
 
+/// Lexical mode the scanner is in at the cursor — completions are suppressed
+/// anywhere but [`ScanMode::Code`] (a name list inside a string literal or a
+/// comment is pure noise).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScanMode {
+    /// Ordinary code — completions apply.
+    Code,
+    /// Inside a `// …` line comment.
+    LineComment,
+    /// Inside a `/* … */` block comment.
+    BlockComment,
+    /// Inside a `"…"` string literal. `interp` marks a `$"…"` interpolated
+    /// string, whose `${ … }` holes switch back to [`ScanMode::Code`].
+    Str { interp: bool },
+    /// Inside a `"""…"""` raw string (or `$"""…"""` raw interpolated string).
+    /// Embedded `"` and `\` are content; only `"""` closes it.
+    RawStr { interp: bool },
+    /// Inside a `'…'` char literal.
+    Char,
+}
+
 /// Classify the cursor context from the document text **before** the cursor.
 ///
-/// Lightweight and PSI-free: it scans the prefix (skipping comments, strings,
-/// and char literals) tracking a stack of brace "headers". The header that
-/// precedes each `{` tells us whether that block is a type body (its header
-/// names a `class`/`interface`/…) or a function/statement block. The innermost
-/// open block decides the context; no open block means top level.
-fn analyze_context(prefix: &str) -> CtxKind {
+/// Lightweight and PSI-free: an explicit-mode scan of the prefix tracking a
+/// stack of brace "headers". The header that precedes each `{` tells us
+/// whether that block is a type body (its header names a `class`/
+/// `interface`/…) or a function/statement block. The innermost open block
+/// decides the [`CtxKind`]; no open block means top level. The final
+/// [`ScanMode`] says whether the cursor itself sits in code or inside a
+/// string/comment — the latter suppresses completion entirely.
+fn analyze_context(prefix: &str) -> (CtxKind, ScanMode) {
+    // Indexed chars so the raw-string arms can look more than one position
+    // ahead (`"""` needs two-ahead, which `Peekable` can't give).
+    let chars: Vec<char> = prefix.chars().collect();
     // Each stack entry: was the opening brace a type body?
     let mut stack: Vec<bool> = Vec::new();
     let mut seg = String::new();
-    let mut chars = prefix.chars().peekable();
+    let mut mode = ScanMode::Code;
+    // For each open `${` interpolation hole: the brace-stack depth at entry
+    // plus whether the enclosing string is raw — the matching `}` at that
+    // depth returns to the right string mode.
+    let mut interp_returns: Vec<(usize, bool)> = Vec::new();
+    let mut i = 0usize;
 
-    while let Some(c) = chars.next() {
-        match c {
-            '/' => match chars.peek() {
-                Some('/') => {
-                    for c2 in chars.by_ref() {
-                        if c2 == '\n' {
-                            break;
-                        }
-                    }
-                    seg.clear();
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        match mode {
+            ScanMode::LineComment => {
+                if c == '\n' {
+                    mode = ScanMode::Code;
                 }
-                Some('*') => {
-                    chars.next();
-                    let mut prev = ' ';
-                    for c2 in chars.by_ref() {
-                        if prev == '*' && c2 == '/' {
-                            break;
-                        }
-                        prev = c2;
-                    }
+            }
+            ScanMode::BlockComment => {
+                if c == '*' && next == Some('/') {
+                    i += 1;
+                    mode = ScanMode::Code;
                     seg.push(' ');
                 }
+            }
+            ScanMode::Str { interp } => match c {
+                '\\' => {
+                    i += 1;
+                }
+                '"' => {
+                    mode = ScanMode::Code;
+                    seg.push('"');
+                }
+                // The lexer terminates a non-raw string at end-of-line, so a
+                // mid-edit unclosed quote must not swallow the rest of the
+                // file — resync at the newline.
+                '\n' => mode = ScanMode::Code,
+                '$' if interp && next == Some('{') => {
+                    i += 1;
+                    interp_returns.push((stack.len(), false));
+                    mode = ScanMode::Code;
+                }
+                _ => {}
+            },
+            ScanMode::RawStr { interp } => match c {
+                // Only `"""` closes a raw string; embedded `"`/`\` are text.
+                '"' if next == Some('"') && chars.get(i + 2) == Some(&'"') => {
+                    i += 2;
+                    mode = ScanMode::Code;
+                    seg.push('"');
+                }
+                '$' if interp && next == Some('{') => {
+                    i += 1;
+                    interp_returns.push((stack.len(), true));
+                    mode = ScanMode::Code;
+                }
+                _ => {}
+            },
+            ScanMode::Char => match c {
+                '\\' => {
+                    i += 1;
+                }
+                '\'' => mode = ScanMode::Code,
+                // Same mid-edit resync rule as strings.
+                '\n' => mode = ScanMode::Code,
+                _ => {}
+            },
+            ScanMode::Code => match c {
+                '/' => match next {
+                    Some('/') => {
+                        i += 1;
+                        mode = ScanMode::LineComment;
+                        // Preserve the pending brace header — `class Foo // x`
+                        // with the `{` on the next line is still a type body.
+                        seg.push(' ');
+                    }
+                    Some('*') => {
+                        i += 1;
+                        mode = ScanMode::BlockComment;
+                    }
+                    _ => seg.push(c),
+                },
+                '"' => {
+                    // A `$` immediately before the quote marks a `$"…"`
+                    // interpolated string (its `${…}` holes are code); a
+                    // triple quote opens a raw string.
+                    let interp = seg.ends_with('$');
+                    if next == Some('"') && chars.get(i + 2) == Some(&'"') {
+                        i += 2;
+                        mode = ScanMode::RawStr { interp };
+                    } else {
+                        mode = ScanMode::Str { interp };
+                    }
+                }
+                '\'' => mode = ScanMode::Char,
+                '{' => {
+                    stack.push(header_is_type(&seg));
+                    seg.clear();
+                }
+                '}' => {
+                    if interp_returns.last().map(|(d, _)| *d) == Some(stack.len()) {
+                        // This `}` closes a `${…}` hole, not a block — return
+                        // to the enclosing (raw or ordinary) string.
+                        let raw = interp_returns.pop().map(|(_, r)| r).unwrap_or(false);
+                        mode = if raw {
+                            ScanMode::RawStr { interp: true }
+                        } else {
+                            ScanMode::Str { interp: true }
+                        };
+                    } else {
+                        stack.pop();
+                        seg.clear();
+                    }
+                }
+                ';' => seg.clear(),
                 _ => seg.push(c),
             },
-            '"' => {
-                while let Some(c2) = chars.next() {
-                    if c2 == '\\' {
-                        chars.next();
-                    } else if c2 == '"' {
-                        break;
-                    }
-                }
-                seg.push('"');
-            }
-            '\'' => {
-                while let Some(c2) = chars.next() {
-                    if c2 == '\\' {
-                        chars.next();
-                    } else if c2 == '\'' {
-                        break;
-                    }
-                }
-                seg.push('\'');
-            }
-            '{' => {
-                stack.push(header_is_type(&seg));
-                seg.clear();
-            }
-            '}' => {
-                stack.pop();
-                seg.clear();
-            }
-            ';' => seg.clear(),
-            _ => seg.push(c),
         }
+        i += 1;
     }
 
-    match stack.last() {
+    let ctx = match stack.last() {
         None => CtxKind::TopLevel,
         Some(true) => CtxKind::TypeBody,
         Some(false) => CtxKind::Statement,
-    }
+    };
+    (ctx, mode)
 }
 
 /// True if a brace's preceding header declares a type (so the block is a type
@@ -305,6 +395,173 @@ fn is_new_context(text: &str, ident_start: usize) -> bool {
         start -= 1;
     }
     &text[start..end] == "new"
+}
+
+/// A cursor position where ONLY type names make sense — completion narrows to
+/// the kinds each position can legally take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypePos {
+    /// `new <Type>` — instantiable types: non-abstract classes + records.
+    New,
+    /// `class C extends <Type>` (`interfaces: false` → non-final classes),
+    /// `interface I extends <Type>` (`interfaces: true` → interfaces), or a
+    /// generic bound `<T extends <Type>>` (`generic: true` → both).
+    Extends { interfaces: bool, generic: bool },
+    /// `implements <Type>` — interfaces only.
+    Implements,
+}
+
+/// Detect whether the identifier starting at `ident_start` sits in a
+/// type-only position: after `new`, or in the type list of an
+/// `extends`/`implements` clause (including past commas — `implements A, B`)
+/// or a generic bound (`<T extends Comparable>`).
+///
+/// The clause check scans back to the nearest statement/header boundary
+/// (`;`/`{`/`}`/`(`/`)`/`=`), finds the LAST `extends`/`implements` keyword in
+/// that slice, and requires everything after the keyword to be type-list
+/// shaped (idents, commas, dots, generics, whitespace) so an `extends` deep in
+/// an unrelated header doesn't trigger.
+fn type_position(text: &str, ident_start: usize) -> Option<TypePos> {
+    let bytes = text.as_bytes();
+    let mut s = ident_start.min(bytes.len());
+    while s > 0 && !matches!(bytes[s - 1], b';' | b'{' | b'}' | b'(' | b')' | b'=') {
+        s -= 1;
+    }
+    // Blank out comments first so a keyword INSIDE a comment (`// extends X,`)
+    // can't fake a type position for the statement typed below it.
+    let slice = strip_comments(&text[s..ident_start]);
+    let slice = slice.as_str();
+
+    // `new <Type>` fast path: the last word before the cursor is `new`.
+    // (Byte-level compare — never slices mid-char.)
+    let tb = slice.trim_end().as_bytes();
+    if tb.len() >= 3
+        && &tb[tb.len() - 3..] == b"new"
+        && (tb.len() == 3 || !is_ident_byte(tb[tb.len() - 4]))
+    {
+        return Some(TypePos::New);
+    }
+
+    // Word-boundary `rfind` of a keyword inside `slice`; returns the offset
+    // just past the keyword.
+    let find_kw = |kw: &str| -> Option<usize> {
+        let mut from = slice.len();
+        while let Some(p) = slice[..from].rfind(kw) {
+            let before_ok = p == 0 || !is_ident_byte(slice.as_bytes()[p - 1]);
+            let after = p + kw.len();
+            let after_ok = after >= slice.len() || !is_ident_byte(slice.as_bytes()[after]);
+            if before_ok && after_ok {
+                return Some(after);
+            }
+            from = p;
+        }
+        None
+    };
+    // The tail between the keyword and the cursor must look like a type list
+    // AND still be "open" at the cursor: right after the keyword, or after a
+    // separator (`,` `<` `&` `.`). After a COMPLETE type name plus a space
+    // (`extends Bar |`) the next word is `implements` / `{`, not another
+    // type, so the position is no longer type-only.
+    let tail_ok = |from: usize| {
+        let tail = &slice[from..];
+        let shape_ok = tail.chars().all(|c| {
+            c.is_alphanumeric()
+                || c == '_'
+                || c.is_whitespace()
+                || matches!(c, ',' | '.' | '<' | '>' | '?' | '&')
+        });
+        let open = match tail.trim_end().chars().last() {
+            None => true,
+            Some(c) => matches!(c, ',' | '<' | '&' | '.' | '?'),
+        };
+        shape_ok && open
+    };
+    let has_word = |kw: &str| find_kw(kw).is_some();
+
+    let ext = find_kw("extends").filter(|&p| tail_ok(p));
+    let imp = find_kw("implements").filter(|&p| tail_ok(p));
+    match (ext, imp) {
+        // Both present (a full `class C extends P implements A` header):
+        // whichever clause the cursor's list belongs to is the LATER keyword.
+        (Some(e), Some(i)) => {
+            if i > e {
+                Some(TypePos::Implements)
+            } else {
+                Some(extends_pos(slice, e, has_word("interface")))
+            }
+        }
+        (Some(e), None) => Some(extends_pos(slice, e, has_word("interface"))),
+        (None, Some(_)) => Some(TypePos::Implements),
+        (None, None) => None,
+    }
+}
+
+/// Classify an `extends` hit: an unclosed `<` before the keyword means a
+/// generic bound (`<T extends |`, both classes and interfaces are legal);
+/// otherwise the header's own kind decides (interface headers extend
+/// interfaces, class headers extend classes).
+fn extends_pos(slice: &str, kw_end: usize, in_interface: bool) -> TypePos {
+    let before = &slice[..kw_end];
+    let opens = before.matches('<').count();
+    let closes = before.matches('>').count();
+    TypePos::Extends { interfaces: in_interface, generic: opens > closes }
+}
+
+/// Replace `// …` (to end of line) and `/* … */` comment spans in `src` with
+/// spaces, so backward keyword scans can't read keywords out of comments.
+/// Length-preserving is not required by the callers, but blanking (instead of
+/// deleting) keeps any future offset use safe.
+fn strip_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let chars: Vec<char> = src.chars().collect();
+    let mut i = 0usize;
+    while i < chars.len() {
+        match (chars[i], chars.get(i + 1)) {
+            ('/', Some('/')) => {
+                while i < chars.len() && chars[i] != '\n' {
+                    out.push(' ');
+                    i += 1;
+                }
+            }
+            ('/', Some('*')) => {
+                out.push(' ');
+                out.push(' ');
+                i += 2;
+                while i < chars.len() {
+                    if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                        out.push(' ');
+                        out.push(' ');
+                        i += 2;
+                        break;
+                    }
+                    out.push(' ');
+                    i += 1;
+                }
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// When the caret sits on an `import …` line, the dotted path typed so far
+/// (after the keyword, up to the caret). `None` anywhere else — including
+/// while the `import` keyword itself is still being typed. Only the text
+/// after the line's last `;` counts, so `import a.B; <code>` doesn't put the
+/// trailing code in import-path mode (nor vice versa).
+fn import_prefix(text: &str, offset: usize) -> Option<String> {
+    let line_start = text[..offset].rfind('\n').map(|p| p + 1).unwrap_or(0);
+    let line = &text[line_start..offset];
+    let line = line.rsplit(';').next().unwrap_or(line);
+    let rest = line.trim_start().strip_prefix("import")?;
+    // Require the space after the keyword (`import|` is still the keyword).
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    Some(rest.trim_start().to_string())
 }
 
 /// Scanning left from `offset`, find the `(` that opens the call whose argument
@@ -454,6 +711,11 @@ fn top_level_document_symbol(item: &juxc_ast::TopLevelDecl, rope: &Rope) -> Opti
 /// run of `///` lines (or a single `/** … */`). Returns the first non-empty doc
 /// line, trimmed, or `None` when there's no doc comment.
 fn doc_comment_before(text: &str, name_start: usize) -> Option<String> {
+    // A cached span can be stale against the on-disk file (external edit,
+    // regenerated stub) — never slice out of bounds or mid-char for it.
+    if name_start > text.len() || !text.is_char_boundary(name_start) {
+        return None;
+    }
     // Find the start of the line the name sits on.
     let line_start = text[..name_start].rfind('\n').map(|p| p + 1).unwrap_or(0);
     // Walk upward, collecting `///` lines, until a non-doc line.
@@ -568,6 +830,592 @@ fn import_edit(rope: &Rope, fqn: &str) -> Option<TextEdit> {
         range: Range::new(pos, pos),
         new_text,
     })
+}
+
+// ============================================================================
+// Completion — item construction
+//
+// One ranking scheme, encoded in `sort_text` prefixes (LSP clients sort by
+// it when present):
+//   0_  locals / parameters; after-dot members of the receiver
+//   1_  implicit-`this` members of the enclosing class; type-position items
+//   2_  type names (open file + workspace, with auto-import) and functions
+//   3_  snippets, built-in types, literal constants
+//   4_  keywords
+//   5_  the flat cross-project member-name bag
+// ============================================================================
+
+/// Resolve the FQN key of the class whose body contains the caret, so member
+/// visibility (`private`/`protected`) is judged from the right place. The
+/// bare→FQN map prefers a same-package declaration, mirroring the checker.
+fn enclosing_fqn(symbols: &SymbolTable, scope: &ScopeInfo, pkg: Option<&str>) -> Option<String> {
+    let name = scope.enclosing_class.as_ref()?;
+    symbols
+        .find_fqn_by_bare_in(name, pkg.unwrap_or(""))
+        .or_else(|| Some(name.clone()))
+}
+
+/// The storage key of the type `ident` names, if any — used to recognize a
+/// `Type.` receiver (statics + enum variants) without re-analysing anything.
+fn type_key_for(symbols: &SymbolTable, ident: &str, pkg: Option<&str>) -> Option<String> {
+    if symbols.classes.contains_key(ident)
+        || symbols.enums.contains_key(ident)
+        || symbols.records.contains_key(ident)
+        || symbols.interfaces.contains_key(ident)
+    {
+        return Some(ident.to_string());
+    }
+    symbols.find_fqn_by_bare_in(ident, pkg.unwrap_or(""))
+}
+
+/// Build one completion item from a resolved [`intel::Member`].
+///
+/// Methods insert a parameter snippet — `greet(${1:who})` leaves the caret on
+/// the first argument; a no-arg method inserts `name()` with the caret after
+/// the parens. Properties / fields / unit variants insert the bare name;
+/// payload variants insert `Name($1)`. The `data` payload feeds
+/// `completionItem/resolve`, which attaches the declaration's doc comment.
+fn member_item(m: intel::Member, uri: &Url, sort_prefix: &str) -> CompletionItem {
+    use intel::MemberKind;
+    let kind = match m.kind {
+        MemberKind::Method => CompletionItemKind::METHOD,
+        MemberKind::Property => CompletionItemKind::PROPERTY,
+        MemberKind::Field => CompletionItemKind::FIELD,
+        MemberKind::EnumVariant => CompletionItemKind::ENUM_MEMBER,
+    };
+    let (insert_text, insert_text_format) = match m.kind {
+        MemberKind::Method => match m.params.as_deref() {
+            Some([]) | None => (Some(format!("{}()", m.name)), None),
+            Some(params) => {
+                // Placeholder text is the parameter name — plain identifiers,
+                // so no snippet-escaping is needed.
+                let holes = params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| format!("${{{}:{}}}", i + 1, p))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (Some(format!("{}({holes})", m.name)), Some(InsertTextFormat::SNIPPET))
+            }
+        },
+        MemberKind::EnumVariant if m.params.is_some() => {
+            (Some(format!("{}($1)", m.name)), Some(InsertTextFormat::SNIPPET))
+        }
+        _ => (None, None),
+    };
+    let data = serde_json::json!({
+        "uri": uri.to_string(),
+        "owner": m.owner_fqn,
+        "member": m.name,
+    });
+    CompletionItem {
+        label: m.name.clone(),
+        kind: Some(kind),
+        detail: Some(m.detail),
+        filter_text: Some(m.name.clone()),
+        sort_text: Some(format!("{sort_prefix}{}", m.name)),
+        insert_text,
+        insert_text_format,
+        data: Some(data),
+        ..Default::default()
+    }
+}
+
+/// The auto-import edit for accepting workspace type `name`, when its
+/// declaring package is unambiguous and differs from the open file's own.
+fn auto_import_for(
+    name: &str,
+    ws: &Workspace,
+    cur_pkg: Option<&str>,
+    rope: &Rope,
+) -> Option<TextEdit> {
+    ws.type_packages
+        .get(name)
+        .map(|pkgs| {
+            pkgs.iter()
+                .filter(|p| Some(p.as_str()) != cur_pkg)
+                .collect::<Vec<_>>()
+        })
+        .filter(|pkgs| pkgs.len() == 1)
+        .and_then(|pkgs| import_edit(rope, &format!("{}.{name}", pkgs[0])))
+}
+
+/// Items for an `import …` line: the next dotted segment of every known type
+/// FQN extending what's typed so far. Package segments come first (MODULE),
+/// terminal type names after (CLASS, detail = the full FQN).
+fn import_items(symbols: &SymbolTable, prefix: &str) -> Vec<CompletionItem> {
+    let base = prefix.rsplit_once('.').map(|(b, _)| b).unwrap_or("");
+    let mut seen: std::collections::HashSet<(String, bool)> = std::collections::HashSet::new();
+    let mut items = Vec::new();
+    let keys: Vec<&String> = symbols
+        .classes
+        .keys()
+        .chain(symbols.enums.keys())
+        .chain(symbols.records.keys())
+        .chain(symbols.interfaces.keys())
+        .collect();
+    // How many distinct dotted FQNs share each bare name — the bare-name
+    // shortcut below must not silently pick one of several candidates.
+    let mut bare_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for fqn in &keys {
+        if fqn.contains('.') {
+            let bare = fqn.rsplit('.').next().unwrap_or(fqn);
+            *bare_counts.entry(bare).or_insert(0) += 1;
+        }
+    }
+    for fqn in keys {
+        // Package-less types can't be imported — nothing to offer.
+        if !fqn.contains('.') {
+            continue;
+        }
+        let rel = if base.is_empty() {
+            fqn.as_str()
+        } else {
+            match fqn.strip_prefix(base).and_then(|r| r.strip_prefix('.')) {
+                Some(r) => r,
+                None => continue,
+            }
+        };
+        let (seg, terminal) = match rel.split_once('.') {
+            Some((s, _)) => (s, false),
+            None => (rel, true),
+        };
+        if seg.is_empty() || !seen.insert((seg.to_string(), terminal)) {
+            continue;
+        }
+        items.push(CompletionItem {
+            label: seg.to_string(),
+            kind: Some(if terminal { CompletionItemKind::CLASS } else { CompletionItemKind::MODULE }),
+            detail: terminal.then(|| fqn.clone()),
+            // Packages before types; alphabetical within each group.
+            sort_text: Some(format!("{}_{seg}", if terminal { 1 } else { 0 })),
+            ..Default::default()
+        });
+        // Java-IDE nicety: with no package typed yet, also offer the TYPE by
+        // its bare name, inserting the whole dotted path — `import Wid` →
+        // `import xss.it.Widget`. Only when the bare name is UNAMBIGUOUS:
+        // with several declaring packages, silently inserting one of them
+        // would be a wrong guess half the time.
+        if base.is_empty() && !terminal {
+            let bare = fqn.rsplit('.').next().unwrap_or(fqn);
+            if bare_counts.get(bare) == Some(&1) && seen.insert((bare.to_string(), true)) {
+                items.push(CompletionItem {
+                    label: bare.to_string(),
+                    kind: Some(CompletionItemKind::CLASS),
+                    detail: Some(fqn.clone()),
+                    insert_text: Some(fqn.clone()),
+                    sort_text: Some(format!("1_{bare}")),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    items
+}
+
+/// Items for a type-only position (`new` / `extends` / `implements`): just
+/// the type names that position can legally take, inserted bare, each with
+/// an auto-import edit when applicable.
+fn type_position_items(
+    doc: &Document,
+    ws: &Workspace,
+    uri: &Url,
+    text: &str,
+    pos: TypePos,
+) -> Vec<CompletionItem> {
+    let symbols = &doc.symbols;
+    let cur_pkg = current_package(text);
+    let mut names: Vec<(String, CompletionItemKind)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let add = |fqn: &str,
+               kind: CompletionItemKind,
+                   names: &mut Vec<(String, CompletionItemKind)>,
+                   seen: &mut std::collections::HashSet<String>| {
+        let bare = fqn.rsplit('.').next().unwrap_or(fqn).to_string();
+        if seen.insert(bare.clone()) {
+            names.push((bare, kind));
+        }
+    };
+
+    match pos {
+        // `new` — instantiable types only: concrete classes + records.
+        TypePos::New => {
+            for (k, sig) in symbols.classes.iter() {
+                if !sig.is_abstract {
+                    add(k, CompletionItemKind::CLASS, &mut names, &mut seen);
+                }
+            }
+            for k in symbols.records.keys() {
+                add(k, CompletionItemKind::STRUCT, &mut names, &mut seen);
+            }
+        }
+        // `implements` — interfaces only.
+        TypePos::Implements => {
+            for k in symbols.interfaces.keys() {
+                add(k, CompletionItemKind::INTERFACE, &mut names, &mut seen);
+            }
+        }
+        // `extends` — what may be extended depends on where the clause sits.
+        TypePos::Extends { interfaces, generic } => {
+            if interfaces || generic {
+                for k in symbols.interfaces.keys() {
+                    add(k, CompletionItemKind::INTERFACE, &mut names, &mut seen);
+                }
+            }
+            if !interfaces || generic {
+                for (k, sig) in symbols.classes.iter() {
+                    // Final classes can't be extended (E0420); foreign stub
+                    // classes can't be subclassed either.
+                    if !sig.is_final && !sig.is_external {
+                        add(k, CompletionItemKind::CLASS, &mut names, &mut seen);
+                    }
+                }
+            }
+        }
+    }
+
+    names.sort_by(|a, b| a.0.cmp(&b.0));
+    names
+        .into_iter()
+        .map(|(name, kind)| {
+            let import = auto_import_for(&name, ws, cur_pkg.as_deref(), &doc.rope);
+            let detail = import.as_ref().map(|_| format!("auto-imports {name}"));
+            let data = serde_json::json!({
+                "uri": uri.to_string(),
+                "owner": name,
+                "member": null,
+            });
+            CompletionItem {
+                label: name.clone(),
+                kind: Some(kind),
+                detail,
+                sort_text: Some(format!("1_{name}")),
+                additional_text_edits: import.map(|e| vec![e]),
+                data: Some(data),
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
+/// Member completion for `<receiver>.<partial>` — classify how the receiver
+/// was written, resolve its type, and return ONLY its accessible members.
+fn member_completions(
+    doc: &Document,
+    ws: &Workspace,
+    uri: &Url,
+    text: &str,
+    recv_end: usize,
+    caret: usize,
+) -> Vec<CompletionItem> {
+    // Scope picture at the receiver (enclosing class for visibility; locals
+    // to tell a variable receiver from a type-name receiver).
+    let scope = scope_at(text, recv_end, caret, &doc.expr_types);
+    let cur_pkg = current_package(text);
+    let access = intel::AccessCtx {
+        package: cur_pkg.clone(),
+        enclosing_class_fqn: enclosing_fqn(&doc.symbols, &scope, cur_pkg.as_deref()),
+    };
+
+    // Classify the receiver from the identifier ending at the `.`.
+    let recv_word = word_at(text, recv_end);
+    let mut resolved: Option<(Ty, intel::ReceiverKind)> = None;
+    if let Some(w) = &recv_word {
+        let is_local = scope.locals.iter().any(|l| l.name == w.text);
+        if w.text == "this" {
+            // `this.` — the enclosing class, instance members (the access
+            // context already grants private).
+            if let Some(fqn) = &access.enclosing_class_fqn {
+                resolved = Some((
+                    Ty::User { name: fqn.clone(), generic_args: vec![] },
+                    intel::ReceiverKind::Instance,
+                ));
+            }
+        } else if w.text == "super" {
+            // `super.` — the parent class, instance members.
+            if let Some(parent) = access
+                .enclosing_class_fqn
+                .as_ref()
+                .and_then(|fqn| doc.symbols.classes.get(fqn))
+                .and_then(|c| c.extends_fqn.clone())
+            {
+                resolved = Some((
+                    Ty::User { name: parent, generic_args: vec![] },
+                    intel::ReceiverKind::Instance,
+                ));
+            }
+        } else if !is_local && receiver_dot_before(text, w.start).is_none() {
+            // A bare type name (`Color.` / `Math.`): statics + enum variants.
+            // Locals shadow type names, hence the `is_local` guard — and a
+            // chained receiver (`a.B.`) stays on the expression path.
+            if let Some(key) = type_key_for(&doc.symbols, &w.text, cur_pkg.as_deref()) {
+                resolved = Some((
+                    Ty::User { name: key, generic_args: vec![] },
+                    intel::ReceiverKind::Static,
+                ));
+            }
+        }
+    }
+
+    // Expression receiver: the cached analysis first, then the mid-edit
+    // reparse fallback (`obj.` patched to `obj;`).
+    let (ty, kind) = match resolved {
+        Some(r) => r,
+        None => {
+            let recovered = doc.type_ending_at(recv_end).cloned().or_else(|| {
+                receiver_type_by_reparse(text, recv_end, caret, ws.root.as_deref(), uri)
+            });
+            match recovered {
+                Some(t) => (t, intel::ReceiverKind::Instance),
+                // A member-access context whose receiver we couldn't resolve:
+                // the statement keyword/snippet bag would be pure noise after
+                // `obj.`, so return nothing.
+                None => return Vec::new(),
+            }
+        }
+    };
+
+    intel::members_of(&doc.symbols, &ty, kind, &access)
+        .into_iter()
+        .map(|m| member_item(m, uri, "0_"))
+        .collect()
+}
+
+/// The source span of `member` inside the type stored under key `owner` —
+/// where `completionItem/resolve` reads the doc comment from.
+fn member_decl_span(symbols: &SymbolTable, owner: &str, member: &str) -> Option<Span> {
+    if let Some(c) = symbols.classes.get(owner) {
+        if let Some(m) = c.methods.get(member) {
+            return Some(m.span);
+        }
+        if let Some(f) = c.fields.get(member) {
+            return Some(f.span);
+        }
+    }
+    if let Some(i) = symbols.interfaces.get(owner) {
+        if let Some(m) = i.methods.get(member) {
+            return Some(m.span);
+        }
+        if let Some(f) = i.fields.get(member) {
+            return Some(f.span);
+        }
+    }
+    if let Some(r) = symbols.records.get(owner) {
+        if let Some(m) = r.methods.get(member) {
+            return Some(m.span);
+        }
+    }
+    if let Some(e) = symbols.enums.get(owner) {
+        if let Some(v) = e.variants.get(member) {
+            return Some(v.span);
+        }
+        if let Some(m) = e.methods.get(member) {
+            return Some(m.span);
+        }
+    }
+    None
+}
+
+/// The completion entry point — a pure function over the cached document +
+/// workspace state, so unit tests drive it directly (no async, no `Client`).
+fn build_completions(doc: &Document, ws: &Workspace, uri: &Url, offset: usize) -> Vec<CompletionItem> {
+    let text = doc.rope.to_string();
+    let offset = offset.min(text.len());
+
+    // Where is the cursor, structurally — and is it even in code? No
+    // completions inside strings, comments, or char literals.
+    let (ctx, mode) = analyze_context(&text[..offset]);
+    if mode != ScanMode::Code {
+        return Vec::new();
+    }
+
+    // `import a.b.|` — complete the package path / type name and nothing else.
+    if let Some(prefix) = import_prefix(&text, offset) {
+        return import_items(&doc.symbols, &prefix);
+    }
+
+    // The partial word being completed.
+    let member_start = ident_start_before(&text, offset);
+    let typed_prefix = text[member_start..offset].to_string();
+
+    // `<receiver>.` — member completion, exclusively.
+    if let Some(recv_end) = receiver_dot_before(&text, member_start) {
+        return member_completions(doc, ws, uri, &text, recv_end, offset);
+    }
+
+    // `new <T>` / `extends <T>` / `implements <T>` — type names, exclusively.
+    if let Some(pos) = type_position(&text, member_start) {
+        return type_position_items(doc, ws, uri, &text, pos);
+    }
+
+    let mut items: Vec<CompletionItem> = Vec::new();
+    let cur_pkg = current_package(&text);
+
+    // Scope-aware names — the things the user most likely wants to type:
+    // locals + parameters first, then the enclosing class's own members
+    // (implicit `this`), statics-only inside a static method. The walk
+    // (lex + parse) only runs where its results are used.
+    let scope = if ctx == CtxKind::Statement {
+        scope_at(&text, member_start, offset, &doc.expr_types)
+    } else {
+        ScopeInfo::default()
+    };
+    if ctx == CtxKind::Statement && scope.in_fn_body {
+        let mut preselected = false;
+        for var in &scope.locals {
+            let detail = var.ty_display.clone().unwrap_or_else(|| {
+                match var.kind {
+                    LocalKind::Param => "parameter",
+                    LocalKind::Local => "local",
+                    LocalKind::ForEachVar => "loop variable",
+                    LocalKind::CatchVar => "caught exception",
+                }
+                .to_string()
+            });
+            // Pre-select the first local matching what's typed — the single
+            // most likely intent.
+            let preselect = !preselected
+                && !typed_prefix.is_empty()
+                && var.name.starts_with(&typed_prefix);
+            preselected |= preselect;
+            items.push(CompletionItem {
+                label: var.name.clone(),
+                kind: Some(CompletionItemKind::VARIABLE),
+                detail: Some(detail),
+                sort_text: Some(format!("0_{}", var.name)),
+                preselect: preselect.then_some(true),
+                ..Default::default()
+            });
+        }
+        if let Some(fqn) = enclosing_fqn(&doc.symbols, &scope, cur_pkg.as_deref()) {
+            let access = intel::AccessCtx {
+                package: cur_pkg.clone(),
+                enclosing_class_fqn: Some(fqn.clone()),
+            };
+            let ty = Ty::User { name: fqn, generic_args: vec![] };
+            let kind = intel::ReceiverKind::Implicit {
+                in_static_method: scope.enclosing_fn_is_static,
+            };
+            for m in intel::members_of(&doc.symbols, &ty, kind, &access) {
+                items.push(member_item(m, uri, "1_"));
+            }
+        }
+    }
+
+    // Snippets — declaration templates at top level / type body, statement
+    // templates inside a function body.
+    let snippets: &[(&str, &str)] = match ctx {
+        CtxKind::Statement => STMT_SNIPPETS,
+        CtxKind::TopLevel | CtxKind::TypeBody => DECL_SNIPPETS,
+    };
+    for (label, body) in snippets {
+        items.push(CompletionItem {
+            label: (*label).to_string(),
+            kind: Some(CompletionItemKind::SNIPPET),
+            detail: Some("snippet".to_string()),
+            insert_text: Some((*body).to_string()),
+            insert_text_format: Some(InsertTextFormat::SNIPPET),
+            sort_text: Some(format!("3_{label}")),
+            ..Default::default()
+        });
+    }
+
+    // Keywords for this context.
+    let keywords: &[&str] = match ctx {
+        CtxKind::TopLevel => TOPLEVEL_KEYWORDS,
+        CtxKind::TypeBody => MEMBER_KEYWORDS,
+        CtxKind::Statement => STATEMENT_KEYWORDS,
+    };
+    for kw in keywords {
+        items.push(CompletionItem {
+            label: (*kw).to_string(),
+            kind: Some(CompletionItemKind::KEYWORD),
+            sort_text: Some(format!("4_{kw}")),
+            ..Default::default()
+        });
+    }
+
+    // Built-in types — a type can name a field, a return type, a local, …
+    for ty in PRIMITIVES {
+        items.push(CompletionItem {
+            label: (*ty).to_string(),
+            kind: Some(CompletionItemKind::STRUCT),
+            detail: Some("built-in type".to_string()),
+            sort_text: Some(format!("3_{ty}")),
+            ..Default::default()
+        });
+    }
+
+    // Literal constants — expressions only.
+    if ctx == CtxKind::Statement {
+        for c in CONSTANTS {
+            items.push(CompletionItem {
+                label: (*c).to_string(),
+                kind: Some(CompletionItemKind::CONSTANT),
+                sort_text: Some(format!("3_{c}")),
+                ..Default::default()
+            });
+        }
+    }
+
+    // Track labels already added so later (coarser) sources don't duplicate
+    // the scope-aware / keyword items above.
+    let mut seen: std::collections::HashSet<String> =
+        items.iter().map(|i| i.label.clone()).collect();
+
+    // Type names from the open file's live analysis (fresh, includes types
+    // just typed but not yet saved) + the project-wide index, each with an
+    // auto-import edit when the type's package is unambiguous.
+    let type_data = |name: &str| {
+        serde_json::json!({ "uri": uri.to_string(), "owner": name, "member": null })
+    };
+    for name in &doc.type_names {
+        if seen.insert(name.clone()) {
+            items.push(CompletionItem {
+                label: name.clone(),
+                kind: Some(CompletionItemKind::CLASS),
+                sort_text: Some(format!("2_{name}")),
+                data: Some(type_data(name)),
+                ..Default::default()
+            });
+        }
+    }
+    for name in &ws.type_names {
+        if seen.insert(name.clone()) {
+            let import = auto_import_for(name, ws, cur_pkg.as_deref(), &doc.rope);
+            let detail = match &import {
+                Some(_) => Some(format!("project type — auto-imports {name}")),
+                None => Some("project type".to_string()),
+            };
+            items.push(CompletionItem {
+                label: name.clone(),
+                kind: Some(CompletionItemKind::CLASS),
+                detail,
+                sort_text: Some(format!("2_{name}")),
+                additional_text_edits: import.map(|e| vec![e]),
+                data: Some(type_data(name)),
+                ..Default::default()
+            });
+        }
+    }
+
+    // The flat cross-project member bag — last-resort recall for names whose
+    // receiver/scope we couldn't tie down. Expression positions only.
+    if ctx == CtxKind::Statement {
+        for name in &ws.member_names {
+            if seen.insert(name.clone()) {
+                items.push(CompletionItem {
+                    label: name.clone(),
+                    kind: Some(CompletionItemKind::FUNCTION),
+                    detail: Some("project member".to_string()),
+                    sort_text: Some(format!("5_{name}")),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    items
 }
 
 /// Is the process with id `pid` still alive? Used by the parent-process
@@ -826,6 +1674,9 @@ impl LanguageServer for Backend {
                 completion_provider: Some(CompletionOptions {
                     // `.` member access, `:` path, `@` annotation (§L.5).
                     trigger_characters: Some(vec![".".into(), ":".into(), "@".into()]),
+                    // Doc comments attach lazily via `completionItem/resolve`
+                    // — only the highlighted item pays the declaring-file read.
+                    resolve_provider: Some(true),
                     ..Default::default()
                 }),
                 // Parameter info: when the caret is inside a call's `( … )`, show
@@ -1057,222 +1908,66 @@ impl LanguageServer for Backend {
         let Some(doc) = self.docs.get(&uri) else {
             return Ok(Some(CompletionResponse::Array(Vec::new())));
         };
-
-        // Classify the cursor context from the text before it, so we only
-        // offer relevant completions (e.g. `print` / statements only inside a
-        // function body; `class` / modifiers only at the top level).
         let offset = position_to_offset(&doc.rope, pos);
-        let prefix: String = doc.rope.slice(..doc.rope.byte_to_char(offset.min(doc.rope.len_bytes()))).to_string();
-        let ctx = analyze_context(&prefix);
 
-        // FEATURE 2 — receiver-aware member completion. When the cursor sits in
-        // a `<expr>.` context, resolve `<expr>`'s inferred type and offer ONLY
-        // that type's methods + fields (walking the extends/implements chain).
-        // The cursor's offset is just past the `.` (plus any partial member
-        // name already typed); `member_start` is where that partial name began,
-        // which is exactly where `receiver_dot_before` looks for the `.`.
-        let text = doc.rope.to_string();
-        let member_start = ident_start_before(&text, offset);
-        if let Some(recv_end) = receiver_dot_before(&text, member_start) {
-            // Resolve the receiver's type. The cached analysis is tried first;
-            // if it has no type ending at the `.` — the common mid-edit case,
-            // where a dangling `obj.` fails to parse and leaves the receiver
-            // untyped — re-analyse a patched buffer so members still appear
-            // while the user is typing.
-            let root = self.workspace.read().ok().and_then(|ws| ws.root.clone());
-            let recv_ty = doc.type_ending_at(recv_end).cloned().or_else(|| {
-                receiver_type_by_reparse(&text, recv_end, offset, root.as_deref(), &uri)
-            });
-            if let Some(ty) = &recv_ty {
-                let members = intel::members_of(&doc.symbols, ty);
-                let items: Vec<CompletionItem> = members
-                    .into_iter()
-                    .map(|m| {
-                        if m.is_method {
-                            CompletionItem {
-                                label: format!("{}()", m.name),
-                                kind: Some(CompletionItemKind::METHOD),
-                                detail: Some(m.detail),
-                                insert_text: Some(format!("{}()", m.name)),
-                                sort_text: Some(format!("0_{}", m.name)),
-                                ..Default::default()
-                            }
-                        } else {
-                            CompletionItem {
-                                label: m.name.clone(),
-                                kind: Some(CompletionItemKind::FIELD),
-                                detail: Some(m.detail),
-                                sort_text: Some(format!("0_{}", m.name)),
-                                ..Default::default()
-                            }
-                        }
-                    })
-                    .collect();
-                // Return ONLY the receiver's members — no globals/keywords
-                // leak into a member-access completion.
-                return Ok(Some(CompletionResponse::Array(items)));
-            }
-            // A member-access context whose receiver type we couldn't resolve.
-            // Returning the statement snippet/keyword bag here is exactly the
-            // noise the user must scroll past (`for`/`if`/`print` after `obj.`),
-            // so return an empty list instead.
-            return Ok(Some(CompletionResponse::Array(Vec::new())));
-        }
-
-        let mut items: Vec<CompletionItem> = Vec::new();
-
-        // `new <Type>` position: offer ONLY type names, inserted bare (so `new X`
-        // stays `X`, never `X()`). Suppresses snippets, keywords, primitives, and
-        // the function/member bag — the function items are what IntelliJ auto-
-        // appends `()` to, which is the spurious `X()` after `new`.
-        let type_only = is_new_context(&text, member_start);
-
-        // Snippets (sorted to the top) — declaration templates at top level /
-        // type body, statement templates inside a function body.
-        let snippets: &[(&str, &str)] = if type_only {
-            &[]
-        } else {
-            match ctx {
-                CtxKind::Statement => STMT_SNIPPETS,
-                CtxKind::TopLevel | CtxKind::TypeBody => DECL_SNIPPETS,
-            }
+        // All the work happens in `build_completions` — a pure function over
+        // the cached document + workspace state, unit-testable without a
+        // `Client`.
+        let items = match self.workspace.read() {
+            Ok(ws) => build_completions(&doc, &ws, &uri, offset),
+            Err(_) => build_completions(&doc, &Workspace::default(), &uri, offset),
         };
-        for (label, body) in snippets {
-            items.push(CompletionItem {
-                label: (*label).to_string(),
-                kind: Some(CompletionItemKind::SNIPPET),
-                detail: Some("snippet".to_string()),
-                insert_text: Some((*body).to_string()),
-                insert_text_format: Some(InsertTextFormat::SNIPPET),
-                sort_text: Some(format!("0_{label}")),
-                ..Default::default()
-            });
-        }
-
-        // Keywords for this context.
-        let keywords: &[&str] = if type_only {
-            &[]
-        } else {
-            match ctx {
-                CtxKind::TopLevel => TOPLEVEL_KEYWORDS,
-                CtxKind::TypeBody => MEMBER_KEYWORDS,
-                CtxKind::Statement => STATEMENT_KEYWORDS,
-            }
-        };
-        for kw in keywords {
-            items.push(CompletionItem {
-                label: (*kw).to_string(),
-                kind: Some(CompletionItemKind::KEYWORD),
-                sort_text: Some(format!("3_{kw}")),
-                ..Default::default()
-            });
-        }
-
-        // Built-in types — useful in every context except after `new` (there's
-        // no `new int()`).
-        if !type_only {
-            for ty in PRIMITIVES {
-                items.push(CompletionItem {
-                    label: (*ty).to_string(),
-                    kind: Some(CompletionItemKind::STRUCT),
-                    detail: Some("built-in type".to_string()),
-                    sort_text: Some(format!("2_{ty}")),
-                    ..Default::default()
-                });
-            }
-        }
-
-        // Literal constants — expressions only.
-        if !type_only && ctx == CtxKind::Statement {
-            for c in CONSTANTS {
-                items.push(CompletionItem {
-                    label: (*c).to_string(),
-                    kind: Some(CompletionItemKind::CONSTANT),
-                    sort_text: Some(format!("2_{c}")),
-                    ..Default::default()
-                });
-            }
-        }
-
-        // Track labels already added so the workspace index doesn't duplicate
-        // the open file's own names.
-        let mut seen: std::collections::HashSet<String> =
-            items.iter().map(|i| i.label.clone()).collect();
-
-        // In-scope type names from the open file's live analysis (fresh,
-        // includes types just typed but not yet saved).
-        for name in &doc.type_names {
-            if seen.insert(name.clone()) {
-                items.push(CompletionItem {
-                    label: name.clone(),
-                    kind: Some(CompletionItemKind::CLASS),
-                    sort_text: Some(format!("1_{name}")),
-                    ..Default::default()
-                });
-            }
-        }
-
-        // Project-wide index: every class/type and every function/method/field
-        // from all `.jux` modules (refreshed on open/save).
-        if let Ok(ws) = self.workspace.read() {
-            for name in &ws.type_names {
-                if seen.insert(name.clone()) {
-                    // FEATURE 3 — auto-import on accept. If this project type
-                    // lives in a package not yet imported by the open file,
-                    // attach the `import pkg.Name;` edit as `additionalTextEdits`
-                    // so accepting the completion also inserts the import. When
-                    // the bare name has exactly one declaring package we can pick
-                    // it unambiguously; ambiguous names are left to the explicit
-                    // code action.
-                    // Don't auto-import a type that lives in THIS file's own
-                    // package — it's already in scope (and a file must never
-                    // import the type it is itself declaring).
-                    let cur_pkg = current_package(&text);
-                    let import_edit = ws
-                        .type_packages
-                        .get(name)
-                        .map(|pkgs| {
-                            pkgs.iter()
-                                .filter(|p| Some(p.as_str()) != cur_pkg.as_deref())
-                                .collect::<Vec<_>>()
-                        })
-                        .filter(|pkgs| pkgs.len() == 1)
-                        .and_then(|pkgs| {
-                            let fqn = format!("{}.{name}", pkgs[0]);
-                            import_edit(&doc.rope, &fqn)
-                        });
-                    let detail = match &import_edit {
-                        Some(_) => Some(format!("project type — auto-imports {name}")),
-                        None => Some("project type".to_string()),
-                    };
-                    items.push(CompletionItem {
-                        label: name.clone(),
-                        kind: Some(CompletionItemKind::CLASS),
-                        detail,
-                        sort_text: Some(format!("1_{name}")),
-                        additional_text_edits: import_edit.map(|e| vec![e]),
-                        ..Default::default()
-                    });
-                }
-            }
-            // Members only make sense in expression position (a function body),
-            // and never in a `new <Type>` position.
-            if !type_only && ctx == CtxKind::Statement {
-                for name in &ws.member_names {
-                    if seen.insert(name.clone()) {
-                        items.push(CompletionItem {
-                            label: name.clone(),
-                            kind: Some(CompletionItemKind::FUNCTION),
-                            detail: Some("project member".to_string()),
-                            sort_text: Some(format!("4_{name}")),
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-        }
-
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    /// Lazy completion documentation (`completionItem/resolve`): the `data`
+    /// payload attached at completion time identifies the declaring symbol;
+    /// here we locate its declaration (possibly in another file or a
+    /// generated stub) and attach its doc comment — paying the file read only
+    /// for the item the user actually highlights.
+    async fn completion_resolve(&self, mut item: CompletionItem) -> Result<CompletionItem> {
+        // No data → nothing to resolve; return the item unchanged.
+        let Some(data) = item.data.clone() else { return Ok(item) };
+        let Some(obj) = data.as_object() else { return Ok(item) };
+        let (Some(uri_s), Some(owner)) = (
+            obj.get("uri").and_then(|v| v.as_str()),
+            obj.get("owner").and_then(|v| v.as_str()),
+        ) else {
+            return Ok(item);
+        };
+        let member = obj.get("member").and_then(|v| v.as_str());
+        let Ok(uri) = Url::parse(uri_s) else { return Ok(item) };
+        let Some(doc) = self.docs.get(&uri) else { return Ok(item) };
+        let symbols = &doc.symbols;
+
+        // Locate the declaration: a member's span inside its owner type, or
+        // the owner declaration itself (types, functions — bare names ok).
+        let located = match member {
+            Some(m) => member_decl_span(symbols, owner, m)
+                .and_then(|span| symbols.decl_unit.get(owner).map(|&u| (u, span))),
+            None => symbols.definition_of(owner),
+        };
+        let Some((unit, span)) = located else { return Ok(item) };
+        let Some(path) = doc.source_paths.get(unit) else { return Ok(item) };
+
+        // Read the declaring file's text — the live rope when it's the open
+        // document, else from disk (covers generated `.jux.d` stubs too).
+        let same_as_open = Url::from_file_path(path).ok().as_ref() == Some(&uri);
+        let decl_text = if same_as_open {
+            doc.rope.to_string()
+        } else {
+            match std::fs::read_to_string(path) {
+                Ok(t) => t,
+                Err(_) => return Ok(item),
+            }
+        };
+        if let Some(doc_line) = doc_comment_before(&decl_text, span.start as usize) {
+            item.documentation = Some(Documentation::MarkupContent(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: doc_line,
+            }));
+        }
+        Ok(item)
     }
 
     /// Parameter info (`textDocument/signatureHelp`). When the caret is inside a
@@ -1725,7 +2420,17 @@ mod tests {
         let ty = doc
             .type_ending_at(dot)
             .expect("receiver `g` must have an inferred type");
-        let members = crate::intel::members_of(&doc.symbols, ty);
+        // Complete from the same package — `int count;` is package-private.
+        let access = intel::AccessCtx {
+            package: Some("shop".to_string()),
+            enclosing_class_fqn: None,
+        };
+        let members = crate::intel::members_of(
+            &doc.symbols,
+            ty,
+            intel::ReceiverKind::Instance,
+            &access,
+        );
         let names: Vec<&str> = members.iter().map(|m| m.name.as_str()).collect();
         assert!(names.contains(&"greet"), "expected greet, got {names:?}");
         assert!(names.contains(&"count"), "expected count, got {names:?}");
@@ -1763,6 +2468,407 @@ mod tests {
         let rope = Rope::from_str("package app;\npublic void run() {}\n");
         let edit = import_edit(&rope, "a.b.Widget").expect("should produce an edit");
         assert_eq!(edit.new_text, "\nimport a.b.Widget;\n");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // ====================================================================
+    // Smart completion — the build_completions pipeline end-to-end
+    // ====================================================================
+
+    /// Analyse `src` as `name` inside `root` and build the cached Document the
+    /// completion handler reads — the same construction `refresh` performs.
+    fn doc_for(root: &PathBuf, name: &str, src: &str) -> (Document, Url) {
+        let file = root.join(name);
+        fs::write(&file, src).unwrap();
+        let uri = Url::from_file_path(&file).unwrap();
+        let rope = Rope::from_str(src);
+        let analysis = analyze_workspace(root, &uri, &rope);
+        let doc = Document {
+            rope,
+            version: 1,
+            expr_types: analysis.expr_types,
+            type_names: analysis.type_names,
+            symbols: analysis.symbols,
+            source_paths: analysis.source_paths,
+        };
+        (doc, uri)
+    }
+
+    /// Locals and parameters are offered in statement context, ranked above
+    /// keywords, with the matching one preselected.
+    #[test]
+    fn completion_offers_locals_and_params_ranked_first() {
+        let root = temp_root("locals_completion");
+        let src = "public class Greeter {\n\
+                       public String greet(String who) {\n\
+                           var greeting = \"hi\";\n\
+                           gr\n\
+                       }\n\
+                   }\n";
+        let (doc, uri) = doc_for(&root, "Greeter.jux", src);
+        let offset = src.rfind("gr\n").unwrap() + 2;
+        let items = build_completions(&doc, &Workspace::default(), &uri, offset);
+
+        let greeting = items.iter().find(|i| i.label == "greeting").expect("local offered");
+        assert_eq!(greeting.kind, Some(CompletionItemKind::VARIABLE));
+        assert!(greeting.sort_text.as_deref().unwrap().starts_with("0_"));
+        // `greeting` matches the typed `gr` prefix → preselected.
+        assert_eq!(greeting.preselect, Some(true));
+
+        let who = items.iter().find(|i| i.label == "who").expect("param offered");
+        assert_eq!(who.detail.as_deref(), Some("String"));
+
+        // Keywords rank below locals. (`while` is also a snippet label, so
+        // match on the KEYWORD kind.)
+        let kw = items
+            .iter()
+            .find(|i| i.label == "while" && i.kind == Some(CompletionItemKind::KEYWORD))
+            .expect("keyword present");
+        assert!(kw.sort_text.as_deref().unwrap().starts_with("4_"));
+        assert!(greeting.sort_text < kw.sort_text, "locals sort above keywords");
+
+        // The enclosing class's own method is offered (implicit `this`).
+        let greet = items.iter().find(|i| i.label == "greet").expect("own method offered");
+        assert!(greet.sort_text.as_deref().unwrap().starts_with("1_"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `obj.` offers instance members only; `Type.` offers statics only.
+    #[test]
+    fn member_completion_splits_static_and_instance() {
+        let root = temp_root("static_instance");
+        let src = "public class Counter {\n\
+                       public static int total() { return 1; }\n\
+                       public int n;\n\
+                       public int bump() { return this.n; }\n\
+                   }\n\
+                   public void main() { var c = new Counter(); c. }\n";
+        let (doc, uri) = doc_for(&root, "Counter.jux", src);
+
+        // Instance receiver: `c.` → bump + n, NOT total.
+        let offset = src.rfind("c. ").unwrap() + 2;
+        let items = build_completions(&doc, &Workspace::default(), &uri, offset);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"bump"), "instance method offered: {labels:?}");
+        assert!(labels.contains(&"n"), "instance field offered: {labels:?}");
+        assert!(!labels.contains(&"total"), "static leaked into `obj.`: {labels:?}");
+
+        // Static receiver: `Counter.` → total only.
+        let src2 = "public class Counter {\n\
+                        public static int total() { return 1; }\n\
+                        public int n;\n\
+                    }\n\
+                    public void main() { Counter. }\n";
+        let (doc2, uri2) = doc_for(&root, "Counter2.jux", src2);
+        let offset2 = src2.rfind("Counter. ").unwrap() + "Counter.".len();
+        let items2 = build_completions(&doc2, &Workspace::default(), &uri2, offset2);
+        let labels2: Vec<&str> = items2.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels2.contains(&"total"), "static offered on `Type.`: {labels2:?}");
+        assert!(!labels2.contains(&"n"), "instance field leaked into `Type.`: {labels2:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `Color.` lists the enum's variants (the receiver is the type name, no
+    /// expression type needed — and no reparse either).
+    #[test]
+    fn enum_dot_lists_variants() {
+        let root = temp_root("enum_variants");
+        let src = "public enum Color { Red, Green, Blue }\n\
+                   public void main() { Color. }\n";
+        let (doc, uri) = doc_for(&root, "Color.jux", src);
+        let offset = src.rfind("Color. ").unwrap() + "Color.".len();
+        let items = build_completions(&doc, &Workspace::default(), &uri, offset);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        for v in ["Red", "Green", "Blue"] {
+            assert!(labels.contains(&v), "variant `{v}` offered: {labels:?}");
+        }
+        let red = items.iter().find(|i| i.label == "Red").unwrap();
+        assert_eq!(red.kind, Some(CompletionItemKind::ENUM_MEMBER));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Methods insert a parameter snippet — the caret lands on the first
+    /// argument, IntelliJ-style.
+    #[test]
+    fn method_completion_inserts_param_snippet() {
+        let root = temp_root("param_snippet");
+        let src = "public class Greeter {\n\
+                       public String greet(String who, int times) { return who; }\n\
+                       public void zero() { }\n\
+                   }\n\
+                   public void main() { var g = new Greeter(); g. }\n";
+        let (doc, uri) = doc_for(&root, "Greeter.jux", src);
+        let offset = src.rfind("g. ").unwrap() + 2;
+        let items = build_completions(&doc, &Workspace::default(), &uri, offset);
+
+        let greet = items.iter().find(|i| i.label == "greet").expect("greet offered");
+        assert_eq!(greet.insert_text.as_deref(), Some("greet(${1:who}, ${2:times})"));
+        assert_eq!(greet.insert_text_format, Some(InsertTextFormat::SNIPPET));
+        // The label is the bare name; matching runs on it.
+        assert_eq!(greet.filter_text.as_deref(), Some("greet"));
+
+        // No-arg methods insert plain `name()` (caret after the parens).
+        let zero = items.iter().find(|i| i.label == "zero").expect("zero offered");
+        assert_eq!(zero.insert_text.as_deref(), Some("zero()"));
+        assert_eq!(zero.insert_text_format, None);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `private` members are hidden outside their class; `protected` members
+    /// show for subclasses (and same package) only.
+    #[test]
+    fn member_visibility_is_enforced() {
+        let root = temp_root("visibility");
+        fs::write(
+            root.join("Base.jux"),
+            "package lib;\n\
+             public class Base {\n\
+                 private int secret;\n\
+                 protected int prot;\n\
+                 public int open;\n\
+             }\n",
+        )
+        .unwrap();
+        let src = "package app;\n\
+                   import lib.Base;\n\
+                   public class Sub extends Base {\n\
+                       public void m() { this. }\n\
+                   }\n";
+        let (doc, uri) = doc_for(&root, "Sub.jux", src);
+
+        // From inside the subclass (`this.`): protected + public, no private.
+        let offset = src.rfind("this. ").unwrap() + "this.".len();
+        let items = build_completions(&doc, &Workspace::default(), &uri, offset);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"open"), "{labels:?}");
+        assert!(labels.contains(&"prot"), "protected visible in subclass: {labels:?}");
+        assert!(!labels.contains(&"secret"), "private leaked into subclass: {labels:?}");
+
+        // From an unrelated file in another package: public only.
+        let src2 = "package other;\n\
+                    import lib.Base;\n\
+                    public void use() { var b = new Base(); b. }\n";
+        let (doc2, uri2) = doc_for(&root, "Use.jux", src2);
+        let offset2 = src2.rfind("b. ").unwrap() + 2;
+        let items2 = build_completions(&doc2, &Workspace::default(), &uri2, offset2);
+        let labels2: Vec<&str> = items2.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels2.contains(&"open"), "{labels2:?}");
+        assert!(!labels2.contains(&"prot"), "protected leaked outside hierarchy: {labels2:?}");
+        assert!(!labels2.contains(&"secret"), "private leaked: {labels2:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// No completions inside strings, comments, or char literals.
+    #[test]
+    fn no_completions_inside_strings_or_comments() {
+        assert_eq!(analyze_context("var s = \"hel").1, ScanMode::Str { interp: false });
+        assert_eq!(analyze_context("/* doc ").1, ScanMode::BlockComment);
+        assert_eq!(analyze_context("// note").1, ScanMode::LineComment);
+        assert_eq!(analyze_context("var c = 'x").1, ScanMode::Char);
+        assert_eq!(analyze_context("public void m() {").1, ScanMode::Code);
+        // A `$"…${hole}…"` interpolation hole IS code again.
+        assert_eq!(analyze_context("var s = $\"v=${").1, ScanMode::Code);
+        // …and after the hole closes we're back inside the string.
+        assert_eq!(
+            analyze_context("var s = $\"v=${x}").1,
+            ScanMode::Str { interp: true }
+        );
+        // Raw strings: embedded `"` and `\` are content; only `"""` closes.
+        assert_eq!(
+            analyze_context("var s = \"\"\"say \" loud").1,
+            ScanMode::RawStr { interp: false }
+        );
+        assert_eq!(analyze_context("var s = \"\"\"a \" b\"\"\"; var t = ").1, ScanMode::Code);
+        // A trailing backslash is raw content, never an escape of the closer.
+        assert_eq!(analyze_context("var s = \"\"\"C:\\\"\"\"; var t = ").1, ScanMode::Code);
+        // Raw interpolated strings get code holes too.
+        assert_eq!(analyze_context("var s = $\"\"\"v=${").1, ScanMode::Code);
+        // A mid-edit unclosed plain string resyncs at end-of-line (the lexer
+        // terminates it there) instead of swallowing the rest of the file.
+        assert_eq!(analyze_context("var s = \"oops\nvar t = ").1, ScanMode::Code);
+
+        // End-to-end: a caret inside a string yields zero items.
+        let root = temp_root("string_silence");
+        let src = "public void main() { var s = \"hello wo\"; }\n";
+        let (doc, uri) = doc_for(&root, "S.jux", src);
+        let offset = src.find("wo\"").unwrap() + 2; // inside the literal
+        let items = build_completions(&doc, &Workspace::default(), &uri, offset);
+        assert!(items.is_empty(), "no completions inside a string literal");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Type-position detection: `extends` vs `implements` vs `new` vs
+    /// generic bounds.
+    #[test]
+    fn type_position_detection() {
+        let t = "public class Foo extends ";
+        assert_eq!(
+            type_position(t, t.len()),
+            Some(TypePos::Extends { interfaces: false, generic: false })
+        );
+        let t2 = "public interface I extends ";
+        assert_eq!(
+            type_position(t2, t2.len()),
+            Some(TypePos::Extends { interfaces: true, generic: false })
+        );
+        let t3 = "public class C implements A, ";
+        assert_eq!(type_position(t3, t3.len()), Some(TypePos::Implements));
+        let t4 = "public class C<T extends ";
+        assert_eq!(
+            type_position(t4, t4.len()),
+            Some(TypePos::Extends { interfaces: false, generic: true })
+        );
+        let t5 = "var x = new ";
+        assert_eq!(type_position(t5, t5.len()), Some(TypePos::New));
+        // Plain statement position is NOT a type position.
+        let t6 = "public void m() { var x = ";
+        assert_eq!(type_position(t6, t6.len()), None);
+        // After a COMPLETE parent type + space, the next word is
+        // `implements`/`{` — no longer a type position.
+        let t7 = "public class C extends Base ";
+        assert_eq!(type_position(t7, t7.len()), None);
+        // …but after a comma the list is still open.
+        let t8 = "public class C implements A, ";
+        assert_eq!(type_position(t8, t8.len()), Some(TypePos::Implements));
+        // Keywords inside comments never fake a type position.
+        let t9 = "public void m() {\n    // extends Base,\n    ";
+        assert_eq!(type_position(t9, t9.len()), None);
+        let t10 = "public void m() {\n    // new\n    ";
+        assert_eq!(type_position(t10, t10.len()), None);
+    }
+
+    /// The brace header survives a trailing line comment, so a next-line `{`
+    /// still classifies as a type body.
+    #[test]
+    fn line_comment_preserves_brace_header() {
+        let (ctx, mode) = analyze_context("public class Foo // widget\n{\n    ");
+        assert_eq!(mode, ScanMode::Code);
+        assert_eq!(ctx, CtxKind::TypeBody);
+    }
+
+    /// `import_prefix` only sees the text after the line's last `;`.
+    #[test]
+    fn import_prefix_respects_statement_boundaries() {
+        assert_eq!(import_prefix("import xss.it.", 14).as_deref(), Some("xss.it."));
+        // After the `;` the line is ordinary code, not import-path mode.
+        assert_eq!(import_prefix("import a.B; foo", 15), None);
+        // …and a second `import` after a `;` IS path mode again.
+        assert_eq!(import_prefix("import a.B; import c.", 21).as_deref(), Some("c."));
+        // Not an import line at all.
+        assert_eq!(import_prefix("var x = 1", 9), None);
+    }
+
+    /// `extends` offers only extendable classes; `implements` only interfaces;
+    /// `new` only instantiable types.
+    #[test]
+    fn type_positions_filter_candidates() {
+        let root = temp_root("type_positions");
+        let src = "public final class Locked { }\n\
+                   public abstract class Abs { }\n\
+                   public class Open { }\n\
+                   public interface Shape { }\n\
+                   public class Next extends ";
+        let (doc, uri) = doc_for(&root, "T.jux", src);
+        let ws = Workspace::default();
+
+        // `extends` — Open yes; Locked (final), Shape (interface) no.
+        let items = build_completions(&doc, &ws, &uri, src.len());
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"Open"), "{labels:?}");
+        assert!(labels.contains(&"Abs"), "abstract classes are extendable: {labels:?}");
+        assert!(!labels.contains(&"Locked"), "final class offered for extends: {labels:?}");
+        assert!(!labels.contains(&"Shape"), "interface offered for class extends: {labels:?}");
+        // No keywords/snippets in a type-only position.
+        assert!(!labels.contains(&"while") && !labels.contains(&"public"), "{labels:?}");
+
+        // `implements` — interfaces only.
+        let src2 = format!("{}Open implements ", &src[..src.len() - "extends ".len()]);
+        let offset2 = src2.len();
+        let rope2 = Rope::from_str(&src2);
+        let doc2 = Document {
+            rope: rope2,
+            version: 2,
+            expr_types: Vec::new(),
+            type_names: doc.type_names.clone(),
+            symbols: doc.symbols.clone(),
+            source_paths: doc.source_paths.clone(),
+        };
+        let items2 = build_completions(&doc2, &ws, &uri, offset2);
+        let labels2: Vec<&str> = items2.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels2.contains(&"Shape"), "{labels2:?}");
+        assert!(!labels2.contains(&"Open"), "class offered for implements: {labels2:?}");
+
+        // `new` — concrete classes, not abstract ones or interfaces.
+        let src3 = "public abstract class Abs { }\npublic class Open { }\npublic interface Shape { }\npublic void m() { var x = new ";
+        let (doc3, uri3) = doc_for(&root, "N.jux", src3);
+        let items3 = build_completions(&doc3, &ws, &uri3, src3.len());
+        let labels3: Vec<&str> = items3.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels3.contains(&"Open"), "{labels3:?}");
+        assert!(!labels3.contains(&"Abs"), "abstract class offered for new: {labels3:?}");
+        assert!(!labels3.contains(&"Shape"), "interface offered for new: {labels3:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `import …` lines complete package segments first, then type names —
+    /// and nothing else.
+    #[test]
+    fn import_completion_offers_package_segments_then_types() {
+        let root = temp_root("import_completion");
+        fs::write(
+            root.join("Widget.jux"),
+            "package xss.it;\npublic class Widget { }\n",
+        )
+        .unwrap();
+        let src = "import xss.\n";
+        let (doc, uri) = doc_for(&root, "main.jux", src);
+        let offset = src.find("xss.").unwrap() + "xss.".len();
+        let items = build_completions(&doc, &Workspace::default(), &uri, offset);
+        let it = items.iter().find(|i| i.label == "it").expect("package segment offered");
+        assert_eq!(it.kind, Some(CompletionItemKind::MODULE));
+        // No keywords/snippets on an import line.
+        assert!(items.iter().all(|i| i.kind != Some(CompletionItemKind::KEYWORD)));
+
+        // One segment deeper: the terminal type name, with its FQN as detail.
+        let src2 = "import xss.it.\n";
+        let rope2 = Rope::from_str(src2);
+        let doc2 = Document {
+            rope: rope2,
+            version: 2,
+            expr_types: Vec::new(),
+            type_names: doc.type_names.clone(),
+            symbols: doc.symbols.clone(),
+            source_paths: doc.source_paths.clone(),
+        };
+        let offset2 = src2.find("it.").unwrap() + "it.".len();
+        let items2 = build_completions(&doc2, &Workspace::default(), &uri, offset2);
+        let widget = items2.iter().find(|i| i.label == "Widget").expect("type offered");
+        assert_eq!(widget.kind, Some(CompletionItemKind::CLASS));
+        assert_eq!(widget.detail.as_deref(), Some("xss.it.Widget"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The resolve pipeline: a member item's `data` locates the declaration
+    /// and reads its doc comment — here exercised through the same helpers the
+    /// `completion_resolve` handler calls.
+    #[test]
+    fn completion_resolve_locates_member_doc_comment() {
+        let root = temp_root("resolve_doc");
+        let src = "public class Doc {\n\
+                       /// Adds things together.\n\
+                       public int add(int a) { return a; }\n\
+                   }\n";
+        let (doc, _uri) = doc_for(&root, "Doc.jux", src);
+        let span = member_decl_span(&doc.symbols, "Doc", "add").expect("member span");
+        let line = doc_comment_before(src, span.start as usize);
+        assert_eq!(line.as_deref(), Some("Adds things together."));
 
         let _ = fs::remove_dir_all(&root);
     }
