@@ -1,0 +1,28 @@
+// Task combinators (JUX-ASYNC v2 §18.1.4): Task.all joins same-typed
+// tasks into a Task of all values; Task.race resolves with the first
+// to settle; Task.delay(ms) is a timer task.
+
+package taskcomb;
+
+public void main() {
+    var a = spawn(() -> 10);
+    var b = spawn(() -> 20);
+    var c = spawn(() -> 30);
+    var all = Task.all(a, b, c);
+    var values = all.blockingGet();
+    var total = 0;
+    for (var v : values) {
+        total = total + v;
+    }
+    print(total);
+
+    var fast = spawn(() -> 7);
+    var slow = spawn(async () -> {
+        await Task.delay(200);
+        99;
+    });
+    print(Task.race(fast, slow).blockingGet());
+
+    Task.delay(30).blockingGet();
+    print("waited");
+}
