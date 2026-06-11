@@ -1,0 +1,46 @@
+// Mutating a stdlib-collection field through a shared-reference (wrapped)
+// class (gap N1). When a class instance is aliased it lowers to
+// `Rc<RefCell<…>>`, and a field read goes through `.0.borrow()`. A *mutating*
+// collection method on such a field (`this.items.add(v)`, `this.seen.put(k,v)`)
+// must instead take the mutable interior borrow (`.0.borrow_mut()`), and any
+// argument that re-enters the same object must be evaluated BEFORE that borrow
+// — otherwise `RefCell` panics `already borrowed` at runtime.
+
+import jux.std.collections.ArrayList;
+import jux.std.collections.HashMap;
+
+public class Bag {
+    public ArrayList<int> items;
+    public HashMap<String, int> seen;
+    public int counter;
+
+    public Bag() {
+        this.items = new ArrayList<int>();
+        this.seen = new HashMap<String, int>();
+        this.counter = 0;
+    }
+
+    // `next()` mutates `this.counter` — calling it as an argument to a
+    // mutating method on `this.items` exercises the re-entrancy fix.
+    public int next() {
+        this.counter = this.counter + 1;
+        return this.counter;
+    }
+
+    public void fill() {
+        this.items.add(this.next());     // re-entrant arg + list mutation
+        this.items.add(this.next());
+        this.seen.put("a", this.next()); // map mutation, re-entrant arg
+    }
+}
+
+public void main() {
+    var b = new Bag();
+    var alias = b;                       // force the wrapper (Rc<RefCell>) shape
+
+    b.fill();
+    print("size=" + b.items.size());     // size=2
+    print("counter=" + b.counter);       // counter=3
+    print("a=" + b.seen.get("a"));       // a=3
+    print("first=" + b.items.get(0));    // first=1
+}

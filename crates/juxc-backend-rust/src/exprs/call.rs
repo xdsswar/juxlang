@@ -1813,6 +1813,17 @@ impl RustEmitter {
         if !is_array && !is_string && !is_map && !is_set && !is_deque {
             return false;
         }
+        // **Gap N1: mutating collection method on a wrapped-class field.**
+        // `this.items.add(v)` where `items` is a collection field of a
+        // shared-reference class reads the field through `borrow_mut()` and
+        // hoists args ahead of that borrow — see `emit_mut_collection_method`.
+        // (String has no mutating-in-place methods on this path, so it's
+        // excluded by `collection_method_mutates`.)
+        if self.collection_method_mutates(&recv_ty, method)
+            && self.callee_receiver_reads_through_borrow(&call.callee).is_some()
+        {
+            return self.emit_mut_collection_method(call, method, &recv_ty);
+        }
         if is_array {
             return self.emit_array_stdlib_method(call, method);
         }
@@ -2013,6 +2024,135 @@ impl RustEmitter {
             }
             _ => false,
         }
+    }
+
+    /// Emit a stdlib-collection method **receiver** that the method will
+    /// mutate (`add`/`push`, `set`, `remove`, `put`, `clear`, …). When the
+    /// receiver is a field of a shared-reference (wrapped) class, the field
+    /// must be read through the **mutable** interior borrow
+    /// (`self.0.borrow_mut().items`) — the default read path takes
+    /// `self.0.borrow().items`, an immutable `Ref`, so `.push()`/`.insert()`
+    /// fail to compile (E0596). Setting both `emitting_out_place` (selects
+    /// `borrow_mut()` in `emit_field`) and `emitting_lvalue` (suppresses the
+    /// auto-`.clone()` that would otherwise mutate a throwaway copy) gives the
+    /// exact `self.0.borrow_mut().items` shape. A non-wrapper receiver (a plain
+    /// local `Vec`) is a `Path`, never reaches `emit_field`, so the flags are
+    /// harmless there.
+    fn emit_mut_collection_receiver(&mut self, receiver: &Expr) {
+        let prev_out = self.emitting_out_place;
+        let prev_lv = self.emitting_lvalue;
+        self.emitting_out_place = true;
+        self.emitting_lvalue = true;
+        self.emit_expr(receiver);
+        self.emitting_out_place = prev_out;
+        self.emitting_lvalue = prev_lv;
+    }
+
+    /// True when `method` **mutates** its stdlib-collection receiver — the
+    /// methods that need `&mut` on the underlying `Vec`/`HashMap`/`HashSet`/
+    /// `VecDeque`. Read-only methods (`size`, `get`, `contains`, `keys`, …)
+    /// answer `false`. Drives the gap-N1 borrow_mut routing.
+    fn collection_method_mutates(&self, recv_ty: &juxc_tycheck::Ty, method: &str) -> bool {
+        match recv_ty {
+            juxc_tycheck::Ty::Array { .. } => matches!(
+                method,
+                "add" | "set" | "remove" | "insert" | "clear" | "reverse" | "sort"
+            ),
+            juxc_tycheck::Ty::User { name, .. } => {
+                match name.rsplit('.').next().unwrap_or(name) {
+                    "HashMap" => matches!(method, "put" | "remove" | "clear"),
+                    "HashSet" => matches!(method, "add" | "remove" | "clear"),
+                    "Deque" => matches!(
+                        method,
+                        "addFirst" | "addLast" | "removeFirst" | "removeLast" | "clear"
+                    ),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Emit a **mutating** stdlib-collection method whose receiver is a field
+    /// of a shared-reference (wrapped) class — `this.items.add(v)` (gap N1).
+    /// Two defects are fixed together:
+    ///   - **A (mutability):** the field is read through `borrow_mut()` (via
+    ///     the receiver-mut flags) so the mutation lands in the real cell, not
+    ///     a temporary `Ref` (would be rustc E0596).
+    ///   - **B (re-entrancy):** every argument is hoisted into a temp BEFORE
+    ///     the receiver borrow is taken, so an argument that re-enters the same
+    ///     object (`this.items.add(this.next())`) runs its own short-lived
+    ///     borrow first instead of colliding with the open collection borrow
+    ///     (would be a runtime `already borrowed` panic).
+    /// The temps carry the full element coercion ladder; the delegated per-kind
+    /// emitter then reads bare temps (`collection_args_prehoisted`).
+    fn emit_mut_collection_method(
+        &mut self,
+        call: &CallExpr,
+        method: &str,
+        recv_ty: &juxc_tycheck::Ty,
+    ) -> bool {
+        // Delegate to the per-kind emitter with the receiver-mut flags set.
+        let dispatch = |this: &mut Self, c: &CallExpr| -> bool {
+            let prev_out = this.emitting_out_place;
+            let prev_lv = this.emitting_lvalue;
+            let prev_hoist = this.collection_args_prehoisted;
+            this.emitting_out_place = true;
+            this.emitting_lvalue = true;
+            this.collection_args_prehoisted = true;
+            let handled = match recv_ty {
+                juxc_tycheck::Ty::Array { .. } => this.emit_array_stdlib_method(c, method),
+                juxc_tycheck::Ty::User { name, .. } => {
+                    match name.rsplit('.').next().unwrap_or(name) {
+                        "HashMap" => this.emit_map_stdlib_method(c, method),
+                        "HashSet" => this.emit_set_stdlib_method(c, method),
+                        "Deque" => this.emit_deque_stdlib_method(c, method),
+                        _ => false,
+                    }
+                }
+                _ => false,
+            };
+            this.emitting_out_place = prev_out;
+            this.emitting_lvalue = prev_lv;
+            this.collection_args_prehoisted = prev_hoist;
+            handled
+        };
+        // No args → no re-entrancy / coercion to hoist; emit in place.
+        if call.args.is_empty() {
+            return dispatch(self, call);
+        }
+        self.w.push_str("{ ");
+        let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
+        for (i, arg) in call.args.iter().enumerate() {
+            self.w.push_str("let __jux_carg");
+            self.w.push_str(&i.to_string());
+            self.w.push_str(" = ");
+            self.emit_collection_arg(call, i, arg);
+            self.w.push_str("; ");
+        }
+        self.emitting_format_arg = prev_fmt;
+        // Synthetic call: same callee/receiver, args replaced by the temps.
+        let temp_args: Vec<Expr> = (0..call.args.len())
+            .map(|i| {
+                Expr::Path(juxc_ast::QualifiedName {
+                    segments: vec![juxc_ast::Ident {
+                        text: format!("__jux_carg{i}"),
+                        span: call.span,
+                    }],
+                    span: call.span,
+                })
+            })
+            .collect();
+        let temp_call = CallExpr {
+            callee: call.callee.clone(),
+            explicit_generic_args: call.explicit_generic_args.clone(),
+            args: temp_args,
+            arg_names: vec![None; call.args.len()],
+            span: call.span,
+        };
+        let handled = dispatch(self, &temp_call);
+        self.w.push_str(" }");
+        handled
     }
 
     /// Emit the Rust equivalent of a Jux `List<T>` / array method
@@ -2579,32 +2719,46 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            // **Nullable element slot** — storing into a container whose
-            // element type-arg is `T?` (`ArrayList<int?>` → `Vec<Option
-            // <isize>>`): a non-null value lifts into `Some(...)`; a
-            // `null` literal / already-`Option` value passes through.
-            let wrap_some = self
-                .builtin_arg_elem_nullable(call, i)
-                && !self.expression_is_already_nullable(arg);
-            if wrap_some {
-                self.w.push_str("Some(");
-            }
-            self.emit_expr(arg);
-            // **Wrapper-class share-on-pass (§CR.4.1)** for the builtin
-            // collection dispatches (`xs.add(obj)` → `xs.push(obj)`):
-            // storing a wrapped place must SHARE the handle (`Rc`
-            // refcount bump), not move it — `l1.add(c); l2.add(c);`
-            // would otherwise be a rustc E0382 on the second use, and
-            // a mutation through the container element must stay
-            // visible through the original binding.
-            if self.wrapper_value_needs_clone(arg) {
-                self.w.push_str(".clone()");
-            }
-            if wrap_some {
-                self.w.push(')');
-            }
+            self.emit_collection_arg(call, i, arg);
         }
         self.emitting_format_arg = prev;
+    }
+
+    /// Emit ONE builtin-container argument with its element coercion
+    /// ladder: nullable `Some(…)` wrap and wrapper share-`.clone()`. Shared
+    /// by `emit_call_args` and the arg-hoisting path so both produce the
+    /// same stored value. When `collection_args_prehoisted` is set the
+    /// argument is already a coerced temp, so the ladder is skipped (the
+    /// bare temp is emitted) — see that flag's doc.
+    fn emit_collection_arg(&mut self, call: &CallExpr, i: usize, arg: &Expr) {
+        if self.collection_args_prehoisted {
+            self.emit_expr(arg);
+            return;
+        }
+        // **Nullable element slot** — storing into a container whose
+        // element type-arg is `T?` (`ArrayList<int?>` → `Vec<Option
+        // <isize>>`): a non-null value lifts into `Some(...)`; a
+        // `null` literal / already-`Option` value passes through.
+        let wrap_some = self
+            .builtin_arg_elem_nullable(call, i)
+            && !self.expression_is_already_nullable(arg);
+        if wrap_some {
+            self.w.push_str("Some(");
+        }
+        self.emit_expr(arg);
+        // **Wrapper-class share-on-pass (§CR.4.1)** for the builtin
+        // collection dispatches (`xs.add(obj)` → `xs.push(obj)`):
+        // storing a wrapped place must SHARE the handle (`Rc`
+        // refcount bump), not move it — `l1.add(c); l2.add(c);`
+        // would otherwise be a rustc E0382 on the second use, and
+        // a mutation through the container element must stay
+        // visible through the original binding.
+        if self.wrapper_value_needs_clone(arg) {
+            self.w.push_str(".clone()");
+        }
+        if wrap_some {
+            self.w.push(')');
+        }
     }
 
     /// True when argument `i` of a **builtin container call** lands in
