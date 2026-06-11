@@ -690,6 +690,79 @@ impl RustEmitter {
             .last()
             .map(|s| s.text.as_str())
             .unwrap_or("");
+        // Constructor reference (§M.8): `Type::new` becomes a closure
+        // constructing the type — `Rc::new(move |a0, ..| Type::new(a0, ..))`.
+        // Overloaded constructors: Phase 1 binds the FIRST declared
+        // one (a ref site carries no argument count to select by).
+        if m.member.text == "new" {
+            let ctor_params: Vec<juxc_ast::Param> = self
+                .symbols
+                .classes
+                .get(receiver_name)
+                .or_else(|| {
+                    self.symbols
+                        .find_fqn_by_bare(receiver_name)
+                        .and_then(|fqn| self.symbols.classes.get(&fqn))
+                })
+                .and_then(|c| c.constructors.first())
+                .map(|c| {
+                    c.params
+                        .iter()
+                        .map(|p| juxc_ast::Param {
+                            name: juxc_ast::Ident {
+                                text: p.name.clone(),
+                                span: m.span,
+                            },
+                            ty: p.ty.clone(),
+                            is_final: false,
+                            is_ref: false,
+                            default: None,
+                            is_varargs: false,
+                            span: m.span,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.w.push_str("std::rc::Rc::new(move |");
+            for (i, p) in ctor_params.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str("__a");
+                self.w.push_str(&i.to_string());
+                self.w.push_str(": ");
+                let _ = p;
+                self.emit_value_type_as_rust(&ctor_params[i].ty);
+            }
+            self.w.push_str("| ");
+            // Crate-root cross-package receivers, same as `new` sites.
+            let bare_is_local = self.symbols.classes.contains_key(receiver_name);
+            if let Some(fqn) = (!bare_is_local)
+                .then(|| self.symbols.find_fqn_by_bare(receiver_name))
+                .flatten()
+            {
+                self.w.push_str("crate::");
+                self.w
+                    .push_str(&fqn.split('.').collect::<Vec<_>>().join("::"));
+            } else {
+                for (i, seg) in m.receiver.segments.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str("::");
+                    }
+                    self.w.push_str(&seg.text);
+                }
+            }
+            self.w.push_str("::new(");
+            for i in 0..ctor_params.len() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str("__a");
+                self.w.push_str(&i.to_string());
+            }
+            self.w.push_str("))");
+            return;
+        }
         let class_method = self
             .symbols
             .classes
