@@ -150,6 +150,8 @@ impl Resolver {
         builtins.insert("AsyncMutex");
         // `Task.all/race/delay` static helpers (§18.1.4).
         builtins.insert("Task");
+        // `withTimeout(ms, f)` — §18.1.9 timeout combinator.
+        builtins.insert("withTimeout");
         // Async-runtime builtin per JUX-ASYNC-ADDENDUM-v2: `parallel`
         // takes N async expressions and concurrently awaits them
         // all, returning a tuple of their results. Lowers to

@@ -1,0 +1,30 @@
+// withTimeout(ms, f) (JUX-ASYNC v2 §18.1.9) — race the work against
+// a timer. The work's value comes back when it settles in time; a
+// TimeoutException unwinds into ordinary catch handling otherwise
+// (the timed-out work is dropped/cancelled).
+
+package timeouts;
+
+async int quick() {
+    return 42;
+}
+
+async int slow() {
+    await Task.delay(500);
+    return 99;
+}
+
+async void run() {
+    var a = await withTimeout(200, async () -> await quick());
+    print(a);
+    try {
+        var b = await withTimeout(50, async () -> await slow());
+        print(b);
+    } catch (TimeoutException e) {
+        print("timed out: " + e.getMessage());
+    }
+}
+
+public void main() {
+    block_on(run());
+}

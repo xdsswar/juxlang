@@ -103,6 +103,7 @@ use crate::ty::{
 /// …) they go here.
 const BUILTINS: &[&str] = &[
     "print", "parallel", "block_on", "yield_now", "Worker", "now_ms", "assert", "spawn",
+    "withTimeout",
     // Stdlib I/O — `File.readText(path)`, `File.writeText(path, body)`.
     // The Jux-level shape is `File.readText(...)`, parsed as a
     // Field call on Path("File"). Registering `File` in BUILTINS

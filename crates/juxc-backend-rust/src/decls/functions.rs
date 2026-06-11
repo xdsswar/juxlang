@@ -404,7 +404,20 @@ impl RustEmitter {
         // construction; the explicit `unreachable!` both satisfies
         // rustc's type-check and traps loudly if the guarantee is ever
         // violated.
-        if !matches!(return_type, ReturnType::Void)
+        // `async void` carries a synthesized unit TypeRef in
+        // AsyncType — value-wise it IS void, so falling off the end
+        // of a try is fine there too.
+        let is_void = match return_type {
+            ReturnType::Void => true,
+            ReturnType::AsyncType(t) => t
+                .name
+                .segments
+                .last()
+                .map(|s| s.text == "void")
+                .unwrap_or(false),
+            _ => false,
+        };
+        if !is_void
             && matches!(body.statements.last(), Some(Stmt::Try(_)))
         {
             self.w
