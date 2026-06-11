@@ -1,0 +1,21 @@
+<idea-plugin>
+  <!-- Loaded only when the LSP4IJ plugin (com.redhat.devtools.lsp4ij) is
+       installed. Provides juxc-lsp on IDEs without the native LSP client
+       (IDEA CE, PyCharm CE, Android Studio, …). When the native client is
+       available (lsp.xml's gate module present), JuxLsp4ijServerFactory
+       disables itself so only ONE juxc-lsp ever runs — native wins. -->
+  <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
+    <server id="juxLanguageServer"
+            name="Jux Language Server"
+            factoryClass="dev.jux.intellij.lsp4ij.JuxLsp4ijServerFactory">
+      <description><![CDATA[
+        Diagnostics, completion, hover, and auto-import for Jux via
+        <code>juxc-lsp</code> (resolved from Settings | Tools | Jux Toolchain,
+        $JUX_HOME, or PATH).
+      ]]></description>
+    </server>
+    <languageMapping language="Jux"
+                     serverId="juxLanguageServer"
+                     languageId="jux"/>
+  </extensions>
+</idea-plugin>

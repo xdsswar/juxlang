@@ -1,8 +1,10 @@
 <idea-plugin>
-  <!-- Loaded only when `com.intellij.modules.ultimate` is present (the native
-       LSP API ships in paid IDEs). On IDEs without it this file is ignored and
-       the LSP classes never load, so the plugin stays functional there (file
-       type, New actions, Run) without the LSP client. -->
+  <!-- Loaded only when `com.intellij.modules.lsp` is present (all commercial
+       IDEs + unified IDEA free mode 2025.2+). On IDEs without it this file is
+       ignored and the LSP classes never load — the plugin stays functional
+       (file type, New actions, Run) and the LSP4IJ fallback (lsp4ij.xml)
+       covers language-server features instead. -->
+
   <extensions defaultExtensionNs="com.intellij">
     <platform.lsp.serverSupportProvider
         implementation="dev.jux.intellij.lsp.JuxLspServerSupportProvider"/>

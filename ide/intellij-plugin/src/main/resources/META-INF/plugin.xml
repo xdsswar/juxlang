@@ -1,5 +1,8 @@
 <idea-plugin>
-  <id>dev.jux.intellij</id>
+  <!-- Marketplace rule: the plugin ID must not contain the word "intellij"
+       (verifyPlugin enforces it). Renamed from dev.jux.intellij before any
+       public release, so no installed base is affected. -->
+  <id>dev.jux.lang</id>
   <name>Jux Language</name>
   <vendor email="contact@xdsswar.dev" url="https://github.com/xdsswar/juxlang">
     XTREME SOFTWARE SOLUTIONS
@@ -68,8 +71,13 @@
 
     <p>
       Works in every IntelliJ-platform IDE (IDEA, CLion, RustRover, GoLand,
-      PyCharm, …). The language-server features require an Ultimate-class IDE or
-      the LSP4IJ plugin on Community editions.
+      PyCharm, …). Language-server features use the IDE's built-in LSP client
+      where available (commercial IDEs and IDEA free mode 2025.2+); on
+      Community editions, install the free
+      <a href="https://plugins.jetbrains.com/plugin/23257-lsp4ij">LSP4IJ</a>
+      plugin and the same features light up through it. When both clients are
+      available the built-in one takes precedence automatically — only one
+      <code>juxc-lsp</code> instance ever runs.
     </p>
   ]]></description>
 
@@ -78,9 +86,23 @@
   <depends>com.intellij.modules.platform</depends>
 
   <!-- Native LSP client (diagnostics/hover/completion/auto-import from
-       juxc-lsp). The lsp.xml extensions load only when the Ultimate module is
-       present, so the LSP classes are inert on Community-only IDEs (§I.6). -->
-  <depends optional="true" config-file="lsp.xml">com.intellij.modules.ultimate</depends>
+       juxc-lsp). Gated on com.intellij.modules.lsp — first shipped in 2025.2
+       (commercial IDEs AND unified IDEA free mode). On paid IDEs 2024.2–2025.1
+       this module does NOT exist, so lsp.xml never loads there; the LSP4IJ
+       fallback serves those builds instead (its nativeLspActive() checks for
+       OUR registered provider, not mere EP existence, precisely so it steps
+       up on those release lines). The lsp.xml extensions load only when the
+       module exists, so the LSP classes are inert elsewhere (§I.6).
+       LOCKSTEP: JuxLsp4ijServerFactory.nativeLspActive() mirrors this gate —
+       change both together or two juxc-lsp servers will fight. -->
+  <depends optional="true" config-file="lsp.xml">com.intellij.modules.lsp</depends>
+
+  <!-- LSP4IJ fallback client: the same juxc-lsp features on IDEs WITHOUT the
+       native LSP module (IDEA CE, PyCharm CE, Android Studio, older builds)
+       when the free LSP4IJ plugin is installed. Loads only alongside LSP4IJ;
+       on IDEs where lsp.xml also loaded, the factory disables itself so only
+       one juxc-lsp runs (native wins). -->
+  <depends optional="true" config-file="lsp4ij.xml">com.redhat.devtools.lsp4ij</depends>
 
   <extensions defaultExtensionNs="com.intellij">
     <fileType
