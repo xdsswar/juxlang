@@ -470,7 +470,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             // the emitted JuxTask). Checked BEFORE the function
             // lookup so the rust.std thread-spawn stub's JoinHandle
             // doesn't capture the name.
-            if name == "spawn" {
+            if name == "spawn" || name == "withTimeout" {
                 return Ty::Unknown;
             }
             // `block_on(fut)` resolves to the future's value — for

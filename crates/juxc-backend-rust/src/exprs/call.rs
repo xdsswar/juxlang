@@ -258,6 +258,67 @@ impl RustEmitter {
                 return;
             }
         }
+        // `withTimeout(ms, f)` — §18.1.9: race the work against a
+        // timer task; the loser is dropped (cancelling the work on
+        // timeout) and a TimeoutException unwinds into the normal
+        // catch machinery. Produces a Future — `await` it.
+        if let Expr::Path(qn) = &*call.callee {
+            if qn.segments.len() == 1 && qn.segments[0].text == "withTimeout" {
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                self.w.push_str("async {\n");
+                self.w.indent_inc();
+                self.w.emit_indent();
+                self.w.push_str(
+                    "let __jux_timer = crate::__jux_spawn(async move { std::thread::sleep(std::time::Duration::from_millis((",
+                );
+                if let Some(ms) = call.args.first() {
+                    self.emit_expr(ms);
+                } else {
+                    self.w.push('0');
+                }
+                self.w.push_str(") as u64)) });\n");
+                self.w.emit_indent();
+                self.w.push_str(
+                    "match futures::future::select(std::pin::pin!(async move { ",
+                );
+                match call.args.get(1) {
+                    Some(Expr::Lambda(l)) if l.params.is_empty() => match &l.body {
+                        juxc_ast::LambdaBody::Expr(e) => self.emit_expr(e),
+                        juxc_ast::LambdaBody::Block(b) => {
+                            let (stmts, tail) = match b.statements.split_last() {
+                                Some((juxc_ast::Stmt::Expr(t), rest)) => (rest, Some(t)),
+                                _ => (&b.statements[..], None),
+                            };
+                            for stmt in stmts {
+                                self.emit_stmt(stmt);
+                            }
+                            if let Some(tail) = tail {
+                                self.emit_expr(tail);
+                            }
+                        }
+                    },
+                    Some(other) => {
+                        self.emit_expr(other);
+                        self.w.push_str(".await");
+                    }
+                    None => {}
+                }
+                self.w.push_str(" }), __jux_timer).await {\n");
+                self.w.indent_inc();
+                self.w.line("futures::future::Either::Left((__jux_v, _)) => __jux_v,");
+                self.w.line(
+                    "futures::future::Either::Right(_) => std::panic::panic_any(crate::jux::std::exceptions::TimeoutException::new(\"operation timed out\".to_string())),",
+                );
+                self.w.indent_dec();
+                self.w.line("}");
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push('}');
+                self.emitting_format_arg = prev;
+                return;
+            }
+        }
         // `Task.all / Task.race / Task.delay` (§18.1.4) — statics on
         // the task runtime. `all` joins same-typed tasks into a
         // Task<List<T>>; `race` resolves with the first to settle;

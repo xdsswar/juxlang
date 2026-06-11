@@ -831,6 +831,44 @@ public class RuntimeException extends Exception {
     }
 }
 "###),
+    ("exceptions/TimeoutException.jux", r###"/**
+ * jux.std.exceptions.TimeoutException
+ *
+ * An operation exceeded its time budget — thrown by
+ * `withTimeout(ms, f)` (JUX-ASYNC v2 section 18.1.9) when the work
+ * doesn't settle before the timer.
+ */
+package jux.std.exceptions;
+
+public class TimeoutException extends Exception {
+    /**
+     * Construct a TimeoutException describing what timed out.
+     */
+    public TimeoutException(String message) {
+        super(message);
+    }
+}
+"###),
+    ("exceptions/CancellationException.jux", r###"/**
+ * jux.std.exceptions.CancellationException
+ *
+ * A task was cancelled while being awaited (JUX-ASYNC v2 section
+ * 18.1.9). Phase-1 note: `task.cancel()` consumes the handle, so
+ * awaiting a cancelled task is a compile-time move error rather
+ * than this exception; the type exists for forward compatibility
+ * and user-thrown cancellation signaling.
+ */
+package jux.std.exceptions;
+
+public class CancellationException extends Exception {
+    /**
+     * Construct a CancellationException with a reason.
+     */
+    public CancellationException(String message) {
+        super(message);
+    }
+}
+"###),
     ("exceptions/Throwable.jux", r###"/**
  * jux.std.exceptions.Throwable
  *
