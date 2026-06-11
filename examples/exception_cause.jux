@@ -1,0 +1,37 @@
+// Exception cause chains + suppressed exceptions (§X.1.1, §X.2.3).
+//
+// - `new Exception(message, cause)` wraps a lower-level failure; walk
+//   `getCause()` to print the causal chain (null at the root).
+// - `addSuppressed(e)` records exceptions raised while another was
+//   already in flight; `getSuppressed()` returns the list (a
+//   defensive copy).
+
+package cause;
+
+void parseConfig() {
+    throw new Exception("bad syntax at line 3");
+}
+
+void loadApp() {
+    try {
+        parseConfig();
+    } catch (Exception e) {
+        throw new Exception("config load failed", e);
+    }
+}
+
+public void main() {
+    try {
+        loadApp();
+    } catch (Exception e) {
+        print("error: " + e.getMessage());
+        var cause = e.getCause();
+        if (cause != null) {
+            print("caused by: " + cause.getMessage());
+        }
+        var root = new Exception("root");
+        e.addSuppressed(new Exception("cleanup failed"));
+        print("suppressed: " + e.getSuppressed().length);
+        print(root.getCause() == null);
+    }
+}

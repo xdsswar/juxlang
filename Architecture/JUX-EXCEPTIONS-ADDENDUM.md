@@ -61,6 +61,13 @@ public class Exception {
 }
 ```
 
+> **Phase-1 implementation note.** `cause` (with the `(message, cause)`
+> constructor), `addSuppressed`, and `getSuppressed` are implemented;
+> read the cause through `getCause()`. `stackTrace` capture is NOT yet
+> implemented (the DWARF walk lands with the §S.7.3 work). A rethrown
+> catch binder carries its CAUGHT static type, not the original
+> concrete subtype (the catch machinery binds the base slice).
+
 Stack trace capture happens at construction time (per `JUX-SEMANTICS-ADDENDUM.md` §S.7.3) — not at `throw`, not at `catch`. This matches Java and avoids the per-throw cost of capturing in code paths that catch and discard.
 
 ### X.1.2. Standard Subclasses
