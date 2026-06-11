@@ -1429,7 +1429,13 @@ impl RustEmitter {
                 Expr::Literal(juxc_ast::Literal::String(_)) => {
                     Some(juxc_tycheck::Ty::String)
                 }
-                _ => None,
+                // Numeric / char receivers built purely from literals
+                // (`255.toHex()`, `(0.0 / 0.0).isNaN()`) — literals
+                // carry `Span::DUMMY`, and a binary over two literals
+                // JOINS those into another DUMMY span, so neither has
+                // an `expr_types` entry. Type them structurally so
+                // §K.11 intrinsics still dispatch.
+                e => literal_numeric_ty(e).map(juxc_tycheck::Ty::Primitive),
             });
         let Some(recv_ty) = recv_ty else {
             return false;
@@ -1447,6 +1453,11 @@ impl RustEmitter {
             juxc_tycheck::Ty::User { name, .. }
                 if name.rsplit('.').next().unwrap_or(name) == "HashSet"
         );
+        // Numeric / char intrinsics (§K.11) — Primitive-typed
+        // receivers get their own dispatch table.
+        if let juxc_tycheck::Ty::Primitive(prim) = &recv_ty {
+            return self.emit_numeric_stdlib_method(call, method, *prim);
+        }
         if !is_array && !is_string && !is_map && !is_set {
             return false;
         }
@@ -1752,8 +1763,243 @@ impl RustEmitter {
         }
     }
 
-    /// Emit the Rust equivalent of a Jux `String` method call.
-    /// Returns `true` when the method was handled.
+    /// Numeric / char intrinsics (§K.11) on primitive receivers.
+    /// Numeric receivers cast to their exact Rust type first — that
+    /// resolves Rust's ambiguous-`{integer}` inference, pins the
+    /// method set, AND keeps width semantics honest (a `byte`
+    /// wrapping-add wraps at 8 bits, not pointer width). Chars
+    /// dispatch on `char` directly. Checked forms produce the Jux
+    /// `Result<T, E>` enum.
+    fn emit_numeric_stdlib_method(
+        &mut self,
+        call: &CallExpr,
+        method: &str,
+        prim: juxc_tycheck::Primitive,
+    ) -> bool {
+        use juxc_tycheck::Primitive as P;
+        let Expr::Field(f) = &*call.callee else { return false };
+        let receiver = &f.object;
+        let is_float = matches!(prim, P::Float | P::Double | P::F32 | P::F64);
+        let is_char = matches!(prim, P::Char);
+        if matches!(prim, P::Bool) {
+            return false;
+        }
+        // Exact Rust spelling of the receiver's primitive — the cast
+        // target that keeps overflow/wrap behavior width-faithful.
+        let rust_ty: &str = match prim {
+            P::Int => "isize",
+            P::Uint => "usize",
+            P::Byte | P::I8 => "i8",
+            P::Ubyte | P::U8 => "u8",
+            P::Short | P::I16 => "i16",
+            P::Ushort | P::U16 => "u16",
+            P::Long | P::I64 => "i64",
+            P::Ulong | P::U64 => "u64",
+            P::I32 => "i32",
+            P::U32 => "u32",
+            P::Float | P::F32 => "f32",
+            P::Double | P::F64 => "f64",
+            P::Char | P::Bool => "",
+        };
+        let prev = self.emitting_format_arg;
+        self.emitting_format_arg = false;
+        let emit_recv = |this: &mut Self| {
+            this.w.push_str("((");
+            this.emit_expr(receiver);
+            if is_char {
+                this.w.push(')');
+            } else {
+                this.w.push_str(") as ");
+                this.w.push_str(rust_ty);
+            }
+            this.w.push(')');
+        };
+        let simple: Option<&str> = if is_char {
+            match method {
+                "isDigit" => Some(".is_ascii_digit()"),
+                "isAlphabetic" => Some(".is_alphabetic()"),
+                "isWhitespace" => Some(".is_whitespace()"),
+                "isUppercase" => Some(".is_uppercase()"),
+                "isLowercase" => Some(".is_lowercase()"),
+                "toUppercase" => Some(".to_ascii_uppercase()"),
+                "toLowercase" => Some(".to_ascii_lowercase()"),
+                // `codePoint()` — the Unicode scalar value as `uint`.
+                "codePoint" => Some(" as usize"),
+                _ => None,
+            }
+        } else if is_float {
+            match method {
+                "sqrt" => Some(".sqrt()"),
+                "floor" => Some(".floor()"),
+                "ceil" => Some(".ceil()"),
+                // Spec: round-half-to-even (banker's rounding).
+                "round" => Some(".round_ties_even()"),
+                "abs" => Some(".abs()"),
+                "isNaN" => Some(".is_nan()"),
+                "isInfinite" => Some(".is_infinite()"),
+                "isFinite" => Some(".is_finite()"),
+                // IEEE bit pattern, widened to `uint` (§K.11).
+                "bits" => Some(".to_bits() as usize"),
+                _ => None,
+            }
+        } else {
+            // `abs` only exists on SIGNED integers in Rust; unsigned
+            // receivers fall through to the generic passthrough (and
+            // rustc's method set) rather than emitting a bad call.
+            let signed = !rust_ty.starts_with('u');
+            match method {
+                "abs" if signed => Some(".abs()"),
+                "saturatingAbs" if signed => Some(".saturating_abs()"),
+                "countOnes" => Some(".count_ones() as isize"),
+                "leadingZeros" => Some(".leading_zeros() as isize"),
+                "trailingZeros" => Some(".trailing_zeros() as isize"),
+                _ => None,
+            }
+        };
+        if let Some(suffix) = simple {
+            emit_recv(self);
+            self.w.push_str(suffix);
+            self.emitting_format_arg = prev;
+            return true;
+        }
+        // One-argument float forms (§K.11).
+        if is_float {
+            match method {
+                // Exact bit equality, NaN payloads included.
+                "bitsEqual" => {
+                    emit_recv(self);
+                    self.w.push_str(".to_bits() == ((");
+                    self.emit_call_args(call);
+                    self.w.push_str(") as ");
+                    self.w.push_str(rust_ty);
+                    self.w.push_str(").to_bits()");
+                    self.emitting_format_arg = prev;
+                    return true;
+                }
+                // IEEE 754 total order (backs `<=>` on floats):
+                // -Inf < … < -0.0 < +0.0 < … < +Inf < NaN.
+                "totalOrder" => {
+                    emit_recv(self);
+                    self.w.push_str(".total_cmp(&((");
+                    self.emit_call_args(call);
+                    self.w.push_str(") as ");
+                    self.w.push_str(rust_ty);
+                    self.w.push_str(")) as isize");
+                    self.emitting_format_arg = prev;
+                    return true;
+                }
+                // Fixed-decimal formatting: `3.14159.toFixed(2)` → "3.14".
+                "toFixed" => {
+                    self.w.push_str("format!(\"{:.1$}\", ");
+                    emit_recv(self);
+                    self.w.push_str(", (");
+                    self.emit_call_args(call);
+                    self.w.push_str(") as usize)");
+                    self.emitting_format_arg = prev;
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        // One-argument integer forms.
+        if !is_float && !is_char {
+            let one_arg: Option<&str> = match method {
+                "saturatingAdd" => Some("saturating_add"),
+                "saturatingSub" => Some("saturating_sub"),
+                "saturatingMul" => Some("saturating_mul"),
+                "wrappingAdd" => Some("wrapping_add"),
+                "wrappingSub" => Some("wrapping_sub"),
+                "wrappingMul" => Some("wrapping_mul"),
+                _ => None,
+            };
+            if let Some(rust) = one_arg {
+                emit_recv(self);
+                self.w.push('.');
+                self.w.push_str(rust);
+                self.w.push_str("((");
+                self.emit_call_args(call);
+                self.w.push_str(") as ");
+                self.w.push_str(rust_ty);
+                self.w.push(')');
+                self.emitting_format_arg = prev;
+                return true;
+            }
+            let rotate: Option<&str> = match method {
+                "rotateLeft" => Some("rotate_left"),
+                "rotateRight" => Some("rotate_right"),
+                _ => None,
+            };
+            if let Some(rust) = rotate {
+                emit_recv(self);
+                self.w.push('.');
+                self.w.push_str(rust);
+                self.w.push_str("((");
+                self.emit_call_args(call);
+                self.w.push_str(") as u32)");
+                self.emitting_format_arg = prev;
+                return true;
+            }
+            // Checked arithmetic → the Jux Result enum (§K.11).
+            let checked: Option<&str> = match method {
+                "checkedAdd" => Some("checked_add"),
+                "checkedSub" => Some("checked_sub"),
+                "checkedMul" => Some("checked_mul"),
+                "checkedDiv" => Some("checked_div"),
+                _ => None,
+            };
+            if let Some(rust) = checked {
+                self.w.push_str("(match ");
+                emit_recv(self);
+                self.w.push('.');
+                self.w.push_str(rust);
+                self.w.push_str("((");
+                self.emit_call_args(call);
+                self.w.push_str(") as ");
+                self.w.push_str(rust_ty);
+                self.w.push_str(") { Some(__jux_v) => crate::jux::std::result::Result::Ok(__jux_v), None => crate::jux::std::result::Result::Err(crate::jux::std::exceptions::ArithmeticException::new(\"");
+                self.w.push_str(method);
+                self.w.push_str(" overflowed\".to_string())) })");
+                self.emitting_format_arg = prev;
+                return true;
+            }
+            // Width conversions to `int` (§K.11). `toInt` is checked
+            // (Result); `saturatingToInt` clamps. Comparing through
+            // `i128` covers every source width and signedness.
+            if method == "toInt" {
+                self.w.push_str("(match isize::try_from(");
+                emit_recv(self);
+                self.w.push_str(") { Ok(__jux_v) => crate::jux::std::result::Result::Ok(__jux_v), Err(_) => crate::jux::std::result::Result::Err(crate::jux::std::exceptions::ArithmeticException::new(\"toInt out of range\".to_string())) })");
+                self.emitting_format_arg = prev;
+                return true;
+            }
+            if method == "saturatingToInt" {
+                self.w.push_str("({ let __jux_v = ");
+                emit_recv(self);
+                self.w.push_str(" as i128; if __jux_v > isize::MAX as i128 { isize::MAX } else if __jux_v < isize::MIN as i128 { isize::MIN } else { __jux_v as isize } })");
+                self.emitting_format_arg = prev;
+                return true;
+            }
+            // Radix formatting.
+            let radix: Option<&str> = match method {
+                "toHex" => Some("{:x}"),
+                "toBinary" => Some("{:b}"),
+                "toOctal" => Some("{:o}"),
+                _ => None,
+            };
+            if let Some(fmt) = radix {
+                self.w.push_str("format!(\"");
+                self.w.push_str(fmt);
+                self.w.push_str("\", ");
+                emit_recv(self);
+                self.w.push(')');
+                self.emitting_format_arg = prev;
+                return true;
+            }
+        }
+        self.emitting_format_arg = prev;
+        false
+    }
+
     fn emit_string_stdlib_method(&mut self, call: &CallExpr, method: &str) -> bool {
         let Expr::Field(f) = &*call.callee else {
             return false;
@@ -1772,6 +2018,26 @@ impl RustEmitter {
             "isEmpty" => {
                 self.emit_expr(receiver);
                 self.w.push_str(".is_empty()");
+                true
+            }
+            // §K.7: explicit length forms. `byteLength` is the
+            // UTF-8 byte count (Rust `len`); `charLength` counts
+            // scalar values (O(N) per the spec note).
+            "byteLength" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".len() as isize");
+                true
+            }
+            "charLength" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".chars().count() as isize");
+                true
+            }
+            "repeat" => {
+                self.emit_expr(receiver);
+                self.w.push_str(".repeat((");
+                self.emit_call_args(call);
+                self.w.push_str(") as usize)");
                 true
             }
             // Pure renames: snake_case Rust spelling.
@@ -1966,5 +2232,34 @@ impl RustEmitter {
             ),
             _ => false,
         }
+    }
+}
+
+/// Structural typing for receivers built PURELY from numeric/char
+/// literals. Literals have `Span::DUMMY`, and a binary expression over
+/// two literals joins those into another DUMMY span, so none of them
+/// ever land in `expr_types`. Mixed int/float arithmetic widens to
+/// `double`, matching the inference pass. Returns `None` as soon as a
+/// non-literal leaf appears (those have real spans and use the map).
+fn literal_numeric_ty(e: &Expr) -> Option<juxc_tycheck::Primitive> {
+    use juxc_tycheck::Primitive as P;
+    match e {
+        Expr::Literal(juxc_ast::Literal::Int(_)) => Some(P::Int),
+        Expr::Literal(juxc_ast::Literal::Float(_)) => Some(P::Double),
+        Expr::Literal(juxc_ast::Literal::Char(_)) => Some(P::Char),
+        Expr::Unary(u) => literal_numeric_ty(&u.operand),
+        Expr::Binary(b) => {
+            let l = literal_numeric_ty(&b.left)?;
+            let r = literal_numeric_ty(&b.right)?;
+            if matches!(l, P::Char) || matches!(r, P::Char) {
+                return None;
+            }
+            Some(if matches!(l, P::Double) || matches!(r, P::Double) {
+                P::Double
+            } else {
+                l
+            })
+        }
+        _ => None,
     }
 }

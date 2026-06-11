@@ -1,0 +1,70 @@
+// Numeric / char intrinsics and primitive-type constants (§K.11).
+//
+// - Integer receivers: abs, saturating*/wrapping* arithmetic (width-
+//   faithful — a `byte` wraps at 8 bits), checked* forms returning
+//   `Result<T, ArithmeticException>`, bit queries (countOnes/
+//   leadingZeros/trailingZeros, rotateLeft/rotateRight), radix
+//   formatting (toHex/toBinary/toOctal), and width conversions
+//   (toInt checked, saturatingToInt clamping).
+// - Float receivers: sqrt/floor/ceil/round (half-to-even)/abs,
+//   isNaN/isInfinite/isFinite, bitsEqual, totalOrder (IEEE total
+//   order backing `<=>`), toFixed.
+// - Char receivers: classifiers + case mapping + codePoint.
+// - Constants on the type NAME: `int.MAX_VALUE`, `byte.MIN_VALUE`,
+//   `double.NAN` / `POSITIVE_INFINITY` / `EPSILON` (float MIN_VALUE
+//   is the smallest positive value, Java-style).
+
+package numerics;
+
+public void main() {
+    // Integer intrinsics.
+    var n = -7;
+    print(n.abs());                  // 7
+    print(12.saturatingAdd(3));      // 15
+    print(5.wrappingMul(2));         // 10
+    print(10.countOnes());           // 2
+    print(255.toHex());              // ff
+    print(5.toBinary());             // 101
+    print(8.toOctal());              // 10
+    print(100.saturatingToInt());    // 100
+
+    // Width-faithful wrap/saturate on a narrow type.
+    byte b = 127;
+    print(b.wrappingAdd(1));         // -128
+    print(b.saturatingAdd(10));      // 127
+    print(1.rotateLeft(3));          // 8
+
+    // Checked arithmetic produces Result<T, ArithmeticException>.
+    var ok = 5.checkedAdd(3);
+    print(ok.isOk());                // true
+    print(ok.unwrap());              // 8
+    long big = 9223372036854775807;
+    print(big.checkedAdd(1).isErr()); // true
+
+    // Float intrinsics.
+    var d = 2.25;
+    print(d.sqrt());                 // 1.5
+    print(d.floor());                // 2
+    print(d.ceil());                 // 3
+    print(2.5.round());              // 2 — round-half-to-even
+    print((0.0 / 0.0).isNaN());      // true
+    print(3.14159.toFixed(2));       // 3.14
+    print(1.0.bitsEqual(1.0));       // true
+    print(1.0.totalOrder(2.0));      // -1
+
+    // Constants on the primitive type names.
+    print(int.MAX_VALUE > 0);        // true
+    print(int.MIN_VALUE < 0);        // true
+    print(byte.MAX_VALUE);           // 127
+    print(double.POSITIVE_INFINITY > 1000000.0); // true
+    print(double.NAN.isNaN());       // true
+    print(double.EPSILON > 0.0);     // true
+
+    // Char classifiers and conversions.
+    print('7'.isDigit());            // true
+    print('a'.isAlphabetic());       // true
+    print('x'.toUppercase());        // X
+    print('Q'.isLowercase());        // false
+    print(' '.isWhitespace());       // true
+    print('A'.codePoint());          // 65
+}

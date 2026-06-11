@@ -1,0 +1,37 @@
+// String API surface (§K.7 / §S.3).
+//
+// - `length` is the UTF-8 BYTE count (O(1)); `byteLength()` is its
+//   explicit spelling and `charLength()` counts Unicode scalar
+//   values (O(N)). On "héllo" those differ: 6 bytes, 5 chars.
+// - `substring(start, end)` slices by byte indices, half-open.
+// - `repeat(n)` concatenates n copies.
+// - The rest of the surface (trim/split/contains/startsWith/endsWith/
+//   indexOf/replace/charAt/isEmpty/toUpperCase/toLowerCase) follows
+//   the Java spellings.
+
+package strings;
+
+public void main() {
+    var s = "héllo";
+    print(s.byteLength());          // 6 — é is two UTF-8 bytes
+    print(s.charLength());          // 5
+    print(s.length);                // 6 — same as byteLength
+
+    print("hello".substring(1, 4)); // ell
+    print("hi".repeat(3));          // hihihi
+
+    var parts = "a,b,c".split(",");
+    print(parts.length);            // 3
+    print(parts[1]);                // b
+
+    print("  pad  ".trim());        // pad
+    print("AbC".toUpperCase());     // ABC
+    print("AbC".toLowerCase());     // abc
+    print("hello".contains("ell")); // true
+    print("hello".startsWith("he"));// true
+    print("hello".endsWith("lo"));  // true
+    print("hello".indexOf("l"));    // 2
+    print("hello".replace("l", "L")); // heLLo
+    print("hello".charAt(1));       // e
+    print("hello".isEmpty());       // false
+}

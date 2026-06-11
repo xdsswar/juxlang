@@ -45,6 +45,19 @@ impl RustEmitter {
             self.emit_safe_field(f);
             return;
         }
+        // §K.11 primitive-type constants: `int.MAX_VALUE` → `isize::MAX`,
+        // `double.NAN` → `f64::NAN`, … The receiver is the TYPE NAME
+        // itself (primitive names are keywords, so no local can shadow).
+        if let Expr::Path(qn) = &*f.object {
+            if qn.segments.len() == 1 {
+                if let Some(rust) =
+                    numeric_constant(&qn.segments[0].text, &f.field.text)
+                {
+                    self.w.push_str(&rust);
+                    return;
+                }
+            }
+        }
         // AsyncMutex guard (§18.3): `guard.value` derefs the guard.
         // Lvalue writes never reach here (emit_assign intercepts);
         // non-Copy protected values clone out on read.
@@ -1241,4 +1254,46 @@ fn camel_to_snake(s: &str) -> String {
         }
     }
     out
+}
+
+/// Maps a `<primitive-type-name>.<CONSTANT>` access (§K.11) to the Rust
+/// associated constant, or `None` when the pair isn't a numeric constant.
+/// Float `MIN_VALUE` is the smallest POSITIVE value per the spec (Java's
+/// `Double.MIN_VALUE` convention), which is Rust's `MIN_POSITIVE`.
+pub(crate) fn numeric_constant(type_name: &str, field: &str) -> Option<String> {
+    let rust_ty = match type_name {
+        "byte" => "i8",
+        "ubyte" => "u8",
+        "short" => "i16",
+        "ushort" => "u16",
+        "int" => "isize",
+        "uint" => "usize",
+        "long" => "i64",
+        "ulong" => "u64",
+        "float" => "f32",
+        "double" => "f64",
+        "i8" => "i8",
+        "u8" => "u8",
+        "i16" => "i16",
+        "u16" => "u16",
+        "i32" => "i32",
+        "u32" => "u32",
+        "i64" => "i64",
+        "u64" => "u64",
+        "f32" => "f32",
+        "f64" => "f64",
+        _ => return None,
+    };
+    let is_float = matches!(rust_ty, "f32" | "f64");
+    let rust_const = match field {
+        "MIN_VALUE" if is_float => "MIN_POSITIVE",
+        "MIN_VALUE" => "MIN",
+        "MAX_VALUE" => "MAX",
+        "NAN" if is_float => "NAN",
+        "POSITIVE_INFINITY" if is_float => "INFINITY",
+        "NEGATIVE_INFINITY" if is_float => "NEG_INFINITY",
+        "EPSILON" if is_float => "EPSILON",
+        _ => return None,
+    };
+    Some(format!("{rust_ty}::{rust_const}"))
 }
