@@ -1,0 +1,63 @@
+// Re-entrancy stress test for the statement-scoped borrow discipline (§CR.4.1).
+//
+// Classes lower to `Rc<RefCell<Inner>>`; every field access takes a `borrow()`
+// /`borrow_mut()` guard that MUST drop within its own statement. If a guard
+// ever leaked across a call, a re-entrant mutation of the same object would
+// panic at run time with `already borrowed: BorrowMutError`. This program
+// drives exactly that adversarial shape — an object mutated again while a call
+// it made is still on the stack — and must run clean.
+
+package reentrancy;
+
+// --- Cross-object re-entry: Counter.bump() calls Notifier.ping(this), which
+//     calls back into Counter.bump() and mutates the SAME counter. ---
+public class Counter {
+    public int value;
+    public Notifier notifier;
+
+    public Counter(Notifier n) {
+        this.value = 0;
+        this.notifier = n;
+    }
+
+    public void bump() {
+        this.value = this.value + 1;        // mutate own field
+        if (this.value < 3) {
+            this.notifier.ping(this);       // re-enters bump() on `this`
+        }
+        print("value=" + this.value);
+    }
+}
+
+public class Notifier {
+    public void ping(Counter c) {
+        c.bump();                            // re-entrant mutation of `c`
+    }
+}
+
+// --- Self re-entry: a method that mutates a field, then recurses into itself
+//     before reading the field back. ---
+public class Accumulator {
+    public int sum;
+
+    public Accumulator() {
+        this.sum = 0;
+    }
+
+    public void addThenRecurse(int n) {
+        this.sum = this.sum + n;             // mutate
+        if (n > 1) {
+            this.addThenRecurse(n - 1);      // self re-entry
+        }
+        print("sum=" + this.sum);
+    }
+}
+
+public void main() {
+    var n = new Notifier();
+    var c = new Counter(n);
+    c.bump();                                // bump -> ping -> bump -> ping -> bump
+
+    var a = new Accumulator();
+    a.addThenRecurse(3);                     // 3 + 2 + 1 = 6
+}

@@ -1094,6 +1094,15 @@ impl RustEmitter {
             self.emit_call_with_hoisted_args(call);
             return;
         }
+        // **Re-entrancy borrow-hoist.** If the receiver is read through a
+        // wrapper `.0.borrow()` guard, hoist it into a temp so the guard drops
+        // before the call — otherwise a re-entrant method (one that, directly
+        // or through a callee, mutates the same object) panics `already
+        // borrowed` (§CR.4.1).
+        if let Some(cf) = self.callee_receiver_reads_through_borrow(&call.callee) {
+            self.emit_call_with_hoisted_receiver(call, cf);
+            return;
+        }
         // Generic call: emit `callee(args, …)` literally. Post Fix 1
         // every Jux `String` value is already an owned Rust `String`,
         // so the previous per-arg enum-variant payload coercion is
@@ -1273,6 +1282,31 @@ impl RustEmitter {
             .any(|a| self.contains_mut_call_on(a, root))
     }
 
+    /// When the callee is `recv.method(...)` and `recv` is itself read through
+    /// a wrapper `.0.borrow()` guard (a wrapper-class instance field), return
+    /// the callee `Field`. Such a call holds the receiver's `borrow()` alive
+    /// across `method(...)`; if `method` re-enters and mutates the same object
+    /// (`a.bump()` → `b.ping(a)` → `a.bump()`), the re-entrant `borrow_mut()`
+    /// panics `already borrowed`. The fix (see `emit_call_with_hoisted_receiver`)
+    /// hoists the receiver into a temp so the guard drops before the call —
+    /// upholding §CR.4.1's statement-scoped borrow discipline under re-entrancy.
+    fn callee_receiver_reads_through_borrow<'c>(
+        &self,
+        callee: &'c Expr,
+    ) -> Option<&'c juxc_ast::FieldExpr> {
+        let Expr::Field(cf) = callee else { return None };
+        let Expr::Field(rf) = cf.object.as_ref() else { return None };
+        if self.receiver_is_wrapper_class(&rf.object)
+            && self
+                .wrapper_field_parent_depth(&rf.object, &rf.field.text)
+                .is_some()
+        {
+            Some(cf)
+        } else {
+            None
+        }
+    }
+
     /// Recursive walk: does `e` contain a call to a mutating method
     /// (per `user_mut_methods`) whose receiver is the bare place
     /// `root` (`x.bump()` for root `x`, `this.bump()` for `this`)?
@@ -1370,6 +1404,66 @@ impl RustEmitter {
             if f.field.text == "pop" && call.args.is_empty() {
                 self.w.push_str(".unwrap()");
             }
+        }
+        self.w.push_str(" }");
+    }
+
+    /// Emit `recv.m(args…)` with the RECEIVER hoisted out of its `.0.borrow()`:
+    ///
+    ///   { let __jux_recv = <recv>; __jux_recv.m(args) }
+    ///
+    /// `recv` (a wrapper-class instance field) clones out of the borrow when
+    /// bound, so the guard drops at the `;` — releasing it BEFORE `m(...)` runs.
+    /// Without this, a re-entrant `m` that mutates the same object panics with
+    /// `already borrowed` (§CR.4.1). Args stay inline: each is a temporary whose
+    /// own borrow ends before `m` is entered, and `__jux_recv` is already owned.
+    fn emit_call_with_hoisted_receiver(
+        &mut self,
+        call: &CallExpr,
+        callee: &juxc_ast::FieldExpr,
+    ) {
+        self.w.push_str("{ let __jux_recv = ");
+        // Value position → the wrapper-field read appends `.clone()`, producing
+        // an owned handle and dropping the `borrow()` temporary at the `;`.
+        let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
+        let prev_cmp = std::mem::take(&mut self.emitting_comparison_operand);
+        self.emit_expr(&callee.object);
+        self.emitting_format_arg = prev_fmt;
+        self.emitting_comparison_operand = prev_cmp;
+        self.w.push_str("; __jux_recv.");
+        self.w.push_str(&callee.field.text);
+        if let Some(sfx) = self.pending_method_suffix.take() {
+            self.w.push_str(&sfx);
+        }
+        if !call.explicit_generic_args.is_empty() {
+            self.w.push_str("::<");
+            for (i, ty) in call.explicit_generic_args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                if crate::analysis::is_jux_string_type(ty) {
+                    self.w.push_str("String");
+                } else {
+                    self.emit_value_type_as_rust(ty);
+                }
+            }
+            self.w.push('>');
+        }
+        self.w.push('(');
+        let prev = std::mem::take(&mut self.emitting_format_arg);
+        for (i, arg) in call.args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            if self.callee_param_is_ref(&call.callee, i) {
+                self.w.push('&');
+            }
+            self.emit_call_arg_value(call, i, arg);
+        }
+        self.emitting_format_arg = prev;
+        self.w.push(')');
+        if callee.field.text == "pop" && call.args.is_empty() {
+            self.w.push_str(".unwrap()");
         }
         self.w.push_str(" }");
     }

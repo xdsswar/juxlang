@@ -430,6 +430,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `W0001`  | Doc comment in non-attaching position                       | Grammar §A.1.2                 |
 | `W0210`  | Module declares no exported symbols                         | Build system §B.3.4            |
 | `W0301`  | Equality chained with reference identity                    | Grammar §A.4                   |
+| `W0457`  | Un-annotated reference cycle (strong field re-references owning class) will leak — mark a back-edge `weak` | JUX-LANG-V1 §6.5 |
 | `W0530`  | Cyclic class initialization within a module                 | Semantics §S.4.2               |
 | `W0720`  | `return` inside `finally` discards exception                | Exceptions §X.3.5              |
 | `W0820`  | `unsafe` block missing `// SAFETY:` justification           | Layout-ABI §L.5.5              |
