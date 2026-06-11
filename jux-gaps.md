@@ -1,7 +1,15 @@
 # Jux — Gap Analysis (implementation vs. spec)
 
 **Author:** Claude (Opus 4.8) — grounded review.
-**Last updated:** 2026-06-11 (post triage + fixes; branch `polymorphism`)
+**Last updated:** 2026-06-11 (re-verification pass; branch `polymorphism`)
+
+> Re-verification note (this pass): every Resolved row below was re-checked against
+> source and is accurate — `emit_call_with_hoisted_receiver` (`exprs/call.rs:1420`),
+> `compute_wrapped_set` (`lib.rs:210`/`:348`), `W0457`/`check_unannotated_cycles`
+> (`symbol_table.rs:1060`), `source_map.rs::rewrite_rustc_output`. The
+> `reentrancy_stress` and `exception_cause` tests both pass. **One correction:**
+> exception chaining (`getCause`/`addSuppressed`/`getSuppressed`/2-arg ctor) is in
+> fact wired and tested — moved from backlog to Resolved (G9).
 
 ## How to read this
 
@@ -41,11 +49,13 @@ markers are ON for all real lowering entry points (`lower_with_source` / `lower_
 ### G7. Backend file size — **done** ✅
 Split into `decls/`, `exprs/`, `stmts.rs`, `literals.rs`, etc.
 
-### G9. Try/catch/finally — **done** (chaining deferred) ✅
+### G9. Try/catch/finally + exception chaining — **done** ✅
 Lowering (`stmts.rs:933`) via `catch_unwind`; return-in-catch parks past `finally`,
 return-in-finally overrides, multi-catch + subtype dispatch all implemented and tested
-(`catch_finally_order`, `multi_catch`, `try_finally_semantics`). **Exception chaining**
-(`cause` / `addSuppressed`) is not wired — backlog.
+(`catch_finally_order`, `multi_catch`, `try_finally_semantics`). **Exception chaining
+is also wired and tested** — `new Exception(message, cause)`, `getCause()`,
+`addSuppressed()` / `getSuppressed()` all work; `exception_cause` test passes
+(re-verified this pass). The earlier "chaining deferred" note is closed.
 
 ### G16. CI compiles emitted Rust — **done** ✅
 Every `bin/jux/tests/*.rs` runner invokes `jux run` → `juxc_driver::build` → `cargo build`
@@ -72,6 +82,24 @@ field and suggests `weak`. Stdlib packages are excluded (their internal cycles l
 exactly one real cycle (`stress_borrow.jux`'s `Node.peer`) across all 144 examples. The
 eventual cycle *collector* (trial-deletion) is still unscheduled (backlog).
 
+### G13. Multi-file Rust output — **done** ✅
+Closed (commit `4ff2df1`). The backend emits **one `.rs` per `.jux` file** mirroring the package
+tree (`emit_package_files` / `split_files` in `lib.rs`), with `mod.rs` re-exports
+(`mod x; pub use x::*;`) keeping type paths flat (`crate::pkg::Type`). Module/file names are
+lower-cased to avoid the module-vs-type name clash; `use super::*;` resolves same-package siblings;
+split-mode items are `pub(crate)`. `main.rs` keeps the prelude + no-package units + `pub mod` decls
++ `fn main` shim. All ~144 example runners compile + run the multi-file output.
+
+### G15a. Const evaluation (§T.11 subset) — **done** ✅
+Closed this session. A shared const-expression evaluator (`juxc-tycheck/src/const_eval.rs`, used by
+both tycheck and the backend) folds integer/bool const expressions over concrete constants —
+literals, `const`/`final` binding reads, arithmetic/bitwise/comparison/logical ops, and calls to
+const-evaluable Java-style functions (const-ness is a property of the expression, §A.2.2 — **no `fn`
+keyword**). Wired into const-binding initializers (`const int CACHE = doubled(1024);` → `2048`),
+fixed-array sizes (`byte[SIZE + 1]` → `[u8; 33]`), and const-generic args (`Ring<float, SIZE>` →
+`Ring::<f32, 32>`). New codes `E0840`/`E0841`/`E0842`. Generic-`N` arithmetic (`byte[N+1]`) stays
+`E0445` (Rust-blocked — see G14). §T.11 spec corrected from Rust-flavored `const fn … -> T` to Jux.
+
 ---
 
 ## Backlog (real, tracked, each its own effort)
@@ -81,13 +109,11 @@ eventual cycle *collector* (trial-deletion) is still unscheduled (backlog).
 | G1b | Box / Arc class representations (beyond Inline + Rc)        | Further perf tiers; §CR.2–3. Inline + Rc shipped. |
 | G2  | Classes across threads (`Arc<Mutex>` rep)                  | Hard-errors today (E0702); depends on G1b. |
 | G5  | No MIR — flow analyses ride on the AST                      | Architectural; decide explicitly if Phase 1 ships without it. |
-| G9t | Exception chaining (`cause` / suppressed)                  | Deferred tail of G9. |
 | G10 | FFI (C/C++)                                                | Deferred by user; path known (build.rs + bindgen/autocxx). |
 | G11 | `StackString`, `Volatile`, `SharedRef`                     | Escape-selector / unsafe-dependent. |
 | G12 | Nested / inner / anonymous classes                         | Partially landed; full support post-Phase-1. |
-| G13 | Multi-file Rust output mirroring `.jux` files              | User-requested; one emitted unit today. |
-| G14 | Per-instantiation generic representation                   | One rep across instantiations today (§CR.5.3). |
-| G15 | Remaining wave-6 items (const-eval, annotations, module.jux, out/move) | Tracked in wave-6 notes. |
+| G14 | Per-instantiation generic representation                   | One rep across instantiations today (§CR.5.3); blocks generic-`N` const arithmetic. |
+| G15 | Remaining wave-6 items (annotations, `module.jux`, out/move) | Tracked in wave-6 notes. |
 
 ---
 

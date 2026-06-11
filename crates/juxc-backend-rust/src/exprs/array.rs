@@ -117,14 +117,18 @@ impl RustEmitter {
         self.w.push('[');
         self.emit_default_value_for(&n.element_type);
         self.w.push_str("; ");
-        // The repeat-length slot is a const `usize` position — a
-        // const-generic param (`new int[N]`) must stay raw `N`, not
-        // the `(N as isize)` value-cast (rustc: "generic parameters
-        // may not be used in const operations").
-        let prev = self.in_array_size_position;
-        self.in_array_size_position = true;
-        self.emit_expr(&n.size);
-        self.in_array_size_position = prev;
+        // A const-evaluable length (`new int[SIZE * 2]`) emits the computed
+        // `usize` literal (§T.11). Otherwise the repeat-length slot is a const
+        // `usize` position — a const-generic param (`new int[N]`) must stay raw
+        // `N`, not the `(N as isize)` value-cast.
+        if let Some(v) = self.try_const_int(&n.size) {
+            self.w.push_str(&v.to_string());
+        } else {
+            let prev = self.in_array_size_position;
+            self.in_array_size_position = true;
+            self.emit_expr(&n.size);
+            self.in_array_size_position = prev;
+        }
         self.w.push(']');
     }
 

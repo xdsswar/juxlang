@@ -3435,20 +3435,61 @@ impl<'a> Checker<'a> {
     /// are left alone — their (pre-existing) validation is rustc's
     /// const-expr check.
     fn check_const_size_expr(&mut self, size: &Expr) {
-        // Bare name or plain literal — always fine.
-        if matches!(size, Expr::Literal(_) | Expr::Path(_)) {
-            return;
-        }
-        if expr_mentions_name_of(size, &self.const_param_names) {
-            self.diagnostics.push(
-                Diagnostic::error(
-                    code::Code::E0445_ConstGenericUnsupported,
-                    "const-generic arithmetic in array sizes (e.g. `N + 1`) is not \
-                     supported in this phase — use the bare parameter (`[N]`) or a \
-                     literal size",
-                )
-                .with_span(expr_span(size)),
-            );
+        let ctx = crate::const_eval::ConstCtx {
+            symbols: self.symbols,
+            generic_param_names: &self.const_param_names,
+        };
+        match crate::const_eval::eval_const_int(size, &ctx) {
+            // Reduces to a concrete value (`5`, `SIZE`, `SIZE + 1`, a const-fn
+            // call) — accept; the backend emits the computed literal (§T.11).
+            Ok(_) => {}
+            // Mentions a GENERIC const param: a bare `[N]` is fine (forwarded
+            // as a Rust const-generic arg), but computed `[N + 1]` needs the
+            // nightly `generic_const_exprs` we don't enable — keep E0445.
+            Err(crate::const_eval::ConstEvalError::Generic) => {
+                if !matches!(size, Expr::Path(qn) if qn.segments.len() == 1) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0445_ConstGenericUnsupported,
+                            "const-generic arithmetic in array sizes (e.g. `N + 1`) is not \
+                             supported in this phase — use the bare parameter (`[N]`) or a \
+                             literal size",
+                        )
+                        .with_span(expr_span(size)),
+                    );
+                }
+            }
+            // Overflow / divide-by-zero while folding.
+            Err(crate::const_eval::ConstEvalError::Panic(msg)) => {
+                self.diagnostics.push(
+                    Diagnostic::error(code::Code::E0842_ConstEvalPanic, msg)
+                        .with_span(expr_span(size)),
+                );
+            }
+            Err(crate::const_eval::ConstEvalError::LimitExceeded) => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0840_ConstEvalLimitExceeded,
+                        "const evaluation of this array size exceeded its resource limits",
+                    )
+                    .with_span(expr_span(size)),
+                );
+            }
+            // Not const-evaluable. Preserve the prior leniency for a bare
+            // literal / name (which the old code accepted unconditionally); only
+            // a clearly non-const ARITHMETIC size is a hard error now (it would
+            // otherwise leak a rustc "array size must be const" error).
+            Err(crate::const_eval::ConstEvalError::NonConst(msg)) => {
+                if !matches!(size, Expr::Literal(_) | Expr::Path(_)) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0841_NonConstInConstContext,
+                            format!("array size must be a compile-time constant — {msg}"),
+                        )
+                        .with_span(expr_span(size)),
+                    );
+                }
+            }
         }
     }
 
@@ -3519,20 +3560,43 @@ impl<'a> Checker<'a> {
                         .with_span(arg.span),
                     );
                 }
-                // Const slot got a type (`new Buf<String>()`).
-                (Some(_), None) => {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::Code::E0445_ConstGenericUnsupported,
-                            format!(
-                                "`{}` is a const-generic parameter — its argument must be a \
-                                 compile-time literal (`4`, `true`), not a type or a runtime \
-                                 value",
-                                param.name.text,
-                            ),
-                        )
-                        .with_span(arg.span),
-                    );
+                // Const slot got a non-literal arg. It may still be a const
+                // EXPRESSION that reduces to a value — a bare const name
+                // (`new Ring<float, SIZE>()`). Evaluate it; accept if it folds
+                // to a value of the matching kind. (The parser only produces a
+                // type or a bare name in arg position, so arithmetic args like
+                // `SIZE*2` are a parser follow-up.)
+                (Some(cty), None) => {
+                    let probe = Expr::Path(arg.name.clone());
+                    let ctx = crate::const_eval::ConstCtx {
+                        symbols: self.symbols,
+                        generic_param_names: &self.const_param_names,
+                    };
+                    let param_is_bool = cty
+                        .name
+                        .segments
+                        .last()
+                        .map(|s| s.text == "bool")
+                        .unwrap_or(false);
+                    let folds = if param_is_bool {
+                        crate::const_eval::eval_const_bool(&probe, &ctx).is_ok()
+                    } else {
+                        crate::const_eval::eval_const_int(&probe, &ctx).is_ok()
+                    };
+                    if !folds {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0445_ConstGenericUnsupported,
+                                format!(
+                                    "`{}` is a const-generic parameter — its argument must be a \
+                                     compile-time constant (`4`, `true`, or a `const` value), not \
+                                     a type or a runtime value",
+                                    param.name.text,
+                                ),
+                            )
+                            .with_span(arg.span),
+                        );
+                    }
                 }
                 // Const slot + literal: the literal's kind must match
                 // the param's value type (`true` can't bind `<int N>`).
@@ -5432,32 +5496,6 @@ fn collect_bare_name_reads_stmt(s: &Stmt, sink: &mut dyn FnMut(&juxc_ast::Qualif
             }
         }
         _ => {}
-    }
-}
-
-/// True when `e` contains a bare single-segment `Path` whose name is in
-/// `names`. Drives the const-generic array-size guard
-/// ([`Checker::check_const_size_expr`]) — only the expression shapes a
-/// size expression can realistically take are walked; an unmatched
-/// shape conservatively reports `false` (no diagnostic, rustc's
-/// const-expr check remains the backstop).
-fn expr_mentions_name_of(e: &Expr, names: &std::collections::HashSet<String>) -> bool {
-    match e {
-        Expr::Path(qn) => {
-            qn.segments.len() == 1 && names.contains(&qn.segments[0].text)
-        }
-        Expr::Binary(b) => {
-            expr_mentions_name_of(&b.left, names) || expr_mentions_name_of(&b.right, names)
-        }
-        Expr::Unary(u) => expr_mentions_name_of(&u.operand, names),
-        Expr::Cast(c) => expr_mentions_name_of(&c.value, names),
-        Expr::Call(c) => c.args.iter().any(|a| expr_mentions_name_of(a, names)),
-        Expr::Field(f) => expr_mentions_name_of(&f.object, names),
-        Expr::Index(ix) => {
-            expr_mentions_name_of(&ix.array, names)
-                || expr_mentions_name_of(&ix.index, names)
-        }
-        _ => false,
     }
 }
 
@@ -7529,6 +7567,67 @@ mod tests {
             has(&d, code::Code::E0445_ConstGenericUnsupported),
             "expected E0445 for a literal in a type slot: {d:?}",
         );
+    }
+
+    /// A fixed-array size that divides by zero folds to a compile-time panic.
+    #[test]
+    fn const_eval_div_by_zero_in_array_size_e0842() {
+        let d = run("public class C { byte[1 / 0] data; }");
+        assert!(has(&d, code::Code::E0842_ConstEvalPanic), "{d:?}");
+    }
+
+    /// A fixed-array size that overflows folds to a compile-time panic.
+    #[test]
+    fn const_eval_overflow_in_array_size_e0842() {
+        let d = run("public class C { byte[9223372036854775807 + 1] data; }");
+        assert!(has(&d, code::Code::E0842_ConstEvalPanic), "{d:?}");
+    }
+
+    /// A const-position call to a non-terminating function exhausts the budget.
+    #[test]
+    fn const_eval_runaway_recursion_e0840() {
+        let d = run(
+            "int rec(int x) { return rec(x); } \
+             public class C { int[rec(1)] data; }",
+        );
+        assert!(has(&d, code::Code::E0840_ConstEvalLimitExceeded), "{d:?}");
+    }
+
+    /// A non-const arithmetic array size (over a runtime local) is rejected.
+    #[test]
+    fn const_eval_non_const_array_size_e0841() {
+        let d = run("public void main() { var n = 5; var a = new int[n + 1]; }");
+        assert!(has(&d, code::Code::E0841_NonConstInConstContext), "{d:?}");
+    }
+
+    /// REGRESSION: const-generic ARITHMETIC over a generic param stays E0445
+    /// (Rust-blocked), never the new const-eval codes.
+    #[test]
+    fn generic_param_arithmetic_array_size_still_e0445() {
+        let d = run("public class S<int N> { byte[N + 1] data; }");
+        assert!(has(&d, code::Code::E0445_ConstGenericUnsupported), "{d:?}");
+        assert!(!has(&d, code::Code::E0841_NonConstInConstContext), "{d:?}");
+        assert!(!has(&d, code::Code::E0842_ConstEvalPanic), "{d:?}");
+    }
+
+    /// REGRESSION: a bare generic-param array size `[N]` is still accepted
+    /// (no E0445 — it forwards as a Rust const-generic arg).
+    #[test]
+    fn bare_generic_param_array_size_ok() {
+        let d = run("public class B<int N> { int[N] data; }");
+        assert!(!has(&d, code::Code::E0445_ConstGenericUnsupported), "{d:?}");
+    }
+
+    /// Const arithmetic over CONCRETE consts is accepted (no const-eval error).
+    #[test]
+    fn concrete_const_arithmetic_array_size_ok() {
+        let d = run(
+            "const int SIZE = 4; \
+             public void main() { var a = new int[SIZE + 1]; }",
+        );
+        assert!(!has(&d, code::Code::E0445_ConstGenericUnsupported), "{d:?}");
+        assert!(!has(&d, code::Code::E0841_NonConstInConstContext), "{d:?}");
+        assert!(!has(&d, code::Code::E0842_ConstEvalPanic), "{d:?}");
     }
 
     /// Const-generic arithmetic in an array size (`new int[N + 1]`)

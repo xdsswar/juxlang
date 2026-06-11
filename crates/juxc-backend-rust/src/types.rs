@@ -52,6 +52,28 @@ impl RustEmitter {
     /// value flow Just Work. The cost is one heap alloc per string literal;
     /// Java does exactly this. (An earlier pass mapped `String → &str`; that
     /// was reverted because borrowed/owned mismatches broke value flow.)
+    /// Try to fold an expression to a concrete `i64` at emit time (§T.11),
+    /// reusing the shared `juxc_tycheck::const_eval` evaluator with this
+    /// emitter's symbols + in-scope generic const params. Any failure (including
+    /// the "mentions a generic param" defer signal) → `None`, so the caller
+    /// emits the expression verbatim exactly as before.
+    pub(crate) fn try_const_int(&self, e: &juxc_ast::Expr) -> Option<i64> {
+        let ctx = juxc_tycheck::const_eval::ConstCtx {
+            symbols: &self.symbols,
+            generic_param_names: &self.const_int_params,
+        };
+        juxc_tycheck::const_eval::eval_const_int(e, &ctx).ok()
+    }
+
+    /// Bool sibling of [`Self::try_const_int`].
+    pub(crate) fn try_const_bool(&self, e: &juxc_ast::Expr) -> Option<bool> {
+        let ctx = juxc_tycheck::const_eval::ConstCtx {
+            symbols: &self.symbols,
+            generic_param_names: &self.const_int_params,
+        };
+        juxc_tycheck::const_eval::eval_const_bool(e, &ctx).ok()
+    }
+
     pub(crate) fn emit_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
         // Raw pointer `T*` is the OUTERMOST modifier (§5.5 / §A.2.7), peeled
         // first: each `*` level emits a Rust `*mut`, then we recurse on the
@@ -67,6 +89,29 @@ impl RustEmitter {
             inner.ptr_depth = 0;
             self.emit_type_as_rust(&inner);
             return;
+        }
+        // **Const-generic VALUE argument** (§T.11): a bare name in a type-arg
+        // slot that names a `const` (`Ring<float, SIZE>` → `Ring::<f32, 32>`).
+        // A digit literal (`256`) is already handled by the bare-name path; a
+        // generic param `N` folds to the `Generic` defer → `None` → emits `N`
+        // (forwarded const-generic arg); a real type name isn't a const → `None`
+        // → falls through to the normal type path.
+        if ty.fn_shape.is_none()
+            && ty.array_shape.is_none()
+            && !ty.nullable
+            && ty.generic_args.is_empty()
+            && ty.name.segments.len() == 1
+            && ty.const_literal_text().is_none()
+        {
+            let probe = juxc_ast::Expr::Path(ty.name.clone());
+            if let Some(v) = self.try_const_int(&probe) {
+                self.w.push_str(&v.to_string());
+                return;
+            }
+            if let Some(b) = self.try_const_bool(&probe) {
+                self.w.push_str(if b { "true" } else { "false" });
+                return;
+            }
         }
         // Nullable types `T?` lower to Rust's `Option<T>`. We peel
         // the `nullable` flag here and recurse on the inner type
@@ -180,13 +225,18 @@ impl RustEmitter {
                     };
                     self.emit_type_as_rust(&element_ty);
                     self.w.push_str("; ");
-                    // The size slot must be a raw `usize` — flag the
-                    // position so a const-generic param (`[T; N]`)
-                    // skips its `(N as isize)` value-cast.
-                    let prev = self.in_array_size_position;
-                    self.in_array_size_position = true;
-                    self.emit_expr(size);
-                    self.in_array_size_position = prev;
+                    // A const-evaluable size (`byte[SIZE + 1]`) emits the
+                    // computed `usize` literal (§T.11); a bare generic `[T; N]`
+                    // / runtime form falls through to the verbatim emission
+                    // (flagged so a const-generic param skips its `as isize`).
+                    if let Some(v) = self.try_const_int(size) {
+                        self.w.push_str(&v.to_string());
+                    } else {
+                        let prev = self.in_array_size_position;
+                        self.in_array_size_position = true;
+                        self.emit_expr(size);
+                        self.in_array_size_position = prev;
+                    }
                     self.w.push(']');
                 }
                 ArrayShape::Dynamic => {

@@ -416,6 +416,25 @@ pub enum Code {
     /// nullable fields default to null and are exempt.
     E0600_FieldNotDefinitelyAssigned,
 
+    // ---- Const evaluation (E0800–E0899) ----
+    /// E0840 — A **const evaluation exceeded its resource limits** (§T.11.4) —
+    /// too many operations or too deep a recursion while folding a const
+    /// expression (e.g. a function that recurses without converging, called in
+    /// a const position). Bounded to keep compilation tractable.
+    E0840_ConstEvalLimitExceeded,
+    /// E0841 — A **non-const operation in a const context** (§T.11.6). A const
+    /// position (a `const`/`final` initializer, a fixed-array size, a
+    /// const-generic argument) must reduce to a compile-time value, but the
+    /// expression does something that can't be evaluated then — heap `new`, I/O,
+    /// a call to a function whose body isn't const-evaluable, a field/index
+    /// read, etc.
+    E0841_NonConstInConstContext,
+    /// E0842 — A **const evaluation panicked at compile time** (§T.11.6):
+    /// integer overflow, divide-by-zero, or a shift out of range while folding
+    /// a const expression. Reported at compile time rather than aborting the
+    /// compiler.
+    E0842_ConstEvalPanic,
+
     // ---- Async / Generators (E0700–E0799) ----
     /// E0710 — `throw` of a non-`Exception` value. Per the exceptions
     /// addendum §X.2.1 (`JUX-EXCEPTIONS-ADDENDUM.md`), `throw expr`
@@ -574,6 +593,9 @@ impl Code {
             Code::E0456_WeakReadNeedsGet         => "E0456",
             Code::W0457_UnannotatedRefCycle      => "W0457",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",
+            Code::E0840_ConstEvalLimitExceeded   => "E0840",
+            Code::E0841_NonConstInConstContext   => "E0841",
+            Code::E0842_ConstEvalPanic           => "E0842",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0701_AsyncNotInProfile        => "E0701",
             Code::E0702_ObjectCapturedBySpawn    => "E0702",
