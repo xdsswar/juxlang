@@ -508,6 +508,8 @@ impl<'a> Parser<'a> {
                 | Some(TokenKind::Float(_))
                 | Some(TokenKind::Str(_))
                 | Some(TokenKind::InterpStr(_))
+                | Some(TokenKind::RawStr(_))
+                | Some(TokenKind::InterpRawStr(_))
                 | Some(TokenKind::Bool(_))
                 | Some(TokenKind::Null)
                 | Some(TokenKind::Minus)
@@ -551,6 +553,8 @@ impl<'a> Parser<'a> {
                 | Some(TokenKind::Float(_))
                 | Some(TokenKind::Str(_))
                 | Some(TokenKind::InterpStr(_))
+                | Some(TokenKind::RawStr(_))
+                | Some(TokenKind::InterpRawStr(_))
                 | Some(TokenKind::Bool(_))
                 | Some(TokenKind::Null)
                 | Some(TokenKind::Kw(Keyword::This))
@@ -927,7 +931,25 @@ impl<'a> Parser<'a> {
                 // segment list. For each `${…}` it recursively lex+parses
                 // the contained expression as an ordinary Jux expression.
                 self.advance();
-                let segments = self.parse_interp_segments(&raw);
+                let segments = self.parse_interp_segments(&raw, true);
+                Some(Expr::InterpString(InterpStringExpr {
+                    segments,
+                    span,
+                }))
+            }
+            // `"""…"""` raw string (§3.4): the bytes between the
+            // triple quotes are the value VERBATIM — no escape
+            // decoding, embedded newlines and backslashes included.
+            TokenKind::RawStr(text) => {
+                self.advance();
+                Some(Expr::Literal(Literal::String(text)))
+            }
+            // `$"""…"""` raw INTERPOLATED string (§3.4): `$name` /
+            // `${expr}` markers still interpolate, but backslashes
+            // stay literal (decode_escapes = false).
+            TokenKind::InterpRawStr(raw) => {
+                self.advance();
+                let segments = self.parse_interp_segments(&raw, false);
                 Some(Expr::InterpString(InterpStringExpr {
                     segments,
                     span,

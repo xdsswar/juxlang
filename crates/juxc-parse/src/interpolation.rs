@@ -31,7 +31,15 @@ impl<'a> Parser<'a> {
     /// inner substring — column-imprecise for now, but the user still
     /// sees the message. A future pass can rebase spans to the outer
     /// source by adding the interp's content-start offset.
-    pub(crate) fn parse_interp_segments(&mut self, raw: &str) -> Vec<InterpSegment> {
+    /// `decode_escapes` distinguishes the cooked `$"…"` form (true —
+    /// backslash sequences decode per §A.1.5) from the RAW form
+    /// (false — backslashes are literal bytes; only `$name` /
+    /// `${expr}` markers are special).
+    pub(crate) fn parse_interp_segments(
+        &mut self,
+        raw: &str,
+        decode_escapes: bool,
+    ) -> Vec<InterpSegment> {
         let bytes = raw.as_bytes();
         let mut segments: Vec<InterpSegment> = Vec::new();
         let mut lit_buf = String::new();
@@ -108,7 +116,7 @@ impl<'a> Parser<'a> {
             // table per §A.1.5. We process one escape sequence at a
             // time so that subsequent `$name`/`${…}` markers retain
             // their normal meaning inside the same literal run.
-            if b == b'\\' && i + 1 < bytes.len() {
+            if b == b'\\' && i + 1 < bytes.len() && decode_escapes {
                 // Find the end of this single escape (it may span
                 // multiple bytes for `\u{…}` and `\xHH`).
                 let esc_end = escape_byte_end(bytes, i);
