@@ -8,11 +8,11 @@
 
 package cause;
 
-void parseConfig() {
+void parseConfig() throws Exception {
     throw new Exception("bad syntax at line 3");
 }
 
-void loadApp() {
+void loadApp() throws Exception {
     try {
         parseConfig();
     } catch (Exception e) {

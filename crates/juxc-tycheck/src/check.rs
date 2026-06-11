@@ -277,6 +277,21 @@ pub(crate) struct Checker<'a> {
     /// first statement), and a delegation may not resolve back to
     /// the declaring constructor itself.
     pub(crate) current_ctor: Option<usize>,
+    /// CHECKED exceptions the current function body may raise without
+    /// an enclosing catch absorbing them — `(exception FQN, site)`
+    /// pairs collected while walking. Compared against the declared
+    /// `throws` clause at the end of each function/method walk
+    /// (§X.1.3, E0711). Cleared per body.
+    pub(crate) checked_escapes: Vec<(String, Span)>,
+    /// Catch-absorption stack: one frame per enclosing `try` BODY,
+    /// holding every type its clauses can catch. A raised checked
+    /// exception that is a subtype of any frame entry is absorbed.
+    pub(crate) catch_absorb_stack: Vec<Vec<Ty>>,
+    /// Depth of lambda bodies being walked — checked-exception
+    /// escapes inside a lambda belong to the LAMBDA, not the
+    /// enclosing function (Phase 1 doesn't type lambda throws), so
+    /// recording is suppressed when > 0.
+    pub(crate) lambda_depth: usize,
     /// True while we're walking the body of a `static` method (or
     /// a `static` field initializer once those land). Drives the
     /// `E0425_ThisInStaticContext` diagnostic in `check_expr`.
@@ -338,6 +353,9 @@ impl<'a> Checker<'a> {
             ctor_selections: HashMap::new(),
             method_selections: HashMap::new(),
             current_ctor: None,
+            checked_escapes: Vec::new(),
+            catch_absorb_stack: Vec::new(),
+            lambda_depth: 0,
             in_static: false,
             in_async: false,
             in_unsafe: false,
@@ -601,6 +619,135 @@ impl<'a> Checker<'a> {
     /// Called BEFORE the parameters are declared into the body scope,
     /// so the default is inferred in the surrounding (caller-like)
     /// environment.
+    /// Resolve a (possibly bare) exception-type name to its FQN in
+    /// the class table — exact key, then unique `.{name}` suffix.
+    fn resolve_exception_fqn(&self, name: &str) -> Option<String> {
+        if self.symbols.classes.contains_key(name) {
+            return Some(name.to_string());
+        }
+        if name.contains('.') {
+            return None;
+        }
+        let suffix = format!(".{name}");
+        let mut hits = self
+            .symbols
+            .classes
+            .keys()
+            .filter(|k| k.ends_with(&suffix));
+        match (hits.next(), hits.next()) {
+            (Some(k), None) => Some(k.clone()),
+            _ => None,
+        }
+    }
+
+    /// CHECKED test (§X.1.3): the class reaches
+    /// `jux.std.exceptions.Exception` on its extends chain WITHOUT
+    /// passing through `RuntimeException`. `Error` and `Throwable`
+    /// branches (and non-exception classes) are not checked.
+    fn is_checked_exception_fqn(&self, fqn: &str) -> bool {
+        let mut cur = fqn.to_string();
+        let mut depth = 0usize;
+        loop {
+            if cur == "jux.std.exceptions.RuntimeException" {
+                return false;
+            }
+            if cur == "jux.std.exceptions.Exception" {
+                return true;
+            }
+            if depth > 64 {
+                return false;
+            }
+            depth += 1;
+            match self.symbols.classes.get(&cur).and_then(|c| c.extends_fqn.clone()) {
+                Some(p) => cur = p,
+                None => return false,
+            }
+        }
+    }
+
+    /// Record a checked exception the current body may raise, unless
+    /// an enclosing `try`'s catch absorbs it or we're inside a lambda
+    /// body (whose throws are its own, Phase 1).
+    fn record_checked_raise(&mut self, fqn: &str, span: Span) {
+        if self.lambda_depth > 0 {
+            return;
+        }
+        if !self.is_checked_exception_fqn(fqn) {
+            return;
+        }
+        let raised = Ty::User {
+            name: fqn.to_string(),
+            generic_args: Vec::new(),
+        };
+        let absorbed = self.catch_absorb_stack.iter().any(|frame| {
+            frame
+                .iter()
+                .any(|caught| is_subtype(&raised, caught, self.symbols))
+        });
+        if !absorbed {
+            self.checked_escapes.push((fqn.to_string(), span));
+        }
+    }
+
+    /// Record every checked exception a CALLEE declares it throws
+    /// (§X.1.3 propagation) — raw dotted names off the signature.
+    fn record_callee_throws(&mut self, throws: &[String], span: Span) {
+        for name in throws {
+            if let Some(fqn) = self.resolve_exception_fqn(name) {
+                self.record_checked_raise(&fqn, span);
+            }
+        }
+    }
+
+    /// End-of-body enforcement: every recorded escape must be a
+    /// subtype of some type in the declared `throws` clause — E0711
+    /// otherwise. Clears the recording state for the next body.
+    fn enforce_declared_throws(&mut self, declared: &[juxc_ast::QualifiedName], fn_name: &str) {
+        let escapes = std::mem::take(&mut self.checked_escapes);
+        if escapes.is_empty() {
+            return;
+        }
+        let declared_tys: Vec<Ty> = declared
+            .iter()
+            .filter_map(|qn| {
+                let name = qn
+                    .segments
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                self.resolve_exception_fqn(&name).map(|fqn| Ty::User {
+                    name: fqn,
+                    generic_args: Vec::new(),
+                })
+            })
+            .collect();
+        let mut reported: Vec<String> = Vec::new();
+        for (fqn, span) in escapes {
+            let raised = Ty::User {
+                name: fqn.clone(),
+                generic_args: Vec::new(),
+            };
+            let covered = declared_tys
+                .iter()
+                .any(|d| is_subtype(&raised, d, self.symbols));
+            if !covered && !reported.contains(&fqn) {
+                reported.push(fqn.clone());
+                let bare = fqn.rsplit('.').next().unwrap_or(&fqn);
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0711_UncaughtChecked,
+                        format!(
+                            "`{fn_name}` may throw the checked exception `{bare}` — catch it, or declare `throws {bare}` on the signature",
+                        ),
+                    )
+                    .with_span(span)
+                    .with_help("checked = extends Exception without passing through RuntimeException (§X.1.3)"),
+                );
+            }
+        }
+    }
+
     /// Most specific common SUPERCLASS of the given class types —
     /// the multi-catch binder type (§X.3.6). Walks each type's
     /// extends chain (self first) and returns the first entry of the
@@ -715,6 +862,9 @@ impl<'a> Checker<'a> {
         let saved_unsafe = self.in_unsafe;
         self.in_unsafe = fn_decl.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
+        // §X.1.3: every checked exception the body can raise must be
+        // covered by the declared `throws` clause.
+        self.enforce_declared_throws(&fn_decl.throws, &fn_decl.name.text);
         self.flush_uninferable_news();
         self.in_unsafe = saved_unsafe;
         self.in_async = saved_async;
@@ -842,6 +992,9 @@ impl<'a> Checker<'a> {
         let saved_async = self.in_async;
         self.in_async = false;
         self.check_block(&ctor.body);
+        // Constructors carry no `throws` clause in Phase 1 — drop the
+        // recorded raises rather than enforce them.
+        self.checked_escapes.clear();
         self.flush_uninferable_news();
         self.in_async = saved_async;
         self.current_ctor = saved_ctor;
@@ -891,6 +1044,9 @@ impl<'a> Checker<'a> {
         let saved_unsafe = self.in_unsafe;
         self.in_unsafe = method.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
+        // §X.1.3: checked exceptions the method body raises must be
+        // covered by its `throws` clause.
+        self.enforce_declared_throws(&method.throws, &method.name.text);
         self.flush_uninferable_news();
         self.in_unsafe = saved_unsafe;
         self.in_async = saved_async;
@@ -1518,6 +1674,13 @@ impl<'a> Checker<'a> {
                 // precise Jux E0710.
                 self.check_expr(e);
                 let thrown = infer_expr(e, &self.env, self.symbols);
+                // §X.1.3: a CHECKED throw must be absorbed by an
+                // enclosing catch or declared on the signature.
+                if let Ty::User { name, .. } = &thrown {
+                    if let Some(fqn) = self.resolve_exception_fqn(name) {
+                        self.record_checked_raise(&fqn, *span);
+                    }
+                }
                 if !self.throwable_ok(&thrown) {
                     // Anchor on the operand when it has a real span, else the
                     // whole `throw` statement (literals can carry dummy spans).
@@ -1536,7 +1699,19 @@ impl<'a> Checker<'a> {
             }
 
             Stmt::Try(t) => {
+                // Checked-exception absorption (§X.1.3): every type
+                // this try's clauses can catch shields raises inside
+                // the BODY (not the catch/finally blocks).
+                let mut absorb_frame: Vec<Ty> = Vec::new();
+                for c in &t.catches {
+                    absorb_frame.push(ty_from_ref(&c.ty, &self.env, self.symbols));
+                    for alt in &c.alt_tys {
+                        absorb_frame.push(ty_from_ref(alt, &self.env, self.symbols));
+                    }
+                }
+                self.catch_absorb_stack.push(absorb_frame);
                 self.check_block(&t.body);
+                self.catch_absorb_stack.pop();
                 // Caught types so far, to detect an unreachable later clause
                 // (§X.3.4): a catch whose type is the same as, or a subtype of,
                 // an earlier clause's can never run.
@@ -1960,6 +2135,10 @@ impl<'a> Checker<'a> {
             // `Unknown` (Phase 1 doesn't infer it), so suppressing
             // the check is the right call.
             Expr::Lambda(l) => {
+                // Checked-exception recording pauses inside lambda
+                // bodies — their raises belong to the lambda, not the
+                // declaring function (Phase 1).
+                self.lambda_depth += 1;
                 self.env.push_scope();
                 for p in &l.params {
                     let ty = match &p.ty {
@@ -1980,6 +2159,7 @@ impl<'a> Checker<'a> {
                 }
                 self.in_async = saved_async;
                 self.current_return = saved_return;
+                self.lambda_depth -= 1;
                 self.env.pop_scope();
             }
             Expr::Elvis(e) => {
@@ -3046,6 +3226,10 @@ impl<'a> Checker<'a> {
                     let params = fn_sig.params.clone();
                     let generic_params = fn_sig.generic_params.clone();
                     let callee_unsafe = fn_sig.is_unsafe;
+                    // §X.1.3 propagation: the callee's declared
+                    // checked throws raise here.
+                    let callee_throws = fn_sig.throws.clone();
+                    self.record_callee_throws(&callee_throws, c.span);
                     // §A.2.8: calling an `unsafe` fn needs an `unsafe` context.
                     self.require_unsafe_context(callee_unsafe, name, c.span);
                     // Validate any explicit `<…>` turbofish against the
@@ -3352,6 +3536,8 @@ impl<'a> Checker<'a> {
                     let params = method.params.clone();
                     let method_generic_params = method.generic_params.clone();
                     let method_vis = method.visibility;
+                    let method_throws = method.throws.clone();
+                    self.record_callee_throws(&method_throws, c.span);
                     let method_is_static = method.is_static;
                     let method_is_unsafe = method.is_unsafe;
                     // Clone the declaring-class name into an owned

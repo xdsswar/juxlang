@@ -1,0 +1,55 @@
+// Checked-exception enforcement (§X.1.3).
+//
+// - Checked = extends Exception WITHOUT passing through
+//   RuntimeException. A body that can raise one (a direct `throw`,
+//   or a call to a function declared `throws` one) must catch it or
+//   declare it (E0711).
+// - RuntimeException subclasses are unchecked — no declaration
+//   needed. A broader declared type (`throws Exception`) covers
+//   narrower raises.
+
+package checked;
+
+class ConfigError extends Exception {
+    ConfigError(String m) { super(m); }
+}
+
+class CacheMiss extends RuntimeException {
+    CacheMiss(String m) { super(m); }
+}
+
+void load() throws ConfigError {
+    throw new ConfigError("bad host");
+}
+
+void safeLoad() {
+    try {
+        load();
+    } catch (ConfigError e) {
+        print("recovered: " + e.getMessage());
+    }
+}
+
+void evict() {
+    // Unchecked — no `throws` needed.
+    throw new CacheMiss("cold");
+}
+
+void broad() throws Exception {
+    // Narrower checked raise covered by the broader declaration.
+    load();
+}
+
+public void main() {
+    safeLoad();
+    try {
+        broad();
+    } catch (Exception e) {
+        print("broad: " + e.getMessage());
+    }
+    try {
+        evict();
+    } catch (CacheMiss e) {
+        print("evicted: " + e.getMessage());
+    }
+}
