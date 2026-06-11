@@ -1,0 +1,34 @@
+// `drop { }` destructors (§6.6 / §S.5).
+//
+// The block runs when the value's lifetime ends — deterministically
+// at scope exit for locals, and for class instances exactly ONCE,
+// when the LAST strong reference is released (aliased handles share
+// one destructor run). `this` is in scope inside the block.
+
+package drops;
+
+public class Resource {
+    public String name;
+
+    public Resource(String name) {
+        this.name = name;
+        print("open " + name);
+    }
+
+    drop {
+        print("close " + name);
+    }
+}
+
+void useOne() {
+    var r = new Resource("inner");
+    print("using " + r.name);
+}   // <- "inner" closes here, before the caller continues
+
+public void main() {
+    var a = new Resource("a");
+    useOne();
+    var b = a;                  // second handle to the SAME resource
+    print("aliased " + b.name);
+    print("end of main");
+}   // <- "a" closes once, after main's last statement
