@@ -293,6 +293,114 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         assertTrue("property `doubled` parsed as a member (got $fields)", fields.contains("doubled"))
     }
 
+    /**
+     * Observable properties (§P): every accessor-block shape from the probes
+     * corpus parses error-free into PROPERTY_DECLARATION with structured
+     * PROPERTY_ACCESSOR children, while plain fields stay FIELD_DECLARATION.
+     */
+    fun testObservablePropertyShapesParse() {
+        val psi = createPsiFile(
+            "Props.jux",
+            """
+            package demo;
+            public class Model {
+                public int Size { get; set; } = 0;
+                public String Name { get; set; } = "";
+                public bool Visible { get; set; };
+                public String Now { get; set; }
+                public String Id { get; private set; } = "";
+                public int Count { get; protected set; } = 0;
+                private String test { get; set; } = "test";
+                private int plainField;
+                private int _age;
+                public int Age {
+                    get -> _age;
+                    set { if (value > 0) { _age = value; } }
+                };
+                public double Celsius { get; set; } = 0.0;
+                public double Fahrenheit {
+                    get -> Celsius * 9.0 / 5.0 + 32.0;
+                    set { Celsius = (value - 32.0) * 5.0 / 9.0; }
+                };
+                public bool IsEmpty { get -> Size == 0; };
+                public String Label -> "x";
+                private final observer<String> nameObs = (old, now) -> {
+                    print(now);
+                };
+                public Model() {}
+                public void use(Model m) {
+                    m.Name.observers.attach(this.nameObs);
+                    m.Name.observers.attach((old, now) -> { print(now); });
+                    m.Name.observers.detach(this.nameObs);
+                    m.Name.observers.clear;
+                    print(m.Name.observers.size);
+                    m.Name.bind(m.Id);
+                    m.Name.unbind();
+                    m.Size.bindBidirectional(m.Count);
+                    m.Name = "x";
+                }
+            }
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertTrue(
+            "unexpected parse errors: " + errors.joinToString { "${it.errorDescription}@${it.textOffset}" },
+            errors.isEmpty(),
+        )
+
+        // Accessor-block and `-> expr` members are PROPERTY_DECLARATIONs …
+        val props = PsiTreeUtil.collectElements(psi) {
+            it.elementType === JuxElementTypes.PROPERTY_DECLARATION
+        }.map { (it as JuxNamedElement).name }.toSet()
+        assertEquals(
+            setOf(
+                "Size", "Name", "Visible", "Now", "Id", "Count", "test",
+                "Age", "Celsius", "Fahrenheit", "IsEmpty", "Label",
+            ),
+            props,
+        )
+        // … while plain fields (incl. the observer variable) stay FIELD_DECLARATION.
+        val fields = PsiTreeUtil.collectElements(psi) {
+            it.elementType === JuxElementTypes.FIELD_DECLARATION
+        }.map { (it as JuxNamedElement).name }.toSet()
+        assertEquals(setOf("plainField", "_age", "nameObs"), fields)
+
+        // Accessor structure: `Id` has two accessors, the setter carrying a
+        // `private` modifier list; `IsEmpty` has a single expression-form getter.
+        val id = PsiTreeUtil.collectElements(psi) {
+            it.elementType === JuxElementTypes.PROPERTY_DECLARATION && (it as JuxNamedElement).name == "Id"
+        }.single()
+        val idAccessors = PsiTreeUtil.collectElements(id) {
+            it.elementType === JuxElementTypes.PROPERTY_ACCESSOR
+        }
+        assertEquals("Id has get + set accessors", 2, idAccessors.size)
+        assertTrue(
+            "Id setter carries private modifier",
+            idAccessors.any { acc ->
+                acc.text.contains("private") &&
+                    acc.node.findChildByType(JuxElementTypes.MODIFIER_LIST) != null
+            },
+        )
+    }
+
+    /** The removed `init` accessor (§P) yields a targeted error, nothing more. */
+    fun testInitAccessorDiagnosed() {
+        val psi = createPsiFile(
+            "InitProp.jux",
+            """
+            public class C {
+                public String Id { get; init; }
+            }
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertEquals("exactly one error for the removed init accessor", 1, errors.size)
+        assertTrue(
+            "error mentions the init removal (got '${errors.first().errorDescription}')",
+            errors.first().errorDescription.contains("init"),
+        )
+    }
+
     /** A use of a type name resolves to its in-file declaration. */
     fun testReferenceResolvesToDeclaration() {
         val file = createPsiFile(

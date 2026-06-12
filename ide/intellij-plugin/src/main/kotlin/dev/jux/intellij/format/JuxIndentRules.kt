@@ -27,7 +27,7 @@ object JuxIndentRules {
 
         return when (p) {
             // ---- brace bodies: members / statements / enum constants -------
-            E.CLASS_BODY, E.CODE_BLOCK -> Indent.getNormalIndent()
+            E.CLASS_BODY, E.CODE_BLOCK, E.PROPERTY_ACCESSOR_LIST -> Indent.getNormalIndent()
 
             // `case …` arms sit one level inside `switch {`.
             E.SWITCH_STATEMENT, E.SWITCH_EXPRESSION ->
@@ -49,12 +49,14 @@ object JuxIndentRules {
             E.CALL_EXPRESSION, E.FIELD_ACCESS_EXPRESSION, E.INDEX_EXPRESSION,
             E.METHOD_REF_EXPRESSION, E.POSTFIX_EXPRESSION,
             E.EXTENDS_CLAUSE, E.IMPLEMENTS_CLAUSE, E.PERMITS_CLAUSE, E.THROWS_CLAUSE,
-            E.FIELD_DECLARATION, E.LOCAL_VARIABLE, E.EXPRESSION_STATEMENT,
+            E.FIELD_DECLARATION, E.PROPERTY_DECLARATION, E.LOCAL_VARIABLE,
+            E.EXPRESSION_STATEMENT, E.PROPERTY_ACCESSOR,
             E.RETURN_STATEMENT, E.THROW_STATEMENT, E.LAMBDA_EXPRESSION, E.SWITCH_CASE ->
                 when (c) {
                     // Bodies indent themselves; annotations/modifiers align
                     // with the declaration they precede.
-                    E.CODE_BLOCK, E.CLASS_BODY, E.ANNOTATION, E.MODIFIER_LIST ->
+                    E.CODE_BLOCK, E.CLASS_BODY, E.PROPERTY_ACCESSOR_LIST,
+                    E.ANNOTATION, E.MODIFIER_LIST ->
                         Indent.getNoneIndent()
                     else -> Indent.getContinuationWithoutFirstIndent()
                 }
@@ -73,7 +75,7 @@ object JuxIndentRules {
 
     /** Indent for a NEW child typed on Enter — `getChildAttributes` mirror. */
     fun newChildIndent(parent: ASTNode): Indent = when (parent.elementType) {
-        E.CLASS_BODY, E.CODE_BLOCK,
+        E.CLASS_BODY, E.CODE_BLOCK, E.PROPERTY_ACCESSOR_LIST,
         E.SWITCH_STATEMENT, E.SWITCH_EXPRESSION -> Indent.getNormalIndent()
         E.PARAMETER_LIST, E.ARGUMENT_LIST, E.TYPE_PARAMETER_LIST,
         E.TYPE_ARGUMENT_LIST, E.ANNOTATION_ARGUMENT_LIST,
