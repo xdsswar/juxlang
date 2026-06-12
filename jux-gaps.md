@@ -218,3 +218,16 @@ found a fresh batch. The probe corpus was also folded into the permanent suite
 |----|-------|----------|-------|
 | O8 | A raw Rust panic (e.g. integer divide-by-zero) carries a `&str` payload — `catch (Exception e)` / `catch (ArithmeticException e)` can't downcast it, so the panic propagates uncaught | Medium | Java maps `x / 0` to `ArithmeticException`; needs either a typed-panic division lowering or a builtin-payload rescue arm in the catch dispatch |
 | O9 | `break`/`continue` inside an **async** `try` body still → E0267 — the `async move` block captures the loop-control flag by value, so O2's threading can't reach it | Low | needs a `Cell`-in-`Rc` channel or carrier-enum return shape for the async closure |
+
+### §P observable properties — follow-ups (core landed 46834eb/4391bc4)
+
+| ID | Issue | Severity | Notes |
+|----|-------|----------|-------|
+| P1 | Computed (get-only) properties don't fire observers — §P.1.5 dependency tracking not implemented; they work as plain getters | Medium | needs static dep extraction from the getter body + re-fire hooks in each dependency's setter |
+| P2 | E0973 (direct assignment to a bound property) not enforced — neither compile-time nor the debug-build runtime throw | Low | setter would need a `__bind_X.is_some()` gate with an internal raw-set path for the binding itself |
+| P3 | E0974 (bind type mismatch) surfaces as a rustc error in the emitted code, not a juxc diagnostic | Low | tycheck check on the two resolved property types at `bind`/`bindBidirectional` sites |
+| P4 | `unbind()` after `bindBidirectional` breaks only the caller's incoming direction — the reverse direction stays until the OTHER side unbinds | Low | keep-alive slot would need to record the peer's closure too |
+| P5 | Shape-2 (3-arg, property-reference) observers: Phase 1 passes the property NAME as a `String`; the Strong adapter closure is never pruned after the owner dies (stops firing, tiny leak) | Low | real property-handle type + adapter liveness tied to the wrapped observer |
+| P6 | `bind()` on a property of `this` inside a constructor → clean `compile_error!` (no wrapper handle exists yet); §P.9's ctor-bind shape needs a post-construction hook | Medium | move binding setup to first-use or an implicit post-ctor init |
+| P7 | `static` properties have no observer infrastructure (storage/firing skipped) | Low | needs statics-shaped storage (`LazyLock<Mutex<…>>`) |
+| P8 | W0970–W0973 inspections + §P.5/§P.7 IDE work (native coloring, gutter icons, rename quick-fix) not started | Medium | IntelliJ plugin / jux-ls effort, separate from juxc |
