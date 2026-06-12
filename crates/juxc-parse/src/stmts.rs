@@ -196,12 +196,23 @@ impl<'a> Parser<'a> {
             self.advance(); // 'unsafe'
             return Some(Stmt::Unsafe(self.parse_block()));
         }
-        if self.at_kw(Keyword::Super) {
+        if self.at_kw(Keyword::Super)
+            && !matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Dot),
+            )
+        {
             // `super(args);` — parent-constructor delegation per §7.3.1.
             // Backend lifts this out of the body into the child struct's
             // literal as `__parent: Parent::new(args)`. We accept it
             // syntactically anywhere in a block today; semantic-level
             // "first-statement-only" enforcement lands later.
+            //
+            // `super.method(args);` is NOT this form — the `.` lookahead
+            // sends it down the expression-statement path, where the
+            // primary parser produces `Expr::Super` and the ordinary
+            // postfix machinery handles the member call (S11: Java's
+            // everyday "delegate to the parent implementation" idiom).
             let start = self.peek_span();
             self.advance(); // 'super'
             self.expect(&TokenKind::LParen, "'(' after `super`");

@@ -1,0 +1,22 @@
+// Wave-3 borrow stress #13: a thread_local static slot holding an
+// object that reaches ITSELF through the static while mutating its own
+// field — nested `.with` access + RefCell discipline. Expect 1 then 5.
+package stress13;
+
+public class Reg {
+    public static Reg? global;
+    public ArrayList<int> kids = new ArrayList<int>();
+    public int tag = 5;
+
+    public void adopt() {
+        // reads the static (this very object) and mutates a field of it
+        Reg.global!!.kids.add(this.tag);
+    }
+}
+
+void main() {
+    Reg.global = new Reg();
+    Reg.global!!.adopt();
+    print(Reg.global!!.kids.size());
+    print(Reg.global!!.kids.get(0));
+}

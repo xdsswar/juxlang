@@ -352,6 +352,31 @@ node.Status = "inactive";           // ❌ E0972: setter is private
 node.Status.observers.attach(obs);  // ✅ observable — getter is public
 ```
 
+### P.3.6. Re-Entrant Sets (Observer Sets Its Own Property)
+
+An observer may set the property it observes (directly or through a call chain). The
+semantics follow JavaFX: **every distinct value transition fires the observer list
+exactly once, in transition order**, until the value is quiescent.
+
+```java
+counter.Value.observers.attach((old, now) -> {
+    if (now < 5) { counter.Value = now + 1; }   // re-entrant set
+});
+counter.Value = 1;     // fires (0→1), (1→2), (2→3), (3→4), (4→5)
+print(counter.Value);  // 5
+```
+
+Mechanically, a nested set **commits the new value immediately** but defers its firing
+pass: the setter that triggered the original fire detects the change after its pass
+returns and fires the next transition, looping until the value stops changing. No
+transition is fired twice and no transition is skipped.
+
+A cycle that never converges (`A` sets `B`, `B` sets `A` with alternating values) is a
+programmer error — it loops forever exactly as the equivalent JavaFX listener cycle
+would. The W0457-class cycle lint may flag statically detectable cases; the runtime
+adds no cycle guard. (Bidirectional *bindings* are unaffected — they keep their own
+`updating` recursion guard, §P.4.3.)
+
 ---
 
 ## §P.4 — Property Binding

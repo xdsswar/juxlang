@@ -17,6 +17,12 @@ impl RustEmitter {
         // When set, the `.0.borrow()` wrapper rewrite below is
         // suppressed — the `.field` here names a method on the newtype.
         let is_call_callee = std::mem::take(&mut self.emitting_call_callee);
+        // Take-and-clear the method-RECEIVER marker (S7): set when this
+        // field read is the receiver place of a method call
+        // (`h.item` in `h.item.set(x)`). Suppresses the plain-read
+        // auto-`.clone()` below so the call borrows the place in-place
+        // instead of mutating a discarded copy.
+        let is_method_receiver = std::mem::take(&mut self.emitting_method_receiver);
         // Overload suffix for a METHOD-position member name — taken
         // here (only when this field IS the call callee) so a nested
         // receiver's own field emissions can't consume it.
@@ -466,7 +472,18 @@ impl RustEmitter {
         } else {
             None
         };
+        // Receiver-place propagation (S7): when this field is the
+        // method name of a call (`is_call_callee`), its object is the
+        // RECEIVER — mark it so its read skips the auto-`.clone()`.
+        // A plain receiver field in a longer chain (`h.a.b.set()`)
+        // propagates the marker down so the whole place stays
+        // clone-free; a wrapper-borrowed link does not (its clone-out
+        // of the `Ref` guard is required, and for wrapper-class
+        // fields the clone is an `Rc` share anyway).
+        self.emitting_method_receiver =
+            is_call_callee || (is_method_receiver && wrapper_depth.is_none());
         self.emit_expr(&f.object);
+        self.emitting_method_receiver = false;
         if let Some(depth) = wrapper_depth {
             // An `out` field place needs an exclusive `&mut` into the
             // interior, so take the mutable borrow; the `RefMut` temporary
@@ -544,9 +561,19 @@ impl RustEmitter {
             && !self.emitting_lvalue
             && !in_borrow_context
             && self.wrapper_field_read_needs_clone(&f.object, &f.field.text);
+        // S7: a plain (non-wrapper-borrow) field read serving as a
+        // method-call receiver place must stay clone-free — the call
+        // borrows the place directly (`h.item.set(x)`), and a clone
+        // would silently discard `&mut self` mutations. The
+        // wrapper-borrow clone is NOT suppressed: cloning out of the
+        // statement-scoped `Ref` guard is mandatory there.
+        let receiver_place_read = is_method_receiver && wrapper_depth.is_none();
         if !callee_is_method
             && (wrapper_borrow_clone
-                || (!self.emitting_lvalue && !in_borrow_context && self.field_read_needs_clone(f)))
+                || (!self.emitting_lvalue
+                    && !in_borrow_context
+                    && !receiver_place_read
+                    && self.field_read_needs_clone(f)))
         {
             self.w.push_str(".clone()");
         }
@@ -864,6 +891,18 @@ impl RustEmitter {
                     .map(|p| p.name.text.as_str())
                     .collect();
                 let ty = crate::exprs::ty_kind_from_ref_with_params(&field.ty, &params);
+                // A generic-instantiated TypeRef (`ArrayList<int>`)
+                // converts to `Ty::Unknown` — resolve its base name
+                // instead: a known class (collections included) is
+                // always Clone-not-Copy, so a value-position read
+                // must clone (S15).
+                if matches!(ty, Ty::Unknown) && field.ty.array_shape.is_none() {
+                    if let Some(base) = field.ty.name.segments.last() {
+                        if self.lookup_class_by_bare_or_fqn(&base.text).is_some() {
+                            return !self.wrapper_classes.contains(&base.text);
+                        }
+                    }
+                }
                 return self.ty_needs_clone_on_field_read(&ty);
             }
             cursor = sig
@@ -1206,6 +1245,13 @@ impl RustEmitter {
         if let Some(ty) = self.lookup_field_type(f) {
             return self.ty_needs_clone_on_field_read(&ty);
         }
+        // Fallback (S15): a `this`-rooted receiver often has no
+        // `expr_types` entry, so the span-keyed lookup above fails —
+        // resolve through the enclosing class's field table instead
+        // (the same extends-chain walk the wrapper path uses).
+        if matches!(&*f.object, Expr::This(_)) {
+            return self.wrapper_field_read_needs_clone(&f.object, &f.field.text);
+        }
         false
     }
 
@@ -1219,6 +1265,13 @@ impl RustEmitter {
     fn ty_needs_clone_on_field_read(&self, ty: &Ty) -> bool {
         match ty {
             Ty::String | Ty::Param(_) => true,
+            // Collection / array fields are non-Copy `Vec`s etc. — a
+            // VALUE-position read (`return this.items;`, S15) must
+            // clone or it moves out of `&self`. Receiver positions
+            // (`this.items.add(x)`, `this.items[0]`) are exempted by
+            // the `emitting_method_receiver` marker, so in-place
+            // mutation keeps working.
+            Ty::Array { .. } => true,
             Ty::User { name, .. } => {
                 // The `Ty::User { name }` here can be either an FQN
                 // (multi-package programs) or a bare class name
@@ -1317,7 +1370,11 @@ impl RustEmitter {
     /// matching a type parameter resolve to [`Ty::Param`]; everything
     /// else falls through to the primitive / String / user-type
     /// branches.
-    fn lookup_class_field_ty_in_chain(&self, class_name: &str, field_name: &str) -> Option<Ty> {
+    pub(crate) fn lookup_class_field_ty_in_chain(
+        &self,
+        class_name: &str,
+        field_name: &str,
+    ) -> Option<Ty> {
         // Use owned String so the cursor isn't tied to a specific ClassSig borrow — the
         // extends chain may cross package boundaries where the bare name stored in
         // `extends` (e.g. "Throwable") differs from the FQN key in `symbols.classes`
@@ -1338,7 +1395,23 @@ impl RustEmitter {
                     .iter()
                     .map(|p| p.name.text.as_str())
                     .collect();
-                return Some(ty_kind_from_ref_with_params(&field.ty, &params));
+                let ty = ty_kind_from_ref_with_params(&field.ty, &params);
+                // A generic-instantiated TypeRef (`ArrayList<int>`)
+                // converts to `Ty::Unknown` — recover the base name
+                // when it resolves to a known class so downstream
+                // decisions (notably the value-position auto-clone,
+                // S15) see a real user type instead of a blind spot.
+                if matches!(ty, Ty::Unknown) && field.ty.array_shape.is_none() {
+                    if let Some(base) = field.ty.name.segments.last() {
+                        if self.lookup_class_by_bare_or_fqn(&base.text).is_some() {
+                            return Some(Ty::User {
+                                name: base.text.clone(),
+                                generic_args: Vec::new(),
+                            });
+                        }
+                    }
+                }
+                return Some(ty);
             }
             cursor = class
                 .extends

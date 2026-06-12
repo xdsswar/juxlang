@@ -1,0 +1,23 @@
+// Wave-3 borrow stress #8: catch-binder aliasing — store the binder to
+// a field, keep using it, then rethrow it. Expect: x / outer: x / x.
+package stress08;
+
+public class Keeper {
+    public Exception? last;
+}
+
+void main() {
+    var k = new Keeper();
+    try {
+        try {
+            throw new RuntimeException("x");
+        } catch (RuntimeException e) {
+            k.last = e;
+            print(e.getMessage());
+            throw e;
+        }
+    } catch (RuntimeException e2) {
+        print("outer: " + e2.getMessage());
+    }
+    print(k.last!!.getMessage());
+}

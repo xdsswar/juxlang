@@ -1,0 +1,33 @@
+// Wave-3 borrow stress #10: a wrapped (aliased+mutated) receiver used
+// ACROSS an await inside a try, and a method arg that is itself an
+// await. Expect 3.
+package stress10;
+
+public class Counter10 {
+    public int n = 0;
+    public void inc() { this.n = this.n + 1; }
+    public void add(int k) { this.n = this.n + k; }
+    public int get() { return this.n; }
+}
+
+async int tick() {
+    return 1;
+}
+
+async void run() {
+    var c = new Counter10();
+    var alias = c;
+    try {
+        await tick();
+        c.inc();
+    } catch (Exception e) {
+        print("err");
+    }
+    c.add(await tick());
+    alias.inc();
+    print(c.get());
+}
+
+async void main() {
+    await run();
+}

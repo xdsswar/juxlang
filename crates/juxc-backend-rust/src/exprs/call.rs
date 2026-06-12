@@ -12,6 +12,24 @@ use crate::RustEmitter;
 /// Mirror of `binary::collect_string_concat_operands` for the
 /// `print(...)`-collapse hot path. Kept here to avoid exposing the
 /// binary-module helper across modules.
+/// The dotted place-path of a pure place expression: `x` → `"x"`,
+/// `this` → `"this"`, `h.item` → `"h.item"`, `this.a.b` → `"this.a.b"`.
+/// `None` for anything that isn't a simple chain of field reads rooted
+/// at a single-segment path or `this` (call results, indexes,
+/// multi-segment qualified names) — those aren't borrowable places the
+/// hoist machinery can reason about (S7).
+fn place_path_of(e: &Expr) -> Option<String> {
+    match e {
+        Expr::This(_) => Some("this".to_string()),
+        Expr::Path(qn) if qn.segments.len() == 1 => Some(qn.segments[0].text.clone()),
+        Expr::Field(f) => {
+            let base = place_path_of(&f.object)?;
+            Some(format!("{base}.{}", f.field.text))
+        }
+        _ => None,
+    }
+}
+
 fn flatten_concat<'a>(b: &'a BinaryExpr, out: &mut Vec<&'a Expr>) {
     push_concat_operand(&b.left, out);
     push_concat_operand(&b.right, out);
@@ -172,6 +190,12 @@ impl RustEmitter {
     /// `println!(…)`. Every other callee is emitted verbatim (the
     /// resolver guarantees the name exists).
     pub(crate) fn emit_call(&mut self, call: &CallExpr) {
+        // The method-RECEIVER marker (S7) applies only to a direct
+        // field-place receiver — a nested CALL inside the receiver
+        // expression (`getH().item.set(x)` evaluating `getH()`) is a
+        // fresh evaluation whose own fields/args must clone normally.
+        // Take-and-clear so it can't leak into this call's emission.
+        let _ = std::mem::take(&mut self.emitting_method_receiver);
         // Method-overload pick (§T.3 Phase-1): tycheck recorded which
         // group member this call resolved to; member K > 0 emits
         // under `name__ovK`. Armed here, consumed by the single path
@@ -1340,22 +1364,25 @@ impl RustEmitter {
     /// through the interior `RefCell`, so no conflict exists.
     fn call_needs_borrow_hoist(&self, call: &CallExpr) -> bool {
         let Expr::Field(f) = call.callee.as_ref() else { return false };
-        let root: &str = match f.object.as_ref() {
-            Expr::Path(qn) if qn.segments.len() == 1 => &qn.segments[0].text,
-            Expr::This(_) => "this",
-            _ => return false,
+        // The receiver as a dotted place path: `x` / `this` /
+        // `h.item` / `this.a.b` (S7 — field-path receivers conflict
+        // exactly like bare locals). Anything that isn't a pure
+        // place (call results, indexes) bails out.
+        let Some(root) = place_path_of(&f.object) else {
+            return false;
         };
-        // A class-named receiver is a static call (no instance borrow);
-        // a wrapper-class instance dispatches through `&self`.
-        if root != "this" {
-            if self.lookup_class_by_bare_or_fqn(root).is_some() {
+        let is_bare = root != "this" && !root.contains('.');
+        if is_bare {
+            // A class-named receiver is a static call (no instance
+            // borrow).
+            if self.lookup_class_by_bare_or_fqn(&root).is_some() {
                 return false;
             }
             let recv_class = self
                 .local_types
                 .iter()
                 .rev()
-                .find_map(|s| s.get(root))
+                .find_map(|s| s.get(&root))
                 .and_then(|ty| match ty {
                     juxc_tycheck::Ty::User { name, .. } => {
                         Some(name.rsplit('.').next().unwrap_or(name).to_string())
@@ -1363,20 +1390,31 @@ impl RustEmitter {
                     _ => None,
                 });
             if let Some(c) = recv_class {
+                // A wrapper-class instance dispatches through `&self`.
                 if self.wrapper_classes.contains(&c) {
                     return false;
                 }
             }
-        } else if let Some(enclosing) = &self.enclosing_class {
-            // Inside a wrapper class's own method, `this.m(this.bump())`
-            // dispatches through `&self` too.
-            if self.wrapper_classes.contains(enclosing) {
-                return false;
+        } else if root == "this" {
+            if let Some(enclosing) = &self.enclosing_class {
+                // Inside a wrapper class's own method,
+                // `this.m(this.bump())` dispatches through `&self` too.
+                if self.wrapper_classes.contains(enclosing) {
+                    return false;
+                }
+            }
+        } else {
+            // Field-path receiver (`h.item.set(…)`): exempt when the
+            // FIELD's class is wrapper-shape (its methods take `&self`).
+            if let Some(c) = self.receiver_class_bare(&f.object) {
+                if self.wrapper_classes.contains(&c) {
+                    return false;
+                }
             }
         }
         call.args
             .iter()
-            .any(|a| self.contains_mut_call_on(a, root))
+            .any(|a| self.contains_mut_call_on(a, &root))
     }
 
     /// When the callee is `recv.method(...)` and `recv` is itself read through
@@ -1413,20 +1451,49 @@ impl RustEmitter {
         }
     }
 
+    /// Emit a stdlib-method RECEIVER. Receivers are borrowed places:
+    /// a plain field read here must not auto-`.clone()` (the call
+    /// borrows the place in place — a clone would orphan `&mut`
+    /// mutations (S7) and force needless copies of collection fields
+    /// (S15)). Wrapper-borrow clone-outs still apply inside
+    /// `emit_field`. The flag is take-and-cleared by `emit_field` /
+    /// `emit_call`, so it never leaks past the receiver expression.
+    fn emit_stdlib_receiver(&mut self, receiver: &Expr) {
+        self.emitting_method_receiver = true;
+        self.emit_expr(receiver);
+        self.emitting_method_receiver = false;
+    }
+
+    /// True when evaluating `e` reads a field through a wrapper
+    /// `.0.borrow()` guard (`s.items` on a wrapper-shape `s`, looking
+    /// through `!!`). Used by the higher-order stdlib emissions
+    /// (forEach / map / filter, S5) to decide whether the iterated
+    /// collection must be snapshotted before the closure runs —
+    /// holding the `Ref` guard across a closure that mutates the same
+    /// object panics `already borrowed` at runtime.
+    fn expr_reads_through_wrapper_borrow(&self, e: &Expr) -> bool {
+        let e = match e {
+            Expr::NotNullAssert(inner, _) => inner.as_ref(),
+            other => other,
+        };
+        let Expr::Field(rf) = e else { return false };
+        self.receiver_is_wrapper_class(&rf.object)
+            && self
+                .wrapper_field_parent_depth(&rf.object, &rf.field.text)
+                .is_some()
+    }
+
     /// Recursive walk: does `e` contain a call to a mutating method
-    /// (per `user_mut_methods`) whose receiver is the bare place
-    /// `root` (`x.bump()` for root `x`, `this.bump()` for `this`)?
+    /// (per `user_mut_methods`) whose receiver is the same place path
+    /// as `root` (`x.bump()` for root `x`, `this.bump()` for `this`,
+    /// `h.item.bump()` for `h.item`)? Place paths are compared as
+    /// dotted strings via [`place_path_of`].
     fn contains_mut_call_on(&self, e: &Expr, root: &str) -> bool {
         match e {
             Expr::Call(c) => {
                 if let Expr::Field(f) = c.callee.as_ref() {
-                    let on_root = match f.object.as_ref() {
-                        Expr::Path(qn) => {
-                            qn.segments.len() == 1 && qn.segments[0].text == root
-                        }
-                        Expr::This(_) => root == "this",
-                        _ => false,
-                    };
+                    let on_root =
+                        place_path_of(&f.object).as_deref() == Some(root);
                     if on_root && self.user_mut_methods.contains(&f.field.text) {
                         return true;
                     }
@@ -1865,6 +1932,45 @@ impl RustEmitter {
             return false;
         };
         let method = f.field.text.as_str();
+        // AUTO-PROPERTY receiver (S3): `s.Items.add(3)` where `Items`
+        // is `{ get; set; }`. The getter returns a CLONE of the
+        // backing field, so dispatching on the property read would
+        // both miss the stdlib mapping (the read's type isn't always
+        // recorded) and silently mutate a temporary. Rewrite the
+        // receiver to the backing field (`s.__prop_Items`) — a real
+        // field of the class — and re-dispatch: the regular
+        // wrapped-field machinery (borrow_mut upgrade, arg prehoist,
+        // N1) then applies. Computed properties keep the getter-call
+        // path: there is no storage to mutate through.
+        if let Expr::Field(pf) = &*f.object {
+            if !pf.safe {
+                let backing = self
+                    .property_on_receiver(&pf.object, &pf.field.text)
+                    .filter(|p| p.has_backing_field && !p.is_static)
+                    .map(|p| juxc_ast::desugar_backing_field_name(&p.name.text));
+                if let Some(backing_name) = backing {
+                    let backing_recv = Expr::Field(juxc_ast::FieldExpr {
+                        object: pf.object.clone(),
+                        field: juxc_ast::Ident {
+                            text: backing_name,
+                            span: pf.field.span,
+                        },
+                        safe: false,
+                        span: pf.span,
+                    });
+                    let rewritten = CallExpr {
+                        callee: Box::new(Expr::Field(juxc_ast::FieldExpr {
+                            object: Box::new(backing_recv),
+                            field: f.field.clone(),
+                            safe: false,
+                            span: f.span,
+                        })),
+                        ..call.clone()
+                    };
+                    return self.try_emit_stdlib_method(&rewritten);
+                }
+            }
+        }
         // Receiver-type lookup. Three paths:
         //   1. `local_types` map for Path receivers — keyed by
         //      name, immune to span collisions inside interp
@@ -1902,11 +2008,42 @@ impl RustEmitter {
                 // an `expr_types` entry. Type them structurally so
                 // §K.11 intrinsics still dispatch.
                 e => literal_numeric_ty(e).map(juxc_tycheck::Ty::Primitive),
+            })
+            // An `Unknown` entry is as good as no entry — let the
+            // declared-type fallback below take over (property reads
+            // are often recorded as `Unknown`).
+            .filter(|t| !matches!(t, juxc_tycheck::Ty::Unknown))
+            .or_else(|| {
+                // FIELD-read receiver fallback (S3): `this`-rooted
+                // reads and property BACKING fields (`s.__prop_Items`,
+                // synthesized by the rewrite above) aren't always in
+                // `expr_types` — resolve the field's DECLARED type
+                // through the receiver's class chain instead.
+                let Expr::Field(rf) = &*f.object else {
+                    return None;
+                };
+                let class = if matches!(&*rf.object, Expr::This(_)) {
+                    self.enclosing_class.clone()
+                } else {
+                    self.receiver_class_bare(&rf.object)
+                };
+                class.and_then(|c| {
+                    self.lookup_class_field_ty_in_chain(&c, &rf.field.text)
+                })
             });
         let Some(recv_ty) = recv_ty else {
             return false;
         };
-        let is_array = matches!(&recv_ty, juxc_tycheck::Ty::Array { .. });
+        // `ArrayList<T>` normalizes to `Ty::Array` in most paths
+        // (tycheck's ty_from_ref shortcut), but a few — e.g. property
+        // getter return types — can surface it under its user-type
+        // name; accept both spellings (S3).
+        let is_array = matches!(&recv_ty, juxc_tycheck::Ty::Array { .. })
+            || matches!(
+                &recv_ty,
+                juxc_tycheck::Ty::User { name, .. }
+                    if name.rsplit('.').next().unwrap_or(name) == "ArrayList"
+            );
         let is_string =
             matches!(&recv_ty, juxc_tycheck::Ty::String);
         let is_map = matches!(
@@ -2043,58 +2180,58 @@ impl RustEmitter {
         let receiver = &*f.object;
         match method {
             "addFirst" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".push_front(");
                 self.emit_call_args(call);
                 self.w.push(')');
                 true
             }
             "addLast" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".push_back(");
                 self.emit_call_args(call);
                 self.w.push(')');
                 true
             }
             "removeFirst" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".pop_front()");
                 true
             }
             "removeLast" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".pop_back()");
                 true
             }
             "peekFirst" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".front().cloned()");
                 true
             }
             "peekLast" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".back().cloned()");
                 true
             }
             "contains" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".contains(&(");
                 self.emit_call_args(call);
                 self.w.push_str("))");
                 true
             }
             "size" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".len() as isize");
                 true
             }
             "isEmpty" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".is_empty()");
                 true
             }
             "clear" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".clear()");
                 true
             }
@@ -2111,56 +2248,56 @@ impl RustEmitter {
         let receiver = &*f.object;
         match method {
             "put" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".insert(");
                 self.emit_call_args(call);
                 self.w.push(')');
                 true
             }
             "get" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".get(&(");
                 self.emit_call_args(call);
                 self.w.push_str(")).cloned().unwrap()");
                 true
             }
             "contains" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".contains_key(&(");
                 self.emit_call_args(call);
                 self.w.push_str("))");
                 true
             }
             "remove" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".remove(&(");
                 self.emit_call_args(call);
                 self.w.push_str(")).unwrap()");
                 true
             }
             "size" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".len() as isize");
                 true
             }
             "isEmpty" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".is_empty()");
                 true
             }
             "clear" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".clear()");
                 true
             }
             "keys" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w
                     .push_str(".keys().cloned().collect::<Vec<_>>()");
                 true
             }
             "values" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w
                     .push_str(".values().cloned().collect::<Vec<_>>()");
                 true
@@ -2177,38 +2314,38 @@ impl RustEmitter {
         let receiver = &*f.object;
         match method {
             "add" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".insert(");
                 self.emit_call_args(call);
                 self.w.push(')');
                 true
             }
             "contains" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".contains(&(");
                 self.emit_call_args(call);
                 self.w.push_str("))");
                 true
             }
             "remove" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".remove(&(");
                 self.emit_call_args(call);
                 self.w.push_str("))");
                 true
             }
             "size" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".len() as isize");
                 true
             }
             "isEmpty" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".is_empty()");
                 true
             }
             "clear" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".clear()");
                 true
             }
@@ -2233,7 +2370,7 @@ impl RustEmitter {
         let prev_lv = self.emitting_lvalue;
         self.emitting_out_place = true;
         self.emitting_lvalue = true;
-        self.emit_expr(receiver);
+        self.emit_stdlib_receiver(receiver);
         self.emitting_out_place = prev_out;
         self.emitting_lvalue = prev_lv;
     }
@@ -2358,7 +2495,7 @@ impl RustEmitter {
         match method {
             // `xs.add(v)` → `xs.push(v)` — Java/spec name vs Rust.
             "add" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".push(");
                 self.emit_call_args(call);
                 self.w.push(')');
@@ -2367,19 +2504,19 @@ impl RustEmitter {
             // `xs.size()` → `xs.len() as isize` — same as `.length`
             // field shape but used as a method.
             "size" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".len() as isize");
                 true
             }
             // `xs.isEmpty()` → `xs.is_empty()` — pure rename.
             "isEmpty" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".is_empty()");
                 true
             }
             // `xs.contains(v)` → `xs.contains(&v)` — Rust needs &T.
             "contains" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".contains(&(");
                 self.emit_call_args(call);
                 self.w.push_str("))");
@@ -2389,7 +2526,7 @@ impl RustEmitter {
             // Matches Java's API contract.
             "indexOf" => {
                 self.w.push_str("(");
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".iter().position(|__e| *__e == ");
                 self.emit_call_args(call);
                 self.w.push_str(").map(|__i| __i as isize).unwrap_or(-1))");
@@ -2398,7 +2535,7 @@ impl RustEmitter {
             // `xs.get(i)` → `xs[i as usize].clone()` — clone so the
             // value-shape consistent with index-access elsewhere.
             "get" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str("[(");
                 self.emit_call_args(call);
                 self.w.push_str(") as usize].clone()");
@@ -2416,9 +2553,9 @@ impl RustEmitter {
                     self.emit_expr(idx);
                 }
                 self.w.push_str(") as usize; let __old = ");
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str("[__i].clone(); ");
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str("[__i] = ");
                 if let Some(val) = call.args.get(1) {
                     self.emit_expr(val);
@@ -2429,40 +2566,40 @@ impl RustEmitter {
             }
             // `xs.first()` / `xs.last()` — indexed access with clone.
             "first" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str("[0].clone()");
                 true
             }
             "last" => {
                 self.w.push('(');
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".last().cloned().unwrap())");
                 true
             }
             // `xs.clear()` / `xs.reverse()` / `xs.sort()` — direct
             // Rust equivalents.
             "clear" | "reverse" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push('.');
                 self.w.push_str(method);
                 self.w.push_str("()");
                 true
             }
             "sort" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".sort()");
                 true
             }
             // `xs.remove(i)` / `xs.insert(i, v)` with isize→usize cast.
             "remove" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".remove((");
                 self.emit_call_args(call);
                 self.w.push_str(") as usize)");
                 true
             }
             "insert" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".insert((");
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
@@ -2480,7 +2617,7 @@ impl RustEmitter {
             // `xs.join(sep)` — only well-defined for `Vec<String>`;
             // Rust's `Vec<String>::join(&str)` returns String.
             "join" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".join(&(");
                 self.emit_call_args(call);
                 self.w.push_str("))");
@@ -2488,30 +2625,66 @@ impl RustEmitter {
             }
             // forEach: iterator chain calling the closure on each
             // borrowed element. Closure capture rules let it borrow
-            // surrounding state.
+            // surrounding state. A wrapper-borrowed collection field
+            // (`s.items` → `s.0.borrow().items`) is SNAPSHOTTED first
+            // (S5, same rule as the H6 for-each statement fix):
+            // holding the `Ref` guard across the closure panics
+            // `already borrowed` the moment the closure mutates the
+            // same object.
             "forEach" => {
-                self.emit_expr(receiver);
+                let snapshot = self.expr_reads_through_wrapper_borrow(receiver);
+                if snapshot {
+                    self.w.push_str("{ let __jux_seq = ");
+                    self.emit_stdlib_receiver(receiver);
+                    self.w.push_str(".clone(); __jux_seq");
+                } else {
+                    self.emit_stdlib_receiver(receiver);
+                }
                 self.w.push_str(".iter().for_each(|__e| (");
                 self.emit_call_args(call);
                 self.w.push_str(")(__e.clone()))");
+                if snapshot {
+                    self.w.push_str(" }");
+                }
                 true
             }
             // map / filter: collect into a fresh Vec so the result
-            // stays Jux-array-shaped.
+            // stays Jux-array-shaped. Same S5 snapshot rule as forEach
+            // — the closure may mutate the iterated object.
             "map" => {
-                self.emit_expr(receiver);
+                let snapshot = self.expr_reads_through_wrapper_borrow(receiver);
+                if snapshot {
+                    self.w.push_str("{ let __jux_seq = ");
+                    self.emit_stdlib_receiver(receiver);
+                    self.w.push_str(".clone(); __jux_seq");
+                } else {
+                    self.emit_stdlib_receiver(receiver);
+                }
                 self.w
                     .push_str(".iter().cloned().map(|__e| (");
                 self.emit_call_args(call);
                 self.w.push_str(")(__e)).collect::<Vec<_>>()");
+                if snapshot {
+                    self.w.push_str(" }");
+                }
                 true
             }
             "filter" => {
-                self.emit_expr(receiver);
+                let snapshot = self.expr_reads_through_wrapper_borrow(receiver);
+                if snapshot {
+                    self.w.push_str("{ let __jux_seq = ");
+                    self.emit_stdlib_receiver(receiver);
+                    self.w.push_str(".clone(); __jux_seq");
+                } else {
+                    self.emit_stdlib_receiver(receiver);
+                }
                 self.w
                     .push_str(".iter().cloned().filter(|__e| (");
                 self.emit_call_args(call);
                 self.w.push_str(")(__e.clone())).collect::<Vec<_>>()");
+                if snapshot {
+                    self.w.push_str(" }");
+                }
                 true
             }
             _ => false,
@@ -2766,12 +2939,12 @@ impl RustEmitter {
             // char-count for usability. A `len_bytes()` variant
             // can land later when raw-byte counts matter.
             "length" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".chars().count() as isize");
                 true
             }
             "isEmpty" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".is_empty()");
                 true
             }
@@ -2779,17 +2952,17 @@ impl RustEmitter {
             // UTF-8 byte count (Rust `len`); `charLength` counts
             // scalar values (O(N) per the spec note).
             "byteLength" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".len() as isize");
                 true
             }
             "charLength" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".chars().count() as isize");
                 true
             }
             "repeat" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".repeat((");
                 self.emit_call_args(call);
                 self.w.push_str(") as usize)");
@@ -2797,43 +2970,43 @@ impl RustEmitter {
             }
             // Pure renames: snake_case Rust spelling.
             "toUpperCase" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".to_uppercase()");
                 true
             }
             "toLowerCase" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".to_lowercase()");
                 true
             }
             "trim" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".trim().to_string()");
                 true
             }
             "startsWith" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".starts_with(");
                 self.emit_call_args(call);
                 self.w.push_str(".as_str())");
                 true
             }
             "endsWith" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".ends_with(");
                 self.emit_call_args(call);
                 self.w.push_str(".as_str())");
                 true
             }
             "contains" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".contains(");
                 self.emit_call_args(call);
                 self.w.push_str(".as_str())");
                 true
             }
             "replace" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".replace(");
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
@@ -2850,14 +3023,14 @@ impl RustEmitter {
             }
             "indexOf" => {
                 self.w.push('(');
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".find(");
                 self.emit_call_args(call);
                 self.w.push_str(".as_str()).map(|__i| __i as isize).unwrap_or(-1))");
                 true
             }
             "split" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".split(");
                 self.emit_call_args(call);
                 self.w
@@ -2867,7 +3040,7 @@ impl RustEmitter {
             "substring" => {
                 // `s.substring(start, end)` — char-indexed slice.
                 self.w.push('(');
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".chars().skip((");
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
@@ -2888,7 +3061,7 @@ impl RustEmitter {
                 true
             }
             "charAt" => {
-                self.emit_expr(receiver);
+                self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".chars().nth((");
                 self.emit_call_args(call);
                 self.w.push_str(") as usize).unwrap()");

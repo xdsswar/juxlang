@@ -1,0 +1,27 @@
+// Wave-3 borrow stress #7: arg-hoist detector reach — two mutating
+// calls on the receiver inside ONE nested binary arg, and a FIELD-PATH
+// receiver (not a bare local). Expect 3 then 2.
+package stress07;
+
+public class Cell7 {
+    public int v = 0;
+    public int bump() { this.v = this.v + 1; return this.v; }
+    public void set(int x) { this.v = x; }
+    public int get() { return this.v; }
+}
+
+public class Holder {
+    public Cell7 item = new Cell7();
+}
+
+void main() {
+    var a = new Cell7();
+    // receiver `a` is read (get) and mutated twice (bump) inside the arg
+    a.set(a.get() + a.bump() + a.bump());
+    print(a.v);
+
+    var h = new Holder();
+    // receiver is a field path: h.item.set(h.item.bump() + h.item.bump())
+    h.item.set(h.item.bump() + h.item.bump());
+    print(h.item.v);
+}

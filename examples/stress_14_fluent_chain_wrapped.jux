@@ -1,0 +1,25 @@
+// Wave-3 borrow stress #14: a fluent mutating chain on a wrapped
+// field — each `add` mutates and returns the receiver; the owner is
+// aliased so both classes take the wrapper shape. Expect abc / abc.
+package stress14;
+
+public class Builder14 {
+    public String s = "";
+    public Builder14 add(String p) {
+        this.s = this.s + p;
+        return this;
+    }
+    public String get() { return this.s; }
+}
+
+public class Owner14 {
+    public Builder14 sb = new Builder14();
+}
+
+void main() {
+    var o = new Owner14();
+    var alias = o;
+    o.sb.add("a").add("b").add("c");
+    print(o.sb.get());
+    print(alias.sb.get());
+}

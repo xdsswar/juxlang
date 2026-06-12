@@ -840,6 +840,25 @@ struct RustEmitter {
     /// flag on entry so only the outermost field sees it; a nested
     /// field receiver (`obj.field.method()`) still borrows correctly.
     pub(crate) emitting_call_callee: bool,
+    /// True while emitting the RECEIVER place of a method call
+    /// (`h.item` in `h.item.set(x)`). A plain (non-wrapper-borrow)
+    /// field read in this position must NOT take the auto-`.clone()`
+    /// — the method needs to borrow the place itself, and a clone
+    /// would silently discard any `&mut self` mutation (S7). Set by
+    /// `emit_field` around its `f.object` emission when the field is
+    /// a call callee; consumed (take-and-clear) at the next
+    /// `emit_field` and cleared at `emit_call` entry so it never
+    /// leaks into argument or unrelated sub-expressions.
+    pub(crate) emitting_method_receiver: bool,
+    /// True while emitting statements inside a LAMBDA body. A `try`
+    /// with returns emitted there can't type its `__jux_ret` channel
+    /// from `current_return_type` (that still describes the enclosing
+    /// FUNCTION — the lambda's return type is inferred), so the try
+    /// machinery drops the explicit annotations and lets rustc infer
+    /// from the threaded `Some(v)` values (S9). Cleared on entry to a
+    /// real fn body (`emit_fn_body_at`) so nested anonymous-class
+    /// methods type normally.
+    pub(crate) in_lambda_body: bool,
 }
 
 /// True when a class declaration should lower to the shared-mutation
@@ -2908,6 +2927,8 @@ impl RustEmitter {
             observer_shapes: std::collections::HashMap::new(),
             emitting_class_has_static_init: false,
             emitting_call_callee: false,
+            emitting_method_receiver: false,
+            in_lambda_body: false,
         }
     }
 
