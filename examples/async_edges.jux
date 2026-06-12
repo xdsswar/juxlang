@@ -1,0 +1,30 @@
+// S17: Worker.spawn with an async lambda runs awaits on the worker
+// thread. S19: same-arity constructors select by argument type.
+package asyncedges;
+
+public class Point {
+    public String tag;
+    public Point(int v) { this.tag = "int:" + v; }
+    public Point(String name) { this.tag = "str:" + name; }
+    public Point(double d) { this.tag = "dbl:" + d; }
+    public Point(int a, int b) { this.tag = "pair:" + (a + b); }
+}
+
+async int slowValue() {
+    return 21;
+}
+
+public async void main() {
+    // S19
+    print(new Point(7).tag);
+    print(new Point("origin").tag);
+    print(new Point(2.5).tag);
+    print(new Point(1, 2).tag);
+
+    // S17
+    var t = Worker.spawn(async () -> {
+        var v = await slowValue();
+        return v * 2;
+    });
+    print(await t);
+}

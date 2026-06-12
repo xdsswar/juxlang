@@ -516,6 +516,24 @@ pub enum Code {
     /// plain `for` over a `Stream<T>` (a stream has no synchronous
     /// iteration protocol — use `for await`).
     E0704_ForAwaitRequiresStream,
+    /// E0705 — a call to an `async` function/method used as a plain
+    /// value (§18.1.2: direct async calls require `await`). Without
+    /// the await the call expression is an unstarted future — the
+    /// body never runs — which previously leaked rustc E0277 noise
+    /// (`Display`/type errors on `impl Future`) or silently dropped
+    /// the work. Legal future-valued positions are exempt: the
+    /// `await` operand and the executor builtins
+    /// (`spawn`/`block_on`/`parallel`/`withTimeout`/`Task.*`/
+    /// `Worker.spawn`).
+    E0705_AsyncCallNotAwaited,
+    /// E0706 — an ASYNC `try` body assigns to a primitive/String
+    /// local declared outside the try. The async block captures such
+    /// locals **by value** (a copy moves in), so the assignment
+    /// silently updates the copy and the outer binding never changes
+    /// — the worst kind of wrong. Accumulate through a shared handle
+    /// instead (`AtomicInt`/`AtomicLong`, a class field) or restructure
+    /// to return the value out of the try.
+    E0706_AsyncTryMutatesOuterLocal,
 
     // ---- Memory / Unsafe (E0500–E0599) ----
     /// E0506 — An `unsafe` operation used outside an `unsafe` context. Per
@@ -669,6 +687,8 @@ impl Code {
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
             Code::E0703_ForAwaitRequiresAsyncContext => "E0703",
             Code::E0704_ForAwaitRequiresStream   => "E0704",
+            Code::E0705_AsyncCallNotAwaited      => "E0705",
+            Code::E0706_AsyncTryMutatesOuterLocal => "E0706",
             Code::E0701_AsyncNotInProfile        => "E0701",
             Code::E0702_ObjectCapturedBySpawn    => "E0702",
             Code::E0710_ThrowRequiresException   => "E0710",

@@ -539,7 +539,8 @@ impl RustEmitter {
                     .next()
                     .map(|s| s.to_string())
                     .unwrap_or_default();
-                let ctor_sfx = self.ctor_overload_suffix(&ctor_bare, n.args.len());
+                let ctor_sfx =
+                    self.ctor_overload_suffix_for_span(&ctor_bare, n.args.len(), n.span);
                 self.w.push_str("::new");
                 self.w.push_str(&ctor_sfx);
                 self.w.push('(');
@@ -1148,6 +1149,37 @@ impl RustEmitter {
             }
         }
         self.w.push_str("| ");
+        // S17: an ASYNC lambda handed to `Worker.spawn` runs on an OS
+        // thread that has no ambient executor — drive the async body
+        // to completion right there. Without this the body emitted as
+        // a plain closure and any `await` inside was rustc E0728.
+        if l.is_async {
+            self.w
+                .push_str("futures::executor::block_on(async move ");
+            match &l.body {
+                juxc_ast::LambdaBody::Expr(e) => {
+                    self.w.push_str("{ ");
+                    self.emit_expr(e);
+                    self.w.push_str(" }");
+                }
+                juxc_ast::LambdaBody::Block(b) => {
+                    let prev_lam = self.in_lambda_body;
+                    self.in_lambda_body = true;
+                    self.w.push_str("{\n");
+                    self.w.indent_inc();
+                    for stmt in &b.statements {
+                        self.emit_stmt(stmt);
+                    }
+                    self.patch_lambda_tail_try(b);
+                    self.w.indent_dec();
+                    self.w.emit_indent();
+                    self.w.push('}');
+                    self.in_lambda_body = prev_lam;
+                }
+            }
+            self.w.push(')');
+            return;
+        }
         match &l.body {
             juxc_ast::LambdaBody::Expr(e) => self.emit_expr(e),
             juxc_ast::LambdaBody::Block(b) => {
@@ -1446,7 +1478,8 @@ impl RustEmitter {
                 .last()
                 .map(|s| s.text.clone())
                 .unwrap_or_default();
-            let ctor_sfx = self.ctor_overload_suffix(&ctor_bare, n.args.len());
+            let ctor_sfx =
+                self.ctor_overload_suffix_for_span(&ctor_bare, n.args.len(), n.span);
             self.w.push_str("::new");
             self.w.push_str(&ctor_sfx);
             self.w.push('(');
