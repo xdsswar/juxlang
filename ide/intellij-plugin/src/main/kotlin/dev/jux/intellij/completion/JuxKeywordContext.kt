@@ -34,7 +34,15 @@ object JuxKeywordContext {
     /** Inside a class/interface/enum body: members, nested types, special blocks. */
     val MEMBER: Set<String> = curated(
         "void", "new", "operator", "init", "drop", "throws",
-    ) + MODIFIERS + TYPE_DECLS + HEADER_CLAUSES
+    ) + MODIFIERS + TYPE_DECLS + HEADER_CLAUSES + setOf(OBSERVER)
+
+    /**
+     * Inside a property's `{ … }` accessor braces (§P.1): the accessor kinds
+     * and their optional visibility. `get`/`set` are contextual identifiers —
+     * NOT in the generated [JuxKeywords.KEYWORDS] — so they join as a raw
+     * union after the real keywords are curated.
+     */
+    val ACCESSOR: Set<String> = curated("public", "private", "protected") + setOf("get", "set")
 
     /** Expression starters — valid anywhere an expression can begin. */
     val EXPRESSION: Set<String> = curated(
@@ -47,7 +55,7 @@ object JuxKeywordContext {
         "if", "else", "while", "for", "do", "switch", "case", "default",
         "return", "throw", "try", "catch", "finally", "break", "continue",
         "var", "final", "const", "unsafe", "in", "as", "when", "yield",
-    ) + EXPRESSION
+    ) + EXPRESSION + setOf(OBSERVER)
 
     /**
      * The keyword set for the completion position [at] (the PSI leaf at the
@@ -58,7 +66,18 @@ object JuxKeywordContext {
         var scope: PsiElement? = at
         while (scope != null && scope !is JuxFile) {
             when (scope.elementType) {
-                E.CODE_BLOCK -> return STATEMENT
+                E.CODE_BLOCK ->
+                    // A CODE_BLOCK directly under FIELD_DECLARATION is the
+                    // parser's legacy fallback for a `Type Name { … }` brace
+                    // whose interior didn't probe as accessors — which is
+                    // exactly what a half-typed property block (or one holding
+                    // only the completion dummy identifier) parses as. Offer
+                    // accessors there, statements everywhere else.
+                    return if (scope.parent.elementType === E.FIELD_DECLARATION) ACCESSOR
+                    else STATEMENT
+                // Between accessors of a property block (a caret inside a
+                // setter's CODE_BLOCK hits the arm above first — innermost out).
+                E.PROPERTY_ACCESSOR_LIST -> return ACCESSOR
                 E.CLASS_BODY -> return MEMBER
                 // Inside any expression node but not yet inside a block —
                 // e.g. a field initializer: offer expression starters.
@@ -75,4 +94,11 @@ object JuxKeywordContext {
     /** Curate against the generated keyword alphabet — typos can't leak through. */
     private fun curated(vararg words: String): Set<String> =
         words.filterTo(LinkedHashSet()) { it in JuxKeywords.KEYWORDS }
+
+    /**
+     * `observer<T>` (§P.2) — reserved by the spec but lexed contextually by
+     * juxc, so it bypasses [curated] (it is absent from the generated keyword
+     * alphabet) and joins the member/statement sets as a type starter.
+     */
+    private const val OBSERVER = "observer"
 }

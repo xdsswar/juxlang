@@ -57,15 +57,37 @@
     <variable name="PARAMS" expression="" defaultValue="" alwaysStopAt="true"/>
     <context><option name="JUX" value="true"/></context>
   </template>
-  <template name="prop" value="public $TYPE$ $NAME$ -&gt; $EXPR$;$END$" description="expression-bodied property (§M.7.4)" toReformat="false" toShortenFQNames="false">
+  <template name="prop" value="public $TYPE$ $NAME$ { get; set; } = $INIT$;$END$" description="observable property (§P.1)" toReformat="false" toShortenFQNames="false">
     <variable name="TYPE" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
-    <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+    <variable name="INIT" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="propr" value="public $TYPE$ $NAME$ { get; private set; } = $INIT$;$END$" description="read-outside property — private setter (§P.1.3)" toReformat="false" toShortenFQNames="false">
+    <variable name="TYPE" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+    <variable name="INIT" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="propc" value="public $TYPE$ $NAME$ { get -&gt; $EXPR$; };$END$" description="computed read-only property (§P.1.5)" toReformat="false" toShortenFQNames="false">
+    <variable name="TYPE" expression="" defaultValue="&quot;bool&quot;" alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue="&quot;IsEmpty&quot;" alwaysStopAt="true"/>
     <variable name="EXPR" expression="" defaultValue="" alwaysStopAt="true"/>
     <context><option name="JUX" value="true"/></context>
   </template>
   <template name="propgs" value="public $TYPE$ $NAME$ {&#10;    get;&#10;    set;&#10;}$END$" description="property with get/set accessors (§M.7)" toReformat="true" toShortenFQNames="false">
     <variable name="TYPE" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
-    <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="obs" value="private final observer&lt;$T$&gt; $NAME$ = (old, now) -&gt; {&#10;    $END$&#10;};" description="named observer variable (§P.2)" toReformat="true" toShortenFQNames="false">
+    <variable name="T" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue="&quot;obs&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="obsi" value="private final observer&lt;$T$&gt; $NAME$ = () -&gt; {&#10;    $END$&#10;};" description="invalidation observer (§P.2.2 shape 3)" toReformat="true" toShortenFQNames="false">
+    <variable name="T" expression="" defaultValue="&quot;String&quot;" alwaysStopAt="true"/>
+    <variable name="NAME" expression="" defaultValue="&quot;inv&quot;" alwaysStopAt="true"/>
     <context><option name="JUX" value="true"/></context>
   </template>
   <template name="initb" value="init {&#10;    $END$&#10;}" description="instance init block (§M.1)" toReformat="true" toShortenFQNames="false">
