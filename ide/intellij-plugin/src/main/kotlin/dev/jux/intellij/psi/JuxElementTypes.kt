@@ -61,6 +61,10 @@ object JuxElementTypes {
     val OPERATOR_DECLARATION = JuxElementType("OPERATOR_DECLARATION")
     val CONST_DECLARATION = JuxElementType("CONST_DECLARATION")
     val PROPERTY_DECLARATION = JuxElementType("PROPERTY_DECLARATION")
+    // Observable properties (§P / §M.7): the `{ get; set; }` braces and each
+    // `[visibility] get|set body` accessor inside them.
+    val PROPERTY_ACCESSOR_LIST = JuxElementType("PROPERTY_ACCESSOR_LIST")
+    val PROPERTY_ACCESSOR = JuxElementType("PROPERTY_ACCESSOR")
     val ENUM_CONSTANT = JuxElementType("ENUM_CONSTANT")
     val INIT_BLOCK = JuxElementType("INIT_BLOCK")
     val STATIC_BLOCK = JuxElementType("STATIC_BLOCK")

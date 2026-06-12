@@ -71,7 +71,10 @@ class JuxFoldingBuilder : FoldingBuilderEx(), DumbAware {
     override fun isCollapsedByDefault(node: ASTNode): Boolean = false
 
     private companion object {
-        val FOLDABLE = setOf(E.CLASS_BODY, E.CODE_BLOCK, T.BLOCK_COMMENT, T.DOC_COMMENT)
+        val FOLDABLE = setOf(
+            E.CLASS_BODY, E.CODE_BLOCK, E.PROPERTY_ACCESSOR_LIST,
+            T.BLOCK_COMMENT, T.DOC_COMMENT,
+        )
         val SWITCHES = setOf(E.SWITCH_STATEMENT, E.SWITCH_EXPRESSION)
         val RAW_STRINGS = setOf(T.RAW_STRING_LITERAL, T.INTERP_RAW_STRING_LITERAL)
     }

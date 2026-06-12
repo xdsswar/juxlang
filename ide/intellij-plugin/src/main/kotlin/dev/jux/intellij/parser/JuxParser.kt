@@ -7,6 +7,7 @@ import com.intellij.psi.tree.IElementType
 import com.intellij.psi.tree.TokenSet
 import dev.jux.intellij.highlight.JuxTokenTypes as T
 import dev.jux.intellij.psi.JuxElementTypes as E
+import dev.jux.intellij.psi.JuxObservableProps
 
 /**
  * Recursive-descent parser for Jux, built against the platform [PsiBuilder]
@@ -304,19 +305,122 @@ class JuxParser : PsiParser {
             parseBodyOrSemicolon(b)
             decl.done(E.METHOD_DECLARATION)
         } else {
-            // Field or property.
-            if (b.at(T.LBRACE)) {
-                parseCodeBlock(b) // property accessor block (opaque for now)
+            // Field or property (§M.7 base syntax + §P observability).
+            when {
+                // `Type Name { get; set; } [= init] ;?` — accessor block. The
+                // probe peeks past `{` and rolls back; on failure the brace is
+                // treated exactly as before (opaque block under a field), so
+                // non-property braces can't regress.
+                b.at(T.LBRACE) && looksLikeAccessorBlock(b) -> {
+                    parsePropertyAccessorList(b)
+                    if (b.at(T.EQ)) { b.advanceLexer(); b.parseExpression() }
+                    // The trailing `;` after `}` (or after the initializer) is
+                    // optional — mirrors juxc-parse, no error when absent.
+                    if (b.at(T.SEMICOLON)) b.advanceLexer()
+                    decl.done(E.PROPERTY_DECLARATION)
+                }
+                // `Type Name -> expr;` — read-only computed shorthand,
+                // equivalent to `{ get -> expr; }` (§M.7.4). `=>` is the
+                // type-test operator, tolerated here only for error recovery.
+                b.at(T.ARROW) || b.at(T.FAT_ARROW) -> {
+                    b.advanceLexer()
+                    b.parseExpression()
+                    b.semicolon()
+                    decl.done(E.PROPERTY_DECLARATION)
+                }
+                else -> {
+                    // Plain field: optional `= expr` initializer.
+                    if (b.at(T.LBRACE)) {
+                        parseCodeBlock(b) // stray brace — legacy fallback
+                    } else {
+                        if (b.at(T.EQ)) { b.advanceLexer(); b.parseExpression() }
+                        b.semicolon()
+                    }
+                    decl.done(E.FIELD_DECLARATION)
+                }
+            }
+        }
+    }
+
+    // ---- observable properties (§P) ----------------------------------------
+
+    /**
+     * Speculative probe: does the `{` at the cursor open a property accessor
+     * block? True when the first significant tokens inside are an optional
+     * visibility run followed by `get`/`set` (contextual identifiers), the
+     * removed-but-diagnosed `init` keyword, or an immediate `}` (an empty block
+     * the user is still typing). Always rolls back.
+     */
+    private fun looksLikeAccessorBlock(b: PsiBuilder): Boolean {
+        val probe = b.mark()
+        b.advanceLexer() // `{`
+        while (b.atAny(ACCESSOR_VISIBILITY)) b.advanceLexer()
+        val ok = b.at(T.RBRACE) || b.at(T.INIT_KW) ||
+            (b.at(T.IDENTIFIER) && b.tokenText in JuxObservableProps.ACCESSOR_KINDS)
+        probe.rollbackTo()
+        return ok
+    }
+
+    /** The `{ accessor+ }` braces of a property declaration. */
+    private fun parsePropertyAccessorList(b: PsiBuilder) {
+        val list = b.mark()
+        b.advanceLexer() // `{`
+        while (!b.eof() && !b.at(T.RBRACE)) {
+            if (atAccessorStart(b)) {
+                parsePropertyAccessor(b)
             } else {
-                // `= expr` field initializer, or `-> expr` expression-bodied
-                // property (§M.7.4 — `->` is the body arrow; `=>` is the
-                // type-test operator, tolerated here only for error recovery).
-                if (b.at(T.EQ)) { b.advanceLexer(); b.parseExpression() }
-                else if (b.at(T.ARROW) || b.at(T.FAT_ARROW)) { b.advanceLexer(); b.parseExpression() }
+                // Recovery: skip one token so the loop always progresses.
+                val e = b.mark()
+                b.advanceLexer()
+                e.error("accessor expected ('get' or 'set')")
+            }
+        }
+        b.expectOrError(T.RBRACE, "'}' expected")
+        list.done(E.PROPERTY_ACCESSOR_LIST)
+    }
+
+    private fun atAccessorStart(b: PsiBuilder): Boolean =
+        b.atAny(ACCESSOR_VISIBILITY) || b.at(T.INIT_KW) ||
+            (b.at(T.IDENTIFIER) && b.tokenText in JuxObservableProps.ACCESSOR_KINDS)
+
+    /**
+     * One accessor: `[public|protected|private] (get|set) body` where the body
+     * is `;` (auto), `-> expr ;` (expression form), or `{ … }` (block form).
+     * Mirrors `juxc-parse` decls.rs. The removed `init` accessor parses through
+     * with an error marker so the tree stays well-shaped while the user fixes it.
+     */
+    private fun parsePropertyAccessor(b: PsiBuilder) {
+        val m = b.mark()
+        if (b.atAny(ACCESSOR_VISIBILITY)) {
+            val mods = b.mark()
+            while (b.atAny(ACCESSOR_VISIBILITY)) b.advanceLexer()
+            mods.done(E.MODIFIER_LIST)
+        }
+        when {
+            b.at(T.INIT_KW) -> {
+                val err = b.mark()
+                b.advanceLexer()
+                err.error(
+                    "the 'init' accessor was removed (§P) — use '{ get; }' for a " +
+                        "read-only property settable in the constructor",
+                )
+            }
+            b.at(T.IDENTIFIER) && b.tokenText in JuxObservableProps.ACCESSOR_KINDS ->
+                b.advanceLexer() // `get` / `set`
+            else -> b.errorHere("'get' or 'set' expected")
+        }
+        when {
+            b.at(T.SEMICOLON) -> b.advanceLexer() // auto accessor: `get;`
+            b.at(T.ARROW) || b.at(T.FAT_ARROW) -> {
+                // Expression body: `get -> _age;` (lenient on `=>` for recovery).
+                b.advanceLexer()
+                b.parseExpression()
                 b.semicolon()
             }
-            decl.done(E.FIELD_DECLARATION)
+            b.at(T.LBRACE) -> b.parseBlock() // full block body (`value` is a plain identifier inside)
+            else -> b.errorHere("';', '-> expression;' or '{ … }' expected for accessor body")
         }
+        m.done(E.PROPERTY_ACCESSOR)
     }
 
     private fun parseThrows(b: PsiBuilder) {
@@ -405,6 +509,9 @@ class JuxParser : PsiParser {
 
     private companion object {
         val ENUM_SEP: TokenSet = TokenSet.create(T.COMMA, T.SEMICOLON)
+
+        /** Per-accessor visibility (§P.1.3) — no package level on accessors. */
+        val ACCESSOR_VISIBILITY: TokenSet = TokenSet.create(T.PUBLIC_KW, T.PROTECTED_KW, T.PRIVATE_KW)
 
         /** Tokens ending a `where` constraint run: the body, terminator, or `= expr`. */
         val WHERE_CLAUSE_END: TokenSet = TokenSet.create(T.LBRACE, T.SEMICOLON, T.EQ)
