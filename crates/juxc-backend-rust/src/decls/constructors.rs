@@ -117,6 +117,27 @@ impl RustEmitter {
     /// call (named-arg expansion, default filling, varargs packing)
     /// lands on a count INSIDE the same constructor's accepted range
     /// — ranges are validated pairwise-disjoint at the declaration.
+    /// Span-aware constructor-overload suffix: prefers tycheck's
+    /// recorded TYPED pick (§T.3 applied to constructors — S19, so
+    /// same-count overloads like `Point(int)` / `Point(String)`
+    /// dispatch by argument type), falling back to the count rule for
+    /// synthesized calls the checker didn't visit.
+    pub(crate) fn ctor_overload_suffix_for_span(
+        &self,
+        class_name: &str,
+        arg_count: usize,
+        span: juxc_source::Span,
+    ) -> String {
+        if let Some(&k) = self.symbols.ctor_selections.get(&span) {
+            return if k == 0 {
+                String::new()
+            } else {
+                format!("__{k}")
+            };
+        }
+        self.ctor_overload_suffix(class_name, arg_count)
+    }
+
     pub(crate) fn ctor_overload_suffix(&self, class_name: &str, arg_count: usize) -> String {
         let class = self
             .symbols

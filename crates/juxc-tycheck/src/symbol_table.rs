@@ -2527,21 +2527,30 @@ fn check_constructor_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagno
             .iter()
             .map(|c| ctor_arity_range(&c.params))
             .collect();
+        let shapes: Vec<String> = class
+            .constructors
+            .iter()
+            .map(|c| param_shape_key(&c.params))
+            .collect();
         for j in 1..ranges.len() {
             for i in 0..j {
                 let (lo_a, hi_a) = ranges[i];
                 let (lo_b, hi_b) = ranges[j];
                 let overlap = lo_a <= hi_b.unwrap_or(usize::MAX)
                     && lo_b <= hi_a.unwrap_or(usize::MAX);
-                if overlap {
+                // Same-count constructors are legal when their
+                // parameter-TYPE shapes differ — the call site picks
+                // by argument types (§T.3 applied to §7.3.1, S19).
+                // Identical shapes are true ambiguity.
+                if overlap && shapes[i] == shapes[j] {
                     diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0450_AmbiguousOverload,
                             format!(
                                 "ambiguous constructor overload on `{class_name}`: two \
-                                 constructors accept the same argument count (Phase 1 \
-                                 selects by count) — make the parameter counts disjoint, \
-                                 or merge them using default parameter values",
+                                 constructors have the same parameter types — overloads \
+                                 must differ in argument count or in at least one \
+                                 parameter type (§T.3)",
                             ),
                         )
                         .with_span(class.constructors[j].span),
@@ -2552,8 +2561,6 @@ fn check_constructor_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagno
     }
 }
 
-/// `[required ..= max]` acceptable-argument-count range for a
-/// constructor parameter list. `None` max = variadic (unbounded).
 /// A normalized textual key for a parameter list's TYPE SHAPE —
 /// `"int,double"` for `(int a, double b)`. Two overload-group members
 /// whose count ranges overlap are distinguishable (§T.3) exactly when
@@ -2597,6 +2604,8 @@ fn type_ref_shape_key(t: &TypeRef) -> String {
     s
 }
 
+/// `[required ..= max]` acceptable-argument-count range for a
+/// constructor parameter list. `None` max = variadic (unbounded).
 pub(crate) fn ctor_arity_range(params: &[ParamSig]) -> (usize, Option<usize>) {
     let required = params
         .iter()

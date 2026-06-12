@@ -1,0 +1,53 @@
+// S16: un-awaited async calls → E0705 (three shapes); legit positions
+// stay clean. S18: outer-primitive mutation in async try → E0706.
+package sedges;
+
+async int fetchValue() {
+    return 41;
+}
+
+public class Api {
+    public async int load() {
+        return 1;
+    }
+}
+
+async void okUsages() {
+    var a = await fetchValue();          // await — fine
+    var t = spawn(fetchValue());         // spawn consumes — fine
+    var b = await t;
+    print(a + b);
+}
+
+void badFreeFn() {
+    var x = fetchValue();                // E0705
+    print("never");
+}
+
+async void badMethod() {
+    var api = new Api();
+    var x = api.load();                  // E0705
+}
+
+async void badAsyncTryMutation() {
+    var total = 0;
+    try {
+        total = total + await fetchValue();   // E0706
+    } catch (Exception e) {
+        print("e");
+    }
+    print(total);
+}
+
+async void okAsyncTryLocal() {
+    try {
+        var local = await fetchValue();  // declared inside — fine
+        print(local);
+    } catch (Exception e) {
+        print("e");
+    }
+}
+
+public async void main() {
+    await okUsages();
+}

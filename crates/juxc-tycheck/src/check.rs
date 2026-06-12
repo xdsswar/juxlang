@@ -316,6 +316,13 @@ pub(crate) struct Checker<'a> {
     /// this is set (async addendum §18.1.2). Reset to `false` inside a
     /// constructor body and inside a non-async lambda.
     pub(crate) in_async: bool,
+    /// True while checking an expression that legitimately CONSUMES a
+    /// future: the operand of `await`, or an argument to the executor
+    /// builtins (`spawn`/`block_on`/`parallel`/`withTimeout`/
+    /// `Task.*`/`Worker.spawn`). Outside such a slot, a call to an
+    /// `async` callee is an unstarted future used as a value —
+    /// E0705 (§18.1.2: direct async calls require `await`).
+    pub(crate) in_future_slot: bool,
     /// True while we're inside an **unsafe context** — the body of an
     /// `unsafe` function/method, or an `unsafe { … }` block. Drives the
     /// `E0506_UnsafeOpOutsideUnsafe` check: calling an `unsafe` function (a
@@ -373,6 +380,7 @@ impl<'a> Checker<'a> {
             in_foreach_iter: false,
             in_static: false,
             in_async: false,
+            in_future_slot: false,
             in_unsafe: false,
             uninferable_news: Vec::new(),
             used_names: std::collections::HashSet::new(),
@@ -2302,6 +2310,35 @@ impl<'a> Checker<'a> {
             }
 
             Stmt::Try(t) => {
+                // S18 (§18.4 async lowering): an ASYNC try body (one
+                // containing an await / `for await`) lowers to an
+                // `async move` block that captures outer locals BY
+                // VALUE — assigning to an outer primitive/String local
+                // inside it would silently update the moved-in copy.
+                // Reject with E0706 instead of miscompiling.
+                if block_has_await_shallow(&t.body) {
+                    let mut assigned: Vec<(String, Span)> = Vec::new();
+                    let mut declared: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    collect_async_try_writes(&t.body, &mut assigned, &mut declared);
+                    for (name, span) in assigned {
+                        if declared.contains(&name) {
+                            continue;
+                        }
+                        let Some(ty) = self.env.lookup(&name) else { continue };
+                        if matches!(ty, Ty::Primitive(_) | Ty::String) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0706_AsyncTryMutatesOuterLocal,
+                                    format!(
+                                        "assignment to outer local `{name}` inside an async `try` updates a captured COPY (the async block captures by value) — accumulate through a shared handle (`AtomicInt`/`AtomicLong`, a class field) or return the value out of the try",
+                                    ),
+                                )
+                                .with_span(span),
+                            );
+                        }
+                    }
+                }
                 // Checked-exception absorption (§X.1.3): every type
                 // this try's clauses can catch shields raises inside
                 // the BODY (not the catch/finally blocks).
@@ -2914,7 +2951,11 @@ impl<'a> Checker<'a> {
                 // The operand's static type is the operand's type (so a
                 // `Future<T>` shape unwraps to `T` in inference); formal
                 // Future-typing lands when async types are modelled properly.
+                // The operand is THE future-consuming position (E0705).
+                let prev_slot = self.in_future_slot;
+                self.in_future_slot = true;
                 self.check_expr(inner);
+                self.in_future_slot = prev_slot;
             }
         }
     }
@@ -4035,6 +4076,26 @@ impl<'a> Checker<'a> {
         Some((ty, format!("{bare}.{prop_name}")))
     }
 
+    /// E0705 (§18.1.2): a call to an async callee outside a
+    /// future-consuming slot is an unstarted future used as a value —
+    /// the body never runs. Read-only on `in_future_slot` (no take):
+    /// a nested async call inside an exempt position stays exempt,
+    /// which trades a rare false negative (rustc still backstops it)
+    /// for zero false positives on branchy await operands.
+    fn flag_unawaited_async_call(&mut self, callee_desc: &str, is_async: bool, span: Span) {
+        if is_async && !self.in_future_slot {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0705_AsyncCallNotAwaited,
+                    format!(
+                        "`{callee_desc}` is async — calling it produces an unstarted future and the body never runs; `await` the call (§18.1.2), or pass it to `spawn(...)` to run it as a task",
+                    ),
+                )
+                .with_span(span),
+            );
+        }
+    }
+
     fn check_call(&mut self, c: &CallExpr) {
         // §P.4.2/§P.4.3 — `target.X.bind(source.Y)` /
         // `bindBidirectional`: both ends must be properties of the
@@ -4119,8 +4180,7 @@ impl<'a> Checker<'a> {
                 };
                 let Some(class_name) = self.env.current_class.clone() else { return };
                 let Some(class) = self.symbols.classes.get(&class_name) else { return };
-                let selected =
-                    Self::select_ctor_by_count(&class.constructors, c.args.len());
+                let selected = self.select_ctor_typed(&class.constructors, &c.args);
                 match selected {
                     Some(k) if k == current_idx => {
                         self.diagnostics.push(
@@ -4225,16 +4285,26 @@ impl<'a> Checker<'a> {
                 // (E0702: no wrapper-class captures).
                 if name == "spawn" {
                     self.check_spawn_captures(&c.args);
+                    // `spawn(asyncFn())` consumes the future (E0705 exempt).
+                    let prev_slot = self.in_future_slot;
+                    self.in_future_slot = true;
                     for arg in &c.args {
                         self.check_expr(arg);
                     }
+                    self.in_future_slot = prev_slot;
                     return;
                 }
-                // Built-in functions accept anything.
+                // Built-in functions accept anything — including bare
+                // futures (`block_on(f())`, `parallel(a(), b())`,
+                // `withTimeout(ms, f())`), so their args are
+                // future-consuming positions (E0705 exempt).
                 if BUILTINS.contains(&name.as_str()) {
+                    let prev_slot = self.in_future_slot;
+                    self.in_future_slot = true;
                     for arg in &c.args {
                         self.check_expr(arg);
                     }
+                    self.in_future_slot = prev_slot;
                     return;
                 }
                 // Resolve the callee FQN: an exact bare key (same-package free
@@ -4259,6 +4329,10 @@ impl<'a> Checker<'a> {
                     let params = fn_sig.params.clone();
                     let generic_params = fn_sig.generic_params.clone();
                     let callee_unsafe = fn_sig.is_unsafe;
+                    let callee_async = matches!(
+                        fn_sig.return_type,
+                        juxc_ast::ReturnType::AsyncType(_),
+                    );
                     // §X.1.3 propagation: the callee's declared
                     // checked throws raise here.
                     let callee_throws = fn_sig.throws.clone();
@@ -4266,6 +4340,8 @@ impl<'a> Checker<'a> {
                     let callee_wheres = fn_sig.wheres.clone();
                     // §A.2.8: calling an `unsafe` fn needs an `unsafe` context.
                     self.require_unsafe_context(callee_unsafe, name, c.span);
+                    // §18.1.2: an async call must be awaited (E0705).
+                    self.flag_unawaited_async_call(name, callee_async, c.span);
                     // Validate any explicit `<…>` turbofish against the
                     // callee's declared type params (E0443).
                     self.check_explicit_type_args(
@@ -4390,24 +4466,31 @@ impl<'a> Checker<'a> {
                     if let Expr::Path(qn) = field.object.as_ref() {
                         if qn.segments.len() == 1 && qn.segments[0].text == "Worker" {
                             self.check_spawn_captures(&c.args);
+                            let prev_slot = self.in_future_slot;
+                            self.in_future_slot = true;
                             for arg in &c.args {
                                 self.check_expr(arg);
                             }
+                            self.in_future_slot = prev_slot;
                             return;
                         }
                     }
                 }
                 // `Task.all/race/delay` (§18.1.4) — runtime statics on
                 // the emitted helpers; args are task handles (or a
-                // millisecond count for delay).
+                // millisecond count for delay) — future-consuming
+                // positions (E0705 exempt).
                 if let Expr::Path(qn) = field.object.as_ref() {
                     if qn.segments.len() == 1
                         && qn.segments[0].text == "Task"
                         && matches!(method_name, "all" | "race" | "delay")
                     {
+                        let prev_slot = self.in_future_slot;
+                        self.in_future_slot = true;
                         for arg in &c.args {
                             self.check_expr(arg);
                         }
+                        self.in_future_slot = prev_slot;
                         return;
                     }
                     // `Stream.of/from/generate` (§18.6.4) — statics on
@@ -4481,6 +4564,17 @@ impl<'a> Checker<'a> {
                                 self.require_unsafe_context(
                                     method.is_unsafe,
                                     method_name,
+                                    c.span,
+                                );
+                                // §18.1.2: async static call must be
+                                // awaited (E0705).
+                                let static_is_async = matches!(
+                                    method.return_type,
+                                    juxc_ast::ReturnType::AsyncType(_),
+                                );
+                                self.flag_unawaited_async_call(
+                                    method_name,
+                                    static_is_async,
                                     c.span,
                                 );
                                 self.check_call_args(
@@ -4716,6 +4810,10 @@ impl<'a> Checker<'a> {
                     self.record_callee_throws(&method_throws, c.span);
                     let method_is_static = method.is_static;
                     let method_is_unsafe = method.is_unsafe;
+                    let method_is_async = matches!(
+                        method.return_type,
+                        juxc_ast::ReturnType::AsyncType(_),
+                    );
                     // Clone the declaring-class name into an owned
                     // String so it outlives the immutable borrow on
                     // `self.symbols` we'd otherwise need.
@@ -4754,6 +4852,8 @@ impl<'a> Checker<'a> {
                         c.span,
                     );
                     self.require_unsafe_context(method_is_unsafe, method_name, c.span);
+                    // §18.1.2: an async method call must be awaited (E0705).
+                    self.flag_unawaited_async_call(method_name, method_is_async, c.span);
                     // Validate any explicit `<…>` turbofish against the
                     // method's own type params (E0443).
                     self.check_explicit_type_args(
@@ -5068,7 +5168,8 @@ impl<'a> Checker<'a> {
             // declared constructor so arg-count/type errors report
             // against SOMETHING sensible; no class constructors at
             // all means the synthesized zero-arg default.
-            let selected = Self::select_ctor_by_count(&class.constructors, n.args.len())
+            let selected = self
+                .select_ctor_typed(&class.constructors, &n.args)
                 .unwrap_or(0);
             if !class.constructors.is_empty() {
                 self.ctor_selections.insert(n.span, selected);
@@ -5246,7 +5347,8 @@ impl<'a> Checker<'a> {
         // Parent-constructor overload selection — same count rule as
         // `new` sites; the backend reads the recorded index when it
         // builds `__parent: Parent::new__K(args)`.
-        let selected = Self::select_ctor_by_count(&parent.constructors, args.len())
+        let selected = self
+            .select_ctor_typed(&parent.constructors, args)
             .unwrap_or(0);
         if !parent.constructors.is_empty() {
             self.ctor_selections.insert(call_span, selected);
@@ -5360,13 +5462,11 @@ impl<'a> Checker<'a> {
         subst_params.extend(method_generic_params.iter().cloned());
     }
 
-    /// Select a constructor overload by **argument count** (Phase-1
-    /// rule, §7.3.1): the unique constructor whose acceptable-count
-    /// range `[required ..= max]` covers `arg_count`. Declaration-time
-    /// validation (`check_constructor_overloads`) guarantees ranges
-    /// are pairwise disjoint, so at most one matches. `None` when no
-    /// constructor accepts the count (the caller falls back to the
-    /// first for error reporting) or when the class declares none.
+    /// Select a constructor overload by **argument count** (§7.3.1):
+    /// the first constructor whose acceptable-count range
+    /// `[required ..= max]` covers `arg_count`. Used by
+    /// [`Self::select_ctor_typed`] as the fast path and kept for
+    /// callers without argument expressions.
     fn select_ctor_by_count(
         ctors: &[crate::symbol_table::ConstructorSig],
         arg_count: usize,
@@ -5375,6 +5475,66 @@ impl<'a> Checker<'a> {
             let (lo, hi) = crate::symbol_table::ctor_arity_range(&c.params);
             arg_count >= lo && hi.map_or(true, |h| arg_count <= h)
         })
+    }
+
+    /// Constructor-overload pick, count THEN types (§T.3 applied to
+    /// §7.3.1 — S19): when several constructors accept the call's
+    /// argument count, score each against the inferred argument types
+    /// (2 exact / 1 compatible / disqualified on a mismatch) and take
+    /// the best, so `new Point(7)` and `new Point("origin")` pick
+    /// different constructors. Ties resolve to the first declared
+    /// candidate (identical-shape pairs are rejected at the
+    /// declaration).
+    fn select_ctor_typed(
+        &self,
+        ctors: &[crate::symbol_table::ConstructorSig],
+        args: &[Expr],
+    ) -> Option<usize> {
+        let count = args.len();
+        let candidates: Vec<usize> = ctors
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                let (lo, hi) = crate::symbol_table::ctor_arity_range(&c.params);
+                count >= lo && hi.map_or(true, |h| count <= h)
+            })
+            .map(|(k, _)| k)
+            .collect();
+        match candidates.len() {
+            0 => None,
+            1 => Some(candidates[0]),
+            _ => {
+                let arg_tys: Vec<Ty> = args
+                    .iter()
+                    .map(|a| infer_expr(a, &self.env, self.symbols))
+                    .collect();
+                let mut best: Option<(i32, usize)> = None;
+                for &k in &candidates {
+                    let params = &ctors[k].params;
+                    let mut score = 0i32;
+                    let mut ok = true;
+                    for (i, at) in arg_tys.iter().enumerate() {
+                        let Some(p) = params.get(i) else { continue };
+                        let pt = ty_from_ref(&p.ty, &self.env, self.symbols);
+                        if pt == *at {
+                            score += 2;
+                        } else if compatible(&pt, at, self.symbols) {
+                            score += 1;
+                        } else {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if !ok {
+                        continue;
+                    }
+                    if best.map_or(true, |(bs, _)| score > bs) {
+                        best = Some((score, k));
+                    }
+                }
+                best.map(|(_, k)| k).or(Some(candidates[0]))
+            }
+        }
     }
 
     /// Variadic-callee arm of [`Self::check_call_args`]: positional
@@ -6209,6 +6369,161 @@ fn collect_sealed_subclasses_covered(
 /// - Arrays compare element-wise + kind.
 /// - User types compare by name + pairwise generic-args.
 /// - Everything else: false.
+/// Does this block make an enclosing `try` ASYNC — i.e. contain an
+/// `await` or a `for await` at its own level? Shallow with respect to
+/// LAMBDAS: an await inside a nested lambda belongs to that lambda's
+/// async context, not this block's. Used by the S18/E0706 guard.
+fn block_has_await_shallow(b: &juxc_ast::Block) -> bool {
+    b.statements.iter().any(stmt_has_await_shallow)
+}
+
+fn stmt_has_await_shallow(s: &Stmt) -> bool {
+    match s {
+        Stmt::Expr(e) | Stmt::Throw(e, _) => expr_has_await_shallow(e),
+        Stmt::Return(Some(e)) => expr_has_await_shallow(e),
+        Stmt::VarDecl(v) => v.init.as_ref().is_some_and(expr_has_await_shallow),
+        Stmt::Assign(a) => {
+            expr_has_await_shallow(&a.value) || expr_has_await_shallow(&a.target)
+        }
+        Stmt::If(i) => {
+            expr_has_await_shallow(&i.condition)
+                || block_has_await_shallow(&i.then_block)
+                || match i.else_branch.as_deref() {
+                    Some(ElseBranch::Block(b)) => block_has_await_shallow(b),
+                    Some(ElseBranch::If(inner)) => {
+                        stmt_has_await_shallow(&Stmt::If(inner.clone()))
+                    }
+                    None => false,
+                }
+        }
+        Stmt::While(w) => {
+            expr_has_await_shallow(&w.condition) || block_has_await_shallow(&w.body)
+        }
+        Stmt::DoWhile(d) => {
+            block_has_await_shallow(&d.body) || expr_has_await_shallow(&d.condition)
+        }
+        Stmt::ForEach(f) => {
+            f.is_await
+                || expr_has_await_shallow(&f.iter)
+                || block_has_await_shallow(&f.body)
+        }
+        Stmt::ForC(f) => {
+            f.cond.as_ref().is_some_and(expr_has_await_shallow)
+                || block_has_await_shallow(&f.body)
+        }
+        Stmt::Try(t) => {
+            block_has_await_shallow(&t.body)
+                || t.catches.iter().any(|c| block_has_await_shallow(&c.body))
+                || t.finally.as_ref().is_some_and(block_has_await_shallow)
+        }
+        Stmt::Unsafe(b) => block_has_await_shallow(b),
+        Stmt::Labeled { stmt, .. } => stmt_has_await_shallow(stmt),
+        _ => false,
+    }
+}
+
+fn expr_has_await_shallow(e: &Expr) -> bool {
+    match e {
+        Expr::Await(..) => true,
+        // Lambdas are their own async scope — don't descend.
+        Expr::Lambda(_) => false,
+        Expr::Binary(b) => {
+            expr_has_await_shallow(&b.left) || expr_has_await_shallow(&b.right)
+        }
+        Expr::Unary(u) => expr_has_await_shallow(&u.operand),
+        Expr::Call(c) => {
+            expr_has_await_shallow(&c.callee)
+                || c.args.iter().any(expr_has_await_shallow)
+        }
+        Expr::Field(f) => expr_has_await_shallow(&f.object),
+        Expr::Index(i) => {
+            expr_has_await_shallow(&i.array) || expr_has_await_shallow(&i.index)
+        }
+        Expr::Cast(c) => expr_has_await_shallow(&c.value),
+        Expr::NotNullAssert(inner, _) => expr_has_await_shallow(inner),
+        Expr::Elvis(el) => {
+            expr_has_await_shallow(&el.value) || expr_has_await_shallow(&el.fallback)
+        }
+        _ => false,
+    }
+}
+
+/// Collect, for the S18/E0706 guard: every bare-local ASSIGNMENT
+/// target in the block (recursively, skipping lambdas) plus every
+/// local DECLARED inside it (those live within the async block and
+/// are fine to mutate).
+fn collect_async_try_writes(
+    b: &juxc_ast::Block,
+    assigned: &mut Vec<(String, Span)>,
+    declared: &mut std::collections::HashSet<String>,
+) {
+    for s in &b.statements {
+        collect_async_try_writes_stmt(s, assigned, declared);
+    }
+}
+
+fn collect_async_try_writes_stmt(
+    s: &Stmt,
+    assigned: &mut Vec<(String, Span)>,
+    declared: &mut std::collections::HashSet<String>,
+) {
+    match s {
+        Stmt::Assign(a) => {
+            if let Expr::Path(qn) = &a.target {
+                if qn.segments.len() == 1 {
+                    assigned.push((qn.segments[0].text.clone(), a.span));
+                }
+            }
+        }
+        Stmt::VarDecl(v) => {
+            declared.insert(v.name.text.clone());
+        }
+        Stmt::If(i) => {
+            collect_async_try_writes(&i.then_block, assigned, declared);
+            let mut cursor = i.else_branch.as_deref();
+            while let Some(branch) = cursor {
+                match branch {
+                    ElseBranch::Block(b) => {
+                        collect_async_try_writes(b, assigned, declared);
+                        break;
+                    }
+                    ElseBranch::If(inner) => {
+                        collect_async_try_writes(&inner.then_block, assigned, declared);
+                        cursor = inner.else_branch.as_deref();
+                    }
+                }
+            }
+        }
+        Stmt::While(w) => collect_async_try_writes(&w.body, assigned, declared),
+        Stmt::DoWhile(d) => collect_async_try_writes(&d.body, assigned, declared),
+        Stmt::ForEach(f) => {
+            declared.insert(f.var_name.text.clone());
+            collect_async_try_writes(&f.body, assigned, declared);
+        }
+        Stmt::ForC(f) => {
+            if let Some(init) = f.init.as_deref() {
+                collect_async_try_writes_stmt(init, assigned, declared);
+            }
+            collect_async_try_writes(&f.body, assigned, declared);
+        }
+        Stmt::Try(t) => {
+            collect_async_try_writes(&t.body, assigned, declared);
+            for c in &t.catches {
+                declared.insert(c.name.text.clone());
+                collect_async_try_writes(&c.body, assigned, declared);
+            }
+            if let Some(fin) = &t.finally {
+                collect_async_try_writes(fin, assigned, declared);
+            }
+        }
+        Stmt::Unsafe(b) => collect_async_try_writes(b, assigned, declared),
+        Stmt::Labeled { stmt, .. } => {
+            collect_async_try_writes_stmt(stmt, assigned, declared)
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bool {
     // Wildcards / suppression escape hatches.
     if expected.is_unknown() || found.is_unknown() {
