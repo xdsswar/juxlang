@@ -14,6 +14,12 @@ class JuxInspectionsTest : BasePlatformTestCase() {
             JuxUnusedImportInspection(),
             JuxUnusedLocalSymbolInspection(),
             JuxMissingOverrideInspection(),
+            JuxPropertyNamingInspection(),
+            JuxSetterEarlyReturnInspection(),
+            JuxAccessorVisibilityInspection(),
+            JuxPropertyNeverObservedInspection(),
+            JuxBoundPropertyAssignmentInspection(),
+            JuxBindTypeMismatchInspection(),
         )
     }
 
@@ -208,5 +214,194 @@ class JuxInspectionsTest : BasePlatformTestCase() {
             "case-insensitive @Override satisfies the check",
             descriptions.any { it.contains("not annotated @override") },
         )
+    }
+
+    // ---- observable properties (§P.7) ---------------------------------------
+
+    fun testPascalCaseHintFiresAndPascalNamesPass() {
+        val descriptions = highlightDescriptions(
+            """
+            package demo;
+            public class A {
+                public String name { get; set; } = "";
+                public String Name2 { get; set; } = "";
+                private String _backing { get; set; } = "";
+            }
+            """.trimIndent(),
+        )
+        assertTrue(descriptions.any { it.contains("'name' should be PascalCase (W0974)") })
+        assertFalse(descriptions.any { it.contains("W0974") && it.contains("'Name2'") })
+        assertFalse(
+            "underscore-prefixed names are exempt",
+            descriptions.any { it.contains("W0974") && it.contains("'_backing'") },
+        )
+    }
+
+    fun testPascalCaseRenameQuickFixUpdatesUsages() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class A {
+                public String na<caret>me { get; set; } = "";
+                private final observer<String> obs = (old, now) -> { print(now); };
+                public A() {
+                    name.observers.attach(obs);
+                    name = "x";
+                }
+            }
+            """.trimIndent(),
+        )
+        myFixture.doHighlighting()
+        val fix = myFixture.findSingleIntention("Rename property to PascalCase")
+        myFixture.launchAction(fix)
+        val text = myFixture.file.text
+        assertTrue("declaration renamed", text.contains("public String Name { get; set; }"))
+        assertTrue("attach site renamed", text.contains("Name.observers.attach(obs);"))
+        assertTrue("write site renamed", text.contains("Name = \"x\";"))
+    }
+
+    fun testEarlyReturnInSetterFlagged() {
+        val descriptions = highlightDescriptions(
+            """
+            package demo;
+            public class A {
+                private String _n = "";
+                public String Name {
+                    get -> _n;
+                    set {
+                        if (value == null) return;
+                        _n = value;
+                    }
+                };
+                public String Other {
+                    get -> _n;
+                    set {
+                        _n = value;
+                        return;
+                    }
+                };
+            }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "only the early return is flagged: $descriptions",
+            1,
+            descriptions.count { it.contains("W0973") },
+        )
+    }
+
+    fun testSetterVisibilityExceedsGetterFlagged() {
+        val descriptions = highlightDescriptions(
+            """
+            package demo;
+            public class A {
+                public String Bad { private get; set; } = "";
+                public String Good { get; private set; } = "";
+            }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "only Bad is flagged: $descriptions",
+            1,
+            descriptions.count { it.contains("E0972") },
+        )
+    }
+
+    fun testNeverObservedFiresOnPrivateOnly() {
+        val descriptions = highlightDescriptions(
+            """
+            package demo;
+            public class A {
+                private String Lonely { get; set; } = "";
+                private String Watched { get; set; } = "";
+                public String Api { get; set; } = "";
+                private bool Computed { get -> true; };
+                private final observer<String> obs = (old, now) -> { print(now); };
+                public A() {
+                    Watched.observers.attach(obs);
+                }
+            }
+            """.trimIndent(),
+        )
+        assertTrue(descriptions.any { it.contains("'Lonely' is never observed or bound (W0971)") })
+        assertFalse("observed property passes", descriptions.any { it.contains("W0971") && it.contains("'Watched'") })
+        assertFalse("public properties are exempt", descriptions.any { it.contains("W0971") && it.contains("'Api'") })
+        assertFalse(
+            "computed properties are exempt",
+            descriptions.any { it.contains("W0971") && it.contains("'Computed'") },
+        )
+    }
+
+    fun testBoundPropertyAssignmentFlagged() {
+        val descriptions = highlightDescriptions(
+            """
+            package demo;
+            public class Model { public String Name { get; set; } = ""; }
+            public class A {
+                public String Label { get; set; } = "";
+                public void wire(Model m) {
+                    Label.bind(m.Name);
+                    Label = "direct";
+                    m.Name = "fine";
+                }
+            }
+            """.trimIndent(),
+        )
+        assertEquals("only the bound receiver flags: $descriptions", 1, descriptions.count { it.contains("E0973") })
+        assertTrue(descriptions.any { it.contains("'Label' is bound") })
+    }
+
+    fun testUnboundPropertyAssignmentNotFlagged() {
+        val descriptions = highlightDescriptions(
+            """
+            package demo;
+            public class Model { public String Name { get; set; } = ""; }
+            public class A {
+                public String Label { get; set; } = "";
+                public void wire(Model m) {
+                    Label.bind(m.Name);
+                    Label.unbind();
+                    Label = "direct";
+                }
+            }
+            """.trimIndent(),
+        )
+        assertFalse("unbind() silences E0973: $descriptions", descriptions.any { it.contains("E0973") })
+    }
+
+    fun testBindTypeMismatchFlaggedWhenBothResolve() {
+        val descriptions = highlightDescriptions(
+            """
+            package demo;
+            public class A {
+                public String Name { get; set; } = "";
+                public double Value { get; set; } = 0.0;
+                public int Count { get; set; } = 0;
+                public int Total { get; set; } = 0;
+                public void wire() {
+                    Name.bindBidirectional(Value);
+                    Count.bind(Total);
+                }
+            }
+            """.trimIndent(),
+        )
+        assertEquals("one mismatch: $descriptions", 1, descriptions.count { it.contains("E0974") })
+        assertTrue(descriptions.any { it.contains("'double' cannot bind to 'String'") })
+    }
+
+    fun testBindTypeMismatchSilentWhenUnresolvable() {
+        val descriptions = highlightDescriptions(
+            """
+            package demo;
+            public class A {
+                public String Name { get; set; } = "";
+                public void wire(Widget w) {
+                    Name.bind(w.Mystery);
+                }
+            }
+            """.trimIndent(),
+        )
+        assertFalse("unresolvable side stays silent: $descriptions", descriptions.any { it.contains("E0974") })
     }
 }
