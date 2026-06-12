@@ -1452,7 +1452,7 @@ impl RustEmitter {
         self.emit_pending_loop_label();
         // Stepped range (§M.6): sign-aware while loop — positive
         // steps count up to the bound, negative steps count down,
-        // zero panics (ArithmeticException semantics).
+        // zero throws a catchable ArithmeticException (ERRATA.md E1).
         if let Expr::Range(r) = &f.iter {
             if let Some(step) = &r.step {
                 let var = f.var_name.text.clone();
@@ -1463,7 +1463,7 @@ impl RustEmitter {
                 self.emit_expr(step);
                 self.w.push_str(";\n");
                 self.w.line(
-                    "if __jux_step == 0 { panic!(\"range step must be non-zero\"); }",
+                    "if __jux_step == 0 { std::panic::panic_any(crate::jux::std::exceptions::ArithmeticException::new(\"range step must be non-zero\".to_string())); }",
                 );
                 self.w.emit_indent();
                 self.w.push_str("let __jux_end: isize = ");
@@ -2035,6 +2035,36 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
+        // Integer `/=` and `%=` desugar to `target = target / value` so
+        // the compound forms get the same checked lowering as the binary
+        // ops (`__jux_idiv`/`__jux_irem` — zero divisor throws a
+        // catchable ArithmeticException, ERRATA.md E1). Every plain-`=`
+        // target shape (local, field, static, wrapper) already exists,
+        // so recursing with the rewritten statement reuses them all.
+        // `operator[]=` targets are excluded: their compound branch
+        // below must hoist the read to avoid E0499, so it special-cases
+        // Div/Rem itself.
+        if matches!(
+            a.op,
+            Some(juxc_ast::BinaryOp::Div) | Some(juxc_ast::BinaryOp::Rem),
+        ) && self.operand_is_float(&a.target) == Some(false)
+            && !matches!(&a.target, Expr::Index(ix)
+                if self.expr_declares_operator(&ix.array, juxc_ast::OperatorKind::IndexSet))
+        {
+            let desugared = AssignStmt {
+                target: a.target.clone(),
+                op: None,
+                value: Expr::Binary(juxc_ast::BinaryExpr {
+                    op: a.op.unwrap(),
+                    left: Box::new(a.target.clone()),
+                    right: Box::new(a.value.clone()),
+                    span: a.span,
+                }),
+                span: a.span,
+            };
+            self.emit_assign(&desugared);
+            return;
+        }
         // AsyncMutex guard write (§18.3): `guard.value = v` (and the
         // compound forms) assign through the deref.
         if let Expr::Field(tf) = &a.target {
@@ -2094,20 +2124,41 @@ impl RustEmitter {
                 if let Some(op) = a.op {
                     // Compute the new value into a temporary so the mutable
                     // borrow for `__op_index_set` doesn't alias the shared
-                    // borrow taken by `__op_index`.
+                    // borrow taken by `__op_index`. Integer `/=`/`%=` route
+                    // the read-op-value through the checked division
+                    // helpers (ERRATA.md E1) like every other assign shape.
+                    let checked_div = matches!(
+                        op,
+                        juxc_ast::BinaryOp::Div | juxc_ast::BinaryOp::Rem,
+                    ) && self.operand_is_float(&a.target) == Some(false);
                     self.w.push_str("let __jux_tmp = ");
+                    if checked_div {
+                        self.w.push_str(if matches!(op, juxc_ast::BinaryOp::Div) {
+                            "crate::__jux_idiv("
+                        } else {
+                            "crate::__jux_irem("
+                        });
+                    }
                     self.emit_expr_with_parent_prec(&ix.array, u8::MAX, false);
                     self.w.push_str(".__op_index(");
                     self.emit_expr(&ix.index);
                     // Clone the index for the read so it's still available
                     // (and unmodified) for the write step below.
                     self.w.push_str(".clone()");
-                    self.w.push_str(") ");
-                    self.w.push_str(op.as_rust_str());
-                    self.w.push(' ');
+                    self.w.push(')');
+                    if checked_div {
+                        self.w.push_str(", ");
+                    } else {
+                        self.w.push(' ');
+                        self.w.push_str(op.as_rust_str());
+                        self.w.push(' ');
+                    }
                     self.emit_expr(&a.value);
                     if self.wrapper_value_needs_clone(&a.value) {
                         self.w.push_str(".clone()");
+                    }
+                    if checked_div {
+                        self.w.push(')');
                     }
                     self.w.push_str(";\n");
                     self.w.emit_indent();

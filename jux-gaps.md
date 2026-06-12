@@ -216,8 +216,35 @@ found a fresh batch. The probe corpus was also folded into the permanent suite
 
 | ID | Issue | Severity | Notes |
 |----|-------|----------|-------|
-| O8 | A raw Rust panic (e.g. integer divide-by-zero) carries a `&str` payload — `catch (Exception e)` / `catch (ArithmeticException e)` can't downcast it, so the panic propagates uncaught | Medium | Java maps `x / 0` to `ArithmeticException`; needs either a typed-panic division lowering or a builtin-payload rescue arm in the catch dispatch |
+| O8 | ~~A raw Rust panic (e.g. integer divide-by-zero) carries a `&str` payload — `catch (Exception e)` / `catch (ArithmeticException e)` can't downcast it~~ | Medium | ✅ **Fixed (2026-06-12).** Integer `/` and `%` route through checked prelude helpers (`__jux_idiv`/`__jux_irem`) that throw a real `ArithmeticException("/ by zero")` — caught by the existing typed dispatch (exact + subclass + base arms). Compound `/=`/`%=` desugar to the same path; literal `1/0` no longer trips rustc's `unconditional_panic`; stepped-range zero step throws too. Spec: ERRATA E1 row + §X.8 updated (Java-parity carve-out). BONUS: uncaught typed exceptions now print Java-style `Exception in thread "main" <fqn>: <message>` via a `catch_unwind` reporter around the renamed entry point (previously: silent exit 101). Example `arith_exception.jux` + `arith_uncaught.jux`, runner `arith_exception.rs`. |
 | O9 | `break`/`continue` inside an **async** `try` body still → E0267 — the `async move` block captures the loop-control flag by value, so O2's threading can't reach it | Low | needs a `Cell`-in-`Rc` channel or carrier-enum return shape for the async closure |
+
+## Bug-hunt wave 3 (2026-06-12, borrow-checker release hardening)
+
+15 adversarial borrow-stress probes (`probes/stress_NN_*.jux`) targeting
+untested intersections of the borrow machinery: observers × properties,
+properties × collections, closure nesting, hoist-detector reach, async ×
+wrappers, operators × self-reference, statics × self-reach, fluent chains,
+getter-returned iterables. **12 findings / 3 passes** (#2 observer→sibling
+field, #6 nested lambda capture, #14 fluent chain — promoted candidates).
+
+Classification: (A) rustc-leaked compile error · (B) runtime RefCell panic ·
+(C) silent wrong output.
+
+| ID | Probe | Class | Finding | Status |
+|----|-------|-------|---------|--------|
+| S1 | `stress_01` | C | Observer that sets its OWN observed property: nested set applies but does NOT re-fire the observer list (prints 2, JavaFX chaining expects 5). Spec was silent — §P needs a re-entrant-set ruling first. | ⛔ open — needs §P re-entrant-set spec ruling (JavaFX chains) + fire-loop redesign |
+| S3 | `stress_03` | A | Collection-typed auto-property: `s.Items.add(3)` → getter-call receiver skips the stdlib method mapping → E0599 `no method add on Vec`; reference semantics of the returned collection also unspecified in lowering. | ⛔ open |
+| S4 | `stress_04` | A | Compound assign to a property (`m.Count += 1`) bypasses the setter and writes a nonexistent raw field → E0609 (`available: __prop_Count`); observer never fires either. | ⛔ open — desugar compound property assigns to get-op-set |
+| S5 | `stress_05` | B | `items.forEach(x -> …)` where the lambda mutates the SAME object: borrow held across the higher-order call → runtime `RefCell already borrowed`. | ⛔ open |
+| S7 | `stress_07` | C | Arg-hoist detector misses FIELD-PATH receivers: `h.item.set(h.item.bump() + h.item.bump())` silently loses every mutation (prints 0; clones mutated then dropped). | ⛔ open — highest severity (silent-wrong) |
+| S8 | `stress_08` | A | Catch binder stored into a nullable BASE-typed field (`Exception? last = e` where `e: RuntimeException`) missing subclass→base upcast inside the `Some(…)` wrap → E0308. | ⛔ open |
+| S9 | `stress_09` | A | Value-producing lambda: `return v;` MID-BODY inside a `try` (under an `if`) breaks the return-threading shape → E0308 + unreachable tail (O1 fixed only the tail-try shape). | ⛔ open |
+| S10 | `stress_10` | A | Async fn: wrapped receiver used across an `await` inside a `try` — the `async move` block moves the only Rc clone in; use after the try → E0382. | ⛔ open |
+| S11 | `stress_11`/`11b` | A | PARSER: statement-position `super.method(args);` rejected ("expected '(' after super") — the statement parser commits to a super-CTOR call on seeing `super`. Expression position works. Any Java-style override delegating to super as a statement fails. | ⛔ open — high impact (basic Java idiom) |
+| S12 | `stress_12` | A | Plain (non-compound) `operator[]=` with self-referential RHS: `g[1] = g[0] + g.total()` → E0499 (O4 hoisted compound forms only). | ⛔ open |
+| S13 | `stress_13` | A | Nullable thread_local static: `Reg.global = new Reg()` (slot `Reg?`) missing the `Some(…)` wrap in the `.with(…)` write → E0308. | ⛔ open |
+| S15 | `stress_15` | A | Getter returning an own collection field (`return this.items`) on a wrapped class emits a MOVE out of the shared borrow → E0507. | ⛔ open |
 
 ### §P observable properties — follow-ups (core landed 46834eb/4391bc4)
 
