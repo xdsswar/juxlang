@@ -1,0 +1,22 @@
+// Wave-3 borrow stress #6: lambda-in-lambda both capturing (and
+// mutating) the same wrapped object — the inner closure's capture
+// clone must not move the outer's. Expect 2.
+package stress06;
+
+public class Acc {
+    public int n = 0;
+    public void bump() { this.n = this.n + 1; }
+}
+
+void main() {
+    var a = new Acc();
+    var outer = () -> {
+        var inner = () -> {
+            a.bump();
+        };
+        inner();
+        a.bump();
+    };
+    outer();
+    print(a.n);
+}

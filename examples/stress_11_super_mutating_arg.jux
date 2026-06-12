@@ -1,0 +1,23 @@
+// Wave-3 borrow stress #11: super-call through a wrapper whose
+// argument MUTATES `this` (`super.m(this.bump() + x)`), invoked
+// virtually through a base-typed handle. Expect 11.
+package stress11;
+
+public class B11 {
+    public int total = 0;
+    public void m(int x) { this.total = this.total + x; }
+    public int getTotal() { return this.total; }
+}
+
+public class D11 extends B11 {
+    public int c = 0;
+    public int bump() { this.c = this.c + 1; return this.c; }
+    @Override
+    public void m(int x) { super.m(this.bump() + x); }
+}
+
+void main() {
+    B11 b = new D11();
+    b.m(10);
+    print(b.getTotal());
+}

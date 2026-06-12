@@ -387,6 +387,12 @@ impl RustEmitter {
         // before invoking. Body content emits via `self.w.emit_indent()`
         // (statements) or via `emit_tail_stmt` (the elided trailing
         // return).
+        //
+        // A REAL fn body types its try-return channels from
+        // `current_return_type` — clear the lambda marker so an
+        // anonymous-class method nested inside a lambda doesn't
+        // inherit inference-typed channels (S9).
+        let prev_lam = std::mem::take(&mut self.in_lambda_body);
         let elide_tail = matches!(
             (body.statements.last(), return_type),
             // Non-void function with explicit trailing `return expr;`.
@@ -437,6 +443,7 @@ impl RustEmitter {
             self.w
                 .line("unreachable!(\"function fell off the end of a try without returning\");");
         }
+        self.in_lambda_body = prev_lam;
     }
 
     /// Emit the *tail* statement of a function body — the one targeted

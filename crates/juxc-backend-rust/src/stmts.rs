@@ -1216,34 +1216,84 @@ impl RustEmitter {
         }
         if has_ret {
             // Return-value channel — `Option<RetT>`, `None` = the body
-            // ran to completion without returning.
+            // ran to completion without returning. Inside a LAMBDA
+            // body (S9) the channel's type comes from inference: the
+            // lambda's return type isn't in `current_return_type`
+            // (that's the enclosing function's), and the threaded
+            // `Some(v)` values pin it for rustc.
             self.w.emit_indent();
-            self.w.push_str("let mut __jux_ret: Option<");
-            match self.current_return_type.clone() {
-                Some(juxc_ast::ReturnType::Type(rt))
-                | Some(juxc_ast::ReturnType::AsyncType(rt)) => {
-                    self.emit_return_type_as_rust(&rt);
+            if self.in_lambda_body {
+                self.w.push_str("let mut __jux_ret = None;\n");
+            } else {
+                self.w.push_str("let mut __jux_ret: Option<");
+                match self.current_return_type.clone() {
+                    Some(juxc_ast::ReturnType::Type(rt))
+                    | Some(juxc_ast::ReturnType::AsyncType(rt)) => {
+                        self.emit_return_type_as_rust(&rt);
+                    }
+                    _ => self.w.push_str("()"),
                 }
-                _ => self.w.push_str("()"),
+                self.w.push_str("> = None;\n");
             }
-            self.w.push_str("> = None;\n");
         }
         // Unhandled-exception channel — holds the payload across the
         // `finally` body so propagation happens AFTER it runs.
         self.w.line(
             "let mut __jux_unhandled: Option<::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>> = None;",
         );
+        // S10: the `async move` block would STEAL wrapper-class
+        // handles referenced in the body (`c.inc()` moves `c`'s only
+        // `Rc` clone in; any use after the try is E0382). Shadow each
+        // such binding with a share-clone first — the block moves the
+        // clone, the original stays live, both point at the same
+        // `RefCell`. Same rule as lambda captures (`emit_lambda`).
+        if is_async {
+            let mut names: Vec<String> = Vec::new();
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            crate::exprs::collect_bare_names_block(&t.body, &mut |n| {
+                if seen.insert(n.to_string()) {
+                    names.push(n.to_string());
+                }
+            });
+            names.retain(|n| {
+                self.local_types
+                    .iter()
+                    .rev()
+                    .find_map(|s| s.get(n))
+                    .and_then(|ty| match ty {
+                        juxc_tycheck::Ty::User { name, .. } => {
+                            Some(name.rsplit('.').next().unwrap_or(name).to_string())
+                        }
+                        _ => None,
+                    })
+                    .map(|c| self.wrapper_classes.contains(&c))
+                    .unwrap_or(false)
+            });
+            for name in &names {
+                self.w.emit_indent();
+                self.w.push_str("let ");
+                self.w.push_str(name);
+                self.w.push_str(" = ");
+                self.w.push_str(name);
+                self.w.push_str(".clone();\n");
+            }
+        }
         self.w.emit_indent();
         if has_ret {
-            self.w.push_str("let __jux_try_result: std::thread::Result<Option<");
-            match self.current_return_type.clone() {
-                Some(juxc_ast::ReturnType::Type(rt))
-                | Some(juxc_ast::ReturnType::AsyncType(rt)) => {
-                    self.emit_return_type_as_rust(&rt);
+            if self.in_lambda_body {
+                // S9: inferred — see the `__jux_ret` channel above.
+                self.w.push_str("let __jux_try_result = ");
+            } else {
+                self.w.push_str("let __jux_try_result: std::thread::Result<Option<");
+                match self.current_return_type.clone() {
+                    Some(juxc_ast::ReturnType::Type(rt))
+                    | Some(juxc_ast::ReturnType::AsyncType(rt)) => {
+                        self.emit_return_type_as_rust(&rt);
+                    }
+                    _ => self.w.push_str("()"),
                 }
-                _ => self.w.push_str("()"),
+                self.w.push_str(">> = ");
             }
-            self.w.push_str(">> = ");
         } else {
             self.w
                 .push_str("let __jux_try_result: std::thread::Result<()> = ");
@@ -2120,6 +2170,27 @@ impl RustEmitter {
             self.emit_assign(&desugared);
             return;
         }
+        // PROPERTY compound assigns (S4): `obj.Count += 1` desugars to
+        // `obj.Count = obj.Count + 1` so the read routes through the
+        // getter and the write through the setter — firing observers
+        // and bindings like any other set. Without this the compound
+        // form fell through to the raw wrapper-field write, which both
+        // bypassed the setter AND named a nonexistent field (E0609).
+        if a.op.is_some() && self.assign_target_is_property_with_setter(&a.target) {
+            let desugared = AssignStmt {
+                target: a.target.clone(),
+                op: None,
+                value: Expr::Binary(juxc_ast::BinaryExpr {
+                    op: a.op.unwrap(),
+                    left: Box::new(a.target.clone()),
+                    right: Box::new(a.value.clone()),
+                    span: a.span,
+                }),
+                span: a.span,
+            };
+            self.emit_assign(&desugared);
+            return;
+        }
         // AsyncMutex guard write (§18.3): `guard.value = v` (and the
         // compound forms) assign through the deref.
         if let Expr::Field(tf) = &a.target {
@@ -2221,8 +2292,9 @@ impl RustEmitter {
                     self.w.push_str(".__op_index_set(");
                     self.emit_expr(&ix.index);
                     self.w.push_str(", __jux_tmp");
-                } else {
-                    // Plain `=` — no read step, no aliasing.
+                } else if matches!(&a.value, Expr::Literal(_) | Expr::Path(_)) {
+                    // Plain `=` with a trivial value — no read step,
+                    // nothing in the value can touch the receiver.
                     self.emit_expr_with_parent_prec(&ix.array, u8::MAX, false);
                     self.w.push_str(".__op_index_set(");
                     self.emit_expr(&ix.index);
@@ -2231,6 +2303,24 @@ impl RustEmitter {
                     if self.wrapper_value_needs_clone(&a.value) {
                         self.w.push_str(".clone()");
                     }
+                } else {
+                    // Plain `=` with a compound value (S12): hoist it
+                    // first. The value may read the SAME receiver
+                    // (`g[1] = g[0] + g.total()`), and two-phase
+                    // borrows don't cover a `&mut`-needing call inside
+                    // the `__op_index_set` args — inline emission
+                    // trips E0499.
+                    self.w.push_str("let __jux_tmp = ");
+                    self.emit_expr(&a.value);
+                    if self.wrapper_value_needs_clone(&a.value) {
+                        self.w.push_str(".clone()");
+                    }
+                    self.w.push_str(";\n");
+                    self.w.emit_indent();
+                    self.emit_expr_with_parent_prec(&ix.array, u8::MAX, false);
+                    self.w.push_str(".__op_index_set(");
+                    self.emit_expr(&ix.index);
+                    self.w.push_str(", __jux_tmp");
                 }
                 self.emitting_format_arg = prev;
                 self.w.push_str(");\n");
@@ -2285,7 +2375,7 @@ impl RustEmitter {
                         .filter(|fs| fs.is_static && !fs.is_final)
                         .map(|fs| fs.ty.clone())
                         .filter(|ty| self.static_type_needs_thread_local(ty));
-                    if tl_field.is_some() {
+                    if let Some(slot_ty) = tl_field {
                         self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                         self.w.push('_');
                         self.w.push_str(&tf.field.text);
@@ -2294,9 +2384,23 @@ impl RustEmitter {
                             self.w.push_str(op.as_rust_str());
                         }
                         self.w.push_str("= ");
+                        // S13: a nullable slot (`static Reg? global`) is an
+                        // `Option<T>` cell — a non-null value needs the
+                        // `Some(…)` lift, exactly like nullable field
+                        // assigns elsewhere.
+                        let wrap = slot_ty.nullable
+                            && a.op.is_none()
+                            && !is_null_literal(&a.value)
+                            && !self.expression_is_already_nullable(&a.value);
+                        if wrap {
+                            self.w.push_str("Some(");
+                        }
                         self.emit_assign_rhs(&a.value);
                         if self.wrapper_value_needs_clone(&a.value) {
                             self.w.push_str(".clone()");
+                        }
+                        if wrap {
+                            self.w.push(')');
                         }
                         self.w.push_str("; });\n");
                         return;
@@ -2315,15 +2419,16 @@ impl RustEmitter {
                     let name = &qn.segments[0].text;
                     let shadowed = self.current_fn_params.contains(name)
                         || self.local_types.iter().any(|s| s.contains_key(name));
-                    let tl = !shadowed
-                        && self
-                            .lookup_class_by_bare_or_fqn(&class_name)
+                    let tl = if shadowed {
+                        None
+                    } else {
+                        self.lookup_class_by_bare_or_fqn(&class_name)
                             .and_then(|c| c.fields.get(name.as_str()))
                             .filter(|fs| fs.is_static && !fs.is_final)
                             .map(|fs| fs.ty.clone())
-                            .map(|ty| self.static_type_needs_thread_local(&ty))
-                            .unwrap_or(false);
-                    if tl {
+                            .filter(|ty| self.static_type_needs_thread_local(ty))
+                    };
+                    if let Some(slot_ty) = tl {
                         self.w.push_str(&class_name);
                         self.w.push('_');
                         self.w.push_str(name);
@@ -2332,9 +2437,21 @@ impl RustEmitter {
                             self.w.push_str(op.as_rust_str());
                         }
                         self.w.push_str("= ");
+                        // S13: nullable slot — see the qualified-name
+                        // branch above.
+                        let wrap = slot_ty.nullable
+                            && a.op.is_none()
+                            && !is_null_literal(&a.value)
+                            && !self.expression_is_already_nullable(&a.value);
+                        if wrap {
+                            self.w.push_str("Some(");
+                        }
                         self.emit_assign_rhs(&a.value);
                         if self.wrapper_value_needs_clone(&a.value) {
                             self.w.push_str(".clone()");
+                        }
+                        if wrap {
+                            self.w.push(')');
                         }
                         self.w.push_str("; });\n");
                         return;
@@ -2663,19 +2780,21 @@ impl RustEmitter {
                 };
                 if let juxc_tycheck::Ty::User { name, .. } = inner {
                     let bare = name.rsplit('.').next().unwrap_or(&name).to_string();
-                    // Both an interface LHS and a polymorphic-base LHS hold a
-                    // trait object — the RHS must be coerced into it (`Rc<dyn …>`).
-                    let is_dyn = self.lookup_interface_by_bare_or_fqn(&bare).is_some()
-                        || self.poly_base_classes.contains(&bare);
-                    if is_dyn {
-                        let mut tref = crate::analysis::synth_iface_type_ref(&bare, a.span);
-                        tref.nullable = slot_nullable;
-                        if !matches!(
-                            self.iface_coercion_to(&tref, &a.value),
-                            crate::analysis::IfaceCoercion::None,
-                        ) {
-                            iface_tref = Some(tref);
-                        }
+                    // Any user-typed LHS goes through the shared coercion
+                    // predicate: an interface / polymorphic-base slot
+                    // takes the `Rc<dyn …>` wrap, and a CONCRETE base-
+                    // class slot takes the `From<Sub> for Base` `.into()`
+                    // upcast (S8 — e.g. a `RuntimeException` catch binder
+                    // stored into an `Exception?` field). The helper
+                    // returns `None` for plain same-type assigns, which
+                    // fall through to the normal path below.
+                    let mut tref = crate::analysis::synth_iface_type_ref(&bare, a.span);
+                    tref.nullable = slot_nullable;
+                    if !matches!(
+                        self.iface_coercion_to(&tref, &a.value),
+                        crate::analysis::IfaceCoercion::None,
+                    ) {
+                        iface_tref = Some(tref);
                     }
                 }
             }
@@ -2706,6 +2825,41 @@ impl RustEmitter {
             }
         }
         self.w.push_str(";\n");
+    }
+
+    /// True when an assignment target resolves to a PROPERTY with a
+    /// settable accessor — either `obj.Prop` (any receiver) or a
+    /// bare `Prop` inside the declaring class (implicit `this`,
+    /// unshadowed). Drives the S4 compound-assign desugar: such
+    /// targets must read through the getter and write through the
+    /// setter rather than touching a backing field directly.
+    fn assign_target_is_property_with_setter(&self, target: &Expr) -> bool {
+        match target {
+            Expr::Field(tf) if !tf.safe => self
+                .property_on_receiver(&tf.object, &tf.field.text)
+                .map(|p| p.setter.is_some())
+                .unwrap_or(false),
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = &qn.segments[0].text;
+                let shadowed = self.current_fn_params.contains(name)
+                    || self.local_types.iter().any(|s| s.contains_key(name))
+                    || self.nullable_locals.contains(name);
+                if shadowed {
+                    return false;
+                }
+                self.enclosing_class
+                    .clone()
+                    .and_then(|c| self.lookup_class_ast_by_bare_or_fqn(&c))
+                    .and_then(|cd| {
+                        cd.properties
+                            .iter()
+                            .find(|p| p.name.text == *name)
+                            .map(|p| p.setter.is_some())
+                    })
+                    .unwrap_or(false)
+            }
+            _ => false,
+        }
     }
 
     /// Emit a property write as a call to the synthesized setter

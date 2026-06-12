@@ -1151,6 +1151,10 @@ impl RustEmitter {
         match &l.body {
             juxc_ast::LambdaBody::Expr(e) => self.emit_expr(e),
             juxc_ast::LambdaBody::Block(b) => {
+                // S9: see `emit_lambda` — lambda-body tries type
+                // their return channels by inference.
+                let prev_lam = self.in_lambda_body;
+                self.in_lambda_body = true;
                 self.w.push_str("{\n");
                 self.w.indent_inc();
                 for stmt in &b.statements {
@@ -1160,6 +1164,7 @@ impl RustEmitter {
                 self.w.indent_dec();
                 self.w.emit_indent();
                 self.w.push('}');
+                self.in_lambda_body = prev_lam;
             }
         }
     }
@@ -1251,6 +1256,13 @@ impl RustEmitter {
         match &l.body {
             juxc_ast::LambdaBody::Expr(e) => self.emit_expr(e),
             juxc_ast::LambdaBody::Block(b) => {
+                // Mark the body as lambda territory (S9): a `try`
+                // with returns in here can't type its return channel
+                // from `current_return_type` (that's the enclosing
+                // FUNCTION's), so the try machinery switches to
+                // inference-typed channels.
+                let prev_lam = self.in_lambda_body;
+                self.in_lambda_body = true;
                 self.w.push_str("{\n");
                 self.w.indent_inc();
                 for stmt in &b.statements {
@@ -1260,6 +1272,7 @@ impl RustEmitter {
                 self.w.indent_dec();
                 self.w.emit_indent();
                 self.w.push('}');
+                self.in_lambda_body = prev_lam;
             }
         }
         self.w.push(')');
@@ -1614,6 +1627,20 @@ pub(crate) fn ty_kind_from_ref_with_params(
             element: Box::new(element),
             kind,
         };
+    }
+    // Phase-1 `ArrayList<T>` ≡ `T[]` shortcut, mirroring tycheck's
+    // `ty_from_ref` (ty.rs): the stdlib dispatch and clone decisions
+    // treat both spellings as the same `Vec<T>`.
+    if t.name.segments.len() == 1
+        && t.name.segments[0].text == "ArrayList"
+        && t.generic_args.len() == 1
+    {
+        if let juxc_ast::GenericArg::Type(inner) = &t.generic_args[0] {
+            return Ty::Array {
+                element: Box::new(ty_kind_from_ref_with_params(inner, generic_params)),
+                kind: ArrayKind::Dynamic,
+            };
+        }
     }
     if t.name.segments.len() != 1 || !t.generic_args.is_empty() {
         return Ty::Unknown;

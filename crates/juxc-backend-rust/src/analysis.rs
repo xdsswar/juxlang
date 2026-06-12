@@ -381,10 +381,14 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
                 let mutates =
                     is_mutating_method(&f.field.text) || user_mut.contains(&f.field.text);
                 if mutates {
-                    if let Expr::Path(qn) = &*f.object {
-                        if qn.segments.len() == 1 {
-                            out.insert(qn.segments[0].text.clone());
-                        }
+                    // The receiver may be a bare local (`a.bump()`) or a
+                    // deeper place path (`h.item.bump()`, `grid[i].bump()`)
+                    // — in every case the BASE binding must become
+                    // `let mut` for the in-place `&mut` borrow to
+                    // compile (S7: field-path receivers were skipped,
+                    // leaving the root binding immutable).
+                    if let Some(name) = lvalue_base_name(&f.object) {
+                        out.insert(name);
                     }
                 }
             }
@@ -1932,8 +1936,21 @@ impl crate::RustEmitter {
                 // Slicing upcast: `(expr).into()` invokes the generated
                 // `From<Sub> for Parent`. A nullable slot is wrapped in `Some(…)`
                 // by the surrounding `nullable` handling.
+                //
+                // `.into()` CONSUMES the value. A bare place (local /
+                // catch binder / field read) may still be used after
+                // this statement (`k.last = e; print(e.getMessage());
+                // throw e;` — S8), so clone the place into the upcast
+                // instead of moving out of it. Every user class
+                // derives `Clone`; fresh rvalues (ctor calls etc.)
+                // skip the clone.
                 self.w.push('(');
                 self.emit_expr(expr);
+                // Field reads already auto-clone in `emit_field`;
+                // only a bare path needs the explicit copy here.
+                if matches!(expr, Expr::Path(_)) {
+                    self.w.push_str(".clone()");
+                }
                 self.w.push_str(").into()");
             }
         }

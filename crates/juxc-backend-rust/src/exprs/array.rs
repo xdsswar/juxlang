@@ -37,7 +37,13 @@ impl RustEmitter {
             return;
         }
         let emitting_lvalue = self.emitting_lvalue;
+        // The indexed array is a borrowed PLACE — `xs[i]` never owns
+        // `xs`. Mark it like a method receiver so a collection-typed
+        // field read (`this.items[0]`) doesn't take the value-position
+        // auto-`.clone()` of the whole Vec (S15).
+        self.emitting_method_receiver = true;
         self.emit_expr(&i.array);
+        self.emitting_method_receiver = false;
         self.w.push('[');
         if matches!(&*i.index, Expr::Literal(Literal::Int(_))) {
             self.emit_expr(&i.index);

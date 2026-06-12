@@ -3012,10 +3012,31 @@ impl RustEmitter {
             if let Some((prop, comparable)) = &setter_observer {
                 self.w.line(&format!("let __jux_now = self.{prop}();"));
                 if *comparable {
+                    // §P.3.6 re-entrant sets: an observer may set this
+                    // same property — the nested set COMMITS its value
+                    // but its firing pass is a no-op (the observer
+                    // list is detached during the pass). Detect the
+                    // change after each pass and fire the next
+                    // transition, looping until quiescent. Every
+                    // distinct transition fires exactly once, in
+                    // order (JavaFX-equivalent).
                     self.w.line(&format!(
                         "if __jux_old != __jux_now {{ self.__obs_{prop}_fire(&__jux_old, &__jux_now); }}"
                     ));
+                    self.w.line("let mut __jux_prev = __jux_now;");
+                    self.w.line("loop {");
+                    self.w.indent_inc();
+                    self.w.line(&format!("let __jux_cur = self.{prop}();"));
+                    self.w.line("if __jux_cur == __jux_prev { break; }");
+                    self.w.line(&format!(
+                        "self.__obs_{prop}_fire(&__jux_prev, &__jux_cur);"
+                    ));
+                    self.w.line("__jux_prev = __jux_cur;");
+                    self.w.indent_dec();
+                    self.w.line("}");
                 } else {
+                    // Non-comparable property types can't detect the
+                    // nested change, so they keep the single-pass fire.
                     self.w
                         .line(&format!("self.__obs_{prop}_fire(&__jux_old, &__jux_now);"));
                 }
