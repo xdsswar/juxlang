@@ -39,5 +39,20 @@ object JuxIcons {
     @JvmField
     val ANNOTATION = load("/icons/juxAnnotation.png")
 
+    // §P.7.8 property gutter trio (12×12 SVGs with `_dark` variants —
+    // IconLoader picks the themed file automatically).
+
+    /** Gutter: the property has observers attached somewhere. */
+    @JvmField
+    val PROPERTY_OBSERVED = load("/icons/propertyObserved.svg")
+
+    /** Gutter: the property is bound, or is a binding source. */
+    @JvmField
+    val PROPERTY_BOUND = load("/icons/propertyBound.svg")
+
+    /** Gutter: the property is neither observed nor bound. */
+    @JvmField
+    val PROPERTY_PLAIN = load("/icons/propertyPlain.svg")
+
     private fun load(path: String) = IconLoader.getIcon(path, JuxIcons::class.java)
 }
