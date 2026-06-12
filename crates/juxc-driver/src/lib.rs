@@ -41,6 +41,7 @@ use juxc_source::SourceFile;
 /// caller-derived name (e.g. from the input file's stem).
 pub const DEFAULT_CRATE_NAME: &str = CRATE_NAME;
 
+pub mod git_deps;
 pub mod manifest;
 mod package_check;
 pub mod project;

@@ -102,6 +102,33 @@ pub fn index_workspace(root: &Path, overrides: &HashMap<PathBuf, String>) -> Wor
             .unwrap_or_default();
         sources.push(SourceFile::new(path, text));
     }
+    // Dependency sources (§B.2.2): the src trees of `path` deps plus
+    // any ALREADY-CACHED `git` deps, so completion/goto resolve types
+    // declared in dependencies. The LSP never touches the network —
+    // `jux build` / `jux update` populate the git cache; until then a
+    // git dep simply doesn't contribute names.
+    if let Some(manifest) = juxc_driver::Manifest::load(root) {
+        let mut dep_roots: Vec<PathBuf> = Vec::new();
+        for dep in &manifest.dependencies {
+            if let Some(p) = &dep.path {
+                dep_roots.push(p.clone());
+            } else if let Some(url) = &dep.git {
+                if let Ok(dir) =
+                    juxc_driver::git_deps::git_dep_cache_dir(url, dep.git_ref.as_ref())
+                {
+                    if dir.join("jux.toml").is_file() {
+                        dep_roots.push(dir);
+                    }
+                }
+            }
+        }
+        for dep_root in dep_roots {
+            for path in scan_jux_files(&dep_root.join("src")) {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                sources.push(SourceFile::new(path, text));
+            }
+        }
+    }
     if sources.is_empty() {
         return WorkspaceIndex::default();
     }

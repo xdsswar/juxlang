@@ -118,19 +118,54 @@ pub struct Manifest {
     pub profile: juxc_tycheck::Profile,
 }
 
-/// A single `[dependencies]` entry. Phase 1 only fully supports `path`
-/// dependencies (the inter-module value); a registry/git dep records its
-/// `version` for diagnostics but has no local `path`.
+/// A single `[dependencies]` entry. Phase 1 supports `path` and `git`
+/// dependencies for Jux packages (§B.2.2); a registry dep records its
+/// `version` for diagnostics but isn't resolvable yet (no registry).
 #[derive(Debug, Clone)]
 pub struct Dependency {
     /// Reverse-DNS dependency name as written in `[dependencies]`.
     pub name: String,
     /// `path = "..."` — a local filesystem dependency, resolved to an
     /// absolute path against the depending package's root. `None` for
-    /// version/registry/git deps (not yet linkable in Phase 1).
+    /// version/registry/git deps. Per §B.5.5 source priority
+    /// (`path > git > registry`), a dep carrying BOTH `path` and `git`
+    /// uses the path.
     pub path: Option<PathBuf>,
     /// `version = "..."` requirement string, if given.
     pub version: Option<String>,
+    /// `git = "https://github.com/user/repo"` — a git-hosted Jux
+    /// package (§B.2.2). Fetched into the user-level cache by
+    /// [`crate::git_deps::fetch_git_dep`], after which it behaves
+    /// exactly like a `path` dependency.
+    pub git: Option<String>,
+    /// Which ref the git source is pinned to. `None` = the remote's
+    /// default branch.
+    pub git_ref: Option<GitRef>,
+}
+
+/// The ref a `git` dependency pins to — `branch` (moves), `tag`
+/// (effectively immutable), or `rev` (immutable commit). Per §B.2.2 the
+/// three keys are mutually exclusive; when several are given, the most
+/// specific wins (`rev` > `tag` > `branch`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitRef {
+    /// `branch = "main"` — track a branch head.
+    Branch(String),
+    /// `tag = "v1.2"` — a tag.
+    Tag(String),
+    /// `rev = "abc123…"` — an exact commit.
+    Rev(String),
+}
+
+impl GitRef {
+    /// The user-facing label for diagnostics and cache-key hashing.
+    pub fn describe(&self) -> String {
+        match self {
+            GitRef::Branch(b) => format!("branch={b}"),
+            GitRef::Tag(t) => format!("tag={t}"),
+            GitRef::Rev(r) => format!("rev={r}"),
+        }
+    }
 }
 
 /// Serde shape mirroring the `[package]` table of `jux.toml`. Only the
@@ -195,13 +230,17 @@ enum RawDependency {
     Detailed(RawDependencyTable),
 }
 
-/// Table form of a `[dependencies]` value. Only the fields Phase 1 uses
-/// (`path`, `version`) are modeled; `git`/`features`/etc. are tolerated
-/// and ignored.
+/// Table form of a `[dependencies]` value. Phase 1 models `path`,
+/// `version`, and the git source keys (`git` + `branch`/`tag`/`rev`,
+/// §B.2.2); `features`/`registry`/etc. are tolerated and ignored.
 #[derive(Debug, Default, Deserialize)]
 struct RawDependencyTable {
     path: Option<String>,
     version: Option<String>,
+    git: Option<String>,
+    branch: Option<String>,
+    tag: Option<String>,
+    rev: Option<String>,
 }
 
 /// Top-level serde shape: the `[package]`, `[lib]`, `[[bin]]`,
@@ -333,16 +372,55 @@ impl Manifest {
             .dependencies
             .into_iter()
             .map(|(name, dep)| match dep {
+                // A bare string is normally a SemVer requirement — but
+                // when it LOOKS like a repository URL, treat it as the
+                // shorthand git form: `"com.x.lib" = "https://github.com/u/r"`
+                // ≡ `{ git = "..." }` (tracks the default branch).
+                RawDependency::Version(v)
+                    if v.starts_with("http://")
+                        || v.starts_with("https://")
+                        || v.starts_with("git@")
+                        || v.starts_with("ssh://") =>
+                {
+                    Dependency {
+                        name,
+                        path: None,
+                        version: None,
+                        git: Some(v),
+                        git_ref: None,
+                    }
+                }
                 RawDependency::Version(v) => Dependency {
                     name,
                     path: None,
                     version: Some(v),
+                    git: None,
+                    git_ref: None,
                 },
-                RawDependency::Detailed(t) => Dependency {
-                    name,
-                    path: t.path.map(|p| resolve_against(project_root, &p)),
-                    version: t.version,
-                },
+                RawDependency::Detailed(t) => {
+                    // Ref keys are mutually exclusive per §B.2.2; the
+                    // most specific wins when several are present.
+                    let git_ref = t
+                        .rev
+                        .map(GitRef::Rev)
+                        .or(t.tag.map(GitRef::Tag))
+                        .or(t.branch.map(GitRef::Branch));
+                    let path = t.path.map(|p| resolve_against(project_root, &p));
+                    if path.is_some() && t.git.is_some() {
+                        // §B.5.5 source priority: path > git. Local
+                        // development override — say so, quietly.
+                        eprintln!(
+                            "juxc: note: dependency `{name}` declares both `path` and `git`; using the local path (source priority §B.5.5)"
+                        );
+                    }
+                    Dependency {
+                        name,
+                        path,
+                        version: t.version,
+                        git: t.git,
+                        git_ref,
+                    }
+                }
             })
             .collect();
 
@@ -422,6 +500,69 @@ impl PackageMetadata {
             copyright: self.copyright.clone(),
             has_icon: self.icon.is_some(),
         }
+    }
+}
+
+#[cfg(test)]
+mod git_dep_tests {
+    use super::*;
+
+    /// Write a jux.toml into a fresh temp dir and load it back.
+    fn load_from(toml: &str) -> Manifest {
+        let dir = std::env::temp_dir().join(format!(
+            "jux-manifest-gitdep-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("jux.toml"), toml).unwrap();
+        let m = Manifest::load(&dir).expect("manifest loads");
+        let _ = std::fs::remove_dir_all(&dir);
+        m
+    }
+
+    #[test]
+    fn git_dependency_table_form_parses_with_ref() {
+        let m = load_from(
+            "[package]\nname = \"com.x.app\"\n\n[dependencies]\n\"com.x.lib\" = { git = \"https://github.com/u/r\", branch = \"dev\" }\n",
+        );
+        let dep = &m.dependencies[0];
+        assert_eq!(dep.git.as_deref(), Some("https://github.com/u/r"));
+        assert_eq!(dep.git_ref, Some(GitRef::Branch("dev".to_string())));
+        assert!(dep.path.is_none());
+    }
+
+    #[test]
+    fn bare_url_string_is_git_shorthand() {
+        // §B.2.2 shorthand: `"name" = "<url>"` ≡ `{ git = "<url>" }`.
+        let m = load_from(
+            "[package]\nname = \"com.x.app\"\n\n[dependencies]\n\"com.x.lib\" = \"https://github.com/u/r\"\n",
+        );
+        let dep = &m.dependencies[0];
+        assert_eq!(dep.git.as_deref(), Some("https://github.com/u/r"));
+        assert!(dep.git_ref.is_none());
+        assert!(dep.version.is_none());
+    }
+
+    #[test]
+    fn bare_version_string_stays_a_version() {
+        let m = load_from(
+            "[package]\nname = \"com.x.app\"\n\n[dependencies]\n\"rust.serde_json\" = \"1.0\"\n",
+        );
+        let dep = &m.dependencies[0];
+        assert_eq!(dep.version.as_deref(), Some("1.0"));
+        assert!(dep.git.is_none());
+    }
+
+    #[test]
+    fn rev_wins_over_branch_when_both_given() {
+        let m = load_from(
+            "[package]\nname = \"com.x.app\"\n\n[dependencies]\n\"com.x.lib\" = { git = \"https://g/r\", branch = \"main\", rev = \"abc\" }\n",
+        );
+        assert_eq!(
+            m.dependencies[0].git_ref,
+            Some(GitRef::Rev("abc".to_string())),
+        );
     }
 }
 

@@ -8,23 +8,23 @@
 //!
 //! ## Project mode vs single-file mode
 //!
-//! The spec's "real" `jux` reads `jux.toml`, walks the package, and
-//! dispatches per-file compilation. That **project mode** is not yet
-//! implemented — invoking `jux run`/`build`/`check` without a file path
-//! prints a "not yet implemented" message and exits non-zero.
+//! **Project mode** — `jux run`/`build`/`check` with no file argument —
+//! reads `./jux.toml` and builds the manifest's `[lib]`/`[[bin]]`
+//! targets (or every `[workspace]` member in dependency order, §B.7),
+//! resolving `path` and `git` dependencies (§B.2.2).
 //!
-//! For early bootstrap we also accept **single-file mode**: `jux run
-//! <file.jux>`, `jux build <file.jux>`, `jux check <file.jux>`. These
-//! dispatch through the same `juxc-driver` library that `juxc` uses, so
-//! the IDE workflow advertised by the spec (`jux run examples/hello.jux`)
-//! works today.
+//! **Single-file mode** — `jux run <file.jux>` etc. — dispatches
+//! through the same `juxc-driver` library that `juxc` uses, so the IDE
+//! workflow advertised by the spec (`jux run examples/hello.jux`)
+//! works without a manifest.
 //!
-//! ## Commands implemented this round
+//! ## Commands
 //!
-//! - `jux run <file>` — compile, build, execute. Forwards stdio + exit code.
-//! - `jux build <file>` — compile + cargo build, don't execute.
-//! - `jux check <file>` — lex/parse/resolve/typecheck only, no codegen.
-//! - `jux new <name>` — stubbed (per spec §B.15.1).
+//! - `jux run [file]` — compile, build, execute. Forwards stdio + exit code.
+//! - `jux build [file]` — compile + cargo build, don't execute.
+//! - `jux check [file]` — lex/parse/resolve/typecheck only, no codegen.
+//! - `jux update` — re-fetch the project's git dependencies (§B.2.2).
+//! - `jux new <name>` — scaffold a project (§B.15.1).
 //! - `jux test` — stubbed.
 
 use std::path::{Path, PathBuf};
@@ -84,6 +84,11 @@ enum CliCommand {
     },
     /// Run tests. (§B.15 — `jux test`.)
     Test,
+    /// Re-fetch the project's git dependencies (§B.2.2). Branch-pinned
+    /// deps pick up new commits; tag/rev pins re-validate. Without
+    /// this, a cached checkout is reused as-is on every build (the
+    /// cache is the pin until the §B.6 lockfile lands).
+    Update,
 }
 
 fn main() -> Result<ExitCode> {
@@ -91,6 +96,7 @@ fn main() -> Result<ExitCode> {
     match cli.command {
         CliCommand::New { name } => cmd_new(&name),
         CliCommand::Test         => cmd_test(),
+        CliCommand::Update       => cmd_update(),
         CliCommand::Check { file } => {
             run_single_or_project(file, Action::Check, None, false)
         }
@@ -135,6 +141,56 @@ fn cmd_new(name: &str) -> Result<ExitCode> {
     eprintln!("jux: created project at {}", target.display());
     eprintln!("     next: `cd {name} && jux run`");
     Ok(ExitCode::SUCCESS)
+}
+
+/// `jux update` — re-fetch every git dependency of the current project
+/// (and, for a workspace root, of every member). Each fetched checkout
+/// replaces its cache entry; a failed fetch falls back to the cached
+/// copy with a warning (see `juxc_driver::git_deps`).
+fn cmd_update() -> Result<ExitCode> {
+    let cwd = std::env::current_dir().context("getting current directory")?;
+    let Some(manifest) = juxc_driver::Manifest::load(&cwd) else {
+        eprintln!(
+            "jux: no jux.toml found in {} — run `jux update` from a project root",
+            cwd.display(),
+        );
+        return Ok(ExitCode::from(1));
+    };
+    // The root manifest plus every workspace member's.
+    let mut manifests = vec![manifest.clone()];
+    for member in &manifest.workspace_members {
+        if let Some(m) = juxc_driver::Manifest::load(&cwd.join(member)) {
+            manifests.push(m);
+        }
+    }
+    let mut updated = 0usize;
+    let mut failed = 0usize;
+    for m in &manifests {
+        for dep in &m.dependencies {
+            if dep.git.is_none() || dep.path.is_some() {
+                // Not a git dep, or path-overridden (§B.5.5).
+                continue;
+            }
+            match juxc_driver::git_deps::fetch_git_dep(dep, true) {
+                Ok(dir) => {
+                    eprintln!("jux: updated `{}` → {}", dep.name, dir.display());
+                    updated += 1;
+                }
+                Err(e) => {
+                    eprintln!("jux: error updating `{}`: {e:#}", dep.name);
+                    failed += 1;
+                }
+            }
+        }
+    }
+    if updated == 0 && failed == 0 {
+        eprintln!("jux: no git dependencies to update");
+    }
+    Ok(if failed == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
 }
 
 /// What kind of pipeline pass to perform in single-file mode.
@@ -234,7 +290,22 @@ fn run_project(
         return Ok(ExitCode::from(1));
     }
     let emit_root = cwd.join("target").join(".rust-build");
-    let build = juxc_driver::project::build_package(&manifest, &[], &[], &emit_root, release)?;
+    // Resolve `[dependencies]` (path + git, §B.2.2) exactly like a
+    // workspace member would: the dependency's public sources prepend
+    // into this package's compilation. The Cargo path-dep lines are
+    // DROPPED here: standalone mode doesn't emit the dependencies'
+    // own library crates, and the Phase-1 source-inclusion model
+    // lowers their bodies into this package's crate anyway (see
+    // `project.rs` — "Cross-module resolution & linking strategy").
+    let (dep_sources, _path_deps) =
+        juxc_driver::project::resolve_package_deps(&manifest, &emit_root)?;
+    let build = juxc_driver::project::build_package(
+        &manifest,
+        &dep_sources,
+        &[],
+        &emit_root,
+        release,
+    )?;
     print_diagnostics(&build.diagnostics, &build.sources);
     if build.has_errors() {
         return Ok(ExitCode::from(1));
