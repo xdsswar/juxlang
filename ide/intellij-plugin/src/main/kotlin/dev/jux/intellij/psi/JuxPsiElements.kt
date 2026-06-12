@@ -7,6 +7,7 @@ import com.intellij.lang.ASTNode
 import com.intellij.navigation.ItemPresentation
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiNameIdentifierOwner
+import com.intellij.psi.tree.IElementType
 import com.intellij.psi.util.elementType
 import com.intellij.util.IncorrectOperationException
 import dev.jux.intellij.highlight.JuxTokenTypes
@@ -73,6 +74,7 @@ abstract class JuxNamedElementImpl(node: ASTNode) : JuxCompositeElement(node), J
         JuxElementTypes.TYPE_ALIAS_DECLARATION -> AllIcons.Nodes.Class
         JuxElementTypes.METHOD_DECLARATION, JuxElementTypes.CONSTRUCTOR_DECLARATION,
         JuxElementTypes.OPERATOR_DECLARATION -> AllIcons.Nodes.Method
+        JuxElementTypes.PROPERTY_DECLARATION -> AllIcons.Nodes.Property
         JuxElementTypes.ENUM_CONSTANT -> AllIcons.Nodes.Constant
         else -> AllIcons.Nodes.Field
     }
@@ -84,8 +86,108 @@ class JuxTypeDeclaration(node: ASTNode) : JuxNamedElementImpl(node)
 /** A method or free function declaration. */
 class JuxMethodDeclaration(node: ASTNode) : JuxNamedElementImpl(node)
 
-/** A field declaration. */
-class JuxFieldDeclaration(node: ASTNode) : JuxNamedElementImpl(node)
+/** A field declaration. Open so [JuxPropertyDeclaration] can specialize it. */
+open class JuxFieldDeclaration(node: ASTNode) : JuxNamedElementImpl(node)
+
+/**
+ * An observable property declaration (§P / §M.7): `Type Name { get; set; } …`
+ * or the computed shorthand `Type Name -> expr;`. Subclasses
+ * [JuxFieldDeclaration] so every existing field consumer (unused-symbol
+ * inspection, Structure View, in-file resolve) keeps treating properties as
+ * named members without edits, while §P-aware code can down-match on this type.
+ */
+class JuxPropertyDeclaration(node: ASTNode) : JuxFieldDeclaration(node) {
+
+    /** The `{ get; set; }` braces — null for the `-> expr;` computed shorthand. */
+    fun accessorList(): PsiElement? =
+        node.findChildByType(JuxElementTypes.PROPERTY_ACCESSOR_LIST)?.psi
+
+    /** The PROPERTY_ACCESSOR children of the accessor list, in source order. */
+    fun accessors(): List<PsiElement> {
+        val list = accessorList() ?: return emptyList()
+        return list.children.filter { it.elementType == JuxElementTypes.PROPERTY_ACCESSOR }
+    }
+
+    /**
+     * The accessor's kind — `"get"` / `"set"` — read from its first IDENTIFIER
+     * leaf (visibility modifiers are keyword tokens, so the first identifier is
+     * always the kind; the removed `init` accessor has none and yields null).
+     */
+    fun accessorKind(accessor: PsiElement): String? {
+        var c: PsiElement? = accessor.firstChild
+        while (c != null) {
+            if (c.elementType == JuxTokenTypes.IDENTIFIER) return c.text
+            c = c.nextSibling
+        }
+        return null
+    }
+
+    fun getterAccessor(): PsiElement? = accessors().firstOrNull { accessorKind(it) == "get" }
+
+    fun setterAccessor(): PsiElement? = accessors().firstOrNull { accessorKind(it) == "set" }
+
+    fun hasSetter(): Boolean = setterAccessor() != null
+
+    /**
+     * Read-only computed property (§P.1.5): get-only accessor block or the
+     * `-> expr;` shorthand. Computed properties reject assignment (E0970) and
+     * never trip the W0971 "never observed" hint.
+     */
+    fun isComputed(): Boolean = !hasSetter()
+
+    /**
+     * The accessor's own visibility keyword token type (`public` / `protected`
+     * / `private`), or null when it inherits the property's visibility (§P.1.3).
+     */
+    fun accessorVisibility(accessor: PsiElement): IElementType? {
+        val mods = accessor.node.findChildByType(JuxElementTypes.MODIFIER_LIST) ?: return null
+        var c = mods.firstChildNode
+        while (c != null) {
+            when (c.elementType) {
+                JuxTokenTypes.PUBLIC_KW, JuxTokenTypes.PROTECTED_KW, JuxTokenTypes.PRIVATE_KW ->
+                    return c.elementType
+            }
+            c = c.treeNext
+        }
+        return null
+    }
+
+    /** The setter's `{ … }` block body, or null for auto/expression setters. */
+    fun setterBody(): PsiElement? =
+        setterAccessor()?.node?.findChildByType(JuxElementTypes.CODE_BLOCK)?.psi
+
+    /** The property's declared visibility keyword token type, or null (default). */
+    fun propertyVisibility(): IElementType? {
+        val mods = node.findChildByType(JuxElementTypes.MODIFIER_LIST) ?: return null
+        var c = mods.firstChildNode
+        while (c != null) {
+            when (c.elementType) {
+                JuxTokenTypes.PUBLIC_KW, JuxTokenTypes.PROTECTED_KW, JuxTokenTypes.PRIVATE_KW ->
+                    return c.elementType
+            }
+            c = c.treeNext
+        }
+        return null
+    }
+
+    fun isPublic(): Boolean = propertyVisibility() == JuxTokenTypes.PUBLIC_KW
+
+    fun isPrivate(): Boolean = propertyVisibility() == JuxTokenTypes.PRIVATE_KW
+
+    /** The declared type node (`TYPE_REFERENCE`). */
+    fun typeReference(): PsiElement? =
+        node.findChildByType(JuxElementTypes.TYPE_REFERENCE)?.psi
+
+    /**
+     * The declared type's text with all whitespace stripped — the comparison
+     * key for the E0974 bind-type-mismatch check (`List<int>` == `List< int >`).
+     */
+    fun typeText(): String? = typeReference()?.text?.replace(WS, "")
+
+    private companion object {
+        val WS = Regex("\\s+")
+    }
+}
 
 /** An enum constant. */
 class JuxEnumConstant(node: ASTNode) : JuxNamedElementImpl(node)

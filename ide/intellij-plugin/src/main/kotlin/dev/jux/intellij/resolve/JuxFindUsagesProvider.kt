@@ -34,7 +34,8 @@ class JuxFindUsagesProvider : FindUsagesProvider {
         E.ANNOTATION_DECLARATION -> "annotation"
         E.METHOD_DECLARATION, E.OPERATOR_DECLARATION -> "method"
         E.CONSTRUCTOR_DECLARATION -> "constructor"
-        E.FIELD_DECLARATION, E.PROPERTY_DECLARATION, E.CONST_DECLARATION -> "field"
+        E.FIELD_DECLARATION, E.CONST_DECLARATION -> "field"
+        E.PROPERTY_DECLARATION -> "property"
         E.ENUM_CONSTANT -> "enum constant"
         else -> "declaration"
     }
