@@ -1,14 +1,18 @@
 //! End-to-end test for instance initializer blocks (`init { }`, §M.1).
 //!
-//! Runs `examples/init_blocks.jux`. Exercises:
-//! - an `init` block running after the constructor body on every `new`.
-//! - the init block reading constructor-set fields and writing a derived field.
+//! Runs `examples/init_blocks.jux`. Exercises the §S.4.4 / ERRATA E2
+//! construction order — super → field initializers → init blocks →
+//! constructor body (Java's instance-initializer rule):
+//! - init blocks run BEFORE the constructor body and see
+//!   field-initializer values, not the body's writes;
+//! - multiple init blocks run in textual order;
+//! - every constructor runs every init block.
 
 use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
-fn init_blocks_run_after_constructor() {
+fn init_blocks_run_before_constructor_body() {
     let jux = env!("CARGO_BIN_EXE_jux");
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -38,9 +42,14 @@ fn init_blocks_run_after_constructor() {
     assert_eq!(
         lines.as_slice(),
         [
-            "init: rect 3x4 -> area 12",
-            "init: rect 5x6 -> area 30",
-            "areas: 12 and 30",
+            "init sees count=100 tag=fresh",
+            "second init block, in textual order",
+            "body(int)",
+            "a: count=7 tag=explicit inits=1",
+            "init sees count=100 tag=fresh",
+            "second init block, in textual order",
+            "body()",
+            "b: count=100 tag=fresh",
         ],
         "unexpected output:\n{stdout}",
     );

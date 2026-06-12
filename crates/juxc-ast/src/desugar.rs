@@ -89,6 +89,13 @@ fn desugar_class(class: &mut ClassDecl) {
         for ctor in &mut class.constructors {
             rewrite_block_property_writes(&mut ctor.body, &backing_props);
         }
+        // `init { }` blocks run in the same ctor-inner context (against
+        // the bare inner struct, §S.4.4 step 4), so `this.<AutoProp>`
+        // there must hit the backing field too — the wrapper's accessor
+        // methods don't exist on the inner value.
+        for block in &mut class.init_blocks {
+            rewrite_block_property_writes(block, &backing_props);
+        }
     }
     // Instance-member names (non-static fields + non-static
     // properties) — a bare reference to one inside a custom accessor

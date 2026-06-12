@@ -317,7 +317,18 @@ impl RustEmitter {
         // blocks can mutate `this` afterward. This keeps generic-typed fields
         // working (the explicit inits avoid the `__self`-builder's `Default`
         // requirement); only a NON-simple ctor body falls to the builder.
-        if let Some(simple) = extract_simple_ctor_inits(ctor) {
+        // A class with `init { }` blocks can't use the simple fast path:
+        // the fast path folds the body's `this.f = param` assignments into
+        // the struct literal, but §S.4.4 / ERRATA E2 order init blocks
+        // BEFORE the constructor body (Java's instance-initializer rule),
+        // so an init block must observe the field-initializer values, not
+        // the body's writes. The `__self`-builder below gets that order.
+        let simple = if class_decl.init_blocks.is_empty() {
+            extract_simple_ctor_inits(ctor)
+        } else {
+            None
+        };
+        if let Some(simple) = simple {
             // Seed nullable-locals from this constructor's `T?` params so a
             // simple `this.data = d;` of a `T?` param into a `T?` field doesn't
             // double-wrap (`Some(Some(d))`). `expression_is_already_nullable`
@@ -330,27 +341,7 @@ impl RustEmitter {
                     self.nullable_locals.insert(p.name.text.clone());
                 }
             }
-            if class_decl.init_blocks.is_empty() {
-                self.emit_simple_ctor_body(class_decl, &simple, false);
-            } else {
-                self.emit_simple_ctor_body(class_decl, &simple, true);
-                // Run the init blocks against `__self`, then return it.
-                self.this_alias = Some("__self".to_string());
-                let mut muts = HashSet::new();
-                for init in &class_decl.init_blocks {
-                    collect_mutated_names(init, &mut muts, &self.user_mut_methods);
-                }
-                self.mutated_in_fn = muts;
-                for init in &class_decl.init_blocks {
-                    for stmt in &init.statements {
-                        self.emit_source_marker(stmt_span(stmt));
-                        self.w.emit_indent();
-                        self.emit_stmt(stmt);
-                    }
-                }
-                self.this_alias = None;
-                self.w.line("__self");
-            }
+            self.emit_simple_ctor_body(class_decl, &simple, false);
             self.w.indent_dec();
             self.w.line("}");
             self.w.newline();
@@ -436,19 +427,12 @@ impl RustEmitter {
                 self.nullable_locals.insert(p.name.text.clone());
             }
         }
-        // Constructor params shadow same-named fields (the canonical
-        // `Other(String test){ this.test = test; }` shape), so they must NOT be
-        // rewritten by the implicit-`this` pass.
-        self.current_fn_params = ctor.params.iter().map(|p| p.name.text.clone()).collect();
-        let owned = ctor_owned_param_names(&ctor.params);
-        self.emit_ctor_body_stmts(&ctor.body.statements, &owned);
-        // Constructor params are out of scope for init blocks (an init block is
-        // shared across all constructors), so clear them before the init pass.
-        self.current_fn_params.clear();
-
-        // §M.1 / §S.4.4 step 5: run every `init { }` block in source order,
-        // after the constructor body and before the value is returned. `this`
-        // still aliases `__self`.
+        // §S.4.4 step 4 / ERRATA E2: run every `init { }` block in source
+        // order BEFORE the constructor body (Java's instance-initializer
+        // order — init blocks see field-initializer values, not the body's
+        // writes). Constructor params are out of scope inside init blocks
+        // (a block is shared across all constructors), so the
+        // `current_fn_params` shadow set stays empty for this pass.
         for init in &class_decl.init_blocks {
             for stmt in &init.statements {
                 self.emit_source_marker(stmt_span(stmt));
@@ -456,6 +440,14 @@ impl RustEmitter {
                 self.emit_stmt(stmt);
             }
         }
+
+        // §S.4.4 step 5: the constructor body. Params shadow same-named
+        // fields (the canonical `Other(String test){ this.test = test; }`
+        // shape), so they must NOT be rewritten by the implicit-`this` pass.
+        self.current_fn_params = ctor.params.iter().map(|p| p.name.text.clone()).collect();
+        let owned = ctor_owned_param_names(&ctor.params);
+        self.emit_ctor_body_stmts(&ctor.body.statements, &owned);
+        self.current_fn_params.clear();
         self.this_alias = None;
 
         // Return the constructed value.
@@ -984,12 +976,10 @@ impl RustEmitter {
                     self.nullable_locals.insert(p.name.text.clone());
                 }
             }
-            self.current_fn_params = ctor.params.iter().map(|p| p.name.text.clone()).collect();
-            let owned = ctor_owned_param_names(&ctor.params);
-            self.emit_ctor_body_stmts(&ctor.body.statements, &owned);
-            self.current_fn_params.clear();
-            // §M.1 / §S.4.4 step 5: run each `init { }` block after the ctor
-            // body, before returning the inner value. `this` → __self.
+            // §S.4.4 step 4 / ERRATA E2: init blocks run BEFORE the ctor
+            // body (Java's instance-initializer order). Ctor params are
+            // not in scope inside init blocks, so the shadow set stays
+            // empty for this pass.
             for init in &class_decl.init_blocks {
                 for stmt in &init.statements {
                     self.emit_source_marker(stmt_span(stmt));
@@ -997,6 +987,11 @@ impl RustEmitter {
                     self.emit_stmt(stmt);
                 }
             }
+            // §S.4.4 step 5: the constructor body. `this` → __self.
+            self.current_fn_params = ctor.params.iter().map(|p| p.name.text.clone()).collect();
+            let owned = ctor_owned_param_names(&ctor.params);
+            self.emit_ctor_body_stmts(&ctor.body.statements, &owned);
+            self.current_fn_params.clear();
             self.this_alias = None;
             self.w.line("__self");
         }

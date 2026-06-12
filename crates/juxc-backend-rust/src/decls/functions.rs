@@ -118,9 +118,20 @@ impl RustEmitter {
             self.emit_generic_params_with_clone_bound(&combined_generics);
         }
         self.w.push('(');
+        // Params the body mutates in place (`xs.push(…)` on a by-value
+        // collection param, reassignment) need Rust's `mut` binding —
+        // same inference the `let mut` choice uses for locals. `out`
+        // params are `&mut T` already and never need it.
+        let mut param_muts = HashSet::new();
+        if let Some(body) = &fn_decl.body {
+            collect_mutated_names(body, &mut param_muts, &self.user_mut_methods);
+        }
         for (i, param) in fn_decl.params.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
+            }
+            if !param.is_out && param_muts.contains(&param.name.text) {
+                self.w.push_str("mut ");
             }
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");

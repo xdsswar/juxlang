@@ -312,7 +312,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0428`  | `new X(...)` where `X` is not instantiable (interface, enum, alias) | —             |
 | `E0429`  | Interface abstract method(s) not implemented        | classes-rules §3               |
 | `E0430`  | Conflicting default methods (diamond) — class must override explicitly | Type system §T.8.2 |
-| `E0431`  | Invalid method-modifier combination (see collision note below) | classes-rules §1.4  |
+| `E0431`  | Invalid method-modifier combination                  | classes-rules §1.4  |
 | `E0432`  | Invalid visibility on a top-level type (`private` / `protected`) | classes-rules §1.1 / §3.1 |
 | `E0433`  | Override narrows visibility relative to the overridden method | classes-rules §1.4   |
 | `E0434`  | Cyclic `extends` chain                              | classes-rules §1.2             |
@@ -326,6 +326,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0443`  | Malformed explicit call-site type-argument list (`id<int>(5)`) | Generics (Gap 5)      |
 | `E0444`  | Bounded wildcard as a storage type over a user generic class (Phase-1 limitation) | Generics (Gap 4) |
 | `E0445`  | Const-generic form outside the Phase-1 core subset  | Type system §T.11.3 / Grammar §A.2.6 |
+| `E0446`  | Generic argument violates its parameter's `extends` bound | Type system §T.2.2 |
 | `E0455`  | `weak` modifier on a non-(plain-class) field type    | JUX-LANG-V1 §6.5 / Semantics §S.5.2 |
 | `E0456`  | `weak` field read without `.get()`, or a `weak` field with an initializer | JUX-LANG-V1 §6.5 / Semantics §S.4.5 |
 | `E0447`  | Or-pattern alternative introduces bindings (`case A(var x) \| B ->`) | Grammar §A.3 |
@@ -335,7 +336,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0450`  | Ambiguous overload *(reserved)*                      | Type system §T.3.3            |
 | `E0451`  | No overload candidate produces required return type *(reserved)* | Type system §T.3.4 |
 | `E0452`  | No matching operator overload *(reserved)*          | Type system §T.3.5            |
-| `E0453`  | Generic type inference is ambiguous *(reserved)*     | Type system §T.4.2            |
+| `E0453`  | Generic type inference has no solution (uninferable `new X<>()`) | Type system §T.4.2 |
 | `E0460`  | Non-void function can finish without returning a value (missing return; conservative, JLS-14.21-style reachability) | Semantics §S.4.6 |
 | `E0470`  | Annotation applied outside its `@Target` set *(reserved)* | Annotations §A.13        |
 | `E0471`  | Runtime annotation read requires reflection *(reserved)* | Annotations §A.13         |
@@ -343,14 +344,14 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0473`  | Annotation is not `@Repeatable` but appears more than once *(reserved)* | Annotations §A.13 |
 | `E0474`  | Wrong type for annotation parameter *(reserved)*     | Annotations §A.13              |
 
-> **Known collision (implementation bug, to be fixed in the compiler):** the
-> `juxc_diagnostics::Code` enum currently carries a second variant that also
-> prints `E0431` — "generic type inference has no solution" (a bare
-> `new X<>()` whose type argument can't be inferred, Type system §T.4.2).
-> Two meanings cannot share one number; the inference-failure check should be
-> renumbered to **`E0446`** (next free slot) in a follow-up compiler change.
-> `E0446` is reserved here for that purpose and must not be allocated to
-> anything else.
+> **Collision history (resolved 2026-06-12):** the inference-failure
+> diagnostic ("generic type inference has no solution", §T.4.2) originally
+> shipped printing `E0431`, colliding with the method-modifier check above.
+> It now prints **`E0453`** — the slot this catalog had reserved for §T.4.2
+> all along. (An earlier revision of this note proposed `E0446`; that slot
+> was since allocated to "generic argument violates its `extends` bound"
+> during the generics wave, so the catalog's own §T.4.2 reservation was
+> used instead.)
 
 ### Borrow Checker (`E0500–E0599`)
 
@@ -436,6 +437,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 |----------|------------------------------------------------------------|--------------------------------|
 | `W0001`  | Doc comment in non-attaching position                       | Grammar §A.1.2                 |
 | `W0210`  | Module declares no exported symbols                         | Build system §B.3.4            |
+| `W0240`  | `@Derive(...)` is a no-op (operators auto-derive) — remove the annotation *(reserved)* | Missing-defs §M.3 / Operators §O.9 |
 | `W0301`  | Equality chained with reference identity                    | Grammar §A.4                   |
 | `W0457`  | Un-annotated reference cycle (strong field re-references owning class) will leak — mark a back-edge `weak` | JUX-LANG-V1 §6.5 |
 | `W0530`  | Cyclic class initialization within a module                 | Semantics §S.4.2               |

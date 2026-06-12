@@ -1,0 +1,66 @@
+// RISK-1 (check-ups.md): adversarial generic + borrow interactions.
+// Forbidden quadrant: juxc accepts but rustc rejects (raw lifetime
+// errors) — or worse, silent copy-instead-of-share semantics.
+package risk1;
+
+import rust.std.Vec;
+
+// G2 — THE sharp case: a GENERIC class (excluded from the wrapper rep)
+// that is aliased and mutated. Java semantics: both names see the
+// mutation.
+public class Cell<T> {
+    public T value;
+    public Cell(T value) { this.value = value; }
+    public void set(T v) { this.value = v; }
+    public T get() { return this.value; }
+}
+
+// G1 — generic identity-ish fn returning one of its params (escape
+// through a generic slot).
+T pick<T>(T a, T b) { return a; }
+
+// G3 — generic fn that stores its param into a container and also
+// returns it (alias through two routes).
+T keepAndReturn<T>(Vec<T> store, T item) {
+    store.push(item);
+    return item;
+}
+
+// A non-generic aliased class for comparison (wrapper rep).
+public class Plain {
+    public int n;
+    public Plain(int n) { this.n = n; }
+}
+
+public void main() {
+    // G2: alias a generic class instance, mutate through one name.
+    var a = new Cell<int>(1);
+    var b = a;          // alias
+    b.set(99);
+    print("G2 shared: a=" + a.get() + " b=" + b.get());
+
+    // G1: escape through generic return.
+    var p = new Plain(5);
+    var q = pick(p, new Plain(6));
+    q.n = 50;
+    print("G1 shared: p=" + p.n);
+
+    // G3: alias via container + return. NOTE: the Vec itself passes by
+    // VALUE today (collections spec pending), so the caller's `store`
+    // stays empty — the ELEMENT sharing is what G3 asserts, via the
+    // returned handle and a locally-built container.
+    var store = new Vec<Plain>();
+    var r = keepAndReturn(store, p);
+    r.n = 77;
+    var local = new Vec<Plain>();
+    local.push(p);
+    print("G3 shared: p=" + p.n + " stored=" + local[0].n);
+
+    // G2b: generic class instance through a generic fn.
+    var c1 = new Cell<String>("x");
+    var c2 = pick(c1, new Cell<String>("y"));
+    c2.set("z");
+    print("G2b shared: c1=" + c1.get());
+
+    print("done");
+}
