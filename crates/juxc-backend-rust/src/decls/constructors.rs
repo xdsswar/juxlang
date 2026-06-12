@@ -687,6 +687,9 @@ impl RustEmitter {
         // collapse to the obvious shape.
         self.emit_wrapper_inner_constructor(class_decl, ctor, ctor_idx);
         let suffix = if ctor_idx > 0 { format!("__{ctor_idx}") } else { String::new() };
+        // P6 (§P.9): binds on `this` recorded while the inner ctor's
+        // body emitted — replayed below, after the wrapper exists.
+        let ctor_binds = std::mem::take(&mut self.pending_ctor_binds);
 
         // Thin public `new` delegating to `new_inner`.
         self.w.indent_inc();
@@ -707,16 +710,50 @@ impl RustEmitter {
         self.w.indent_inc();
         self.emit_static_init_trigger();
         self.w.emit_indent();
-        self.w.push_str("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner");
-        self.w.push_str(&suffix);
-        self.w.push('(');
-        for (i, param) in ctor.params.iter().enumerate() {
-            if i > 0 {
-                self.w.push_str(", ");
+        if ctor_binds.is_empty() {
+            self.w.push_str("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner");
+            self.w.push_str(&suffix);
+            self.w.push('(');
+            for (i, param) in ctor.params.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str(&param.name.text);
             }
-            self.w.push_str(&param.name.text);
+            self.w.push_str("))))\n");
+        } else {
+            // Bind the wrapped instance to a local so the deferred
+            // binds can hold it; params are CLONED into `new_inner`
+            // (cheap `Rc` bumps / value copies) because a bind's
+            // source receiver may name one of them.
+            self.w.push_str(
+                "let __jux_self = Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner",
+            );
+            self.w.push_str(&suffix);
+            self.w.push('(');
+            for (i, param) in ctor.params.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str(&param.name.text);
+                self.w.push_str(".clone()");
+            }
+            self.w.push_str("))));\n");
+            // Replay each deferred bind with `this` resolved to the
+            // fresh wrapper handle.
+            let prev_alias = self.this_alias.replace("__jux_self".to_string());
+            for b in &ctor_binds {
+                self.w.emit_indent();
+                self.emit_bind(
+                    (b.target.0.as_ref(), &b.target.1, &b.target.2),
+                    (b.source.0.as_ref(), &b.source.1, &b.source.2),
+                    b.bidirectional,
+                );
+                self.w.push_str(";\n");
+            }
+            self.this_alias = prev_alias;
+            self.w.line("__jux_self");
         }
-        self.w.push_str("))))\n");
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();

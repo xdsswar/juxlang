@@ -1929,8 +1929,11 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
         "inline struct header carries the Clone+Debug bound: {rust}",
     );
     assert!(!rust.contains("Box_Inner"), "no inner newtype when Inline: {rust}");
+    // Class-scoped probe — the prelude's JuxStream/JuxChannel types
+    // are RefCell-backed, so a whole-output `contains` would
+    // false-positive.
     assert!(
-        !rust.contains("std::cell::RefCell"),
+        !rust.contains("RefCell<Box"),
         "no RefCell wrapper when Inline: {rust}",
     );
     assert!(rust.contains("value: T,"), "generic field: {rust}");
@@ -2038,8 +2041,11 @@ fn simple_constructor_emits_direct_self_literal() {
         "inline plain struct: {rust}",
     );
     assert!(!rust.contains("Pair_Inner"), "no inner newtype when Inline: {rust}");
+    // Class-scoped probe — the always-emitted prelude legitimately
+    // contains `Rc::new(RefCell::new(…))` (JuxStream), so a whole-
+    // output `contains` would false-positive.
     assert!(
-        !rust.contains("std::rc::Rc::new(std::cell::RefCell::new"),
+        !rust.contains("RefCell<Pair"),
         "no Rc<RefCell> wrapper when Inline: {rust}",
     );
     // No `__self` builder — the simple-ctor path emits the literal
@@ -2768,9 +2774,20 @@ fn grouped_import_lowers_to_brace_use() {
         public void main() {}
         "#,
     );
+    // Grouped imports expand one-line-per-name (the per-line form
+    // lets `emit_imports` dedup a symbol imported again by another
+    // unit's grouping — rustc E0252 otherwise).
     assert!(
-        rust.contains("use com::example::{A, B as B2, C};"),
-        "expected brace group, got: {rust}",
+        rust.contains("use com::example::A;"),
+        "expected expanded import A, got: {rust}",
+    );
+    assert!(
+        rust.contains("use com::example::B as B2;"),
+        "expected expanded aliased import, got: {rust}",
+    );
+    assert!(
+        rust.contains("use com::example::C;"),
+        "expected expanded import C, got: {rust}",
     );
 }
 
@@ -2788,7 +2805,9 @@ fn multiple_imports_emit_use_block() {
     );
     assert!(rust.contains("use a::A;"), "missing single import, got: {rust}");
     assert!(rust.contains("use b::*;"), "missing glob import, got: {rust}");
-    assert!(rust.contains("use c::{X, Y};"), "missing grouped import, got: {rust}");
+    // Grouped imports expand one-line-per-name (E0252 dedup).
+    assert!(rust.contains("use c::X;"), "missing expanded import X, got: {rust}");
+    assert!(rust.contains("use c::Y;"), "missing expanded import Y, got: {rust}");
     // The block should appear *before* fn main, with a blank line
     // separator between them.
     let use_a_pos = rust.find("use a::A;").expect("use a found");
@@ -3128,8 +3147,11 @@ fn unmapped_operator_emits_inherent_method_only() {
         !rust.contains("impl std::ops::Index"),
         "should NOT emit Index impl yet: {rust}",
     );
+    // (`impl Fn<` is the tuple-sugar header a real user `Fn` impl
+    // would need — a bare `impl Fn` probe would false-positive on the
+    // prelude's `impl FnMut() -> …` argument-position bounds.)
     assert!(
-        !rust.contains("impl Fn"),
+        !rust.contains("impl Fn<"),
         "should NOT emit Fn impl yet: {rust}",
     );
 }

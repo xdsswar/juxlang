@@ -1,0 +1,133 @@
+// Observable properties (§P) — full Phase-1 surface in one program:
+//
+// - P1: computed (get-only) properties fire observers when a
+//   dependency's setter changes the computed VALUE (§P.1.5);
+// - P2: direct assignment to a one-way-bound property throws
+//   IllegalStateException in debug builds (E0973), while both sides
+//   of a bidirectional binding stay settable (§P.4.2);
+// - P4: unbind() after bindBidirectional breaks BOTH directions;
+// - P5: a named 3-arg observer's Strong adapter is pruned from the
+//   source's storage after its owner dies;
+// - P6: bind() on a property of `this` inside a constructor (§P.9);
+// - P7: static observable properties fire class-scoped observers.
+package observable;
+
+public class Field {
+    public int Value { get; set; } = 0;
+}
+
+public class Person {
+    public String First { get; set; } = "";
+    public String Last { get; set; } = "";
+    // P1: computed — re-fires from First's and Last's setters.
+    public String FullName { get -> First + "/" + Last; };
+}
+
+public class Probe {
+    private final observer<int> watch = (prop, old, now) -> {
+        print("watch " + prop + " " + old + "->" + now);
+    };
+
+    public Probe(Field f) {
+        f.Value.observers.attach(this.watch);
+    }
+}
+
+public class Mirror {
+    public int Shown { get; set; } = 0;
+
+    // P6: ctor bind on `this` — deferred to post-construction,
+    // initial sync included.
+    public Mirror(Source s) {
+        this.Shown.bind(s.Value);
+    }
+}
+
+public class Source {
+    public int Value { get; set; } = 10;
+}
+
+public class Config {
+    // P7: class-scoped observable property.
+    public static int Level { get; set; } = 0;
+}
+
+void p1_computed() {
+    var p = new Person();
+    p.FullName.observers.attach((old, now) -> {
+        print("full: " + old + " -> " + now);
+    });
+    p.First = "Ada";
+    p.Last = "Lovelace";
+    p.Last = "Lovelace"; // no-op write: silent
+}
+
+void p4_bidirectional_unbind() {
+    var a = new Field();
+    var b = new Field();
+    a.Value.bindBidirectional(b.Value);
+    b.Value = 5;
+    print("a after b=5: " + a.Value);
+    a.Value.unbind();
+    b.Value = 9;
+    print("a after unbind + b=9: " + a.Value);
+    a.Value = 7;
+    print("b after a=7: " + b.Value);
+}
+
+void p2_bound_assign_throws() {
+    var t = new Field();
+    var s = new Field();
+    t.Value.bind(s.Value);
+    s.Value = 3;
+    print("t follows: " + t.Value);
+    try {
+        t.Value = 99;
+        print("not reached");
+    } catch (IllegalStateException e) {
+        print("caught: bound assign refused");
+    }
+    t.Value.unbind();
+    t.Value = 4;
+    print("after unbind set: " + t.Value);
+}
+
+void p5_adapter_pruned(Field f) {
+    var p = new Probe(f);
+    f.Value = 1;
+    print("size with owner: " + f.Value.observers.size);
+}
+
+void p6_ctor_bind() {
+    var s = new Source();
+    var m = new Mirror(s);
+    print("initial sync: " + m.Shown);
+    s.Value = 42;
+    print("follows: " + m.Shown);
+}
+
+void p7_static_props() {
+    Config.Level.observers.attach((old, now) -> {
+        print("level: " + old + " -> " + now);
+    });
+    Config.Level = 3;
+    Config.Level = 3; // no change: silent
+    Config.Level = 7;
+    print("static size: " + Config.Level.observers.size);
+    Config.Level.observers.clear;
+    Config.Level = 9; // cleared: silent
+}
+
+public void main() {
+    p1_computed();
+    p4_bidirectional_unbind();
+    p2_bound_assign_throws();
+    var f = new Field();
+    p5_adapter_pruned(f);
+    f.Value = 2;
+    f.Value = 3;
+    print("size after owner death: " + f.Value.observers.size);
+    p6_ctor_bind();
+    p7_static_props();
+    print("done");
+}

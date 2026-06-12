@@ -1,0 +1,22 @@
+// P7: static observable properties — observers attach/fire on the
+// class-scoped value exactly like instance ones.
+package p7;
+
+public class Config {
+    public static int Level { get; set; } = 0;
+    public static String Tag { get; set; } = "none";
+}
+
+public void main() {
+    Config.Level.observers.attach((old, now) -> {
+        print("level: " + old + " -> " + now);
+    });
+    Config.Level = 3;
+    Config.Level = 3; // no change: silent
+    Config.Level = 7;
+    print("size: " + Config.Level.observers.size);
+    Config.Level.observers.clear;
+    Config.Level = 9; // cleared: silent
+    print("tag: " + Config.Tag);
+    print("done");
+}

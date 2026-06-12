@@ -19,9 +19,10 @@ gaps) into a single status view. Status reflects the `polymorphism` branch.
 | Borrow discipline (`Rc<RefCell>` shared-mutable): re-entrancy, wrapped fields, collections, `!!`, for-each, operators, **field-path receivers, async tries, higher-order stdlib calls, observers** | ✅ | N1, G3, H1, H5, H6, H9 + wave-3 S1–S15 (all closed, runner `borrow_stress_wave3`) |
 | `?.` safe-navigation over wrapped classes + multi-level chains | ✅ | H5 |
 | Exceptions: try/catch/finally ordering, chaining, multi-catch, subclass→base cause upcast, `/ 0` → catchable `ArithmeticException`, uncaught-exception report | ✅ | H8, O1–O9 all closed |
-| Diagnostics: juxc catches its own errors (no rustc leaks), 61 E/W codes | ◐ | E0454/E0974 added; remaining known leaks: S16–S18 (async edges) |
+| Diagnostics: juxc catches its own errors (no rustc leaks), 63 E/W codes | ✅ | E0454/E0974, E0705/E0706 added; S16–S18 async-edge leaks closed 2026-06-12 |
 | Generic *class* as a polymorphic base | ⏭ | N5 — rejected cleanly with E0454; use a generic interface |
-| Remaining known gaps (async edges: un-awaited async call, `Worker.spawn` + async lambda, outer-local mutation in async try) | ⛔ | `jux-gaps.md` S16–S18 (low frequency) |
+| Async edges (un-awaited async → E0705, `Worker.spawn` async lambda → block_on, async-try outer mutation → E0706) + typed ctor overloads (S19) | ✅ | closed 2026-06-12; runner `async_edges` |
+| Observable properties §P: core + ALL follow-ups (computed deps, E0973 gate, bidi unbind, adapter pruning, ctor bind, static props) | ✅ | P1–P7 closed 2026-06-12; runner `observable_props` |
 
 ## 2. Codegen quality
 
@@ -63,11 +64,12 @@ gaps) into a single status view. Status reflects the `polymorphism` branch.
 
 ## What blocks calling it v0.1
 
-**Nothing structural remains.** Async streams (§18.6) and the testing
-framework (§21) — the last two feature blockers — landed 2026-06-12. The
-only ⛔ row left is the trio of low-frequency async edges (S16–S18 in
-`jux-gaps.md`), which are quality items rather than missing features.
-The O-series is fully closed and
+**Nothing remains — every ⛔ row is closed.** Async streams (§18.6) and
+the testing framework (§21) — the last two feature blockers — landed
+2026-06-12, and the same day closed the async-edge trio (S16–S18, now
+clean E0705/E0706 diagnostics + the Worker async-lambda lowering), typed
+constructor overloads (S19), and the entire observable-property
+follow-up series (P1–P7). The O-series is fully closed and
 the borrow machinery survived a 15-probe adversarial wave with every finding
 fixed (2026-06-12) — the **inferred borrow checker is release-grade for the
 common feature set**: no known rustc borrow-error leaks, RefCell panics, or

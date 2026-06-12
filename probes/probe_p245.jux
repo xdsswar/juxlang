@@ -1,0 +1,68 @@
+// P2: direct assignment to a BOUND property throws (debug builds).
+// P4: unbind() after bindBidirectional breaks BOTH directions.
+// P5: a named 3-arg observer's adapter dies with its owner.
+package p245;
+
+public class Field {
+    public int Value { get; set; } = 0;
+}
+
+public class Probe {
+    private final observer<int> watch = (prop, old, now) -> {
+        print("watch " + prop + " " + old + "->" + now);
+    };
+
+    public Probe(Field f) {
+        f.Value.observers.attach(this.watch);
+    }
+}
+
+void p4_bidirectional_unbind() {
+    var a = new Field();
+    var b = new Field();
+    a.Value.bindBidirectional(b.Value);
+    b.Value = 5;
+    print("a after b=5: " + a.Value);
+    a.Value.unbind();
+    b.Value = 9;
+    print("a after unbind + b=9: " + a.Value);
+    // reverse direction must ALSO be dead: drive a, b must not move
+    // (use the raw setter path indirectly — a isn't bound anymore)
+    a.Value = 7;
+    print("b after a=7: " + b.Value);
+}
+
+void p2_bound_assign_throws() {
+    var t = new Field();
+    var s = new Field();
+    t.Value.bind(s.Value);
+    s.Value = 3;
+    print("t follows: " + t.Value);
+    try {
+        t.Value = 99;
+        print("not reached");
+    } catch (IllegalStateException e) {
+        print("caught: bound assign refused");
+    }
+    t.Value.unbind();
+    t.Value = 4;
+    print("after unbind set: " + t.Value);
+}
+
+void p5_adapter_pruned(Field f) {
+    var p = new Probe(f);
+    f.Value = 1;
+    print("size with owner: " + f.Value.observers.size);
+}
+
+public void main() {
+    p4_bidirectional_unbind();
+    p2_bound_assign_throws();
+    var f = new Field();
+    p5_adapter_pruned(f);
+    // Probe's owner died with the fn frame; one more fire flips the
+    // adapter's dead flag, the next prunes it from storage.
+    f.Value = 2;
+    f.Value = 3;
+    print("size after owner death: " + f.Value.observers.size);
+}

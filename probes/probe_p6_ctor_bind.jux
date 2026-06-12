@@ -1,0 +1,41 @@
+// P6 (§P.9): bind() on a property of `this` inside a constructor —
+// deferred to right after construction, initial sync included.
+package p6;
+
+public class Source {
+    public int Value { get; set; } = 10;
+}
+
+public class Mirror {
+    public int Shown { get; set; } = 0;
+
+    public Mirror(Source s) {
+        this.Shown.bind(s.Value);
+    }
+}
+
+public class Twin {
+    public int A { get; set; } = 0;
+
+    public Twin(Source s) {
+        this.A.bindBidirectional(s.Value);
+    }
+}
+
+public void main() {
+    var s = new Source();
+    var m = new Mirror(s);
+    print("initial sync: " + m.Shown);
+    s.Value = 42;
+    print("follows: " + m.Shown);
+    m.Shown.unbind();
+    s.Value = 50;
+    print("after unbind: " + m.Shown);
+
+    var s2 = new Source();
+    var t = new Twin(s2);
+    print("twin initial: " + t.A);
+    t.A = 99;
+    print("reverse drive: " + s2.Value);
+    print("done");
+}
