@@ -1112,6 +1112,28 @@ impl RustEmitter {
     /// (FnOnce + Send + 'static); the wrapping `Rc` of the regular
     /// emit path is incompatible with cross-thread transfer
     /// because `Rc` isn't `Send`.
+    /// O1 patch-up for lambda blocks ending in `try`/`catch`: the try
+    /// lowering threads `return` values through a `__jux_ret` Option and
+    /// re-issues the `return` AFTER the `catch_unwind` machinery — so the
+    /// try statement itself has type `()`. When that try is the LAST
+    /// statement of a value-returning lambda, Rust would infer the
+    /// closure's return type as `()` (E0308). Emitting `unreachable!()`
+    /// after it gives the tail position type `!`, which coerces to any
+    /// `T`. Only fires for VALUED returns (`return expr`) — a void
+    /// lambda may legally fall through past its try, and panicking
+    /// there would be wrong.
+    fn patch_lambda_tail_try(&mut self, b: &juxc_ast::Block) {
+        if let Some(juxc_ast::Stmt::Try(t)) = b.statements.last() {
+            let threads_value = crate::stmts::block_contains_valued_return(&t.body)
+                || t.catches
+                    .iter()
+                    .any(|c| crate::stmts::block_contains_valued_return(&c.body));
+            if threads_value {
+                self.w.line("unreachable!()");
+            }
+        }
+    }
+
     pub(crate) fn emit_bare_move_lambda(&mut self, l: &juxc_ast::LambdaExpr) {
         self.w.push_str("move ");
         self.w.push('|');
@@ -1134,6 +1156,7 @@ impl RustEmitter {
                 for stmt in &b.statements {
                     self.emit_stmt(stmt);
                 }
+                self.patch_lambda_tail_try(b);
                 self.w.indent_dec();
                 self.w.emit_indent();
                 self.w.push('}');
@@ -1233,6 +1256,7 @@ impl RustEmitter {
                 for stmt in &b.statements {
                     self.emit_stmt(stmt);
                 }
+                self.patch_lambda_tail_try(b);
                 self.w.indent_dec();
                 self.w.emit_indent();
                 self.w.push('}');

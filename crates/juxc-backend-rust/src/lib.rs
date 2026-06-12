@@ -799,6 +799,18 @@ struct RustEmitter {
     /// `finally` runs → return completes). Cleared inside lambda and
     /// anonymous-class bodies, whose `return`s belong to themselves.
     pub(crate) in_try_closure: bool,
+    /// Loop-nesting depth at the CURRENT emission point — incremented
+    /// around each loop body (`while` / `do-while` / `for-each` /
+    /// C-style `for`). Used by the O2 try/loop-control threading to
+    /// tell whether a `break`/`continue` binds a loop OUTSIDE the
+    /// enclosing try's `catch_unwind` closure (must thread through the
+    /// `__jux_loopctl` flag) or a loop INSIDE it (plain emission).
+    pub(crate) loop_emit_depth: usize,
+    /// Active `__jux_loopctl` threading channels, one per enclosing
+    /// `try` lowering whose body/catches contain loop-escaping
+    /// `break`/`continue` (O2). Innermost last. See
+    /// [`stmts::TryLoopCtl`] and `RustEmitter::emit_loop_escape`.
+    pub(crate) try_loopctl: Vec<stmts::TryLoopCtl>,
     /// `true` while emitting a class that declares `static { }` blocks
     /// (§S.4.1). Drives the first-use trigger: each constructor body and each
     /// static method body emits a `Self::__static_init();` call at its top so
@@ -2787,6 +2799,8 @@ impl RustEmitter {
             emitting_wrapper_class: false,
             in_value_type_position: false,
             in_try_closure: false,
+            loop_emit_depth: 0,
+            try_loopctl: Vec::new(),
             emitting_class_has_static_init: false,
             emitting_call_callee: false,
         }

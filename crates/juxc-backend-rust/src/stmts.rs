@@ -347,6 +347,113 @@ fn match_simple_not_null_check(cond: &Expr) -> Option<&str> {
     None
 }
 
+/// One active loop-control threading channel (O2). A `try` statement
+/// whose body (or catch arms) contains a `break`/`continue` targeting a
+/// loop OUTSIDE the try can't emit it directly — the body lowers inside
+/// a `catch_unwind` closure (E0267) and the catch arms inside the
+/// `'__jux_catch` labeled dispatch block (E0695). Instead the escape
+/// records a code in a `u8` flag local, exits its enclosing construct,
+/// and the try machinery re-issues the real `break`/`continue` AFTER
+/// `finally` ran (matching Java's "finally before loop control" order).
+pub(crate) struct TryLoopCtl {
+    /// The flag local's name — `__jux_loopctl_<stack-depth>`, unique
+    /// among the channels active at any given emission point.
+    pub(crate) flag: String,
+    /// `loop_emit_depth` recorded when the try began. A
+    /// `break`/`continue` intercepts only when emitted at this SAME
+    /// depth — one emitted inside a loop nested within the try binds
+    /// that inner loop and passes through untouched.
+    pub(crate) base_depth: usize,
+    /// Whether the try's closure threads a return value (`Option<T>`
+    /// carrier) — picks `return None;` vs `return;` for the
+    /// body-region escape.
+    pub(crate) closure_has_ret: bool,
+    /// Where emission currently sits relative to this try's machinery —
+    /// decides the escape's replacement text (or none).
+    pub(crate) region: LoopCtlRegion,
+    /// Distinct escapes seen so far, in first-encounter order. The
+    /// flag code for an escape is its index + 1 (0 = "no escape").
+    /// Each entry is `(is_break, optional label)`.
+    pub(crate) escapes: Vec<(bool, Option<String>)>,
+}
+
+/// Emission region for a [`TryLoopCtl`] channel.
+#[derive(PartialEq)]
+pub(crate) enum LoopCtlRegion {
+    /// Inside the try body's `catch_unwind` closure — escape via
+    /// `{ flag = N; return …; }`.
+    Body,
+    /// Inside a catch arm (the `'__jux_catch` dispatch block) —
+    /// escape via `{ flag = N; break '__jux_catch; }`.
+    Catch,
+    /// Machinery / `finally` — no interception by this channel
+    /// (an enclosing channel may still apply).
+    Off,
+}
+
+/// True when a `try` statement needs an O2 loop-control channel: its
+/// body or a catch arm contains a `break`/`continue` that targets a
+/// loop OUTSIDE the try. The walker descends statement forms that emit
+/// inline (if/else, labeled, unsafe, switch arms, and nested `try`
+/// including its finally — all of those land inside the outer closure)
+/// but STOPS at loops: an escape inside a nested loop binds that loop,
+/// which lives inside the closure too. The try's OWN finally is
+/// excluded — it emits outside the closure, where plain loop control
+/// is already legal.
+pub(crate) fn try_needs_loopctl(t: &juxc_ast::TryStmt) -> bool {
+    block_has_loop_escape(&t.body)
+        || t.catches.iter().any(|c| block_has_loop_escape(&c.body))
+}
+
+fn block_has_loop_escape(b: &juxc_ast::Block) -> bool {
+    b.statements.iter().any(stmt_has_loop_escape)
+}
+
+fn stmt_has_loop_escape(s: &Stmt) -> bool {
+    match s {
+        Stmt::Break(..) | Stmt::Continue(..) => true,
+        Stmt::If(i) => {
+            if block_has_loop_escape(&i.then_block) {
+                return true;
+            }
+            let mut cursor = i.else_branch.as_deref();
+            while let Some(branch) = cursor {
+                match branch {
+                    juxc_ast::ElseBranch::If(inner) => {
+                        if block_has_loop_escape(&inner.then_block) {
+                            return true;
+                        }
+                        cursor = inner.else_branch.as_deref();
+                    }
+                    juxc_ast::ElseBranch::Block(b) => return block_has_loop_escape(b),
+                }
+            }
+            false
+        }
+        // Loops swallow their own escapes — don't descend.
+        Stmt::While(_) | Stmt::DoWhile(_) | Stmt::ForEach(_) | Stmt::ForC(_) => false,
+        Stmt::Labeled { stmt, .. } => stmt_has_loop_escape(stmt),
+        // A nested try emits ENTIRELY inside the outer closure — its
+        // body, catch arms, and finally all need the outer channel
+        // when they escape (the nested machinery threads through its
+        // own channel first, then its dispatch re-escapes outward).
+        Stmt::Try(t) => {
+            block_has_loop_escape(&t.body)
+                || t.catches.iter().any(|c| block_has_loop_escape(&c.body))
+                || t.finally
+                    .as_ref()
+                    .map(|f| block_has_loop_escape(f))
+                    .unwrap_or(false)
+        }
+        Stmt::Unsafe(b) => block_has_loop_escape(b),
+        Stmt::Expr(juxc_ast::Expr::Switch(sw)) => sw.arms.iter().any(|arm| match &arm.body {
+            juxc_ast::SwitchBody::Block(b) => block_has_loop_escape(b),
+            juxc_ast::SwitchBody::Expr(_) => false,
+        }),
+        _ => false,
+    }
+}
+
 impl RustEmitter {
     /// Emit the body of a block — statements one per line, each indented.
     /// The enclosing `{ … }` is emitted by the caller so we can match
@@ -502,22 +609,16 @@ impl RustEmitter {
             Stmt::Assign(a) => self.emit_assign(a),
             // Loop-control statements — the optional label targets an
             // enclosing `Stmt::Labeled` loop (`break outer;` →
-            // `break 'outer;`).
+            // `break 'outer;`). Inside a `try` lowering the escape may
+            // thread through a `__jux_loopctl` channel instead — see
+            // `emit_loop_escape`.
             Stmt::Break(label, _) => {
-                self.w.push_str("break");
-                if let Some(l) = label {
-                    self.w.push_str(" '");
-                    self.w.push_str(&l.text);
-                }
-                self.w.push_str(";\n");
+                self.emit_loop_escape(true, label.as_ref().map(|l| l.text.as_str()));
+                self.w.push('\n');
             }
             Stmt::Continue(label, _) => {
-                self.w.push_str("continue");
-                if let Some(l) = label {
-                    self.w.push_str(" '");
-                    self.w.push_str(&l.text);
-                }
-                self.w.push_str(";\n");
+                self.emit_loop_escape(false, label.as_ref().map(|l| l.text.as_str()));
+                self.w.push('\n');
             }
             Stmt::SuperCall(_, _) => {
                 // `super(args);` is lifted out of the body by
@@ -901,6 +1002,78 @@ impl RustEmitter {
         out
     }
 
+    /// Emit a `break`/`continue` statement's text (NO trailing
+    /// newline — callers add it so the dispatch emitter can inline the
+    /// escape inside an `if … { … }` one-liner).
+    ///
+    /// **O2 interception.** When the innermost in-region
+    /// [`TryLoopCtl`] channel was opened at the CURRENT loop depth,
+    /// the escape targets a loop outside that try's machinery and
+    /// can't be emitted directly. Instead:
+    ///
+    /// - **Body region** (inside the `catch_unwind` closure):
+    ///   `{ __jux_loopctl_N = code; return …; }` — the early return
+    ///   exits the closure; the carrier shape (`return None;` for a
+    ///   return-threading closure, bare `return;` otherwise) keeps the
+    ///   closure's type.
+    /// - **Catch region** (inside the `'__jux_catch` dispatch block):
+    ///   `{ __jux_loopctl_N = code; break '__jux_catch; }`.
+    ///
+    /// `emit_try`'s post-`finally` dispatch re-issues the real escape
+    /// — through THIS same method, so a try nested inside another
+    /// try's closure threads outward channel by channel.
+    ///
+    /// Channels whose region is `Off` are skipped (we're in their
+    /// machinery or `finally`, which emit outside the closure) — an
+    /// enclosing channel may still apply.
+    pub(crate) fn emit_loop_escape(&mut self, is_break: bool, label: Option<&str>) {
+        let depth = self.loop_emit_depth;
+        let intercept = self
+            .try_loopctl
+            .iter_mut()
+            .rev()
+            .find(|ch| ch.region != LoopCtlRegion::Off)
+            .filter(|ch| ch.base_depth == depth)
+            .map(|ch| {
+                let key = (is_break, label.map(|s| s.to_string()));
+                let code = match ch.escapes.iter().position(|e| *e == key) {
+                    Some(i) => i + 1,
+                    None => {
+                        ch.escapes.push(key);
+                        ch.escapes.len()
+                    }
+                };
+                (
+                    ch.flag.clone(),
+                    code,
+                    ch.region == LoopCtlRegion::Body,
+                    ch.closure_has_ret,
+                )
+            });
+        if let Some((flag, code, in_body, has_ret)) = intercept {
+            self.w.push_str("{ ");
+            self.w.push_str(&flag);
+            self.w.push_str(" = ");
+            self.w.push_str(&code.to_string());
+            if in_body {
+                if has_ret {
+                    self.w.push_str("; return None; }");
+                } else {
+                    self.w.push_str("; return; }");
+                }
+            } else {
+                self.w.push_str("; break '__jux_catch; }");
+            }
+            return;
+        }
+        self.w.push_str(if is_break { "break" } else { "continue" });
+        if let Some(l) = label {
+            self.w.push_str(" '");
+            self.w.push_str(l);
+        }
+        self.w.push(';');
+    }
+
     /// Lower a Jux `try / catch / finally` statement to Rust using
     /// `std::panic::catch_unwind` as the unwinding mechanism. The
     /// shape per spec §X.3.2:
@@ -962,10 +1135,34 @@ impl RustEmitter {
         // the dispatch arm — §X.3.2: finally runs before the return).
         let has_ret = block_contains_fn_return(&t.body)
             || t.catches.iter().any(|c| block_contains_fn_return(&c.body));
+        // O2: loop-control channel — needed when the body or a catch
+        // arm `break`s/`continue`s a loop OUTSIDE this try (the
+        // closure / dispatch block traps direct loop control). Sync
+        // shape only: the async block captures by `move`, so a flag
+        // local can't thread out of it (Phase-1 limitation).
+        let wants_loopctl = !is_async && try_needs_loopctl(t);
         // Wrap the whole thing in a block so locals introduced by
         // the lowering don't leak.
         self.w.push_str("{\n");
         self.w.indent_inc();
+        if wants_loopctl {
+            // Flag local — 0 = no escape; other codes are assigned in
+            // first-encounter order by `emit_loop_escape` and
+            // dispatched after `finally` below. Named by channel
+            // stack depth so nested try machineries never shadow.
+            let flag = format!("__jux_loopctl_{}", self.try_loopctl.len());
+            self.w.emit_indent();
+            self.w.push_str("let mut ");
+            self.w.push_str(&flag);
+            self.w.push_str(": u8 = 0;\n");
+            self.try_loopctl.push(TryLoopCtl {
+                flag,
+                base_depth: self.loop_emit_depth,
+                closure_has_ret: has_ret,
+                region: LoopCtlRegion::Body,
+                escapes: Vec::new(),
+            });
+        }
         if has_ret {
             // Return-value channel — `Option<RetT>`, `None` = the body
             // ran to completion without returning.
@@ -1036,6 +1233,15 @@ impl RustEmitter {
         }
         self.in_try_closure = prev_try_flag;
         self.in_catch_arm = prev_catch_arm;
+        // O2: emission is past the closure — catch arm bodies emit
+        // inside the `'__jux_catch` dispatch block next, where an
+        // escape threads via `break '__jux_catch` instead of an early
+        // closure return.
+        if wants_loopctl {
+            if let Some(ch) = self.try_loopctl.last_mut() {
+                ch.region = LoopCtlRegion::Catch;
+            }
+        }
         // Match on the result and run the appropriate catch.
         self.w.emit_indent();
         self.w.push_str("match __jux_try_result {\n");
@@ -1157,6 +1363,15 @@ impl RustEmitter {
         self.w.line("}");
         self.w.indent_dec();
         self.w.line("}");
+        // O2: the dispatch block is closed — `finally` emits inline
+        // (outside both the closure and the labeled block), where
+        // plain loop control is already legal. Suspend this channel;
+        // an ENCLOSING one may still intercept.
+        if wants_loopctl {
+            if let Some(ch) = self.try_loopctl.last_mut() {
+                ch.region = LoopCtlRegion::Off;
+            }
+        }
         // Finally: emit its body verbatim after the match. Runs
         // in both success and failure paths — and BEFORE an
         // unmatched exception resumes or a try-body `return`
@@ -1181,6 +1396,25 @@ impl RustEmitter {
             } else {
                 self.w
                     .push_str("if let Some(__jux_ret_v) = __jux_ret { return __jux_ret_v; }\n");
+            }
+        }
+        // O2: re-issue the real `break`/`continue` the body or a
+        // catch arm requested — AFTER `finally` ran (Java ordering).
+        // The escape goes back through `emit_loop_escape`: when THIS
+        // try sits inside another try's closure, the channel just
+        // popped no longer applies and the enclosing one intercepts,
+        // threading the escape outward one machinery layer at a time.
+        if wants_loopctl {
+            let ch = self.try_loopctl.pop().expect("loopctl channel pushed above");
+            for (i, (is_break, label)) in ch.escapes.iter().enumerate() {
+                self.w.emit_indent();
+                self.w.push_str("if ");
+                self.w.push_str(&ch.flag);
+                self.w.push_str(" == ");
+                self.w.push_str(&(i + 1).to_string());
+                self.w.push_str(" { ");
+                self.emit_loop_escape(*is_break, label.as_deref());
+                self.w.push_str(" }\n");
             }
         }
         self.w.indent_dec();
@@ -1252,7 +1486,9 @@ impl RustEmitter {
                     ));
                 }
                 self.w.indent_inc();
+                self.loop_emit_depth += 1;
                 self.emit_block_contents(&f.body);
+                self.loop_emit_depth -= 1;
                 self.w.emit_indent();
                 self.w.push_str(&var);
                 self.w.push_str(" += __jux_step;\n");
@@ -1271,7 +1507,9 @@ impl RustEmitter {
             self.emit_expr(&f.iter);
             self.w.push_str(" {\n");
             self.w.indent_inc();
+            self.loop_emit_depth += 1;
             self.emit_block_contents(&f.body);
+            self.loop_emit_depth -= 1;
             self.w.indent_dec();
             self.w.emit_indent();
             self.w.push_str("}\n");
@@ -1309,7 +1547,9 @@ impl RustEmitter {
                 self.w.push_str(") = __jux_it.next() {
 ");
                 self.w.indent_inc();
+                self.loop_emit_depth += 1;
                 self.emit_block_contents(&f.body);
+                self.loop_emit_depth -= 1;
                 self.w.indent_dec();
                 self.w.line("}");
                 self.w.indent_dec();
@@ -1400,7 +1640,9 @@ impl RustEmitter {
                 scope.insert(f.var_name.text.clone(), ty.clone());
             }
         }
+        self.loop_emit_depth += 1;
         self.emit_block_contents(&f.body);
+        self.loop_emit_depth -= 1;
         self.local_types.pop();
         self.w.indent_dec();
         self.w.emit_indent();
@@ -1696,7 +1938,9 @@ impl RustEmitter {
             self.w.line("}");
         }
         // Body.
+        self.loop_emit_depth += 1;
         self.emit_block_contents(&f.body);
+        self.loop_emit_depth -= 1;
         self.w.indent_dec();
         self.w.line("}");
         self.w.indent_dec();
@@ -1724,7 +1968,9 @@ impl RustEmitter {
             self.w.push_str(" {\n");
         }
         self.w.indent_inc();
+        self.loop_emit_depth += 1;
         self.emit_block_contents(&w.body);
+        self.loop_emit_depth -= 1;
         self.w.indent_dec();
         self.w.emit_indent();
         self.w.push_str("}\n");
@@ -1741,7 +1987,9 @@ impl RustEmitter {
         self.emit_pending_loop_label();
         self.w.push_str("loop {\n");
         self.w.indent_inc();
+        self.loop_emit_depth += 1;
         self.emit_block_contents(&d.body);
+        self.loop_emit_depth -= 1;
         if !matches!(d.condition, Expr::Literal(Literal::Bool(true))) {
             self.w.emit_indent();
             self.w.push_str("if !(");
@@ -2655,48 +2903,75 @@ pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
 /// arm blocks. Lambda bodies are SKIPPED — a `return` there belongs to
 /// the lambda, not the enclosing function.
 pub(crate) fn block_contains_fn_return(block: &juxc_ast::Block) -> bool {
-    block.statements.iter().any(stmt_contains_fn_return)
+    block_contains_return_where(block, &|_| true)
 }
 
-fn stmt_contains_fn_return(s: &Stmt) -> bool {
+/// True when `block` contains a function-level `return <expr>` (a return
+/// CARRYING a value, not a bare `return;`). Used by the lambda emitter's
+/// tail-try patch-up (O1): only a value-returning lambda needs the
+/// `unreachable!()` type-coercion footer — a void lambda may legally
+/// fall through past its try.
+pub(crate) fn block_contains_valued_return(block: &juxc_ast::Block) -> bool {
+    block_contains_return_where(block, &|opt| opt.is_some())
+}
+
+/// Shared walker behind [`block_contains_fn_return`] /
+/// [`block_contains_valued_return`] — `pred` inspects each `return`'s
+/// optional value expression and decides whether it counts.
+fn block_contains_return_where(
+    block: &juxc_ast::Block,
+    pred: &dyn Fn(&Option<juxc_ast::Expr>) -> bool,
+) -> bool {
+    block
+        .statements
+        .iter()
+        .any(|s| stmt_contains_return_where(s, pred))
+}
+
+fn stmt_contains_return_where(
+    s: &Stmt,
+    pred: &dyn Fn(&Option<juxc_ast::Expr>) -> bool,
+) -> bool {
     match s {
-        Stmt::Return(_) => true,
+        Stmt::Return(opt) => pred(opt),
         Stmt::If(i) => {
-            if block_contains_fn_return(&i.then_block) {
+            if block_contains_return_where(&i.then_block, pred) {
                 return true;
             }
             let mut cursor = i.else_branch.as_deref();
             while let Some(branch) = cursor {
                 match branch {
                     juxc_ast::ElseBranch::If(inner) => {
-                        if block_contains_fn_return(&inner.then_block) {
+                        if block_contains_return_where(&inner.then_block, pred) {
                             return true;
                         }
                         cursor = inner.else_branch.as_deref();
                     }
                     juxc_ast::ElseBranch::Block(b) => {
-                        return block_contains_fn_return(b);
+                        return block_contains_return_where(b, pred);
                     }
                 }
             }
             false
         }
-        Stmt::While(w) => block_contains_fn_return(&w.body),
-        Stmt::DoWhile(d) => block_contains_fn_return(&d.body),
-        Stmt::Labeled { stmt, .. } => stmt_contains_fn_return(stmt),
-        Stmt::ForEach(f) => block_contains_fn_return(&f.body),
-        Stmt::ForC(f) => block_contains_fn_return(&f.body),
+        Stmt::While(w) => block_contains_return_where(&w.body, pred),
+        Stmt::DoWhile(d) => block_contains_return_where(&d.body, pred),
+        Stmt::Labeled { stmt, .. } => stmt_contains_return_where(stmt, pred),
+        Stmt::ForEach(f) => block_contains_return_where(&f.body, pred),
+        Stmt::ForC(f) => block_contains_return_where(&f.body, pred),
         Stmt::Try(t) => {
-            block_contains_fn_return(&t.body)
-                || t.catches.iter().any(|c| block_contains_fn_return(&c.body))
+            block_contains_return_where(&t.body, pred)
+                || t.catches
+                    .iter()
+                    .any(|c| block_contains_return_where(&c.body, pred))
                 || t.finally
                     .as_ref()
-                    .map(|f| block_contains_fn_return(f))
+                    .map(|f| block_contains_return_where(f, pred))
                     .unwrap_or(false)
         }
-        Stmt::Unsafe(b) => block_contains_fn_return(b),
+        Stmt::Unsafe(b) => block_contains_return_where(b, pred),
         Stmt::Expr(juxc_ast::Expr::Switch(sw)) => sw.arms.iter().any(|arm| match &arm.body {
-            juxc_ast::SwitchBody::Block(b) => block_contains_fn_return(b),
+            juxc_ast::SwitchBody::Block(b) => block_contains_return_where(b, pred),
             juxc_ast::SwitchBody::Expr(_) => false,
         }),
         _ => false,
