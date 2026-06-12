@@ -37,6 +37,7 @@ try { var t = localStorage.getItem('jux-docs-theme');
     <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
     <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
     <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+    <a href="JUX-OBSERVABLE-PROPERTIES-ADDENDUM.html">Observable Properties</a>
     <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
   </div>
@@ -444,6 +445,46 @@ var (ok, n) = tryParse("42");
 
 `out` is for FFI compatibility and for the rare case where `Result<T, E>` and tuples are both awkward. Style guide: prefer return values and tuples; reach for `out` when interfacing with C or matching an external convention.
 
+### M.4.6. Implementation Notes (Phase 1)
+
+`out` is a **contextual** keyword: it introduces the parameter mode only when it
+precedes a type in a parameter list, and the call-site `out` only when it precedes
+a place argument — so an ordinary identifier named `out` (variable, field, label)
+continues to work.
+
+**Lowering to Rust.** An `out int result` parameter lowers to `result: &mut isize`.
+In the body, an assignment `result = v` lowers to `*result = v` and any read to
+`(*result)`. At the call site, `out <place>` lowers to `&mut <place>`:
+
+| Place form          | Jux               | Emitted Rust                     |
+|---------------------|-------------------|----------------------------------|
+| local               | `f(out n)`        | `f(&mut n)`                      |
+| plain-struct field  | `f(out c.value)`  | `f(&mut c.value)`                |
+| shared-ref field    | `f(out b.field)`  | `f(&mut b.0.borrow_mut().field)` |
+| array element       | `f(out a[i])`     | `f(&mut a[i])`                   |
+
+A shared-reference (aliased) class field takes the **mutable** interior borrow; the
+`RefMut` temporary lives to the end of the call statement (Rust temporary-lifetime
+extension), so the `&mut` into it stays valid for the callee. An uninitialized local
+out-arg (`int n;`) is default-initialized at its declaration so the `&mut` is
+well-formed (`let mut n: isize = 0;`).
+
+**Definite assignment.** The must-assign-on-every-normal-exit check (`E0940`) reuses
+the same forward dataflow engine as field definite-assignment (if/else intersection,
+loops don't escape, `return`/`throw` diverge).
+
+**Diagnostics.**
+
+| Code    | Condition                                                              |
+|---------|------------------------------------------------------------------------|
+| `E0940` | `out` parameter not assigned on some normal-exit path.                 |
+| `E0942` | `out` argument is not an assignable place (e.g. `out gen()`).          |
+| `E0943` | `out` arg/param disagreement (`out` on a plain param, or a plain arg to an `out` param). |
+| `E0944` | `out` combined with `final`/varargs/default, or on a constructor param. |
+
+**Deferred.** `out null` (§M.4.4) and the `move` call-site operator are follow-ups —
+both are FFI/ownership refinements not required by the Phase-1 (Jux-to-Rust) surface.
+
 ---
 
 ## §M.5 — Record `with(...)` and Withers
@@ -563,11 +604,18 @@ Open-ended range patterns (`x..`, `..x`, `..=x`) are permitted in patterns only,
 Jux properties use **the C# property syntax, with one deliberate divergence:
 expression bodies use `->`, not C#'s `=>`** — because `=>` is Jux's type-test
 (instanceof) operator (`a => Type`) and must stay unambiguous. So: `{ get; set; }`
-blocks, `init`-only setters, expression-bodied properties (`-> expr`),
-expression-bodied accessors (`get -> expr`), full accessor bodies, and the
-implicit `value` parameter in setters.
+blocks, expression-bodied properties (`-> expr`), expression-bodied accessors
+(`get -> expr`), full accessor bodies, and the implicit `value` parameter in setters.
 
 This supersedes the earlier shorthand syntax (`public get String name`) referenced in JUX-LANG-V1 §7.3 — that form is removed.
+
+> **Observable properties (§P).** Every `{ get; set; }` property is also observable
+> and bindable — see `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md` for the `observer<T>`
+> type, the `.observers` member, `bind`/`bindBidirectional`/`unbind`, computed-property
+> dependency tracking, and the PascalCase naming convention (preferred, not enforced).
+> That addendum also **removes the `init` accessor** — accessor kinds are `get` and
+> `set` only. This section has been updated accordingly: read-only construction-time
+> properties are written `{ get; }`.
 
 ### M.7.1. Syntax
 
@@ -580,7 +628,7 @@ property-body     = '{' accessor-list '}'
 accessor-list     = accessor (accessor)*
 
 accessor          = visibility? accessor-kind accessor-body
-accessor-kind     = 'get' | 'set' | 'init'
+accessor-kind     = 'get' | 'set'                             -- 'init' accessor removed per §P
 accessor-body     = ';'                                       -- auto: synthesize body
                   | '->' expression ';'                       -- expression-bodied
                   | block                                      -- full body
@@ -596,7 +644,7 @@ A property may have:
 - A `-> expr` body — expression-bodied read-only computed property.
 - A `{ get-or-set blocks }` body — full custom accessors.
 
-Inside a setter or `init` accessor body, the parameter is implicitly named **`value`** (C# convention). It has the property's declared type.
+Inside a setter body, the parameter is implicitly named **`value`** (C# convention). It has the property's declared type.
 
 ### M.7.2. Auto-Properties
 
@@ -605,13 +653,13 @@ The compiler synthesizes a private backing field for auto-properties. The backin
 ```jux
 public class User {
     public String name { get; set; }                  // read-write
-    public String id { get; init; }                   // settable only during construction
+    public String id { get; }                         // read-only (settable only in constructor)
     public int age { get; }                           // read-only (settable only in constructor)
     public String email { get; private set; }         // public read, private write
     public int score { get; protected set; }          // public read, protected write
 
     public User(String id, String name) {
-        this.id = id;            // OK: init setter accepts during construction
+        this.id = id;            // OK: read-only auto can be set in constructor
         this.name = name;
         this.age = 0;            // OK: read-only auto can be set in constructor
     }
@@ -620,16 +668,19 @@ public class User {
 var u = new User("u-42", "Alice");
 print(u.name);                   // "Alice"
 u.name = "Bob";                  // OK: public set
-u.id = "u-99";                   // ERROR: id has init-only setter
-u.age = 30;                      // ERROR: age is read-only
-u.email = "x@y";                 // ERROR: email's set is private (outside the class)
+u.id = "u-99";                   // ERROR: id is read-only (E0970)
+u.age = 30;                      // ERROR: age is read-only (E0970)
+u.email = "x@y";                 // ERROR: email's set is private (outside the class, E0972)
 ```
 
-**`init` accessor.** A property with `{ get; init; }` (or `{ get; private init; }`, etc.) is settable during:
-- The constructor of the declaring type (and its subclasses, when `protected init` or higher).
-- A `with(...)` expression on records (per §M.5).
+**Read-only auto-properties.** A property with `{ get; }` and no setter is settable
+only inside the constructors (and `init { ... }` blocks, §M.1) of the declaring type.
+After construction it is immutable. Records additionally allow `with(...)` copies
+(per §M.5), which construct a new instance rather than mutating the original.
 
-After construction, the property is immutable. This matches C# 9+ `init` semantics exactly.
+> There is **no `init` accessor** in Jux. The C# 9 `{ get; init; }` form was part of
+> an earlier draft of this section and was removed by
+> `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md` — `{ get; }` covers the use case.
 
 ### M.7.3. Property Initializer
 
@@ -638,7 +689,7 @@ A property may carry an `=`-initializer. The expression is evaluated once during
 ```jux
 public class Config {
     public String host { get; set; } = "localhost";
-    public int port { get; init; } = 8080;
+    public int port { get; } = 8080;
     public List<String> tags { get; } = new List<>();
 }
 ```
@@ -649,8 +700,8 @@ For computed read-only properties, `-> expression` is a shorthand for `{ get -> 
 
 ```jux
 public class Person {
-    public String firstName { get; init; }
-    public String lastName { get; init; }
+    public String firstName { get; }
+    public String lastName { get; }
 
     public String fullName -> firstName + " " + lastName;       // shorthand
     // Equivalent verbose form:
@@ -735,11 +786,11 @@ A `static` property accesses the class, not an instance. `Config.version`, not `
 
 ### M.7.10. Properties on Records and Interfaces
 
-Records auto-derive `{ get; init; }` for every component — that's what makes them immutable and constructor-settable. A user can additionally declare further computed properties:
+Records auto-derive read-only `{ get; }` properties for every component — that's what makes them immutable and constructor-settable (`with(...)` copies construct a new instance, per §M.5). A user can additionally declare further computed properties:
 
 ```jux
 public record Vector3(double x, double y, double z) {
-    // x, y, z are auto-properties with { get; init; } from the record components
+    // x, y, z are read-only { get; } auto-properties from the record components
     public double magnitudeSquared -> x*x + y*y + z*z;
     public double magnitude -> sqrt(magnitudeSquared);
 }
@@ -905,6 +956,12 @@ public class Outer {
     public class Pub { }            -- visible everywhere Outer is
 }
 ```
+
+### M.9.4. Phase-1 Implementation Notes
+
+Nested types are **lifted** to the top level under an owner-qualified internal name (`Config` inside `HttpServer` becomes `HttpServer__Config`, recursively for deeper nesting), which is also the emitted Rust struct name. Both access forms resolve onto the lifted type: qualified `HttpServer.Config` (type positions and `new` expressions) and bare `Config` from inside the owner or a sibling nested type (innermost enclosing scope wins). Two classes may freely nest same-named types.
+
+Deferred to a later phase: the M.9.3 visibility *combination* rule (Phase-1 uses each type's own declared visibility) and the cross-nesting private-member relaxation; qualified access to a nested **enum's variants** (`Outer.Status.Active`) — declare the enum top-level when variants are consumed outside the owner.
 
 ---
 

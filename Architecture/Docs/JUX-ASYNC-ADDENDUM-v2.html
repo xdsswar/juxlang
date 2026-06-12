@@ -37,6 +37,7 @@ try { var t = localStorage.getItem('jux-docs-theme');
     <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
     <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
     <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+    <a href="JUX-OBSERVABLE-PROPERTIES-ADDENDUM.html">Observable Properties</a>
     <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
   </div>
@@ -429,6 +430,15 @@ A spawned task that fails with no awaiter triggers the runtime's unhandled-rejec
 Because direct async calls require `await` (§18.1.2), unhandled rejections can only come from spawned tasks. This is a much smaller surface area than JavaScript, where any call that returns a Promise can be silently dropped.
 
 #### 18.1.9. Cancellation
+
+> **Phase-1 implementation note.** `withTimeout(ms, f)` and
+> `TimeoutException` are implemented (the timed-out work is dropped).
+> `task.cancel()` cancels by dropping the handle and CONSUMES it —
+> awaiting a cancelled task is a compile-time move error rather than
+> a `CancellationException` (the cooperative checkpoint runtime this
+> section describes lands later; the exception class exists for
+> forward compatibility). `for await` / `Stream<T>` remain deferred
+> per the follow-up note below.
 
 Calling `task.cancel()` requests cancellation. At the next `await` inside the task, a `CancellationException` is thrown:
 

@@ -37,6 +37,7 @@ try { var t = localStorage.getItem('jux-docs-theme');
     <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
     <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
     <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+    <a href="JUX-OBSERVABLE-PROPERTIES-ADDENDUM.html">Observable Properties</a>
     <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
   </div>
@@ -342,11 +343,11 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0200`  | Unexpected token                                     | Generic parse error            |
 | `E0210`  | `super(...)` or `this(...)` not first statement      | Grammar §A.2.4                 |
 | `E0211`  | Constructor missing required `super(...)` call      | Grammar §A.2.4                 |
-| `E0212`  | Varargs (`T...`) parameter is not the last parameter *(reserved)* | Entry Points §E (varargs) |
+| `E0212`  | Varargs (`T...`) parameter is not the last parameter | Entry Points §E (varargs) |
 | `E0220`  | Sealed type with `permits` clause needed *(reserved)* | Grammar §A.2.5                 |
 | `E0240`  | `try` block without `catch` or `finally` *(reserved)* | Grammar §A.2.8                 |
 | `E0241`  | Label-targeted `break`/`continue` mismatched *(reserved)* | Grammar §A.2.8              |
-| `E0260`  | `if`-expression missing `else` branch *(reserved)*   | Grammar §A.2.9                 |
+| `E0260`  | `if`-expression missing `else` branch                | Grammar §A.2.9                 |
 | `E0261`  | `switch` expression must be exhaustive *(reserved; statement form is `E0440`)* | Type system §T.5 |
 | `E0270`  | Or-pattern alternatives bind incompatible names *(reserved)* | Grammar §A.3            |
 | `E0271`  | Local-variable destructuring requires irrefutable pattern *(reserved)* | Grammar §A.3  |
@@ -409,10 +410,17 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0443`  | Malformed explicit call-site type-argument list (`id<int>(5)`) | Generics (Gap 5)      |
 | `E0444`  | Bounded wildcard as a storage type over a user generic class (Phase-1 limitation) | Generics (Gap 4) |
 | `E0445`  | Const-generic form outside the Phase-1 core subset  | Type system §T.11.3 / Grammar §A.2.6 |
+| `E0455`  | `weak` modifier on a non-(plain-class) field type    | JUX-LANG-V1 §6.5 / Semantics §S.5.2 |
+| `E0456`  | `weak` field read without `.get()`, or a `weak` field with an initializer | JUX-LANG-V1 §6.5 / Semantics §S.4.5 |
+| `E0447`  | Or-pattern alternative introduces bindings (`case A(var x) \| B ->`) | Grammar §A.3 |
+| `E0448`  | Malformed named-argument list (unknown name, duplicate slot, positional after named) | Grammar §A.2.9 / Type system §T.3.2 |
+| `E0449`  | Default-value expression references another parameter (Phase-1 limitation; §S.1.3 full form deferred) | Semantics §S.1.3 |
+| `E0450`  | Ambiguous overload (Phase 1: overlapping constructor arity ranges) | Type system §T.3 |
 | `E0450`  | Ambiguous overload *(reserved)*                      | Type system §T.3.3            |
 | `E0451`  | No overload candidate produces required return type *(reserved)* | Type system §T.3.4 |
 | `E0452`  | No matching operator overload *(reserved)*          | Type system §T.3.5            |
 | `E0453`  | Generic type inference is ambiguous *(reserved)*     | Type system §T.4.2            |
+| `E0460`  | Non-void function can finish without returning a value (missing return; conservative, JLS-14.21-style reachability) | Semantics §S.4.6 |
 | `E0470`  | Annotation applied outside its `@Target` set *(reserved)* | Annotations §A.13        |
 | `E0471`  | Runtime annotation read requires reflection *(reserved)* | Annotations §A.13         |
 | `E0472`  | Missing required annotation parameter *(reserved)*   | Annotations §A.13              |
@@ -457,6 +465,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0701`  | `async` not available in current profile                     | Async §18.1.11                |
 | `E0702`  | Class object captured by a `Worker.spawn` closure (Phase-1 objects are `!Send`) | Async §18.2 |
 | `E0710`  | `throw` requires `Exception` or subtype                      | Exceptions §X.2.1              |
+| `E0711`  | Uncaught checked exception must be caught or declared in `throws` | Exceptions §X.1.3        |
 | `E0720`  | Unreachable `catch` clause                                   | Exceptions §X.3.4              |
 | `E0721`  | Multi-catch types must be unrelated                         | Exceptions §X.3.6              |
 | `E0730`  | `?` operator's enclosing function has incompatible return    | Exceptions §X.4.1              |
@@ -487,13 +496,19 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0931`  | `operator==` defined without `operator hash`                 | Operators §O.2.7               |
 | `E0935`  | Call to a `delete`d operator                                 | Operators §O.3.4               |
 | `E0940`  | Out-parameter not assigned on every path                    | Missing-defs §M.4.2            |
+| `E0942`  | `out` argument is not an assignable place                   | Missing-defs §M.4.2            |
+| `E0943`  | `out` argument / parameter disagreement                     | Missing-defs §M.4             |
+| `E0944`  | Misuse of the `out` parameter modifier                      | Missing-defs §M.4.1            |
 | `E0941`  | No matching operator definition for required capability     | Operators §O.5.1               |
 | `E0950`  | Orphan operator overload                                    | Runtime/ABI §R.3.3             |
 | `E0951`  | Duplicate operator overload across modules                  | Runtime/ABI §R.3.3             |
 | `E0952`  | Orphan free-function operator definition                    | Runtime/ABI §R.3.6             |
 | `E0961`  | Mutable static requires thread-safe wrapper                  | Missing-defs §M.12.3           |
-| `E0970`  | Write to a read-only or `init`-only property outside its settable window | Missing-defs §M.7.2 |
-| `E0972`  | Property accessor visibility violation (e.g. `private set` written from outside) | Missing-defs §M.7.2 / §M.7.7 |
+| `E0970`  | Write to a read-only or computed (get-only) property outside its settable window | Missing-defs §M.7.2 / Properties §P.1.5 |
+| `E0972`  | Property accessor visibility violation (setter more visible than getter; `private set` written from outside) | Missing-defs §M.7.2 / §M.7.7 / Properties §P.1.3 / §P.3.5 |
+| `E0973`  | Direct assignment to a bound property                       | Properties §P.4.2              |
+| `E0974`  | `bindBidirectional` called with mismatched property types   | Properties §P.4.3              |
+| `E0975`  | `observer<T>` lambda shape does not match any accepted form | Properties §P.2.2              |
 | `E0980`  | Method reference is ambiguous                               | Missing-defs §M.8.3            |
 | `E0991`  | Inner classes not supported                                 | Missing-defs §M.9.2            |
 | `E0992`  | Anonymous classes not supported                             | Missing-defs §M.9.2            |
@@ -506,10 +521,16 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `W0001`  | Doc comment in non-attaching position                       | Grammar §A.1.2                 |
 | `W0210`  | Module declares no exported symbols                         | Build system §B.3.4            |
 | `W0301`  | Equality chained with reference identity                    | Grammar §A.4                   |
+| `W0457`  | Un-annotated reference cycle (strong field re-references owning class) will leak — mark a back-edge `weak` | JUX-LANG-V1 §6.5 |
 | `W0530`  | Cyclic class initialization within a module                 | Semantics §S.4.2               |
 | `W0720`  | `return` inside `finally` discards exception                | Exceptions §X.3.5              |
 | `W0820`  | `unsafe` block missing `// SAFETY:` justification           | Layout-ABI §L.5.5              |
 | `W0960`  | Mutable static in single-threaded profile                    | Missing-defs §M.12.3           |
+| `W0970`  | `observer<T>` attached but never detached and target has no `drop` | Properties §P.6         |
+| `W0971`  | Property declared `{ get; set; }` but never observed or bound | Properties §P.7.2            |
+| `W0972`  | Binding source property has `private set` — binding will never update | Properties §P.6      |
+| `W0973`  | Early `return` in a custom setter body may skip the observer fire | Properties §P.7.6        |
+| `W0974`  | Property name not PascalCase (naming convention — preferred, never an error) | Properties §P.1.1 / §P.7.1 |
 
 ### Notes (`N0xxx`)
 

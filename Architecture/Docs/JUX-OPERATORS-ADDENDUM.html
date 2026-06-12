@@ -37,6 +37,7 @@ try { var t = localStorage.getItem('jux-docs-theme');
     <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
     <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
     <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+    <a href="JUX-OBSERVABLE-PROPERTIES-ADDENDUM.html">Observable Properties</a>
     <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
   </div>
@@ -389,7 +390,7 @@ public List<T> sorted<T>(List<T> items) where T has operator<=>(T) -> int {
 ### O.5.3. Constraint Failures
 
 ```
-Error E0940: type `User` does not satisfy `T has operator<=>(T) -> int`
+Error E0941: type `User` does not satisfy `T has operator<=>(T) -> int`
   --> sorter.jux:14:5
    |
 14 |     var sorted = sorted(users);
