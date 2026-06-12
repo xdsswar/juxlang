@@ -359,6 +359,14 @@ pub(crate) struct TryLoopCtl {
     /// The flag local's name — `__jux_loopctl_<stack-depth>`, unique
     /// among the channels active at any given emission point.
     pub(crate) flag: String,
+    /// Channel storage shape. Sync tries use a plain `u8` local (the
+    /// `catch_unwind` closure captures it by reference). ASYNC tries
+    /// capture by `move`, so the flag is an `Arc<AtomicU8>` instead —
+    /// a `_body`-suffixed clone moves into the `async move` block
+    /// while the original stays out for the catch arms and the
+    /// post-`finally` dispatch. `Arc`, not `Rc<Cell>`: spawned futures
+    /// must stay `Send` (O9).
+    pub(crate) is_async: bool,
     /// `loop_emit_depth` recorded when the try began. A
     /// `break`/`continue` intercepts only when emitted at this SAME
     /// depth — one emitted inside a loop nested within the try binds
@@ -1015,9 +1023,11 @@ impl RustEmitter {
     ///   `{ __jux_loopctl_N = code; return …; }` — the early return
     ///   exits the closure; the carrier shape (`return None;` for a
     ///   return-threading closure, bare `return;` otherwise) keeps the
-    ///   closure's type.
+    ///   closure's type. ASYNC channels store through the
+    ///   `_…_body` `Arc<AtomicU8>` clone instead (O9).
     /// - **Catch region** (inside the `'__jux_catch` dispatch block):
-    ///   `{ __jux_loopctl_N = code; break '__jux_catch; }`.
+    ///   `{ __jux_loopctl_N = code; break '__jux_catch; }` (async:
+    ///   `.store(code, Relaxed)` on the original handle).
     ///
     /// `emit_try`'s post-`finally` dispatch re-issues the real escape
     /// — through THIS same method, so a try nested inside another
@@ -1048,13 +1058,32 @@ impl RustEmitter {
                     code,
                     ch.region == LoopCtlRegion::Body,
                     ch.closure_has_ret,
+                    ch.is_async,
                 )
             });
-        if let Some((flag, code, in_body, has_ret)) = intercept {
+        if let Some((flag, code, in_body, has_ret, is_async)) = intercept {
             self.w.push_str("{ ");
-            self.w.push_str(&flag);
-            self.w.push_str(" = ");
-            self.w.push_str(&code.to_string());
+            if is_async {
+                // Atomic store (O9). Body region writes through the
+                // `_`-prefixed clone moved into the `async move`
+                // block; catch arms emit outside it and use the
+                // original handle.
+                if in_body {
+                    self.w.push('_');
+                }
+                self.w.push_str(&flag);
+                if in_body {
+                    self.w.push_str("_body");
+                }
+                self.w.push_str(".store(");
+                self.w.push_str(&code.to_string());
+                self.w
+                    .push_str(", ::std::sync::atomic::Ordering::Relaxed)");
+            } else {
+                self.w.push_str(&flag);
+                self.w.push_str(" = ");
+                self.w.push_str(&code.to_string());
+            }
             if in_body {
                 if has_ret {
                     self.w.push_str("; return None; }");
@@ -1135,12 +1164,14 @@ impl RustEmitter {
         // the dispatch arm — §X.3.2: finally runs before the return).
         let has_ret = block_contains_fn_return(&t.body)
             || t.catches.iter().any(|c| block_contains_fn_return(&c.body));
-        // O2: loop-control channel — needed when the body or a catch
-        // arm `break`s/`continue`s a loop OUTSIDE this try (the
+        // O2/O9: loop-control channel — needed when the body or a
+        // catch arm `break`s/`continue`s a loop OUTSIDE this try (the
         // closure / dispatch block traps direct loop control). Sync
-        // shape only: the async block captures by `move`, so a flag
-        // local can't thread out of it (Phase-1 limitation).
-        let wants_loopctl = !is_async && try_needs_loopctl(t);
+        // tries use a `u8` flag captured by reference; async tries use
+        // an `Arc<AtomicU8>` whose clone moves into the `async move`
+        // block (O9 — the by-`move` capture is why a plain local can't
+        // thread out).
+        let wants_loopctl = try_needs_loopctl(t);
         // Wrap the whole thing in a block so locals introduced by
         // the lowering don't leak.
         self.w.push_str("{\n");
@@ -1152,11 +1183,31 @@ impl RustEmitter {
             // stack depth so nested try machineries never shadow.
             let flag = format!("__jux_loopctl_{}", self.try_loopctl.len());
             self.w.emit_indent();
-            self.w.push_str("let mut ");
-            self.w.push_str(&flag);
-            self.w.push_str(": u8 = 0;\n");
+            if is_async {
+                // Atomic channel (O9): the `_body` clone is what the
+                // `async move` block captures; the original stays
+                // available to the catch arms and the post-`finally`
+                // dispatch. Single-underscore prefix on the clone so
+                // a try whose only escapes sit in catch arms doesn't
+                // warn about the unused moved-in handle.
+                self.w.push_str("let ");
+                self.w.push_str(&flag);
+                self.w
+                    .push_str(" = ::std::sync::Arc::new(::std::sync::atomic::AtomicU8::new(0));\n");
+                self.w.emit_indent();
+                self.w.push_str("let _");
+                self.w.push_str(&flag);
+                self.w.push_str("_body = ");
+                self.w.push_str(&flag);
+                self.w.push_str(".clone();\n");
+            } else {
+                self.w.push_str("let mut ");
+                self.w.push_str(&flag);
+                self.w.push_str(": u8 = 0;\n");
+            }
             self.try_loopctl.push(TryLoopCtl {
                 flag,
+                is_async,
                 base_depth: self.loop_emit_depth,
                 closure_has_ret: has_ret,
                 region: LoopCtlRegion::Body,
@@ -1410,6 +1461,10 @@ impl RustEmitter {
                 self.w.emit_indent();
                 self.w.push_str("if ");
                 self.w.push_str(&ch.flag);
+                if ch.is_async {
+                    self.w
+                        .push_str(".load(::std::sync::atomic::Ordering::Relaxed)");
+                }
                 self.w.push_str(" == ");
                 self.w.push_str(&(i + 1).to_string());
                 self.w.push_str(" { ");

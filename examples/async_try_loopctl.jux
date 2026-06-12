@@ -1,0 +1,117 @@
+// O9: `break`/`continue` inside an ASYNC `try` body (and its catch
+// arms) — the `async move` block can't thread a plain flag local out,
+// so the loop-control channel is an Arc<AtomicU8> (O2's u8 channel is
+// the sync shape). Covers: continue + break from an async try body,
+// break from a catch arm, finally-before-loop-control ordering,
+// labeled break through two loops, and return/break coexistence.
+package asyncloopctl;
+
+async int tick(int n) {
+    return n;
+}
+
+// continue (i==2) and break (i==4) from inside an async try body;
+// finally must run BEFORE the loop control happens (Java ordering).
+async void bodyEscapes() {
+    for (var i : 1..6) {
+        try {
+            if (i == 2) {
+                continue;
+            }
+            if (i == 4) {
+                break;
+            }
+            print("work " + await tick(i));
+        } finally {
+            print("fin " + i);
+        }
+    }
+    print("bodyEscapes done");
+}
+
+// break issued from a CATCH arm of an async try.
+async void catchEscapes() {
+    for (var i : 1..5) {
+        try {
+            if (i == 3) {
+                throw new RuntimeException("stop");
+            }
+            print("ok " + await tick(i));
+        } catch (RuntimeException e) {
+            print("caught " + e.getMessage());
+            break;
+        }
+    }
+    print("catchEscapes done");
+}
+
+// labeled break from an async try nested two loops deep.
+async void labeledEscape() {
+    outer:
+    for (var i : 1..4) {
+        for (var j : 1..4) {
+            try {
+                if (i == 2 && j == 2) {
+                    break outer;
+                }
+                print("cell " + await tick(i * 10 + j));
+            } finally {
+                print("cleanup");
+            }
+        }
+    }
+    print("labeledEscape done");
+}
+
+// return and break coexisting in one async try body.
+async int firstOver(int limit) {
+    for (var i : 1..10) {
+        try {
+            var v = await tick(i * i);
+            if (v > limit) {
+                return v;
+            }
+            if (i == 4) {
+                break;
+            }
+        } finally {
+            print("probe " + i);
+        }
+    }
+    return -1;
+}
+
+// Send proof: the same async-try-with-break shape running on a pool
+// thread via spawn — the Arc<AtomicU8> channel must keep the future
+// Send (an Rc<Cell> channel would not compile here). State flows out
+// through the return channel, not outer-local mutation (the async
+// block captures outer locals by move — gap S18 tracks that).
+async int spawnedEscape() {
+    for (var i : 1..10) {
+        try {
+            var v = await tick(i);
+            if (v == 3) {
+                return 30 + v;
+            }
+            if (v > 5) {
+                break;
+            }
+        } finally {
+            // non-printing: pool-thread output order would be
+            // nondeterministic against main's prints
+        }
+    }
+    return -1;
+}
+
+public async void main() {
+    await bodyEscapes();
+    await catchEscapes();
+    await labeledEscape();
+    print(await firstOver(8));
+    print(await firstOver(100));
+    var t = spawn(async () -> {
+        return await spawnedEscape();
+    });
+    print(await t);
+}
