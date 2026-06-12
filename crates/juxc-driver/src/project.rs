@@ -241,6 +241,19 @@ fn resolve_member_deps(
     Ok((dep_sources, path_deps))
 }
 
+/// Resolve a STANDALONE package's `[dependencies]` (path + git, §B.2.2)
+/// into the (prepended source set, emitted-crate path-dep lines) pair
+/// that [`build_package`] takes. Same closure walk the workspace path
+/// uses, with no sibling members in scope. Public so the `jux` CLI's
+/// single-package project mode resolves dependencies exactly like
+/// workspace members do.
+pub fn resolve_package_deps(
+    m: &Manifest,
+    emit_root: &Path,
+) -> Result<(Vec<SourceFile>, Vec<PathDep>)> {
+    resolve_member_deps(m, &BTreeMap::new(), emit_root)
+}
+
 /// Recursively gather the transitive closure of a member's path
 /// dependencies: their public sources (for resolution) and their emitted
 /// library-crate path-dep lines (for linking).
@@ -253,15 +266,42 @@ fn collect_dep_closure(
     seen: &mut BTreeSet<String>,
 ) -> Result<()> {
     for dep in &m.dependencies {
-        // Only path deps are linkable in Phase 1; a registry/git dep is
-        // recorded but skipped here.
-        let Some(dep_path) = &dep.path else { continue };
+        // Source priority per §B.5.5: path > git > registry. Registry
+        // deps aren't resolvable yet (no registry in Phase 1) and are
+        // skipped; git deps fetch into the user cache and then behave
+        // exactly like path deps.
+        let dep_path: PathBuf = if let Some(p) = &dep.path {
+            p.clone()
+        } else if dep.git.is_some() {
+            match crate::git_deps::fetch_git_dep(dep, false) {
+                Ok(dir) => dir,
+                Err(e) => {
+                    // Fail the build with a clear, jux-level message —
+                    // a missing dependency is fatal, but the user
+                    // should see WHAT and WHY, not a cargo error later.
+                    return Err(e.context(format!(
+                        "resolving git dependency `{}` of `{}`",
+                        dep.name, m.package.name
+                    )));
+                }
+            }
+        } else {
+            continue;
+        };
         // Find the matching workspace member (by package name).
         let Some(dep_manifest) = members.get(&dep.name) else {
-            // A path dep that isn't a workspace member: load it directly.
-            let loaded = Manifest::load(dep_path);
+            // A path/git dep that isn't a workspace member: load it
+            // directly from its directory.
+            let loaded = Manifest::load(&dep_path);
             if let Some(loaded) = loaded {
                 add_dep(&loaded, members, emit_root, dep_sources, path_deps, seen)?;
+            } else {
+                anyhow::bail!(
+                    "dependency `{}` of `{}` has no readable jux.toml at {}",
+                    dep.name,
+                    m.package.name,
+                    dep_path.display(),
+                );
             }
             continue;
         };

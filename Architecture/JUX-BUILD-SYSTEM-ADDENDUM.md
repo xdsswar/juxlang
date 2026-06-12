@@ -250,7 +250,7 @@ Dependency-table options:
 
 - `version = "..."`: SemVer requirement (defaults to compatible-with-major if omitted on a registry dep).
 - `path = "..."`: Local filesystem path. Overrides version requirement.
-- `git = "...", branch = "..." | rev = "..." | tag = "..."`: Git source. Pinned by branch (moves), rev (immutable), or tag.
+- `git = "...", branch = "..." | rev = "..." | tag = "..."`: Git source. Pinned by branch (moves), rev (immutable), or tag. **Shorthand:** a bare string value that looks like a repository URL (`http://`, `https://`, `git@`, `ssh://` prefix) is the git form tracking the remote's default branch — `"com.x.lib" = "https://github.com/u/repo"` ≡ `"com.x.lib" = { git = "https://github.com/u/repo" }`.
 - `registry = "..."`: Non-default registry name (registered in `[[publish.registry]]`).
 - `features = ["a", "b"]`: Enable optional features.
 - `default-features = false`: Disable the dep's default features.
