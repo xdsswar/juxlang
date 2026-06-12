@@ -1,0 +1,11 @@
+<html>
+<body>
+Reports properties whose setter is declared <i>more</i> visible than their getter
+(<b>E0972</b>, §P.1.3).
+<p>
+A property that writes wider than it reads inverts the encapsulation contract —
+<code>public String Bad { private get; set; }</code> is a compile error. An
+accessor without its own modifier inherits the property's declared visibility.
+</p>
+</body>
+</html>

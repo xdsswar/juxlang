@@ -1,0 +1,5 @@
+<svg width="12" height="12" viewBox="0 0 12 12" xmlns="http://www.w3.org/2000/svg">
+  <!-- Observed property: a filled "watching" dot with a subtle ring. -->
+  <circle cx="6" cy="6" r="4.5" fill="none" stroke="#389FD6" stroke-width="1"/>
+  <circle cx="6" cy="6" r="2.5" fill="#389FD6"/>
+</svg>

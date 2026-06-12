@@ -1,0 +1,13 @@
+<html>
+<body>
+Reports <code>return</code> statements in a custom property setter body that may
+skip the observer fire (<b>W0973</b>, §P.7.6).
+<p>
+The compiler fires observers after the setter body completes; an early
+<code>return</code> exits the body before the new value is stored, so observers
+fire with whatever was set at that point — usually nothing. A
+<code>return</code> that is the last statement of the body changes nothing and
+is not reported, nor are returns inside lambdas nested in the body.
+</p>
+</body>
+</html>

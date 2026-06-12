@@ -1,0 +1,14 @@
+<html>
+<body>
+Reports direct assignments to a property bound one-way via <code>bind(…)</code>
+(<b>E0973</b>, §P.4.2).
+<p>
+A bound property follows its source; assigning to it directly fights the
+binding and throws <code>IllegalStateException</code> at runtime in debug
+builds. The check matches the whole receiver chain (<code>Label.Name</code>,
+not any <code>Name</code>); an <code>unbind()</code> on the same chain silences
+it, and bidirectional bindings never report — direct sets are legal there
+(§P.4.3).
+</p>
+</body>
+</html>

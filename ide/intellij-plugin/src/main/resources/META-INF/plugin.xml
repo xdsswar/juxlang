@@ -181,6 +181,10 @@
     <codeInsight.lineMarkerProvider
         language="Jux"
         implementationClass="dev.jux.intellij.resolve.JuxLineMarkerProvider"/>
+    <!-- sec. P.7.8: observed / bound / plain gutter trio on properties. -->
+    <codeInsight.lineMarkerProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.resolve.JuxPropertyLineMarkerProvider"/>
 
     <!-- Quick Documentation (Ctrl+Q) / nav-bar tooltip: render a declaration's
          signature + its doc comment from the PSI. Works without the LSP. -->

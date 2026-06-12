@@ -1,0 +1,12 @@
+<html>
+<body>
+Reports <code>bind(…)</code> / <code>bindBidirectional(…)</code> calls between
+properties of different types (<b>E0974</b>, §P.4.3).
+<p>
+Both properties must have the same declared type — <code>String</code> cannot
+follow <code>double</code>. The check reports only when both operands resolve
+to property declarations; anything unresolvable stays silent rather than
+risking a false error.
+</p>
+</body>
+</html>

@@ -1,0 +1,13 @@
+<html>
+<body>
+Reports <code>private</code> <code>{ get; set; }</code> properties that are never
+observed and never bound (<b>W0971</b>, §P.7.2).
+<p>
+A property nobody observes may as well be a plain field. Only private
+properties are checked: observer access follows getter visibility (§P.3.5), so
+a private property is observable only from its own file — making the check
+exact. Public and protected properties may legally be observed by code the IDE
+cannot see and are exempt, as are computed (get-only) properties.
+</p>
+</body>
+</html>

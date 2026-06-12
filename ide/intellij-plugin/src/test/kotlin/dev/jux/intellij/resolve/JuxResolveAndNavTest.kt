@@ -103,4 +103,71 @@ class JuxResolveAndNavTest : BasePlatformTestCase() {
             gutters.any { it.tooltipText?.contains("Animal") == true },
         )
     }
+
+    // ---- §P.7.8 property gutter trio ----------------------------------------
+
+    fun testPropertyGutterTrioStatuses() {
+        // Watcher attaches to Model.Name and binds Model.Title cross-file —
+        // the slow pass aggregates every project file's usage scan.
+        myFixture.addFileToProject(
+            "watcher.jux",
+            """
+            package demo;
+            public class Watcher {
+                public String Local { get; set; } = "";
+                private final observer<String> obs = (old, now) -> { print(now); };
+                public Watcher(Model m) {
+                    m.Name.observers.attach(obs);
+                    Local.bind(m.Title);
+                }
+            }
+            """.trimIndent(),
+        )
+        myFixture.configureByText(
+            "model.jux",
+            """
+            package demo;
+            public class Model {
+                public String Name { get; set; } = "";
+                public String Title { get; set; } = "";
+                public String Untouched { get; set; } = "";
+            }
+            """.trimIndent(),
+        )
+        myFixture.doHighlighting()
+        val gutters = myFixture.findAllGutters().mapNotNull { it.tooltipText }
+
+        assertTrue(
+            "Name is observed (cross-file attach): $gutters",
+            gutters.any { it.contains("'Name' is observed") },
+        )
+        assertTrue(
+            "Title is a binding source → bound: $gutters",
+            gutters.any { it.contains("'Title' is bound") },
+        )
+        assertTrue(
+            "Untouched gets the plain marker: $gutters",
+            gutters.any { it.contains("'Untouched' is not observed or bound") },
+        )
+    }
+
+    fun testPropertyGutterBoundReceiver() {
+        myFixture.configureByText(
+            "form.jux",
+            """
+            package demo;
+            public class Form {
+                public String Label { get; set; } = "";
+                public String Source { get; set; } = "";
+                public void wire() {
+                    Label.bind(Source);
+                }
+            }
+            """.trimIndent(),
+        )
+        myFixture.doHighlighting()
+        val gutters = myFixture.findAllGutters().mapNotNull { it.tooltipText }
+        assertTrue("bind receiver is bound: $gutters", gutters.any { it.contains("'Label' is bound") })
+        assertTrue("bind argument is a source → bound: $gutters", gutters.any { it.contains("'Source' is bound") })
+    }
 }
