@@ -1253,8 +1253,19 @@ impl RustEmitter {
             }
         }
         self.w.push_str("| ");
+        // Take-and-clear the void-target marker (§TS.3): an expression
+        // body under a `() -> void` slot discards its value.
+        let void_target = std::mem::take(&mut self.lambda_void_target);
         match &l.body {
-            juxc_ast::LambdaBody::Expr(e) => self.emit_expr(e),
+            juxc_ast::LambdaBody::Expr(e) => {
+                if void_target {
+                    self.w.push_str("{ ");
+                    self.emit_expr(e);
+                    self.w.push_str("; }");
+                } else {
+                    self.emit_expr(e);
+                }
+            }
             juxc_ast::LambdaBody::Block(b) => {
                 // Mark the body as lambda territory (S9): a `try`
                 // with returns in here can't type its return channel

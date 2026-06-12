@@ -505,6 +505,17 @@ pub enum Code {
     /// non-async lambda fires this code — catching it here keeps the
     /// `.await outside async fn` failure from leaking out of `rustc`.
     E0700_AwaitRequiresAsyncContext,
+    /// E0703 — `for await` used outside an async context (§18.6.3). The
+    /// loop awaits the stream's `next()` per element, so it is only
+    /// permitted inside an `async` function/method/lambda — same rule
+    /// (and same fix) as a bare `await` (E0700).
+    E0703_ForAwaitRequiresAsyncContext,
+    /// E0704 — `for await` / `Stream<T>` iteration mismatch (§18.6.3).
+    /// Fires in both directions: a `for await` whose iterable isn't a
+    /// `Stream<T>` (streams are the only async-iterable type), and a
+    /// plain `for` over a `Stream<T>` (a stream has no synchronous
+    /// iteration protocol — use `for await`).
+    E0704_ForAwaitRequiresStream,
 
     // ---- Memory / Unsafe (E0500–E0599) ----
     /// E0506 — An `unsafe` operation used outside an `unsafe` context. Per
@@ -656,6 +667,8 @@ impl Code {
             Code::E0841_NonConstInConstContext   => "E0841",
             Code::E0842_ConstEvalPanic           => "E0842",
             Code::E0700_AwaitRequiresAsyncContext => "E0700",
+            Code::E0703_ForAwaitRequiresAsyncContext => "E0703",
+            Code::E0704_ForAwaitRequiresStream   => "E0704",
             Code::E0701_AsyncNotInProfile        => "E0701",
             Code::E0702_ObjectCapturedBySpawn    => "E0702",
             Code::E0710_ThrowRequiresException   => "E0710",

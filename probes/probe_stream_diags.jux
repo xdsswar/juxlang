@@ -1,0 +1,26 @@
+// E0703: for await outside async; E0704 both directions.
+package sdiag;
+
+void notAsync() {
+    for await (var x : Stream.of(1)) {
+        print(x);
+    }
+}
+
+async void wrongIterable() {
+    var xs = new ArrayList<int>();
+    xs.add(1);
+    for await (var x : xs) {
+        print(x);
+    }
+}
+
+async void plainForOverStream() {
+    for (var x : Stream.of(1)) {
+        print(x);
+    }
+}
+
+public async void main() {
+    await wrongIterable();
+}

@@ -148,6 +148,9 @@ impl Resolver {
         builtins.insert("Channel");
         // `AsyncMutex<T>` — await-friendly mutual exclusion (§18.3).
         builtins.insert("AsyncMutex");
+        // `Stream<T>` — async streams (§18.6); lowers to the emitted
+        // JuxStream helper, no Jux class.
+        builtins.insert("Stream");
         // `Task.all/race/delay` static helpers (§18.1.4).
         builtins.insert("Task");
         // `withTimeout(ms, f)` — §18.1.9 timeout combinator.

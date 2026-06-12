@@ -257,6 +257,11 @@ pub struct DoWhileStmt {
 ///   inside `body`.
 #[derive(Debug, Clone)]
 pub struct ForEachStmt {
+    /// True for the async form `for await (var x : stream)` (§18.6.3):
+    /// the iterator is a `Stream<T>` and each element is produced by an
+    /// awaited `next()` call. Only legal inside an async context
+    /// (E0703); the iterable must be a stream (E0704).
+    pub is_await: bool,
     /// Optional declared type of the loop variable. `None` for the
     /// inference-form `var i : …`.
     pub var_type: Option<TypeRef>,

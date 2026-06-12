@@ -519,7 +519,13 @@ fn stmt_contains_await(stmt: &Stmt) -> bool {
         Stmt::If(i) => if_contains_await(i),
         Stmt::While(w) => expr_contains_await(&w.condition) || block_contains_await(&w.body),
         Stmt::DoWhile(d) => block_contains_await(&d.body) || expr_contains_await(&d.condition),
-        Stmt::ForEach(f) => expr_contains_await(&f.iter) || block_contains_await(&f.body),
+        // `for await` (§18.6.3) awaits per element even when neither
+        // the iter expression nor the body contains a textual `await`
+        // — missing it here would classify an enclosing `try` as SYNC
+        // and emit `.await` inside a non-async `catch_unwind` closure.
+        Stmt::ForEach(f) => {
+            f.is_await || expr_contains_await(&f.iter) || block_contains_await(&f.body)
+        }
         Stmt::ForC(f) => {
             f.cond.as_ref().is_some_and(expr_contains_await) || block_contains_await(&f.body)
         }

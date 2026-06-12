@@ -614,6 +614,44 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     }
                 }
             }
+            // `Stream.<ctor>` statics (§18.6.4) — `Stream` is a builtin,
+            // not a class, so the class-static path above can't type it.
+            // The element type comes from an explicit type arg
+            // (`Stream.of<int>()`), else the first argument (`of`) or
+            // its array element (`from`); `generate` infers `Unknown`
+            // (the lambda's return isn't tracked — rustc pins it).
+            if let Expr::Path(qn) = field.object.as_ref() {
+                if qn.segments.len() == 1
+                    && qn.segments[0].text == "Stream"
+                    && !symbols.classes.contains_key("Stream")
+                    && matches!(method_name, "of" | "from" | "generate")
+                {
+                    let elem = if let Some(t) = c.explicit_generic_args.first() {
+                        ty_from_ref(t, env, symbols)
+                    } else {
+                        match method_name {
+                            "of" => c
+                                .args
+                                .first()
+                                .map(|a| infer_expr(a, env, symbols))
+                                .unwrap_or(Ty::Unknown),
+                            "from" => match c
+                                .args
+                                .first()
+                                .map(|a| infer_expr(a, env, symbols))
+                            {
+                                Some(Ty::Array { element, .. }) => *element,
+                                _ => Ty::Unknown,
+                            },
+                            _ => Ty::Unknown,
+                        }
+                    };
+                    return Ty::User {
+                        name: "Stream".to_string(),
+                        generic_args: vec![elem],
+                    };
+                }
+            }
             // Weak-field promotion (§6.5): `weakField.get()` → `T?`. A weak
             // field's strong view is reached only through `.get()`, which may
             // fail because the target may have been dropped — hence the
@@ -647,6 +685,25 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     return Ty::User {
                         name: "__AsyncMutexGuard".to_string(),
                         generic_args: generic_args.clone(),
+                    };
+                }
+                // Stream<T> (§18.6) — `next()` yields `T?` (null =
+                // exhausted); combinators return streams (`mapAsync`
+                // widens the element to Unknown — the lambda's return
+                // isn't tracked; rustc pins it).
+                if name.rsplit('.').next() == Some("Stream")
+                    && !symbols.classes.contains_key("Stream")
+                {
+                    return match method_name {
+                        "next" => Ty::nullable(
+                            generic_args.first().cloned().unwrap_or(Ty::Unknown),
+                        ),
+                        "mapAsync" => Ty::User {
+                            name: "Stream".to_string(),
+                            generic_args: vec![Ty::Unknown],
+                        },
+                        "filterAsync" | "take" | "skip" | "chain" => receiver_ty.clone(),
+                        _ => Ty::Unknown,
                     };
                 }
             }

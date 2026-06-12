@@ -136,6 +136,16 @@ impl<'a> Parser<'a> {
             }));
         }
         if self.at_kw(Keyword::For) {
+            // `for await (var x : stream)` (§18.6.3) commits to the
+            // for-each form directly — a C-style `for await` is
+            // nonsense, and `is_c_style_for`'s scan assumes the `(`
+            // immediately follows `for`.
+            if matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Kw(Keyword::Await)),
+            ) {
+                return Some(Stmt::ForEach(self.parse_for_each_stmt()?));
+            }
             // Disambiguate the C-style `for (init; cond; update)` from the
             // enhanced `for (var x : iter)` by scanning the header for the
             // first top-level `;` (C-style) vs `:` (for-each).
@@ -319,6 +329,8 @@ impl<'a> Parser<'a> {
     pub(crate) fn parse_for_each_stmt(&mut self) -> Option<ForEachStmt> {
         let start = self.peek_span();
         self.advance(); // 'for'
+        // `for await (var x : stream)` — the async stream form (§18.6.3).
+        let is_await = self.eat_kw(Keyword::Await);
         self.expect(&TokenKind::LParen, "'(' after `for`");
 
         // `var IDENT :` (inferred) or `TYPE IDENT :` (explicit type).
@@ -335,7 +347,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::RParen, "')' after for-each header");
         let body = self.parse_block();
         let end = self.last_consumed_span();
-        Some(ForEachStmt { var_type, var_name, iter, body, span: start.join(end) })
+        Some(ForEachStmt { is_await, var_type, var_name, iter, body, span: start.join(end) })
     }
 
     /// Lookahead: is the `for (...)` header the C-style three-clause form

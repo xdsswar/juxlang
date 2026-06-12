@@ -45,7 +45,7 @@ gaps) into a single status view. Status reflects the `polymorphism` branch.
 | Value semantics — equality / ordering / hashing / formatting | ✅ | **operator** overrides (`==`/`hash`/`string`/ordering), C++-style, not interfaces; consistency enforced (E0930/E0931). See `JUX-CORE-LIB-ADDENDUM` §72 |
 | `Iterable<T>` / `Iterator<T>` (only nominal foundational interfaces) + `for-each` desugaring | ✅ | `JUX-CORE-LIB-ADDENDUM` §K.5; `user_iterable.jux` |
 | Exception hierarchy + Result lowering | ✅ | `JUX-EXCEPTIONS-ADDENDUM` |
-| Async streams (`Stream<T>`, `for await`) | ⛔ | roadmap §18.6 |
+| Async streams (`Stream<T>`, `for await`, of/from/generate, combinators) | ✅ | §18.6 specced + implemented; E0703/E0704; runner `async_streams` |
 | Networking / HTTP / JSON | ⏭ | needs metaprogramming (roadmap §3.4) |
 
 ## 4. Toolchain & IDE
@@ -57,14 +57,17 @@ gaps) into a single status view. Status reflects the `polymorphism` branch.
 | IntelliJ plugin: PSI parser, semantic highlighting, formatter, native inspections + quick-fixes, goto, completion, LSP4IJ fallback | ✅ |
 | IntelliJ refactoring (move/rename/extract/inline/change-signature), debugger, test-runner UI | ⏭ | `plugin-gap.md` |
 | Build system / package manager (`jux.toml`), multi-module workspaces, **path + git deps (GitHub URLs, `jux update`), `--target` cross-compile** | ✅ | §B.2.2; registry deps + `jux.lock` remain post-v0.1 |
-| Testing framework (`@Test`, `juxc test`) | ⛔ | roadmap §21 |
+| Testing framework (`@Test` + hooks, `jux.std.testing` assertions, `jux test [pattern] [--release]`, async tests) | ✅ | `JUX-TESTING-ADDENDUM.md`; runner `test_runner` |
 
 ---
 
 ## What blocks calling it v0.1
 
-The ⛔ rows: **async streams (§18.6)**, a **testing framework (§21)**, and the
-three low-frequency async edges (S16–S18). The O-series is fully closed and
+**Nothing structural remains.** Async streams (§18.6) and the testing
+framework (§21) — the last two feature blockers — landed 2026-06-12. The
+only ⛔ row left is the trio of low-frequency async edges (S16–S18 in
+`jux-gaps.md`), which are quality items rather than missing features.
+The O-series is fully closed and
 the borrow machinery survived a 15-probe adversarial wave with every finding
 fixed (2026-06-12) — the **inferred borrow checker is release-grade for the
 common feature set**: no known rustc borrow-error leaks, RefCell panics, or

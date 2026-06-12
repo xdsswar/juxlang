@@ -3924,6 +3924,12 @@ Doc comments use Markdown. The `juxc doc` command produces searchable HTML docum
 
 ### 12.6. Testing Framework
 
+> **Normative spec:** `JUX-TESTING-ADDENDUM.md` (§TS.1–§TS.9), which
+> supersedes this sketch where they differ — notably the annotations
+> are compiler builtins (no import), the module is `jux.std.testing`,
+> and `assertThrows` takes only the lambda in Phase 1 (Jux has no
+> class literals).
+
 `std.testing` provides a testing framework integrated with `juxc test`. Tests are ordinary functions annotated with `@Test`:
 
 ```java
