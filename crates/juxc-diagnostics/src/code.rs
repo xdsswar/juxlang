@@ -543,13 +543,12 @@ pub enum Code {
     E0935_DeletedOperator,
 
     // ---- Properties (E0970–E0979) — JUX-MISSING-DEFS §M.7 ----
-    /// E0970 — Write to a read-only or `init`-only property outside
-    /// the place where it's settable. Per §M.7.2, a `{ get; }`
-    /// property is settable only inside the declaring type's
-    /// constructor, and a `{ get; init; }` property only during
-    /// construction (`new`, or a record `with(...)`). An assignment
-    /// reaching this code is a post-construction write, which the
-    /// property forbids.
+    /// E0970 — Write to a read-only property outside the place where
+    /// it's settable. Per §M.7.2, a `{ get; }` property is settable
+    /// only inside the declaring type's constructor; any later
+    /// assignment fires this code. (The `init` accessor this code once
+    /// also covered was removed by the §P observable-properties
+    /// addendum — `get`/`set` are the only accessor kinds.)
     E0970_PropertyNotWritable,
     /// E0972 — Property accessor visibility violation. Per §M.7.2 /
     /// §M.7.7, writing through a property whose `set` / `init`
@@ -557,6 +556,19 @@ pub enum Code {
     /// (e.g. a `{ get; private set; }` property written from outside
     /// the declaring class) fires this code.
     E0972_PropertyAccessorVisibility,
+    /// E0975 — `observer<T>` lambda shape mismatch (§P.2.2). An
+    /// observer accepts exactly three lambda shapes: `()` (invalidation),
+    /// `(old, now)` (full), or `(prop, old, now)` (full with property
+    /// reference). Any other parameter count fires this code — at the
+    /// observer variable's initializer or at an
+    /// `.observers.attach(...)` argument.
+    E0975_ObserverShapeMismatch,
+    /// W0974 — Property name doesn't start with an uppercase letter
+    /// (§P.1.1). PascalCase property names are the PREFERRED visual
+    /// signal that a member is a property rather than a plain field —
+    /// a convention, never a requirement, so this is a suppressible
+    /// warning and compilation proceeds unchanged.
+    W0974_PropertyNamePascalCase,
 }
 
 impl Code {
@@ -648,6 +660,8 @@ impl Code {
             Code::E0935_DeletedOperator          => "E0935",
             Code::E0970_PropertyNotWritable      => "E0970",
             Code::E0972_PropertyAccessorVisibility => "E0972",
+            Code::E0975_ObserverShapeMismatch    => "E0975",
+            Code::W0974_PropertyNamePascalCase   => "W0974",
         }
     }
 }

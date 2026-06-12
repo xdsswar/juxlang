@@ -1,0 +1,15 @@
+// §P diagnostics: W0974 (PascalCase hint), E0975 (observer shape), init removal
+package probes;
+
+public class D {
+    public int count { get; set; } = 0;     // W0974: lowercase property name
+
+    private final observer<int> badObs = (a) -> {   // E0975: 1-param shape
+        print(a);
+    };
+}
+
+void main() {
+    var d = new D();
+    print("diag probe");
+}

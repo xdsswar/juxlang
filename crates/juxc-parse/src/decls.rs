@@ -1055,12 +1055,29 @@ impl<'a> Parser<'a> {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0200_UnexpectedToken,
-                            "expected `get`, `set`, or `init` inside property body",
+                            "expected `get` or `set` inside property body",
                         )
                         .with_span(here),
                     );
                     break;
                 };
+                // §P (observable-properties addendum): the `init`
+                // accessor was REMOVED — accessor kinds are `get` and
+                // `set` only. A construction-time read-only property is
+                // `{ get; }` (settable in the constructor, §M.7.2).
+                // Parse it as a plain `set` for recovery so downstream
+                // checks still see a coherent property.
+                if matches!(kind, Kind::Init) {
+                    let here = self.peek_span();
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "the `init` accessor was removed (§P) — use `{ get; }` for a \
+                             read-only property settable in the constructor, or `{ get; set; }`",
+                        )
+                        .with_span(here),
+                    );
+                }
                 self.advance(); // consume the accessor keyword/ident
                 let is_setter = matches!(kind, Kind::Set | Kind::Init);
                 // Accessor body: `;` (auto) | `=> expr ;` | block.
