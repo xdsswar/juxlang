@@ -200,14 +200,21 @@ found a fresh batch. The probe corpus was also folded into the permanent suite
 | H8 | Concrete subclass not upcast to its base in arg position (exception causes) → E0308; overloaded-ctor arg coercion used wrong overload | High | ✅ `IntoBase` coercion + arity-resolved ctor |
 | H9 | `operator()` on a wrapped class emitted `&mut self` → E0596 | Medium | ✅ `&self` on wrappers |
 
+### O-series — ALL FIXED (2026-06-12 wave)
+
+| ID | Issue | Severity | Status |
+|----|-------|----------|--------|
+| O1 | `try`/`catch`/`finally` inside a value-producing lambda left the closure with an implicit `()` tail → E0308 | High | ✅ `unreachable!()` after a tail try threading a valued return |
+| O2 | `break`/`continue` inside a `try` *body* in a loop → E0267 (the body is a `catch_unwind` closure); in a *catch arm* → E0695 (`'__jux_catch` labeled block) | Medium | ✅ `__jux_loopctl` flag threading, dispatch after `finally` (Java ordering); sync shape only — async `move` blocks still can't thread |
+| O3 | A generic exception class (`class E<T> extends Exception`) emits `T` out of scope + spurious `Clone`/`Debug` bounds | Medium | ✅ generic params propagated into `From`/`Deref`/`DerefMut` impl headers |
+| O4 | Compound index-assign `g[i] += v` doesn't hoist the value arg → E0499 (operator[]= receiver + value both borrow `g`) | Medium | ✅ value hoisted before the `__op_index_set` call |
+| O5 | Block-bodied lambda as a call argument `f(() -> { … })`; direct function-typed field call `obj.field(args)` → E0413 | Medium | ✅ fn-field dispatch `(field)(args)` + `Worker.spawn` tycheck gate + fn-field `Debug` stub + `Task::join` |
+| O6 | Reading a `String` field on a by-value `Exception` parameter moves it → E0507 (field-read clone not applied for built-in Exception fields) | Medium | ✅ clone applied to built-in Exception field reads |
+| O7 | Built-in `Exception(message, cause)` stub declares a non-null `cause` where the spec is `Exception?` | Low | ✅ stub signature corrected to `Exception?` |
+
 ### Open (lower-frequency; tracked for a follow-up wave)
 
 | ID | Issue | Severity | Notes |
 |----|-------|----------|-------|
-| O1 | `try`/`catch`/`finally` inside a value-producing lambda hard-codes the carrier return type to `Option<()>` → E0308 | High | try-lowering × closure return-type inference |
-| O2 | `break`/`continue` inside a `try` *body* in a loop → E0267 (the body is a `catch_unwind` closure) | Medium | thread loop-control out of the closure like `return` |
-| O3 | A generic exception class (`class E<T> extends Exception`) emits `T` out of scope + spurious `Clone`/`Debug` bounds | Medium | generic-class × exception-base lowering |
-| O4 | Compound index-assign `g[i] += v` doesn't hoist the value arg → E0499 (operator[]= receiver + value both borrow `g`) | Medium | hoist the value before the `__op_index_set` call |
-| O5 | Block-bodied lambda as a call argument `f(() -> { … })` fails to parse → E0200; direct function-typed field call `obj.field(args)` → E0413 | Medium | blocks `spawn(() -> { … })`; parser + field-call dispatch |
-| O6 | Reading a `String` field on a by-value `Exception` parameter moves it → E0507 (field-read clone not applied for built-in Exception fields) | Medium | newly exposed once H8 let the upcast through |
-| O7 | Built-in `Exception(message, cause)` stub declares a non-null `cause` where the spec is `Exception?` | Low | stdlib stub signature |
+| O8 | A raw Rust panic (e.g. integer divide-by-zero) carries a `&str` payload — `catch (Exception e)` / `catch (ArithmeticException e)` can't downcast it, so the panic propagates uncaught | Medium | Java maps `x / 0` to `ArithmeticException`; needs either a typed-panic division lowering or a builtin-payload rescue arm in the catch dispatch |
+| O9 | `break`/`continue` inside an **async** `try` body still → E0267 — the `async move` block captures the loop-control flag by value, so O2's threading can't reach it | Low | needs a `Cell`-in-`Rc` channel or carrier-enum return shape for the async closure |
