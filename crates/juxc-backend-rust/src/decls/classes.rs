@@ -173,6 +173,16 @@ impl RustEmitter {
         // without requiring Debug on the stored closure.
         let has_fn_field = class_decl.fields.iter().any(|f| {
             f.ty.as_ref().map(|t| t.fn_shape.is_some()).unwrap_or(false)
+                // §P.2: `observer<T>` fields lower to `Rc<dyn Fn(…)>` —
+                // same no-Debug shape as fn-typed fields.
+                || f.ty
+                    .as_ref()
+                    .map(|t| {
+                        t.fn_shape.is_none()
+                            && t.name.segments.len() == 1
+                            && t.name.segments[0].text == "observer"
+                    })
+                    .unwrap_or(false)
         });
         if has_fn_field {
             self.w.line("#[derive(Clone)]");
@@ -230,8 +240,25 @@ impl RustEmitter {
             self.emit_visibility(field.visibility);
             self.w.push_str(&field.name.text);
             self.w.push_str(": ");
+            let fty = juxc_tycheck::resolved_field_type(field);
+            // §P.2: `observer<T>` fields — arity-aware lowering, same
+            // rule as the wrapper path (shape read from the lambda
+            // initializer; recorded for `.observers.attach` routing).
+            if fty.name.segments.len() == 1
+                && fty.name.segments[0].text == "observer"
+                && fty.fn_shape.is_none()
+            {
+                let arity = match &field.default {
+                    Some(juxc_ast::Expr::Lambda(l)) => l.params.len(),
+                    _ => 2,
+                };
+                self.observer_shapes.insert(field.name.text.clone(), arity);
+                self.emit_observer_var_type(&fty, arity);
+                self.w.push_str(",\n");
+                continue;
+            }
             // Field-position type mapping (String → owned `String`).
-            self.emit_field_type_as_rust(&juxc_tycheck::resolved_field_type(field));
+            self.emit_field_type_as_rust(&fty);
             self.w.push_str(",\n");
         }
         self.w.indent_dec();
@@ -643,7 +670,24 @@ impl RustEmitter {
         // ---- C_Inner: the instance fields ----
         // Debug joins Clone so the newtype's derived Debug resolves
         // (`Rc<RefCell<C_Inner>>: Debug` requires `C_Inner: Debug`).
-        self.w.line("#[derive(Clone, Debug)]");
+        // EXCEPT when a field is function-typed or an `observer<T>`
+        // (§P.2) — both lower to `Rc<dyn Fn(…)>`, which has no Debug;
+        // those classes get a manual name-printing impl after the
+        // struct instead.
+        let inner_has_fn_field = class_decl.fields.iter().any(|f| {
+            f.ty.as_ref()
+                .map(|t| {
+                    t.fn_shape.is_some()
+                        || (t.name.segments.len() == 1
+                            && t.name.segments[0].text == "observer")
+                })
+                .unwrap_or(false)
+        });
+        if inner_has_fn_field {
+            self.w.line("#[derive(Clone)]");
+        } else {
+            self.w.line("#[derive(Clone, Debug)]");
+        }
         self.w.emit_indent();
         // The inner struct is `pub` so the wrapper (and any
         // same-crate path) can name it; the user-facing visibility
@@ -700,6 +744,25 @@ impl RustEmitter {
             self.w.push_str(&field.name.text);
             self.w.push_str(": ");
             let fty = juxc_tycheck::resolved_field_type(field);
+            // §P.2: `observer<T>` fields. The Rust shape depends on the
+            // lambda's arity, read from the field initializer (0 =
+            // invalidation `Fn()`, 2 = full `Fn(T, T)`, 3 = full with
+            // property reference `Fn(String, T, T)`); the arity is
+            // recorded so `.observers.attach(...)` call sites route to
+            // the matching storage vec.
+            if fty.name.segments.len() == 1
+                && fty.name.segments[0].text == "observer"
+                && fty.fn_shape.is_none()
+            {
+                let arity = match &field.default {
+                    Some(juxc_ast::Expr::Lambda(l)) => l.params.len(),
+                    _ => 2,
+                };
+                self.observer_shapes.insert(field.name.text.clone(), arity);
+                self.emit_observer_var_type(&fty, arity);
+                self.w.push_str(",\n");
+                continue;
+            }
             if field.is_weak {
                 // `weak` field (§6.5): store a non-owning `Weak` at the
                 // target class's inner cell, so it does NOT contribute to the
@@ -717,8 +780,28 @@ impl RustEmitter {
             }
             self.w.push_str(",\n");
         }
+        // Observable-property storage (§P.3.3): two lazy observer vecs
+        // + a binding keep-alive per writable property. `None` until
+        // the first attach — a never-observed property costs nothing
+        // beyond the slots.
+        self.emit_observer_inner_fields(class_decl);
         self.w.indent_dec();
         self.w.line("}");
+        // Manual Debug stand-in for inner structs holding `Rc<dyn Fn>`
+        // (fn-typed / observer fields) — prints the class name so the
+        // newtype's derived Debug and the marker trait's `Debug`
+        // supertrait both resolve.
+        if inner_has_fn_field {
+            self.w.emit_indent();
+            self.w.push_str("impl");
+            self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+            self.w.push_str(" std::fmt::Debug for ");
+            self.w.push_str(&inner);
+            self.emit_generic_params_as_args(&class_decl.generic_params);
+            self.w.push_str(" { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, \"");
+            self.w.push_str(name);
+            self.w.push_str("\") } }\n");
+        }
         self.w.newline();
 
         // ---- the newtype handle: C<T>(Rc<RefCell<C_Inner<T>>>) ----
@@ -792,8 +875,26 @@ impl RustEmitter {
                 self.pending_decl_suffix = Some(format!("__ov{occ}"));
             }
             *occ += 1;
+            // §P setter firing: a synthesized property setter
+            // (`__set_<X>` for an observable property `X`) gets an
+            // old/new capture around its body and a post-body observer
+            // fire. `emit_method` consumes the pending marker.
+            if let Some(prop_name) = method.name.text.strip_prefix("__set_") {
+                if let Some(prop) = crate::decls::observers::observable_props(class_decl)
+                    .into_iter()
+                    .find(|p| p.name.text == prop_name)
+                {
+                    self.pending_setter_observer = Some((
+                        prop_name.to_string(),
+                        crate::decls::observers::property_ty_is_comparable(&prop.ty),
+                    ));
+                }
+            }
             self.emit_method(method);
         }
+        // §P observer plumbing: attach/detach/clear/size/fire helpers,
+        // one set per observable property.
+        self.emit_observer_helper_methods(class_decl);
         // **Inherited-method inlining (§CR.5.1).** Same pass the legacy
         // path runs: walk the `extends` chain and copy every concrete
         // (non-abstract, non-static) inherited method this class
@@ -2838,6 +2939,14 @@ impl RustEmitter {
         // Body sits at depth 2 — push one more level so
         // `emit_fn_body_at` sees the writer at the body depth.
         self.w.indent_inc();
+        // §P setter observer bracket: capture the property's value
+        // BEFORE the setter body runs. The matching post-body fire is
+        // emitted after the body below. An early `return` in a custom
+        // setter body skips the fire (W0973 semantics).
+        let setter_observer = self.pending_setter_observer.take();
+        if let Some((prop, _)) = &setter_observer {
+            self.w.line(&format!("let __jux_old = self.{prop}();"));
+        }
         if let Some(body) = body {
             // Static methods have no `self` — leave `this_alias`
             // unset so an accidental `this` in the body produces a
@@ -2896,6 +3005,21 @@ impl RustEmitter {
             self.current_return_type = saved;
             self.current_fn_params.clear();
             self.this_alias = None;
+            // §P setter observer fire — after the body, before the
+            // close. Comparable property types fire only on an actual
+            // value change; user-class types (no `PartialEq` on the
+            // wrapper) fire on every completed set.
+            if let Some((prop, comparable)) = &setter_observer {
+                self.w.line(&format!("let __jux_now = self.{prop}();"));
+                if *comparable {
+                    self.w.line(&format!(
+                        "if __jux_old != __jux_now {{ self.__obs_{prop}_fire(&__jux_old, &__jux_now); }}"
+                    ));
+                } else {
+                    self.w
+                        .line(&format!("self.__obs_{prop}_fire(&__jux_old, &__jux_now);"));
+                }
+            }
         } else {
             // Abstract method — no Jux body. Emit `unimplemented!()`
             // so the Rust compiler accepts the function and any

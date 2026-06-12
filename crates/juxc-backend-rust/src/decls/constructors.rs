@@ -908,6 +908,8 @@ impl RustEmitter {
                 }
                 self.w.push_str(",\n");
             }
+            // §P observer storage starts unallocated.
+            self.emit_observer_field_inits_lines(class_decl);
             self.w.indent_dec();
             self.w.line("};");
 
@@ -1044,6 +1046,8 @@ impl RustEmitter {
                 self.emit_field_storage_default(field);
             }
         }
+        // §P observer storage starts unallocated.
+        self.emit_observer_field_inits_inline(class_decl, &mut first);
         if first {
             // No instance fields — emit `C_Inner {}`.
             self.w.push_str("}");
@@ -1114,6 +1118,8 @@ impl RustEmitter {
                 self.emit_field_storage_default(field);
             }
         }
+        // §P observer storage starts unallocated.
+        self.emit_observer_field_inits_inline(class_decl, &mut first);
         if first {
             self.w.push_str("}");
         } else {

@@ -45,6 +45,21 @@ impl RustEmitter {
             self.emit_safe_field(f);
             return;
         }
+        // §P.3.2: `<prop>.observers.clear` / `<prop>.observers.size` —
+        // parenthesis-free command accessors on a property's observer
+        // namespace. Routed before the generic field logic (the chain
+        // would otherwise read like fields on the property's VALUE).
+        if matches!(f.field.text.as_str(), "clear" | "size") {
+            if let Expr::Field(obsf) = &*f.object {
+                if obsf.field.text == "observers" {
+                    if let Some((recv, prop, _)) = self.resolve_observable_prop(&obsf.object) {
+                        let op = f.field.text.clone();
+                        self.emit_observers_command(recv, &prop, &op);
+                        return;
+                    }
+                }
+            }
+        }
         // §K.11 primitive-type constants: `int.MAX_VALUE` → `isize::MAX`,
         // `double.NAN` → `f64::NAN`, … The receiver is the TYPE NAME
         // itself (primitive names are keywords, so no local can shadow).

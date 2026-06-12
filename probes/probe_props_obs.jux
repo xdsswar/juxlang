@@ -1,0 +1,65 @@
+// §P Wave A: observer<T> + .observers attach/detach/clear/size + firing
+package probes;
+
+public class Model {
+    public String Name { get; set; } = "";
+    public int Count { get; set; } = 0;
+}
+
+public class Watcher {
+    private final observer<String> nameObs = (old, now) -> {
+        print($"name: $old -> $now");
+    };
+
+    private final observer<int> countInv = () -> {
+        print("count invalidated");
+    };
+
+    public Watcher(Model m) {
+        m.Name.observers.attach(this.nameObs);
+        m.Count.observers.attach(this.countInv);
+    }
+}
+
+// Weak semantics: w2 dies at function end; its observer must stop firing.
+void attachTemp(Model m) {
+    var w2 = new TempWatcher(m);
+    m.Name = "temp";    // fires w2's observer
+}
+
+public class TempWatcher {
+    private final observer<String> obs = (old, now) -> {
+        print($"temp watcher: $now");
+    };
+
+    public TempWatcher(Model m) {
+        m.Name.observers.attach(this.obs);
+    }
+}
+
+void main() {
+    var m = new Model();
+    var w = new Watcher(m);
+
+    m.Name = "alice";        // fires nameObs: "" -> alice
+    m.Name = "alice";        // no change - no fire
+    m.Count = 1;             // fires countInv
+
+    print(m.Name.observers.size);   // 1
+
+    // inline lambda attach (strong)
+    m.Name.observers.attach((old, now) -> {
+        print($"inline: $now");
+    });
+    m.Name = "bob";          // fires nameObs + inline
+
+    m.Name.observers.clear;
+    m.Name = "carol";        // no observers - silent
+    print(m.Name.observers.size);   // 0
+
+    // weak: TempWatcher attaches, fires once, dies with the fn frame
+    attachTemp(m);              // prints "temp watcher: temp"
+    m.Name = "afterdrop";       // watcher dead - no fire
+    print(m.Name.observers.size);   // 0 (dead ref doesn't count)
+    print("done");
+}

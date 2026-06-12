@@ -2267,6 +2267,48 @@ impl RustEmitter {
                     }
                 }
             }
+            // **Bare-name property write** (`Loading = true;` inside a
+            // method — implicit `this`, §M.7/§P.9). Routes to the
+            // synthesized setter exactly like `this.Loading = …`.
+            // Guarded against shadowing: a parameter or local with the
+            // same name wins (it's an ordinary variable assignment).
+            if let Expr::Path(qn) = &a.target {
+                if qn.segments.len() == 1 {
+                    let name = qn.segments[0].text.clone();
+                    let shadowed = self.current_fn_params.contains(&name)
+                        || self.local_types.iter().any(|s| s.contains_key(&name))
+                        || self.nullable_locals.contains(&name);
+                    if !shadowed {
+                        let prop = self
+                            .enclosing_class
+                            .clone()
+                            .and_then(|c| self.lookup_class_ast_by_bare_or_fqn(&c))
+                            .and_then(|cd| {
+                                cd.properties.iter().find(|p| p.name.text == name).cloned()
+                            });
+                        if let Some(prop) = prop {
+                            if prop.setter.is_some() {
+                                if prop.is_static {
+                                    let setter =
+                                        juxc_ast::desugar_static_setter_name(&name);
+                                    self.w.push_str("Self::");
+                                    self.w.push_str(&setter);
+                                    self.w.push('(');
+                                    self.emit_property_setter_arg(&a.value);
+                                    self.w.push_str(");\n");
+                                } else {
+                                    let this_expr =
+                                        Expr::This(juxc_source::Span::DUMMY);
+                                    self.emit_property_setter_call(
+                                        &this_expr, &name, &a.value,
+                                    );
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
         }
         // String `+=` special-case: Rust's `String + String` and
         // `String += String` aren't implemented (only the

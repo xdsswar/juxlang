@@ -109,6 +109,20 @@ impl Writer {
         self.indent_level
     }
 
+    /// Current buffer length in bytes — pairs with
+    /// [`Writer::split_off_from`] to capture a sub-emission (emit into
+    /// the live buffer, then cut the new tail back out as a `String`).
+    pub(crate) fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Cut everything emitted since byte offset `mark` back out of the
+    /// buffer and return it. `mark` must come from [`Writer::len`]
+    /// taken before the captured emission started.
+    pub(crate) fn split_off_from(&mut self, mark: usize) -> String {
+        self.buf.split_off(mark)
+    }
+
     /// Replace the first occurrence of `needle` in the buffer with
     /// `replacement`. Used by the file-header patcher to fill in the
     /// real source path once a `SourceFile` is attached to the emitter
