@@ -3924,7 +3924,70 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Resolve `e` as a PROPERTY ACCESS (`recv.PropName` /
+    /// `Class.PropName`), returning the property's declared type and
+    /// its `Class.Prop` label for diagnostics. `None` when `e` isn't a
+    /// property access (then the bind call falls through to the
+    /// ordinary method checks).
+    fn property_access_ty(&mut self, e: &Expr) -> Option<(Ty, String)> {
+        let Expr::Field(f) = e else { return None };
+        let prop_name = f.field.text.as_str();
+        // Same class-resolution ladder as the E0970/E0972 write checks:
+        // a static `Class.Prop` path, else the receiver's inferred type.
+        let class_fqn: Option<String> = if let Expr::Path(qn) = f.object.as_ref() {
+            crate::infer::path_resolves_to_class(qn, &self.env, self.symbols)
+                .or_else(|| match infer_expr(&f.object, &self.env, self.symbols) {
+                    Ty::User { name, .. } => self.resolve_class_fqn(&name),
+                    _ => None,
+                })
+        } else {
+            match infer_expr(&f.object, &self.env, self.symbols) {
+                Ty::User { name, .. } => self.resolve_class_fqn(&name),
+                _ => None,
+            }
+        };
+        let class_fqn = class_fqn?;
+        let prop = self
+            .symbols
+            .classes
+            .get(&class_fqn)
+            .and_then(|c| c.properties.get(prop_name))
+            .cloned()?;
+        let ty = ty_from_ref(&prop.ty, &self.env, self.symbols);
+        let bare = class_fqn.rsplit('.').next().unwrap_or(&class_fqn);
+        Some((ty, format!("{bare}.{prop_name}")))
+    }
+
     fn check_call(&mut self, c: &CallExpr) {
+        // §P.4.2/§P.4.3 — `target.X.bind(source.Y)` /
+        // `bindBidirectional`: both ends must be properties of the
+        // SAME declared type (E0974). Checked here so the mismatch
+        // surfaces at the bind site instead of leaking a rustc error
+        // from the emitted binding closure.
+        if let Expr::Field(opf) = c.callee.as_ref() {
+            if matches!(opf.field.text.as_str(), "bind" | "bindBidirectional")
+                && c.args.len() == 1
+            {
+                if let Some((t_ty, t_label)) = self.property_access_ty(&opf.object) {
+                    if let Some((s_ty, s_label)) =
+                        self.property_access_ty(&c.args[0])
+                    {
+                        if t_ty != s_ty {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0974_BindTypeMismatch,
+                                    format!(
+                                        "cannot {} `{t_label}` ({t_ty}) to `{s_label}` ({s_ty}) — bound properties must have the same type (§P.4.3)",
+                                        opf.field.text,
+                                    ),
+                                )
+                                .with_span(c.span),
+                            );
+                        }
+                    }
+                }
+            }
+        }
         // §P.2.2 / §P.3.2 — `<prop>.observers.attach(lambda)` with an
         // inline lambda: the lambda must take 0, 2, or 3 parameters
         // (E0975). Other arg shapes (named observer variables) were
