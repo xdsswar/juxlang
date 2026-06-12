@@ -4152,10 +4152,18 @@ impl<'a> Checker<'a> {
                 // objects are `Rc`-backed (`!Send`) — a class-typed
                 // capture would leak rustc E0277. Checked on the bare
                 // shape before resolution; valid spawns fall through.
+                //
+                // `Worker` is an empty stub class — `spawn` has no method
+                // entry in the symbol table. Return early so the method-
+                // resolution paths below don't emit a spurious E0413.
                 if method_name == "spawn" {
                     if let Expr::Path(qn) = field.object.as_ref() {
                         if qn.segments.len() == 1 && qn.segments[0].text == "Worker" {
                             self.check_spawn_captures(&c.args);
+                            for arg in &c.args {
+                                self.check_expr(arg);
+                            }
+                            return;
                         }
                     }
                 }
@@ -4616,6 +4624,18 @@ impl<'a> Checker<'a> {
                             &[],
                             &[],
                         );
+                        return;
+                    }
+                }
+                // Before emitting E0413: check whether `method_name` is a
+                // **function-typed instance field** on the receiver's class.
+                // `obj.field(args)` where `field: () -> T` is a valid call
+                // through an `Rc<dyn Fn>` — not an unknown method.
+                if let Some((fsig, _)) = self.symbols.lookup_field(&name, method_name) {
+                    if fsig.ty.fn_shape.is_some() {
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
                         return;
                     }
                 }

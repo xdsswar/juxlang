@@ -1,0 +1,33 @@
+// O5b probe: function-typed field call + spawn block-lambda
+package probes;
+
+import jux.std.concurrent.Worker;
+
+public class TaskRunner {
+    // Function-typed field
+    public () -> void task;
+
+    public TaskRunner(() -> void task) {
+        this.task = task;
+    }
+
+    public void run() {
+        // O5b: calling a function-typed field: obj.field(args)
+        this.task();
+    }
+}
+
+void main() {
+    var runner = new TaskRunner(() -> {
+        print("task ran");
+    });
+    runner.run();
+
+    // spawn with block-bodied lambda
+    var w = Worker.spawn(() -> {
+        print("worker ran");
+        return 42;
+    });
+    var result = w.join();
+    print(result);
+}

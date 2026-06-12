@@ -1103,6 +1103,46 @@ impl RustEmitter {
             self.emit_call_with_hoisted_receiver(call, cf);
             return;
         }
+        // **Function-typed field call** — `obj.task()` where `task` is
+        // declared as a `() -> T` field (stored as `Rc<dyn Fn(…)>`).
+        // Methods live on the wrapper newtype, so `emit_call_callee=true`
+        // suppresses `.0.borrow()` to avoid the guard. But function-typed
+        // fields live INSIDE `C_Inner`, so the borrow IS required. Detect
+        // and handle this before the generic path sets the flag.
+        if let Expr::Field(f) = &*call.callee {
+            let class_bare = if matches!(*f.object, Expr::This(_)) {
+                self.enclosing_class.clone()
+            } else {
+                self.receiver_class_bare(&f.object)
+            };
+            // Use lookup_class_by_bare_or_fqn (bare-name aware) instead of
+            // symbols.lookup_field (FQN-only) so probes.TaskRunner resolves
+            // from the bare "TaskRunner" key stored in enclosing_class.
+            let is_fn_field = class_bare.as_deref().and_then(|bare| {
+                let class = self.lookup_class_by_bare_or_fqn(bare)?;
+                class.fields.get(f.field.text.as_str())
+            }).map(|fsig| fsig.ty.fn_shape.is_some()).unwrap_or(false);
+            if is_fn_field {
+                // Emit as `(field_read)(args)` — parens prevent Rust from
+                // interpreting this as a method call on the struct/wrapper.
+                // For plain structs: `(self.task)(args)`
+                // For wrapper classes: `(self.0.borrow().task.clone())(args)`
+                // Both are valid because Rc<dyn Fn(...)> implements Fn via Deref.
+                self.w.push('(');
+                self.emit_expr(&call.callee);  // emitting_call_callee=false → borrow fires
+                self.w.push(')');
+                self.w.push('(');
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                for (i, arg) in call.args.iter().enumerate() {
+                    if i > 0 { self.w.push_str(", "); }
+                    self.emit_expr(arg);
+                }
+                self.emitting_format_arg = prev;
+                self.w.push(')');
+                return;
+            }
+        }
         // Generic call: emit `callee(args, …)` literally. Post Fix 1
         // every Jux `String` value is already an owned Rust `String`,
         // so the previous per-arg enum-variant payload coercion is

@@ -2717,6 +2717,9 @@ impl RustEmitter {
         w.push_str("        }\n");
         w.push_str("    }\n");
         w.push_str("}\n");
+        // `join()` — block the calling thread until the worker completes.
+        // Uses futures::executor::block_on so no additional runtime dep needed.
+        w.push_str("impl<T> Task<T> { pub fn join(self) -> T { futures::executor::block_on(self) } }\n");
         w.push_str("pub struct Worker;\n");
         w.push_str("impl Worker {\n");
         w.push_str(

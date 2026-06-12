@@ -165,16 +165,20 @@ impl RustEmitter {
             self.current_type_params = prev_type_params;
             return;
         }
-        // Derive Clone unconditionally so the `T: Clone` bound used on
-        // generic impls (and the auto-`.clone()` injected on field
-        // reads) keeps working when the user nests classes — `Box<User>`
-        // needs `User: Clone`, which falls out for free here.
-        // Debug joins Clone so `format!("{:?}", obj)` works for any
-        // class — used by `throw` lowering (panic-payload format)
-        // and by user code that wants a quick diagnostic dump.
-        // Classes whose fields don't implement Debug will surface
-        // a clean rustc error pointing at the offending field.
-        self.w.line("#[derive(Clone, Debug)]");
+        // Derive Clone unconditionally. Debug is also derived, EXCEPT
+        // when a field is function-typed (`() -> T`): `dyn Fn()` doesn't
+        // implement Debug, so the derive would fail. Instead we emit a
+        // manual `impl Debug` stub after the struct that prints the class
+        // name — satisfying the marker-trait `Debug` supertrait bound
+        // without requiring Debug on the stored closure.
+        let has_fn_field = class_decl.fields.iter().any(|f| {
+            f.ty.as_ref().map(|t| t.fn_shape.is_some()).unwrap_or(false)
+        });
+        if has_fn_field {
+            self.w.line("#[derive(Clone)]");
+        } else {
+            self.w.line("#[derive(Clone, Debug)]");
+        }
         // pub struct Name<T, U> { …fields… }
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
@@ -232,6 +236,21 @@ impl RustEmitter {
         }
         self.w.indent_dec();
         self.w.line("}");
+        // Manual `impl Debug` for classes with function-typed fields —
+        // `dyn Fn()` doesn't implement Debug so `#[derive(Debug)]` would fail.
+        // The stub prints the class name so marker-trait `Debug` supertrait
+        // bounds are satisfied and `throw` lowering can still format the type.
+        if has_fn_field {
+            self.w.emit_indent();
+            self.w.push_str("impl");
+            self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+            self.w.push_str(" std::fmt::Debug for ");
+            self.w.push_str(&class_decl.name.text);
+            self.emit_generic_params_as_args(&class_decl.generic_params);
+            self.w.push_str(" { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, \"");
+            self.w.push_str(&class_decl.name.text);
+            self.w.push_str("\") } }\n");
+        }
         self.w.newline();
 
         // Auto-`From<Sub> for Parent` for **non-sealed open
