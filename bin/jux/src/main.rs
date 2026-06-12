@@ -67,6 +67,11 @@ enum CliCommand {
         /// (forwards `--release` to the inner `cargo build`).
         #[arg(long)]
         release: bool,
+        /// Cross-compile for the given Rust target triple (forwards
+        /// `--target` to the inner `cargo build`). The toolchain must
+        /// be installed: `rustup target add <triple>`.
+        #[arg(long)]
+        target: Option<String>,
     },
     /// Build and run the project (or a single file). (§B.15 — `jux run`.)
     Run {
@@ -100,7 +105,13 @@ fn main() -> Result<ExitCode> {
         CliCommand::Check { file } => {
             run_single_or_project(file, Action::Check, None, false)
         }
-        CliCommand::Build { file, emit_dir, release } => {
+        CliCommand::Build { file, emit_dir, release, target } => {
+            if let Some(triple) = target {
+                // The driver's cargo invocations (and artifact-path
+                // computations) read JUX_TARGET — see
+                // `juxc_driver::cross_target`.
+                std::env::set_var("JUX_TARGET", triple);
+            }
             run_single_or_project(file, Action::Build, emit_dir, release)
         }
         CliCommand::Run { file, emit_dir, release } => {

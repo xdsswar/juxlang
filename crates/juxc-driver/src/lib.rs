@@ -41,6 +41,21 @@ use juxc_source::SourceFile;
 /// caller-derived name (e.g. from the input file's stem).
 pub const DEFAULT_CRATE_NAME: &str = CRATE_NAME;
 
+/// The cross-compilation target triple, when one was requested.
+///
+/// Carried in the `JUX_TARGET` environment variable (set by the `jux`
+/// CLI from `--target` or `jux.toml [build] target`) rather than
+/// threaded through every build signature — both `cargo build` sites
+/// and both artifact-path computations consult it. Apps must build for
+/// any platform rustc supports; this is the passthrough that makes
+/// `jux build --target aarch64-unknown-linux-gnu` work.
+pub(crate) fn cross_target() -> Option<String> {
+    match std::env::var("JUX_TARGET") {
+        Ok(t) if !t.trim().is_empty() => Some(t),
+        _ => None,
+    }
+}
+
 pub mod git_deps;
 pub mod manifest;
 mod package_check;
@@ -539,6 +554,9 @@ pub fn build_with_manifest(
     if release {
         cmd.arg("--release");
     }
+    if let Some(triple) = cross_target() {
+        cmd.args(["--target", &triple]);
+    }
     let output = cmd
         .current_dir(crate_dir)
         .output()
@@ -567,10 +585,14 @@ pub fn build_with_manifest(
 
     // Compute the binary path. Cargo's default target dir is
     // `target/debug/{name}{exe-suffix}` (or `target/release/...`
-    // when `--release` was passed).
+    // when `--release` was passed); a cross-compile target adds its
+    // triple segment (`target/<triple>/<profile>/...`).
     let profile_dir = if release { "release" } else { "debug" };
-    let binary_path = crate_dir
-        .join("target")
+    let mut out_dir = crate_dir.join("target");
+    if let Some(triple) = cross_target() {
+        out_dir = out_dir.join(triple);
+    }
+    let binary_path = out_dir
         .join(profile_dir)
         .join(format!("{crate_name}{}", std::env::consts::EXE_SUFFIX));
 
@@ -689,6 +711,9 @@ pub fn build_emitted_crate(
     if release {
         cmd.arg("--release");
     }
+    if let Some(triple) = cross_target() {
+        cmd.args(["--target", &triple]);
+    }
     let output = cmd
         .current_dir(crate_dir)
         .output()
@@ -710,9 +735,14 @@ pub fn build_emitted_crate(
         );
     }
 
-    // Compute the produced-artifact path.
+    // Compute the produced-artifact path (cross targets add their
+    // triple segment: `target/<triple>/<profile>/...`).
     let profile_dir = if release { "release" } else { "debug" };
-    let out_dir = crate_dir.join("target").join(profile_dir);
+    let mut out_dir = crate_dir.join("target");
+    if let Some(triple) = cross_target() {
+        out_dir = out_dir.join(triple);
+    }
+    let out_dir = out_dir.join(profile_dir);
     let binary_path = match target {
         juxc_backend_rust::CrateTarget::Bin { name } => {
             out_dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
