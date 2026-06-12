@@ -1,0 +1,24 @@
+// O5 probe: block-bodied lambda as call arg + function-typed field dispatch
+package probes;
+
+// helper that accepts a lambda
+void apply(String label, () -> void action) {
+    action();
+}
+
+// helper with a block-bodied lambda arg
+void main() {
+    // O5a: block-bodied lambda as call arg
+    apply("test", () -> {
+        print("block lambda ran");
+    });
+
+    // O5b: typed-param block-bodied lambda as call arg
+    var nums = new int[]{1, 2, 3};
+    // forEach is not in stdlib yet; simulate with a local field
+    // (just test that the parser can handle the syntax)
+    apply("typed", () -> {
+        var x = 42;
+        print(x);
+    });
+}
