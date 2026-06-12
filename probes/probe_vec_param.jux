@@ -1,0 +1,26 @@
+// Does a Vec passed to a function share (Java reference semantics)
+// or copy? And does indexing a Vec of wrapper-class elements read
+// fields correctly?
+package vecparam;
+
+import rust.std.Vec;
+
+public class Item {
+    public int n;
+    public Item(int n) { this.n = n; }
+}
+
+void addOne(Vec<int> xs) {
+    xs.push(7);
+}
+
+public void main() {
+    var xs = new Vec<int>();
+    addOne(xs);
+    print("len after call: " + xs.len());
+
+    var items = new Vec<Item>();
+    items.push(new Item(3));
+    print("field through index: " + items[0].n);
+    print("done");
+}

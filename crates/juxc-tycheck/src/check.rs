@@ -333,7 +333,7 @@ pub(crate) struct Checker<'a> {
     /// **unresolved** generic argument (nothing at the construction site pinned
     /// it). Flushed at the end of each function/method/constructor body: a
     /// candidate whose name never appears in [`Self::used_names`] is genuinely
-    /// uninferable (an unused, type-ambiguous local) and gets E0431 — turning
+    /// uninferable (an unused, type-ambiguous local) and gets E0453 — turning
     /// what would be a `rustc` E0282 into a precise Jux error. A candidate that
     /// IS referenced is left alone, since any later use can pin the parameter
     /// (`new Vec<>(); v.push(1)` infers `Vec<int>` in the emitted Rust).
@@ -389,7 +389,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Emit `E0431` for every recorded `var x = new X<>()` whose `x` was never
+    /// Emit `E0453` for every recorded `var x = new X<>()` whose `x` was never
     /// referenced in the just-walked body (so nothing could pin its generic
     /// argument), then clear the per-body tracking sets. Called at the end of
     /// each function/method/constructor walk.
@@ -399,7 +399,7 @@ impl<'a> Checker<'a> {
             if !self.used_names.contains(&name) {
                 self.diagnostics.push(
                     Diagnostic::error(
-                        code::Code::E0431_GenericInferenceNoSolution,
+                        code::Code::E0453_GenericInferenceNoSolution,
                         format!(
                             "cannot infer the type argument of `{name}`: it is never used to \
                              pin it — write the type explicitly, e.g. `new Vec<String>()`",
@@ -1988,7 +1988,7 @@ impl<'a> Checker<'a> {
                 };
                 // Record a `var x = new X<>()` whose inferred type still has an
                 // unresolved generic argument: if `x` is never referenced later
-                // (checked at body end) nothing can pin it → E0431.
+                // (checked at body end) nothing can pin it → E0453.
                 if v.ty.is_none()
                     && matches!(
                         &v.init,
@@ -2552,7 +2552,7 @@ impl<'a> Checker<'a> {
             Expr::TryExpr(t) => {
                 self.check_stmt(&Stmt::Try((**t).clone()));
             }
-            // Record a bare-name reference so the E0431 "uninferable `new`"
+            // Record a bare-name reference so the E0453 "uninferable `new`"
             // flush can tell whether a `var x = new X<>()` is ever used.
             Expr::Path(qn) => {
                 if qn.segments.len() == 1 {
@@ -7068,38 +7068,38 @@ mod tests {
         assert!(!has(&d, code::Code::E0710_ThrowRequiresException), "got: {d:?}");
     }
 
-    // ---- uninferable empty-diamond `new` (E0431, §T.4.2) ----
+    // ---- uninferable empty-diamond `new` (E0453, §T.4.2) ----
 
     /// `var b = new Box<>()` (generic class, no args) that is never referenced
-    /// can't have its type argument pinned → E0431.
+    /// can't have its type argument pinned → E0453.
     #[test]
     fn unused_uninferable_new_errors() {
         let d = run(r#"public class Box<T> { public Box() {} } public void f(){ var b = new Box(); }"#);
-        assert!(has(&d, code::Code::E0431_GenericInferenceNoSolution), "got: {d:?}");
+        assert!(has(&d, code::Code::E0453_GenericInferenceNoSolution), "got: {d:?}");
     }
 
     /// The same construction, but `b` is later used as a receiver — a use could
-    /// pin the argument (as the emitted Rust infers), so no E0431.
+    /// pin the argument (as the emitted Rust infers), so no E0453.
     #[test]
     fn used_uninferable_new_ok() {
         let d = run(
             r#"public class Box<T> { public Box() {} public void touch(){} } public void f(){ var b = new Box(); b.touch(); }"#,
         );
-        assert!(!has(&d, code::Code::E0431_GenericInferenceNoSolution), "got: {d:?}");
+        assert!(!has(&d, code::Code::E0453_GenericInferenceNoSolution), "got: {d:?}");
     }
 
     /// An explicit type argument pins it — never flagged even if unused.
     #[test]
     fn explicit_type_arg_new_ok() {
         let d = run(r#"public class Box<T> { public Box() {} } public void f(){ var b = new Box<int>(); }"#);
-        assert!(!has(&d, code::Code::E0431_GenericInferenceNoSolution), "got: {d:?}");
+        assert!(!has(&d, code::Code::E0453_GenericInferenceNoSolution), "got: {d:?}");
     }
 
     /// A non-generic class has no argument to infer — never flagged.
     #[test]
     fn non_generic_new_not_flagged() {
         let d = run(r#"public class Plain { public Plain() {} } public void f(){ var p = new Plain(); }"#);
-        assert!(!has(&d, code::Code::E0431_GenericInferenceNoSolution), "got: {d:?}");
+        assert!(!has(&d, code::Code::E0453_GenericInferenceNoSolution), "got: {d:?}");
     }
 
     // ---- unreachable catch (E0720, §X.3.4) ----

@@ -1,31 +1,42 @@
 // Demonstrates instance initializer blocks (`init { }`, JUX-MISSING-DEFS §M.1).
 //
-// An `init` block runs at the end of every constructor — after the field
-// initializers and the constructor body, before the new object is handed back
-// (construction sequence step 5, §S.4.4). It's the right place for derived-field
-// setup and validation that must happen on every construction path.
+// Construction order (§S.4.4 / ERRATA E2 — Java's instance-initializer rule):
+//   super → field initializers → init blocks → constructor body.
+// An init block runs on EVERY construction path, sees field-initializer
+// values (never the body's writes), and cannot read constructor
+// parameters. Derived-from-parameter setup belongs in the body; `init`
+// is for one-time setup and validation shared by all constructors.
 
-public class Rect {
-    public int width;
-    public int height;
-    public int area;       // derived in the init block
-    public String label;
+public class Counter {
+    public int count = 100;
+    public String tag = "fresh";
+    public int constructions;
 
-    public Rect(int width, int height) {
-        this.width = width;
-        this.height = height;
-        this.label = "rect";
+    // Runs before either constructor body — `count` is still the
+    // field-initializer value here, even when the body overwrites it.
+    init {
+        print($"init sees count=${this.count} tag=${this.tag}");
+        this.constructions = 1;
     }
 
-    // Runs after the constructor body on every `new Rect(...)`.
     init {
-        this.area = this.width * this.height;
-        print($"init: ${this.label} ${this.width}x${this.height} -> area ${this.area}");
+        print("second init block, in textual order");
+    }
+
+    public Counter(int count) {
+        print("body(int)");
+        this.count = count;
+        this.tag = "explicit";
+    }
+
+    public Counter() {
+        print("body()");
     }
 }
 
 public void main() {
-    var a = new Rect(3, 4);
-    var b = new Rect(5, 6);
-    print($"areas: ${a.area} and ${b.area}");
+    var a = new Counter(7);
+    print($"a: count=${a.count} tag=${a.tag} inits=${a.constructions}");
+    var b = new Counter();
+    print($"b: count=${b.count} tag=${b.tag}");
 }

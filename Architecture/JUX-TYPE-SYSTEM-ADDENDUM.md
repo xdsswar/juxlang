@@ -249,7 +249,7 @@ For a call `f<T₁, T₂, ...>(a₁, a₂, ..., aₙ)` with no explicit type arg
    - Find all constraints involving `Tⱼ`.
    - Compute the join (least upper bound) of all "use site" types — types appearing on the LHS of `≤ Tⱼ`.
    - Verify the join is `≤` every "constraint site" type — types on the RHS of `Tⱼ ≤`.
-5. **Result.** If a unique solution exists, the call site is resolved. If multiple solutions exist, emit `E0430`. If no solution, emit `E0431` showing the conflicting constraints.
+5. **Result.** If a unique solution exists, the call site is resolved. If multiple solutions exist, emit `E0430`. If no solution, emit `E0453` showing the conflicting constraints.
 
 ### T.4.3. Worked Examples
 
@@ -265,7 +265,7 @@ public <T> T max(T a, T b) where T has operator<=>(T) -> int {
 }
 
 var d = max(3, 5);                // T = int; bound satisfied (int has operator<=>)
-var e = max(3, "hi");             // E0431: cannot unify int and String
+var e = max(3, "hi");             // E0453: cannot unify int and String
 ```
 
 ### T.4.4. Inference and Overload Resolution

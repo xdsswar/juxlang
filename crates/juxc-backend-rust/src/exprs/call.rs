@@ -1205,7 +1205,15 @@ impl RustEmitter {
         // applying the hoist there too would be harmless — the trigger
         // simply fires on the textual shape.
         if self.call_needs_borrow_hoist(call) {
-            self.emit_call_with_hoisted_args(call);
+            // When the RECEIVER is itself read through a wrapper
+            // `.0.borrow()` (field-path receiver), both the receiver
+            // guard AND the argument guards must drop before the call —
+            // hoist both. Otherwise args-only suffices.
+            if let Some(cf) = self.callee_receiver_reads_through_borrow(&call.callee) {
+                self.emit_call_with_hoisted_receiver(call, cf, true);
+            } else {
+                self.emit_call_with_hoisted_args(call);
+            }
             return;
         }
         // **Re-entrancy borrow-hoist.** If the receiver is read through a
@@ -1214,7 +1222,7 @@ impl RustEmitter {
         // or through a callee, mutates the same object) panics `already
         // borrowed` (§CR.4.1).
         if let Some(cf) = self.callee_receiver_reads_through_borrow(&call.callee) {
-            self.emit_call_with_hoisted_receiver(call, cf);
+            self.emit_call_with_hoisted_receiver(call, cf, false);
             return;
         }
         // **Function-typed field call** — `obj.task()` where `task` is
@@ -1427,6 +1435,18 @@ impl RustEmitter {
     /// receivers are exempt: their methods take `&self` and mutate
     /// through the interior `RefCell`, so no conflict exists.
     fn call_needs_borrow_hoist(&self, call: &CallExpr) -> bool {
+        // An argument that reads a wrapper FIELD (`n.bump(n.value)`,
+        // `f(n, n.value)`) emits a `.0.borrow()` whose `Ref` guard is a
+        // call-expression temporary, alive until the whole call
+        // statement ends — so any callee that `borrow_mut`s the same
+        // object panics `already borrowed` at runtime (§CR.4.1 /
+        // RISK-3). This hazard is independent of the receiver's shape
+        // (place, call result, free function): hoisting the args into
+        // statement-scoped temps drops the guards before the call and
+        // matches Java's args-before-call evaluation order.
+        if call.args.iter().any(|a| self.expr_reads_wrapper_field(a)) {
+            return true;
+        }
         let Expr::Field(f) = call.callee.as_ref() else { return false };
         // The receiver as a dotted place path: `x` / `this` /
         // `h.item` / `this.a.b` (S7 — field-path receivers conflict
@@ -1454,7 +1474,9 @@ impl RustEmitter {
                     _ => None,
                 });
             if let Some(c) = recv_class {
-                // A wrapper-class instance dispatches through `&self`.
+                // A wrapper-class instance dispatches through `&self` —
+                // no E0499 risk (the RefCell arg-guard hazard was
+                // already handled by the top-of-fn check).
                 if self.wrapper_classes.contains(&c) {
                     return false;
                 }
@@ -1479,6 +1501,77 @@ impl RustEmitter {
         call.args
             .iter()
             .any(|a| self.contains_mut_call_on(a, &root))
+    }
+
+    /// True when `e` contains a read that lowers to a wrapper-class
+    /// `.0.borrow()` — a plain field access (or `this.<field>` inside a
+    /// wrapper method) on a wrapper-class instance. Used by
+    /// [`Self::call_needs_borrow_hoist`]: such a read in ARGUMENT
+    /// position leaves its `Ref` guard alive across the call (Rust
+    /// call-expression temporary scope), so a method that `borrow_mut`s
+    /// the same object panics at runtime. Conservative: any wrapper
+    /// field read triggers the (harmless) hoist, aliasing or not.
+    fn expr_reads_wrapper_field(&self, e: &Expr) -> bool {
+        match e {
+            Expr::Field(f) => {
+                if let Some(c) = self.receiver_class_bare(&f.object) {
+                    if self.wrapper_classes.contains(&c) {
+                        return true;
+                    }
+                }
+                if matches!(&*f.object, Expr::This(_)) {
+                    if let Some(en) = &self.enclosing_class {
+                        if self.wrapper_classes.contains(en) {
+                            return true;
+                        }
+                    }
+                }
+                self.expr_reads_wrapper_field(&f.object)
+            }
+            Expr::Call(c) => {
+                // A nested call's own internal guards drop when it
+                // returns, but its receiver chain and arguments are
+                // call-site temporaries of THIS statement — recurse.
+                if let Expr::Field(cf) = &*c.callee {
+                    if self.expr_reads_wrapper_field(&cf.object) {
+                        return true;
+                    }
+                }
+                c.args.iter().any(|a| self.expr_reads_wrapper_field(a))
+            }
+            Expr::Binary(b) => {
+                self.expr_reads_wrapper_field(&b.left)
+                    || self.expr_reads_wrapper_field(&b.right)
+            }
+            Expr::Unary(u) => self.expr_reads_wrapper_field(&u.operand),
+            Expr::Cast(c) => self.expr_reads_wrapper_field(&c.value),
+            Expr::TypeTest(t) => self.expr_reads_wrapper_field(&t.value),
+            Expr::Index(i) => {
+                self.expr_reads_wrapper_field(&i.array)
+                    || self.expr_reads_wrapper_field(&i.index)
+            }
+            Expr::Elvis(el) => {
+                self.expr_reads_wrapper_field(&el.value)
+                    || self.expr_reads_wrapper_field(&el.fallback)
+            }
+            Expr::Ternary(t) => {
+                self.expr_reads_wrapper_field(&t.condition)
+                    || self.expr_reads_wrapper_field(&t.then_branch)
+                    || self.expr_reads_wrapper_field(&t.else_branch)
+            }
+            Expr::NotNullAssert(inner, _)
+            | Expr::Await(inner, _)
+            | Expr::ErrorProp(inner, _)
+            | Expr::Out(inner, _) => self.expr_reads_wrapper_field(inner),
+            Expr::InterpString(s) => s.segments.iter().any(|seg| {
+                matches!(seg, juxc_ast::InterpSegment::Expr(inner)
+                    if self.expr_reads_wrapper_field(inner))
+            }),
+            Expr::TupleLit(elems, _) => {
+                elems.iter().any(|el| self.expr_reads_wrapper_field(el))
+            }
+            _ => false,
+        }
     }
 
     /// When the callee is `recv.method(...)` and `recv` is itself read through
@@ -1810,12 +1903,19 @@ impl RustEmitter {
     /// `recv` (a wrapper-class instance field) clones out of the borrow when
     /// bound, so the guard drops at the `;` — releasing it BEFORE `m(...)` runs.
     /// Without this, a re-entrant `m` that mutates the same object panics with
-    /// `already borrowed` (§CR.4.1). Args stay inline: each is a temporary whose
-    /// own borrow ends before `m` is entered, and `__jux_recv` is already owned.
+    /// `already borrowed` (§CR.4.1).
+    ///
+    /// `hoist_args` additionally binds every argument to a
+    /// `__jux_arg<i>` temp between the receiver binding and the call —
+    /// needed when an argument reads a wrapper field (its `Ref` guard
+    /// is a call-expression temporary that would otherwise stay alive
+    /// across `m(...)`, RISK-3). Order matches Java: receiver, then
+    /// args left-to-right, then the call.
     fn emit_call_with_hoisted_receiver(
         &mut self,
         call: &CallExpr,
         callee: &juxc_ast::FieldExpr,
+        hoist_args: bool,
     ) {
         self.w.push_str("{ let __jux_recv = ");
         // Value position → the wrapper-field read appends `.clone()`, producing
@@ -1825,7 +1925,19 @@ impl RustEmitter {
         self.emit_expr(&callee.object);
         self.emitting_format_arg = prev_fmt;
         self.emitting_comparison_operand = prev_cmp;
-        self.w.push_str("; __jux_recv.");
+        self.w.push_str("; ");
+        if hoist_args {
+            let prev_args_fmt = std::mem::take(&mut self.emitting_format_arg);
+            for (i, arg) in call.args.iter().enumerate() {
+                self.w.push_str("let __jux_arg");
+                self.w.push_str(&i.to_string());
+                self.w.push_str(" = ");
+                self.emit_call_arg_value(call, i, arg);
+                self.w.push_str("; ");
+            }
+            self.emitting_format_arg = prev_args_fmt;
+        }
+        self.w.push_str("__jux_recv.");
         self.w.push_str(&callee.field.text);
         if let Some(sfx) = self.pending_method_suffix.take() {
             self.w.push_str(&sfx);
@@ -1853,7 +1965,12 @@ impl RustEmitter {
             if self.callee_param_is_ref(&call.callee, i) {
                 self.w.push('&');
             }
-            self.emit_call_arg_value(call, i, arg);
+            if hoist_args {
+                self.w.push_str("__jux_arg");
+                self.w.push_str(&i.to_string());
+            } else {
+                self.emit_call_arg_value(call, i, arg);
+            }
         }
         self.emitting_format_arg = prev;
         self.w.push(')');

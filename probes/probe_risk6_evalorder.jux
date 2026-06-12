@@ -1,0 +1,21 @@
+// RISK-6 (check-ups.md): named-argument evaluation order.
+// §S.1.4 promises CALL-SITE LEXICAL order; the §S.1.3 Phase-1 note
+// says the current compiler evaluates reordered named args in
+// PARAMETER-SLOT order. This probe documents the actual behavior.
+package risk6;
+
+int trace(String tag, int v) {
+    print("eval " + tag);
+    return v;
+}
+
+void f(int a, int b) {
+    print("f a=" + a + " b=" + b);
+}
+
+public void main() {
+    // Reordered named args with side effects: spec order would print
+    // "eval B" first (lexical); slot order prints "eval A" first.
+    f(b: trace("B", 2), a: trace("A", 1));
+    print("done");
+}

@@ -244,13 +244,17 @@ pub enum Code {
     /// for sealed-shape scrutinees so missed cases are caught at
     /// compile time, not via a runtime panic.
     E0440_NotExhaustive,
-    /// E0431 — Generic type inference has no solution. Per the type-system
+    /// E0453 — Generic type inference has no solution. Per the type-system
     /// addendum §T.4.2, a bare `new X<>()` whose type argument can't be
     /// inferred from the construction site AND is never pinned by later use
     /// (an unused, ambiguous local) fires this code — instead of leaking
     /// `rustc`'s `E0282 type annotations needed`. Write the argument
     /// explicitly (`new Vec<String>()`).
-    E0431_GenericInferenceNoSolution,
+    ///
+    /// (History: originally shipped as `E0431`, colliding with
+    /// `E0431_InvalidMethodModifiers`; renumbered to the catalog's
+    /// reserved §T.4.2 slot — see DIAGNOSTICS §D.4's collision note.)
+    E0453_GenericInferenceNoSolution,
     /// E0443 — A malformed **explicit call-site type-argument list** —
     /// the `<…>` in `id<int>(5)` / `obj.pick<String>(x)`. Fires when:
     /// the callee isn't generic (no type params to apply the args to),
@@ -654,7 +658,7 @@ impl Code {
             Code::E0442_UnrelatedCast            => "E0442",
             Code::E0441_TypeTestBinderMisplaced  => "E0441",
             Code::E0440_NotExhaustive            => "E0440",
-            Code::E0431_GenericInferenceNoSolution => "E0431",
+            Code::E0453_GenericInferenceNoSolution => "E0453",
             Code::E0443_ExplicitTypeArgs         => "E0443",
             Code::E0444_WildcardStorageUnsupported => "E0444",
             Code::E0212_VarargsNotLast           => "E0212",

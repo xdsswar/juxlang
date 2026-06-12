@@ -2984,11 +2984,21 @@ impl RustEmitter {
             }
             first_param = false;
         }
+        // Params the body mutates in place (`xs.push(…)` on a by-value
+        // collection param, reassignment) need Rust's `mut` binding —
+        // same inference the `let mut` choice uses for locals.
+        let mut param_muts = HashSet::new();
+        if let Some(b) = &method.body {
+            collect_mutated_names(b, &mut param_muts, &self.user_mut_methods);
+        }
         for (i, param) in method.params.iter().enumerate() {
             if !first_param {
                 self.w.push_str(", ");
             }
             first_param = false;
+            if !param.is_out && param_muts.contains(&param.name.text) {
+                self.w.push_str("mut ");
+            }
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
             if param.is_out {

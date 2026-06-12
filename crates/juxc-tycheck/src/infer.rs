@@ -551,9 +551,27 @@ fn infer_index(i: &IndexExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     match array_ty {
         Ty::Array { element, .. } => *element,
         // `operator[]` (§O.2.4): the overload's declared return type.
-        ref user @ Ty::User { .. } => {
-            lookup_user_operator_return_type(user, OperatorKind::Index, env, symbols)
-                .unwrap_or(Ty::Unknown)
+        ref user @ Ty::User { ref name, ref generic_args } => {
+            if let Some(ret) =
+                lookup_user_operator_return_type(user, OperatorKind::Index, env, symbols)
+            {
+                return ret;
+            }
+            // Builtin Rust-std container indexing (no user `operator[]`
+            // declared): `Vec<T>`/`VecDeque<T>` index to the element,
+            // `HashMap<K,V>`/`BTreeMap<K,V>` to the value. Without this
+            // the element type is `Unknown` and the backend can't see a
+            // wrapper-class element behind `xs[i]` (its field reads then
+            // skip the `.0.borrow()` rewrite — a rustc E0609 leak).
+            match name.rsplit('.').next().unwrap_or(name) {
+                "Vec" | "VecDeque" => {
+                    generic_args.first().cloned().unwrap_or(Ty::Unknown)
+                }
+                "HashMap" | "BTreeMap" => {
+                    generic_args.get(1).cloned().unwrap_or(Ty::Unknown)
+                }
+                _ => Ty::Unknown,
+            }
         }
         _ => Ty::Unknown,
     }

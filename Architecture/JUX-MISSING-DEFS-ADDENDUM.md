@@ -34,7 +34,7 @@ Every item in this addendum is a small, focused fill. None of them changes the l
 
 JUX-LANG-V1 §3.2 reserves `init` as a keyword but never specifies its role. This section gives it one.
 
-An **`init` block** is a body of code that runs once during construction of a class instance, after the constructor body, in textual order with other `init` blocks of the same class.
+An **`init` block** is a body of code that runs once during construction of a class instance, after field initializers and **before the constructor body** (per `ERRATA.md` E2 and `JUX-SEMANTICS-ADDENDUM.md` §S.4.4 — Java's instance-initializer order), in textual order with other `init` blocks of the same class.
 
 ### M.1.1. Syntax
 
@@ -50,15 +50,18 @@ public class Connection {
     private int port;
     private Socket socket;
 
+    private int attempts = 0;
+
+    init {
+        // Runs after field initializers, BEFORE the constructor body —
+        // it sees `attempts == 0`, not anything the body assigns.
+        log.info("Connection object under construction");
+    }
+
     public Connection(String host, int port) throws IOException {
         this.host = host;
         this.port = port;
-    }
-
-    init {
-        // Runs after the constructor body, before any caller sees this.
         this.socket = Socket.open(host, port);
-        log.info("Connected to " + host + ":" + port);
     }
 
     drop {
@@ -69,7 +72,7 @@ public class Connection {
 
 ### M.1.2. Semantics
 
-`init` blocks fit into the construction sequence (per `JUX-SEMANTICS-ADDENDUM.md` §S.4.4) as step 5 — after field initializers and the constructor body, before the reference is returned to the caller.
+`init` blocks fit into the construction sequence (per `JUX-SEMANTICS-ADDENDUM.md` §S.4.4) as step 4 — after the superclass construction and field initializers, **before the constructor body** (step 5). This is Java's instance-initializer order (ERRATA E2): an init block observes field-initializer values, never the constructor body's writes, and may not read constructor parameters (it is shared by every constructor).
 
 When a class has multiple constructors and multiple `init` blocks, every constructor runs every `init` block, in the textual order they appear in the class body. (Kotlin's rule.) This makes `init` the right place to put validation or one-time setup that must happen on every construction path:
 
@@ -1075,7 +1078,7 @@ This addendum closes every dangling reference and acknowledged inconsistency ide
 
 | Item                                         | Section | Resolution                                  |
 |----------------------------------------------|---------|---------------------------------------------|
-| `init` blocks                                 | §M.1    | Run once after constructor body              |
+| `init` blocks                                 | §M.1    | Run once before constructor body (ERRATA E2) |
 | `yield` keyword                               | §M.2    | Generator functions; `Iterator<T>` / `Stream<T>` return |
 | `@Derive`                                     | §M.3    | Built-in for fixed interface set             |
 | `out` parameters                              | §M.4    | Function writes through, caller binds via `out` |

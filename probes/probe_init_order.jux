@@ -1,0 +1,47 @@
+// §S.4.4 / ERRATA E2: construction order is
+//   super → field initializers → init blocks → constructor body.
+// Init blocks observe field-initializer values, NOT the body's writes.
+package initorder;
+
+public class Plain {
+    private int x = 1;
+
+    init {
+        print("plain init sees x=" + x);
+    }
+
+    init {
+        print("plain second init");
+    }
+
+    public Plain(int x) {
+        print("plain body");
+        this.x = x;
+    }
+
+    public int get() { return this.x; }
+}
+
+// Aliased+mutated → wrapper representation; same order must hold.
+public class Wrapped {
+    public int Value { get; set; } = 10;
+
+    init {
+        print("wrapped init sees Value=" + this.Value);
+    }
+
+    public Wrapped(int v) {
+        print("wrapped body");
+        this.Value = v;
+    }
+}
+
+void share(Wrapped w) { w.Value = w.Value + 1; }
+
+public void main() {
+    var p = new Plain(5);
+    print("after: " + p.get());
+    var w = new Wrapped(42);
+    share(w);
+    print("after: " + w.Value);
+}

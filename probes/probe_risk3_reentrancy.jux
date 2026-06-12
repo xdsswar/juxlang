@@ -1,0 +1,97 @@
+// RISK-3 (check-ups.md): statement-scoped borrow discipline under
+// re-entrancy. Every pattern here is a classic RefCell
+// "already borrowed" panic if any emitted borrow guard outlives its
+// statement. The wave passes only if NOTHING panics.
+package risk3;
+
+public class Node {
+    public int value;
+    public Node? next;
+
+    public Node(int v) {
+        this.value = v;
+        this.next = null;
+    }
+
+    // Re-entrant: a method on `this` that calls ANOTHER method on
+    // `this` while the receiver is borrowed for the outer call.
+    public int doubled() { return this.base() * 2; }
+    public int base() { return this.value; }
+
+    // Mutating method whose ARGUMENT expression reads the receiver.
+    public void bump(int by) { this.value = this.value + by; }
+
+    // Method that mutates a DIFFERENT object passed in — called with
+    // the receiver itself (self-application).
+    public void copyFrom(Node other) { this.value = other.value; }
+}
+
+public class Holder {
+    public Node inner;
+
+    public Holder(Node n) { this.inner = n; }
+
+    // Chain `h.inner.bump(...)` where the argument re-reads h.inner.
+    public Node get() { return this.inner; }
+}
+
+// An observer body that re-enters the observed object (sets the same
+// property) — §P.3.6 quiescence territory.
+public class Temp {
+    public int Degrees { get; set; } = 0;
+}
+
+void alias_mutate(Node a, Node b) {
+    // Two handles, one mutated through while the other reads.
+    a.bump(b.value);
+    b.copyFrom(a);
+}
+
+public void main() {
+    var n = new Node(10);
+    // 1. Re-entrant method call on this.
+    print("doubled: " + n.doubled());
+
+    // 2. Argument expression reads the receiver being mutated.
+    n.bump(n.value);
+    print("self-bump: " + n.value);
+
+    // 3. Self-application: receiver == argument.
+    n.copyFrom(n);
+    print("self-copy: " + n.value);
+
+    // 4. Aliased pair (same object twice).
+    alias_mutate(n, n);
+    print("alias pair: " + n.value);
+
+    // 5. Chained field receiver where the argument re-reads the chain.
+    var h = new Holder(n);
+    h.inner.bump(h.inner.value);
+    print("chain bump: " + h.inner.value);
+
+    // 6. Method call on a chain returned from a method.
+    h.get().bump(h.get().value);
+    print("getter chain: " + n.value);
+
+    // 7. Linked self-reference: node pointing at itself, mutate
+    //    through the link while reading the owner.
+    n.next = n;
+    n.next!!.bump(n.value);
+    print("self-link: " + n.value);
+
+    // 8. Observer re-enters the observed property (quiescence loop).
+    var t = new Temp();
+    t.Degrees.observers.attach((old, now) -> {
+        if (now > 100) {
+            t.Degrees = 100; // clamp — re-entrant set during fire
+        }
+    });
+    t.Degrees = 250;
+    print("clamped: " + t.Degrees);
+
+    // 9. Nested chains on the same aliased object in one statement.
+    var sum = n.value + n.doubled() + n.base();
+    print("nested reads: " + sum);
+
+    print("done");
+}
