@@ -263,7 +263,11 @@ impl RustEmitter {
                     // identity-preserving) instead of extracting `__parent`.
                     if !self.poly_base_classes.contains(parent_bare) {
                         self.w.emit_indent();
-                        self.w.push_str("impl From<");
+                        // Generic classes need `impl<T: Clone + Debug>` before
+                        // `From<Child<T>>` — otherwise `T` is out of scope (E0412).
+                        self.w.push_str("impl");
+                        self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+                        self.w.push_str(" From<");
                         self.w.push_str(&class_decl.name.text);
                         self.emit_generic_params_as_args(&class_decl.generic_params);
                         self.w.push_str("> for ");
@@ -295,9 +299,12 @@ impl RustEmitter {
                 // Continue past this block.
             } else {
             // impl Deref for Child { type Target = Parent; … }
+            // Use emit_generic_params_with_clone_bound so generic children like
+            // `Child<T>` get `impl<T: Clone + Debug>` — plain `impl<T>` fails
+            // to satisfy the struct's own `T: Clone + Debug` requirement (E0277).
             self.w.emit_indent();
             self.w.push_str("impl");
-            self.emit_generic_params(&class_decl.generic_params);
+            self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
             self.w.push_str(" std::ops::Deref for ");
             self.w.push_str(&class_decl.name.text);
             self.emit_generic_params_as_args(&class_decl.generic_params);
@@ -314,7 +321,7 @@ impl RustEmitter {
             // impl DerefMut for Child { … }
             self.w.emit_indent();
             self.w.push_str("impl");
-            self.emit_generic_params(&class_decl.generic_params);
+            self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
             self.w.push_str(" std::ops::DerefMut for ");
             self.w.push_str(&class_decl.name.text);
             self.emit_generic_params_as_args(&class_decl.generic_params);
