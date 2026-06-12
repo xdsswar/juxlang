@@ -1263,6 +1263,12 @@ impl RustEmitter {
     /// the misleading `Ty::User { name: "T", … }`.
     pub(crate) fn lookup_field_type(&self, f: &FieldExpr) -> Option<Ty> {
         let object_ty = self.expr_types.get(&expr_span_of(&f.object))?;
+        // Strip one layer of nullable so `e.message` where `e: Exception?` (after
+        // a null-check smart-cast) still resolves through the class chain.
+        let object_ty = match object_ty {
+            Ty::Nullable(inner) => inner.as_ref(),
+            other => other,
+        };
         let Ty::User { name, .. } = object_ty else {
             return None;
         };
@@ -1297,13 +1303,20 @@ impl RustEmitter {
     /// else falls through to the primitive / String / user-type
     /// branches.
     fn lookup_class_field_ty_in_chain(&self, class_name: &str, field_name: &str) -> Option<Ty> {
-        let mut cursor: Option<&str> = Some(class_name);
+        // Use owned String so the cursor isn't tied to a specific ClassSig borrow — the
+        // extends chain may cross package boundaries where the bare name stored in
+        // `extends` (e.g. "Throwable") differs from the FQN key in `symbols.classes`
+        // (e.g. "jux.std.exceptions.Throwable"). `lookup_class_by_bare_or_fqn` resolves
+        // both bare and FQN spellings, so the walk succeeds across stdlib hierarchy.
+        let mut cursor: Option<String> = Some(class_name.to_string());
         let mut depth = 0usize;
         while let Some(name) = cursor {
             if depth > 64 {
                 return None;
             }
-            let class = self.symbols.classes.get(name)?;
+            let Some(class) = self.lookup_class_by_bare_or_fqn(&name) else {
+                break;
+            };
             if let Some(field) = class.fields.get(field_name) {
                 let params: std::collections::HashSet<&str> = class
                     .generic_params
@@ -1315,7 +1328,7 @@ impl RustEmitter {
             cursor = class
                 .extends
                 .as_ref()
-                .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()));
+                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
             depth += 1;
         }
         None

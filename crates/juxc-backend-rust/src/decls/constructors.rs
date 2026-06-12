@@ -187,6 +187,48 @@ impl RustEmitter {
         self.w.push_str(bare);
     }
 
+    /// Emit the argument list for a `super(args)` call, resolving the parent
+    /// constructor's parameter nullable flags so non-null values passed to a
+    /// `T?` parent parameter are automatically wrapped in `Some(…)`.
+    ///
+    /// Both the simple-ctor path and the fallback `__self`-builder path share
+    /// this helper so the fix is in one place.
+    fn emit_super_call_args(
+        &mut self,
+        parent_ty: &juxc_ast::TypeRef,
+        args: &[juxc_ast::Expr],
+    ) {
+        let parent_bare = parent_ty
+            .name
+            .segments
+            .last()
+            .map(|s| s.text.clone())
+            .unwrap_or_default();
+        // Look up the overload whose arity matches; fall back to the first.
+        let param_nullables: Vec<bool> = self
+            .lookup_class_by_bare_or_fqn(&parent_bare)
+            .and_then(|c| {
+                c.constructors
+                    .iter()
+                    .find(|ctor| ctor.params.len() == args.len())
+                    .or_else(|| c.constructors.first())
+                    .map(|ctor| ctor.params.iter().map(|p| p.ty.nullable).collect())
+            })
+            .unwrap_or_default();
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            let nullable = param_nullables.get(i).copied().unwrap_or(false);
+            self.emit_arg_with_nullable_wrap(arg, nullable);
+            // Wrapper share-on-pass: a wrapped place into a non-nullable slot
+            // needs the Rc clone so it becomes a shared handle, not a move.
+            if !nullable && self.wrapper_value_needs_clone(arg) {
+                self.w.push_str(".clone()");
+            }
+        }
+    }
+
     /// Emit a user-declared constructor as `pub fn new(...) -> Self`.
     /// Caller (`emit_class_decl`) has the writer at level 0; the ctor
     /// signature lives at depth 1 (inside the class's `impl` block),
@@ -296,13 +338,47 @@ impl RustEmitter {
         }
 
         // Fallback: the body has stmts other than this.field-init (e.g.,
-        // a `print(…)` mixed in). Use the `__self` builder pattern,
+        // a conditional mixed in). Use the `__self` builder pattern,
         // which requires fields without explicit init to be
         // `Default`-initialized — fine for primitives, breaks for
         // unconstrained generic types. The user has to keep the ctor
         // body simple in that case.
         self.w.line("let mut __self = Self {");
         self.w.indent_inc();
+        // Emit the `__parent` slot first when the class has a non-sealed
+        // parent, exactly like `emit_simple_ctor_body` does. Without this,
+        // the `__parent` field is missing from the struct literal and rustc
+        // emits E0063 (e.g. an Exception subclass with a complex ctor body).
+        let parent_is_sealed = class_decl
+            .extends
+            .as_ref()
+            .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare).map(|c| c.is_sealed))
+            .unwrap_or(false);
+        if let Some(parent_ty) = &class_decl.extends {
+            if !parent_is_sealed {
+                let super_args = extract_super_args(ctor);
+                self.w.emit_indent();
+                self.w.push_str("__parent: ");
+                self.emit_parent_ctor_base_path(parent_ty);
+                let parent_bare = parent_ty
+                    .name
+                    .segments
+                    .last()
+                    .map(|s| s.text.clone())
+                    .unwrap_or_default();
+                let n_super = super_args.as_ref().map_or(0, |a| a.len());
+                let sfx = self.ctor_overload_suffix(&parent_bare, n_super);
+                self.w.push_str("::new");
+                self.w.push_str(&sfx);
+                self.w.push('(');
+                if let Some(args) = super_args {
+                    let parent_ty_clone = parent_ty.clone();
+                    self.emit_super_call_args(&parent_ty_clone, &args);
+                }
+                self.w.push_str("),\n");
+            }
+        }
         for field in &class_decl.fields {
             if field.is_static {
                 continue;
@@ -495,28 +571,13 @@ impl RustEmitter {
                 // (with a clear Rust error) when the parent's ctor needs
                 // arguments and the user forgot to write `super(...)`.
                 if let Some(args) = &simple.super_args {
-                    // Post Fix 1, every Jux `String` value (literal,
-                    // parameter, field, or call result) is already an
-                    // owned Rust `String`, so the per-arg `.to_string()`
-                    // coercion the parent's String-typed slot used to
-                    // need is now a no-op double-wrap. The args go in
-                    // verbatim; rustc verifies the types match.
-                    let _ = parent_ty;
                     // Clone to release the borrow on `simple` before the
-                    // `emit_expr` calls (which need `&mut self`).
+                    // emit calls (which need `&mut self`).
                     let args = args.clone();
-                    for (i, arg) in args.iter().enumerate() {
-                        if i > 0 {
-                            self.w.push_str(", ");
-                        }
-                        self.emit_expr(arg);
-                        // Wrapper-class share-on-pass (§CR.4.1): a wrapped
-                        // place forwarded into `super(...)` shares the
-                        // instance with the parent slot.
-                        if self.wrapper_value_needs_clone(arg) {
-                            self.w.push_str(".clone()");
-                        }
-                    }
+                    let parent_ty_clone = parent_ty.clone();
+                    // Use the helper so non-null args for a nullable
+                    // parent-ctor parameter are wrapped in `Some(…)`.
+                    self.emit_super_call_args(&parent_ty_clone, &args);
                 }
                 self.w.push_str("),\n");
             }

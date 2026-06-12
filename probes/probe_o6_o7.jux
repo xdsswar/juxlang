@@ -1,0 +1,40 @@
+package probes;
+
+// O7 probe: Exception(msg, null) — cause should be Exception? so null is valid
+// O6 probe: reading .message on a by-value Exception parameter must clone, not move
+
+import jux.std.exceptions.Exception;
+
+// O6: takes Exception by value, reads its String fields twice
+String extractMessage(Exception e) {
+    var first = e.message;
+    var second = e.getMessage();  // both reads must compile (no double-move)
+    return first + " / " + second;
+}
+
+// O6 with cause chain
+String extractCause(Exception e) {
+    var cause = e.getCause();
+    if (cause != null) {
+        return cause.message;  // reading on nullable-unwrapped Exception
+    }
+    return "(none)";
+}
+
+void main() {
+    // O7: null cause should be accepted
+    var e1 = new Exception("root error", null);
+    print(e1.message);          // "root error"
+    print(e1.getCause() == null ? "no cause" : "has cause");  // "no cause"
+
+    // O7: non-null cause
+    var inner = new Exception("inner");
+    var e2 = new Exception("outer", inner);
+    print(e2.message);          // "outer"
+    print(e2.getCause() == null ? "no cause" : "has cause");  // "has cause"
+
+    // O6: pass by value and read message twice
+    print(extractMessage(new Exception("hello")));   // "hello / hello"
+    print(extractCause(new Exception("no chain")));  // "(none)"
+    print(extractCause(new Exception("chained", new Exception("cause"))));  // "cause"
+}
