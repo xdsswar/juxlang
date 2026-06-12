@@ -2609,6 +2609,39 @@ impl RustEmitter {
         w.push_str("        crate::jux::std::concurrent::MemoryOrder::SeqCst => std::sync::atomic::Ordering::SeqCst,\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
+        // Checked integer division/remainder (ERRATA.md E1 Java-parity
+        // carve-out): integer `a / 0` and `a % 0` throw a catchable
+        // `ArithmeticException("/ by zero")` instead of raw-panicking
+        // with rustc's `&str` payload (which no `catch` arm could
+        // downcast). Overflow (`MIN / -1`) keeps the overflow-row
+        // policy: panic in debug, wrap in release — same as `+`/`-`/`*`.
+        // Free fns wrap the trait so call sites emit
+        // `crate::__jux_idiv(a, b)` with no trait import needed.
+        w.push_str("trait JuxIntDiv {\n");
+        w.push_str("    fn jux_div(self, rhs: Self) -> Self;\n");
+        w.push_str("    fn jux_rem(self, rhs: Self) -> Self;\n");
+        w.push_str("}\n");
+        w.push_str("macro_rules! jux_int_div_impl {\n");
+        w.push_str("    ($($t:ty),*) => {$(\n");
+        w.push_str("        impl JuxIntDiv for $t {\n");
+        w.push_str("            fn jux_div(self, rhs: Self) -> Self {\n");
+        w.push_str("                if rhs == 0 {\n");
+        w.push_str("                    std::panic::panic_any(crate::jux::std::exceptions::ArithmeticException::new(String::from(\"/ by zero\")));\n");
+        w.push_str("                }\n");
+        w.push_str("                if cfg!(debug_assertions) { self / rhs } else { self.wrapping_div(rhs) }\n");
+        w.push_str("            }\n");
+        w.push_str("            fn jux_rem(self, rhs: Self) -> Self {\n");
+        w.push_str("                if rhs == 0 {\n");
+        w.push_str("                    std::panic::panic_any(crate::jux::std::exceptions::ArithmeticException::new(String::from(\"/ by zero\")));\n");
+        w.push_str("                }\n");
+        w.push_str("                if cfg!(debug_assertions) { self % rhs } else { self.wrapping_rem(rhs) }\n");
+        w.push_str("            }\n");
+        w.push_str("        }\n");
+        w.push_str("    )*};\n");
+        w.push_str("}\n");
+        w.push_str("jux_int_div_impl!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);\n");
+        w.push_str("fn __jux_idiv<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_div(b) }\n");
+        w.push_str("fn __jux_irem<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_rem(b) }\n\n");
         // Async-runtime helper: `__jux_yield_now()` returns a one-
         // shot yielding Future. On first poll it registers a
         // wake-up and returns `Poll::Pending`; on second poll it
@@ -3700,6 +3733,66 @@ impl RustEmitter {
         self.w.newline();
     }
 
+    /// FQNs of every concrete, non-generic exception class — classes
+    /// whose `extends` chain reaches the exception root (`Exception`
+    /// itself included) — for the uncaught-exception reporter appended
+    /// by [`Self::finish`]. Filtered out:
+    ///
+    /// - **Generic classes** (`class E<T> extends Exception`): a
+    ///   `downcast_ref` arm needs a concrete type, and instantiations
+    ///   can't be enumerated here.
+    /// - **Wrapper-shape classes**: they can't be thrown in the first
+    ///   place (their `Rc` payload isn't `Send`, which `panic_any`
+    ///   requires) and their emitted struct has no direct
+    ///   `getMessage`.
+    ///
+    /// Sorted for deterministic emission.
+    fn throwable_class_fqns(&self) -> Vec<String> {
+        let root: Option<String> =
+            if self.symbols.classes.contains_key("jux.std.exceptions.Exception") {
+                Some("jux.std.exceptions.Exception".to_string())
+            } else {
+                self.symbols.find_fqn_by_bare("Exception")
+            };
+        let Some(root) = root else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = self
+            .symbols
+            .classes
+            .iter()
+            .filter(|(fqn, sig)| {
+                if !sig.generic_params.is_empty() {
+                    return false;
+                }
+                if self.wrapper_classes.contains(backend_fqn::fqn_bare(fqn)) {
+                    return false;
+                }
+                if **fqn == root {
+                    return true;
+                }
+                // Walk the extends chain up toward the root (same
+                // bounded walk as `catch_subclass_fqns`).
+                let mut cur = sig.extends_fqn.clone();
+                let mut depth = 0usize;
+                while let Some(p) = cur {
+                    if depth > 64 {
+                        return false;
+                    }
+                    depth += 1;
+                    if p == root {
+                        return true;
+                    }
+                    cur = self.symbols.classes.get(&p).and_then(|c| c.extends_fqn.clone());
+                }
+                false
+            })
+            .map(|(fqn, _)| fqn.clone())
+            .collect();
+        out.sort();
+        out
+    }
+
     /// Wrap up: build the Cargo.toml and bundle with the emitted source.
     ///
     /// **Async detection.** If the emitted text contains `async fn` (or
@@ -3714,6 +3807,10 @@ impl RustEmitter {
     /// context).
     fn finish(mut self) -> RustCrate {
         let split = self.split_files.take();
+        // Computed before `self.w` is moved out below (the borrow
+        // checker won't allow a method call on a partially-moved
+        // `self`).
+        let throwable_fqns = self.throwable_class_fqns();
         let mut source = self.w.into_string();
         // In split mode, `async fn` / `panic_any` / `catch_unwind` may live in
         // any per-unit body file, so the Cargo-feature and panic-hook decisions
@@ -3735,41 +3832,103 @@ impl RustEmitter {
         // language doesn't have Result<T, E> yet).
         //
         // Detection: a substring scan for `panic_any` or
-        // `catch_unwind` in the emitted source. When present, we
-        // prepend a `std::panic::set_hook(Box::new(|_| {}))` to
-        // every `fn main()` definition.
+        // `catch_unwind` in the emitted source. When present, the
+        // entry point gains a quiet panic hook plus an
+        // uncaught-exception reporter (see below).
         let uses_panics = source.contains("panic_any")
             || source.contains("catch_unwind")
             || split_text.contains("panic_any")
             || split_text.contains("catch_unwind");
         if uses_panics {
-            // Replace each `fn main() {\n` opener with a variant
-            // that begins by installing the silent hook. Splice
-            // covers both the sync `fn main()` and the workspace
-            // shim that delegates into the user's packaged main.
-            // Use the fully-qualified `::std::boxed::Box` so a
-            // user-declared `class Box` (some test programs do
-            // this) doesn't shadow std's Box at the
-            // `set_hook(Box::new(...))` call site.
-            // The hook stays quiet for thrown Jux exceptions (their
-            // payload is a user exception class — `catch` may absorb
-            // them, and the throw-time hook can't know). But a &str /
-            // String payload is a RUNTIME PANIC — assert failures
-            // (§S.7.2), arithmetic checks, index bounds — which no
-            // Jux `catch` clause can match, so it always reaches the
-            // top: print it, or the process dies with a bare 101.
-            let reporting_hook = concat!(
-                "fn main() {\n",
-                "    std::panic::set_hook(::std::boxed::Box::new(|__jux_info| {\n",
-                "        let __jux_p = __jux_info.payload();\n",
-                "        if let Some(__jux_s) = __jux_p.downcast_ref::<&str>() {\n",
-                "            eprintln!(\"panic: {__jux_s}\");\n",
-                "        } else if let Some(__jux_s) = __jux_p.downcast_ref::<String>() {\n",
-                "            eprintln!(\"panic: {__jux_s}\");\n",
-                "        }\n",
-                "    }));\n",
-            );
-            source = source.replace("fn main() {\n", reporting_hook);
+            // Two reporting layers, installed by renaming the real
+            // entry point to `__jux_user_main` and appending a fresh
+            // `fn main()` wrapper:
+            //
+            // - The HOOK prints &str / String payloads — RUNTIME
+            //   PANICS (assert failures §S.7.2, index bounds), which
+            //   no Jux `catch` clause can match, so printing at throw
+            //   time is printing at the top. It stays quiet for typed
+            //   payloads: the hook fires on every throw, caught or
+            //   not, and can't know whether a `catch` downstream will
+            //   absorb the exception. (Fully-qualified
+            //   `::std::boxed::Box` so a user-declared `class Box`
+            //   doesn't shadow std's at the `set_hook` call site.)
+            // - The `catch_unwind` around `__jux_user_main` reports
+            //   typed payloads that actually ESCAPED — a
+            //   thrown-but-uncaught Jux exception — with the
+            //   Java-style `Exception in thread "main" <fqn>:
+            //   <message>` line, one downcast arm per known
+            //   non-generic exception class (generic exception
+            //   instantiations can't be enumerated; they exit with
+            //   code 101 unreported). Exit code 101 matches the bare
+            //   panic exit so scripts see no difference.
+            //
+            // Rename only the COLUMN-0 entry point. A packaged user
+            // `main` (`pub mod arithex { pub fn main() … }`) is
+            // indented in single-file mode and lives in a split file
+            // in split mode, so anchoring on the preceding newline
+            // leaves it alone — the shim's `arithex::main()` call
+            // keeps resolving. Both the bare-shim (`fn main`) and the
+            // crate-root user-main (`pub fn main`) shapes qualify.
+            let mut renamed = false;
+            for (from, to) in [
+                ("\nfn main() {\n", "\nfn __jux_user_main() {\n"),
+                ("\npub fn main() {\n", "\npub fn __jux_user_main() {\n"),
+            ] {
+                if source.contains(from) {
+                    source = source.replace(from, to);
+                    renamed = true;
+                    break;
+                }
+            }
+            // When no recognized entry shape exists (e.g. a
+            // value-returning `fn main() -> isize` shim, or a library
+            // crate with no main at all), append nothing — a second
+            // `fn main` would not compile.
+            if renamed {
+                let mut wrapper = String::from(concat!(
+                    "\nfn main() {\n",
+                    "    std::panic::set_hook(::std::boxed::Box::new(|__jux_info| {\n",
+                    "        let __jux_p = __jux_info.payload();\n",
+                    "        if let Some(__jux_s) = __jux_p.downcast_ref::<&str>() {\n",
+                    "            eprintln!(\"panic: {__jux_s}\");\n",
+                    "        } else if let Some(__jux_s) = __jux_p.downcast_ref::<String>() {\n",
+                    "            eprintln!(\"panic: {__jux_s}\");\n",
+                    "        }\n",
+                    "    }));\n",
+                    "    if let Err(__jux_p) = std::panic::catch_unwind(::std::panic::AssertUnwindSafe(__jux_user_main)) {\n",
+                ));
+                for fqn in &throwable_fqns {
+                    let path = match backend_fqn::fqn_package(&fqn) {
+                        Some(pkg) => format!(
+                            "crate::{}::{}",
+                            pkg.split('.').collect::<Vec<_>>().join("::"),
+                            backend_fqn::fqn_bare(&fqn),
+                        ),
+                        // No-package classes sit at the crate root;
+                        // the wrapper also lives in `main.rs`, so the
+                        // bare name resolves in both single-file and
+                        // split modes (split keeps root-tier units in
+                        // main.rs).
+                        None => backend_fqn::fqn_bare(&fqn).to_string(),
+                    };
+                    wrapper.push_str(&format!(
+                        concat!(
+                            "        if let Some(__jux_e) = __jux_p.downcast_ref::<{path}>() {{\n",
+                            "            eprintln!(\"Exception in thread \\\"main\\\" {fqn}: {{}}\", __jux_e.getMessage());\n",
+                            "        }}\n",
+                        ),
+                        path = path,
+                        fqn = fqn,
+                    ));
+                }
+                wrapper.push_str(concat!(
+                    "        std::process::exit(101);\n",
+                    "    }\n",
+                    "}\n",
+                ));
+                source.push_str(&wrapper);
+            }
         }
         // `main.rs` first, then every per-unit body + `mod.rs` (split mode); the
         // hook splice above only touched `main.rs`, which is where `fn main`

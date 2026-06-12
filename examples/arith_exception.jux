@@ -1,0 +1,70 @@
+// Integer division/remainder by zero throws a catchable
+// ArithmeticException("/ by zero") — ERRATA.md E1 Java-parity
+// carve-out (gap O8). Covers: catch as ArithmeticException /
+// RuntimeException / Exception, `%`, compound `/=`, a literal
+// `1 / 0` (must not trip rustc's unconditional_panic lint on the
+// emitted Rust), finally ordering, and the untouched float and
+// integer-division behaviors.
+
+package arithex;
+
+int readZero() {
+    return 0;
+}
+
+void catchExact() {
+    try {
+        print(10 / readZero());
+    } catch (ArithmeticException e) {
+        print("exact: " + e.getMessage());
+    }
+}
+
+void catchAsRuntime() {
+    try {
+        print(10 % readZero());
+    } catch (RuntimeException e) {
+        print("runtime: " + e.getMessage());
+    }
+}
+
+void catchAsException() {
+    try {
+        int x = 10;
+        x /= readZero();
+        print(x);
+    } catch (Exception e) {
+        print("base: " + e.getMessage());
+    }
+}
+
+void literalDivide() {
+    try {
+        print(1 / 0);
+    } catch (ArithmeticException e) {
+        print("literal: " + e.getMessage());
+    }
+}
+
+void finallyOrdering() {
+    try {
+        print(7 % readZero());
+    } catch (ArithmeticException e) {
+        print("handled");
+    } finally {
+        print("cleanup");
+    }
+}
+
+public void main() {
+    catchExact();
+    catchAsRuntime();
+    catchAsException();
+    literalDivide();
+    finallyOrdering();
+    // Untouched behaviors: integer division still truncates, float
+    // division by zero still follows IEEE (inf), mixed promotion holds.
+    print(5 / 2);
+    print(1.0 / 0.0);
+    print(7 / 2.0);
+}

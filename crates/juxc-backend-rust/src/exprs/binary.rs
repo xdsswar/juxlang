@@ -464,6 +464,38 @@ impl RustEmitter {
             self.w.push_str(")).map_or(0, |__o| __o as isize)");
             return;
         }
+        // Integer `/` and `%` route through the checked prelude
+        // helpers (`__jux_idiv`/`__jux_irem`) so a zero divisor
+        // throws a catchable `ArithmeticException("/ by zero")`
+        // per ERRATA.md E1 instead of raw-panicking — and a literal
+        // `1 / 0` no longer trips rustc's deny-by-default
+        // `unconditional_panic` lint on the emitted code. Only fires
+        // when BOTH operands are known integers; float and
+        // unknown-typed (e.g. generic) operands keep the plain
+        // operator, where rustc remains the backstop. Const
+        // positions (`static`/`const` initializers) also keep the
+        // plain operator — the helper isn't `const fn`-callable,
+        // and a zero divisor there is a compile-time error, not a
+        // runtime throw.
+        if !self.emitting_const_context
+            && matches!(b.op, BinaryOp::Div | BinaryOp::Rem)
+            && self.operand_is_float(&b.left) == Some(false)
+            && self.operand_is_float(&b.right) == Some(false)
+        {
+            self.w.push_str(if matches!(b.op, BinaryOp::Div) {
+                "crate::__jux_idiv("
+            } else {
+                "crate::__jux_irem("
+            });
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            self.emit_expr(&b.left);
+            self.w.push_str(", ");
+            self.emit_expr(&b.right);
+            self.emitting_format_arg = prev;
+            self.w.push(')');
+            return;
+        }
         let prec = binary_prec(b.op);
         // Comparison ops (`==`, `!=`, `<`, `<=`, `>`, `>=`) borrow
         // both operands through `PartialEq`/`PartialOrd` — String /
@@ -529,7 +561,10 @@ impl RustEmitter {
     /// Numeric class of an operand for Java-style promotion: `Some(true)` for a
     /// floating type (`float`/`double`), `Some(false)` for any integer width,
     /// `None` for non-numeric operands or when the type isn't known.
-    fn operand_is_float(&self, e: &Expr) -> Option<bool> {
+    /// `pub(crate)` because the assignment lowering (`stmts.rs`) also
+    /// consults it to decide whether `/=`/`%=` take the checked-division
+    /// desugar (ERRATA.md E1).
+    pub(crate) fn operand_is_float(&self, e: &Expr) -> Option<bool> {
         use juxc_tycheck::Primitive as P;
         // A numeric literal's shape is authoritative and always available
         // (literals may not carry an `expr_types` entry).

@@ -1,0 +1,16 @@
+// An UNCAUGHT integer divide-by-zero: the thrown ArithmeticException
+// escapes main, the process exits non-zero, and the appended
+// uncaught-exception reporter prints the Java-style
+// `Exception in thread "main" <fqn>: <message>` line (gap O8).
+
+package arithuncaught;
+
+int readZero() {
+    return 0;
+}
+
+public void main() {
+    print("before");
+    print(10 / readZero());
+    print("after");
+}

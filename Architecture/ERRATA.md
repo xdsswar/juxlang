@@ -36,6 +36,18 @@ dereference of a value that the type system said couldn't be
 null. Panics are **NOT catchable from Jux source**. The user
 only knows about exceptions.
 
+**Java-parity carve-out (2026-06-12).** Integer division and
+remainder by zero are the one condition moved from the panic
+column to the exception column: `x / 0` and `x % 0` (integer
+operands) **throw `ArithmeticException("/ by zero")`**, exactly
+as in Java. Rationale: dividing by a runtime-zero is ordinary,
+recoverable program logic (parsing user input, ratios over
+empty collections), not a "this should never happen" invariant
+violation — every Java-family programmer expects to `catch` it.
+Overflow on division (`int.MIN / -1`) remains governed by the
+overflow row above (debug panic / release wrap), consistent
+with `+`/`-`/`*`.
+
 The catalogue of conditions that panic vs. throw:
 
 | Condition                              | Mechanism  | Catchable? |
@@ -43,7 +55,7 @@ The catalogue of conditions that panic vs. throw:
 | Arithmetic overflow (`jux-full` debug) | Panic      | No         |
 | Arithmetic overflow (`jux-full` release) | Wrap     | N/A        |
 | Array bounds violation                 | Panic      | No         |
-| Division by zero (integer)             | Panic      | No         |
+| Division by zero (integer)             | Exception (`ArithmeticException`) | Yes |
 | Null deref via `!!` (force-unwrap)     | Panic      | No         |
 | `T?` null deref via the type system    | Type error at compile time | N/A |
 | File not found, parse error, etc.      | Exception  | Yes        |

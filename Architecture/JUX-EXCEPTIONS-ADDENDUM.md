@@ -84,6 +84,8 @@ public class TimeoutException extends Exception { ... }
 // Panic-mirror ("panic-class") exceptions. These are ordinary user-throwable
 // types named after panic conditions; per ERRATA.md E1 the runtime itself
 // never throws them — a real panic aborts and cannot be caught.
+// One carve-out (ERRATA.md E1, 2026-06-12): the runtime DOES throw
+// ArithmeticException for integer division/remainder by zero (Java parity).
 public final class NullPointerException extends RuntimeException { ... }
 public final class IndexOutOfBoundsException extends RuntimeException { ... }
 public final class ArithmeticException extends RuntimeException { ... }
@@ -534,7 +536,7 @@ The async-throws-Result lowering applies to spawned tasks too: in Result-mode pr
 A **panic** is the runtime's response to a violated language invariant. Distinct from user-thrown exceptions:
 
 - **Exceptions** are programmer-modeled error conditions, declared in `throws` clauses, expected to be caught and handled.
-- **Panics** are bugs — null deref of a non-nullable, integer overflow in debug, array OOB, `.unwrap()` on `Err`, division by zero, exception in static initializer, exhausted const-eval limits, stack overflow.
+- **Panics** are bugs — null deref of a non-nullable, integer overflow in debug, array OOB, `.unwrap()` on `Err`, exception in static initializer, exhausted const-eval limits, stack overflow. (Integer division/remainder by zero is **not** on this list: per `ERRATA.md` E1 it throws a catchable `ArithmeticException("/ by zero")`, as in Java.)
 
 Per `JUX-SEMANTICS-ADDENDUM.md` §S.7 and `ERRATA.md` E1, a panic reports the condition (message, source location, stack trace where the profile supports it) and then calls the panic handler, which terminates the program. This holds in **every** profile; `jux-full` differs from `jux-core` only in how rich the report is.
 
@@ -546,7 +548,8 @@ Per `JUX-SEMANTICS-ADDENDUM.md` §S.7 and `ERRATA.md` E1, a panic reports the co
 try {
     riskyMath();              // overflow here PANICS — the catch below never runs
 } catch (ArithmeticException e) {
-    // reached only if riskyMath *threw* an ArithmeticException itself
+    // reached if riskyMath *threw* an ArithmeticException itself — including
+    // the runtime's own throw on integer `/ 0` or `% 0` (ERRATA.md E1)
     log.warn("math reported overflow", e);
 }
 ```
@@ -576,7 +579,7 @@ The hook is called once per panic. It may not itself panic (the runtime aborts u
 
 ### X.8.3. `RuntimeException` and `throws`
 
-Because `RuntimeException` and its subclasses are unchecked, they don't appear in `throws` declarations. The function `divide(int a, int b)` may panic-divide-by-zero without declaring it.
+Because `RuntimeException` and its subclasses are unchecked, they don't appear in `throws` declarations. The function `divide(int a, int b)` may throw `ArithmeticException` on a zero divisor without declaring it.
 
 A function that *does* want to declare a panic-class condition as part of its API uses a different exception class (`extends Exception`, not `RuntimeException`):
 
