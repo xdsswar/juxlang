@@ -1,0 +1,48 @@
+// §P.4 binding probe
+package probes;
+
+public class Field2 {
+    public String Text { get; set; } = "";
+}
+
+public class Label2 {
+    public String Text { get; set; } = "";
+}
+
+public class Slider2 {
+    public int Value { get; set; } = 0;
+}
+
+public class Bar2 {
+    public int Progress { get; set; } = 0;
+}
+
+void main() {
+    // one-way: label follows field
+    var f = new Field2();
+    var l = new Label2();
+    f.Text = "start";
+    l.Text.bind(f.Text);
+    print(l.Text);          // start (initial sync)
+    f.Text = "typed";
+    print(l.Text);          // typed
+    l.Text.unbind();
+    f.Text = "ignored";
+    print(l.Text);          // typed (unbound)
+
+    // bidirectional
+    var s = new Slider2();
+    var b = new Bar2();
+    s.Value = 30;
+    s.Value.bindBidirectional(b.Progress);
+    print(b.Progress);      // 0? no: s takes b's value on bind -> s=0
+    print(s.Value);         // 0
+    b.Progress = 75;
+    print(s.Value);         // 75
+    s.Value = 20;
+    print(b.Progress);      // 20
+    s.Value.unbind();
+    b.Progress = 99;
+    print(s.Value);         // 20 (s->b direction may persist until b unbinds; s no longer follows b)
+    print("done");
+}

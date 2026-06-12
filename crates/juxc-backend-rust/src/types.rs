@@ -137,6 +137,15 @@ impl RustEmitter {
         // helpers.
         if ty.fn_shape.is_none() && ty.name.segments.len() == 1 {
             let bare = ty.name.segments[0].text.as_str();
+            // §P.2: `observer<T>` outside a field declaration (param /
+            // annotated local) — no initializer to read the lambda
+            // arity from, so the canonical full shape `Rc<dyn Fn(T, T)>`
+            // applies. Field declarations are arity-aware (see the
+            // wrapper field loop in `emit_wrapper_class_decl`).
+            if bare == "observer" {
+                self.emit_observer_var_type(ty, 2);
+                return;
+            }
             let mapped = match bare {
                 "Channel" if !self.symbols.classes.contains_key("Channel") => {
                     Some("crate::JuxChannel")

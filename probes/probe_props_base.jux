@@ -1,0 +1,27 @@
+// Baseline: current §M.7 property support
+package probes;
+
+public class Model {
+    public String Name { get; set; } = "";
+    public int Count { get; private set; } = 0;
+
+    private int _age = 0;
+    public int Age {
+        get -> _age;
+        set { if (value > 0) { _age = value; } }
+    }
+
+    public void bump() {
+        this.Count = this.Count + 1;
+    }
+}
+
+void main() {
+    var m = new Model();
+    m.Name = "hello";
+    print(m.Name);
+    m.bump();
+    print(m.Count);
+    m.Age = 5;
+    print(m.Age);
+}

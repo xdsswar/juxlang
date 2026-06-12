@@ -1,0 +1,31 @@
+// §P.9-shaped usage: bare property names + observers from methods
+package probes;
+
+public class Form {
+    public String Username { get; set; } = "";
+    public bool Loading { get; set; } = false;
+
+    private final observer<bool> loadingObs = (old, now) -> {
+        print($"loading: $now");
+    };
+
+    public void setup() {
+        Loading.observers.attach(this.loadingObs);
+        Username.observers.attach((old, now) -> {
+            print($"user: $now");
+        });
+    }
+
+    public void submit() {
+        Loading = true;
+        Username = "alice";
+    }
+}
+
+void main() {
+    var f = new Form();
+    f.setup();
+    f.submit();      // loading: true, user: alice
+    print(f.Loading);
+    print("done");
+}

@@ -258,6 +258,57 @@ impl RustEmitter {
             self.w.push(')');
             return;
         }
+        // §P.3: `<prop>.observers.attach(o)` / `.detach(o)` — route to
+        // the per-property observer storage before any generic method
+        // dispatch (the chain would otherwise read like field accesses
+        // on the property's VALUE).
+        if let Expr::Field(opf) = &*call.callee {
+            let opname = opf.field.text.as_str();
+            if matches!(opname, "attach" | "detach") {
+                if let Expr::Field(obsf) = &*opf.object {
+                    if obsf.field.text == "observers" {
+                        if let Some((recv, prop, class)) =
+                            self.resolve_observable_prop(&obsf.object)
+                        {
+                            let opname = opname.to_string();
+                            return self.emit_observers_call(recv, &prop, &class, &opname, call);
+                        }
+                    }
+                }
+            }
+        }
+        // §P.4: property binding — `target.X.bind(source.Y)`,
+        // `target.X.bindBidirectional(other.Y)`, `target.X.unbind()`.
+        // Only fires when the receiver chain actually names an
+        // observable property; a user method named `bind` on a
+        // non-property receiver falls through to normal dispatch.
+        if let Expr::Field(opf) = &*call.callee {
+            let opname = opf.field.text.as_str();
+            if matches!(opname, "bind" | "bindBidirectional" | "unbind") {
+                if let Some((t_recv, t_prop, t_class)) =
+                    self.resolve_observable_prop(&opf.object)
+                {
+                    if opname == "unbind" && call.args.is_empty() {
+                        let t_prop = t_prop.clone();
+                        return self.emit_unbind(t_recv, &t_prop);
+                    }
+                    if opname != "unbind" {
+                        if let Some(src) = call.args.first() {
+                            if let Some((s_recv, s_prop, s_class)) =
+                                self.resolve_observable_prop(src)
+                            {
+                                let bidi = opname == "bindBidirectional";
+                                return self.emit_bind(
+                                    (t_recv, &t_prop, &t_class),
+                                    (s_recv, &s_prop, &s_class),
+                                    bidi,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Recognize a single-segment path `print` for the built-in.
         if let Expr::Path(qn) = &*call.callee {
             if qn.segments.len() == 1 && qn.segments[0].text == "print" {

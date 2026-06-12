@@ -811,6 +811,20 @@ struct RustEmitter {
     /// `break`/`continue` (O2). Innermost last. See
     /// [`stmts::TryLoopCtl`] and `RustEmitter::emit_loop_escape`.
     pub(crate) try_loopctl: Vec<stmts::TryLoopCtl>,
+    /// §P observable properties: set just before `emit_method` emits a
+    /// synthesized property setter (`__set_<X>`) whose property is
+    /// observable. Carries `(property name, change-comparable?)` —
+    /// `emit_method` takes it and brackets the body with the old/new
+    /// capture and the post-body `__obs_<X>_fire` call. Comparable
+    /// types fire only when `old != now`; non-comparable (user-class)
+    /// types fire on every set.
+    pub(crate) pending_setter_observer: Option<(String, bool)>,
+    /// §P observer-variable shapes: `observer<T>` fields/locals mapped
+    /// to their lambda arity (0 = invalidation, 2 = full, 3 = full +
+    /// property reference). Keyed by bare variable/field name; filled
+    /// as declarations are emitted, consulted by the
+    /// `.observers.attach/detach` routing to pick the storage vec.
+    pub(crate) observer_shapes: std::collections::HashMap<String, usize>,
     /// `true` while emitting a class that declares `static { }` blocks
     /// (§S.4.1). Drives the first-use trigger: each constructor body and each
     /// static method body emits a `Self::__static_init();` call at its top so
@@ -1672,6 +1686,27 @@ pub(crate) fn compute_aliased_classes(
         }
     }
 
+    // §P observable properties: a class declaring at least one
+    // writable `{ get; set; }` property stays wrapped — the observer
+    // storage fields, the attach/detach/clear/size helpers, and the
+    // setter fire epilogue are all emitted on the wrapper shape only.
+    // Demoting such a class to Inline would silently lose its
+    // observability (and break `.observers` call sites, which route to
+    // the wrapper helper methods).
+    for unit in units {
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                let has_observable = cd
+                    .properties
+                    .iter()
+                    .any(|p| !p.is_static && p.getter.is_some() && p.setter.is_some());
+                if has_observable {
+                    aliased.insert(cd.name.text.clone());
+                }
+            }
+        }
+    }
+
     // §CR.3.5 inheritance roll-up: a connected `extends` component shares
     // one representation. If ANY class in a component is aliased, the
     // whole component stays wrapped. Build the bidirectional extends
@@ -2526,6 +2561,41 @@ impl RustEmitter {
         w.push_str("        }\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
+        // Observable-property observer handle (§P.2/§P.3): one
+        // attached observer of a `{ get; set; }` property. NAMED
+        // observer variables attach weakly (§P.2.3 — the owner's
+        // field keeps the closure alive; when the owner drops, the
+        // weak ref dies and the property prunes it on next fire).
+        // INLINE lambdas attach strongly — nothing else holds them,
+        // so a weak attach would be dead on arrival.
+        w.push_str("enum JuxObserver<F: ?Sized> {\n");
+        w.push_str("    Weak(std::rc::Weak<F>),\n");
+        w.push_str("    Strong(std::rc::Rc<F>),\n");
+        w.push_str("}\n");
+        w.push_str("impl<F: ?Sized> JuxObserver<F> {\n");
+        w.push_str("    fn upgrade(&self) -> Option<std::rc::Rc<F>> {\n");
+        w.push_str("        match self {\n");
+        w.push_str("            JuxObserver::Weak(w) => w.upgrade(),\n");
+        w.push_str("            JuxObserver::Strong(s) => Some(s.clone()),\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("    fn is_for(&self, target: &std::rc::Rc<F>) -> bool {\n");
+        w.push_str("        self.upgrade().map_or(false, |f| std::rc::Rc::ptr_eq(&f, target))\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("impl<F: ?Sized> Clone for JuxObserver<F> {\n");
+        w.push_str("    fn clone(&self) -> Self {\n");
+        w.push_str("        match self {\n");
+        w.push_str("            JuxObserver::Weak(w) => JuxObserver::Weak(w.clone()),\n");
+        w.push_str("            JuxObserver::Strong(s) => JuxObserver::Strong(s.clone()),\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("impl<F: ?Sized> std::fmt::Debug for JuxObserver<F> {\n");
+        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
+        w.push_str("        f.write_str(\"observer\")\n");
+        w.push_str("    }\n");
+        w.push_str("}\n\n");
         // Memory-ordering adapter (§S.6.2): maps the Jux stdlib
         // `MemoryOrder` enum onto Rust's `atomic::Ordering` for the
         // explicit-order overloads of `AtomicInt`/`AtomicLong`.
@@ -2801,6 +2871,8 @@ impl RustEmitter {
             in_try_closure: false,
             loop_emit_depth: 0,
             try_loopctl: Vec::new(),
+            pending_setter_observer: None,
+            observer_shapes: std::collections::HashMap::new(),
             emitting_class_has_static_init: false,
             emitting_call_callee: false,
         }
