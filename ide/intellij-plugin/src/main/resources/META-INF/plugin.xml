@@ -265,6 +265,56 @@
         enabledByDefault="true"
         level="WEAK WARNING"
         implementationClass="dev.jux.intellij.inspections.JuxMissingOverrideInspection"/>
+    <!-- Observable-property inspections (sec. P.7) — IDE-side; E0973/E0974
+         have no compiler backstop yet, so each is individually disableable. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxPropertyNaming"
+        displayName="Property name is not PascalCase (W0974)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WEAK WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxPropertyNamingInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxSetterEarlyReturn"
+        displayName="Early return in property setter may skip observer fire (W0973)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxSetterEarlyReturnInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxAccessorVisibility"
+        displayName="Setter more visible than getter (E0972)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxAccessorVisibilityInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxPropertyNeverObserved"
+        displayName="Property is never observed or bound (W0971)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WEAK WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxPropertyNeverObservedInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxBoundPropertyAssignment"
+        displayName="Direct assignment to a bound property (E0973)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxBoundPropertyAssignmentInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxBindTypeMismatch"
+        displayName="Binding between mismatched property types (E0974)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxBindTypeMismatchInspection"/>
 
     <!-- New Project / New Module support: the "Jux" generator scaffolds a
          jux.toml + src/main.jux project (§I — project model). -->
