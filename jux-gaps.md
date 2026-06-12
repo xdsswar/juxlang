@@ -248,6 +248,7 @@ Classification: (A) rustc-leaked compile error · (B) runtime RefCell panic ·
 | S16 | (O9 work) | A | Calling an async fn WITHOUT `await` from a sync lambda (`Worker.spawn(() -> { return asyncFn(); })`) leaks rustc E0277 (`Display` not impl for `impl Future`) — tycheck should reject the un-awaited async call with a clean diagnostic. | ⛔ open |
 | S17 | (O9 work) | A | `Worker.spawn(async () -> …)` emits a plain `move \|\|` closure (no async block) → E0728 `await` outside async. Free `spawn(async () -> …)` works; the Worker path misses the async-lambda lowering. | ⛔ open |
 | S18 | (O9 work) | C | An async `try` body that mutates an OUTER primitive local (`total = total + await …`) silently loses the mutation — the `async move` block captures by value and writes the copy. Worse than S10's E0382 (no error at all). Needs a tycheck error or a threading shape. | ⛔ open |
+| S19 | (overloading) | — | CONSTRUCTOR overloads still select by argument count only (disjoint ranges enforced); same-arity typed ctor selection (`new Point(int)` vs `new Point(String)`) should follow the §T.3 method machinery (`select_method_overload_typed`). | ⛔ open — follow-up |
 
 ### §P observable properties — follow-ups (core landed 46834eb/4391bc4)
 

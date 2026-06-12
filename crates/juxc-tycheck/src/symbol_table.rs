@@ -2405,13 +2405,17 @@ fn check_diamond_default_conflicts(
 /// constructors (`HashMap()` + `HashMap(int)`, JUX-BINDGEN §G.5.1/§G.5.2) —
 /// parse and resolve cleanly: the stub class is flagged `is_external` and
 /// exempted here, while ordinary user classes still get the limit enforced.
-/// Method overloading (§T.3), Phase-1 rule — mirrors the
-/// constructor rule: overloads of one name are selected by ARGUMENT
-/// COUNT, so each group's acceptable-count ranges must be pairwise
-/// disjoint (E0450). Additionally, Phase 1 keeps overload groups out
-/// of the inheritance machinery: a group's name may not also exist on
-/// an ancestor class (override matching, virtual-dispatch traits, and
-/// body copy-down are all name-keyed today).
+/// Method overloading (§T.3): overloads of one name are selected by
+/// argument count first, then by ARGUMENT TYPES when several members
+/// accept the same count (the call-site pick lives in
+/// `crate::infer::select_method_overload_typed`). At the declaration,
+/// the only rejected shape is true ambiguity: two members whose
+/// count ranges overlap AND whose parameter-type shapes are
+/// indistinguishable (E0450). Additionally, Phase 1 keeps overload
+/// groups out of the inheritance machinery: a group's name may not
+/// also exist on an ancestor class (override matching,
+/// virtual-dispatch traits, and body copy-down are all name-keyed
+/// today).
 fn check_method_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (class_name, class) in &table.classes {
         if class.is_external {
@@ -2420,21 +2424,25 @@ fn check_method_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>
         for (name, group) in &class.method_overloads {
             let ranges: Vec<(usize, Option<usize>)> =
                 group.iter().map(|m| ctor_arity_range(&m.params)).collect();
+            let shapes: Vec<String> = group
+                .iter()
+                .map(|m| param_shape_key(&m.params))
+                .collect();
             for j in 1..ranges.len() {
                 for i in 0..j {
                     let (lo_a, hi_a) = ranges[i];
                     let (lo_b, hi_b) = ranges[j];
                     let overlap = lo_a <= hi_b.unwrap_or(usize::MAX)
                         && lo_b <= hi_a.unwrap_or(usize::MAX);
-                    if overlap {
+                    if overlap && shapes[i] == shapes[j] {
                         diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0450_AmbiguousOverload,
                                 format!(
                                     "ambiguous overload of `{class_name}.{name}`: two \
-                                     declarations accept the same argument count (Phase 1 \
-                                     selects by count) — make the parameter counts \
-                                     disjoint, or merge them with default parameters",
+                                     declarations have the same parameter types — \
+                                     overloads must differ in argument count or in at \
+                                     least one parameter type (§T.3)",
                                 ),
                             )
                             .with_span(group[j].span),
@@ -2546,6 +2554,49 @@ fn check_constructor_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagno
 
 /// `[required ..= max]` acceptable-argument-count range for a
 /// constructor parameter list. `None` max = variadic (unbounded).
+/// A normalized textual key for a parameter list's TYPE SHAPE —
+/// `"int,double"` for `(int a, double b)`. Two overload-group members
+/// whose count ranges overlap are distinguishable (§T.3) exactly when
+/// their shape keys differ; identical keys are the true-ambiguity
+/// E0450 case.
+pub(crate) fn param_shape_key(params: &[ParamSig]) -> String {
+    params
+        .iter()
+        .map(|p| type_ref_shape_key(&p.ty))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn type_ref_shape_key(t: &TypeRef) -> String {
+    let mut s: String = t
+        .name
+        .segments
+        .iter()
+        .map(|x| x.text.as_str())
+        .collect::<Vec<_>>()
+        .join(".");
+    if !t.generic_args.is_empty() {
+        s.push('<');
+        for (i, g) in t.generic_args.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            match g.as_type() {
+                Some(inner) => s.push_str(&type_ref_shape_key(inner)),
+                None => s.push('_'),
+            }
+        }
+        s.push('>');
+    }
+    if t.nullable {
+        s.push('?');
+    }
+    if t.array_shape.is_some() {
+        s.push_str("[]");
+    }
+    s
+}
+
 pub(crate) fn ctor_arity_range(params: &[ParamSig]) -> (usize, Option<usize>) {
     let required = params
         .iter()

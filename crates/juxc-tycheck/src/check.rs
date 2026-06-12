@@ -793,13 +793,44 @@ impl<'a> Checker<'a> {
                     })
                     .map(|c| c.operators.get(&kind).is_some_and(|o| !o.is_deleted))
                     .unwrap_or(false);
-                let record_ok = self
-                    .symbols
-                    .records
-                    .get(name)
-                    .map(|r| r.operators.get(&kind).is_some_and(|o| !o.is_deleted))
+                // Records AUTO-DERIVE `==`, `hash`, and `string`
+                // (§O.3 — the data-class model; `= delete` re-disables);
+                // other operator kinds need an explicit declaration.
+                let record = self.symbols.records.get(name).or_else(|| {
+                    if name.contains('.') {
+                        return None;
+                    }
+                    let suffix = format!(".{name}");
+                    let mut hits =
+                        self.symbols.records.iter().filter(|(k, _)| k.ends_with(&suffix));
+                    match (hits.next(), hits.next()) {
+                        (Some((_, r)), None) => Some(r),
+                        _ => None,
+                    }
+                });
+                let record_ok = record
+                    .map(|r| {
+                        let declared =
+                            r.operators.get(&kind).is_some_and(|o| !o.is_deleted);
+                        let deleted =
+                            r.operators.get(&kind).is_some_and(|o| o.is_deleted);
+                        let auto = matches!(kind, K::Eq | K::Hash | K::ToString);
+                        declared || (auto && !deleted)
+                    })
                     .unwrap_or(false);
-                class_ok || record_ok
+                // Enums likewise derive equality/hash, and their
+                // Display prints the variant (`string`).
+                let enum_ok = (self.symbols.enums.contains_key(name)
+                    || (!name.contains('.')
+                        && self
+                            .symbols
+                            .enums
+                            .keys()
+                            .filter(|k| k.ends_with(&format!(".{name}")))
+                            .count()
+                            == 1))
+                    && matches!(kind, K::Eq | K::Hash | K::ToString);
+                class_ok || record_ok || enum_ok
             }
             _ => false,
         }
@@ -4419,10 +4450,12 @@ impl<'a> Checker<'a> {
                         &self.env,
                         self.symbols,
                     ) {
-                        let class_method = match self.symbols.select_method_overload(
+                        let class_method = match crate::infer::select_method_overload_typed(
+                            self.symbols,
                             &class_fqn,
                             method_name,
-                            c.args.len(),
+                            c,
+                            &self.env,
                         ) {
                             Some((k, picked)) => {
                                 self.method_selections.insert(c.span, k);
@@ -4659,14 +4692,17 @@ impl<'a> Checker<'a> {
                 if let Some((method, declaring_class)) =
                     self.symbols.lookup_method(&name, method_name)
                 {
-                    // Overload-group pick (§T.3 Phase-1): when the
-                    // receiver's class declares several same-name
-                    // methods, the argument count selects the member;
-                    // the recorded index drives `name__ovK` emission.
-                    let method = match self
-                        .symbols
-                        .select_method_overload(&name, method_name, c.args.len())
-                    {
+                    // Overload-group pick (§T.3): the argument count
+                    // selects when only one member accepts it; same-
+                    // count members select by ARGUMENT TYPES. The
+                    // recorded index drives `name__ovK` emission.
+                    let method = match crate::infer::select_method_overload_typed(
+                        self.symbols,
+                        &name,
+                        method_name,
+                        c,
+                        &self.env,
+                    ) {
                         Some((k, picked)) => {
                             self.method_selections.insert(c.span, k);
                             picked

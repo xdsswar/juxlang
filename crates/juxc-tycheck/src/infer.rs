@@ -50,6 +50,86 @@ use crate::ty::{
 // Expression inference
 // ============================================================================
 
+/// Method-overload pick (§T.3): count first, then ARGUMENT TYPES.
+///
+/// Members whose acceptable-count range covers the call are the
+/// candidates; with one candidate the count decided (the historical
+/// Phase-1 rule). With several, each candidate is scored against the
+/// inferred argument types — `2` per exact parameter match, `1` per
+/// merely-compatible one, disqualified on any incompatible parameter —
+/// and the best score wins (`add(7)` picks `add(int)` over
+/// `add(double)`; `add(2.5)` picks `add(double)`). A tie resolves to
+/// the FIRST declared candidate (deterministic; identical-shape groups
+/// were already rejected at the declaration with E0450).
+///
+/// Returns the group index (drives `name__ovK` emission) and the
+/// picked signature. `None` when the name has no overload group or no
+/// member accepts the count.
+pub(crate) fn select_method_overload_typed<'a>(
+    symbols: &'a SymbolTable,
+    class_name: &str,
+    method_name: &str,
+    c: &CallExpr,
+    env: &TypeEnv,
+) -> Option<(usize, &'a MethodSig)> {
+    // Same exact-key / unique-suffix class resolution as the
+    // count-based selector.
+    let class = symbols.classes.get(class_name).or_else(|| {
+        if class_name.contains('.') {
+            return None;
+        }
+        let suffix = format!(".{class_name}");
+        let mut hits = symbols.classes.iter().filter(|(k, _)| k.ends_with(&suffix));
+        match (hits.next(), hits.next()) {
+            (Some((_, cl)), None) => Some(cl),
+            _ => None,
+        }
+    })?;
+    let group = class.method_overloads.get(method_name)?;
+    let count = c.args.len();
+    let candidates: Vec<(usize, &MethodSig)> = group
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| {
+            let (lo, hi) = crate::symbol_table::ctor_arity_range(&m.params);
+            count >= lo && hi.map_or(true, |h| count <= h)
+        })
+        .collect();
+    match candidates.len() {
+        0 => None,
+        1 => Some(candidates[0]),
+        _ => {
+            let arg_tys: Vec<Ty> =
+                c.args.iter().map(|a| infer_expr(a, env, symbols)).collect();
+            let mut best: Option<(i32, usize, &MethodSig)> = None;
+            for (k, m) in &candidates {
+                let mut score = 0i32;
+                let mut ok = true;
+                for (i, at) in arg_tys.iter().enumerate() {
+                    // Defaults / varargs tails score neutrally.
+                    let Some(p) = m.params.get(i) else { continue };
+                    let pt = ty_from_ref(&p.ty, env, symbols);
+                    if pt == *at {
+                        score += 2;
+                    } else if crate::check::compatible(&pt, at, symbols) {
+                        score += 1;
+                    } else {
+                        ok = false;
+                        break;
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                if best.as_ref().map_or(true, |(bs, ..)| score > *bs) {
+                    best = Some((score, *k, m));
+                }
+            }
+            best.map(|(_, k, m)| (k, m)).or_else(|| Some(candidates[0]))
+        }
+    }
+}
+
 /// Infer the type of `expr` against `env` and `symbols`.
 ///
 /// Returns [`Ty::Unknown`] for any expression the walker can't yet
@@ -593,12 +673,12 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             // declared return type (lowered in the class's scope).
             if let Expr::Path(qn) = field.object.as_ref() {
                 if let Some(class_fqn) = path_resolves_to_class(qn, env, symbols) {
-                    // Overload-group pick (§T.3 Phase-1, count rule) —
+                    // Overload-group pick (§T.3, count + types) —
                     // overloads may differ in return type, so the
                     // selected member's return drives inference.
-                    let picked = symbols
-                        .select_method_overload(&class_fqn, method_name, c.args.len())
-                        .map(|(_, m)| m);
+                    let picked =
+                        select_method_overload_typed(symbols, &class_fqn, method_name, c, env)
+                            .map(|(_, m)| m);
                     if let Some(class) = symbols.classes.get(&class_fqn) {
                         if let Some(method) =
                             picked.or_else(|| class.methods.get(method_name))
@@ -712,12 +792,12 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 if let Some((method, declaring_class)) =
                     symbols.lookup_method(name, method_name)
                 {
-                    // Overload-group pick (§T.3 Phase-1): a group's
-                    // members may differ in return type.
-                    let method = symbols
-                        .select_method_overload(name, method_name, c.args.len())
-                        .map(|(_, m)| m)
-                        .unwrap_or(method);
+                    // Overload-group pick (§T.3, count + types): a
+                    // group's members may differ in return type.
+                    let method =
+                        select_method_overload_typed(symbols, name, method_name, c, env)
+                            .map(|(_, m)| m)
+                            .unwrap_or(method);
                     // Lower in the declaring class's generic scope AND the
                     // method's own generic params so both `T get()` (class
                     // param) and `<U> U pick()` (method param) read as

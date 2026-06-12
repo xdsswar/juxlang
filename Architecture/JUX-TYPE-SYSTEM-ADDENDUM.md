@@ -132,15 +132,20 @@ The compiler infers `T = Dog` from the source argument; verifies the dest argume
 
 ## §T.3 — Overload Resolution
 
-> **Phase-1 implementation note.** The current compiler implements a
-> count-based subset of this section: overloads of one name (methods
-> and constructors) are selected by **argument count**, and each
-> group's acceptable-count ranges (counting omittable defaults and
-> varargs) must be pairwise disjoint — `E0450` otherwise. Type-based
-> applicability filtering and the specificity ordering below land
-> with a later phase. Phase 1 also keeps method overload groups out
-> of inheritance (no overriding into/out of a group) and out of
-> interfaces.
+> **Phase-1 implementation note (updated 2026-06-12).** METHOD
+> overloads now resolve by **argument count, then argument types**:
+> members whose count range covers the call are candidates; with
+> several, each is scored against the inferred argument types (2 per
+> exact parameter match, 1 per merely-assignable one, disqualified on
+> any mismatch) and the best score wins — so `add(int)` /
+> `add(double)` / `add(String)` coexist and dispatch correctly. At the
+> declaration only TRUE ambiguity is rejected (`E0450`): overlapping
+> counts with identical parameter-type shapes. This is a working
+> subset of the full specificity ordering below (named arguments and
+> generic-candidate ranking still pending). CONSTRUCTORS remain
+> count-selected with disjoint ranges for now. Phase 1 also keeps
+> method overload groups out of inheritance (no overriding into/out
+> of a group) and out of interfaces.
 
 When multiple declarations share a name, the resolver picks one. The algorithm runs in compiler phase 8.
 
