@@ -13,15 +13,15 @@ gaps) into a single status view. Status reflects the `polymorphism` branch.
 
 | Area | Status | Reference |
 |------|--------|-----------|
-| Core pipeline (lex→parse→resolve→tycheck→lower→codegen→build) | ✅ | end-to-end, 936/0 suite |
+| Core pipeline (lex→parse→resolve→tycheck→lower→codegen→build) | ✅ | end-to-end, 950+/0 suite |
 | Generics: explicit type-args, wildcards (`? extends`/`? super`), const generics, invariance | ✅ | `project_generics_status`; N2 |
-| Polymorphism: interface + class virtual dispatch, `super`, downcast, `=>` smart-cast | ✅ | `project_polymorphism_stages` |
-| Borrow discipline (`Rc<RefCell>` shared-mutable): re-entrancy, wrapped fields, collections, `!!`, for-each, operators | ✅ | N1, G3, H1, H5, H6, H9 |
+| Polymorphism: interface + class virtual dispatch, `super` (incl. statement position), downcast, `=>` smart-cast | ✅ | `project_polymorphism_stages`; S11 |
+| Borrow discipline (`Rc<RefCell>` shared-mutable): re-entrancy, wrapped fields, collections, `!!`, for-each, operators, **field-path receivers, async tries, higher-order stdlib calls, observers** | ✅ | N1, G3, H1, H5, H6, H9 + wave-3 S1–S15 (all closed, runner `borrow_stress_wave3`) |
 | `?.` safe-navigation over wrapped classes + multi-level chains | ✅ | H5 |
-| Exceptions: try/catch/finally ordering, chaining, multi-catch, subclass→base cause upcast | ◐ | H8 done; O1/O2/O3/O6/O7 open |
-| Diagnostics: juxc catches its own errors (no rustc leaks), 59 E/W codes | ◐ | E0454 added; a few leaks remain (O-series) |
+| Exceptions: try/catch/finally ordering, chaining, multi-catch, subclass→base cause upcast, `/ 0` → catchable `ArithmeticException`, uncaught-exception report | ✅ | H8, O1–O9 all closed |
+| Diagnostics: juxc catches its own errors (no rustc leaks), 61 E/W codes | ◐ | E0454/E0974 added; remaining known leaks: S16–S18 (async edges) |
 | Generic *class* as a polymorphic base | ⏭ | N5 — rejected cleanly with E0454; use a generic interface |
-| Remaining miscompiles (lambda-try, break/continue-in-try, generic exception class, `g[i]+=`, block-lambda arg) | ⛔ | `jux-gaps.md` O1–O5 (lower frequency) |
+| Remaining known gaps (async edges: un-awaited async call, `Worker.spawn` + async lambda, outer-local mutation in async try) | ⛔ | `jux-gaps.md` S16–S18 (low frequency) |
 
 ## 2. Codegen quality
 
@@ -56,19 +56,22 @@ gaps) into a single status view. Status reflects the `polymorphism` branch.
 | LSP server (`juxc-lsp`) — single source of truth | ✅ |
 | IntelliJ plugin: PSI parser, semantic highlighting, formatter, native inspections + quick-fixes, goto, completion, LSP4IJ fallback | ✅ |
 | IntelliJ refactoring (move/rename/extract/inline/change-signature), debugger, test-runner UI | ⏭ | `plugin-gap.md` |
-| Build system / package manager (`jux.toml`), multi-module workspaces | ◐ |
+| Build system / package manager (`jux.toml`), multi-module workspaces, **path + git deps (GitHub URLs, `jux update`), `--target` cross-compile** | ✅ | §B.2.2; registry deps + `jux.lock` remain post-v0.1 |
 | Testing framework (`@Test`, `juxc test`) | ⛔ | roadmap §21 |
 
 ---
 
 ## What blocks calling it v0.1
 
-The ⛔ rows: **async streams (§18.6)**, a **testing framework (§21)**, and
-closing the remaining O-series miscompiles so juxc never leaks a rustc error.
-Value semantics (equality/ordering/hashing/formatting) and the `Iterable`
-contract are done via the operator-based design — the roadmap's old
-interface-based §1.1/§19.1 plan was superseded by `JUX-CORE-LIB-ADDENDUM` and is
-not a gap. Everything else is either done or an explicit post-v0.1 deferral.
-Compiler soundness for the common feature set is in good shape — the recent
-hardening waves drove the suite from ~900 to 936 green with no known panics on
-valid input.
+The ⛔ rows: **async streams (§18.6)**, a **testing framework (§21)**, and the
+three low-frequency async edges (S16–S18). The O-series is fully closed and
+the borrow machinery survived a 15-probe adversarial wave with every finding
+fixed (2026-06-12) — the **inferred borrow checker is release-grade for the
+common feature set**: no known rustc borrow-error leaks, RefCell panics, or
+silent-wrong lowerings on valid input. Jux libraries are consumable straight
+from GitHub (`"com.x.lib" = "https://github.com/u/repo"`), and `jux build
+--target <triple>` cross-compiles to any installed rustc target. Value
+semantics (equality/ordering/hashing/formatting) and the `Iterable` contract
+are done via the operator-based design — the roadmap's old interface-based
+§1.1/§19.1 plan was superseded by `JUX-CORE-LIB-ADDENDUM` and is not a gap.
+Everything else is either done or an explicit post-v0.1 deferral.

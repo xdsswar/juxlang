@@ -563,6 +563,12 @@ pub enum Code {
     /// observer variable's initializer or at an
     /// `.observers.attach(...)` argument.
     E0975_ObserverShapeMismatch,
+    /// E0974 — Property binding type mismatch (§P.4.3). `bind` /
+    /// `bindBidirectional` connect two properties of the SAME declared
+    /// type; binding an `int` property to a `String` property fires
+    /// this at the bind site instead of leaking a rustc error from the
+    /// emitted closure.
+    E0974_BindTypeMismatch,
     /// W0974 — Property name doesn't start with an uppercase letter
     /// (§P.1.1). PascalCase property names are the PREFERRED visual
     /// signal that a member is a property rather than a plain field —
@@ -661,6 +667,7 @@ impl Code {
             Code::E0970_PropertyNotWritable      => "E0970",
             Code::E0972_PropertyAccessorVisibility => "E0972",
             Code::E0975_ObserverShapeMismatch    => "E0975",
+            Code::E0974_BindTypeMismatch         => "E0974",
             Code::W0974_PropertyNamePascalCase   => "W0974",
         }
     }
