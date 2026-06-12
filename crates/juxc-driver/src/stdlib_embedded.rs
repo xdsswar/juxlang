@@ -812,10 +812,16 @@ public class Exception extends Throwable {
      * Construct an Exception with a message and the exception that
      * caused it (§X.1.1 / §X.2.3) — the wrap-and-rethrow form:
      * `throw new Exception("config load failed", e);`.
+     * `cause` is nullable so callers may pass `null` when the root
+     * cause is unknown at the call site.
      */
-    public Exception(String message, Exception cause) {
+    public Exception(String message, Exception? cause) {
         super(message);
-        this.__causeBox = new Exception[]{cause};
+        if (cause != null) {
+            this.__causeBox = new Exception[]{cause};
+        } else {
+            this.__causeBox = new Exception[]{};
+        }
         this.__suppressed = new Exception[]{};
     }
 

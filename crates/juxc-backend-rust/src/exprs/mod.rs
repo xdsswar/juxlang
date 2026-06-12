@@ -599,9 +599,17 @@ impl RustEmitter {
                         self.lookup_class_by_bare_or_fqn(name)
                             .map(|c| {
                                 let gp = c.generic_params.clone();
-                                c.constructors
-                                    .first()
-                                    .map(|ctor| {
+                                // Pick the overload matching this call's arity so
+                                // nullable flags come from the right constructor —
+                                // always using `first()` broke calls to a second
+                                // overload whose later params are nullable (e.g.
+                                // Exception(msg, cause?) with arg count 2).
+                                let ctor = c
+                                    .constructors
+                                    .iter()
+                                    .find(|ctor| ctor.params.len() == n.args.len())
+                                    .or_else(|| c.constructors.first());
+                                ctor.map(|ctor| {
                                         ctor.params
                                             .iter()
                                             .map(|p| param_nullable(&p.ty, &gp))
