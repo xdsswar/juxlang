@@ -1252,6 +1252,66 @@ impl<'a> Checker<'a> {
                 self.check_weak_field(field);
             }
         }
+        // §P.1.1 PascalCase property convention (W0974) — preferred,
+        // never enforced: a lowercase-initial property name compiles
+        // unchanged with this suppressible warning.
+        for prop in &class.properties {
+            let starts_lower = prop
+                .name
+                .text
+                .chars()
+                .next()
+                .map(|c| c.is_lowercase())
+                .unwrap_or(false);
+            if starts_lower {
+                self.diagnostics.push(
+                    Diagnostic::warning(
+                        code::Code::W0974_PropertyNamePascalCase,
+                        format!(
+                            "property `{}` should be PascalCase (`{}`) — the preferred visual \
+                             signal that a member is a property, not a plain field (§P.1.1)",
+                            prop.name.text,
+                            uppercase_first(&prop.name.text),
+                        ),
+                    )
+                    .with_span(prop.name.span),
+                );
+            }
+        }
+        // §P.2.2 observer<T> lambda shapes (E0975): an observer field's
+        // initializer lambda must take 0 (invalidation), 2 (old, now),
+        // or 3 (prop, old, now) parameters.
+        for field in &class.fields {
+            let is_observer = field
+                .ty
+                .as_ref()
+                .map(|t| {
+                    t.fn_shape.is_none()
+                        && t.name.segments.len() == 1
+                        && t.name.segments[0].text == "observer"
+                })
+                .unwrap_or(false);
+            if is_observer {
+                if let Some(juxc_ast::Expr::Lambda(l)) = &field.default {
+                    if !matches!(l.params.len(), 0 | 2 | 3) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0975_ObserverShapeMismatch,
+                                format!(
+                                    "observer `{}` takes {} parameter{} — an observer lambda is \
+                                     `() -> …` (invalidation), `(old, now) -> …`, or \
+                                     `(prop, old, now) -> …` (§P.2.2)",
+                                    field.name.text,
+                                    l.params.len(),
+                                    if l.params.len() == 1 { "" } else { "s" },
+                                ),
+                            )
+                            .with_span(field.name.span),
+                        );
+                    }
+                }
+            }
+        }
         for (idx, ctor) in class.constructors.iter().enumerate() {
             self.check_constructor(ctor, &this_ty, idx);
         }
@@ -3865,6 +3925,36 @@ impl<'a> Checker<'a> {
     }
 
     fn check_call(&mut self, c: &CallExpr) {
+        // §P.2.2 / §P.3.2 — `<prop>.observers.attach(lambda)` with an
+        // inline lambda: the lambda must take 0, 2, or 3 parameters
+        // (E0975). Other arg shapes (named observer variables) were
+        // validated at their declaration.
+        if let Expr::Field(opf) = c.callee.as_ref() {
+            if matches!(opf.field.text.as_str(), "attach" | "detach") {
+                if let Expr::Field(obsf) = &*opf.object {
+                    if obsf.field.text == "observers" {
+                        if let Some(Expr::Lambda(l)) = c.args.first() {
+                            if !matches!(l.params.len(), 0 | 2 | 3) {
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        code::Code::E0975_ObserverShapeMismatch,
+                                        format!(
+                                            "this observer lambda takes {} parameter{} — an \
+                                             observer is `() -> …` (invalidation), \
+                                             `(old, now) -> …`, or `(prop, old, now) -> …` \
+                                             (§P.2.2)",
+                                            l.params.len(),
+                                            if l.params.len() == 1 { "" } else { "s" },
+                                        ),
+                                    )
+                                    .with_span(c.span),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Always walk args first, regardless of callee shape, so nested
         // checks still fire.
         match c.callee.as_ref() {
@@ -5493,6 +5583,16 @@ impl<'a> Checker<'a> {
 /// Lower a [`ReturnType`] to a [`Ty`]. Duplicated from `infer.rs` so the
 /// checker can use it without exporting an internal helper. `async T`
 /// unwraps to `T` (no `Future<T>` wrapper in Phase 1).
+/// First character uppercased — for the W0974 rename suggestion
+/// (`name` → `Name`).
+fn uppercase_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 fn return_type_to_ty(rt: &ReturnType, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     match rt {
         ReturnType::Void => Ty::Void,
@@ -7402,13 +7502,15 @@ mod tests {
         assert!(has(&d, code::Code::E0970_PropertyNotWritable), "expected E0970: {d:?}");
     }
 
-    /// Writing an init-only property after construction fires E0970.
+    /// §P removed the `init` accessor — the read-only-after-construction
+    /// shape is `{ get; }` (settable in the ctor), and a post-construction
+    /// write to it fires E0970.
     #[test]
-    fn write_init_property_after_construction_errors() {
+    fn write_ctor_settable_readonly_property_after_construction_errors() {
         let d = run(
             r#"
             public class P {
-                public String Code { get; init; }
+                public String Code { get; }
                 public P(String c) { this.Code = c; }
             }
             public void main() { var p = new P("a"); p.Code = "x"; }
@@ -7436,16 +7538,17 @@ mod tests {
         );
     }
 
-    /// The constructor may set read-only / init / private-set
-    /// properties — the desugarer lowers those to backing-field writes,
-    /// so no access-control diagnostic fires.
+    /// The constructor may set read-only / private-set properties —
+    /// the desugarer lowers those to backing-field writes, so no
+    /// access-control diagnostic fires. (`init` accessors were removed
+    /// by §P; `{ get; }` covers the construction-time-settable shape.)
     #[test]
     fn ctor_may_set_restricted_properties() {
         let d = run(
             r#"
             public class P {
                 public int Id { get; }
-                public String Code { get; init; }
+                public String Code { get; }
                 public String Token { get; private set; }
                 public P(String c) { this.Id = 1; this.Code = c; this.Token = "t"; }
             }
