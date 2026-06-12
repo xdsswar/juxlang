@@ -1,0 +1,13 @@
+// TRUE ambiguity: two overloads with identical parameter types must
+// still be rejected (E0450).
+package ovlbad;
+
+public class Bad {
+    public void add(int x) { print(x); }
+    public void add(int y) { print(y + 1); }
+}
+
+void main() {
+    var b = new Bad();
+    b.add(1);
+}

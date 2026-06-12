@@ -1,0 +1,27 @@
+// Same-NAME methods differing only by parameter TYPE (same arity):
+// add(int) / add(double) / add(String) must each be callable and
+// dispatch by argument type.
+package overloadtypes;
+
+public class Acc {
+    public String log = "";
+    public void add(int x) { this.log = this.log + "i" + x + ";"; }
+    public void add(double x) { this.log = this.log + "d" + x + ";"; }
+    public void add(String x) { this.log = this.log + "s" + x + ";"; }
+    // different arity too
+    public void add(int a, int b) { this.log = this.log + "ii" + (a + b) + ";"; }
+}
+
+int twice(int x) { return x * 2; }
+double half(double x) { return x / 2.0; }
+
+void main() {
+    var a = new Acc();
+    a.add(7);
+    a.add(2.5);
+    a.add("hey");
+    a.add(1, 2);
+    a.add(twice(3));
+    a.add(half(9.0));
+    print(a.log);
+}
