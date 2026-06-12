@@ -87,8 +87,16 @@ enum CliCommand {
         #[arg(long)]
         release: bool,
     },
-    /// Run tests. (§B.15 — `jux test`.)
-    Test,
+    /// Run tests (JUX-TESTING-ADDENDUM §TS.2/§TS.8).
+    Test {
+        /// Optional substring filter: only tests whose
+        /// package-qualified name contains the pattern run.
+        pattern: Option<String>,
+        /// Build the test runner with optimizations. The `assert`
+        /// builtin stays checked under `jux test` either way.
+        #[arg(long)]
+        release: bool,
+    },
     /// Re-fetch the project's git dependencies (§B.2.2). Branch-pinned
     /// deps pick up new commits; tag/rev pins re-validate. Without
     /// this, a cached checkout is reused as-is on every build (the
@@ -100,7 +108,7 @@ fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
         CliCommand::New { name } => cmd_new(&name),
-        CliCommand::Test         => cmd_test(),
+        CliCommand::Test { pattern, release } => cmd_test(pattern, release),
         CliCommand::Update       => cmd_update(),
         CliCommand::Check { file } => {
             run_single_or_project(file, Action::Check, None, false)
@@ -395,10 +403,12 @@ fn run_workspace(
     Ok(ExitCode::SUCCESS)
 }
 
-/// `jux test` — discover `@Test`-annotated free functions
-/// across `src/` and `test/`, build a test runner, run it.
-/// Returns the runner's exit code so CI sees test failures.
-fn cmd_test() -> Result<ExitCode> {
+/// `jux test [pattern]` — discover `@Test`-annotated free functions
+/// across `src/` and `test/` (plus resolved `[dependencies]` sources,
+/// so tests see what the build sees), build a test runner, run it
+/// with the filter pattern as argv. Returns the runner's exit code so
+/// CI sees test failures (§TS.2/§TS.7/§TS.8).
+fn cmd_test(pattern: Option<String>, release: bool) -> Result<ExitCode> {
     let cwd = std::env::current_dir().context("getting current directory")?;
     let manifest_path = cwd.join("jux.toml");
     if !manifest_path.exists() {
@@ -408,16 +418,25 @@ fn cmd_test() -> Result<ExitCode> {
         );
         return Ok(ExitCode::from(1));
     }
-    let manifest = read_manifest(&manifest_path)?;
+    let Some(manifest) = juxc_driver::Manifest::load(&cwd) else {
+        eprintln!("jux: failed to load {}", manifest_path.display());
+        return Ok(ExitCode::from(1));
+    };
     let binary_name = format!(
         "{}_test",
         manifest
+            .package
             .name
             .rsplit('.')
             .next()
-            .unwrap_or(manifest.name.as_str()),
+            .unwrap_or(manifest.package.name.as_str()),
     );
-    let mut sources: Vec<juxc_source::SourceFile> = Vec::new();
+    let emit_dir = cwd.join("target").join(".rust-build-test");
+    // Dependency sources (path + git, §B.2.2): tests compile against
+    // the same dependency set the build does.
+    let (dep_sources, _path_deps) =
+        juxc_driver::project::resolve_package_deps(&manifest, &emit_dir)?;
+    let mut sources: Vec<juxc_source::SourceFile> = dep_sources;
     let src_dir = cwd.join("src");
     if src_dir.exists() {
         sources.extend(collect_project_sources(&src_dir)?);
@@ -446,11 +465,12 @@ fn cmd_test() -> Result<ExitCode> {
         eprintln!("jux: nothing to test");
         return Ok(ExitCode::SUCCESS);
     };
-    let emit_dir = cwd.join("target").join(".rust-build-test");
-    let artifact = juxc_driver::build(&crate_, &emit_dir, &binary_name, false)?;
+    let artifact = juxc_driver::build(&crate_, &emit_dir, &binary_name, release)?;
     // Run the test binary, inherit stdio so the user sees PASS/FAIL
-    // output in real time. Forward the exit code so CI gates work.
+    // output in real time. Forward the filter pattern as argv and
+    // the exit code so CI gates work.
     let status = Command::new(&artifact.binary_path)
+        .args(pattern.iter())
         .status()
         .with_context(|| format!("running {}", artifact.binary_path.display()))?;
     let code = status.code().unwrap_or(1) as u8;

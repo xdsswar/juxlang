@@ -1,0 +1,130 @@
+// Async streams (§18.6): Stream<T> with `async T? next()`, `for await`,
+// constructors of/from/generate, and the lazy consuming combinators
+// mapAsync/filterAsync/take/skip/chain. Backpressure is implicit — the
+// generate producer runs once per pull.
+
+package streams;
+
+import jux.std.concurrent.AtomicInt;
+
+async void ofAndForAwait() {
+    var total = 0;
+    for await (var x : Stream.of(1, 2, 3)) {
+        total = total + x;
+    }
+    print("sum " + total);
+}
+
+async void fromArray() {
+    var names = new ArrayList<String>();
+    names.add("ada");
+    names.add("grace");
+    for await (var n : Stream.from(names)) {
+        print("name " + n);
+    }
+}
+
+async void generateCounted() {
+    var n = new AtomicInt(0);
+    var s = Stream.generate(async () -> {
+        var k = n.fetchAdd(1);
+        if (k >= 4) {
+            return null;
+        }
+        return k * 10;
+    });
+    for await (var v : s) {
+        print("gen " + v);
+    }
+    // exhausted: a fresh pull resolves null immediately
+    var after = await s.next();
+    print("after " + (after == null ? "null" : "value"));
+}
+
+async void controlFlow() {
+    for await (var x : Stream.of(1, 2, 3, 4, 5, 6)) {
+        if (x % 2 == 1) {
+            continue;
+        }
+        if (x == 6) {
+            break;
+        }
+        print("even " + x);
+    }
+    print("controlFlow done");
+}
+
+async void labeled() {
+    outer:
+    for (var round : 1..3) {
+        for await (var x : Stream.of(10, 20, 30)) {
+            if (round == 2 && x == 20) {
+                break outer;
+            }
+            print("cell " + (round * 100 + x));
+        }
+    }
+    print("labeled done");
+}
+
+async void combinators() {
+    var s = Stream.of(1, 2, 3, 4, 5)
+        .mapAsync(x -> x * 10)
+        .filterAsync(x -> x > 10)
+        .take(2);
+    for await (var v : s) {
+        print("combo " + v);
+    }
+    var t = Stream.of(1, 2, 3, 4).skip(2).chain(Stream.of(9));
+    for await (var v : t) {
+        print("tail " + v);
+    }
+}
+
+async void emptyStream() {
+    for await (var x : Stream.of(7).take(0)) {
+        print("never " + x);
+    }
+    print("empty ok");
+}
+
+async void inTry() {
+    // Accumulate through a shared handle: an async try body captures
+    // by move, so outer PRIMITIVE locals would be copied (gap S18) —
+    // the AtomicInt handle shares.
+    var seen = new AtomicInt(0);
+    while (true) {
+        try {
+            for await (var x : Stream.of(1, 2, 3)) {
+                seen.fetchAdd(x);
+                if (x == 2) {
+                    break;
+                }
+            }
+        } finally {
+            print("cleanup");
+        }
+        break;
+    }
+    print("seen " + seen.load());
+}
+
+async void sharedHandle() {
+    var a = Stream.of(1, 2, 3);
+    var b = a;
+    var first = await a.next();
+    var second = await b.next();
+    print("shared " + first!! + " " + second!!);
+}
+
+public async void main() {
+    await ofAndForAwait();
+    await fromArray();
+    await generateCounted();
+    await controlFlow();
+    await labeled();
+    await combinators();
+    await emptyStream();
+    await inTry();
+    await sharedHandle();
+}

@@ -1266,7 +1266,17 @@ impl RustEmitter {
                         }
                         _ => None,
                     })
-                    .map(|c| self.wrapper_classes.contains(&c))
+                    .map(|c| {
+                        // Builtin runtime HANDLES (streams, channels,
+                        // mutexes, atomics) share exactly like wrapper
+                        // classes — without the rebind the async block
+                        // steals the only handle.
+                        self.wrapper_classes.contains(&c)
+                            || matches!(
+                                c.as_str(),
+                                "Stream" | "Channel" | "AsyncMutex" | "AtomicInt" | "AtomicLong",
+                            )
+                    })
                     .unwrap_or(false)
             });
             for name in &names {
@@ -1554,6 +1564,69 @@ impl RustEmitter {
     /// **Ranges** (`0..10`) keep their naked form. They're cheap-to-
     /// move self-iterators with `Item = isize`; no borrow needed.
     pub(crate) fn emit_for_each(&mut self, f: &ForEachStmt) {
+        // §18.6.3 `for await (var x : stream)` — one-shot pull loop
+        // over a `Stream<T>`:
+        //
+        //   {
+        //       let __jux_stream = <iter>.clone();
+        //       ['label:] while let Some(x) = __jux_stream.next().await { body }
+        //   }
+        //
+        // The handle `.clone()` is an `Rc` bump — a bare local stays
+        // usable after the loop, and a combinator-chain expression
+        // lands in a fresh temp. `next()` borrows the inner `RefCell`
+        // only INSIDE the call, so nothing is held across the body
+        // (no H6-style snapshot needed — and none would make sense
+        // for an async sequence). A pending loop label binds the
+        // `while`, not the wrapper block, so `break 'label` works.
+        if f.is_await {
+            let label = self.pending_loop_label.take();
+            self.w.push_str("{\n");
+            self.w.indent_inc();
+            self.w.emit_indent();
+            self.w.push_str("let __jux_stream = ");
+            self.emit_expr_with_parent_prec(&f.iter, u8::MAX, false);
+            self.w.push_str(".clone();\n");
+            self.w.emit_indent();
+            if let Some(l) = label {
+                self.w.push('\'');
+                self.w.push_str(&l);
+                self.w.push_str(": ");
+            }
+            self.w.push_str("while let Some(");
+            self.w.push_str(&f.var_name.text);
+            self.w.push_str(") = __jux_stream.next().await {\n");
+            self.w.indent_inc();
+            // Register the loop variable's element type (the stream's
+            // generic arg) so wrapper-class elements deref correctly —
+            // same rule as the collection for-each below.
+            let elem_ty = match self
+                .expr_types
+                .get(&crate::exprs::expr_span_of(&f.iter))
+            {
+                Some(Ty::User { name, generic_args })
+                    if name.rsplit('.').next() == Some("Stream") =>
+                {
+                    generic_args.first().cloned()
+                }
+                _ => None,
+            };
+            self.local_types.push(std::collections::HashMap::new());
+            if let Some(ty @ Ty::User { .. }) = &elem_ty {
+                if let Some(scope) = self.local_types.last_mut() {
+                    scope.insert(f.var_name.text.clone(), ty.clone());
+                }
+            }
+            self.loop_emit_depth += 1;
+            self.emit_block_contents(&f.body);
+            self.loop_emit_depth -= 1;
+            self.local_types.pop();
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+            return;
+        }
         self.emit_pending_loop_label();
         // Stepped range (§M.6): sign-aware while loop — positive
         // steps count up to the bound, negative steps count down,

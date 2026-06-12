@@ -153,6 +153,10 @@ impl RustEmitter {
                 "AsyncMutex" if !self.symbols.classes.contains_key("AsyncMutex") => {
                     Some("crate::JuxAsyncMutex")
                 }
+                // Async streams (§18.6) — same builtin-helper mapping.
+                "Stream" if !self.symbols.classes.contains_key("Stream") => {
+                    Some("crate::JuxStream")
+                }
                 _ => None,
             };
             if let Some(path) = mapped {

@@ -859,6 +859,13 @@ struct RustEmitter {
     /// real fn body (`emit_fn_body_at`) so nested anonymous-class
     /// methods type normally.
     pub(crate) in_lambda_body: bool,
+    /// Set when the lambda about to be emitted flows into a fn-typed
+    /// parameter whose declared return is `void`
+    /// (`assertThrows(() -> divide(10, 0))` — §TS.3): an EXPRESSION
+    /// body wraps as `{ expr; }` so its value is discarded and the
+    /// closure types as `()`. Take-and-cleared by the lambda
+    /// emitters.
+    pub(crate) lambda_void_target: bool,
 }
 
 /// True when a class declaration should lower to the shared-mutation
@@ -2792,6 +2799,78 @@ impl RustEmitter {
         w.push_str("        *self.inner.tx.lock().unwrap() = None;\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
+        // Async-stream runtime — §18.6. A `Stream<T>` handle is an
+        // `Rc<RefCell<…>>` share over a boxed task-local stream
+        // (`LocalBoxStream` — streams never cross threads; the E0702
+        // capture gate rejects them in `spawn`). `next()` pulls one
+        // element (None = exhausted, idempotent). Combinators CONSUME
+        // the receiver: `take_inner` swaps the boxed stream out and
+        // leaves `empty()` behind, so the elements flow through the
+        // returned stream only (§18.6.5 — a stream is a one-shot
+        // sequence and the combinator is its new front).
+        w.push_str("struct JuxStream<T> {\n");
+        w.push_str("    inner: std::rc::Rc<std::cell::RefCell<futures::stream::LocalBoxStream<'static, T>>>,\n");
+        w.push_str("}\n");
+        w.push_str("impl<T> Clone for JuxStream<T> {\n");
+        w.push_str("    fn clone(&self) -> Self {\n");
+        w.push_str("        JuxStream { inner: self.inner.clone() }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("impl<T: Clone + 'static> JuxStream<T> {\n");
+        w.push_str("    fn from_stream(s: futures::stream::LocalBoxStream<'static, T>) -> Self {\n");
+        w.push_str("        // `fuse` makes exhaustion idempotent (§18.6.2): every\n");
+        w.push_str("        // `next()` after the first None resolves None instead of\n");
+        w.push_str("        // re-polling the source (`unfold` panics if re-polled).\n");
+        w.push_str("        let fused = ::std::boxed::Box::pin(futures::stream::StreamExt::fuse(s));\n");
+        w.push_str("        JuxStream { inner: std::rc::Rc::new(std::cell::RefCell::new(fused)) }\n");
+        w.push_str("    }\n");
+        w.push_str("    fn of(items: Vec<T>) -> Self {\n");
+        w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::iter(items)))\n");
+        w.push_str("    }\n");
+        w.push_str("    fn from(items: Vec<T>) -> Self {\n");
+        w.push_str("        Self::of(items)\n");
+        w.push_str("    }\n");
+        w.push_str("    fn generate(\n");
+        w.push_str("        f: impl FnMut() -> futures::future::LocalBoxFuture<'static, Option<T>> + 'static,\n");
+        w.push_str("    ) -> Self {\n");
+        w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::unfold(f, |mut f| async move {\n");
+        w.push_str("            f().await.map(|v| (v, f))\n");
+        w.push_str("        })))\n");
+        w.push_str("    }\n");
+        w.push_str("    async fn next(&self) -> Option<T> {\n");
+        w.push_str("        let mut s = self.inner.borrow_mut();\n");
+        w.push_str("        futures::stream::StreamExt::next(&mut *s).await\n");
+        w.push_str("    }\n");
+        w.push_str("    fn take_inner(&self) -> futures::stream::LocalBoxStream<'static, T> {\n");
+        w.push_str("        std::mem::replace(\n");
+        w.push_str("            &mut *self.inner.borrow_mut(),\n");
+        w.push_str("            ::std::boxed::Box::pin(futures::stream::empty()),\n");
+        w.push_str("        )\n");
+        w.push_str("    }\n");
+        w.push_str("    #[allow(non_snake_case)]\n");
+        w.push_str("    fn mapAsync<U: Clone + 'static>(&self, f: std::rc::Rc<dyn Fn(T) -> U>) -> JuxStream<U> {\n");
+        w.push_str("        JuxStream::from_stream(::std::boxed::Box::pin(futures::stream::StreamExt::map(\n");
+        w.push_str("            self.take_inner(),\n");
+        w.push_str("            move |v| f(v),\n");
+        w.push_str("        )))\n");
+        w.push_str("    }\n");
+        w.push_str("    #[allow(non_snake_case)]\n");
+        w.push_str("    fn filterAsync(&self, f: std::rc::Rc<dyn Fn(T) -> bool>) -> JuxStream<T> {\n");
+        w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::StreamExt::filter(\n");
+        w.push_str("            self.take_inner(),\n");
+        w.push_str("            move |v: &T| futures::future::ready(f(v.clone())),\n");
+        w.push_str("        )))\n");
+        w.push_str("    }\n");
+        w.push_str("    fn take(&self, n: isize) -> JuxStream<T> {\n");
+        w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::StreamExt::take(self.take_inner(), n.max(0) as usize)))\n");
+        w.push_str("    }\n");
+        w.push_str("    fn skip(&self, n: isize) -> JuxStream<T> {\n");
+        w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::StreamExt::skip(self.take_inner(), n.max(0) as usize)))\n");
+        w.push_str("    }\n");
+        w.push_str("    fn chain(&self, other: JuxStream<T>) -> JuxStream<T> {\n");
+        w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::StreamExt::chain(self.take_inner(), other.take_inner())))\n");
+        w.push_str("    }\n");
+        w.push_str("}\n\n");
         // AsyncMutex runtime — §18.3. `await m.lock()` suspends until
         // acquired; the returned guard is the only handle to the
         // protected value (`guard.value` reads/writes deref it) and
@@ -2929,6 +3008,7 @@ impl RustEmitter {
             emitting_call_callee: false,
             emitting_method_receiver: false,
             in_lambda_body: false,
+            lambda_void_target: false,
         }
     }
 
@@ -3391,116 +3471,257 @@ impl RustEmitter {
         }
     }
 
-    /// Emit the test-runner `fn main()` for `jux test`. Walks every
-    /// unit's top-level functions and collects the ones annotated
-    /// `@Test` (case-insensitive). Each test runs inside
-    /// `std::panic::catch_unwind` so a panicking assertion fails
-    /// the test instead of aborting the whole runner. Output is
-    /// formatted to mirror `cargo test`'s human-readable shape:
+    /// Emit the test-runner `fn main()` for `jux test`
+    /// (JUX-TESTING-ADDENDUM §TS.2/§TS.5–§TS.8). Walks every unit's
+    /// top-level functions and collects `@Test`s plus the per-file
+    /// lifecycle hooks (`@BeforeAll`/`@BeforeEach`/`@AfterEach`/
+    /// `@AfterAll`, all case-insensitive). Each test runs inside
+    /// `std::panic::catch_unwind` so a failed assertion (a panic,
+    /// §TS.4) fails the test instead of aborting the runner; async
+    /// tests are driven with `block_on`. A runtime argv substring
+    /// filter selects tests without recompiling. Output:
     ///
     /// ```text
     /// running 3 tests
-    ///   PASS test_one
-    ///   PASS test_two
-    ///   FAIL test_three: expected 42, got 41
+    ///   PASS pkg.test_one
+    ///   FAIL pkg.test_three: assertEqual: expected `42`, got `41`
     ///
     /// test result: FAILED. 2 passed; 1 failed
     /// ```
     pub(crate) fn emit_test_runner_main(&mut self, units: &[CompilationUnit]) {
-        // Discovery — collect `(call_path, display_name)` tuples
-        // for every `@Test` free function across every unit. The
-        // call path includes the package prefix (`mypkg::myfn`)
-        // so the synthetic main can reach into packaged modules.
-        let mut tests: Vec<(String, String)> = Vec::new();
+        // Case-insensitive annotation probe.
+        let has_ann = |f: &juxc_ast::FnDecl, name: &str| {
+            f.annotations.iter().any(|a| {
+                a.name
+                    .segments
+                    .last()
+                    .is_some_and(|seg| seg.text.eq_ignore_ascii_case(name))
+            })
+        };
+        // Per-unit discovery: tests + hooks, file = lifecycle scope
+        // (§TS.5). `call` is the Rust path (`pkg::fn`), `display` the
+        // package-qualified Jux name (`pkg.fn`).
+        struct UnitPlan {
+            tests: Vec<(String, String, bool)>, // (call, display, is_async)
+            before_each: Vec<(String, bool)>,
+            after_each: Vec<(String, bool)>,
+            before_all: Vec<(String, bool)>,
+            after_all: Vec<(String, bool)>,
+        }
+        let mut plans: Vec<UnitPlan> = Vec::new();
         for unit in units {
             let pkg: Vec<&str> = unit
                 .package
                 .as_ref()
                 .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect())
                 .unwrap_or_default();
+            let rust_prefix: String =
+                pkg.iter().map(|s| format!("{s}::")).collect();
+            let jux_prefix: String = pkg.iter().map(|s| format!("{s}.")).collect();
+            let mut plan = UnitPlan {
+                tests: Vec::new(),
+                before_each: Vec::new(),
+                after_each: Vec::new(),
+                before_all: Vec::new(),
+                after_all: Vec::new(),
+            };
             for item in &unit.items {
                 let TopLevelDecl::Function(fn_decl) = item else {
                     continue;
                 };
-                let has_test = fn_decl.annotations.iter().any(|a| {
-                    a.name.segments.last().is_some_and(|seg| {
-                        // Case-insensitive match per the
-                        // `feedback_annotations_case_insensitive`
-                        // rule — `@Test`, `@test`, `@TEST` all
-                        // count as the same annotation.
-                        seg.text.eq_ignore_ascii_case("Test")
-                    })
-                });
-                if !has_test {
-                    continue;
+                let is_async = matches!(
+                    fn_decl.return_type,
+                    juxc_ast::ReturnType::AsyncType(_),
+                );
+                let call = format!("{rust_prefix}{}", fn_decl.name.text);
+                if has_ann(fn_decl, "Test") {
+                    let display = format!("{jux_prefix}{}", fn_decl.name.text);
+                    plan.tests.push((call, display, is_async));
+                } else if has_ann(fn_decl, "BeforeEach") {
+                    plan.before_each.push((call, is_async));
+                } else if has_ann(fn_decl, "AfterEach") {
+                    plan.after_each.push((call, is_async));
+                } else if has_ann(fn_decl, "BeforeAll") {
+                    plan.before_all.push((call, is_async));
+                } else if has_ann(fn_decl, "AfterAll") {
+                    plan.after_all.push((call, is_async));
                 }
-                let mut path = String::new();
-                for seg in &pkg {
-                    path.push_str(seg);
-                    path.push_str("::");
-                }
-                path.push_str(&fn_decl.name.text);
-                tests.push((path, fn_decl.name.text.clone()));
+            }
+            if !plan.tests.is_empty() {
+                plans.push(plan);
             }
         }
+        // Render one hook/test invocation, driving async fns through
+        // the executor.
+        let call_text = |call: &str, is_async: bool| -> String {
+            if is_async {
+                format!("futures::executor::block_on({call}());")
+            } else {
+                format!("{call}();")
+            }
+        };
+
+        // Payload → message helper: assertion failures and runtime
+        // panics carry String/&str; an escaped typed exception renders
+        // `<Class>: <message>` through one downcast arm per known
+        // exception class (same enumeration the uncaught-exception
+        // reporter uses).
+        self.w.newline();
+        self.w.line(
+            "fn __jux_panic_msg(p: &::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>) -> String {",
+        );
+        self.w.indent_inc();
+        self.w
+            .line("if let Some(s) = p.downcast_ref::<String>() { return s.clone(); }");
+        self.w.line(
+            "if let Some(s) = p.downcast_ref::<&'static str>() { return s.to_string(); }",
+        );
+        for fqn in self.throwable_class_fqns() {
+            let path = match backend_fqn::fqn_package(&fqn) {
+                Some(pkg) => format!(
+                    "crate::{}::{}",
+                    pkg.split('.').collect::<Vec<_>>().join("::"),
+                    backend_fqn::fqn_bare(&fqn),
+                ),
+                None => backend_fqn::fqn_bare(&fqn).to_string(),
+            };
+            self.w.line(&format!(
+                "if let Some(e) = p.downcast_ref::<{path}>() {{ return format!(\"{fqn}: {{}}\", e.getMessage()); }}",
+            ));
+        }
+        self.w.line("String::from(\"<panic>\")");
+        self.w.indent_dec();
+        self.w.line("}");
+
+        let total: usize = plans.iter().map(|p| p.tests.len()).sum();
         self.w.newline();
         self.w.line("fn main() {");
         self.w.indent_inc();
         // Suppress the default panic hook's "thread 'main' panicked
-        // at …" noise. Each failed test still surfaces through the
-        // catch_unwind path below as a `FAIL` line — the stderr
-        // diagnostic from rustc's hook would just double-print.
+        // at …" noise — failures surface as FAIL lines. Fully-
+        // qualified `Box` so a user `class Box` can't shadow std's.
         self.w
-            .line("std::panic::set_hook(Box::new(|_| {}));");
-        // Header — total count helps the user see at a glance
-        // how many tests will run.
+            .line("std::panic::set_hook(::std::boxed::Box::new(|_| {}));");
+        // Runtime filtering (§TS.8): argv substrings select tests.
+        self.w.line(
+            "let __jux_filter: Vec<String> = std::env::args().skip(1).collect();",
+        );
+        self.w.line(
+            "let __jux_match = |n: &str| __jux_filter.is_empty() || __jux_filter.iter().any(|f| n.contains(f.as_str()));",
+        );
         self.w.emit_indent();
+        self.w.push_str("let __jux_names: [&str; ");
+        self.w.push_str(&total.to_string());
+        self.w.push_str("] = [");
+        for (i, (_, display, _)) in
+            plans.iter().flat_map(|p| p.tests.iter()).enumerate().map(|(i, t)| (i, t))
+        {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push('"');
+            self.w.push_str(display);
+            self.w.push('"');
+        }
+        self.w.push_str("];\n");
+        self.w.line(
+            "let __jux_total = __jux_names.iter().filter(|n| __jux_match(n)).count();",
+        );
         self.w
-            .push_str(&format!("println!(\"running {} tests\");\n", tests.len()));
+            .line("println!(\"running {} tests\", __jux_total);");
         self.w.line("let mut __jux_passed: i64 = 0;");
         self.w.line("let mut __jux_failed: i64 = 0;");
-        for (call_path, display) in &tests {
-            // Wrap each call in catch_unwind so a panic from one
-            // test doesn't abort the runner. The closure captures
-            // nothing — test functions are top-level, no closure
-            // state needed.
-            self.w.emit_indent();
-            self.w.push_str(
-                "let __jux_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ",
-            );
-            self.w.push_str(call_path);
-            self.w.push_str("()));\n");
-            self.w.emit_indent();
-            self.w.push_str("match __jux_result {\n");
-            self.w.indent_inc();
-            self.w.emit_indent();
+
+        for (ui, plan) in plans.iter().enumerate() {
+            // Lazy once-per-file BeforeAll (§TS.5) — runs inside the
+            // first executed test's catch_unwind, so its failure
+            // fails that test.
             self.w
-                .push_str(&format!("Ok(_) => {{ println!(\"  PASS {display}\"); __jux_passed += 1; }}\n"));
-            self.w.emit_indent();
-            self.w.push_str("Err(__jux_payload) => {\n");
-            self.w.indent_inc();
-            self.w.line(
-                "let __jux_msg: String = __jux_payload.downcast_ref::<String>().cloned()",
-            );
-            self.w.line(
-                "    .or_else(|| __jux_payload.downcast_ref::<&'static str>().map(|s| s.to_string()))",
-            );
-            self.w.line("    .unwrap_or_else(|| String::from(\"<panic>\"));");
-            self.w.emit_indent();
-            self.w
-                .push_str(&format!("println!(\"  FAIL {display}: {{}}\", __jux_msg);\n"));
-            self.w.line("__jux_failed += 1;");
-            self.w.indent_dec();
-            self.w.line("}");
-            self.w.indent_dec();
-            self.w.line("}");
+                .line(&format!("let mut __jux_unit{ui}_started = false;"));
+            for (call, display, is_async) in &plan.tests {
+                self.w
+                    .line(&format!("if __jux_match(\"{display}\") {{"));
+                self.w.indent_inc();
+                self.w.emit_indent();
+                self.w.push_str(
+                    "let __jux_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n",
+                );
+                self.w.indent_inc();
+                self.w.line(&format!(
+                    "if !__jux_unit{ui}_started {{ __jux_unit{ui}_started = true;"
+                ));
+                self.w.indent_inc();
+                for (h, ha) in &plan.before_all {
+                    self.w.line(&call_text(h, *ha));
+                }
+                self.w.indent_dec();
+                self.w.line("}");
+                for (h, ha) in &plan.before_each {
+                    self.w.line(&call_text(h, *ha));
+                }
+                self.w.line(&call_text(call, *is_async));
+                self.w.indent_dec();
+                self.w.line("}));");
+                // AfterEach runs in its OWN catch_unwind — even when
+                // the test failed (§TS.5).
+                self.w.emit_indent();
+                self.w.push_str(
+                    "let __jux_after = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n",
+                );
+                self.w.indent_inc();
+                for (h, ha) in &plan.after_each {
+                    self.w.line(&call_text(h, *ha));
+                }
+                self.w.indent_dec();
+                self.w.line("}));");
+                self.w.line("match (&__jux_result, &__jux_after) {");
+                self.w.indent_inc();
+                self.w.line(&format!(
+                    "(Ok(_), Ok(_)) => {{ println!(\"  PASS {display}\"); __jux_passed += 1; }}"
+                ));
+                self.w.line(&format!(
+                    "(Err(p), _) => {{ println!(\"  FAIL {display}: {{}}\", __jux_panic_msg(p)); __jux_failed += 1; }}"
+                ));
+                self.w.line(&format!(
+                    "(Ok(_), Err(p)) => {{ println!(\"  FAIL {display}: <afterEach> {{}}\", __jux_panic_msg(p)); __jux_failed += 1; }}"
+                ));
+                self.w.indent_dec();
+                self.w.line("}");
+                self.w.indent_dec();
+                self.w.line("}");
+            }
+            if !plan.after_all.is_empty() {
+                // Per-file AfterAll — only when the file ran (§TS.5);
+                // a failure counts against the run without masking
+                // any test's own result.
+                self.w
+                    .line(&format!("if __jux_unit{ui}_started {{"));
+                self.w.indent_inc();
+                self.w.emit_indent();
+                self.w.push_str(
+                    "let __jux_aa = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n",
+                );
+                self.w.indent_inc();
+                for (h, ha) in &plan.after_all {
+                    self.w.line(&call_text(h, *ha));
+                }
+                self.w.indent_dec();
+                self.w.line("}));");
+                self.w.line(
+                    "if let Err(p) = &__jux_aa { println!(\"  FAIL <afterAll>: {}\", __jux_panic_msg(p)); __jux_failed += 1; }",
+                );
+                self.w.indent_dec();
+                self.w.line("}");
+            }
         }
-        // Summary + exit code. A non-zero exit is what CI looks
-        // at to gate merges, so the runner panics on failure
-        // (Rust's default-hook handles the exit code).
+        // Summary + exit code (§TS.7); `; N filtered out` when a
+        // filter was active.
         self.w.line("println!();");
         self.w.line(
-            "println!(\"test result: {}. {} passed; {} failed\", if __jux_failed == 0 { \"ok\" } else { \"FAILED\" }, __jux_passed, __jux_failed);",
+            "let __jux_filtered = __jux_names.len() - __jux_total;",
+        );
+        self.w.line(
+            "if __jux_filtered > 0 { println!(\"test result: {}. {} passed; {} failed; {} filtered out\", if __jux_failed == 0 { \"ok\" } else { \"FAILED\" }, __jux_passed, __jux_failed, __jux_filtered); } else { println!(\"test result: {}. {} passed; {} failed\", if __jux_failed == 0 { \"ok\" } else { \"FAILED\" }, __jux_passed, __jux_failed); }",
         );
         self.w.line("if __jux_failed > 0 { std::process::exit(1); }");
         self.w.indent_dec();
@@ -3635,18 +3856,21 @@ impl RustEmitter {
                     }
                 }
             }
-            if let Some(line) = render_use(&import.spec, inside_package_mod) {
-                // Per-module dedupe: when two units in the same
-                // package both import the same name, we'd
-                // otherwise emit `use foo;` twice in the same
-                // `pub mod` and Rust rejects it as `E0252`. The
-                // emitted-uses set is reset whenever we enter or
-                // leave a `pub mod` (see `emit_package_node_body`).
-                if !self.emitted_uses_in_module.insert(line.clone()) {
-                    continue;
+            if let Some(rendered) = render_use(&import.spec, inside_package_mod) {
+                // Per-module, PER-LINE dedupe: when two units in the
+                // same module import the same name — even through
+                // different groupings (`{add}` vs `{add, divide}`,
+                // which `render_use` expands one-per-line) — we'd
+                // otherwise emit `use foo;` twice and Rust rejects it
+                // as E0252. The emitted-uses set is reset whenever we
+                // enter or leave a `pub mod`.
+                for line in rendered.split('\n') {
+                    if !self.emitted_uses_in_module.insert(line.to_string()) {
+                        continue;
+                    }
+                    self.w.line(line);
+                    emitted_any = true;
                 }
-                self.w.line(&line);
-                emitted_any = true;
             }
         }
         // Blank line after the use block — keeps the emitted source
@@ -3999,15 +4223,23 @@ fn render_use(spec: &ImportSpec, inside_package_mod: bool) -> Option<String> {
                 return None;
             }
             let path = render_qualified(prefix)?;
-            let body = items
+            // Grouped imports expand to ONE `use` line per name (not
+            // `use p::{a, b};`): the per-module dedupe is line-keyed,
+            // so two root-tier units importing the same symbol through
+            // DIFFERENT groupings (`{add}` vs `{add, divide}`) must
+            // land on identical lines or rustc rejects the second as
+            // E0252.
+            let lines = items
                 .iter()
                 .map(|it| match &it.alias {
-                    Some(a) => format!("{} as {}", it.name.text, a.text),
-                    None => it.name.text.clone(),
+                    Some(a) => {
+                        format!("use {root}{path}::{} as {};", it.name.text, a.text)
+                    }
+                    None => format!("use {root}{path}::{};", it.name.text),
                 })
                 .collect::<Vec<_>>()
-                .join(", ");
-            Some(format!("use {root}{path}::{{{body}}};"))
+                .join("\n");
+            Some(lines)
         }
     }
 }

@@ -2134,13 +2134,59 @@ impl<'a> Checker<'a> {
                 self.check_expr(&f.iter);
                 self.in_foreach_iter = prev_fe;
                 let iter_ty = infer_expr(&f.iter, &self.env, self.symbols);
+                // §18.6.3 async streams: `for await` is only legal in an
+                // async context (it awaits `next()` per element), and the
+                // iterable must be a Stream<T> — in both directions
+                // (plain `for` over a stream has no sync protocol).
+                let iter_is_stream = matches!(
+                    &iter_ty,
+                    Ty::User { name, .. }
+                        if name.rsplit('.').next() == Some("Stream")
+                            && !self.symbols.classes.contains_key("Stream")
+                );
+                if f.is_await {
+                    if !self.in_async {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0703_ForAwaitRequiresAsyncContext,
+                                "`for await` is only permitted inside an async function, method, or lambda — it awaits the stream's `next()` for every element (§18.6.3)",
+                            )
+                            .with_span(f.span),
+                        );
+                    }
+                    if !iter_is_stream && !matches!(iter_ty, Ty::Unknown) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0704_ForAwaitRequiresStream,
+                                format!(
+                                    "`for await` iterates a `Stream<T>`, found {iter_ty} — use a plain `for` for synchronous iterables (§18.6.3)",
+                                ),
+                            )
+                            .with_span(expr_span(&f.iter)),
+                        );
+                    }
+                } else if iter_is_stream {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0704_ForAwaitRequiresStream,
+                            "a `Stream<T>` has no synchronous iteration protocol — use `for await (var x : …)` (§18.6.3)",
+                        )
+                        .with_span(expr_span(&f.iter)),
+                    );
+                }
                 // Loop-var binding: explicit annotation wins; else
-                // element-of-array if iter is an array; else Unknown.
+                // element-of-array if iter is an array; else the
+                // stream's element type; else Unknown.
                 let var_ty = if let Some(declared) = &f.var_type {
                     ty_from_ref(declared, &self.env, self.symbols)
                 } else {
                     match &iter_ty {
                         Ty::Array { element, .. } => (**element).clone(),
+                        // Stream<T> (§18.6): the element type is the
+                        // single generic arg.
+                        Ty::User { generic_args, .. } if iter_is_stream => {
+                            generic_args.first().cloned().unwrap_or(Ty::Unknown)
+                        }
                         // User iterable (§O.6/§K.5): the protocol's
                         // element type — `iterator()`'s Iterator<T>
                         // argument, or the iterator's own `next()`
@@ -4333,6 +4379,35 @@ impl<'a> Checker<'a> {
                         }
                         return;
                     }
+                    // `Stream.of/from/generate` (§18.6.4) — statics on
+                    // the emitted JuxStream helper. `generate`'s single
+                    // argument must be a zero-parameter lambda (the
+                    // pull-driven producer).
+                    if qn.segments.len() == 1
+                        && qn.segments[0].text == "Stream"
+                        && !self.symbols.classes.contains_key("Stream")
+                        && matches!(method_name, "of" | "from" | "generate")
+                    {
+                        if method_name == "generate" {
+                            let ok = matches!(
+                                c.args.first(),
+                                Some(Expr::Lambda(l)) if l.params.is_empty()
+                            ) && c.args.len() == 1;
+                            if !ok {
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        code::Code::E0410_TypeMismatch,
+                                        "`Stream.generate` takes exactly one zero-parameter async lambda — `Stream.generate(async () -> …)` (§18.6.4)",
+                                    )
+                                    .with_span(c.span),
+                                );
+                            }
+                        }
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
                 }
                 // `ClassName.staticMethod(args)` — receiver is a
                 // type name; resolve and check as a static call
@@ -4527,6 +4602,20 @@ impl<'a> Checker<'a> {
                     }
                     if bare == "Channel"
                         && matches!(method_name, "send" | "receive" | "close")
+                    {
+                        for arg in &c.args {
+                            self.check_expr(arg);
+                        }
+                        return;
+                    }
+                    // Stream<T> (§18.6) — same builtin treatment: its
+                    // methods live on the emitted JuxStream helper.
+                    if bare == "Stream"
+                        && !self.symbols.classes.contains_key("Stream")
+                        && matches!(
+                            method_name,
+                            "next" | "mapAsync" | "filterAsync" | "take" | "skip" | "chain",
+                        )
                     {
                         for arg in &c.args {
                             self.check_expr(arg);

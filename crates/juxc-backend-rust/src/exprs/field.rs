@@ -964,13 +964,14 @@ impl RustEmitter {
                     }
                     if let juxc_tycheck::Ty::User { name, .. } = ty {
                         let bare = name.rsplit('.').next().unwrap_or(name);
-                        // Async-runtime handles are Arc-backed —
+                        // Async-runtime handles are Arc/Rc-backed —
                         // passing one shares it (refcount bump), the
                         // same rule wrapper places follow. Atomic
-                        // counters share the same way (§S.6.2).
+                        // counters share the same way (§S.6.2);
+                        // streams (§18.6) are Rc-backed handles too.
                         if matches!(
                             bare,
-                            "Channel" | "AsyncMutex" | "AtomicInt" | "AtomicLong"
+                            "Channel" | "AsyncMutex" | "AtomicInt" | "AtomicLong" | "Stream"
                         ) {
                             return true;
                         }

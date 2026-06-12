@@ -353,8 +353,8 @@ Because direct async calls require `await` (§18.1.2), unhandled rejections can 
 > awaiting a cancelled task is a compile-time move error rather than
 > a `CancellationException` (the cooperative checkpoint runtime this
 > section describes lands later; the exception class exists for
-> forward compatibility). `for await` / `Stream<T>` remain deferred
-> per the follow-up note below.
+> forward compatibility). `for await` / `Stream<T>` are specified in
+> §18.6 and implemented.
 
 Calling `task.cancel()` requests cancellation. At the next `await` inside the task, a `CancellationException` is thrown:
 
@@ -571,12 +571,147 @@ No `Future<T>` in any signature. No `Send` bounds. No pinning. No runtime to cho
 
 The Kotlin and Jux columns are the closest match. Jux's contribution is making the borrow rule explicit while keeping the surface as light as Kotlin's.
 
-### 18.6. What This Addendum Does Not Specify
+### 18.6. Async Streams
 
-- **Async iterators / streams** (`for await (var x of stream)`). Will be a follow-up section. Underlying type: `Stream<T>` with `async T? next()`.
-- **Async generators.** Same.
+An async stream is a sequence whose elements arrive over time — lines from a
+file, messages from a socket, events from a channel. The consumer pulls each
+element with an awaited call; the producer runs only when pulled (implicit
+backpressure).
+
+#### 18.6.1. The `Stream<T>` Type
+
+`Stream<T>` is a **final, built-in class** (like `Channel<T>` and `Task<T>` —
+no import needed). It is not user-implementable in Phase 1: interfaces lower
+to dynamic-dispatch trait objects, and async methods are not dyn-compatible
+in the Phase-1 backend. User-defined streams are created through
+`Stream.generate(...)` (§18.6.4), which covers the same ground.
+
+Stream values are **handles**: assigning, capturing, or passing a stream
+shares the same underlying sequence (Java reference semantics — the same rule
+class objects follow). Two handles to one stream pull from the same source;
+an element consumed through one handle is not seen by the other.
+
+Streams are **task-local**: a stream cannot be captured by `spawn` /
+`Worker.spawn` (rejected with `E0702`, the same rule as class objects).
+Cross-task pipelines use `Channel<T>` and wrap the receiving end in a stream
+on the consuming task if desired.
+
+#### 18.6.2. `next()` and Exhaustion
+
+```jux
+async T? next()
+```
+
+Suspends until the next element is available and resolves to it; resolves to
+`null` when the stream is exhausted. After exhaustion, every further `next()`
+call resolves `null` immediately (idempotent). There is no "rewind" — a
+stream is a one-shot sequence.
+
+#### 18.6.3. `for await`
+
+```text
+for-each-stmt = 'for' 'await'? '(' ('var' | type) ident ':' expression ')' block
+```
+
+`for await (var x : stream)` consumes a stream to exhaustion:
+
+```jux
+public async void readAll(Stream<String> lines) {
+    for await (var line : lines) {
+        if (line.startsWith("#")) continue;
+        process(line);
+    }
+}
+```
+
+Desugaring: the stream expression is evaluated once, then the loop is exactly
+
+```jux
+while (true) {
+    var x = await stream.next();
+    if (x == null) break;
+    // body, with x smart-cast to T
+}
+```
+
+`break`, `continue`, and loop labels work as in any loop. Rules:
+
+- `for await` is only legal inside an `async` function, method, or lambda —
+  **E0703** otherwise (it awaits).
+- The iterated expression must be a `Stream<T>` — **E0704** otherwise.
+- A plain `for` over a `Stream<T>` is also **E0704**, with the fix-it
+  "use `for await`": a stream has no synchronous iteration protocol.
+
+#### 18.6.4. Constructors
+
+```jux
+static Stream<T> of(T... items);          // fixed elements, in order
+static Stream<T> from(T[] items);         // snapshot of an array/list
+static Stream<T> generate(async T? f());  // pull-driven producer
+```
+
+- `Stream.of(1, 2, 3)` — the listed elements, then exhaustion.
+- `Stream.from(xs)` — the elements of an array / `ArrayList` (snapshot taken
+  at construction; later mutation of `xs` is not observed).
+- `Stream.generate(f)` — the general escape hatch: `f` is an async lambda
+  called once **per pull**; each call produces the next element, and
+  returning `null` ends the stream. The lambda may `await` (read a channel,
+  sleep, do I/O) and may capture state to drive the sequence:
+
+```jux
+var n = new AtomicInt(0);
+var firstFive = Stream.generate(async () -> {
+    var k = n.fetchAdd(1);
+    if (k >= 5) return null;
+    return k;
+});
+```
+
+#### 18.6.5. Combinators
+
+```jux
+Stream<U> mapAsync((T) -> U f);
+Stream<T> filterAsync((T) -> bool p);
+Stream<T> take(int n);
+Stream<T> skip(int n);
+Stream<T> chain(Stream<T> other);
+```
+
+All combinators are **lazy** — nothing runs until the result is pulled — and
+compose:
+
+```jux
+var s = Stream.of(1, 2, 3, 4, 5)
+    .mapAsync(x -> x * 10)
+    .filterAsync(x -> x > 10)
+    .take(2);
+for await (var v : s) { print(v); }    // 20, 30
+```
+
+Combinators **consume the receiver**: after `s.take(2)`, pulling from `s`
+itself yields `null` — the elements now flow through the returned stream.
+(A stream is a one-shot sequence; the combinator is its new front.) The
+transform lambdas are synchronous in Phase 1 — the `Async` suffix says the
+*combinator operates on an async stream*, not that the lambda suspends;
+async transform lambdas are a planned widening of the same names.
+
+#### 18.6.6. Backpressure
+
+Implicit and total: a stream does no work until `next()` is awaited. A
+`generate` producer runs once per pull; a combinator chain pulls its upstream
+exactly as often as it is pulled. There is no internal buffering — buffering
+is what `Channel<T>` is for.
+
+### 18.7. What This Addendum Does Not Specify
+
+- **Async generators** (`yield`-based stream bodies). Will build on §18.6's
+  `Stream<T>`; `Stream.generate` is the Phase-1 form.
+- **Async transform lambdas in combinators** (`mapAsync(async x -> …)`).
+  Planned widening of §18.6.5 under the same names.
+- **User classes implementing `Stream<T>`.** Lands with async interface
+  methods.
 - **Cooperative fairness guarantees.** The runtime currently makes none beyond "no task starves indefinitely." Workloads that need stronger guarantees should yield explicitly with `Task.yield()`.
-- **Structured concurrency primitives** (scoped tasks, supervision trees). Likely a future §18.7; the cancellation primitives in §18.1.9 are the foundation.
+- **Structured concurrency primitives** (scoped tasks, supervision trees). Likely a future §18.8; the cancellation primitives in §18.1.9 are the foundation.
 
 None block the v0.1 design.
 

@@ -12,6 +12,19 @@ use crate::RustEmitter;
 /// Mirror of `binary::collect_string_concat_operands` for the
 /// `print(...)`-collapse hot path. Kept here to avoid exposing the
 /// binary-module helper across modules.
+/// A synthesized NULLABLE return-type ref for `Stream.generate` body
+/// emission (§18.6.4): only the `nullable` flag matters — the return
+/// lowering reads it to apply the `Some(...)` lift, and the dummy name
+/// resolves to nothing, so no interface/upcast coercion fires.
+fn synth_nullable_type_ref() -> juxc_ast::TypeRef {
+    let mut t = crate::analysis::synth_iface_type_ref(
+        "__jux_stream_elem",
+        juxc_source::Span::DUMMY,
+    );
+    t.nullable = true;
+    t
+}
+
 /// The dotted place-path of a pure place expression: `x` → `"x"`,
 /// `this` → `"this"`, `h.item` → `"h.item"`, `this.a.b` → `"this.a.b"`.
 /// `None` for anything that isn't a simple chain of field reads rooted
@@ -341,13 +354,19 @@ impl RustEmitter {
         }
         // `assert(cond)` / `assert(cond, msg)` (§S.7.2) → Rust's
         // `debug_assert!`: checked in debug builds, elided in release
-        // — exactly the jux-full profile defaults. The message slot
-        // goes through the format machinery so interpolated strings
-        // and String values both work; the macro evaluates it lazily
-        // (only on failure).
+        // — exactly the jux-full profile defaults. Under `jux test`
+        // (§TS.3) it lowers to the always-checked `assert!` instead,
+        // so `jux test --release` can't elide assertions. The message
+        // slot goes through the format machinery so interpolated
+        // strings and String values both work; the macro evaluates it
+        // lazily (only on failure).
         if let Expr::Path(qn) = &*call.callee {
             if qn.segments.len() == 1 && qn.segments[0].text == "assert" {
-                self.w.push_str("debug_assert!(");
+                self.w.push_str(if self.test_mode {
+                    "assert!("
+                } else {
+                    "debug_assert!("
+                });
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
                 if let Some(cond) = call.args.first() {
@@ -480,6 +499,16 @@ impl RustEmitter {
                             self.emitting_format_arg = prev;
                         }
                     }
+                }
+                // `Stream.of/from/generate` (§18.6.4) — statics on the
+                // emitted JuxStream helper.
+                if qn.segments.len() == 1
+                    && qn.segments[0].text == "Stream"
+                    && !self.symbols.classes.contains_key("Stream")
+                    && matches!(f.field.text.as_str(), "of" | "from" | "generate")
+                {
+                    self.emit_stream_static(call, f.field.text.as_str());
+                    return;
                 }
             }
         }
@@ -1334,6 +1363,31 @@ impl RustEmitter {
                 return;
             }
         }
+        // A lambda flowing into a `() -> void`-typed parameter wraps
+        // its EXPRESSION body as `{ expr; }` (value discarded) so the
+        // closure types as `()` — `assertThrows(() -> divide(10, 0))`
+        // per §TS.3. The flag is take-and-cleared by the lambda
+        // emitters.
+        if let Expr::Lambda(l) = arg {
+            if matches!(l.body, juxc_ast::LambdaBody::Expr(_)) {
+                if let Some(pt) = self.callee_param_type(&call.callee, i) {
+                    if let Some(fs) = &pt.fn_shape {
+                        let ret_is_void = fs
+                            .return_type
+                            .name
+                            .segments
+                            .last()
+                            .map(|s| s.text == "void")
+                            .unwrap_or(false)
+                            && fs.return_type.fn_shape.is_none()
+                            && fs.return_type.array_shape.is_none();
+                        if ret_is_void {
+                            self.lambda_void_target = true;
+                        }
+                    }
+                }
+            }
+        }
         let nullable = self.callee_param_is_nullable(&call.callee, i);
         let upcast = self.arg_needs_sealed_upcast(&call.callee, i, arg);
         if upcast {
@@ -1448,6 +1502,164 @@ impl RustEmitter {
             Some(cf)
         } else {
             None
+        }
+    }
+
+    /// Emit a `Stream.<ctor>` static (§18.6.4):
+    ///
+    /// - `Stream.of(a, b)`    → `crate::JuxStream::of(vec![a, b])`
+    /// - `Stream.from(xs)`    → `crate::JuxStream::from(xs.clone())`
+    ///   (snapshot — the source array stays usable, per §18.6.4)
+    /// - `Stream.generate(async () -> …)` → the pull-driven producer:
+    ///
+    ///   ```text
+    ///   crate::JuxStream::generate({
+    ///       let c = c.clone();                  // closure-level rebinds
+    ///       move || {
+    ///           let c = c.clone();              // per-call rebinds
+    ///           Box::pin(async move { <body> })
+    ///               as futures::future::LocalBoxFuture<'static, _>
+    ///       }
+    ///   })
+    ///   ```
+    ///
+    ///   Captures rebind TWICE: the outer clone hands the closure its
+    ///   own handle (the caller keeps theirs — spawn's rule), and the
+    ///   per-call clone hands each produced future its own (the
+    ///   `async move` consumes its captures every pull). The lambda's
+    ///   Jux return type is `T?`, so body emission runs under a
+    ///   synthesized NULLABLE return type — `return k;` lifts to
+    ///   `Some(k)`, `return null;` lowers to `None` — and a
+    ///   value-tail body takes the same lift inline.
+    fn emit_stream_static(&mut self, call: &CallExpr, method: &str) {
+        let prev = self.emitting_format_arg;
+        self.emitting_format_arg = false;
+        match method {
+            "of" => {
+                self.w.push_str("crate::JuxStream::of(vec![");
+                for (i, arg) in call.args.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str(", ");
+                    }
+                    self.emit_expr(arg);
+                }
+                self.w.push_str("])");
+            }
+            "from" => {
+                self.w.push_str("crate::JuxStream::from(");
+                if let Some(arg) = call.args.first() {
+                    self.emit_expr(arg);
+                    self.w.push_str(".clone()");
+                }
+                self.w.push(')');
+            }
+            "generate" => {
+                // Capture rebinds — same discovery as `spawn`.
+                let mut rebinds: Vec<String> = Vec::new();
+                if let Some(Expr::Lambda(l)) = call.args.first() {
+                    let mut names: Vec<String> = Vec::new();
+                    crate::exprs::collect_bare_names_in_lambda(l, &mut |n| {
+                        if !names.iter().any(|x| x == n) {
+                            names.push(n.to_string());
+                        }
+                    });
+                    for name in names {
+                        let known = self
+                            .local_types
+                            .iter()
+                            .rev()
+                            .find_map(|s| s.get(&name).cloned());
+                        if let Some(ty) = known {
+                            if !matches!(ty, juxc_tycheck::Ty::Primitive(_)) {
+                                rebinds.push(name);
+                            }
+                        }
+                    }
+                }
+                self.w.push_str("crate::JuxStream::generate({ ");
+                for name in &rebinds {
+                    self.w.push_str("let ");
+                    self.w.push_str(name);
+                    self.w.push_str(" = ");
+                    self.w.push_str(name);
+                    self.w.push_str(".clone(); ");
+                }
+                self.w.push_str("move || { ");
+                for name in &rebinds {
+                    self.w.push_str("let ");
+                    self.w.push_str(name);
+                    self.w.push_str(" = ");
+                    self.w.push_str(name);
+                    self.w.push_str(".clone(); ");
+                }
+                // Fully-qualified `Box` — a user `class Box` at the
+                // crate root must not shadow std's (same rule as the
+                // panic-hook splice).
+                self.w.push_str("::std::boxed::Box::pin(async move { ");
+                // The producer's Jux-level return type is `T?`: emit
+                // the body under a synthesized nullable return so
+                // `return` statements take the `Some(...)` lift.
+                let saved_ret = self.current_return_type.take();
+                self.current_return_type =
+                    Some(juxc_ast::ReturnType::Type(synth_nullable_type_ref()));
+                let prev_lam = self.in_lambda_body;
+                self.in_lambda_body = false;
+                match call.args.first() {
+                    Some(Expr::Lambda(l)) => match &l.body {
+                        juxc_ast::LambdaBody::Expr(e) => {
+                            self.emit_stream_elem_value(e);
+                        }
+                        juxc_ast::LambdaBody::Block(b) => {
+                            let (stmts, tail) = match b.statements.split_last() {
+                                Some((juxc_ast::Stmt::Expr(t), rest)) => (rest, Some(t)),
+                                _ => (&b.statements[..], None),
+                            };
+                            self.w.push('\n');
+                            self.w.indent_inc();
+                            for stmt in stmts {
+                                self.w.emit_indent();
+                                self.emit_stmt(stmt);
+                            }
+                            if let Some(tail) = tail {
+                                self.w.emit_indent();
+                                self.emit_stream_elem_value(tail);
+                                self.w.push('\n');
+                            }
+                            self.w.indent_dec();
+                            self.w.emit_indent();
+                        }
+                    },
+                    Some(other) => {
+                        // Non-lambda arg — tycheck complained; emit
+                        // best-effort so the crate still parses.
+                        self.emit_expr(other);
+                    }
+                    None => {
+                        self.w.push_str("None");
+                    }
+                }
+                self.in_lambda_body = prev_lam;
+                self.current_return_type = saved_ret;
+                self.w
+                    .push_str(" }) as futures::future::LocalBoxFuture<'static, _> } })");
+            }
+            _ => {}
+        }
+        self.emitting_format_arg = prev;
+    }
+
+    /// Emit one stream-element VALUE position (`Stream.generate`'s
+    /// expression tail): `null` → `None`, an already-nullable value
+    /// flows through, anything else lifts into `Some(...)`.
+    fn emit_stream_elem_value(&mut self, e: &Expr) {
+        if crate::stmts::is_null_literal(e) {
+            self.w.push_str("None");
+        } else if self.expression_is_already_nullable(e) {
+            self.emit_expr(e);
+        } else {
+            self.w.push_str("Some(");
+            self.emit_expr(e);
+            self.w.push(')');
         }
     }
 

@@ -458,13 +458,16 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         };
     }
 
-    // 1.6. Async-runtime builtin types (§18.1/§18.3): Channel<T> /
-    //    AsyncMutex<T> aren't Jux classes (they lower to emitted
-    //    helpers), but parameter/field positions still need their
-    //    typed shape so method dispatch (`receive()` → `T?`,
-    //    `lock()` → guard) works through them.
+    // 1.6. Async-runtime builtin types (§18.1/§18.3/§18.6): Channel<T> /
+    //    AsyncMutex<T> / Stream<T> aren't Jux classes (they lower to
+    //    emitted helpers), but parameter/field positions still need
+    //    their typed shape so method dispatch (`receive()` → `T?`,
+    //    `lock()` → guard, `next()` → `T?`) works through them.
     if t.name.segments.len() == 1
-        && matches!(t.name.segments[0].text.as_str(), "Channel" | "AsyncMutex")
+        && matches!(
+            t.name.segments[0].text.as_str(),
+            "Channel" | "AsyncMutex" | "Stream",
+        )
         && !symbols.classes.contains_key(t.name.segments[0].text.as_str())
     {
         let generic_args = t

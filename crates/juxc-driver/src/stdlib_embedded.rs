@@ -1451,4 +1451,105 @@ public class Instant {
     }
 }
 "###),
+    ("testing/Assertions.jux", r###"/**
+ * jux.std.testing — the assertion surface of the testing framework
+ * (JUX-TESTING-ADDENDUM §TS.3).
+ *
+ * Pure-Jux free functions. A failed assertion raises an assertion
+ * FAILURE — a runtime panic carrying the message (§TS.4) — which no
+ * `catch (Exception e)` in the code under test can swallow; the test
+ * runner's boundary reports it as the test's FAIL message. Under
+ * `jux test` the underlying `assert` builtin is always checked
+ * (release builds included).
+ */
+package jux.std.testing;
+
+/**
+ * Assert two values are equal via the type's `operator==`. The message
+ * renders both sides through `operator string`. Floats compare
+ * EXACTLY — use `assertNear` for approximate comparison.
+ */
+public void assertEqual<T>(T expected, T actual)
+        where T has operator==(T) -> bool, T has operator string() -> String {
+    if (expected != actual) {
+        assert(false, "assertEqual: expected `" + expected + "`, got `" + actual + "`");
+    }
+}
+
+/**
+ * Assert two values are NOT equal via the type's `operator==`.
+ */
+public void assertNotEqual<T>(T unexpected, T actual)
+        where T has operator==(T) -> bool, T has operator string() -> String {
+    if (unexpected == actual) {
+        assert(false, "assertNotEqual: both sides are `" + actual + "`");
+    }
+}
+
+/**
+ * Assert a condition holds, with an optional message.
+ */
+public void assertTrue(bool condition, String message = "assertTrue failed") {
+    if (!condition) {
+        assert(false, message);
+    }
+}
+
+/**
+ * Assert a condition does NOT hold, with an optional message.
+ */
+public void assertFalse(bool condition, String message = "assertFalse failed") {
+    if (condition) {
+        assert(false, message);
+    }
+}
+
+/**
+ * Assert a nullable value is null.
+ */
+public void assertNull<T>(T? value) {
+    if (value != null) {
+        assert(false, "assertNull: value was non-null");
+    }
+}
+
+/**
+ * Assert a nullable value is non-null.
+ */
+public void assertNotNull<T>(T? value) {
+    if (value == null) {
+        assert(false, "assertNotNull: value was null");
+    }
+}
+
+/**
+ * Assert two doubles are within `epsilon` of each other — the
+ * sanctioned float comparison (`assertEqual` on doubles is exact).
+ */
+public void assertNear(double expected, double actual, double epsilon = 0.000000001) {
+    var diff = expected - actual;
+    if (diff < 0.0) {
+        diff = -diff;
+    }
+    if (diff > epsilon) {
+        assert(false, "assertNear: expected `" + expected + "`, got `" + actual + "` (epsilon " + epsilon + ")");
+    }
+}
+
+/**
+ * Run `f` and assert it THROWS. Returns the caught exception for
+ * inspection (`e.getMessage()`, type tests). Fails when `f` completes
+ * normally. Phase-1 form of the spec's typed assertThrows — see
+ * §TS.3 for the divergence note.
+ */
+public Exception assertThrows(() -> void f) {
+    try {
+        f();
+    } catch (Exception e) {
+        return e;
+    }
+    assert(false, "assertThrows: no exception was thrown");
+    throw new RuntimeException("unreachable");
+}
+"###),
 ];
