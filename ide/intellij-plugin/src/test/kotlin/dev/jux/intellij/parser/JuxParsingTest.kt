@@ -13,6 +13,7 @@ import dev.jux.intellij.psi.JuxFieldDeclaration
 import dev.jux.intellij.psi.JuxMethodDeclaration
 import dev.jux.intellij.psi.JuxNamedElement
 import dev.jux.intellij.psi.JuxParserDefinition
+import dev.jux.intellij.psi.JuxPropertyDeclaration
 import dev.jux.intellij.psi.JuxTypeDeclaration
 import dev.jux.intellij.resolve.JuxReference
 import java.io.File
@@ -287,7 +288,8 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
             "unexpected parse errors: " + errors.joinToString { "${it.errorDescription}@${it.textOffset}" },
             errors.isEmpty(),
         )
-        // The properties land as FIELD_DECLARATIONs named `name` / `doubled`.
+        // The `-> expr` shorthands are PROPERTY_DECLARATIONs, still visible to
+        // field consumers via the JuxFieldDeclaration base class.
         val fields = PsiTreeUtil.collectElementsOfType(psi, JuxFieldDeclaration::class.java).map { it.name }
         assertTrue("property `name` parsed as a member (got $fields)", fields.contains("name"))
         assertTrue("property `doubled` parsed as a member (got $fields)", fields.contains("doubled"))
@@ -381,6 +383,60 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
                     acc.node.findChildByType(JuxElementTypes.MODIFIER_LIST) != null
             },
         )
+    }
+
+    /** The [JuxPropertyDeclaration] PSI helpers the §P annotator/inspections rely on. */
+    fun testPropertyPsiHelpers() {
+        val psi = createPsiFile(
+            "PropPsi.jux",
+            """
+            public class C {
+                public String Id { get; private set; } = "";
+                public int Age {
+                    get -> 1;
+                    set { if (value > 0) { print(value); } }
+                };
+                public bool IsEmpty { get -> true; };
+                public String Label -> "x";
+                private int Hidden { get; set; };
+            }
+            """.trimIndent(),
+        )
+        assertEmpty(PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java))
+        val props = PsiTreeUtil.collectElementsOfType(psi, JuxPropertyDeclaration::class.java)
+            .associateBy { it.name }
+        assertEquals(setOf("Id", "Age", "IsEmpty", "Label", "Hidden"), props.keys)
+
+        val id = props.getValue("Id")
+        assertTrue("Id has a setter", id.hasSetter())
+        assertFalse("Id is not computed", id.isComputed())
+        assertNull("Id getter inherits visibility", id.accessorVisibility(id.getterAccessor()!!))
+        assertEquals(
+            "Id setter is private",
+            JuxTokenTypes.PRIVATE_KW,
+            id.accessorVisibility(id.setterAccessor()!!),
+        )
+        assertNull("Id auto-setter has no block body", id.setterBody())
+        assertTrue("Id is public", id.isPublic())
+        assertEquals("String", id.typeText())
+
+        val age = props.getValue("Age")
+        assertNotNull("Age setter has a block body", age.setterBody())
+
+        val isEmpty = props.getValue("IsEmpty")
+        assertTrue("get-only block is computed", isEmpty.isComputed())
+
+        val label = props.getValue("Label")
+        assertTrue("-> shorthand is computed", label.isComputed())
+        assertNull("-> shorthand has no accessor list", label.accessorList())
+
+        val hidden = props.getValue("Hidden")
+        assertTrue("Hidden is private", hidden.isPrivate())
+        assertFalse("Hidden is not public", hidden.isPublic())
+
+        // Plain fields never come back as JuxPropertyDeclaration.
+        val plain = createPsiFile("Plain.jux", "public class D { private int count; }")
+        assertEmpty(PsiTreeUtil.collectElementsOfType(plain, JuxPropertyDeclaration::class.java))
     }
 
     /** The removed `init` accessor (§P) yields a targeted error, nothing more. */

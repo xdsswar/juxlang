@@ -54,8 +54,11 @@ class JuxParserDefinition : ParserDefinition {
         E.OPERATOR_DECLARATION -> JuxMethodDeclaration(node)
 
         E.FIELD_DECLARATION,
-        E.CONST_DECLARATION,
-        E.PROPERTY_DECLARATION -> JuxFieldDeclaration(node)
+        E.CONST_DECLARATION -> JuxFieldDeclaration(node)
+
+        // Properties get their own PSI class (a JuxFieldDeclaration subclass,
+        // so field consumers keep working) with §P accessor helpers.
+        E.PROPERTY_DECLARATION -> JuxPropertyDeclaration(node)
 
         E.ENUM_CONSTANT -> JuxEnumConstant(node)
         E.PARAMETER -> JuxParameter(node)

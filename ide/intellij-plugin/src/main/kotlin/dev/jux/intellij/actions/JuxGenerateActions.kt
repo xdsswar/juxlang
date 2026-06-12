@@ -55,6 +55,13 @@ abstract class JuxGenerateAction : AnAction() {
     /** Build the member text to insert, or `null` to insert nothing. */
     protected abstract fun build(className: String, fields: List<JuxField>): String?
 
+    /**
+     * Whether `{ get; set; }` properties (§P) count as fields for this action.
+     * Constructor generation keeps them (settable in the constructor, §M.7.2);
+     * getter/setter generation must skip them — accessors already exist.
+     */
+    protected open val includeProperties: Boolean = true
+
     private fun enclosingType(e: AnActionEvent): JuxTypeDeclaration? {
         val file = e.getData(CommonDataKeys.PSI_FILE) ?: return null
         if (file.language != JuxLanguage) return null
@@ -70,6 +77,7 @@ abstract class JuxGenerateAction : AnAction() {
             // Skip nested-type fields and statics.
             if (PsiTreeUtil.getParentOfType(field, JuxTypeDeclaration::class.java) != type) continue
             if (hasKeyword(field, "static")) continue
+            if (!includeProperties && field is dev.jux.intellij.psi.JuxPropertyDeclaration) continue
             val name = field.name ?: continue
             val typeRef = field.node.findChildByType(JuxElementTypes.TYPE_REFERENCE)
             val typeText = typeRef?.text?.trim() ?: continue
@@ -101,6 +109,8 @@ class JuxGenerateConstructorAction : JuxGenerateAction() {
 
 /** Generate a getter for each field: `public T name() { return name; }`. */
 class JuxGenerateGettersAction : JuxGenerateAction() {
+    override val includeProperties: Boolean = false
+
     override fun build(className: String, fields: List<JuxField>): String? {
         if (fields.isEmpty()) return null
         return fields.joinToString("") {
@@ -111,6 +121,8 @@ class JuxGenerateGettersAction : JuxGenerateAction() {
 
 /** Generate a setter for each field: `public void setName(T value) { name = value; }`. */
 class JuxGenerateSettersAction : JuxGenerateAction() {
+    override val includeProperties: Boolean = false
+
     override fun build(className: String, fields: List<JuxField>): String? {
         if (fields.isEmpty()) return null
         return fields.joinToString("") {
