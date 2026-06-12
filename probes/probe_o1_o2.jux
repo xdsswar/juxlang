@@ -1,0 +1,69 @@
+// O1 + O2 probe
+package probes;
+
+import jux.std.exceptions.Exception;
+
+// O1: try/catch inside a value-producing lambda
+int safeDiv(int a, int b) {
+    var f = () -> {
+        try {
+            if (b == 0) {
+                throw new Exception("div by zero");
+            }
+            return a / b;
+        } catch (Exception e) {
+            return -1;
+        }
+    };
+    return f();
+}
+
+// O2: break/continue inside try body in a loop
+int firstPositive(int[] xs) {
+    var result = -1;
+    for (var i : 0..xs.length) {
+        try {
+            if (xs[i] > 0) {
+                result = xs[i];
+                break;
+            }
+            if (xs[i] == -2) {
+                continue;
+            }
+        } catch (Exception e) {
+            continue;
+        }
+    }
+    return result;
+}
+
+// O2b: continue in catch arm + finally ordering
+int sumSafe(int[] xs) {
+    var sum = 0;
+    var finallyRuns = 0;
+    for (var i : 0..xs.length) {
+        try {
+            if (xs[i] < 0) {
+                throw new Exception("negative");
+            }
+            sum = sum + xs[i];
+        } catch (Exception e) {
+            continue;
+        } finally {
+            finallyRuns = finallyRuns + 1;
+        }
+    }
+    print($"finally ran $finallyRuns times");
+    return sum;
+}
+
+void main() {
+    print(safeDiv(10, 2));   // 5
+    print(safeDiv(10, 0));   // -1
+
+    var arr = new int[]{-1, -2, 3, 4};
+    print(firstPositive(arr));  // 3
+
+    var arr2 = new int[]{1, -5, 2, -7, 3};
+    print(sumSafe(arr2));  // 6, finally ran 5 times
+}
