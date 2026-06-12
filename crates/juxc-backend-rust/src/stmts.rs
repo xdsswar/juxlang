@@ -1828,28 +1828,55 @@ impl RustEmitter {
         }
         // `operator[]=` dispatch (§O.2.4): `obj[i] = v` on a user type
         // declaring the overload becomes `obj.__op_index_set(i, v)`.
-        // Compound forms (`obj[i] += v`) read-modify-write through
-        // `operator[]` first.
+        //
+        // Compound forms (`obj[i] += v`) used to inline the read into the
+        // set call: `obj.__op_index_set(i, obj.__op_index(i) + v)`. That
+        // triggers E0499 — Rust's borrow checker sees `&mut obj` (for the
+        // outer `__op_index_set`) and `&obj` (for the inner `__op_index`)
+        // alive at the same time.
+        //
+        // Fix: hoist the new value into a `let __jux_tmp` BEFORE calling
+        // `__op_index_set`. The index `i` is cloned for the read step so it
+        // remains available for the write step even when it's not `Copy`.
+        // Plain `=` doesn't need the hoist (no read step, no aliasing).
         if let Expr::Index(ix) = &a.target {
             if self.expr_declares_operator(&ix.array, juxc_ast::OperatorKind::IndexSet) {
-                self.emit_expr_with_parent_prec(&ix.array, u8::MAX, false);
-                self.w.push_str(".__op_index_set(");
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
-                self.emit_expr(&ix.index);
-                self.w.push_str(", ");
                 if let Some(op) = a.op {
-                    // Read-modify-write: obj.__op_index(i) <op> v.
+                    // Compute the new value into a temporary so the mutable
+                    // borrow for `__op_index_set` doesn't alias the shared
+                    // borrow taken by `__op_index`.
+                    self.w.push_str("let __jux_tmp = ");
                     self.emit_expr_with_parent_prec(&ix.array, u8::MAX, false);
                     self.w.push_str(".__op_index(");
                     self.emit_expr(&ix.index);
+                    // Clone the index for the read so it's still available
+                    // (and unmodified) for the write step below.
+                    self.w.push_str(".clone()");
                     self.w.push_str(") ");
                     self.w.push_str(op.as_rust_str());
                     self.w.push(' ');
-                }
-                self.emit_expr(&a.value);
-                if self.wrapper_value_needs_clone(&a.value) {
-                    self.w.push_str(".clone()");
+                    self.emit_expr(&a.value);
+                    if self.wrapper_value_needs_clone(&a.value) {
+                        self.w.push_str(".clone()");
+                    }
+                    self.w.push_str(";\n");
+                    self.w.emit_indent();
+                    self.emit_expr_with_parent_prec(&ix.array, u8::MAX, false);
+                    self.w.push_str(".__op_index_set(");
+                    self.emit_expr(&ix.index);
+                    self.w.push_str(", __jux_tmp");
+                } else {
+                    // Plain `=` — no read step, no aliasing.
+                    self.emit_expr_with_parent_prec(&ix.array, u8::MAX, false);
+                    self.w.push_str(".__op_index_set(");
+                    self.emit_expr(&ix.index);
+                    self.w.push_str(", ");
+                    self.emit_expr(&a.value);
+                    if self.wrapper_value_needs_clone(&a.value) {
+                        self.w.push_str(".clone()");
+                    }
                 }
                 self.emitting_format_arg = prev;
                 self.w.push_str(");\n");
