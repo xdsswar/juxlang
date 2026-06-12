@@ -1,0 +1,24 @@
+// O3 probe: generic exception class
+package probes;
+
+import jux.std.exceptions.Exception;
+
+// class E<T> extends Exception — T must be in scope, no spurious Clone/Debug bounds
+public class TypedError<T> extends Exception {
+    public T detail;
+
+    public TypedError(String message, T detail) {
+        super(message);
+        this.detail = detail;
+    }
+}
+
+void main() {
+    var e = new TypedError<int>("bad value", 42);
+    print(e.message);   // bad value
+    print(e.detail);    // 42
+
+    var e2 = new TypedError<String>("bad name", "foo");
+    print(e2.message);  // bad name
+    print(e2.detail);   // foo
+}
