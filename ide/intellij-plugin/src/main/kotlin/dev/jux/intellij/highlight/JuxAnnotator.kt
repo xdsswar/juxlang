@@ -8,6 +8,7 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.util.elementType
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxNamedElement
+import dev.jux.intellij.psi.JuxObservableProps
 import dev.jux.intellij.resolve.JuxReference
 
 /**
@@ -39,6 +40,12 @@ class JuxAnnotator : Annotator {
 
     private fun colorFor(id: PsiElement): TextAttributesKey? {
         val parent = id.parent ?: return null
+
+        // §P.5: `observer` is a reserved primitive keyword, colored anywhere —
+        // same color as `int` / `bool` / `void`. juxc still lexes it as a
+        // contextual identifier (no OBSERVER_KW in jux-tokens.json), so the
+        // annotator owns this coloring rather than the lexer.
+        if (id.text == JuxObservableProps.OBSERVER_TYPE) return JuxSyntaxHighlighter.TYPE
 
         // Declaration name: the name identifier of a class/method/field/etc.
         val named = parent as? JuxNamedElement
@@ -84,6 +91,10 @@ class JuxAnnotator : Annotator {
         // Reference uses: classify by call shape first (works without resolve,
         // so cross-file calls colour correctly too), then by in-file resolve.
         if (parent.elementType in REFERENCE_PARENTS) {
+            // §P.5 native coloring must run BEFORE the call-shape check —
+            // `attach(…)` is a call, and METHOD_CALL would win otherwise.
+            propertyContextColor(id, parent)?.let { return it }
+
             if (isCallPosition(id, parent)) return JuxSyntaxHighlighter.METHOD_CALL
 
             // The reference lives on the composite node, ranged over its name
@@ -91,7 +102,15 @@ class JuxAnnotator : Annotator {
             // qualifier never borrows the member's resolution).
             val ref = parent.references.firstOrNull() as? JuxReference ?: return null
             if (ref.rangeInElement.startOffset != id.startOffsetInParent) return null
-            val resolved = ref.resolveLocally() ?: return null
+            val resolved = ref.resolveLocally()
+            if (resolved == null) {
+                // `value` inside a setter body (§P.1.4) is the implicit
+                // parameter — colored as one when nothing in scope shadows it.
+                if (id.text == JuxObservableProps.SETTER_VALUE && isInSetterBody(id)) {
+                    return JuxSyntaxHighlighter.PARAMETER
+                }
+                return null
+            }
             return when (resolved.elementType) {
                 E.CLASS_DECLARATION, E.INTERFACE_DECLARATION, E.ENUM_DECLARATION,
                 E.RECORD_DECLARATION, E.STRUCT_DECLARATION, E.ANNOTATION_DECLARATION,
@@ -108,6 +127,102 @@ class JuxAnnotator : Annotator {
         }
 
         return null
+    }
+
+    // ---- §P.5 native coloring (observable properties) ----------------------
+
+    /**
+     * Context-sensitive native coloring (§P.5 / §P.7.7): `observers` after a
+     * property, `attach`/`detach`/`clear`/`size` after `.observers`, and
+     * `bind`/`unbind`/`bindBidirectional` directly after a property. Used
+     * anywhere else, these names are plain identifiers and return null here.
+     *
+     * Name-gated so every other identifier pays nothing. In-file resolve
+     * VETOES (a local named `bind` or a user method `attach` stays plain);
+     * receivers that don't resolve in-file fall back to documented heuristics —
+     * `.observers` chains color optimistically, the bind family only behind a
+     * PascalCase receiver. The full type-resolved pass (§P.7.7) is jux-ls
+     * semantic-tokens territory; this is the IDE-side approximation.
+     */
+    private fun propertyContextColor(id: PsiElement, parent: PsiElement): TextAttributesKey? {
+        val name = id.text
+        // Cheap gate: bail unless the identifier is one of the magic names.
+        val isMember = name == JuxObservableProps.OBSERVERS_MEMBER
+        val isOp = name in JuxObservableProps.OBSERVERS_OPS
+        val isBind = name in JuxObservableProps.BIND_OPS
+        if (!isMember && !isOp && !isBind) return null
+
+        // All §P shapes are member accesses: `<recv>.<name>`.
+        if (parent.elementType !== E.FIELD_ACCESS_EXPRESSION) return null
+        if (!isLastIdentifier(id, parent)) return null
+        val recv = parent.firstChild ?: return null
+
+        return when {
+            // `<property>.observers`
+            isMember ->
+                if (isPropertyReceiver(recv, optimistic = true)) JuxSyntaxHighlighter.NATIVE_MEMBER
+                else null
+            // `<property>.observers.attach(…)` / `.detach(…)` (calls) and
+            // `.clear` / `.size` (paren-free command accessors, §P.3.2 — with
+            // parens they lose the color, a useful smell).
+            isOp -> {
+                if (!isObserversChain(recv)) return null
+                val wantsCall = name !in JuxObservableProps.PAREN_FREE_OPS
+                if (isCallee(parent) == wantsCall) JuxSyntaxHighlighter.NATIVE_OPERATION else null
+            }
+            // `<property>.bind(…)` / `.unbind()` / `.bindBidirectional(…)`
+            else ->
+                if (isCallee(parent) && isPropertyReceiver(recv, optimistic = false))
+                    JuxSyntaxHighlighter.NATIVE_OPERATION
+                else null
+        }
+    }
+
+    /** True when [recv] is a `….observers` access on a qualifying property. */
+    private fun isObserversChain(recv: PsiElement): Boolean {
+        if (recv.elementType !== E.FIELD_ACCESS_EXPRESSION) return false
+        val last = lastIdentifier(recv) ?: return false
+        if (last.text != JuxObservableProps.OBSERVERS_MEMBER) return false
+        val inner = recv.firstChild ?: return false
+        return isPropertyReceiver(inner, optimistic = true)
+    }
+
+    /**
+     * Does [recv] denote an observable property? In-file resolution decides
+     * when it can ([JuxReference.resolveLocally] — never cross-file from the
+     * annotator); an unresolved receiver is accepted [optimistic]ally (the
+     * `.observers` chains) or behind the PascalCase convention (bind family).
+     */
+    private fun isPropertyReceiver(recv: PsiElement, optimistic: Boolean): Boolean {
+        if (recv.elementType !in REFERENCE_PARENTS) return false
+        val ref = recv.references.firstOrNull() as? JuxReference
+        val resolved = ref?.resolveLocally()
+        if (resolved != null) return resolved.elementType === E.PROPERTY_DECLARATION
+        if (optimistic) return true
+        val last = lastIdentifier(recv) ?: return false
+        return last.text.firstOrNull()?.isUpperCase() == true
+    }
+
+    /** True when [parent] is the callee of a `CALL_EXPRESSION`. */
+    private fun isCallee(parent: PsiElement): Boolean {
+        val grand = parent.parent ?: return false
+        return grand.elementType === E.CALL_EXPRESSION && grand.firstChild === parent
+    }
+
+    /** True when [id] sits inside a `set { … }` accessor body (§P.1.4). */
+    private fun isInSetterBody(id: PsiElement): Boolean {
+        var scope: PsiElement? = id.parent
+        while (scope != null) {
+            if (scope.elementType === E.PROPERTY_ACCESSOR) {
+                return scope.firstIdentifierText() == "set"
+            }
+            // A method/class boundary means we left any accessor body.
+            if (scope.elementType === E.METHOD_DECLARATION ||
+                scope.elementType === E.CLASS_BODY
+            ) return false
+            scope = scope.parent
+        }
+        return false
     }
 
     /**
@@ -131,14 +246,18 @@ class JuxAnnotator : Annotator {
     }
 
     /** True when [id] is the last IDENTIFIER leaf directly under [parent]. */
-    private fun isLastIdentifier(id: PsiElement, parent: PsiElement): Boolean {
+    private fun isLastIdentifier(id: PsiElement, parent: PsiElement): Boolean =
+        lastIdentifier(parent) === id
+
+    /** The last IDENTIFIER leaf directly under [parent], or null. */
+    private fun lastIdentifier(parent: PsiElement): PsiElement? {
         var last: PsiElement? = null
         var c: PsiElement? = parent.firstChild
         while (c != null) {
             if (c.elementType === JuxTokenTypes.IDENTIFIER) last = c
             c = c.nextSibling
         }
-        return last === id
+        return last
     }
 
     /**

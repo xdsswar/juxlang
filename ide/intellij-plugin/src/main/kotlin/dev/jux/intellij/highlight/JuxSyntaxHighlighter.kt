@@ -39,6 +39,12 @@ class JuxSyntaxHighlighter : SyntaxHighlighterBase() {
         val LOCAL_VARIABLE = key("JUX_LOCAL_VARIABLE", D.LOCAL_VARIABLE)
         val TYPE_PARAMETER = key("JUX_TYPE_PARAMETER", D.PARAMETER)
         val ENUM_CONSTANT = key("JUX_ENUM_CONSTANT", D.STATIC_FIELD)
+        // §P.5 native coloring (annotator-driven, property context only):
+        // the `.observers` member, and the attach/detach/clear/size +
+        // bind/unbind/bindBidirectional operations. KEYWORD-based like TYPE,
+        // signalling "built-in, not user code" on every theme.
+        val NATIVE_MEMBER = key("JUX_NATIVE_MEMBER", D.KEYWORD)
+        val NATIVE_OPERATION = key("JUX_NATIVE_OPERATION", D.KEYWORD)
         // String-interior colours ([JuxStringAnnotator]): `${…}` delimiters
         // and escape sequences (valid vs malformed).
         val INTERPOLATION = key("JUX_INTERPOLATION", D.KEYWORD)

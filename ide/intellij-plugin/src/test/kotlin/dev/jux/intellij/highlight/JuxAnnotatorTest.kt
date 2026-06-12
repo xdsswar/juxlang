@@ -79,6 +79,93 @@ class JuxAnnotatorTest : BasePlatformTestCase() {
         assertContainsElements(keysAt(code, "Beast", 1), "JUX_CLASS_NAME")
     }
 
+    // ---- observable properties (§P.5 native coloring) ----------------------
+
+    private val propsDemo = """
+        package demo;
+
+        public class Model {
+            public String Name { get; set; } = "";
+            public String Id { get; private set; } = "";
+            private String test { get; set; } = "t";
+
+            private final observer<String> nameObs = (old, now) -> {
+                print(now);
+            };
+
+            public void wire(Model m) {
+                Name.observers.attach(nameObs);
+                Name.observers.clear;
+                print(Name.observers.size);
+                m.Name.observers.attach(nameObs);
+                Name.bind(Id);
+                Name.unbind();
+                test.bind(Id);
+                m.Title.bindBidirectional(Id);
+            }
+
+            public void notProps() {
+                var bind = "hello";
+                print(bind);
+                myObject.attach(x);
+                helper.clear();
+            }
+        }
+    """.trimIndent()
+
+    fun testObserverTypeIsPrimitiveColored() {
+        assertContainsElements(keysAt(propsDemo, "observer", 1), "JUX_TYPE")
+    }
+
+    fun testObserversMemberIsNativeColored() {
+        assertContainsElements(keysAt(propsDemo, "observers", 1), "JUX_NATIVE_MEMBER")
+        // Cross-object receiver (`m.Name.observers`) colors via the heuristic.
+        assertContainsElements(keysAt(propsDemo, "observers", 4), "JUX_NATIVE_MEMBER")
+    }
+
+    fun testObserversOpsAreNativeColored() {
+        assertContainsElements(keysAt(propsDemo, "attach", 1), "JUX_NATIVE_OPERATION")
+        assertContainsElements(keysAt(propsDemo, "clear", 1), "JUX_NATIVE_OPERATION")
+        assertContainsElements(keysAt(propsDemo, "size", 1), "JUX_NATIVE_OPERATION")
+    }
+
+    fun testBindOpsAreNativeColored() {
+        // NOTE on occurrence counting: the substring "bind" also matches inside
+        // `unbind` and at the head of `bindBidirectional` — occurrences are
+        // counted over raw text, hence the explicit indexes below.
+        // #1 = `Name.bind(Id)` — resolved PascalCase property receiver.
+        assertContainsElements(keysAt(propsDemo, "bind", 1), "JUX_NATIVE_OPERATION")
+        assertContainsElements(keysAt(propsDemo, "unbind", 1), "JUX_NATIVE_OPERATION")
+        // #3 = `test.bind(Id)` — in-file camelCase property receiver resolves.
+        assertContainsElements(keysAt(propsDemo, "bind", 3), "JUX_NATIVE_OPERATION")
+        // Unresolved PascalCase receiver (`m.Title`) colors via the convention.
+        assertContainsElements(keysAt(propsDemo, "bindBidirectional", 1), "JUX_NATIVE_OPERATION")
+    }
+
+    fun testNonPropertyUsesStayPlain() {
+        // `print(bind)` reading the local `bind` — never native-colored
+        // ("bind" #6: after bind(Id), un[bind], test.[bind], [bind]Bidirectional, var [bind]).
+        assertEmpty(keysAt(propsDemo, "bind", 6).filter { it.startsWith("JUX_NATIVE") })
+        // `myObject.attach(x)` ("attach" #3) — no `.observers` receiver → plain call.
+        assertEmpty(keysAt(propsDemo, "attach", 3).filter { it.startsWith("JUX_NATIVE") })
+        // `helper.clear()` ("clear" #2) — parens on a non-observers receiver → plain call.
+        assertEmpty(keysAt(propsDemo, "clear", 2).filter { it.startsWith("JUX_NATIVE") })
+    }
+
+    fun testSetterValueIsParameterColored() {
+        val code = """
+            package demo;
+            public class C {
+                private int _age;
+                public int Age {
+                    get -> _age;
+                    set { _age = value; }
+                };
+            }
+        """.trimIndent()
+        assertContainsElements(keysAt(code, "value", 1), "JUX_PARAMETER")
+    }
+
     // ---- string interiors --------------------------------------------------
 
     fun testValidEscapeIsColored() {
