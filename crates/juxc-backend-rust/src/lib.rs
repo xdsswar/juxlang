@@ -432,6 +432,19 @@ impl PackageNode {
 // Emitter
 // ============================================================================
 
+/// One `bind()` / `bindBidirectional()` call deferred out of a
+/// constructor body (P6, §P.9) — see
+/// `RustEmitter::pending_ctor_binds`. Receiver `None` means the
+/// instance under construction (`this`); `Some(e)` is the original
+/// receiver expression, replayed verbatim in the public `new` (ctor
+/// params are still in scope there, cloned before the `new_inner`
+/// hand-off).
+pub(crate) struct PendingCtorBind {
+    pub(crate) target: (Option<juxc_ast::Expr>, String, String),
+    pub(crate) source: (Option<juxc_ast::Expr>, String, String),
+    pub(crate) bidirectional: bool,
+}
+
 /// Internal emitter state. Accumulates source text into a [`Writer`]
 /// (auto-indent + buffer) and produces a [`RustCrate`] when
 /// [`RustEmitter::finish`] is called.
@@ -817,8 +830,25 @@ struct RustEmitter {
     /// `emit_method` takes it and brackets the body with the old/new
     /// capture and the post-body `__obs_<X>_fire` call. Comparable
     /// types fire only when `old != now`; non-comparable (user-class)
-    /// types fire on every set.
-    pub(crate) pending_setter_observer: Option<(String, bool)>,
+    /// types fire on every set. The third slot lists the COMPUTED
+    /// properties (§P.1.5) whose getters read this property — each as
+    /// `(name, change-comparable?)` — so the setter also recomputes
+    /// them and fires their observers on change. The fourth slot is
+    /// `true` for a STATIC property setter (P7): the bracket then
+    /// reads through `Self::<X>()` and fires the class-scoped
+    /// `Self::__obs_<X>_fire`, and no P2 gate wrapper is emitted
+    /// (statics have no binding machinery to guard).
+    pub(crate) pending_setter_observer: Option<(String, bool, Vec<(String, bool)>, bool)>,
+    /// P6 (§P.9): `bind()` calls on a property of `this` inside a
+    /// constructor body. While the body runs, `this` is the bare
+    /// inner struct (`__self`) — no wrapper handle exists for the
+    /// binding closures to hold weakly — so `emit_bind` records the
+    /// call here (emitting a no-op at the original site) and the
+    /// public `new` replays it AFTER `Self(Rc::new(RefCell::new(…)))`
+    /// wraps the instance. The deferred bind still performs its
+    /// initial sync, so the only observable difference from in-place
+    /// execution is ordering relative to later ctor statements.
+    pub(crate) pending_ctor_binds: Vec<PendingCtorBind>,
     /// §P observer-variable shapes: `observer<T>` fields/locals mapped
     /// to their lambda arity (0 = invalidation, 2 = full, 3 = full +
     /// property reference). Keyed by bare variable/field name; filled
@@ -2597,12 +2627,20 @@ impl RustEmitter {
         w.push_str("enum JuxObserver<F: ?Sized> {\n");
         w.push_str("    Weak(std::rc::Weak<F>),\n");
         w.push_str("    Strong(std::rc::Rc<F>),\n");
+        w.push_str("    // A Strong ADAPTER whose real observer lives elsewhere\n");
+        w.push_str("    // behind a weak ref (the §P.2.2 shape-2 wrapper): the\n");
+        w.push_str("    // dead flag flips when the adapter detects its inner\n");
+        w.push_str("    // observer died, so the fire loop prunes it (P5).\n");
+        w.push_str("    StrongGuarded(std::rc::Rc<F>, std::rc::Rc<std::cell::Cell<bool>>),\n");
         w.push_str("}\n");
         w.push_str("impl<F: ?Sized> JuxObserver<F> {\n");
         w.push_str("    fn upgrade(&self) -> Option<std::rc::Rc<F>> {\n");
         w.push_str("        match self {\n");
         w.push_str("            JuxObserver::Weak(w) => w.upgrade(),\n");
         w.push_str("            JuxObserver::Strong(s) => Some(s.clone()),\n");
+        w.push_str("            JuxObserver::StrongGuarded(s, dead) => {\n");
+        w.push_str("                if dead.get() { None } else { Some(s.clone()) }\n");
+        w.push_str("            }\n");
         w.push_str("        }\n");
         w.push_str("    }\n");
         w.push_str("    fn is_for(&self, target: &std::rc::Rc<F>) -> bool {\n");
@@ -2614,6 +2652,9 @@ impl RustEmitter {
         w.push_str("        match self {\n");
         w.push_str("            JuxObserver::Weak(w) => JuxObserver::Weak(w.clone()),\n");
         w.push_str("            JuxObserver::Strong(s) => JuxObserver::Strong(s.clone()),\n");
+        w.push_str("            JuxObserver::StrongGuarded(s, d) => {\n");
+        w.push_str("                JuxObserver::StrongGuarded(s.clone(), d.clone())\n");
+        w.push_str("            }\n");
         w.push_str("        }\n");
         w.push_str("    }\n");
         w.push_str("}\n");
@@ -3003,6 +3044,7 @@ impl RustEmitter {
             loop_emit_depth: 0,
             try_loopctl: Vec::new(),
             pending_setter_observer: None,
+            pending_ctor_binds: Vec::new(),
             observer_shapes: std::collections::HashMap::new(),
             emitting_class_has_static_init: false,
             emitting_call_callee: false,

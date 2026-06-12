@@ -804,4 +804,31 @@ public class LoginForm extends VBox {
   declared with `{ get; set; }` in PascalCase and are therefore observable with zero
   additional infrastructure.
 
+### P.10.1. Phase-1 Implementation Notes
+
+- **Static observable properties** fire observers **on the thread that set
+  them**, and only observers attached on that same thread see the change.
+  Observers are task-local closures (`Rc`-backed, not `Send`), so their storage
+  for a `static` property is thread-local — consistent with observers being
+  task-local everywhere else in Phase 1. Cross-thread static-property
+  observation is out of scope until the threading model grows shared
+  observers.
+- **Bidirectional bindings allow direct assignment to either side** (the new
+  value propagates to the peer) — only a ONE-WAY binding's target refuses
+  direct sets with `E0973`/`IllegalStateException`. This matches JavaFX's
+  `bindBidirectional` semantics.
+- **`bind()` in a constructor** (on a property of `this`) is deferred to the
+  instant construction completes — the binding's initial sync and all
+  subsequent propagation behave identically; only ordering relative to LATER
+  statements in the same constructor body differs (the bind takes effect
+  after the body finishes). Binding setup is the last thing a constructor
+  does in idiomatic code, so this is rarely observable.
+- **Computed-property dependency tracking** is static: the compiler collects
+  the settable properties of the same class that the getter body mentions
+  (bare name or `this.X`). Reads routed through helper METHODS
+  (`get -> helper()` where `helper` reads `First`) are not seen — mention the
+  dependency in the getter body to make it tracked.
+- Static **computed** properties and `bind()` on static properties are not
+  implemented in Phase 1.
+
 *End of Observable Properties addendum.*

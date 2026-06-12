@@ -445,8 +445,28 @@ impl RustEmitter {
                 self.pending_decl_suffix = Some(format!("__ov{occ}"));
             }
             *occ += 1;
+            // P7: a STATIC observable property's setter gets the
+            // observer fire bracket on the inline path too (instance
+            // observable props force the wrapper path, but statics
+            // don't reclassify the class).
+            if let Some(prop_name) = method.name.text.strip_prefix("__set_") {
+                if let Some(prop) = crate::decls::observers::static_observable_props(class_decl)
+                    .into_iter()
+                    .find(|p| p.name.text == prop_name)
+                {
+                    self.pending_setter_observer = Some((
+                        prop_name.to_string(),
+                        crate::decls::observers::property_ty_is_comparable(&prop.ty),
+                        Vec::new(),
+                        true,
+                    ));
+                }
+            }
             self.emit_method(method);
         }
+        // P7: static-property observer helpers (associated fns over
+        // the module-scope thread_local storage emitted below).
+        self.emit_static_observer_helper_methods(class_decl);
         // **Method body inlining for virtual dispatch.** Walk the
         // `extends` chain and copy every concrete (non-abstract,
         // non-static) inherited method that THIS class doesn't
@@ -551,6 +571,9 @@ impl RustEmitter {
                 self.emit_mutable_static_field(&class_decl.name.text, field);
             }
         }
+        // P7: thread_local observer storage for static observable
+        // properties, beside their LazyLock value backing.
+        self.emit_static_observer_storage(class_decl);
 
         // Trait-impl block per recognized operator. Only a handful of
         // operators have a direct Rust-trait counterpart in this
@@ -884,9 +907,42 @@ impl RustEmitter {
                     .into_iter()
                     .find(|p| p.name.text == prop_name)
                 {
+                    // §P.1.5: computed properties whose getter reads
+                    // THIS property re-fire from this setter too.
+                    let dependents: Vec<(String, bool)> =
+                        crate::decls::observers::computed_observable_props(class_decl)
+                            .into_iter()
+                            .filter(|c| {
+                                crate::decls::observers::computed_prop_deps(class_decl, c)
+                                    .iter()
+                                    .any(|d| d == prop_name)
+                            })
+                            .map(|c| {
+                                (
+                                    c.name.text.clone(),
+                                    crate::decls::observers::property_ty_is_comparable(&c.ty),
+                                )
+                            })
+                            .collect();
                     self.pending_setter_observer = Some((
                         prop_name.to_string(),
                         crate::decls::observers::property_ty_is_comparable(&prop.ty),
+                        dependents,
+                        false,
+                    ));
+                } else if let Some(prop) =
+                    crate::decls::observers::static_observable_props(class_decl)
+                        .into_iter()
+                        .find(|p| p.name.text == prop_name)
+                {
+                    // P7: static setter — class-scoped observer fire,
+                    // no computed-dep tracking (static computed props
+                    // are out of Phase-1 scope).
+                    self.pending_setter_observer = Some((
+                        prop_name.to_string(),
+                        crate::decls::observers::property_ty_is_comparable(&prop.ty),
+                        Vec::new(),
+                        true,
                     ));
                 }
             }
@@ -895,6 +951,8 @@ impl RustEmitter {
         // §P observer plumbing: attach/detach/clear/size/fire helpers,
         // one set per observable property.
         self.emit_observer_helper_methods(class_decl);
+        // P7: static-property observer helpers (associated fns).
+        self.emit_static_observer_helper_methods(class_decl);
         // **Inherited-method inlining (§CR.5.1).** Same pass the legacy
         // path runs: walk the `extends` chain and copy every concrete
         // (non-abstract, non-static) inherited method this class
@@ -986,6 +1044,9 @@ impl RustEmitter {
                 self.emit_mutable_static_field(name, field);
             }
         }
+        // P7: thread_local observer storage for static observable
+        // properties, beside their LazyLock value backing.
+        self.emit_static_observer_storage(class_decl);
 
         // Operator trait impls + interface trait impls + marker trait
         // reuse the existing emitters unchanged — they delegate to the
@@ -2872,7 +2933,18 @@ impl RustEmitter {
 
         self.w.indent_inc();
         self.w.emit_indent();
-        self.emit_visibility(method.visibility);
+        // P2 (§P.4.2): an OBSERVABLE property's setter emits its real
+        // body under `__set_X_raw` (always `pub` — binding closures in
+        // other modules call it; Jux-level access stays enforced by
+        // tycheck E0972), and a thin public `__set_X` gate wrapper is
+        // appended after the method (E0973 bound-assignment guard).
+        let p2_setter = matches!(&self.pending_setter_observer, Some((_, _, _, false)))
+            && method.name.text.starts_with("__set_");
+        if p2_setter {
+            self.w.push_str("pub ");
+        } else {
+            self.emit_visibility(method.visibility);
+        }
         // `async T` method → `async fn`. Same rule as `emit_fn_decl`:
         // Rust's `async` keyword sits before `fn`, so we prepend it
         // when the declared return type is async.
@@ -2885,6 +2957,9 @@ impl RustEmitter {
         }
         self.w.push_str("fn ");
         self.w.push_str(&method.name.text);
+        if p2_setter {
+            self.w.push_str("_raw");
+        }
         if let Some(sfx) = self.pending_decl_suffix.take() { self.w.push_str(&sfx); }
         // Method's own generic parameters plus any synthetic wildcards.
         if combined_method_generics.is_empty() {
@@ -2944,8 +3019,17 @@ impl RustEmitter {
         // emitted after the body below. An early `return` in a custom
         // setter body skips the fire (W0973 semantics).
         let setter_observer = self.pending_setter_observer.take();
-        if let Some((prop, _)) = &setter_observer {
-            self.w.line(&format!("let __jux_old = self.{prop}();"));
+        if let Some((prop, _, dependents, observer_static)) = &setter_observer {
+            // Static setters read through the associated getter; the
+            // class-scoped storage has no `self`.
+            let recv = if *observer_static { "Self::" } else { "self." };
+            self.w.line(&format!("let __jux_old = {recv}{prop}();"));
+            // §P.1.5: pre-capture every dependent COMPUTED property's
+            // value so the post-body bracket can fire on change.
+            for (c, _) in dependents {
+                self.w
+                    .line(&format!("let __jux_cold_{c} = {recv}{c}();"));
+            }
         }
         if let Some(body) = body {
             // Static methods have no `self` — leave `this_alias`
@@ -3009,8 +3093,9 @@ impl RustEmitter {
             // close. Comparable property types fire only on an actual
             // value change; user-class types (no `PartialEq` on the
             // wrapper) fire on every completed set.
-            if let Some((prop, comparable)) = &setter_observer {
-                self.w.line(&format!("let __jux_now = self.{prop}();"));
+            if let Some((prop, comparable, dependents, observer_static)) = &setter_observer {
+                let recv = if *observer_static { "Self::" } else { "self." };
+                self.w.line(&format!("let __jux_now = {recv}{prop}();"));
                 if *comparable {
                     // §P.3.6 re-entrant sets: an observer may set this
                     // same property — the nested set COMMITS its value
@@ -3021,15 +3106,15 @@ impl RustEmitter {
                     // distinct transition fires exactly once, in
                     // order (JavaFX-equivalent).
                     self.w.line(&format!(
-                        "if __jux_old != __jux_now {{ self.__obs_{prop}_fire(&__jux_old, &__jux_now); }}"
+                        "if __jux_old != __jux_now {{ {recv}__obs_{prop}_fire(&__jux_old, &__jux_now); }}"
                     ));
                     self.w.line("let mut __jux_prev = __jux_now;");
                     self.w.line("loop {");
                     self.w.indent_inc();
-                    self.w.line(&format!("let __jux_cur = self.{prop}();"));
+                    self.w.line(&format!("let __jux_cur = {recv}{prop}();"));
                     self.w.line("if __jux_cur == __jux_prev { break; }");
                     self.w.line(&format!(
-                        "self.__obs_{prop}_fire(&__jux_prev, &__jux_cur);"
+                        "{recv}__obs_{prop}_fire(&__jux_prev, &__jux_cur);"
                     ));
                     self.w.line("__jux_prev = __jux_cur;");
                     self.w.indent_dec();
@@ -3038,7 +3123,24 @@ impl RustEmitter {
                     // Non-comparable property types can't detect the
                     // nested change, so they keep the single-pass fire.
                     self.w
-                        .line(&format!("self.__obs_{prop}_fire(&__jux_old, &__jux_now);"));
+                        .line(&format!("{recv}__obs_{prop}_fire(&__jux_old, &__jux_now);"));
+                }
+                // §P.1.5: recompute each dependent COMPUTED property
+                // (after the quiescence loop, so the final value is
+                // read) and fire its observers. Comparable computed
+                // types fire only on a real change; non-comparable
+                // ones fire whenever the driving setter completed.
+                for (c, c_comparable) in dependents {
+                    self.w.line(&format!("let __jux_cnow_{c} = {recv}{c}();"));
+                    if *c_comparable {
+                        self.w.line(&format!(
+                            "if __jux_cold_{c} != __jux_cnow_{c} {{ {recv}__obs_{c}_fire(&__jux_cold_{c}, &__jux_cnow_{c}); }}"
+                        ));
+                    } else {
+                        self.w.line(&format!(
+                            "{recv}__obs_{c}_fire(&__jux_cold_{c}, &__jux_cnow_{c});"
+                        ));
+                    }
                 }
             }
         } else {
@@ -3056,6 +3158,37 @@ impl RustEmitter {
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();
+        // P2 gate wrapper (§P.4.2): every existing call site reaches
+        // the property through `__set_X`, which now refuses a direct
+        // assignment while a binding drives the property — an
+        // `IllegalStateException` in debug builds (E0973). The binding
+        // machinery writes through `__set_X_raw` above.
+        if let Some((prop, _, _, false)) = &setter_observer {
+            if let Some(p0) = method.params.first() {
+                let mark = self.w.len();
+                self.emit_value_type_as_rust(&p0.ty);
+                let vt = self.w.split_off_from(mark);
+                self.w
+                    .line(&format!("pub fn __set_{prop}(&self, value: {vt}) {{"));
+                self.w.indent_inc();
+                // Only ONE-WAY bindings refuse direct sets — both
+                // sides of a bidirectional binding stay settable
+                // (JavaFX semantics; the third slot flag records it).
+                self.w.line(&format!(
+                    "if cfg!(debug_assertions) && matches!(&self.0.borrow().__bind_{prop}, Some((_, _, false))) {{"
+                ));
+                self.w.indent_inc();
+                self.w.line(&format!(
+                    "std::panic::panic_any(crate::jux::std::exceptions::IllegalStateException::new(\"E0973: property `{prop}` is bound - direct assignment is not allowed while a binding drives it; unbind() first\".to_string()));"
+                ));
+                self.w.indent_dec();
+                self.w.line("}");
+                self.w.line(&format!("self.__set_{prop}_raw(value);"));
+                self.w.indent_dec();
+                self.w.line("}");
+                self.w.newline();
+            }
+        }
         self.w.indent_dec();
     }
 

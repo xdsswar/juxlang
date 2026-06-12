@@ -1,0 +1,34 @@
+// P1 (§P.1.5): computed (get-only) properties fire their observers
+// when a dependency's setter changes the computed value.
+package p1;
+
+public class Person {
+    public String First { get; set; } = "";
+    public String Last { get; set; } = "";
+    // Computed from two settable deps — re-fires from BOTH setters.
+    public String FullName { get -> First + "/" + Last; };
+
+    public int Total { get; set; } = 0;
+    // Computed bool — fires only when the VALUE flips, not on every
+    // dependency write.
+    public bool IsBig { get -> Total > 10; };
+}
+
+public void main() {
+    var p = new Person();
+    p.FullName.observers.attach((old, now) -> {
+        print("full: " + old + " -> " + now);
+    });
+    p.First = "Ada";
+    p.Last = "Lovelace";
+    p.Last = "Lovelace"; // no-op write: nothing fires
+
+    p.IsBig.observers.attach((o, n) -> {
+        print("big: " + o + " -> " + n);
+    });
+    p.Total = 5;  // false -> false: silent
+    p.Total = 20; // false -> true: fires
+    p.Total = 25; // true -> true: silent
+    print("size: " + p.FullName.observers.size);
+    print("done");
+}

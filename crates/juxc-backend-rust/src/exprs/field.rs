@@ -63,6 +63,15 @@ impl RustEmitter {
                         self.emit_observers_command(recv, &prop, &op);
                         return;
                     }
+                    // P7: `Config.Level.observers.size` / `.clear` —
+                    // class-scoped static observer storage.
+                    if let Some((class, prop)) =
+                        self.resolve_static_observable_prop(&obsf.object)
+                    {
+                        let op = f.field.text.clone();
+                        self.emit_static_observers_command(&class, &prop, &op);
+                        return;
+                    }
                 }
             }
         }

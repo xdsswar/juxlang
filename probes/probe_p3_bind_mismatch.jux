@@ -1,0 +1,17 @@
+// P3: bind type mismatch must be a clean juxc E0974, not a rustc leak.
+package p3probe;
+
+public class A {
+    public int Count { get; set; } = 0;
+}
+
+public class B {
+    public String Label { get; set; } = "";
+}
+
+void main() {
+    var a = new A();
+    var b = new B();
+    b.Label.bind(a.Count);
+    print("never");
+}

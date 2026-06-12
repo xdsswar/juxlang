@@ -310,6 +310,16 @@ impl RustEmitter {
                             let opname = opname.to_string();
                             return self.emit_observers_call(recv, &prop, &class, &opname, call);
                         }
+                        // P7: `Config.Level.observers.attach(o)` — the
+                        // receiver names a CLASS, so the instance
+                        // resolution above misses; route to the
+                        // class-scoped static observer helpers.
+                        if let Some((class, prop)) =
+                            self.resolve_static_observable_prop(&obsf.object)
+                        {
+                            let opname = opname.to_string();
+                            return self.emit_static_observers_call(&class, &prop, &opname, call);
+                        }
                     }
                 }
             }
