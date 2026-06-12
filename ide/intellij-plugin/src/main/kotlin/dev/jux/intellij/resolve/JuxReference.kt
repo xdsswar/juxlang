@@ -1,11 +1,8 @@
 package dev.jux.intellij.resolve
 
-import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiReferenceBase
-import com.intellij.psi.search.PsiElementProcessor
-import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.util.elementType
 import dev.jux.intellij.psi.JuxElementFactory
 import dev.jux.intellij.psi.JuxElementTypes as E
@@ -106,13 +103,12 @@ class JuxReference(element: PsiElement, range: TextRange) :
         return element
     }
 
-    override fun getVariants(): Array<Any> {
-        val file = element.containingFile ?: return emptyArray()
-        val out = ArrayList<Any>()
-        PsiTreeUtil.processElements(file, PsiElementProcessor { e ->
-            if (e is JuxNamedElement) e.name?.let { out.add(LookupElementBuilder.create(it)) }
-            true
-        })
-        return out.toTypedArray()
-    }
+    /**
+     * No reference-driven variants: the platform would surface these for ANY
+     * reference at the caret — including member positions after `.` — flooding
+     * the lookup with every name in the file regardless of scope. Fallback
+     * completion is owned by [dev.jux.intellij.completion.JuxCompletionContributor]
+     * (scope-aware, relevance-ranked); member completion by `juxc-lsp`.
+     */
+    override fun getVariants(): Array<Any> = emptyArray()
 }
