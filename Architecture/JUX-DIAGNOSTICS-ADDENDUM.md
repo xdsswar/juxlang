@@ -420,8 +420,11 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0951`  | Duplicate operator overload across modules                  | Runtime/ABI §R.3.3             |
 | `E0952`  | Orphan free-function operator definition                    | Runtime/ABI §R.3.6             |
 | `E0961`  | Mutable static requires thread-safe wrapper                  | Missing-defs §M.12.3           |
-| `E0970`  | Write to a read-only or `init`-only property outside its settable window | Missing-defs §M.7.2 |
-| `E0972`  | Property accessor visibility violation (e.g. `private set` written from outside) | Missing-defs §M.7.2 / §M.7.7 |
+| `E0970`  | Write to a read-only or computed (get-only) property outside its settable window | Missing-defs §M.7.2 / Properties §P.1.5 |
+| `E0972`  | Property accessor visibility violation (setter more visible than getter; `private set` written from outside) | Missing-defs §M.7.2 / §M.7.7 / Properties §P.1.3 / §P.3.5 |
+| `E0973`  | Direct assignment to a bound property                       | Properties §P.4.2              |
+| `E0974`  | `bindBidirectional` called with mismatched property types   | Properties §P.4.3              |
+| `E0975`  | `observer<T>` lambda shape does not match any accepted form | Properties §P.2.2              |
 | `E0980`  | Method reference is ambiguous                               | Missing-defs §M.8.3            |
 | `E0991`  | Inner classes not supported                                 | Missing-defs §M.9.2            |
 | `E0992`  | Anonymous classes not supported                             | Missing-defs §M.9.2            |
@@ -439,6 +442,11 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `W0720`  | `return` inside `finally` discards exception                | Exceptions §X.3.5              |
 | `W0820`  | `unsafe` block missing `// SAFETY:` justification           | Layout-ABI §L.5.5              |
 | `W0960`  | Mutable static in single-threaded profile                    | Missing-defs §M.12.3           |
+| `W0970`  | `observer<T>` attached but never detached and target has no `drop` | Properties §P.6         |
+| `W0971`  | Property declared `{ get; set; }` but never observed or bound | Properties §P.7.2            |
+| `W0972`  | Binding source property has `private set` — binding will never update | Properties §P.6      |
+| `W0973`  | Early `return` in a custom setter body may skip the observer fire | Properties §P.7.6        |
+| `W0974`  | Property name not PascalCase (naming convention — preferred, never an error) | Properties §P.1.1 / §P.7.1 |
 
 ### Notes (`N0xxx`)
 

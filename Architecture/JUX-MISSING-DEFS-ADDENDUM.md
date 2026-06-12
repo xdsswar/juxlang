@@ -520,11 +520,18 @@ Open-ended range patterns (`x..`, `..x`, `..=x`) are permitted in patterns only,
 Jux properties use **the C# property syntax, with one deliberate divergence:
 expression bodies use `->`, not C#'s `=>`** — because `=>` is Jux's type-test
 (instanceof) operator (`a => Type`) and must stay unambiguous. So: `{ get; set; }`
-blocks, `init`-only setters, expression-bodied properties (`-> expr`),
-expression-bodied accessors (`get -> expr`), full accessor bodies, and the
-implicit `value` parameter in setters.
+blocks, expression-bodied properties (`-> expr`), expression-bodied accessors
+(`get -> expr`), full accessor bodies, and the implicit `value` parameter in setters.
 
 This supersedes the earlier shorthand syntax (`public get String name`) referenced in JUX-LANG-V1 §7.3 — that form is removed.
+
+> **Observable properties (§P).** Every `{ get; set; }` property is also observable
+> and bindable — see `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md` for the `observer<T>`
+> type, the `.observers` member, `bind`/`bindBidirectional`/`unbind`, computed-property
+> dependency tracking, and the PascalCase naming convention (preferred, not enforced).
+> That addendum also **removes the `init` accessor** — accessor kinds are `get` and
+> `set` only. This section has been updated accordingly: read-only construction-time
+> properties are written `{ get; }`.
 
 ### M.7.1. Syntax
 
@@ -537,7 +544,7 @@ property-body     = '{' accessor-list '}'
 accessor-list     = accessor (accessor)*
 
 accessor          = visibility? accessor-kind accessor-body
-accessor-kind     = 'get' | 'set' | 'init'
+accessor-kind     = 'get' | 'set'                             -- 'init' accessor removed per §P
 accessor-body     = ';'                                       -- auto: synthesize body
                   | '->' expression ';'                       -- expression-bodied
                   | block                                      -- full body
@@ -553,7 +560,7 @@ A property may have:
 - A `-> expr` body — expression-bodied read-only computed property.
 - A `{ get-or-set blocks }` body — full custom accessors.
 
-Inside a setter or `init` accessor body, the parameter is implicitly named **`value`** (C# convention). It has the property's declared type.
+Inside a setter body, the parameter is implicitly named **`value`** (C# convention). It has the property's declared type.
 
 ### M.7.2. Auto-Properties
 
@@ -562,13 +569,13 @@ The compiler synthesizes a private backing field for auto-properties. The backin
 ```jux
 public class User {
     public String name { get; set; }                  // read-write
-    public String id { get; init; }                   // settable only during construction
+    public String id { get; }                         // read-only (settable only in constructor)
     public int age { get; }                           // read-only (settable only in constructor)
     public String email { get; private set; }         // public read, private write
     public int score { get; protected set; }          // public read, protected write
 
     public User(String id, String name) {
-        this.id = id;            // OK: init setter accepts during construction
+        this.id = id;            // OK: read-only auto can be set in constructor
         this.name = name;
         this.age = 0;            // OK: read-only auto can be set in constructor
     }
@@ -577,16 +584,19 @@ public class User {
 var u = new User("u-42", "Alice");
 print(u.name);                   // "Alice"
 u.name = "Bob";                  // OK: public set
-u.id = "u-99";                   // ERROR: id has init-only setter
-u.age = 30;                      // ERROR: age is read-only
-u.email = "x@y";                 // ERROR: email's set is private (outside the class)
+u.id = "u-99";                   // ERROR: id is read-only (E0970)
+u.age = 30;                      // ERROR: age is read-only (E0970)
+u.email = "x@y";                 // ERROR: email's set is private (outside the class, E0972)
 ```
 
-**`init` accessor.** A property with `{ get; init; }` (or `{ get; private init; }`, etc.) is settable during:
-- The constructor of the declaring type (and its subclasses, when `protected init` or higher).
-- A `with(...)` expression on records (per §M.5).
+**Read-only auto-properties.** A property with `{ get; }` and no setter is settable
+only inside the constructors (and `init { ... }` blocks, §M.1) of the declaring type.
+After construction it is immutable. Records additionally allow `with(...)` copies
+(per §M.5), which construct a new instance rather than mutating the original.
 
-After construction, the property is immutable. This matches C# 9+ `init` semantics exactly.
+> There is **no `init` accessor** in Jux. The C# 9 `{ get; init; }` form was part of
+> an earlier draft of this section and was removed by
+> `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md` — `{ get; }` covers the use case.
 
 ### M.7.3. Property Initializer
 
@@ -595,7 +605,7 @@ A property may carry an `=`-initializer. The expression is evaluated once during
 ```jux
 public class Config {
     public String host { get; set; } = "localhost";
-    public int port { get; init; } = 8080;
+    public int port { get; } = 8080;
     public List<String> tags { get; } = new List<>();
 }
 ```
@@ -606,8 +616,8 @@ For computed read-only properties, `-> expression` is a shorthand for `{ get -> 
 
 ```jux
 public class Person {
-    public String firstName { get; init; }
-    public String lastName { get; init; }
+    public String firstName { get; }
+    public String lastName { get; }
 
     public String fullName -> firstName + " " + lastName;       // shorthand
     // Equivalent verbose form:
@@ -692,11 +702,11 @@ A `static` property accesses the class, not an instance. `Config.version`, not `
 
 ### M.7.10. Properties on Records and Interfaces
 
-Records auto-derive `{ get; init; }` for every component — that's what makes them immutable and constructor-settable. A user can additionally declare further computed properties:
+Records auto-derive read-only `{ get; }` properties for every component — that's what makes them immutable and constructor-settable (`with(...)` copies construct a new instance, per §M.5). A user can additionally declare further computed properties:
 
 ```jux
 public record Vector3(double x, double y, double z) {
-    // x, y, z are auto-properties with { get; init; } from the record components
+    // x, y, z are read-only { get; } auto-properties from the record components
     public double magnitudeSquared -> x*x + y*y + z*z;
     public double magnitude -> sqrt(magnitudeSquared);
 }

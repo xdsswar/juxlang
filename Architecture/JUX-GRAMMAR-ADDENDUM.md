@@ -71,8 +71,8 @@ keyword           = 'abstract' | 'annotation' | 'as' | 'async' | 'await'
                   | 'continue' | 'default' | 'do' | 'drop' | 'else'
                   | 'enum' | 'extends' | 'final' | 'finally' | 'for'
                   | 'if' | 'implements' | 'import' | 'init' | 'interface'
-                  | 'internal' | 'move' | 'native' | 'new' | 'package'
-                  | 'permits' | 'private' | 'protected' | 'public' | 'record'
+                  | 'internal' | 'move' | 'native' | 'new' | 'observer'
+                  | 'package' | 'permits' | 'private' | 'protected' | 'public' | 'record'
                   | 'return' | 'sealed' | 'sizeof' | 'static' | 'struct'
                   | 'super' | 'switch' | 'this' | 'throw' | 'throws'
                   | 'try' | 'type' | 'unsafe' | 'var' | 'void'
@@ -85,7 +85,7 @@ Identifiers that match a keyword are tokenized as that keyword. **Contextual key
 
 Note: `instanceof` and `is` are **not** keywords in Jux. The type-test operator is the punctuation token `=>` (per §A.4 level 12). Reads as "is an instance of": `x => Dog` is "x is an instance of Dog".
 
-> **Edit to §3.2 of JUX-LANG-V1:** Add `unsafe`, `volatile`, `when` to the reserved keyword list. The keywords `init` and `yield` are reserved but their syntactic roles are specified in this addendum and in `JUX-MISSING-DEFS-ADDENDUM.md` respectively. The keyword `annotation` was added in the same pass as the annotation-system addendum — see `JUX-ANNOTATIONS-ADDENDUM.md` §A.2.
+> **Edit to §3.2 of JUX-LANG-V1:** Add `unsafe`, `volatile`, `when` to the reserved keyword list. The keywords `init` and `yield` are reserved but their syntactic roles are specified in this addendum and in `JUX-MISSING-DEFS-ADDENDUM.md` respectively. The keyword `annotation` was added in the same pass as the annotation-system addendum — see `JUX-ANNOTATIONS-ADDENDUM.md` §A.2. The keyword `observer` is the observable-callback primitive type — see `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md` §P.2.
 
 ### A.1.4. Numeric Literals
 
@@ -319,7 +319,8 @@ property-body     = '{' accessor-list '}'
                   | '->' expression                           -- expression-bodied read-only ('->', not '=>': '=>' is instanceof)
 accessor-list     = accessor (accessor)*
 accessor          = visibility? accessor-kind accessor-body
-accessor-kind     = 'get' | 'set' | 'init'
+accessor-kind     = 'get' | 'set'                             -- 'init' accessor removed (§P);
+                                                              -- 'init' keyword remains for init-blocks only
 accessor-body     = ';'                                       -- auto: synthesize body
                   | '->' expression ';'                       -- expression-bodied
                   | block                                      -- full body
@@ -405,8 +406,11 @@ simple-type       = qualified-name generic-args?              -- named
                   | tuple-type
                   | function-type
                   | array-type
+                  | observer-type                             -- observable callback (§P.2)
                   | pointer-type                              -- unsafe contexts
                   | 'void'
+
+observer-type     = 'observer' '<' type '>'
 
 tuple-type        = '(' ')'                                   -- unit; reserved
                   | '(' type ',' type ( ',' type )* ')'

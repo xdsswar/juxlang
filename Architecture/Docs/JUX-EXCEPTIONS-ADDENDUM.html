@@ -37,6 +37,7 @@ try { var t = localStorage.getItem('jux-docs-theme');
     <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
     <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
     <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+    <a href="JUX-OBSERVABLE-PROPERTIES-ADDENDUM.html">Observable Properties</a>
     <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
   </div>
@@ -143,6 +144,13 @@ public class Exception {
     }
 }
 ```
+
+> **Phase-1 implementation note.** `cause` (with the `(message, cause)`
+> constructor), `addSuppressed`, and `getSuppressed` are implemented;
+> read the cause through `getCause()`. `stackTrace` capture is NOT yet
+> implemented (the DWARF walk lands with the §S.7.3 work). A rethrown
+> catch binder carries its CAUGHT static type, not the original
+> concrete subtype (the catch machinery binds the base slice).
 
 Stack trace capture happens at construction time (per `JUX-SEMANTICS-ADDENDUM.md` §S.7.3) — not at `throw`, not at `catch`. This matches Java and avoids the per-throw cost of capturing in code paths that catch and discard.
 
@@ -379,6 +387,17 @@ public sealed enum Result<T, E> permits Ok, Err {
 ```
 
 ### X.4.1. The `?` Operator
+
+> **Phase-1 implementation note.** `Result<T, E>` / `Option<T>` live
+> in `jux.std.result` / `jux.std.option`; construct with the variant
+> forms (`Result.Ok(v)`, `Result.Err(e)`, `Option.Some(v)`,
+> `Option.None` — the lowercase static factories and the lambda
+> combinators land with the function-typed-parameter work). `?` on a
+> Result requires a Result-returning enclosing function (the
+> `throws E` desugar form is deferred); `?` inside a `try` body is
+> rejected (E0730). The §X.4.3 `as`-convertible auto-conversion is
+> not yet applied — error types must be compatible directly (E0731
+> otherwise).
 
 `expr?` (postfix, per `JUX-GRAMMAR-ADDENDUM.md` §A.4 level 19) propagates errors:
 

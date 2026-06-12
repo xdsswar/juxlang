@@ -37,6 +37,7 @@ try { var t = localStorage.getItem('jux-docs-theme');
     <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
     <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
     <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
+    <a href="JUX-OBSERVABLE-PROPERTIES-ADDENDUM.html">Observable Properties</a>
     <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
   </div>
@@ -351,6 +352,50 @@ resolver. Outer-scope shadowing (a nested block reusing a name)
 is still allowed; only same-scope collisions fire E0304.
 
 **Spec status:** Aligned.
+
+---
+
+## E9 — Observable properties: `init` accessor removed, diagnostics renumbered
+
+**Conflict.** `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md` (§P) arrived with
+three tensions against the existing spec surface:
+
+1. Its draft diagnostic codes `E0401`–`E0407` / `W0401`–`W0404`
+   collided with published codes (`E0401`–`E0403` are the
+   duplicate-field/method/variant errors). §D.5.1 forbids
+   reassigning published codes.
+2. §M.7 (and the grammar §A.2.5) specified a C# 9-style `init`
+   accessor (`{ get; init; }`), which §P's design — and the
+   project's direction — drops.
+3. §P's draft made PascalCase property naming a hard error;
+   the decision is that it is a **preferred convention only**.
+
+**Resolution.**
+
+1. Property diagnostics live in the established `E097x`/`W097x`
+   family: `E0970` (write to read-only/computed property) and
+   `E0972` (accessor visibility violation) already existed and
+   absorb §P's draft E0402/E0401+E0403; new allocations are
+   `E0973` (write to bound property), `E0974` (`bindBidirectional`
+   type mismatch), `E0975` (observer lambda shape), and warnings
+   `W0970`–`W0974`.
+2. The `init` **accessor** is removed from the language: grammar
+   §A.2.5 is now `accessor-kind = 'get' | 'set'`, and §M.7 was
+   rewritten — read-only construction-time properties are
+   `{ get; }` (settable in constructors and `init { }` blocks).
+   The `init` *keyword* stays reserved for init-blocks (§M.1).
+   **Compiler follow-up:** `juxc-parse` still accepts the `init`
+   accessor (`is_init`) and `juxc-tycheck` still carries an
+   init-only write path under `E0970` — both must be removed.
+3. PascalCase property naming is surfaced as suppressible
+   warning `W0974` and an IDE rename hint. It never blocks
+   compilation: `private String test { get; set; } = "test";`
+   is legal. No renames are applied to any existing spec or
+   stdlib surface.
+
+**Spec status:** Aligned (docs). Compiler still implements the
+`init` accessor and none of `E0973`–`E0975` / `W0970`–`W0974`;
+tracked as the observable-properties implementation work.
 
 ---
 

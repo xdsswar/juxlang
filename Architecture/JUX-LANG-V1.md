@@ -164,22 +164,22 @@ break        case         catch        class        const
 continue     default      do           drop         else
 enum         extends      final        finally      for
 if           implements   import       init         interface
-internal     move         native       new          package
-permits      private      protected    public       record
-return       sealed       sizeof       static       struct
-super        switch       this         throw        throws
-try          type         var          void         while
-yield
+internal     move         native       new          observer
+package      permits      private      protected    public
+record       return       sealed       sizeof       static
+struct       super        switch       this         throw
+throws       try          type         var          void
+while        yield
 ```
 
-The keywords `async` and `await` are reserved at the lexical level even when not all features are available in the current profile. `annotation` declares user-defined annotation types (see `JUX-ANNOTATIONS-ADDENDUM.md`). `break` and `continue` are loop-flow keywords (§A.2.8). `as` is the cast operator (§A.5) and the import-alias keyword (§4.2). `sizeof` is the compile-time size query (§5.9).
+The keywords `async` and `await` are reserved at the lexical level even when not all features are available in the current profile. `annotation` declares user-defined annotation types (see `JUX-ANNOTATIONS-ADDENDUM.md`). `break` and `continue` are loop-flow keywords (§A.2.8). `as` is the cast operator (§A.5) and the import-alias keyword (§4.2). `sizeof` is the compile-time size query (§5.9). `observer` is the observable-callback primitive type for properties (see `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md` §P.2).
 
 ### 3.3. Identifiers
 
 - ASCII letters, digits, and underscore.
 - Must not start with a digit.
 - Must not collide with reserved keywords.
-- Convention: `camelCase` for variables and methods, `PascalCase` for types, `SCREAMING_SNAKE_CASE` for constants, `lowercase` for packages.
+- Convention: `camelCase` for variables and methods, `PascalCase` for types, `SCREAMING_SNAKE_CASE` for constants, `lowercase` for packages. Properties (`{ get; set; }`) are *preferably* `PascalCase` to visually distinguish them from plain fields — a convention surfaced as warning `W0974`, never enforced (see `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md` §P.1.1).
 
 ### 3.4. Literals
 
@@ -474,6 +474,7 @@ switch (shape) {
 | `Map<K, V>`         | Hash map (uses heap)                            | full, embedded |
 | `Set<T>`            | Hash set (uses heap)                            | full, embedded |
 | `(A, B) -> R`       | Function type                                   | all profiles |
+| `observer<T>`       | Weak observer callback for an observable property (see `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md`) | full, embedded |
 | `() async -> R`     | Async function type (may suspend)               | full, embedded |
 | `Task<T>`           | Handle to running async computation             | full, embedded |
 | `T*`                | Raw pointer (only inside `native` blocks)       | all profiles |
@@ -1256,7 +1257,8 @@ The variadic parameter is bound to a `String[]` inside the function body. Variad
 
 ```java
 public class User {
-    // Fields and properties (C#-style; see §M.7)
+    // Fields and properties (C#-style; see §M.7 for accessor syntax and
+    // JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md §P for observers and binding)
     private String passwordHash;
     public String name { get; private set; }     // public read, private write
     public int age    { get; private set; }      // public read, private write
@@ -2114,8 +2116,8 @@ public class Box<T> {
 }
 
 public class Pair<A, B> {
-    public A first  { get; init; }
-    public B second { get; init; }
+    public A first  { get; }
+    public B second { get; }
 
     public Pair(A first, B second) {
         this.first = first;
