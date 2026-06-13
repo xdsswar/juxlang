@@ -651,6 +651,15 @@ opt-level = 1                # fast tests, but readable stack traces
 
 The default profiles are `dev` (used by `jux build` without `--release`) and `release` (used by `jux build --release`). `test` is used by `jux test`. `bench` is used by `jux bench` (when added).
 
+### B.9.2. Phase-1 Status & Divergences
+
+`[build] optimization` and the `[profile.*]` tables are **implemented**. They lower into the per-module emitted `Cargo.toml`, so each module (workspace member) controls its own profiles and build type independently.
+
+- **`[build] optimization`** selects the default build type when no CLI flag is given: `"release"`/`"size"` build optimized, `"debug"`/`"none"` (and absence) build debug. An explicit `jux build --release` always wins. `"size"` additionally injects `opt-level = "z"` into the emitted `[profile.release]` unless the manifest already pins one.
+- **`[build] target`** supplies a default cross-compile triple (overridden by the CLI `--target`); `"native"` is normalized to "no triple".
+- **`[profile.*]`** keys are translated to their Cargo spellings on emission: `debug = "line-tables"` → Cargo `"line-tables-only"`; `strip = "all"` → Cargo `"symbols"`; spec `extends` → Cargo `inherits` (and Cargo's `inherits` spelling is also accepted). A custom-named profile (anything but `dev`/`release`/`test`/`bench`) always emits an `inherits` (defaulting to `"dev"`), since Cargo requires it.
+- **Divergences:** custom-named profiles are emitted but not yet *selectable* (no `jux build --profile <name>` flag — only `dev`/`release` are reachable, via `--release`). A non-integer `codegen-units` (e.g. the spec's `"max"`) is dropped on emission because Cargo only accepts an integer there.
+
 ---
 
 ## §B.10 — Registry Protocol

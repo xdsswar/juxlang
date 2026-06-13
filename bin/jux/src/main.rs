@@ -223,6 +223,18 @@ enum Action {
     Run,
 }
 
+/// Apply the manifest's `[build] target` (§B.9) as the default
+/// cross-compilation triple by setting `JUX_TARGET` — unless the CLI
+/// `--target` flag already set it (CLI wins). The driver's cargo invocations
+/// read `JUX_TARGET` (see `juxc_driver::cross_target`).
+fn apply_default_target(manifest: &juxc_driver::Manifest) {
+    if std::env::var_os("JUX_TARGET").is_none() {
+        if let Some(triple) = &manifest.build_target {
+            std::env::set_var("JUX_TARGET", triple);
+        }
+    }
+}
+
 /// Dispatch table: route to single-file mode if `file` is `Some`, else
 /// to the project-mode placeholder. `emit_dir` (if any) overrides the
 /// default emit directory in single-file mode.
@@ -294,6 +306,12 @@ fn run_project(
         eprintln!("jux: failed to load {}", manifest_path.display());
         return Ok(ExitCode::from(1));
     };
+
+    // `[build] optimization` sets the default debug/release build type; an
+    // explicit CLI `--release` still wins (§B.9). `[build] target` supplies a
+    // default cross-compile triple unless `--target` already set JUX_TARGET.
+    let release = manifest.effective_release(release);
+    apply_default_target(&manifest);
 
     // ---- Workspace mode -------------------------------------------------
     if !manifest.workspace_members.is_empty() {
@@ -422,6 +440,10 @@ fn cmd_test(pattern: Option<String>, release: bool) -> Result<ExitCode> {
         eprintln!("jux: failed to load {}", manifest_path.display());
         return Ok(ExitCode::from(1));
     };
+    // `jux test` honors the manifest's default build type too (§B.9); the
+    // `assert` builtin stays checked regardless (§TS.2).
+    let release = manifest.effective_release(release);
+    apply_default_target(&manifest);
     let binary_name = format!(
         "{}_test",
         manifest

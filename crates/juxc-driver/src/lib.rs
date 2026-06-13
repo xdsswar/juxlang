@@ -486,7 +486,7 @@ pub fn build_with_manifest(
     // Project the manifest's `[package]` metadata into the backend's
     // `CargoMeta` shape. No manifest → empty meta → legacy Cargo.toml.
     let cargo_meta = manifest
-        .map(|m| m.package.to_cargo_meta())
+        .map(|m| m.to_cargo_meta())
         .unwrap_or_default();
     let cargo_toml =
         juxc_backend_rust::cargo_toml_for_with_meta(crate_name, true, &cargo_meta);
@@ -641,7 +641,7 @@ pub fn build_emitted_crate(
     let uses_async = true;
 
     let cargo_meta = manifest
-        .map(|m| m.package.to_cargo_meta())
+        .map(|m| m.to_cargo_meta())
         .unwrap_or_default();
     // Foreign (`rust.<crate>`) `[dependencies]` become registry deps in the
     // emitted Cargo.toml so the bound crate is actually linked into the binary

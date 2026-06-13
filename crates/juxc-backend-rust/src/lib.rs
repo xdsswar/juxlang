@@ -4443,6 +4443,30 @@ pub struct CargoMeta {
     /// copied into the crate dir by the driver as `app.ico`; this flag
     /// only tells the emitter to wire the build script + dependency.
     pub has_icon: bool,
+    /// Cargo build profiles to emit (`[profile.dev]`, `[profile.release]`,
+    /// …) — the lowered form of the manifest's `[profile.*]` tables
+    /// (§B.9). Empty → no profile tables emitted (Cargo's built-in
+    /// defaults apply). The driver does the Jux→Cargo key translation;
+    /// the emitter just renders each block verbatim.
+    pub profiles: Vec<CargoProfile>,
+}
+
+/// One Cargo `[profile.<name>]` table to emit into a generated `Cargo.toml`.
+///
+/// `entries` are already Cargo-spelled `key` → rendered-TOML-`value` pairs
+/// (e.g. `("opt-level", "3")`, `("lto", "\"thin\"")`, `("strip", "true")`),
+/// so the emitter can write each line without knowing TOML value types. The
+/// driver ([`crate`]'s consumer) owns the spec→Cargo translation and value
+/// rendering (quoting strings, leaving integers/bools bare).
+#[derive(Debug, Clone, Default)]
+pub struct CargoProfile {
+    /// Profile name: a Cargo built-in (`dev`/`release`/`test`/`bench`) or a
+    /// custom name. Custom names must carry an `inherits` entry (the driver
+    /// guarantees this).
+    pub name: String,
+    /// `(cargo_key, rendered_value)` pairs, already valid TOML on the value
+    /// side. Emitted in order, one `key = value` line each.
+    pub entries: Vec<(String, String)>,
 }
 
 impl CargoMeta {
@@ -4526,6 +4550,7 @@ pub fn cargo_toml_for_with_meta(name: &str, uses_async: bool, meta: &CargoMeta) 
         ""
     };
 
+    let profiles = render_profiles(&meta.profiles);
     format!(
         "{pkg}\
          \n\
@@ -4535,7 +4560,8 @@ pub fn cargo_toml_for_with_meta(name: &str, uses_async: bool, meta: &CargoMeta) 
          name = \"{name}\"\n\
          path = \"src/main.rs\"\n\
          \n\
-         [workspace]\n",
+         [workspace]\n\
+         {profiles}",
     )
 }
 
@@ -4713,7 +4739,18 @@ pub fn cargo_toml_for_target(
     // an emitted workspace must omit it.
     let workspace_tail = if in_workspace { "" } else { "[workspace]\n" };
 
-    format!("{pkg}\n{deps}{build_deps}{target_block}{workspace_tail}")
+    // `[profile.*]` tables (§B.9). Cargo honors these only in a package
+    // that is its own workspace root, so they're emitted for stand-alone
+    // crates (the common single-package path). Members of an emitted
+    // workspace carry their profiles in the workspace-root manifest instead,
+    // so `in_workspace` crates skip them here.
+    let profiles = if in_workspace {
+        String::new()
+    } else {
+        render_profiles(&meta.profiles)
+    };
+
+    format!("{pkg}\n{deps}{build_deps}{target_block}{workspace_tail}{profiles}")
 }
 
 /// Escape a string for safe inclusion inside a double-quoted TOML basic
@@ -4722,4 +4759,27 @@ pub fn cargo_toml_for_target(
 /// in manifest metadata, so we keep this minimal.
 fn escape_toml(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Render the `[profile.<name>]` tables (§B.9) for a generated `Cargo.toml`.
+///
+/// Each [`CargoProfile`] becomes a `[profile.<name>]` header followed by its
+/// already-rendered `key = value` entries. Returns `""` when there are no
+/// profiles, so callers can splice it unconditionally. A trailing blank line
+/// separates the profile block from whatever follows.
+fn render_profiles(profiles: &[CargoProfile]) -> String {
+    if profiles.is_empty() {
+        return String::new();
+    }
+    // Lead with a blank line so the profile block reads cleanly after the
+    // preceding table (`[workspace]` / `[[bin]]`).
+    let mut out = String::from("\n");
+    for p in profiles {
+        out.push_str(&format!("[profile.{}]\n", p.name));
+        for (k, v) in &p.entries {
+            out.push_str(&format!("{k} = {v}\n"));
+        }
+        out.push('\n');
+    }
+    out
 }
