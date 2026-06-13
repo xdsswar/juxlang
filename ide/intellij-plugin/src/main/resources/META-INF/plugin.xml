@@ -4,12 +4,23 @@
        public release, so no installed base is affected. -->
   <id>dev.jux.lang</id>
   <name>Jux Language</name>
-  <vendor email="contact@xdsswar.dev" url="https://github.com/xdsswar/juxlang">
+  <vendor email="contact@xdsswar.dev" url="https://juxlang.dev/">
     XTREME SOFTWARE SOLUTIONS
   </vendor>
 
   <description><![CDATA[
     <h2>Jux Language</h2>
+
+    <p><b>License &amp; disclaimer (please read before installing).</b>
+      This plugin and the Jux toolchain are provided FREE OF CHARGE and
+      <b>"AS IS", without warranty of any kind</b>. You use them entirely at your
+      own risk; to the maximum extent permitted by law the authors and
+      XTREME SOFTWARE SOLUTIONS accept <b>no liability</b> for any damages or data
+      loss arising from their use. Jux is pre-release software and may change or
+      contain defects. On first launch the plugin asks you to accept these terms.
+      See <a href="https://juxlang.dev/">juxlang.dev</a> and
+      <a href="https://github.com/xdsswar/juxlang">github.com/xdsswar/juxlang</a>.
+    </p>
     <p>
       Full IDE support for <b>Jux</b> — a Java/C#-shaped language that lowers to
       Rust. Write familiar class/interface/enum/record syntax and ship native
@@ -461,6 +472,10 @@
                              id="dev.jux.intellij.settings.JuxConfigurable"
                              instance="dev.jux.intellij.settings.JuxConfigurable"
                              displayName="Jux Toolchain"/>
+
+    <!-- One-time "AS IS / no liability" agreement, shown on first project open
+         until accepted (application-wide, see JuxLicense). -->
+    <postStartupActivity implementation="dev.jux.intellij.license.JuxLicenseStartup"/>
   </extensions>
 
   <actions>
@@ -507,6 +522,12 @@
             text="Override/Implement Methods"
             description="Generate @override stubs for inherited methods not yet declared">
       <add-to-group group-id="GenerateGroup" anchor="after" relative-to-action="Jux.Generate.Setters"/>
+    </action>
+    <action id="Jux.ShowLicense"
+            class="dev.jux.intellij.license.JuxShowLicenseAction"
+            text="Jux License &amp; Disclaimer..."
+            description="Show the Jux plugin license and AS-IS disclaimer">
+      <add-to-group group-id="HelpMenu" anchor="last"/>
     </action>
   </actions>
 </idea-plugin>
