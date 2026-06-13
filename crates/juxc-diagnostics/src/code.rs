@@ -586,6 +586,17 @@ pub enum Code {
     /// diagnostic.
     E0506_UnsafeOpOutsideUnsafe,
 
+    /// E0507 — A `delete <expr>;` statement. Jux has **no `delete`/`free`
+    /// keyword** by design (`JUX-POINTERS-REFERENCES-GUIDE.md` §5.2,
+    /// Layout-ABI §L.7-L.8): memory is freed by calling the foreign
+    /// deallocator (`free`, or a C++ `delete` wrapper) inside an `unsafe`
+    /// block, idiomatically from the owning class's `drop { }` destructor.
+    /// Without this code, `delete p;` matches the typed-local lookahead
+    /// (`Ident Ident ;`), so `delete` is read as a *type* and the user gets
+    /// a baffling `E0304 cannot find type 'delete'`. We intercept the shape
+    /// in the parser and point them at the spec-correct drop-block model.
+    E0507_NoDeleteKeyword,
+
     // ---- Operators / Auto-derivation (E0900–E0999) ----
     /// E0930 — Conflicting operator declarations. Per
     /// `JUX-OPERATORS-ADDENDUM.md` §O.2.1, defining BOTH `operator<=>`
@@ -740,6 +751,7 @@ impl Code {
             Code::E0710_ThrowRequiresException   => "E0710",
             Code::E0720_UnreachableCatch         => "E0720",
             Code::E0506_UnsafeOpOutsideUnsafe    => "E0506",
+            Code::E0507_NoDeleteKeyword          => "E0507",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",

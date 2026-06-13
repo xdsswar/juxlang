@@ -273,6 +273,40 @@ impl<'a> Parser<'a> {
             let end = self.last_consumed_span();
             return Some(Stmt::SuperCall(args, start.join(end)));
         }
+        // **`delete <expr>;` guidance** (§L.7-L.8). Jux has NO `delete`
+        // keyword: memory is freed by calling the foreign deallocator
+        // inside `unsafe`, idiomatically from a `drop { }` destructor. But
+        // `delete p;` is the shape `Ident Ident ;`, which would otherwise
+        // be swallowed by `looks_like_typed_local` below — reading `delete`
+        // as a *type* and yielding a baffling `E0304 cannot find type
+        // 'delete'`. We intercept it FIRST and emit a precise pointer to the
+        // drop-block model. The trigger requires a second *operand* after
+        // `delete` (another ident, `this`, or `*p`); two operands in a row
+        // is never a valid expression statement, so this never steals a
+        // legitimate use of `delete` as an identifier (`delete(x)` call,
+        // `delete = v` assign, `delete.run()` member, bare `delete;`).
+        if matches!(self.peek(), TokenKind::Ident(s) if s == "delete")
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Ident(_))
+                    | Some(TokenKind::Kw(Keyword::This))
+                    | Some(TokenKind::Star),
+            )
+        {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0507_NoDeleteKeyword,
+                    "`delete` is not a keyword in Jux; free memory from a `drop { }` destructor by calling the foreign deallocator (`free`) inside `unsafe` (see §L.7-L.8)",
+                )
+                .with_span(self.peek_span())
+                .with_help(
+                    "free memory by calling the foreign deallocator (`free`, or a C++ `delete` wrapper) inside an `unsafe` block, idiomatically from the owning class's `drop { }` destructor (see §L.7-L.8)",
+                ),
+            );
+            // Return `None`; the caller's `recover_to_stmt_boundary` consumes
+            // through the `;` so parsing resumes cleanly with no cascade.
+            return None;
+        }
         // Typed local declaration: `Type name [= expr] ;` per §A.2.8's
         // alternative form. Detected by a 3-token lookahead so we don't
         // wrongly consume the leading identifier of an expression
