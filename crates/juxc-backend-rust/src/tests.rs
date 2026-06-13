@@ -4409,3 +4409,71 @@ fn array_element_incr_hoists_index() {
     assert!(rust.contains("let __jux_i = s"), "index should hoist to __jux_i: {rust}");
     assert!(rust.contains("let __jux_t ="), "old value should be cached: {rust}");
 }
+
+// ---------------------------------------------------------------------------
+// §L.6.5 — address-of a class object (`&obj`) + raw-pointer null handling
+// ---------------------------------------------------------------------------
+
+const PTR_CLASS_PRELUDE: &str =
+    "public class P { public int x; public P(int x) { this.x = x; } } ";
+
+/// `&obj` on a class lowers to the inner-cell pointer (`obj.0.as_ptr()`),
+/// reaching through the `Rc<RefCell<P_Inner>>` handle to the data — not the
+/// place-pointer macro used for value locals.
+#[test]
+fn addr_of_class_object_lowers_to_inner_ptr() {
+    let rust = emit(&format!(
+        "{PTR_CLASS_PRELUDE} public void main() {{ P p = new P(1); unsafe {{ P* q = &p; }} }}"
+    ));
+    assert!(rust.contains("p.0.as_ptr()"), "expected inner-cell ptr, got: {rust}");
+    assert!(
+        !rust.contains("addr_of_mut!(p)"),
+        "class `&obj` must not use addr_of_mut!: {rust}"
+    );
+}
+
+/// A class raw-pointer TYPE lowers to `*mut P_Inner` (points at the inner
+/// data struct, matching `&obj`'s `obj.0.as_ptr()`).
+#[test]
+fn class_pointer_type_lowers_to_inner() {
+    let rust = emit(&format!(
+        "{PTR_CLASS_PRELUDE} public void main() {{ P p = new P(1); unsafe {{ P* q = &p; }} }}"
+    ));
+    assert!(rust.contains("*mut P_Inner"), "expected `*mut P_Inner`, got: {rust}");
+}
+
+/// A value-typed `&local` is unchanged: the place-pointer macro and a plain
+/// `*mut isize` pointee (records/primitives keep the direct pointee).
+#[test]
+fn addr_of_value_local_uses_addr_of_mut() {
+    let rust = emit("public void main() { int n = 1; unsafe { int* p = &n; } }");
+    assert!(
+        rust.contains("addr_of_mut!(n)"),
+        "value `&local` should use addr_of_mut!: {rust}"
+    );
+    assert!(rust.contains("*mut isize"), "expected `*mut isize`, got: {rust}");
+}
+
+/// Raw-pointer null comparison lowers to `is_null()`, never the `Option`
+/// `is_some()`/`is_none()` (which a `*mut T` does not have). §L.6.
+#[test]
+fn pointer_null_comparison_uses_is_null() {
+    let rust = emit(
+        "public void main() { int n = 1; unsafe { int* p = &n; \
+         bool a = (p == null); bool b = (p != null); } }",
+    );
+    assert!(rust.contains(".is_null()"), "expected is_null(), got: {rust}");
+    assert!(!rust.contains(".is_some()"), "raw pointer must not use is_some(): {rust}");
+    assert!(!rust.contains(".is_none()"), "raw pointer must not use is_none(): {rust}");
+}
+
+/// A `null` initializer in a raw-pointer slot lowers to `std::ptr::null_mut()`,
+/// not `None` (§L.6.1: `null` is the sole `T*` literal).
+#[test]
+fn pointer_null_init_lowers_to_null_mut() {
+    let rust = emit("public void main() { unsafe { int* p = null; } }");
+    assert!(
+        rust.contains("let p: *mut isize = std::ptr::null_mut();"),
+        "expected `let p: *mut isize = std::ptr::null_mut();`, got: {rust}"
+    );
+}

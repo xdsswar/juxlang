@@ -3433,6 +3433,8 @@ impl RustEmitter {
                     self.weak_params.insert(p.name.text.clone(), cls.to_string());
                 }
             }
+            // Raw-pointer params (§L.6): reset + seed for the `p == null` peephole.
+            self.seed_pointer_params(&method.params);
             // Record this method's parameter names so the implicit-`this`
             // rewrite (bare instance-field → `this.field`) doesn't fire for a
             // parameter that shadows a field.

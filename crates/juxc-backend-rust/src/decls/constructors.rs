@@ -341,6 +341,8 @@ impl RustEmitter {
                     self.nullable_locals.insert(p.name.text.clone());
                 }
             }
+            // Raw-pointer params (§L.6): reset + seed for the `p == null` peephole.
+            self.seed_pointer_params(&ctor.params);
             self.emit_simple_ctor_body(class_decl, &simple, false);
             self.w.indent_dec();
             self.w.line("}");
@@ -435,6 +437,8 @@ impl RustEmitter {
                 self.nullable_locals.insert(p.name.text.clone());
             }
         }
+        // Raw-pointer params (§L.6): reset + seed for the `p == null` peephole.
+        self.seed_pointer_params(&ctor.params);
         // §S.4.4 step 4 / ERRATA E2: run every `init { }` block in source
         // order BEFORE the constructor body (Java's instance-initializer
         // order — init blocks see field-initializer values, not the body's
@@ -923,6 +927,8 @@ impl RustEmitter {
                     self.nullable_locals.insert(p.name.text.clone());
                 }
             }
+            // Raw-pointer params (§L.6): reset + seed for the `p == null` peephole.
+            self.seed_pointer_params(&ctor.params);
             // `C_Inner { __parent: Parent::new_inner(super_args), … }`.
             self.w.emit_indent();
             self.emit_wrapper_simple_ctor_inner(class_decl, &inner, &simple);
@@ -1013,6 +1019,8 @@ impl RustEmitter {
                     self.nullable_locals.insert(p.name.text.clone());
                 }
             }
+            // Raw-pointer params (§L.6): reset + seed for the `p == null` peephole.
+            self.seed_pointer_params(&ctor.params);
             // §S.4.4 step 4 / ERRATA E2: init blocks run BEFORE the ctor
             // body (Java's instance-initializer order). Ctor params are
             // not in scope inside init blocks, so the shadow set stays

@@ -101,6 +101,13 @@ Key properties of `T*` (§L.6.1):
 `&` is reserved *exclusively* for address-of inside `unsafe`; Jux has no
 implicit borrow-reference syntax (it uses inferred borrows per §6). ✅
 
+**`&obj` on a class object** (§L.6.5) gives a `T*` aimed at the **inner object
+value**, not at the `Rc<RefCell>` handle that owns it, so it is the address C/C++
+interop expects. It is a *borrowing, non-owning* pointer: it does not bump the
+refcount, does not keep `obj` alive, and steps around the normal borrow checks
+(that is exactly why it needs `unsafe`). It lowers to `obj.as_ptr()`. For plain
+object *identity* without `unsafe`, reach for `===` (§2), not a numeric address. ✅
+
 Function pointers `fn(A) -> R` (distinct from closures `(A) -> R`) are the C
 callback mechanism (§L.6.4) 📐.
 
@@ -169,6 +176,14 @@ public final class RawBuffer {
 `drop { }` is Jux's destructor (§6.6 / §S.5) and runs deterministically when
 the object dies — the right place to release a foreign resource. ✅ for the
 `drop` block itself; the `free(...)` *call* is 📐 (needs the FFI layer).
+
+Because `delete` is muscle memory for C++/Java/JS programmers, the compiler
+catches a `delete p;` statement and turns it into a *guided* error instead of a
+confusing one. Writing `delete <thing>;` (a second operand after the word, e.g.
+`delete p;`, `delete this.buf;`, `delete *p;`) reports **E0507** with a message
+that points you at the `drop { }` + foreign-`free` model above. `delete` is still
+a usable identifier everywhere else (`delete(x)`, `delete = v`, `delete.run()`
+never trip E0507). ✅
 
 ### 5.3 Other `unsafe`-only tools
 - `transmute<A, B>(v)` — bit reinterpret, `sizeof<A>() == sizeof<B>()` (E0840). 📐

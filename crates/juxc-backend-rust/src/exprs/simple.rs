@@ -7,6 +7,23 @@ use juxc_ast::{CastExpr, Expr, RangeExpr, UnaryExpr};
 use crate::exprs::UNARY_PREC;
 use crate::RustEmitter;
 
+/// True when emitting `expr.as_ptr()` for a class `&obj` (§L.6.5) would need
+/// `expr` wrapped in parens. Atoms and postfix shapes (a bare path, `this`, a
+/// field access, a call, an index) bind tightly enough to take `.as_ptr()`
+/// directly; composite shapes (a cast, a binary, etc.) need wrapping. Same
+/// shape as `binary::receiver_needs_parens`, kept local per the established
+/// per-module-copy convention for this tiny helper.
+fn addr_receiver_needs_parens(e: &Expr) -> bool {
+    !matches!(
+        e,
+        Expr::Path(_)
+            | Expr::This(_)
+            | Expr::Field(_)
+            | Expr::Call(_)
+            | Expr::Index(_)
+    )
+}
+
 impl RustEmitter {
     /// Lower `value as Type` to Rust `value as type`.
     ///
@@ -193,11 +210,34 @@ impl RustEmitter {
     /// needs parens (`-(x + y)` rather than `-x + y`). Atomic and postfix
     /// operands don't.
     pub(crate) fn emit_unary(&mut self, u: &UnaryExpr) {
-        // `&x` (address-of) lowers to a raw-pointer macro, not a prefix
-        // token: `core::ptr::addr_of_mut!(x)` yields a `*mut T` (a Rust
-        // reference `&x` is a different type). The operand is a place, so
-        // it's emitted verbatim inside the macro call.
         if matches!(u.op, juxc_ast::UnaryOp::AddrOf) {
+            // `&obj` on a CLASS object (§L.6.5). A class lowers to
+            // `Rc<RefCell<C>>`, so the address we want is the INNER value's,
+            // not the handle's. `RefCell::as_ptr` (reached through `Rc`'s
+            // `Deref`) returns that `*mut C` without taking a runtime borrow
+            // or touching the refcount — a borrowing, non-owning pointer,
+            // which is exactly the spec semantics. A value-typed `&local`
+            // falls through to the place-pointer macro below.
+            if self.expr_is_class_instance(&u.operand) {
+                // The class newtype is `C(Rc<RefCell<C_Inner>>)`, so the
+                // handle's `Rc` is field `.0`; `.as_ptr()` on the `RefCell`
+                // it derefs to yields `*mut C_Inner` — a pointer to the inner
+                // data, matching the `C*` → `*mut C_Inner` type lowering.
+                let needs_parens = addr_receiver_needs_parens(&u.operand);
+                if needs_parens {
+                    self.w.push('(');
+                }
+                self.emit_expr(&u.operand);
+                if needs_parens {
+                    self.w.push(')');
+                }
+                self.w.push_str(".0.as_ptr()");
+                return;
+            }
+            // `&x` (address-of) on a value place lowers to a raw-pointer
+            // macro, not a prefix token: `core::ptr::addr_of_mut!(x)` yields
+            // a `*mut T` (a Rust reference `&x` is a different type). The
+            // operand is a place, so it's emitted verbatim inside the macro.
             self.w.push_str("core::ptr::addr_of_mut!(");
             self.emit_expr(&u.operand);
             self.w.push(')');
