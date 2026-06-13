@@ -781,6 +781,10 @@ pub struct ConstructorSig {
     pub visibility: Visibility,
     /// Formal parameters in declaration order.
     pub params: Vec<ParamSig>,
+    /// True for a foreign (`.jux.d`) constructor whose `throws E` clause maps a
+    /// Rust `new() -> Result<Self, E>` (§G.5.4) — the `new T(...)` call site
+    /// unwraps the `Result`.
+    pub is_foreign_result: bool,
     /// Span of the constructor declaration.
     pub span: Span,
 }
@@ -2999,6 +3003,7 @@ fn insert_class(
         .map(|c| ConstructorSig {
             visibility: c.visibility,
             params: c.params.iter().map(param_sig).collect(),
+            is_foreign_result: is_external && !c.throws.is_empty(),
             span: c.span,
         })
         .collect();

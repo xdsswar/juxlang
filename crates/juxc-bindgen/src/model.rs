@@ -118,6 +118,9 @@ pub struct StubCtor {
     pub visibility: Vis,
     pub name: String,
     pub params: Vec<StubParam>,
+    /// `throws E`, set when the Rust `new` returned `Result<Self, E>` (§G.5.4) —
+    /// rendered as a `throws` clause so the call site unwraps the `Result`.
+    pub throws: Option<JuxType>,
 }
 
 /// A method / free-function stub.

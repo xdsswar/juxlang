@@ -147,7 +147,11 @@ fn render_field(out: &mut String, f: &StubField) {
 }
 
 fn render_ctor(out: &mut String, c: &StubCtor) {
-    let _ = writeln!(out, "    {}{}({});", c.visibility.prefix(), c.name, render_params(&c.params));
+    let mut s = format!("    {}{}({})", c.visibility.prefix(), c.name, render_params(&c.params));
+    if let Some(err) = &c.throws {
+        let _ = write!(s, " throws {err}");
+    }
+    let _ = writeln!(out, "{s};");
 }
 
 /// Render a method or free function. `in_interface` suppresses the `static`
@@ -243,6 +247,7 @@ mod tests {
             visibility: Vis::Public,
             name: "HashMap".into(),
             params: vec![],
+            throws: None,
         });
         hm.methods.push(StubFn {
             visibility: Vis::Public,

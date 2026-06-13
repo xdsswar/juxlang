@@ -338,10 +338,14 @@ fn collect_inherent_members(
 
             let has_self = has_self_receiver(f);
             if mname == "new" && !has_self {
+                // A `new() -> Result<Self, E>` surfaces as a `throws E` ctor so
+                // the call site unwraps the `Result` (§G.5.4).
+                let (_ret, throws) = map_return(&f.sig.output);
                 ctors.push(StubCtor {
                     visibility: Vis::Public,
                     name: type_name.to_string(),
                     params: map_params(f),
+                    throws,
                 });
             } else {
                 let mut sf = map_function(mname, f);
