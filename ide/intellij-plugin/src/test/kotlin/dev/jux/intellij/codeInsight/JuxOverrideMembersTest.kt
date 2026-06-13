@@ -135,6 +135,70 @@ class JuxOverrideMembersTest : BasePlatformTestCase() {
         assertTrue(text.indexOf("greet(String who) {", text.indexOf("class Impl")) > text.indexOf("own()"))
     }
 
+    fun testGenericInterfaceArgsSubstitutedInStub() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            public interface Holder<T> {
+                void write(String name);
+                void test(T t);
+                T getIt();
+            }
+            public class HolderName implements Holder<Object> {
+                <caret>
+            }
+            """.trimIndent(),
+        )
+        val type = typeNamed("HolderName")
+        JuxOverrideMembers.insertStubs(project, type, JuxOverrideMembers.candidates(type))
+        // Inspect only the GENERATED stubs (the class body), not the interface
+        // source above it (which legitimately still reads `test(T t)`).
+        val stubs = myFixture.file.text.substringAfter("implements Holder<Object> {")
+        // T is substituted to the concrete argument Object in the stub.
+        assertTrue("test(Object t)", stubs.contains("public void test(Object t)"))
+        assertTrue("Object getIt()", stubs.contains("public Object getIt()"))
+        assertFalse("no undefined T in stubs", Regex("""\bT\b""").containsMatchIn(stubs))
+        // Non-generic method is unaffected.
+        assertTrue("write(String name)", stubs.contains("public void write(String name)"))
+    }
+
+    fun testComposedGenericSubstitutionThroughChain() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            public interface Base<X> { void take(X x); }
+            public interface Mid<Y> extends Base<Y> {}
+            public class Impl implements Mid<Object> {
+                <caret>
+            }
+            """.trimIndent(),
+        )
+        val type = typeNamed("Impl")
+        JuxOverrideMembers.insertStubs(project, type, JuxOverrideMembers.candidates(type))
+        // Mid<Object> → Base<Object> → take(Object x).
+        assertTrue(myFixture.file.text.contains("void take(Object x)"))
+    }
+
+    fun testMethodLevelGenericsPreservedInOverride() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            public class Base {
+                public <R> R wrap(R item) { return item; }
+            }
+            public class Sub extends Base {
+                <caret>
+            }
+            """.trimIndent(),
+        )
+        val type = typeNamed("Sub")
+        JuxOverrideMembers.insertStubs(project, type, JuxOverrideMembers.candidates(type))
+        val text = myFixture.file.text
+        // The method's OWN type parameter <R> stays (it's not a class arg).
+        assertTrue("method generics kept", text.contains("<R> R wrap(R item)"))
+        assertTrue("delegates to super", text.contains("return super.wrap(item);"))
+    }
+
     fun testImplementMethodsPlatformAction() {
         myFixture.configureByText(
             "a.jux",
