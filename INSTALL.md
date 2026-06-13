@@ -64,23 +64,23 @@ The binaries land in `target/release/`:
 The tools (and the IntelliJ plugin) locate `juxc` / `juxc-lsp` in this order:
 
 1. an explicit path you configure (in a run configuration), then
-2. **`$JUX_HOME/bin/`** (or `$JUX_HOME/`), then
+2. **`$JUX_HOME`**, then
 3. your `PATH`.
 
-The recommended setup is to copy the binaries into a `JUX_HOME/bin` directory
-and point the `JUX_HOME` environment variable at the root.
+The recommended setup is to copy the executables straight into the `JUX_HOME`
+directory (no `bin/` subfolder) and point the `JUX_HOME` environment variable at it.
 
 ### Windows (PowerShell)
 
 ```powershell
 # Choose an install root, e.g. C:\Tools\jux
 $JuxHome = "C:\Tools\jux"
-New-Item -ItemType Directory -Force -Path "$JuxHome\bin" | Out-Null
-Copy-Item target\release\juxc.exe,target\release\jux.exe,target\release\juxc-lsp.exe "$JuxHome\bin"
+New-Item -ItemType Directory -Force -Path "$JuxHome" | Out-Null
+Copy-Item target\release\juxc.exe,target\release\jux.exe,target\release\juxc-lsp.exe "$JuxHome"
 
-# Persist JUX_HOME and add the bin dir to PATH (user scope).
+# Persist JUX_HOME and add it to PATH (user scope).
 setx JUX_HOME $JuxHome
-setx PATH "$env:PATH;$JuxHome\bin"
+setx PATH "$env:PATH;$JuxHome"
 ```
 
 Open a **new** terminal afterward so the variables take effect.
@@ -90,12 +90,12 @@ Restart IntelliJ too, so it picks up the new `JUX_HOME`.
 
 ```sh
 JUX_HOME="$HOME/.jux"
-mkdir -p "$JUX_HOME/bin"
-cp target/release/juxc target/release/jux target/release/juxc-lsp "$JUX_HOME/bin/"
+mkdir -p "$JUX_HOME"
+cp target/release/juxc target/release/jux target/release/juxc-lsp "$JUX_HOME/"
 
 # Add to your shell profile (~/.bashrc or ~/.zshrc):
 echo 'export JUX_HOME="$HOME/.jux"' >> ~/.zshrc
-echo 'export PATH="$JUX_HOME/bin:$PATH"' >> ~/.zshrc
+echo 'export PATH="$JUX_HOME:$PATH"' >> ~/.zshrc
 ```
 
 Open a new shell (or `source ~/.zshrc`).
@@ -205,9 +205,9 @@ The printed `.jux.d` is a signature-only Jux view of the crate's API.
 
 | Symptom | Fix |
 |---------|-----|
-| `juxc: command not found` | Open a new terminal after `setx`/profile edit; confirm `JUX_HOME/bin` is on `PATH`. |
+| `juxc: command not found` | Open a new terminal after `setx`/profile edit; confirm `JUX_HOME` is on `PATH`. |
 | Run does nothing / "cannot run program" | `juxc` not found — set `JUX_HOME` (and restart the IDE so it inherits the variable). |
-| Language Servers shows `juxc-lsp` *failed to start* | `juxc-lsp` not on `JUX_HOME/bin` or `PATH`; build it (`cargo build --release -p juxc-lsp`) and restart the IDE. |
+| Language Servers shows `juxc-lsp` *failed to start* | `juxc-lsp` not in `JUX_HOME` or on `PATH`; build it (`cargo build --release -p juxc-lsp`) and restart the IDE. |
 | No smart features on **Community** IDE | Native LSP is Ultimate-only; install **LSP4IJ** and register `juxc-lsp`. |
 | Plugin won't install | IDE must be 2024.1+; the prebuilt plugin targets 2026.1.3. |
 | `juxc --run` fails to build the emitted crate | Ensure `cargo`/`rustc` are installed and on `PATH` — `juxc` shells out to them. |
