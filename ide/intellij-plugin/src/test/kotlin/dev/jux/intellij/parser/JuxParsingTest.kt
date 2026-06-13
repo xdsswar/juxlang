@@ -77,6 +77,45 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
     }
 
     /**
+     * `ref` (§M.13) is a leading modifier keyword on fields, parameters, and
+     * locals. Because the type name sits nested in a TYPE_REFERENCE (never a
+     * direct child) the declaration name must still resolve to the trailing
+     * identifier — `title`/`who`/`alias`, not the type `String`. Locks the
+     * brand-new keyword in: a regression here would name fields after their
+     * type and break navigation/rename/structure for every ref declaration.
+     */
+    fun testRefModifierDoesNotShiftDeclarationNames() {
+        val psi = createPsiFile(
+            "Refs.jux",
+            """
+            package demo;
+            public class Doc {
+                public ref String title;
+                public ref int views;
+                public void edit(ref String who) {
+                    ref String alias = who;
+                    print(alias);
+                }
+            }
+            """.trimIndent(),
+        )
+        assertEmpty(PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java))
+
+        val fields = PsiTreeUtil.collectElementsOfType(psi, JuxFieldDeclaration::class.java).map { it.name }
+        assertTrue("ref field 'title' (not 'String')", fields.contains("title"))
+        assertTrue("ref field 'views' (not 'int')", fields.contains("views"))
+        assertFalse("type name must not leak as a field name", fields.contains("String"))
+
+        val params = PsiTreeUtil.collectElementsOfType(psi, dev.jux.intellij.psi.JuxParameter::class.java)
+            .map { it.name }
+        assertTrue("ref param 'who'", params.contains("who"))
+
+        val locals = PsiTreeUtil.collectElementsOfType(psi, dev.jux.intellij.psi.JuxLocalVariable::class.java)
+            .map { it.name }
+        assertTrue("ref local 'alias'", locals.contains("alias"))
+    }
+
+    /**
      * The PSI structure the override-methods Generate action relies on: a
      * class's `implements`/`extends` clause exposes its supertype names as
      * TYPE_REFERENCE nodes, and the class body holds its methods as

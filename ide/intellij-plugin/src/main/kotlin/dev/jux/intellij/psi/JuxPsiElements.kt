@@ -194,9 +194,12 @@ class JuxEnumConstant(node: ASTNode) : JuxNamedElementImpl(node)
 
 /**
  * A method/constructor parameter. The name is the identifier *after* the type —
- * the **last** direct identifier leaf — because a `final`/`out` param-mode is
- * itself an identifier-shaped leaf that precedes the type, and the type's own
- * name is nested inside a `TYPE_REFERENCE` (so never a direct child here).
+ * the **last** direct identifier leaf. Param-modes that precede the type are
+ * either keyword tokens (`final`/`const`/`ref`, §M.13) — not identifiers at all
+ * — or the contextual `out` (§M.4), an identifier-shaped leaf that still sits
+ * *before* the name. The type's own name is nested inside a `TYPE_REFERENCE`
+ * (never a direct child here), so the last direct identifier is always the
+ * parameter name.
  */
 class JuxParameter(node: ASTNode) : JuxNamedElementImpl(node) {
     override fun getNameIdentifier(): PsiElement? {
