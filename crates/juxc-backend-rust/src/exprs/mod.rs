@@ -545,6 +545,27 @@ impl RustEmitter {
                         (joined, true)
                     }
                 };
+                // A foreign ctor lowered from `new() -> Result<Self, E>`
+                // (§G.5.4): wrap the whole call so the `Result` is unwrapped at
+                // the use site, re-throwing on `Err` via `panic_any` for an
+                // enclosing Jux `try`/`catch` (mirrors `call_is_foreign_result`).
+                let ctor_is_foreign_result = n
+                    .class_name
+                    .segments
+                    .last()
+                    .map(|s| s.text.as_str())
+                    .and_then(|nm| self.lookup_class_by_bare_or_fqn(nm))
+                    .and_then(|c| {
+                        c.constructors
+                            .iter()
+                            .find(|ct| ct.params.len() == n.args.len())
+                            .or_else(|| c.constructors.first())
+                    })
+                    .map(|ct| ct.is_foreign_result)
+                    .unwrap_or(false);
+                if ctor_is_foreign_result {
+                    self.w.push('(');
+                }
                 // Mark the writer BEFORE the callee so a re-ordered
                 // named ctor (§S.1.4 / C7) can split off `Class::new(`
                 // and re-emit it after the lexical-order arg temps.
@@ -809,6 +830,10 @@ impl RustEmitter {
                         emit_one(self, i, arg);
                     }
                     self.w.push(')');
+                }
+                if ctor_is_foreign_result {
+                    self.w
+                        .push_str(").unwrap_or_else(|__e| std::panic::panic_any(__e))");
                 }
                 self.emitting_format_arg = prev;
             }

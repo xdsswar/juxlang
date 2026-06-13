@@ -1279,6 +1279,9 @@ impl<'a> Parser<'a> {
         // the whole unit is flagged `external`. A normal `.jux` source that
         // writes `Foo();` gets the same empty block, which is harmless (the
         // constructor just does nothing).
+        // A foreign (`.jux.d`) ctor from `Result<Self, E>` carries a `throws`
+        // clause (§G.5.4); the elided-body `;` follows it.
+        let throws = self.parse_throws_clause();
         let body = if self.eat(&TokenKind::Semicolon) {
             let sp = self.last_consumed_span();
             juxc_ast::Block { statements: Vec::new(), span: sp }
@@ -1290,9 +1293,37 @@ impl<'a> Parser<'a> {
             annotations,
             visibility,
             params,
+            throws,
             body,
             span: start.join(end),
         })
+    }
+
+    /// Parse a `throws` clause — `throws Type (, Type)*` (§A.2.4 / §7.11) — into
+    /// the error types' qualified names, or empty when absent. The type checker
+    /// and backend map `throws E` ↔ a Rust `Result<T, E>` return (§16.7 / §G.5.4);
+    /// `.jux.d` stubs emit this clause for `Result`-returning foreign functions
+    /// and constructors. Any `<…>` generic-args on an error type are parsed and
+    /// discarded (the AST records only the name).
+    pub(crate) fn parse_throws_clause(&mut self) -> Vec<juxc_ast::QualifiedName> {
+        if !self.eat_kw(Keyword::Throws) {
+            return Vec::new();
+        }
+        let mut tys = Vec::new();
+        loop {
+            let qn = self.parse_qualified_name();
+            if qn.segments.is_empty() {
+                break;
+            }
+            tys.push(qn);
+            if self.at(&TokenKind::Lt) {
+                self.skip_balanced_angle_brackets();
+            }
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        tys
     }
 
     // ------------------------------------------------------------------
@@ -1692,36 +1723,7 @@ impl<'a> Parser<'a> {
         let params = self.parse_param_list();
         self.expect(&TokenKind::RParen, "')' to close parameter list");
 
-        // throws-clause per §A.2.4 / §7.11: `throws Type (, Type)*`. The error
-        // types are recorded as qualified names so the type checker and the
-        // backend can map `throws E` ↔ `Result<T, E>` (§16.7). Stubs emitted by
-        // `juxc bindgen` (§G.5.4) carry this clause for `Result`-returning
-        // foreign functions, so it must parse here.
-        let throws = if self.eat_kw(Keyword::Throws) {
-            let mut tys = Vec::new();
-            loop {
-                let qn = self.parse_qualified_name();
-                if qn.segments.is_empty() {
-                    break;
-                }
-                tys.push(qn);
-                // The throws-clause grammar is `'throws' type-list` and a `type`
-                // admits `generic-args` (§A.2.4 / §A.2.7), e.g. a foreign
-                // `throws OccupiedError<K, V, A>` from a `.jux.d` stub. The AST
-                // records only the error type's qualified *name*, so we parse and
-                // discard any `<…>` argument list rather than letting the leading
-                // `<` derail the signature into a "expected '{'" block error.
-                if self.at(&TokenKind::Lt) {
-                    self.skip_balanced_angle_brackets();
-                }
-                if !self.eat(&TokenKind::Comma) {
-                    break;
-                }
-            }
-            tys
-        } else {
-            Vec::new()
-        };
+        let throws = self.parse_throws_clause();
 
         // where-clause per §O.5.1: `where T has operator OP(types) -> R`
         // (comma-separated). `where` and `has` are contextual — they

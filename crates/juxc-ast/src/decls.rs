@@ -754,6 +754,10 @@ pub struct ConstructorDecl {
     pub visibility: Visibility,
     /// Formal parameters.
     pub params: Vec<Param>,
+    /// `throws` clause — exception types that may escape (§7.11). For a foreign
+    /// (`.jux.d`) constructor this maps a Rust `Result<Self, E>` return (§G.5.4),
+    /// so the call site unwraps the `Result`. Empty for ordinary constructors.
+    pub throws: Vec<QualifiedName>,
     /// Constructor body — runs after fields are zero-initialized into
     /// the `__self` builder (see backend `emit_constructor`).
     pub body: Block,
