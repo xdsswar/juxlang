@@ -155,6 +155,45 @@ var total = new Money(150) + new Money(50);   // both operands stay usable after
 print($"total=$total");                       // total=$200
 ```
 
+### Indexers: overloading `[]`
+
+You can also overload the subscript operator `[]`, the same way C# has indexers
+and C++ has `operator[]`. It comes as a **read/write pair**: `operator[]` defines
+what `w[i]` returns, and `operator[]=` defines what `w[i] = v` does. That lets a
+class expose clean array-style access while keeping its storage private.
+
+```java
+import rust.std.Vec;
+
+public class Wallet {
+    private Vec<int> slots;                    // private backing store
+    public Wallet() {
+        this.slots = new Vec<int>();
+        this.slots.push(10);
+        this.slots.push(20);
+    }
+
+    // index read:  evaluated for  w[i]
+    public int  operator[](int i)          { return this.slots[i]; }
+    // index write: evaluated for  w[i] = v
+    public void operator[]=(int i, int v)  { this.slots[i] = v; }
+}
+
+public void main() {
+    var w = new Wallet();
+    print(w[0]);          // 10    calls operator[]
+    w[1] = 99;            //       calls operator[]=
+    w[0] += w[1];         // both! reads w[0] and w[1], then writes back
+    print(w[0]);          // 109
+}
+```
+
+That last line is the fun one: a compound assignment through an indexer fires
+**both** operators in a single statement, the getter to read and the setter to
+write back. The `operator[]` / `operator[]=` bodies lower to inherent methods, and
+`w[i]` at the call site maps onto Rust's `Index`/`IndexMut` shape, so the emitted
+Rust still reads naturally.
+
 ### Type aliases, `sizeof`, `typeof`
 
 ```java
