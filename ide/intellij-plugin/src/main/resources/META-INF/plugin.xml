@@ -263,6 +263,22 @@
     <!-- Native inspections (IDE-side, no LSP needed) with quick-fixes. -->
     <localInspection
         language="Jux"
+        shortName="JuxUnreachableCode"
+        displayName="Unreachable code"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxUnreachableCodeInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxRedundantSemicolon"
+        displayName="Redundant semicolon"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WEAK WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxRedundantSemicolonInspection"/>
+    <localInspection
+        language="Jux"
         shortName="JuxUnusedImport"
         displayName="Unused or duplicate import"
         groupName="Jux"
