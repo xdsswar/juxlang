@@ -542,6 +542,11 @@ impl RustEmitter {
         for op in &class_decl.operators {
             self.emit_operator_as_method(op);
         }
+        // **Interface-default forwarders (§7.4.3)** — same as the wrapper
+        // path: emit a `pub fn` forwarding to the trait default for every
+        // `default` interface method this (non-wrapper) class doesn't
+        // override, so direct `obj.method()` resolves inherent-first.
+        self.emit_inherited_default_methods(class_decl);
         self.w.line("}");
         self.w.newline();
 
@@ -981,6 +986,13 @@ impl RustEmitter {
         if !class_decl.is_abstract {
             self.emit_inherited_wrapper_methods(class_decl);
         }
+        // **Interface-default forwarders (§7.4.3).** For every `default`
+        // interface method this class doesn't override, emit a `pub fn`
+        // that fully-qualifies the trait — so `obj.label()` resolves
+        // inherent-first instead of failing E0599 ("trait not in scope").
+        // Runs for the WRAPPER class path; the legacy path has its own
+        // call beside its inherent-impl close.
+        self.emit_inherited_default_methods(class_decl);
         // `super.method()` shims (§6.9.4): for each method this class
         // overrides, emit the nearest concrete ancestor's body under
         // `__jux_super_<m>` so a `super.m()` call dispatches statically to it.
@@ -1284,6 +1296,224 @@ impl RustEmitter {
             }
             cursor = parent_extends;
             depth += 1;
+        }
+    }
+
+    /// **Inherited interface-default inlining (§7.4.3).** For every
+    /// `default` method on an interface this class `implements` (directly
+    /// or rolled up through `extends`) that the class does **not**
+    /// override, emit a *forwarding inherent method* into the class's own
+    /// `impl` block, e.g.
+    ///
+    /// ```text
+    /// pub fn label(&self) -> String {
+    ///     <Self as crate::xss::it::some::Holder<crate::xss::it::some::Object>>::label(self)
+    /// }
+    /// ```
+    ///
+    /// **Why.** A Jux interface lowers to a Rust trait, and a `default`
+    /// method becomes a Rust trait *default body* — emitted on the trait,
+    /// not in the `impl Trait for Class`. Rust resolves `holder.label()`
+    /// inherent-methods-FIRST; since the class's inherent `impl` only
+    /// carries the *overridden* methods (`write`/`test`), `label` misses
+    /// and rustc demands the trait be in scope at the call site (E0599 +
+    /// "trait `Holder` … is implemented but not in scope"). The call site
+    /// has no `use Holder`, so the program won't build. The forwarding
+    /// method makes `label` resolve inherent-first — exactly like an
+    /// overridden method — while reusing the trait's default body via the
+    /// fully-qualified `<Self as Trait<args>>::label(self)` form (a
+    /// fully-qualified call needs no `use`).
+    ///
+    /// This mirrors [`Self::emit_class_trait_impls`] for the interface
+    /// roll-up + per-interface `type_subst` (so a `Holder<Object>`
+    /// default returning `T` forwards as returning `Object`), and reuses
+    /// [`Self::emit_inherited_wrapper_methods`]'s ancestor-walk to skip a
+    /// default already inlined as an inherent by a concrete ancestor.
+    fn emit_inherited_default_methods(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        // Abstract classes never get an inherent forwarding method — they
+        // carry no concrete `impl Trait for …`, and any concrete subclass
+        // re-runs this walk and emits the forwarder itself.
+        if class_decl.is_abstract {
+            return;
+        }
+        // Roll up implemented interfaces: the class's own `implements`
+        // clause PLUS interfaces inherited through the `extends` chain
+        // (Java's "IS-A through the parent" rule). Identical to the
+        // roll-up at the top of `emit_class_trait_impls`; the symbol
+        // table carries each ancestor's `implements` because the AST only
+        // holds the class's own list.
+        let mut implements: Vec<juxc_ast::TypeRef> = class_decl.implements.clone();
+        {
+            let mut seen: std::collections::HashSet<String> = implements
+                .iter()
+                .filter_map(|t| t.name.segments.first().map(|s| s.text.clone()))
+                .collect();
+            let mut cursor: Option<&juxc_ast::TypeRef> = class_decl.extends.as_ref();
+            while let Some(parent_ref) = cursor {
+                let Some(parent_name) = parent_ref.name.segments.first() else { break };
+                let Some(parent_sig) = self.lookup_class_by_bare_or_fqn(parent_name.text.as_str())
+                else { break };
+                for inherited in &parent_sig.implements {
+                    let Some(iface_seg) = inherited.name.segments.first() else { continue };
+                    if seen.insert(iface_seg.text.clone()) {
+                        implements.push(inherited.clone());
+                    }
+                }
+                cursor = parent_sig.extends.as_ref();
+            }
+        }
+        if implements.is_empty() {
+            return;
+        }
+        // Methods this class overrides directly — a default with one of
+        // these names already has an inherent body (the override), so no
+        // forwarder is needed (and emitting one would be a duplicate-name
+        // E0592). Also serves as the cross-interface dedup seed below.
+        let mut provided: std::collections::HashSet<String> = class_decl
+            .methods
+            .iter()
+            .map(|m| m.name.text.clone())
+            .collect();
+        for interface_ty in &implements {
+            let Some(iface_name) = interface_ty.name.segments.first() else {
+                continue;
+            };
+            // Build the interface-param → class-arg substitution
+            // (`implements Holder<Object>` → `T ↦ Object`) so a default
+            // returning `T` forwards as returning `Object`. Same shape as
+            // `emit_class_trait_impls`.
+            let iface_sig = self
+                .lookup_interface_by_bare_or_fqn(iface_name.text.as_str())
+                .map(|(_, i)| i);
+            let Some(iface) = iface_sig else { continue };
+            let mut type_subst: std::collections::HashMap<String, juxc_ast::TypeRef> =
+                std::collections::HashMap::new();
+            for (param, arg) in iface
+                .generic_params
+                .iter()
+                .zip(interface_ty.generic_args.iter())
+            {
+                if let Some(arg_ty) = arg.as_type() {
+                    type_subst.insert(param.name.text.clone(), arg_ty.clone());
+                }
+            }
+            // Pull (name, MethodSig) pairs and sort for deterministic
+            // emission order.
+            let mut methods: Vec<(String, MethodSig)> = iface
+                .methods
+                .iter()
+                .map(|(name, m)| (name.clone(), m.clone()))
+                .collect();
+            methods.sort_by(|a, b| a.0.cmp(&b.0));
+            for (name, sig) in &methods {
+                // A **default** interface method = has a body on the
+                // interface = `!is_static && !is_abstract`. Static methods
+                // lower to free functions (never trait items), and abstract
+                // methods have no body to forward to — skip both.
+                if sig.is_static || sig.is_abstract {
+                    continue;
+                }
+                // Already overridden by this class, or already emitted as a
+                // forwarder for an earlier interface (first interface to
+                // name a default wins; if two interfaces gave the same
+                // default name the source had to override it — E0431 — so
+                // it's in `provided` via the override and we skip).
+                if provided.contains(name) {
+                    continue;
+                }
+                // Skip if a concrete ancestor already provides this method
+                // as an inherent — `emit_inherited_wrapper_methods` (and the
+                // legacy inline-copy loop) already inlined that body onto
+                // `Self`, so resolution finds it inherent-first without a
+                // forwarder. Walk the `extends` chain for a non-abstract
+                // method of this name (same pattern as the ancestor walk in
+                // `emit_class_trait_impls`).
+                let mut ancestor_has_inherent = false;
+                let mut cursor: Option<&juxc_ast::TypeRef> = class_decl.extends.as_ref();
+                while let Some(parent_ref) = cursor {
+                    let Some(seg) = parent_ref.name.segments.first() else { break };
+                    let Some((_, parent_sig)) = self
+                        .symbols
+                        .classes
+                        .iter()
+                        .find(|(k, _)| {
+                            k.as_str() == seg.text.as_str()
+                                || k.rsplit('.').next().unwrap_or(k.as_str()) == seg.text.as_str()
+                        })
+                        .map(|(k, v)| (k.clone(), v))
+                    else { break };
+                    if let Some(parent_method) = parent_sig.methods.get(name.as_str()) {
+                        if !parent_method.is_abstract {
+                            ancestor_has_inherent = true;
+                            break;
+                        }
+                    }
+                    cursor = parent_sig.extends.as_ref();
+                }
+                if ancestor_has_inherent {
+                    continue;
+                }
+                // Mark provided so a later interface's same-named default
+                // doesn't emit a duplicate forwarder.
+                provided.insert(name.clone());
+                // ---- Emit the forwarding inherent method ----
+                // Signature mirrors `emit_class_trait_impls`'s delegating
+                // method (so wrapper/ref/nullable param + return types
+                // render identically), but the body fully-qualifies the
+                // trait so no `use` is required at the call site.
+                self.w.emit_indent();
+                // Inherent forwarders are always `pub` (matching the rest of
+                // the class's inherent surface) and `&self` (interface
+                // defaults take a shared receiver; mutation goes through the
+                // wrapper's interior `RefCell`).
+                self.w.push_str("pub ");
+                if matches!(sig.return_type, ReturnType::AsyncType(_)) {
+                    self.w.push_str("async ");
+                }
+                self.w.push_str("fn ");
+                self.w.push_str(name);
+                self.w.push_str("(&self");
+                for param in &sig.params {
+                    self.w.push_str(", ");
+                    self.w.push_str(&param.name);
+                    self.w.push_str(": ");
+                    let psub = substitute_type_ref(&param.ty, &type_subst);
+                    self.emit_value_type_as_rust(&psub);
+                }
+                self.w.push(')');
+                match &sig.return_type {
+                    ReturnType::Void => {}
+                    ReturnType::Type(t) | ReturnType::AsyncType(t) => {
+                        self.w.push_str(" -> ");
+                        let rsub = substitute_type_ref(t, &type_subst);
+                        self.emit_return_type_as_rust(&rsub);
+                    }
+                }
+                self.w.push_str(" { ");
+                // Body: `<Self as <FQ-trait-path><args>>::<name>(self, …)`.
+                // `emit_type_as_rust(interface_ty)` spells the trait exactly
+                // as the `impl Trait for Class` header does — crate-qualified
+                // path + the `implements`-clause generic args
+                // (`crate::xss::it::some::Holder<crate::xss::it::some::Object>`)
+                // — so the fully-qualified call resolves with no `use`.
+                self.w.push_str("<Self as ");
+                self.emit_type_as_rust(interface_ty);
+                self.w.push_str(">::");
+                self.w.push_str(name);
+                self.w.push_str("(self");
+                for param in &sig.params {
+                    self.w.push_str(", ");
+                    self.w.push_str(&param.name);
+                }
+                self.w.push(')');
+                // `async` defaults: the trait method returns a Future, so
+                // await it to yield the declared value type (the enclosing
+                // forwarder was emitted `async fn`, so `.await` is legal).
+                if matches!(sig.return_type, ReturnType::AsyncType(_)) {
+                    self.w.push_str(".await");
+                }
+                self.w.push_str(" }\n");
+            }
         }
     }
 
