@@ -536,6 +536,23 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             }
             return raw;
         }
+        // §M.7 / §P property read — `obj.Name`. The backing field is
+        // mangled and the getter lives in `methods`, so the property's
+        // declared type is the authoritative static type. Lower it in the
+        // declaring class's scope and compose the extends substitution so an
+        // inherited generic property reads through `extends Parent<int>`.
+        if let Some((prop, declaring_class)) = symbols.lookup_property(name, field_name) {
+            let raw = lower_member_type(&prop.ty, declaring_class, symbols);
+            if let Some((params, args)) = compose_extends_substitution(
+                name,
+                generic_args,
+                declaring_class,
+                symbols,
+            ) {
+                return substitute(&raw, &params, &args);
+            }
+            return raw;
+        }
         if let Some(record) = symbols.records.get(name) {
             if let Some(component) = record.components.iter().find(|c| c.name == field_name) {
                 let raw = lower_member_type(&component.ty, name, symbols);
