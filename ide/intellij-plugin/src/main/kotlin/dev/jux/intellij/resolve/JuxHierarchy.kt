@@ -91,18 +91,29 @@ object JuxHierarchy {
     }
 
     /**
-     * Substitute whole-word type-parameter names in a signature/type string
-     * with their concrete arguments — `void test(T t)` + `{T=Object}` →
-     * `void test(Object t)`. A single pass over identifier tokens, so it never
-     * double-substitutes; formal parameter NAMES and unrelated identifiers
-     * (not in [subst]) pass through unchanged (case-sensitive).
+     * The supertype type-parameter names bound by `type`'s direct
+     * extends/implements clauses — the names that are legal inside `type`'s
+     * body under Jux's inherited-type-param ruling (`implements Holder<Animal>`
+     * makes `Holder`'s `T` usable here, resolving to `Animal`). Only positions
+     * with a corresponding type argument bind; the class's OWN params (which
+     * shadow) are NOT included. Used to color an inherited `T` as a type
+     * parameter rather than an unresolved type.
      */
-    fun substituteTypeParams(text: String, subst: Map<String, String>): String {
-        if (subst.isEmpty()) return text
-        return IDENT.replace(text) { m -> subst[m.value] ?: m.value }
+    fun inheritedTypeParameterNames(type: JuxTypeDeclaration): Set<String> {
+        val own = typeParameterNames(type).toHashSet()
+        val out = HashSet<String>()
+        for ((ref, _) in supertypeReferences(type)) {
+            val args = typeArguments(ref)
+            if (args.isEmpty()) continue
+            val superDecl = JuxTypeIndex.findType(type.project, bareTypeName(ref)) ?: continue
+            val params = typeParameterNames(superDecl)
+            val bound = minOf(params.size, args.size)
+            for (i in 0 until bound) {
+                if (params[i] !in own) out.add(params[i])
+            }
+        }
+        return out
     }
-
-    private val IDENT = Regex("""[A-Za-z_]\w*""")
 
     /**
      * Does the declaration carry modifier [kw]? Modifiers are always wrapped

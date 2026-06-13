@@ -9,6 +9,8 @@ import com.intellij.psi.util.elementType
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxNamedElement
 import dev.jux.intellij.psi.JuxObservableProps
+import dev.jux.intellij.psi.JuxTypeDeclaration
+import dev.jux.intellij.resolve.JuxHierarchy
 import dev.jux.intellij.resolve.JuxReference
 
 /**
@@ -285,6 +287,17 @@ class JuxAnnotator : Annotator {
                         p = p.nextSibling
                     }
                 }
+                // Jux inherited-type-param ruling: a class implementing/extending
+                // `I<Concrete>` may use `I`'s parameter names in its body (they
+                // resolve to the bound arguments — see juxc-ast
+                // `substitute_inherited_type_params`). Color those as type
+                // parameters too, so a hand-written or generated `void test(T t)`
+                // in `class C implements Holder<Animal>` shows `T` green, not as
+                // an unresolved type.
+                val typeDecl = scope as? JuxTypeDeclaration
+                if (typeDecl != null &&
+                    name in JuxHierarchy.inheritedTypeParameterNames(typeDecl)
+                ) return true
             }
             scope = scope.parent
         }
