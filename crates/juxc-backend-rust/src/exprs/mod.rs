@@ -566,6 +566,28 @@ impl RustEmitter {
                     }
                     self.w.push('>');
                 }
+                // §G.5.1 — implicit zero-arg constructor for a foreign type with
+                // no `new`. A Rust type built via `Default::default()` (the
+                // idiomatic "give me one with defaults" for option/config structs
+                // like `WindowOptions`) has no inherent constructor, so bindgen
+                // surfaces none. `new T()` is then the single Jux construction
+                // idiom and lowers to `T::default()` — `default` itself is never
+                // exposed as a member. Only fires for external (`@rust`) types
+                // with no zero-arg constructor; user classes keep their `::new`.
+                let foreign_default_ctor = n.args.is_empty()
+                    && self.external_class_real_path(&n.class_name).is_some()
+                    && !n
+                        .class_name
+                        .segments
+                        .last()
+                        .map(|s| s.text.as_str())
+                        .and_then(|nm| self.lookup_class_by_bare_or_fqn(nm))
+                        .map(|c| c.constructors.iter().any(|ct| ct.params.is_empty()))
+                        .unwrap_or(false);
+                if foreign_default_ctor {
+                    self.w.push_str("::default()");
+                    return;
+                }
                 // Constructor-overload pick (§7.3.1): count-based
                 // suffix re-derived against the class's ctor list.
                 // Derived from the EMITTED path's final segment so a
@@ -711,6 +733,25 @@ impl RustEmitter {
                             })
                     })
                     .unwrap_or_default();
+                // §G.9.2: foreign-borrow (`&T`) constructor parameters get the
+                // call-site `&` re-added — mirrors the method-call path so a
+                // `Window(&str name, …)` receives `&"…".to_string()` (coerces to
+                // `&str`), not an owned `String`.
+                let ctor_param_is_ref: Vec<bool> = n
+                    .class_name
+                    .segments
+                    .last()
+                    .map(|s| s.text.as_str())
+                    .and_then(|name| {
+                        self.lookup_class_by_bare_or_fqn(name).and_then(|c| {
+                            c.constructors
+                                .iter()
+                                .find(|ctor| ctor.params.len() == n.args.len())
+                                .or_else(|| c.constructors.first())
+                                .map(|ctor| ctor.params.iter().map(|p| p.is_ref).collect())
+                        })
+                    })
+                    .unwrap_or_default();
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
                 // The per-arg coercion (iface/base wrap, nullable
@@ -725,6 +766,10 @@ impl RustEmitter {
                             this.emit_expr_coerced_to_iface(pty, arg);
                             return;
                         }
+                    }
+                    let by_ref = ctor_param_is_ref.get(i).copied().unwrap_or(false);
+                    if by_ref {
+                        this.w.push('&');
                     }
                     let nullable = ctor_nullable_flags.get(i).copied().unwrap_or(false);
                     this.emit_arg_with_nullable_wrap(arg, nullable);
