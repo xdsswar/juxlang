@@ -992,10 +992,21 @@ impl RustEmitter {
             self.w.push_str("))");
             return;
         }
+        // The class/interface is keyed by FQN, so a BARE receiver name
+        // (`Stats::cube`) needs the same `find_fqn_by_bare` fallback the
+        // constructor branch above uses — otherwise the lookup misses, the
+        // method's `is_static` defaults to `false`, and a STATIC method ref
+        // wrongly lowers to the instance form `|__r| __r.cube()` (rustc E0599:
+        // `cube` is an associated function, not a method).
         let class_method = self
             .symbols
             .classes
             .get(receiver_name)
+            .or_else(|| {
+                self.symbols
+                    .find_fqn_by_bare(receiver_name)
+                    .and_then(|fqn| self.symbols.classes.get(&fqn))
+            })
             .and_then(|c| c.methods.get(m.member.text.as_str()));
         // Interface lookup runs in parallel — `MathLike::doubled`
         // doesn't appear in `classes` but does in `interfaces`. The
@@ -1007,6 +1018,11 @@ impl RustEmitter {
             .symbols
             .interfaces
             .get(receiver_name)
+            .or_else(|| {
+                self.symbols
+                    .find_fqn_by_bare(receiver_name)
+                    .and_then(|fqn| self.symbols.interfaces.get(&fqn))
+            })
             .and_then(|i| i.methods.get(m.member.text.as_str()));
         let is_interface_static = iface_method
             .map(|mi| mi.is_static)
