@@ -125,33 +125,62 @@ private class JuxProjectPanel(private val project: Project) {
         return out.toList()
     }
 
+    /**
+     * One module's subtree — its *structure* from `jux.toml`, not its files:
+     * the build kind (executable / library + crate-type), edition, any named
+     * `[[bin]]` targets, and its dependencies with each one's source
+     * (version / path / git). A library module gets the library icon.
+     */
     private fun buildModuleNode(dir: File): DefaultMutableTreeNode {
         val manifest = File(dir, "jux.toml")
         val text = readFileOrEmpty(manifest)
         val name = JuxToml.packageName(text) ?: dir.name
-        val version = JuxToml.packageVersion(text)
-        val label = if (version != null) "$name  $version" else name
-        val node = DefaultMutableTreeNode(JuxNode(label, AllIcons.Nodes.Module, manifest.takeIf { it.isFile }))
+        val isLib = JuxToml.hasLib(text)
+        val node = DefaultMutableTreeNode(
+            JuxNode(
+                name,
+                if (isLib) AllIcons.Nodes.PpLibFolder else AllIcons.Nodes.Module,
+                manifest.takeIf { it.isFile },
+                tail = JuxToml.packageVersion(text),
+            ),
+        )
 
-        // Dependencies group.
-        val deps = JuxToml.dependencies(text)
-        if (deps.isNotEmpty()) {
-            val depsNode = DefaultMutableTreeNode(JuxNode("Dependencies", AllIcons.Nodes.PpLibFolder, null))
-            for (d in deps) {
-                depsNode.add(DefaultMutableTreeNode(JuxNode(d, AllIcons.Nodes.PpLib, null)))
-            }
-            node.add(depsNode)
+        // Build kind.
+        if (isLib) {
+            val cts = JuxToml.libCrateTypes(text)
+            node.add(leaf("Library", AllIcons.Nodes.PpLib, tail = cts.joinToString(", ").ifEmpty { "lib" }))
+        } else {
+            node.add(leaf("Executable", AllIcons.Actions.Execute))
         }
 
-        // Source roots that exist.
-        for (srcName in listOf("src", "test")) {
-            val srcDir = File(dir, srcName)
-            if (srcDir.isDirectory) {
-                node.add(DefaultMutableTreeNode(JuxNode(srcName, AllIcons.Nodes.Folder, srcDir)))
+        // Edition.
+        JuxToml.edition(text)?.let { node.add(leaf("Edition", AllIcons.Nodes.Tag, tail = it)) }
+
+        // Named binary targets ([[bin]]).
+        val bins = JuxToml.bins(text)
+        if (bins.isNotEmpty()) {
+            val g = group("Binaries", AllIcons.Nodes.ModuleGroup)
+            for (b in bins) g.add(leaf(b, AllIcons.Actions.Execute))
+            node.add(g)
+        }
+
+        // Dependencies with each one's source detail.
+        val deps = JuxToml.dependencyDetails(text)
+        if (deps.isNotEmpty()) {
+            val g = group("Dependencies", AllIcons.Nodes.PpLibFolder)
+            for ((depName, detail) in deps) {
+                g.add(leaf(depName, AllIcons.Nodes.PpLib, tail = detail.ifEmpty { null }))
             }
+            node.add(g)
         }
         return node
     }
+
+    private fun leaf(label: String, icon: javax.swing.Icon, tail: String? = null) =
+        DefaultMutableTreeNode(JuxNode(label, icon, null, tail))
+
+    private fun group(label: String, icon: javax.swing.Icon) =
+        DefaultMutableTreeNode(JuxNode(label, icon, null))
 
     private fun expandTopLevel() {
         tree.expandPath(TreePath(treeRoot.path))
@@ -175,8 +204,16 @@ private class JuxProjectPanel(private val project: Project) {
         try { if (f.isFile) f.readText() else "" } catch (_: Exception) { "" }
 }
 
-/** A tree node payload: display label, icon, and an optional file to open. */
-private data class JuxNode(val label: String, val icon: javax.swing.Icon, val file: File?)
+/**
+ * A tree node payload: primary label, optional grayed [tail] (version / source
+ * detail), icon, and an optional file to open on double-click.
+ */
+private data class JuxNode(
+    val label: String,
+    val icon: javax.swing.Icon,
+    val file: File?,
+    val tail: String? = null,
+)
 
 private class JuxModuleCellRenderer : com.intellij.ui.ColoredTreeCellRenderer() {
     override fun customizeCellRenderer(
@@ -192,6 +229,7 @@ private class JuxModuleCellRenderer : com.intellij.ui.ColoredTreeCellRenderer() 
         if (payload is JuxNode) {
             icon = payload.icon
             append(payload.label)
+            payload.tail?.let { append("  $it", com.intellij.ui.SimpleTextAttributes.GRAYED_ATTRIBUTES) }
         } else {
             append(payload?.toString() ?: "")
         }
@@ -207,9 +245,72 @@ private class JuxModuleCellRenderer : com.intellij.ui.ColoredTreeCellRenderer() 
 internal object JuxToml {
     fun packageName(text: String): String? = stringValueIn(text, "package", "name")
     fun packageVersion(text: String): String? = stringValueIn(text, "package", "version")
+    fun edition(text: String): String? = stringValueIn(text, "package", "edition")
+
+    /** True when the module declares a `[lib]` target (produces a library). */
+    fun hasLib(text: String): Boolean = sectionBody(text, "lib") != null
+
+    /** `[lib] crate-type = [...]` (e.g. `lib`, `cdylib`); empty if unspecified. */
+    fun libCrateTypes(text: String): List<String> {
+        val body = sectionBody(text, "lib") ?: return emptyList()
+        val m = Regex("""crate-type\s*=\s*\[(.*?)]""", RegexOption.DOT_MATCHES_ALL).find(body)
+            ?: return emptyList()
+        return Regex("\"([^\"]+)\"").findAll(m.groupValues[1]).map { it.groupValues[1] }.toList()
+    }
+
+    /** Names of every `[[bin]]` target the manifest declares. */
+    fun bins(text: String): List<String> {
+        val lines = text.lines()
+        val header = Regex("""^\s*\[\[\s*bin\s*]]\s*$""")
+        val out = ArrayList<String>()
+        var i = 0
+        while (i < lines.size) {
+            if (!header.matches(lines[i].substringBefore('#'))) { i++; continue }
+            var name: String? = null
+            var j = i + 1
+            while (j < lines.size && !lines[j].substringBefore('#').trim().startsWith("[")) {
+                Regex("""^\s*name\s*=\s*"([^"]*)"""").find(lines[j])?.let { name = it.groupValues[1] }
+                j++
+            }
+            name?.let(out::add)
+            i = j
+        }
+        return out
+    }
 
     /** Dependency names = the keys under `[dependencies]`. */
     fun dependencies(text: String): List<String> = keysIn(text, "dependencies")
+
+    /**
+     * Each `[dependencies]` entry as `(name, sourceDetail)` — the detail is the
+     * bare version (`"1.0"` → `1.0`), or `path: …` / `git: … (branch)` for
+     * table specs, so the tree shows where each dependency comes from.
+     */
+    fun dependencyDetails(text: String): List<Pair<String, String>> {
+        val body = sectionBody(text, "dependencies") ?: return emptyList()
+        val out = ArrayList<Pair<String, String>>()
+        for (raw in body.lineSequence()) {
+            val line = raw.substringBefore('#').trim()
+            if (line.isEmpty() || line.startsWith("[") || '=' !in line) continue
+            val key = line.substringBefore('=').trim().trim('"')
+            if (key.isEmpty()) continue
+            out.add(key to depDetail(line.substringAfter('=').trim()))
+        }
+        return out
+    }
+
+    private fun depDetail(value: String): String {
+        if (value.startsWith("\"")) return value.trim().trim('"')
+        fun field(name: String): String? =
+            Regex("""\b$name\s*=\s*"([^"]*)"""").find(value)?.groupValues?.get(1)
+        field("path")?.let { return "path: $it" }
+        field("git")?.let { g ->
+            val ref = field("branch") ?: field("tag") ?: field("rev")
+            return "git: $g" + (if (ref != null) " ($ref)" else "")
+        }
+        field("version")?.let { return it }
+        return value.trim('{', '}', ' ')
+    }
 
     /** `[workspace] members = [ ... ]` — the listed member paths (incl. globs). */
     fun workspaceMembers(text: String): List<String> {
