@@ -5228,6 +5228,7 @@ impl<'a> Checker<'a> {
                     default: None,
                     is_varargs: false,
                     is_out: false,
+                    is_shared_ref: false,
                 })
                 .collect();
             let subst_params = record.generic_params.clone();

@@ -1500,6 +1500,87 @@ impl crate::RustEmitter {
         false
     }
 
+    /// True when arg `arg_idx` of the call maps to a `ref` (§M.13)
+    /// SHARED-reference parameter — so the call site passes an
+    /// aliasing handle (`x.clone()` for `ref` args) or wraps a plain
+    /// value (`Rc::new(RefCell::new(v))`). Covers free functions and
+    /// static/instance methods through the symbol table.
+    pub(crate) fn callee_param_is_shared_ref(
+        &self,
+        callee: &juxc_ast::Expr,
+        arg_idx: usize,
+    ) -> bool {
+        if let juxc_ast::Expr::Path(qn) = callee {
+            if qn.segments.len() == 1 {
+                let name = qn.segments[0].text.as_str();
+                let f_sig = self
+                    .symbols
+                    .lookup_function(name)
+                    .map(|(_, f)| f)
+                    .or_else(|| {
+                        // A bare name that's AMBIGUOUS only because a
+                        // bindgen stub exports the same name (a user
+                        // `rename` vs `rust.std.rename`): user code
+                        // shadows the foreign surface, mirroring
+                        // tycheck's resolution. Foreign-ness is the
+                        // stub's own `@rust` path — discovered, not a
+                        // name list.
+                        let suffix = format!(".{name}");
+                        let mut hits = self
+                            .symbols
+                            .functions
+                            .iter()
+                            .filter(|(k, f)| k.ends_with(&suffix) && f.rust_path.is_none());
+                        match (hits.next(), hits.next()) {
+                            (Some((_, f)), None) => Some(f),
+                            _ => None,
+                        }
+                    });
+                if let Some(f) = f_sig {
+                    return f
+                        .params
+                        .get(arg_idx)
+                        .map(|p| p.is_shared_ref)
+                        .unwrap_or(false);
+                }
+            }
+        }
+        if let juxc_ast::Expr::Field(f) = callee {
+            // Static `ClassName.method(...)`.
+            if let juxc_ast::Expr::Path(qn) = &*f.object {
+                if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                    if let Some(c) = self.symbols.classes.get(&class_fqn) {
+                        if let Some(m) = c.methods.get(f.field.text.as_str()) {
+                            return m
+                                .params
+                                .get(arg_idx)
+                                .map(|p| p.is_shared_ref)
+                                .unwrap_or(false);
+                        }
+                    }
+                }
+            }
+            // Instance method: resolve the receiver's class.
+            if let Some(bare) = self.receiver_class_bare(&f.object) {
+                let sig = self.symbols.classes.get(&bare).or_else(|| {
+                    self.symbols
+                        .find_fqn_by_bare(&bare)
+                        .and_then(|fqn| self.symbols.classes.get(&fqn))
+                });
+                if let Some(c) = sig {
+                    if let Some(m) = c.methods.get(f.field.text.as_str()) {
+                        return m
+                            .params
+                            .get(arg_idx)
+                            .map(|p| p.is_shared_ref)
+                            .unwrap_or(false);
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// True when arg `arg_idx` of a method call `recv.method(...)` maps to a
     /// **borrowed** parameter (`&T`) of an **external** (`rust.std` / crate)
     /// method — so codegen must re-add the call-site `&` (§G.9.2): a Rust

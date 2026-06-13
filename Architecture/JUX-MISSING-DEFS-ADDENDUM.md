@@ -1072,6 +1072,94 @@ JUX-LANG-V1 §6.9.8 / §19.1 flag this as under-specified.
 
 ---
 
+## §M.13 — `ref` Bindings: Shared References to Value Types
+
+### M.13.1. Motivation
+
+Classes already have reference semantics — two variables naming the same
+instance see each other's mutations (§6, §CR). VALUE types — `String`,
+primitives, `struct`s, `record`s, arrays — copy on assignment and on
+parameter passing. `ref` opts a binding of a value type into the same
+shared-reference behavior, without wrapping it in a class:
+
+```java
+public class Profile {
+    // Both fields point AT a shared String object — never a copy.
+    public ref String displayName;
+    public ref int counter;
+}
+
+void rename(ref String name) {
+    name = "renamed";           // the CALLER's object changes
+}
+
+public void main() {
+    ref String a = "first";
+    ref String b = a;            // b aliases a's object
+    b = "second";
+    print(a);                    // "second" — shared, not copied
+    rename(a);
+    print(b);                    // "renamed" — same object throughout
+}
+```
+
+### M.13.2. Semantics
+
+- `ref T` is a binding mode, not a distinct type: the expression type of a
+  `ref T` binding is `T` everywhere — reads produce a `T` value, method
+  calls dispatch on `T`, and `typeof` reports `T`.
+- **Initialization.** Initializing a `ref` binding from a plain `T` value
+  creates a NEW shared object holding that value. Initializing (or
+  argument-passing) from another `ref T` binding ALIASES the same object.
+- **Assignment stores through.** `x = v` on a `ref` binding writes `v`
+  into the shared object — every alias observes it (C++ reference /
+  JavaFX-property mental model; there is no rebinding form in Phase 1).
+- **Parameters.** A `ref T` parameter receives the caller's object when
+  the argument is itself `ref`; a plain-value argument is wrapped into a
+  fresh object (the callee's writes are then invisible to the caller —
+  pass a `ref` binding when you want write-through).
+- **Returns.** `ref` return types are deferred (Phase 1 rejects them).
+- `ref` on a CLASS-typed binding is accepted and meaningless (classes are
+  already references); the compiler is free to warn (reserved W0490).
+- `ref` bindings are task-local exactly like class instances; the E0702
+  spawn-capture gate applies.
+
+### M.13.3. Lowering (Phase 1)
+
+`ref T` slots lower to `Rc<RefCell<T_rust>>`:
+
+| Site | Lowering |
+|------|----------|
+| `ref T x = <plain value>` | `let x = Rc::new(RefCell::new(v));` |
+| `ref T x = <ref binding>` | `let x = y.clone();` (handle share) |
+| read in value position    | `x.borrow().clone()` (statement-scoped) |
+| `x = v` (store-through)   | `{ let __jux_v = v; *x.borrow_mut() = __jux_v; }` |
+| `ref` field               | field type `Rc<RefCell<T>>`, same rules |
+| `ref` parameter           | `Rc<RefCell<T>>`; ref-arg → `.clone()`, plain arg → wrap |
+
+The statement-scoped borrow discipline (§CR.4.1) applies — reads clone
+out, writes evaluate the RHS before taking the cell borrow.
+
+### M.13.4. Grammar
+
+```
+ref-type   = 'ref' type
+```
+
+`ref` is valid at the START of a type in field declarations, local
+variable declarations, and parameter declarations. It joins the reserved
+keyword table (§3.2 / grammar §A.1.3). Nesting (`ref ref T`), `ref` array
+ELEMENTS (`ref T[]`), and `ref` generic arguments (`List<ref T>`) are
+rejected in Phase 1.
+
+> **Phase-1 implementation status (2026-06-12):** locals and parameters
+> are fully implemented (`probes/probe_ref_bindings.jux`); `ref` FIELDS
+> parse and carry the flag but their lowering (storage wrap, read/write
+> routing through the owner) is the in-progress next step — tracked in
+> `jux-gaps.md`.
+
+---
+
 ## Summary
 
 This addendum closes every dangling reference and acknowledged inconsistency identified in the gap analysis:
@@ -1089,6 +1177,7 @@ This addendum closes every dangling reference and acknowledged inconsistency ide
 | Nested classes                                | §M.9    | Static-nested only; no inner/anonymous/local |
 | Foundational interfaces                       | §M.10   | Full contracts; `Iterator` resolved to `next() -> T?` |
 | `@Reflectable`                                | §M.11   | Opt-in compile-time reflection metadata     |
+| `ref` bindings                                | §M.13   | Shared references to value types (`Rc<RefCell>`) |
 | `spawn` keyword/function                      | §M.12.1 | Library function only                       |
 | Cross-module class extension                   | §M.12.2 | Java-style: extendable by default, `final`/`const` opts out |
 | Static thread safety per profile              | §M.12.3 | Per-profile rule                            |

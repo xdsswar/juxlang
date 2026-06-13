@@ -771,6 +771,11 @@ pub struct ParamSig {
     /// call site must pass `out <place>`. Drives the call-arg agreement check
     /// (E0943) and the backend `&mut` emission.
     pub is_out: bool,
+    /// `ref` binding mode (§M.13) — the parameter receives a SHARED
+    /// reference to a value-typed object (`Rc<RefCell<T>>`); a `ref`
+    /// argument aliases the caller's object. Distinct from
+    /// [`Self::is_ref`] (the bindgen foreign-borrow marker).
+    pub is_shared_ref: bool,
 }
 
 /// Signature of a top-level record declaration.
@@ -3458,6 +3463,7 @@ fn param_sig(p: &juxc_ast::Param) -> ParamSig {
         default: p.default.clone(),
         is_varargs: p.is_varargs,
         is_out: p.is_out,
+        is_shared_ref: p.is_shared_ref,
     }
 }
 

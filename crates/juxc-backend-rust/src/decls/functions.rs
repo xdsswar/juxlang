@@ -130,7 +130,7 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            if !param.is_out && param_muts.contains(&param.name.text) {
+            if !param.is_out && !param.is_shared_ref && param_muts.contains(&param.name.text) {
                 self.w.push_str("mut ");
             }
             self.w.push_str(&param.name.text);
@@ -138,7 +138,14 @@ impl RustEmitter {
             if param.is_out {
                 self.w.push_str("&mut "); // `out T` (§M.4) lowers to `&mut T`
             }
-            self.emit_value_type_as_rust(&lifted_param_tys[i]);
+            if param.is_shared_ref {
+                // `ref T` (§M.13) — shared reference to a value object.
+                self.w.push_str("std::rc::Rc<std::cell::RefCell<");
+                self.emit_value_type_as_rust(&lifted_param_tys[i]);
+                self.w.push_str(">>");
+            } else {
+                self.emit_value_type_as_rust(&lifted_param_tys[i]);
+            }
         }
         self.w.push(')');
 
@@ -241,6 +248,14 @@ impl RustEmitter {
             for p in &fn_decl.params {
                 if p.ty.nullable {
                     self.nullable_locals.insert(p.name.text.clone());
+                }
+            }
+            // `ref` bindings (§M.13): reset per fn, seeded from `ref`
+            // params so reads clone out / assigns store through.
+            self.ref_locals.clear();
+            for p in &fn_decl.params {
+                if p.is_shared_ref {
+                    self.ref_locals.insert(p.name.text.clone());
                 }
             }
             // Register each parameter's type in `local_types` so name-keyed

@@ -1905,6 +1905,46 @@ impl RustEmitter {
     /// infer it. Once tycheck carries a real type for each `VarDecl`, we
     /// can emit explicit annotations here.
     pub(crate) fn emit_var_decl(&mut self, var: &VarDecl) {
+        // `ref` local (§M.13): the slot is an `Rc<RefCell<T>>` shared
+        // reference. Initializing from another `ref` binding shares
+        // the handle; a plain value wraps into a fresh object. The
+        // name is registered in `ref_locals` so reads clone out and
+        // assignments store through.
+        if var.is_ref {
+            if let Some(ty_ref) = &var.ty {
+                let ty = juxc_tycheck::ty_from_ref_in_env(ty_ref, &self.symbols);
+                if let Some(scope) = self.local_types.last_mut() {
+                    scope.insert(var.name.text.clone(), ty);
+                }
+            }
+            self.w.push_str("let ");
+            self.w.push_str(&var.name.text);
+            self.w.push_str(" = ");
+            let init_is_ref = matches!(
+                var.init.as_ref(),
+                Some(Expr::Path(qn))
+                    if qn.segments.len() == 1
+                        && self.ref_locals.contains(qn.segments[0].text.as_str())
+            );
+            if init_is_ref {
+                if let Some(Expr::Path(qn)) = &var.init {
+                    self.w.push_str(&qn.segments[0].text);
+                    self.w.push_str(".clone()");
+                }
+            } else {
+                self.w
+                    .push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                if let Some(init) = &var.init {
+                    let prev = std::mem::take(&mut self.emitting_format_arg);
+                    self.emit_expr(init);
+                    self.emitting_format_arg = prev;
+                }
+                self.w.push_str("))");
+            }
+            self.w.push_str(";\n");
+            self.ref_locals.insert(var.name.text.clone());
+            return;
+        }
         // Record the local's declared type in the backend's
         // `local_types` map so `@Intrinsic` dispatch can resolve
         // the receiver class when `expr_types` lookups are
@@ -2606,6 +2646,29 @@ impl RustEmitter {
                         }
                     }
                 }
+            }
+        }
+        // `ref` binding store-through (§M.13): `x = v` on a `ref`
+        // local/param writes INTO the shared cell, so every alias
+        // observes it. The RHS evaluates into a temp first — it may
+        // read the same cell (`x = x + 1`), and an inline RHS read's
+        // borrow guard would overlap the store's `borrow_mut`.
+        if let Expr::Path(qn) = &a.target {
+            if qn.segments.len() == 1 && self.ref_locals.contains(&qn.segments[0].text) {
+                let name = qn.segments[0].text.clone();
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                self.w.push_str("{ let __jux_v = ");
+                self.emit_assign_rhs(&a.value);
+                self.w.push_str("; *");
+                self.w.push_str(&name);
+                self.w.push_str(".borrow_mut() ");
+                if let Some(op) = a.op {
+                    self.w.push_str(op.as_rust_str());
+                }
+                self.w.push_str("= __jux_v; }\n");
+                self.emitting_format_arg = prev;
+                return;
             }
         }
         // String `+=` special-case: Rust's `String + String` and

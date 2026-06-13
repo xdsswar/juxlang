@@ -174,6 +174,19 @@ impl RustEmitter {
                 self.w.push(')');
             }
             Expr::Path(qn) => {
+                // **`ref` binding read** (§M.13): a value-position read
+                // of a `ref` local/param clones the value OUT of the
+                // shared cell (statement-scoped borrow). Lvalue targets
+                // are handled by `emit_assign`'s store-through arm and
+                // never reach here with the flag set.
+                if qn.segments.len() == 1
+                    && !self.emitting_lvalue
+                    && self.ref_locals.contains(&qn.segments[0].text)
+                {
+                    self.w.push_str(&qn.segments[0].text);
+                    self.w.push_str(".borrow().clone()");
+                    return;
+                }
                 // **`out` parameter access** (§M.4): an out param lowers to
                 // `&mut T`, so a value read derefs to `(*result)` and an
                 // assignment LHS to `*result`. An inner block local that shadows
@@ -900,6 +913,7 @@ impl RustEmitter {
                             default: None,
                             is_varargs: false,
                             is_out: false,
+                            is_shared_ref: false,
                             span: m.span,
                         })
                         .collect()

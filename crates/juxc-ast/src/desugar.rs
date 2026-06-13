@@ -150,6 +150,7 @@ fn lower_one_property(
             annotations: Vec::new(),
             visibility: Visibility::Private,
             is_static: prop.is_static,
+            is_ref: false,
             // Read-only / init-only autos are non-reassignable after
             // construction; mark the backing field `final` so the
             // backend's static-field shape and any final-aware path
@@ -254,6 +255,7 @@ fn lower_one_property(
             default: None,
             is_varargs: false,
             is_out: false,
+            is_shared_ref: false,
             span,
         };
         methods.push(FnDecl {

@@ -59,6 +59,11 @@ fn render_type(out: &mut String, t: &StubType) {
     if let Some(path) = &t.rust_path {
         let _ = writeln!(out, "@rust(\"{path}\")");
     }
+    // Map-style `Index<&K>` marker (discovered from the rustdoc trait
+    // impls) — drives the backend's `xs[k]` lowering.
+    if t.index_ref {
+        let _ = writeln!(out, "@RustIndexRef");
+    }
 
     let keyword = match t.kind {
         TypeKind::Class => "class",

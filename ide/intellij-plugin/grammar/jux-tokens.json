@@ -145,6 +145,10 @@
       "spelling": "record"
     },
     {
+      "name": "REF_KW",
+      "spelling": "ref"
+    },
+    {
       "name": "RETURN_KW",
       "spelling": "return"
     },
@@ -191,6 +195,10 @@
     {
       "name": "TYPE_KW",
       "spelling": "type"
+    },
+    {
+      "name": "TYPEOF_KW",
+      "spelling": "typeof"
     },
     {
       "name": "UNSAFE_KW",

@@ -1,0 +1,49 @@
+// §M.13 ref bindings — shared references to value types.
+package refb;
+
+void rename(ref String name) {
+    name = "renamed";          // the CALLER's object changes
+}
+
+void bump(ref int n) {
+    n += 5;
+}
+
+int readOnly(ref int n) {
+    return n * 2;
+}
+
+public void main() {
+    // Locals: alias + store-through.
+    ref String a = "first";
+    ref String b = a;          // b aliases a's object
+    b = "second";
+    print("a: " + a);          // "second"
+
+    // Write-through a ref param.
+    rename(a);
+    print("b: " + b);          // "renamed" — same object throughout
+
+    // Primitives.
+    ref int n = 10;
+    ref int m = n;
+    bump(n);
+    print("m: " + m);          // 15
+    print("double: " + readOnly(m));
+
+    // Self-referential store-through (RHS reads the same cell).
+    n = n + 1;
+    print("n: " + n);          // 16
+
+    // Plain value into a ref param: fresh object, caller unaffected.
+    String plain = "keep";
+    rename(plain);
+    print("plain: " + plain);  // "keep"
+
+    // Plain read out of a ref into a value local: a copy.
+    String copy = a;
+    a = "changed";
+    print("copy: " + copy);    // "renamed"
+
+    print("done");
+}

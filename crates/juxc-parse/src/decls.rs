@@ -266,7 +266,8 @@ impl<'a> Parser<'a> {
                         | Some(TokenKind::Kw(Keyword::Const))
                         | Some(TokenKind::Kw(Keyword::Async))
                         | Some(TokenKind::Kw(Keyword::Native))
-                        | Some(TokenKind::Kw(Keyword::Unsafe)),
+                        | Some(TokenKind::Kw(Keyword::Unsafe))
+                        | Some(TokenKind::Kw(Keyword::Ref)),
                 ) {
                     i += 1;
                 }
@@ -314,7 +315,8 @@ impl<'a> Parser<'a> {
                         | Some(TokenKind::Kw(Keyword::Const))
                         | Some(TokenKind::Kw(Keyword::Async))
                         | Some(TokenKind::Kw(Keyword::Native))
-                        | Some(TokenKind::Kw(Keyword::Unsafe)),
+                        | Some(TokenKind::Kw(Keyword::Unsafe))
+                        | Some(TokenKind::Kw(Keyword::Ref)),
                 ) {
                     i += 1;
                 }
@@ -927,6 +929,7 @@ impl<'a> Parser<'a> {
         let mut is_static = false;
         let mut is_final = false;
         let mut is_weak = false;
+        let mut is_ref = false;
         loop {
             if self.eat_kw(Keyword::Static) {
                 is_static = true;
@@ -937,6 +940,10 @@ impl<'a> Parser<'a> {
                 // `.get()` → `T?`. Validity (class-typed, non-generic, no
                 // initializer) is enforced in tycheck (`E0455`).
                 is_weak = true;
+            } else if self.eat_kw(Keyword::Ref) {
+                // `ref` field (§M.13): the field holds a SHARED
+                // reference to a value-typed object.
+                is_ref = true;
             } else {
                 break;
             }
@@ -971,6 +978,7 @@ impl<'a> Parser<'a> {
             is_static,
             is_final,
             is_weak,
+            is_ref,
             ty,
             name,
             default,
@@ -1377,7 +1385,8 @@ impl<'a> Parser<'a> {
                         | Some(TokenKind::Kw(Keyword::Const))
                         | Some(TokenKind::Kw(Keyword::Async))
                         | Some(TokenKind::Kw(Keyword::Native))
-                        | Some(TokenKind::Kw(Keyword::Unsafe)),
+                        | Some(TokenKind::Kw(Keyword::Unsafe))
+                        | Some(TokenKind::Kw(Keyword::Ref)),
                 ) {
                     i += 1;
                 }
@@ -2257,6 +2266,10 @@ impl<'a> Parser<'a> {
                 .with_span(final_span),
             );
         }
+        // Optional `ref` binding mode (§M.13) — the parameter receives a
+        // SHARED reference to a value-typed object; a `ref` argument
+        // aliases the caller's object.
+        let is_shared_ref = self.eat_kw(Keyword::Ref);
         // Optional `out` mode (§M.4) — the contextual keyword `out` immediately
         // before a type. A parameter literally NAMED `out` (`int out`) keeps
         // working because there `out` isn't the leading token. `out` is the mode
@@ -2342,6 +2355,7 @@ impl<'a> Parser<'a> {
             default,
             is_varargs,
             is_out,
+            is_shared_ref,
             span: start.join(end),
         })
     }

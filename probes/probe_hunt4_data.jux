@@ -1,0 +1,66 @@
+// Bug-hunt wave 4a: data-shape corners.
+// HashMap index/iteration with class values, record equality + with(),
+// enum payload switch with guards, tuples, string method chains.
+package hunt4a;
+
+import rust.std.Vec;
+import rust.std.HashMap;
+
+public class Player {
+    public int hp;
+    public Player(int hp) { this.hp = hp; }
+    public void heal(int amount) { this.hp = this.hp + amount; }
+}
+
+public record Pos(int x, int y) {}
+
+public enum Shape {
+    Dot,
+    Line(int),
+    Rect(int, int)
+}
+
+int area(Shape s) {
+    return switch (s) {
+        case Shape.Dot -> 0;
+        case Shape.Line(var n) when n > 100 -> n * 2;
+        case Shape.Line(var n) -> n;
+        case Shape.Rect(var w, var h) -> w * h;
+    };
+}
+
+(int, String) pair(int n) {
+    return (n, "v" + n);
+}
+
+public void main() {
+    // HashMap with wrapper-class values: insert, index read, mutate
+    // the shared element through the map.
+    var team = new HashMap<String, Player>();
+    var alice = new Player(50);
+    team.insert("alice", alice);
+    team.insert("bob", new Player(80));
+    team["alice"].heal(25);
+    print("alice hp: " + alice.hp);
+    print("via map: " + team["alice"].hp);
+
+    // Vec of records: equality through an indexed read.
+    // (record `.with(...)` is E0413 today — H4 ledger row.)
+    var path = new Vec<Pos>();
+    path.push(new Pos(1, 2));
+    print("rec: " + (path[0] == new Pos(1, 2)) + " " + path[0].x);
+
+    // Enum payload switch with a guard.
+    print("areas: " + area(Shape.Dot) + " " + area(Shape.Line(7))
+        + " " + area(Shape.Line(200)) + " " + area(Shape.Rect(3, 4)));
+
+    // Tuple return + element access.
+    var t = pair(9);
+    print("tuple: " + t.0 + " " + t.1);
+
+    // String method chain on a field read.
+    var s = "  Hello Jux  ";
+    print("chain: [" + s.trim().toUpperCase() + "]");
+
+    print("done");
+}
