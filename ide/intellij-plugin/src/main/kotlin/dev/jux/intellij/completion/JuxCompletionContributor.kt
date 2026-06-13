@@ -10,9 +10,6 @@ import com.intellij.codeInsight.completion.util.ParenthesesInsertHandler
 import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.icons.AllIcons
-import com.intellij.ide.util.PropertiesComponent
-import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.extensions.ExtensionPointName
 import com.intellij.patterns.PlatformPatterns
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
@@ -54,20 +51,6 @@ import javax.swing.Icon
  */
 class JuxCompletionContributor : CompletionContributor() {
     private companion object {
-        /**
-         * EP handles addressed by name — public [ExtensionPointName] API
-         * (`extensionsIfPointIsRegistered` returns an empty list when the EP
-         * doesn't exist, loading nothing). The `ExtensionsArea` route is
-         * internal API on 2024.2.
-         */
-        val NATIVE_LSP_EP: ExtensionPointName<Any> =
-            ExtensionPointName.create("com.intellij.platform.lsp.serverSupportProvider")
-        val LSP4IJ_SERVER_EP: ExtensionPointName<Any> =
-            ExtensionPointName.create("com.redhat.devtools.lsp4ij.server")
-
-        /** LOCKSTEP: mirrors `lsp.xml`'s `implementationClass`. */
-        const val JUX_NATIVE_PROVIDER = "dev.jux.intellij.lsp.JuxLspServerSupportProvider"
-
         // Relevance tiers (higher floats to the top of the lookup).
         const val P_LOCAL = 100.0
         const val P_PARAM = 90.0
@@ -549,46 +532,11 @@ class JuxCompletionContributor : CompletionContributor() {
 
     /**
      * True when an LSP client (native or LSP4IJ) is serving `juxc-lsp`
-     * completions for this project, so the fallback items would only
-     * duplicate them.
-     *
-     * Classloading discipline: the native check goes through
-     * [dev.jux.intellij.lsp.JuxNativeLspStatus] ONLY behind the
-     * `platform.lsp.serverSupportProvider` extension-point probe (those
-     * classes exist exactly when the EP does); the LSP4IJ check never touches
-     * LSP4IJ classes at all — plugin presence plus the persisted enable flag
-     * are enough.
+     * completions for this project, so the fallback items would only duplicate
+     * them. Delegates to the shared [dev.jux.intellij.lsp.JuxLspState] gate
+     * (also used by the semantic annotator) — returns false in unit-test mode
+     * so the fixture exercises this fallback.
      */
-    private fun lspProvidesCompletion(parameters: CompletionParameters): Boolean {
-        val app = ApplicationManager.getApplication()
-        // The headless test fixture never starts a server — keep the fallback
-        // alive so completion tests exercise it.
-        if (app.isUnitTestMode) return false
-        val project = parameters.position.project
-        // Native client: only when OUR provider is registered AND a Jux server
-        // session is actually up. NOT an early-return false — on 2024.2–2025.1
-        // paid IDEs the EP exists but our lsp.xml never loaded, and LSP4IJ may
-        // be serving instead. (A registered Jux provider implies the platform
-        // LSP classes exist, so touching JuxNativeLspStatus is safe.)
-        val nativeRegistered = NATIVE_LSP_EP.extensionsIfPointIsRegistered
-            .any { it.javaClass.name == JUX_NATIVE_PROVIDER }
-        if (nativeRegistered &&
-            dev.jux.intellij.lsp.JuxNativeLspStatus.isActive(project)
-        ) {
-            return true
-        }
-        // LSP4IJ path: probe its `server` extension point — it has
-        // registrations exactly when the LSP4IJ plugin is installed and
-        // enabled (and then our lsp4ij.xml loaded too). Avoids the internal
-        // PluginManagerCore API and the PluginId.Companion field that doesn't
-        // exist before 2025.2. Additionally require the user's server toggle
-        // on AND a real `juxc-lsp` binary — a fresh machine without the
-        // toolchain must keep the fallback completions.
-        // LOCKSTEP: the key mirrors JuxLsp4ijServerFactory.ENABLED_KEY
-        // (not importable here — classloading firewall).
-        if (LSP4IJ_SERVER_EP.extensionsIfPointIsRegistered.isEmpty()) return false
-        if (!dev.jux.intellij.run.JuxLspCommandLine.isResolvable()) return false
-        return PropertiesComponent.getInstance(project)
-            .getBoolean("dev.jux.lsp4ij.enabled", true)
-    }
+    private fun lspProvidesCompletion(parameters: CompletionParameters): Boolean =
+        dev.jux.intellij.lsp.JuxLspState.isServing(parameters.position.project)
 }
