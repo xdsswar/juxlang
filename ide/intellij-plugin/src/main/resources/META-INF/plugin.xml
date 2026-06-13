@@ -150,6 +150,13 @@
     <annotator
         language="Jux"
         implementationClass="dev.jux.intellij.highlight.JuxStringAnnotator"/>
+    <!-- Always-on semantic diagnostics: runs juxc in check mode (JSON output,
+         no codegen) off the EDT and paints real compiler errors/warnings
+         inline. Stands down when juxc-lsp is serving (it publishes its own) or
+         no toolchain is found. -->
+    <externalAnnotator
+        language="Jux"
+        implementationClass="dev.jux.intellij.highlight.JuxSemanticAnnotator"/>
 
     <!-- IDE-side resolution: in-file Go-to-Declaration, Find Usages, and
          Rename for Jux declarations. Cross-file / std symbols defer to juxc-lsp. -->
