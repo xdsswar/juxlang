@@ -103,6 +103,12 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
     override fun getState(executor: Executor, environment: ExecutionEnvironment): CommandLineState {
         if (isTestMode()) return JuxTestCommandLineState(this, environment)
         return object : CommandLineState(environment) {
+            init {
+                // Make `path:line:col` in juxc's output clickable (jumps to the
+                // exact spot), like Java's compiler console.
+                addConsoleFilters(JuxConsoleFilter(environment.project))
+            }
+
             @Throws(ExecutionException::class)
             override fun startProcess(): ProcessHandler {
                 val file = File(filePath)
