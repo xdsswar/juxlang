@@ -21,14 +21,19 @@ import com.intellij.platform.lsp.api.LspServerState
  */
 object JuxNativeLspStatus {
     /**
-     * True while a Jux LSP server is initializing or running. `Initializing`
-     * counts as active so the fallback doesn't flash a duplicate list during
-     * the server's first second.
+     * True only while a Jux LSP server is **Running** — i.e. actually able to
+     * answer completion requests. `Initializing` deliberately does NOT count:
+     * server start-up can take many seconds (toolchain spawn + project index),
+     * and suppressing the fallback during that window left the user with NO
+     * completion at all ("sometimes I don't get it"). Letting the IDE-side
+     * fallback serve until the server is Running guarantees completion is
+     * always available; the brief overlap as it flips to Running is harmless
+     * versus a multi-second dead zone.
      */
     fun isActive(project: Project): Boolean = try {
         LspServerManager.getInstance(project)
             .getServersForProvider(JuxLspServerSupportProvider::class.java)
-            .any { it.state == LspServerState.Initializing || it.state == LspServerState.Running }
+            .any { it.state == LspServerState.Running }
     } catch (_: Throwable) {
         // Any API drift or unexpected state must never break completion —
         // fall back to contributing the IDE-side items.
