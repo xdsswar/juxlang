@@ -158,7 +158,14 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            if !param.is_out && !param.is_shared_ref && param_muts.contains(&param.name.text) {
+            // A `final` parameter (§M.14.2) is an immutable binding: never emit
+            // `mut`. Any reassignment was already rejected by tycheck (E0464), so
+            // the body cannot legitimately need a mutable binding.
+            if !param.is_final
+                && !param.is_out
+                && !param.is_shared_ref
+                && param_muts.contains(&param.name.text)
+            {
                 self.w.push_str("mut ");
             }
             self.w.push_str(&param.name.text);

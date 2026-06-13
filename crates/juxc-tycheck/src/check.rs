@@ -1147,6 +1147,7 @@ impl<'a> Checker<'a> {
         self.in_unsafe = fn_decl.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
         self.check_out_params_assigned(&fn_decl.params, body, &fn_decl.name.text);
+        self.check_final_not_reassigned(&fn_decl.params, body);
         self.check_missing_return(
             &fn_decl.return_type,
             body,
@@ -1203,6 +1204,144 @@ impl<'a> Checker<'a> {
                 )
                 .with_span(span),
             );
+        }
+    }
+
+    /// **E0464 (§M.14.2)** — a `final`/`const` binding must not be reassigned.
+    /// Seeds the in-scope final set with the function's `final` parameters and
+    /// walks the body; a `final` local (`VarDecl.is_final`) adds to the set, a
+    /// non-final local re-using a name removes it (Jux permits shadowing — env.rs
+    /// notes shadowing diagnostics are deferred — so an inner `var x` legitimately
+    /// un-finals an outer `final x`). Both plain (`x = …`) and compound
+    /// (`x += …`, and the parser's `++`/`--` desugaring) assignments are caught.
+    fn check_final_not_reassigned(
+        &mut self,
+        params: &[juxc_ast::Param],
+        body: &juxc_ast::Block,
+    ) {
+        let finals: std::collections::HashSet<String> = params
+            .iter()
+            .filter(|p| p.is_final)
+            .map(|p| p.name.text.clone())
+            .collect();
+        // A body with no `final` params can still declare `final` locals, so we
+        // always walk — the walker accumulates locals as it descends.
+        self.walk_block_final_reassign(body, &finals);
+    }
+
+    /// Walk one block for `final`-reassignment (E0464). `incoming` is the set of
+    /// names that are final on entry; locals declared in this block extend/shadow
+    /// a *clone* of it so the effect is correctly scoped to the block and its
+    /// descendants.
+    fn walk_block_final_reassign(
+        &mut self,
+        block: &juxc_ast::Block,
+        incoming: &std::collections::HashSet<String>,
+    ) {
+        let mut finals = incoming.clone();
+        for stmt in &block.statements {
+            self.walk_stmt_final_reassign(stmt, &mut finals);
+        }
+    }
+
+    /// Walk one statement for `final`-reassignment (E0464), updating `finals`
+    /// with any binding the statement introduces in the CURRENT block scope and
+    /// recursing into nested blocks with a scoped clone.
+    fn walk_stmt_final_reassign(
+        &mut self,
+        stmt: &Stmt,
+        finals: &mut std::collections::HashSet<String>,
+    ) {
+        match stmt {
+            // A local declaration (re)binds its name in this scope: `final var`
+            // makes it final, a plain `var` un-finals a shadowed outer name.
+            Stmt::VarDecl(v) => {
+                if v.is_final {
+                    finals.insert(v.name.text.clone());
+                } else {
+                    finals.remove(&v.name.text);
+                }
+            }
+            // The violation: assigning (plain or compound) to a bare name that is
+            // currently a final binding.
+            Stmt::Assign(a) => {
+                if let Expr::Path(qn) = &a.target {
+                    if qn.segments.len() == 1 && finals.contains(&qn.segments[0].text) {
+                        let name = &qn.segments[0].text;
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0464_FinalBindingReassigned,
+                                format!(
+                                    "cannot reassign `{name}`: it is a `final` binding and is \
+                                     immutable (§M.14.2). Drop `final`, or bind a new local.",
+                                ),
+                            )
+                            .with_span(a.span),
+                        );
+                    }
+                }
+            }
+            Stmt::If(i) => {
+                self.walk_block_final_reassign(&i.then_block, finals);
+                let mut branch = i.else_branch.as_deref();
+                while let Some(b) = branch {
+                    match b {
+                        ElseBranch::If(inner) => {
+                            self.walk_block_final_reassign(&inner.then_block, finals);
+                            branch = inner.else_branch.as_deref();
+                        }
+                        ElseBranch::Block(blk) => {
+                            self.walk_block_final_reassign(blk, finals);
+                            branch = None;
+                        }
+                    }
+                }
+            }
+            Stmt::While(w) => self.walk_block_final_reassign(&w.body, finals),
+            Stmt::DoWhile(d) => self.walk_block_final_reassign(&d.body, finals),
+            Stmt::ForEach(fe) => {
+                // The loop variable is a fresh, non-final binding scoped to the
+                // body; it shadows any same-named outer final.
+                let mut inner = finals.clone();
+                inner.remove(&fe.var_name.text);
+                self.walk_block_final_reassign(&fe.body, &inner);
+            }
+            Stmt::ForC(fc) => {
+                // The init clause's bindings scope over cond/update/body.
+                let mut inner = finals.clone();
+                if let Some(init) = &fc.init {
+                    self.walk_stmt_final_reassign(init, &mut inner);
+                }
+                if let Some(update) = &fc.update {
+                    self.walk_stmt_final_reassign(update, &mut inner);
+                }
+                self.walk_block_final_reassign(&fc.body, &inner);
+            }
+            Stmt::Try(t) => {
+                self.walk_block_final_reassign(&t.body, finals);
+                for c in &t.catches {
+                    // The catch binder shadows in the handler body.
+                    let mut inner = finals.clone();
+                    inner.remove(&c.name.text);
+                    self.walk_block_final_reassign(&c.body, &inner);
+                }
+                if let Some(fin) = &t.finally {
+                    self.walk_block_final_reassign(fin, finals);
+                }
+            }
+            Stmt::Unsafe(b) => self.walk_block_final_reassign(b, finals),
+            Stmt::Labeled { stmt, .. } => self.walk_stmt_final_reassign(stmt, finals),
+            // A statement-position `switch`: walk its block arms (an arm's own
+            // pattern binders shadow within the arm, but that is rare enough that
+            // the conservative whole-set view suffices).
+            Stmt::Expr(Expr::Switch(sw)) => {
+                for arm in &sw.arms {
+                    if let SwitchBody::Block(b) = &arm.body {
+                        self.walk_block_final_reassign(b, finals);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1535,6 +1674,7 @@ impl<'a> Checker<'a> {
         self.in_unsafe = method.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
         self.check_out_params_assigned(&method.params, body, &method.name.text);
+        self.check_final_not_reassigned(&method.params, body);
         self.check_missing_return(
             &method.return_type,
             body,
@@ -5444,6 +5584,7 @@ impl<'a> Checker<'a> {
                     is_varargs: false,
                     is_out: false,
                     is_shared_ref: false,
+                    is_final: false,
                 })
                 .collect();
             let subst_params = record.generic_params.clone();
@@ -6923,6 +7064,51 @@ mod tests {
     /// Convenience: count diagnostics matching `code`.
     fn count(diags: &[Diagnostic], wanted: code::Code) -> usize {
         diags.iter().filter(|d| d.code == wanted).count()
+    }
+
+    // --- §M.14.2 `final` parameter / local reassignment (E0464) ---
+
+    /// Reassigning a `final` parameter is E0464.
+    #[test]
+    fn final_param_reassign_is_e0464() {
+        let d = run("public void f(final int x) { x = 5; }");
+        assert!(has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
+    }
+
+    /// A compound assignment to a `final` parameter is also E0464.
+    #[test]
+    fn final_param_compound_assign_is_e0464() {
+        let d = run("public void f(final int x) { x += 1; }");
+        assert!(has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
+    }
+
+    /// Reading a `final` parameter is fine — only reassignment is barred.
+    #[test]
+    fn final_param_read_is_ok() {
+        let d = run("public void f(final int x) { var y = x + 1; }");
+        assert!(!has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
+    }
+
+    /// A plain (non-final) parameter may be reassigned.
+    #[test]
+    fn nonfinal_param_reassign_is_ok() {
+        let d = run("public void f(int x) { x = 5; }");
+        assert!(!has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
+    }
+
+    /// Reassigning a `final` LOCAL is also E0464 (§M.14.2 covers locals).
+    #[test]
+    fn final_local_reassign_is_e0464() {
+        let d = run("public void f() { final int y = 1; y = 2; }");
+        assert!(has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
+    }
+
+    /// A non-final local that SHADOWS a `final` param (in an inner scope) may be
+    /// reassigned — the shadow un-finals the name for that scope.
+    #[test]
+    fn shadowing_local_unfinals_param() {
+        let d = run("public void f(final int x) { if (true) { var x = 0; x = 1; } }");
+        assert!(!has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
     }
 
     /// Bare `return;` in a void function is fine.

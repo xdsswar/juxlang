@@ -441,6 +441,24 @@ pub enum Code {
     /// wired by later assignment, so an initializer (`weak P p = …;`) is
     /// rejected in Phase 1.
     E0456_WeakReadNeedsGet,
+    /// E0464 — **Reassignment of a `final`/`const` binding** (§M.14.2). A
+    /// `final` (or its synonym `const`) parameter — or local — is an immutable
+    /// binding: the name cannot be reassigned after it is bound. Reading it, and
+    /// mutating the FIELDS of a `final` class binding, remain legal — only
+    /// rebinding the name is rejected (Java's `final` parameter rule).
+    E0464_FinalBindingReassigned,
+    /// E0466 — **Invalid parameter binding-mode combination** (§M.14.5). The
+    /// `ref` (§M.13) and `weak` (§M.14.3) binding modes are mutually exclusive
+    /// and cannot apply to a varargs parameter (which binds a `T[]` array — a
+    /// `ref`/`weak` array element is barred), and a `weak` parameter may not
+    /// carry a default value in Phase 1. Fires on `ref weak T`, `ref T...` /
+    /// `weak T...`, and `weak T = <default>`.
+    E0466_InvalidParamBindingCombo,
+    /// E0467 — **A defaulted parameter precedes a non-defaulted one** (§M.14.4).
+    /// Defaults fill trailing omitted arguments, so a required parameter after a
+    /// defaulted one could never be omitted — move all defaulted parameters to
+    /// the end of the list.
+    E0467_DefaultParamOrdering,
     /// E0454 — A **generic class used as a polymorphic base** (Phase-1
     /// limitation). Assigning a subclass instance into a slot typed as a
     /// *generic* base **class** (`Container<int> b = new Box<int>(…)` where
@@ -694,6 +712,9 @@ impl Code {
             Code::E0446_GenericBoundNotSatisfied => "E0446",
             Code::E0455_WeakOnNonClass           => "E0455",
             Code::E0456_WeakReadNeedsGet         => "E0456",
+            Code::E0464_FinalBindingReassigned   => "E0464",
+            Code::E0466_InvalidParamBindingCombo => "E0466",
+            Code::E0467_DefaultParamOrdering     => "E0467",
             Code::E0454_GenericBasePolymorphic   => "E0454",
             Code::W0457_UnannotatedRefCycle      => "W0457",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",
