@@ -21,7 +21,10 @@ class JuxUnresolvedReferenceInspectionTest : BasePlatformTestCase() {
 
     private fun assertUnresolved(code: String, name: String) {
         val d = descriptions(code)
-        assertTrue("expected 'Cannot resolve symbol \\'$name\\'' in $d", d.any { it == "Cannot resolve symbol '$name'" })
+        assertTrue(
+            "expected an unresolved diagnostic for '$name' in $d",
+            d.any { it == "Cannot resolve symbol '$name'" || it == "Cannot resolve type '$name'" },
+        )
     }
 
     private fun assertAllResolved(code: String) {
@@ -165,6 +168,127 @@ class JuxUnresolvedReferenceInspectionTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
+    }
+
+    // ---- type positions -----------------------------------------------------
+
+    fun testUnknownTypeFlagged() {
+        // `Wodget` names no in-file/project/prelude type and is not imported.
+        assertUnresolved(
+            """
+            package demo;
+            public class A {
+                public void go(Wodget w) {}
+            }
+            """.trimIndent(),
+            "Wodget",
+        )
+    }
+
+    fun testRenamedAwayTypeUsageFlagged() {
+        // `Gadget` is defined, but `Widget` (a stale reference after a rename)
+        // resolves to nothing.
+        assertUnresolved(
+            """
+            package demo;
+            public class Gadget {}
+            public class A {
+                public Widget make() { return null; }
+            }
+            """.trimIndent(),
+            "Widget",
+        )
+    }
+
+    fun testInFileTypeNotFlagged() {
+        assertAllResolved(
+            """
+            package demo;
+            public class Gadget {}
+            public class A {
+                public Gadget make() { return new Gadget(); }
+            }
+            """.trimIndent(),
+        )
+    }
+
+    fun testPreludeAndPrimitiveTypesNotFlagged() {
+        // Map / List / Throwable are jux.std prelude; int / String are built-in.
+        assertAllResolved(
+            """
+            package demo;
+            public class A {
+                public Map<String, List<int>> data;
+                public void boom() throws Throwable {}
+            }
+            """.trimIndent(),
+        )
+    }
+
+    fun testTypeParameterNotFlagged() {
+        assertAllResolved(
+            """
+            package demo;
+            public class Box<T> {
+                private T value;
+                public T get() { return value; }
+                public <R> R map(R seed) { return seed; }
+            }
+            """.trimIndent(),
+        )
+    }
+
+    fun testImportedTypeNotFlagged() {
+        assertAllResolved(
+            """
+            package demo;
+            import rust.std.collections.BTreeMap;
+            public class A {
+                public BTreeMap<int, int> m;
+            }
+            """.trimIndent(),
+        )
+    }
+
+    fun testCrossFileTypeNotFlagged() {
+        myFixture.addFileToProject("beast.jux", "package demo;\npublic class Beast {}\n")
+        assertAllResolved(
+            """
+            package demo;
+            public class A {
+                public void pet(Beast b) {}
+            }
+            """.trimIndent(),
+        )
+    }
+
+    fun testQualifiedTypeNotFlagged() {
+        // A dotted type path is package resolution — left to the language server.
+        assertAllResolved(
+            """
+            package demo;
+            public class A {
+                public foo.bar.Whatever thing() { return null; }
+            }
+            """.trimIndent(),
+        )
+    }
+
+    fun testChangeToNearestTypeQuickFix() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class Gadget {}
+            public class A {
+                public Gadg<caret>ey make() { return null; }
+            }
+            """.trimIndent(),
+        )
+        myFixture.doHighlighting()
+        val fix = myFixture.findSingleIntention("Change to 'Gadget'")
+        myFixture.launchAction(fix)
+        assertTrue("type usage rewritten to the in-project type", myFixture.file.text.contains("public Gadget make()"))
     }
 
     // ---- quick-fix ----------------------------------------------------------
