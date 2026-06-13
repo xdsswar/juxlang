@@ -5,7 +5,13 @@ import com.google.gson.JsonParser
 /**
  * One semantic diagnostic from `juxc --check --diagnostic-format json`, reduced
  * to what the editor annotator needs: the stable code, the severity, the
- * message, the owning file, and the UTF-8 byte range to underline.
+ * message, the owning file, and the location to underline.
+ *
+ * Both the 1-based line/column AND the UTF-8 byte range are carried. The editor
+ * prefers line/column — it's line-ending-agnostic, so it maps correctly onto
+ * IntelliJ's `\n`-normalized in-memory document even though juxc computed the
+ * offsets from the on-disk bytes (which on Windows include `\r`). Byte offsets
+ * are the fallback when line/column are absent.
  */
 data class JuxDiagnostic(
     val code: String,
@@ -14,6 +20,10 @@ data class JuxDiagnostic(
     val file: String, // forward-slash path, exactly as juxc emitted it
     val byteStart: Int,
     val byteEnd: Int,
+    val lineStart: Int = 0, // 1-based; 0 = absent
+    val colStart: Int = 0, // 1-based char column
+    val lineEnd: Int = 0,
+    val colEnd: Int = 0,
 )
 
 /**
@@ -55,6 +65,10 @@ object JuxCheckParser {
                         file = span.get("file").asString,
                         byteStart = span.get("byte_start").asInt,
                         byteEnd = span.get("byte_end").asInt,
+                        lineStart = intOr(span, "line_start", 0),
+                        colStart = intOr(span, "column_start", 0),
+                        lineEnd = intOr(span, "line_end", 0),
+                        colEnd = intOr(span, "column_end", 0),
                     ),
                 )
             } catch (_: Throwable) {
@@ -63,6 +77,14 @@ object JuxCheckParser {
         }
         return out
     }
+
+    /** A JSON int field, or [default] when missing/non-numeric. */
+    private fun intOr(obj: com.google.gson.JsonObject, name: String, default: Int): Int =
+        try {
+            if (obj.has(name)) obj.get(name).asInt else default
+        } catch (_: Throwable) {
+            default
+        }
 
     /**
      * Map a UTF-8 [byteOffset] (what juxc reports) to the corresponding index

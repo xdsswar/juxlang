@@ -23,6 +23,19 @@ class JuxCheckParserTest : TestCase() {
         assertEquals("C:/p/Bad.jux", d.file)
         assertEquals(69, d.byteStart)
         assertEquals(83, d.byteEnd)
+        // Line/column are carried too — the editor prefers these (CRLF-safe).
+        assertEquals(4, d.lineStart)
+        assertEquals(17, d.colStart)
+        assertEquals(4, d.lineEnd)
+        assertEquals(31, d.colEnd)
+    }
+
+    fun testLineColDefaultToZeroWhenAbsent() {
+        val ndjson =
+            """{"code":"E0400","severity":"warning","message":"ok","primary_span":{"file":"a.jux","byte_start":1,"byte_end":2}}"""
+        val d = JuxCheckParser.parse(ndjson).single()
+        assertEquals(0, d.lineStart) // absent -> 0 -> annotator falls back to byte mapping
+        assertEquals(1, d.byteStart)
     }
 
     fun testSkipsFilelessAndMalformedLines() {
