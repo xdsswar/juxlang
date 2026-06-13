@@ -1749,6 +1749,8 @@ The cost of polymorphism in the borrow system is conservative widening at call s
 
 Interfaces may declare **abstract methods** (no body — implementers must provide one) and **default methods** (with a body — implementers inherit the implementation, may override). Java 8+ syntax exactly. Default methods are the way to share workflow code across many implementers without resorting to abstract base classes.
 
+**Interface members are implicitly `public`.** A method (abstract, `default`, or `static`) or constant declared in an interface with no explicit visibility is `public` — an interface is a contract, so its members are part of the public surface by default (the same rule as interface fields, §3.3). Writing `public` is redundant but allowed; an explicit `private` helper is permitted, but the package-private default never applies inside an interface.
+
 The pattern is most powerful when defaults call into abstract methods — the implementer fills in the small variation points, the interface provides the high-level workflow.
 
 ##### Worked Example — A Generic Repository<T>

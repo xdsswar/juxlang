@@ -854,6 +854,14 @@ impl<'a> Parser<'a> {
             // when the user writes `void foo();`.
             let Some(mut method) = self.parse_fn_decl(method_annotations, method_vis)
             else { break };
+            // Per §7.6 / Java: an interface method is **implicitly public** when
+            // no visibility is written. Promote the package-private default to
+            // `public` (an explicitly written `private`/`protected` helper, if
+            // the user wrote one, is left as-is). Mirrors the interface-field
+            // promotion above.
+            if method.visibility == Visibility::Package {
+                method.visibility = Visibility::Public;
+            }
             // Promote `static` to the method's modifier list so
             // backend / tycheck see it the same way as static
             // class methods. (parse_fn_decl already absorbed any
