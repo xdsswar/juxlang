@@ -56,8 +56,14 @@ class JuxReference(element: PsiElement, range: TextRange) :
         val name = value
         val receiverWord = receiverWord() ?: return null
         val target = JuxTypeInference.resolveReceiver(receiverWord, element) ?: return null
-        return JuxHierarchy.allMembers(target.type).firstOrNull {
-            (it as? JuxNamedElement)?.name == name
+        // Match static-ness to the receiver the same way member completion does
+        // (`Type.x` → statics + enum constants; `obj.x` → instance members), so
+        // a same-named static+instance pair resolves to the right one.
+        return JuxHierarchy.allMembers(target.type).firstOrNull { m ->
+            val named = m as? JuxNamedElement ?: return@firstOrNull false
+            if (named.name != name) return@firstOrNull false
+            val isStatic = m.elementType === E.ENUM_CONSTANT || JuxHierarchy.hasModifier(m, "static")
+            target.isStatic == isStatic
         }
     }
 

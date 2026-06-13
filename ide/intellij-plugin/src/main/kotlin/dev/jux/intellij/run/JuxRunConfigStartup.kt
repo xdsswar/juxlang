@@ -86,11 +86,16 @@ class JuxRunConfigStartup : ProjectActivity {
             .configurationFactories[0]
         var firstNew: RunnerAndConfigurationSettings? = null
         for (e in entries) {
-            val exists = rm.allSettings.any {
+            val existing = rm.allSettings.firstOrNull {
                 val c = it.configuration as? JuxRunConfiguration
                 c != null && !c.isTestMode() && c.filePath == e.file.path
             }
-            if (exists) continue
+            if (existing != null) {
+                // A run from the gutter leaves a TEMPORARY config; promote it so
+                // the entry point stays in the dropdown permanently.
+                if (existing.isTemporary) existing.isTemporary = false
+                continue
+            }
             val settings = rm.createConfiguration(e.name, factory)
             (settings.configuration as JuxRunConfiguration).apply {
                 mode = JuxRunConfiguration.MODE_RUN

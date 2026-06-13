@@ -7,6 +7,7 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
@@ -75,26 +76,40 @@ private class JuxProjectPanel(private val project: Project) {
         reload()
     }
 
-    /** Rebuild the module tree from the project's `jux.toml` files. */
+    /**
+     * Rebuild the module tree from the project's `jux.toml` files. The manifest
+     * reads + directory walks run on a pooled thread (never the EDT — they'd
+     * freeze the UI on a large or network-mounted project), then the tree model
+     * is swapped on the EDT.
+     */
     private fun reload() {
-        treeRoot.removeAllChildren()
         val base = project.basePath?.let(::File)
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val (rootLabel, children) = computeModel(base)
+            ApplicationManager.getApplication().invokeLater {
+                treeRoot.userObject = rootLabel
+                treeRoot.removeAllChildren()
+                for (c in children) treeRoot.add(c)
+                model.reload()
+                expandTopLevel()
+            }
+        }
+    }
+
+    /** Pure (off-EDT) computation of the root label + module nodes from disk. */
+    private fun computeModel(base: File?): Pair<JuxNode, List<DefaultMutableTreeNode>> {
         if (base == null || !base.isDirectory) {
-            treeRoot.userObject = JuxNode("No project", AllIcons.General.Information, null)
-            model.reload()
-            return
+            return JuxNode("No project", AllIcons.General.Information, null) to emptyList()
         }
         val rootManifest = File(base, "jux.toml")
-        treeRoot.userObject = JuxNode(base.name, AllIcons.Nodes.ModuleGroup, null)
-
+        val rootLabel = JuxNode(base.name, AllIcons.Nodes.ModuleGroup, null)
         val moduleDirs = discoverModules(base, rootManifest)
-        if (moduleDirs.isEmpty()) {
-            treeRoot.add(DefaultMutableTreeNode(JuxNode("No jux.toml found", AllIcons.General.Information, null)))
+        val children = if (moduleDirs.isEmpty()) {
+            listOf(DefaultMutableTreeNode(JuxNode("No jux.toml found", AllIcons.General.Information, null)))
         } else {
-            for (dir in moduleDirs) treeRoot.add(buildModuleNode(dir))
+            moduleDirs.map { buildModuleNode(it) }
         }
-        model.reload()
-        expandTopLevel()
+        return rootLabel to children
     }
 
     /**
