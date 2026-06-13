@@ -159,7 +159,7 @@ keyword           = 'abstract' | 'annotation' | 'as' | 'async' | 'await'
                   | 'package' | 'permits' | 'private' | 'protected' | 'public' | 'record'
                   | 'return' | 'sealed' | 'sizeof' | 'static' | 'struct'
                   | 'super' | 'switch' | 'this' | 'throw' | 'throws'
-                  | 'try' | 'type' | 'unsafe' | 'var' | 'void'
+                  | 'try' | 'type' | 'typeof' | 'unsafe' | 'var' | 'void'
                   | 'volatile' | 'when' | 'while' | 'yield'
 
 contextual-kw     = 'get' | 'set' | 'operator' | 'out' | 'step' | 'in'
@@ -340,6 +340,11 @@ param-list        = param ( ',' param )* ( ',' variadic-param )?
 param             = annotation* param-mode? type identifier ('=' expression)?
 param-mode        = binding-immut | 'out'                  -- 'final' or 'const' (synonyms), or 'out'
 variadic-param    = annotation* type '...' identifier
+                                                              -- a `type` may carry a binding-mode prefix:
+                                                              -- ref-type ('ref' type, §M.13.4) or
+                                                              -- weak-type ('weak' type, §M.14.3); both are
+                                                              -- orthogonal to param-mode. See §M.14 for the
+                                                              -- full parameter combination matrix.
 
 throws-clause     = 'throws' qualified-name ( ',' qualified-name )*
 
@@ -569,7 +574,14 @@ do-while-stmt     = 'do' statement 'while' '(' expression ')' ';'
 for-stmt          = 'for' '(' for-init? ';' expression? ';'
                     for-update? ')' statement
 for-init          = local-decl-no-semi | expression-list
-for-update        = expression-list
+for-update        = expression-list | incdec
+
+incdec-stmt       = incdec ';'
+incdec            = ( '++' | '--' ) lvalue          -- prefix
+                  | lvalue ( '++' | '--' )           -- postfix
+-- `lvalue` is a name, array element, or field. In STATEMENT and
+-- for-update position only; `++`/`--` produce no value in expression
+-- position (Phase 1). Desugars to `lvalue += 1` / `lvalue -= 1`.
 
 for-each-stmt     = 'for' '(' ( 'var' | type ) identifier ':' expression ')'
                     statement
@@ -672,6 +684,11 @@ primary           = literal
                   | new-expr
                   | lambda
                   | method-ref
+                  | sizeof-expr
+                  | typeof-expr
+
+sizeof-expr       = 'sizeof' '(' (type | expression) ')'        -- §5.9
+typeof-expr       = 'typeof' '(' expression ')'                  -- §5.9.10
 
 literal           = int-literal | float-literal | char-literal
                   | string-literal | interp-literal

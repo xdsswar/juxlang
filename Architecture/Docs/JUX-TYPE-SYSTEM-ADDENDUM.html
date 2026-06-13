@@ -216,15 +216,20 @@ The compiler infers `T = Dog` from the source argument; verifies the dest argume
 
 ## §T.3 — Overload Resolution
 
-> **Phase-1 implementation note.** The current compiler implements a
-> count-based subset of this section: overloads of one name (methods
-> and constructors) are selected by **argument count**, and each
-> group's acceptable-count ranges (counting omittable defaults and
-> varargs) must be pairwise disjoint — `E0450` otherwise. Type-based
-> applicability filtering and the specificity ordering below land
-> with a later phase. Phase 1 also keeps method overload groups out
-> of inheritance (no overriding into/out of a group) and out of
-> interfaces.
+> **Phase-1 implementation note (updated 2026-06-12).** METHOD
+> overloads now resolve by **argument count, then argument types**:
+> members whose count range covers the call are candidates; with
+> several, each is scored against the inferred argument types (2 per
+> exact parameter match, 1 per merely-assignable one, disqualified on
+> any mismatch) and the best score wins — so `add(int)` /
+> `add(double)` / `add(String)` coexist and dispatch correctly. At the
+> declaration only TRUE ambiguity is rejected (`E0450`): overlapping
+> counts with identical parameter-type shapes. This is a working
+> subset of the full specificity ordering below (named arguments and
+> generic-candidate ranking still pending). CONSTRUCTORS remain
+> count-selected with disjoint ranges for now. Phase 1 also keeps
+> method overload groups out of inheritance (no overriding into/out
+> of a group) and out of interfaces.
 
 When multiple declarations share a name, the resolver picks one. The algorithm runs in compiler phase 8.
 
@@ -328,7 +333,7 @@ For a call `f<T₁, T₂, ...>(a₁, a₂, ..., aₙ)` with no explicit type arg
    - Find all constraints involving `Tⱼ`.
    - Compute the join (least upper bound) of all "use site" types — types appearing on the LHS of `≤ Tⱼ`.
    - Verify the join is `≤` every "constraint site" type — types on the RHS of `Tⱼ ≤`.
-5. **Result.** If a unique solution exists, the call site is resolved. If multiple solutions exist, emit `E0430`. If no solution, emit `E0431` showing the conflicting constraints.
+5. **Result.** If a unique solution exists, the call site is resolved. If multiple solutions exist, emit `E0430`. If no solution, emit `E0453` showing the conflicting constraints.
 
 ### T.4.3. Worked Examples
 
@@ -344,7 +349,7 @@ public <T> T max(T a, T b) where T has operator<=>(T) -> int {
 }
 
 var d = max(3, 5);                // T = int; bound satisfied (int has operator<=>)
-var e = max(3, "hi");             // E0431: cannot unify int and String
+var e = max(3, "hi");             // E0453: cannot unify int and String
 ```
 
 ### T.4.4. Inference and Overload Resolution

@@ -327,8 +327,8 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0444`  | Bounded wildcard as a storage type over a user generic class (Phase-1 limitation) | Generics (Gap 4) |
 | `E0445`  | Const-generic form outside the Phase-1 core subset  | Type system §T.11.3 / Grammar §A.2.6 |
 | `E0446`  | Generic argument violates its parameter's `extends` bound | Type system §T.2.2 |
-| `E0455`  | `weak` modifier on a non-(plain-class) field type    | JUX-LANG-V1 §6.5 / Semantics §S.5.2 |
-| `E0456`  | `weak` field read without `.get()`, or a `weak` field with an initializer | JUX-LANG-V1 §6.5 / Semantics §S.4.5 |
+| `E0455`  | `weak` modifier on a non-(plain-class) field **or parameter** type    | JUX-LANG-V1 §6.5 / Semantics §S.5.2 / §M.14.3 |
+| `E0456`  | `weak` field **or parameter** read without `.get()`, or a `weak` field with an initializer | JUX-LANG-V1 §6.5 / Semantics §S.4.5 / §M.14.3 |
 | `E0447`  | Or-pattern alternative introduces bindings (`case A(var x) \| B ->`) | Grammar §A.3 |
 | `E0448`  | Malformed named-argument list (unknown name, duplicate slot, positional after named) | Grammar §A.2.9 / Type system §T.3.2 |
 | `E0449`  | Default-value expression references another parameter (Phase-1 limitation; §S.1.3 full form deferred) | Semantics §S.1.3 |
@@ -338,6 +338,9 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0452`  | No matching operator overload *(reserved)*          | Type system §T.3.5            |
 | `E0453`  | Generic type inference has no solution (uninferable `new X<>()`) | Type system §T.4.2 |
 | `E0460`  | Non-void function can finish without returning a value (missing return; conservative, JLS-14.21-style reachability) | Semantics §S.4.6 |
+| `E0464`  | Reassignment of a `final`/`const` binding (parameter or local) | §M.14.2 |
+| `E0466`  | Invalid parameter binding-mode combination (`ref`+`weak`, `ref`/`weak` on varargs, `weak`+default) | §M.14.5 |
+| `E0467`  | A defaulted parameter precedes a non-defaulted parameter | §M.14.4 |
 | `E0470`  | Annotation applied outside its `@Target` set *(reserved)* | Annotations §A.13        |
 | `E0471`  | Runtime annotation read requires reflection *(reserved)* | Annotations §A.13         |
 | `E0472`  | Missing required annotation parameter *(reserved)*   | Annotations §A.13              |
@@ -415,7 +418,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0940`  | Out-parameter not assigned on every path                    | Missing-defs §M.4.2            |
 | `E0942`  | `out` argument is not an assignable place                   | Missing-defs §M.4.2            |
 | `E0943`  | `out` argument / parameter disagreement                     | Missing-defs §M.4             |
-| `E0944`  | Misuse of the `out` parameter modifier                      | Missing-defs §M.4.1            |
+| `E0944`  | Misuse of the `out` parameter modifier (`out` + `final`/`ref`/`weak`/varargs/default, or on a constructor param) | Missing-defs §M.4.1 / §M.14.5 |
 | `E0941`  | No matching operator definition for required capability     | Operators §O.5.1               |
 | `E0950`  | Orphan operator overload                                    | Runtime/ABI §R.3.3             |
 | `E0951`  | Duplicate operator overload across modules                  | Runtime/ABI §R.3.3             |

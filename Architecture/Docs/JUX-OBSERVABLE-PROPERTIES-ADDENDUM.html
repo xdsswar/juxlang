@@ -436,6 +436,31 @@ node.Status = "inactive";           // ❌ E0972: setter is private
 node.Status.observers.attach(obs);  // ✅ observable — getter is public
 ```
 
+### P.3.6. Re-Entrant Sets (Observer Sets Its Own Property)
+
+An observer may set the property it observes (directly or through a call chain). The
+semantics follow JavaFX: **every distinct value transition fires the observer list
+exactly once, in transition order**, until the value is quiescent.
+
+```java
+counter.Value.observers.attach((old, now) -> {
+    if (now < 5) { counter.Value = now + 1; }   // re-entrant set
+});
+counter.Value = 1;     // fires (0→1), (1→2), (2→3), (3→4), (4→5)
+print(counter.Value);  // 5
+```
+
+Mechanically, a nested set **commits the new value immediately** but defers its firing
+pass: the setter that triggered the original fire detects the change after its pass
+returns and fires the next transition, looping until the value stops changing. No
+transition is fired twice and no transition is skipped.
+
+A cycle that never converges (`A` sets `B`, `B` sets `A` with alternating values) is a
+programmer error — it loops forever exactly as the equivalent JavaFX listener cycle
+would. The W0457-class cycle lint may flag statically detectable cases; the runtime
+adds no cycle guard. (Bidirectional *bindings* are unaffected — they keep their own
+`updating` recursion guard, §P.4.3.)
+
 ---
 
 ## §P.4 — Property Binding
@@ -862,6 +887,40 @@ public class LoginForm extends VBox {
 - JuxFX (the UI framework) uses this system directly. All `Node` properties are
   declared with `{ get; set; }` in PascalCase and are therefore observable with zero
   additional infrastructure.
+
+### P.10.1. Phase-1 Implementation Notes
+
+- **Inherited properties are fully observable (Java semantics).** A
+  `B extends A` object attaches/detaches/binds `A`'s properties through its
+  own handle exactly like its own; setters fire the ancestor-slice observers
+  whether the set goes through a `B`-typed or an `A`-typed (base) reference;
+  chains of any depth work. The one open edge: CREATING a binding
+  (`bind`/`bindBidirectional`) through a base-typed *reference* — bind via
+  the concrete-typed variable for now.
+- **Static observable properties** fire observers **on the thread that set
+  them**, and only observers attached on that same thread see the change.
+  Observers are task-local closures (`Rc`-backed, not `Send`), so their storage
+  for a `static` property is thread-local — consistent with observers being
+  task-local everywhere else in Phase 1. Cross-thread static-property
+  observation is out of scope until the threading model grows shared
+  observers.
+- **Bidirectional bindings allow direct assignment to either side** (the new
+  value propagates to the peer) — only a ONE-WAY binding's target refuses
+  direct sets with `E0973`/`IllegalStateException`. This matches JavaFX's
+  `bindBidirectional` semantics.
+- **`bind()` in a constructor** (on a property of `this`) is deferred to the
+  instant construction completes — the binding's initial sync and all
+  subsequent propagation behave identically; only ordering relative to LATER
+  statements in the same constructor body differs (the bind takes effect
+  after the body finishes). Binding setup is the last thing a constructor
+  does in idiomatic code, so this is rarely observable.
+- **Computed-property dependency tracking** is static: the compiler collects
+  the settable properties of the same class that the getter body mentions
+  (bare name or `this.X`). Reads routed through helper METHODS
+  (`get -> helper()` where `helper` reads `First`) are not seen — mention the
+  dependency in the getter body to make it tracked.
+- Static **computed** properties and `bind()` on static properties are not
+  implemented in Phase 1.
 
 *End of Observable Properties addendum.*
 

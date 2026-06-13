@@ -256,6 +256,11 @@ param-list        = param ( ',' param )* ( ',' variadic-param )?
 param             = annotation* param-mode? type identifier ('=' expression)?
 param-mode        = binding-immut | 'out'                  -- 'final' or 'const' (synonyms), or 'out'
 variadic-param    = annotation* type '...' identifier
+                                                              -- a `type` may carry a binding-mode prefix:
+                                                              -- ref-type ('ref' type, §M.13.4) or
+                                                              -- weak-type ('weak' type, §M.14.3); both are
+                                                              -- orthogonal to param-mode. See §M.14 for the
+                                                              -- full parameter combination matrix.
 
 throws-clause     = 'throws' qualified-name ( ',' qualified-name )*
 
