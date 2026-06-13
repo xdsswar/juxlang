@@ -1124,9 +1124,13 @@ impl<'a> Checker<'a> {
         for param in &fn_decl.params {
             self.check_iface_value_type(&param.ty);
             self.check_fixed_array_size_in_type(&param.ty);
+            // J4: a free function's own `<T>` params aren't pushed into the
+            // env, so pass them explicitly as the in-scope generics.
+            self.validate_sig_type(&param.ty, &fn_decl.generic_params);
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
         }
+        self.validate_sig_return(&fn_decl.return_type, &fn_decl.generic_params);
         // Const-generic params (`int cap<int N>()`) read as values in
         // the body — declare them with their value type.
         self.declare_const_generic_params(&fn_decl.generic_params);
@@ -1281,6 +1285,8 @@ impl<'a> Checker<'a> {
                 self.check_iface_value_type(fty);
                 self.check_wildcard_storage_type(fty);
                 self.check_fixed_array_size_in_type(fty);
+                // J4: reject an unresolved field type name.
+                self.validate_sig_type(fty, &[]);
             }
             // `weak` field validity (§6.5). A weak field is exempt from
             // definite-assignment (§S.4.5 — pass not yet implemented) and
@@ -1460,6 +1466,8 @@ impl<'a> Checker<'a> {
         self.env.push_scope();
         self.env.declare("this", this_ty.clone());
         for param in &ctor.params {
+            // J4: reject an unresolved parameter type name.
+            self.validate_sig_type(&param.ty, &[]);
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
         }
@@ -1507,9 +1515,13 @@ impl<'a> Checker<'a> {
         for param in &method.params {
             self.check_iface_value_type(&param.ty);
             self.check_fixed_array_size_in_type(&param.ty);
+            // J4: reject an unresolved type name (e.g. the supertype's `T`
+            // written in an override instead of the bound `Object`).
+            self.validate_sig_type(&param.ty, &[]);
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
         }
+        self.validate_sig_return(&method.return_type, &[]);
         self.check_iface_return_type(&method.return_type);
         let saved = self.current_return.take();
         self.current_return = Some(return_type_to_ty(
@@ -1543,6 +1555,116 @@ impl<'a> Checker<'a> {
         // accept the over-broadening (no method-local generics in any
         // existing example).
         self.env.pop_scope();
+    }
+
+    /// **E0417 (J4)** — validate that every bare type name appearing in a
+    /// signature position (a parameter, return, or field type) resolves to a
+    /// real type. The motivating case: a class that `implements Holder<Object>`
+    /// and overrides `void test(T t)` — `T` is the *interface's* type-parameter
+    /// name, not a type in scope here, so per Jux's Java-shaped override rule it
+    /// must be written as the bound argument `Object`. Catching it here turns a
+    /// confusing rustc `E0412 cannot find type T` into a precise diagnostic that
+    /// points at the offending name.
+    ///
+    /// `extra` carries generic parameters that are in scope but NOT registered
+    /// in `self.env.generic_params` — needed for free functions, whose own
+    /// `<T>` params aren't pushed into the env (methods push theirs before this
+    /// runs, so they pass `&[]`).
+    ///
+    /// Conservative by design: only single-segment names are checked, and a
+    /// small allowlist of language intrinsics that lower to emitted helpers
+    /// (rather than symbol-table types) is exempt. Everything else defers to the
+    /// real resolver [`ty_from_ref`] — a `Ty::Unknown` result is the
+    /// unambiguous "this name resolves to nothing" signal.
+    fn validate_sig_type(&mut self, tref: &TypeRef, extra: &[TypeParam]) {
+        // Function-type shape — recurse into each parameter and the return;
+        // `name`/`generic_args` are conventionally empty in this case.
+        if let Some(fs) = &tref.fn_shape {
+            for p in &fs.params {
+                self.validate_sig_type(p, extra);
+            }
+            self.validate_sig_type(&fs.return_type, extra);
+            return;
+        }
+        // A synthetic const-generic argument (`<float, 256>`) is carried as a
+        // TypeRef whose only segment is the literal text — never a type name.
+        if tref.const_literal_text().is_some() {
+            return;
+        }
+        if self.sig_head_unresolved(tref, extra) {
+            let bare = &tref.name.segments[0].text;
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0417_UnknownType,
+                    format!(
+                        "unknown type `{bare}` — no primitive, in-scope generic parameter, or \
+                         class/record/enum/interface of that name is visible here. If this \
+                         overrides a member of a generic supertype, name the concrete type \
+                         argument it was bound to (e.g. `Object` under `implements \
+                         Holder<Object>`), not the supertype's type-parameter name",
+                    ),
+                )
+                .with_span(tref.span),
+            );
+            return; // bogus head — don't descend into its (also bogus) args
+        }
+        // Head resolves — validate each concrete generic argument too, so
+        // `List<Bogus>` is caught at `Bogus`.
+        for ga in &tref.generic_args {
+            if let juxc_ast::GenericArg::Type(inner) = ga {
+                self.validate_sig_type(inner, extra);
+            }
+        }
+    }
+
+    /// True when the single-segment head name of `tref` resolves to nothing.
+    /// Multi-segment names (explicit FQNs) and intrinsic builtin type names are
+    /// never flagged. See [`Self::validate_sig_type`].
+    fn sig_head_unresolved(&self, tref: &TypeRef, extra: &[TypeParam]) -> bool {
+        // Only bare single-segment names are at risk of the `T`-leak.
+        if tref.name.segments.len() != 1 {
+            return false;
+        }
+        let bare = tref.name.segments[0].text.as_str();
+        // Return-slot / inference keywords and language intrinsics that lower to
+        // emitted helpers rather than symbol-table types. These never appear in
+        // `symbols.*`, so `ty_from_ref` can't vouch for them.
+        const INTRINSIC: &[&str] = &[
+            "void", "var", "Self", "observer", "Channel", "AsyncMutex", "Stream", "Task",
+        ];
+        if INTRINSIC.contains(&bare) || bare == juxc_ast::TUPLE_SENTINEL {
+            return false;
+        }
+        // In-scope generic parameters: those registered in the env (class +
+        // method level) plus any passed explicitly (free-function level).
+        if self.env.generic_params.contains(bare) {
+            return false;
+        }
+        if extra.iter().any(|tp| tp.name.text == bare) {
+            return false;
+        }
+        // Defer to the real resolver on a name-only probe (strip array /
+        // nullable / pointer / generic-arg shapes — none of those change whether
+        // the HEAD name resolves). `Ty::Unknown` ⇔ "resolves to nothing".
+        let probe = TypeRef {
+            name: tref.name.clone(),
+            generic_args: vec![],
+            nullable: false,
+            array_shape: None,
+            fn_shape: None,
+            ptr_depth: 0,
+            span: tref.span,
+        };
+        matches!(ty_from_ref(&probe, &self.env, self.symbols), Ty::Unknown)
+    }
+
+    /// Validate a `ReturnType` slot via [`Self::validate_sig_type`]. `void`
+    /// (sync or `async void`) carries no user-named type to resolve.
+    fn validate_sig_return(&mut self, rt: &ReturnType, extra: &[TypeParam]) {
+        match rt {
+            ReturnType::Type(t) | ReturnType::AsyncType(t) => self.validate_sig_type(t, extra),
+            ReturnType::Void => {}
+        }
     }
 
     /// Fire `E0435` when an interface type appears in a **value position**
