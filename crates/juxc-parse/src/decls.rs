@@ -2343,7 +2343,9 @@ impl<'a> Parser<'a> {
                     .with_span(self.last_consumed_span()),
                 );
             } else {
-                ty.array_shape = Some(juxc_ast::ArrayShape::Dynamic);
+                // A variadic parameter is a single-dimension dynamic array
+                // of its element type (`T...` ≡ `T[]`).
+                ty.array_shape = Some(juxc_ast::ArrayShape::single(juxc_ast::ArrayDim::Dynamic));
             }
         }
         let name = self.parse_ident()?;

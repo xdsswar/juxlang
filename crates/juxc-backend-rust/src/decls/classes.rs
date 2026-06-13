@@ -1415,7 +1415,10 @@ impl RustEmitter {
             .collect();
         for field in &class_decl.fields {
             if let Some(ty) = &field.ty {
-                if matches!(ty.array_shape, Some(juxc_ast::ArrayShape::Fixed(_)))
+                if matches!(
+                    ty.array_shape.as_ref().map(|s| s.outer()),
+                    Some(juxc_ast::ArrayDim::Fixed(_)),
+                )
                     && ty.generic_args.is_empty()
                     && ty.fn_shape.is_none()
                     && ty.name.segments.len() == 1

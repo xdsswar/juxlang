@@ -137,6 +137,49 @@ impl RustEmitter {
     /// - `new char[8]`     → `['\\0'; 8]`
     /// - `new MyType[N]`   → `[Default::default(); N]` (works iff MyType: Default + Copy)
     pub(crate) fn emit_new_array(&mut self, n: &NewArrayExpr) {
+        // Collect every dimension's size, outermost-first: the outer
+        // `size` plus any `inner_sizes` from a multi-dim `new T[a][b]`.
+        let mut sizes: Vec<&Expr> = Vec::with_capacity(1 + n.inner_sizes.len());
+        sizes.push(&n.size);
+        for s in &n.inner_sizes {
+            sizes.push(s);
+        }
+        // Snapshot the LHS shape's per-dimension kinds (if any) so each
+        // level can independently pick fixed vs dynamic — keeps borrow
+        // of `self` out of the recursion.
+        let target_dims: Vec<bool> = self
+            .target_array_shape
+            .as_ref()
+            .map(|s| {
+                s.dims
+                    .iter()
+                    .map(|d| matches!(d, juxc_ast::ArrayDim::Dynamic))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.emit_new_array_dim(n, &sizes, 0, &target_dims);
+    }
+
+    /// Recursively emit ONE dimension of a `new T[…]…` allocation,
+    /// outermost-first. `sizes` holds every dimension's size
+    /// (outermost-first); `depth` is the current dimension index;
+    /// `target_dims[i]` is `true` when the LHS slot's i-th dimension is
+    /// dynamic (empty when there's no array-typed LHS to consult).
+    ///
+    /// At each level we emit either a `Vec` repeat (`vec![inner; len]`)
+    /// or a fixed-array repeat (`[inner; len]`), where `inner` is the
+    /// recursively-emitted next dimension — or, at the innermost level,
+    /// the element default value.
+    fn emit_new_array_dim(
+        &mut self,
+        n: &NewArrayExpr,
+        sizes: &[&Expr],
+        depth: usize,
+        target_dims: &[bool],
+    ) {
+        let size = sizes[depth];
+        let is_innermost = depth + 1 == sizes.len();
+
         // **Generic element** (`new T[N]` where `T` is a type param in
         // scope): the `[VALUE; N]` repeat form would require `T: Copy`
         // on top of `Default` — Jux generics carry `Clone`, not `Copy`.
@@ -144,8 +187,10 @@ impl RustEmitter {
         // only `T: Default` is needed (added to the class's bound by
         // `class_default_bound_params` when a `T[N]` field exists).
         // The array's size/type are inferred from the assignment
-        // target, so `from_fn` needs no explicit length.
-        let elem_is_type_param = n.element_type.array_shape.is_none()
+        // target, so `from_fn` needs no explicit length. Only relevant
+        // at the innermost level (the element is the type param).
+        let elem_is_type_param = is_innermost
+            && n.element_type.array_shape.is_none()
             && !n.element_type.nullable
             && n.element_type.generic_args.is_empty()
             && n.element_type.fn_shape.is_none()
@@ -153,47 +198,67 @@ impl RustEmitter {
             && self
                 .current_type_params
                 .contains(n.element_type.name.segments[0].text.as_str());
-        // **Dynamic (heap `Vec`) array** — `int[] a = new int[N]`
-        // (§5.6, Java-standard). Required whenever the size is a
-        // RUNTIME value (a Rust `[v; N]` demands a *const* `N`), and
-        // chosen for an explicit `T[]` slot even with a const size.
-        // A const-generic param (`new T[N]` inside `<int N>` scope) is
-        // a compile-time constant — it stays a fixed stack array, so
-        // it is NOT a runtime size. `vec![default; N]` covers the
-        // dynamic case; a generic element repeats via a collect so
-        // only `T: Default` is needed (not `Copy`).
-        let size_is_const = self.try_const_int(&n.size).is_some()
+
+        // **Dynamic (heap `Vec`) dimension** — `int[] a = new int[N]`
+        // (§5.6, Java-standard). Required whenever the size is a RUNTIME
+        // value (a Rust `[v; N]` demands a *const* `N`). Otherwise the
+        // dimension's kind is taken from the LHS slot: the outer dim
+        // honors `dynamic_array_target` / `target_dims[0]`; inner dims
+        // honor `target_dims[depth]`, defaulting to fixed (stack) when
+        // there's no LHS shape to consult. A const-generic param
+        // (`new T[N]` inside `<int N>` scope) is a compile-time
+        // constant — it stays fixed, so it is NOT a runtime size.
+        let size_is_const = self.try_const_int(size).is_some()
             || matches!(
-                &*n.size,
+                size,
                 Expr::Path(qn)
                     if qn.segments.len() == 1
                         && self.const_int_params.contains(qn.segments[0].text.as_str())
             );
-        let want_dynamic = self.dynamic_array_target || !size_is_const;
+        let lhs_says_dynamic = if depth < target_dims.len() {
+            target_dims[depth]
+        } else if depth == 0 {
+            // No per-dim shape but the legacy outer flag may still apply.
+            self.dynamic_array_target
+        } else {
+            false
+        };
+        let want_dynamic = lhs_says_dynamic || !size_is_const;
+
         if want_dynamic {
-            if elem_is_type_param {
+            if is_innermost && elem_is_type_param {
                 self.w.push_str("(0..");
-                self.emit_array_repeat_len(&n.size);
+                self.emit_array_repeat_len(size);
                 self.w
                     .push_str(").map(|_| Default::default()).collect::<Vec<_>>()");
-            } else {
-                self.w.push_str("vec![");
-                self.emit_default_value_for(&n.element_type);
-                self.w.push_str("; ");
-                self.emit_array_repeat_len(&n.size);
-                self.w.push(']');
+                return;
             }
+            self.w.push_str("vec![");
+            if is_innermost {
+                self.emit_default_value_for(&n.element_type);
+            } else {
+                self.emit_new_array_dim(n, sizes, depth + 1, target_dims);
+            }
+            self.w.push_str("; ");
+            self.emit_array_repeat_len(size);
+            self.w.push(']');
             return;
         }
-        if elem_is_type_param {
+
+        // Fixed (stack `[…; N]`) dimension.
+        if is_innermost && elem_is_type_param {
             self.w
                 .push_str("std::array::from_fn(|_| Default::default())");
             return;
         }
         self.w.push('[');
-        self.emit_default_value_for(&n.element_type);
+        if is_innermost {
+            self.emit_default_value_for(&n.element_type);
+        } else {
+            self.emit_new_array_dim(n, sizes, depth + 1, target_dims);
+        }
         self.w.push_str("; ");
-        self.emit_array_repeat_len(&n.size);
+        self.emit_array_repeat_len(size);
         self.w.push(']');
     }
 

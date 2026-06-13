@@ -468,6 +468,7 @@ switch (shape) {
 | `T?`                | Nullable T (T or null)                          | all profiles |
 | `T[]`               | Array of T, size set at construction            | all profiles |
 | `T[N]`              | Array of T with statically-known size N         | all profiles |
+| `T[][]` / `T[3][4]` | Multi-dimensional array (any rank, dims may mix dynamic/fixed) | all profiles |
 | `RingBuffer<T, N>`  | Fixed-capacity circular buffer                  | all profiles |
 | `StackString<N>`    | Inline string with bounded capacity, no heap    | all profiles |
 | `List<T>`           | Growable list (uses heap)                       | full, embedded |
@@ -516,6 +517,36 @@ public <int N> byte[N] copy(byte[N] src) {
 ```
 
 `T[]` and `T[N]` are interchangeable when passing a fixed-size array to a function expecting a runtime-sized one — the size information is simply not preserved. Going the other way requires a check.
+
+**Multi-dimensional arrays.** An array type may stack any number of dimension suffixes. Following Java, the type reads left-to-right as nesting from the outside in: `int[][]` is "an array of (arrays of `int`)", and the leftmost `[…]` is the OUTERMOST dimension. Dimensions may be dynamic (`[]`), fixed (`[N]`), or a mix:
+
+```java
+int[][] grid = new int[3][4];   // 3 rows, each a 4-element row (outer size 3)
+grid[1][2] = 7;                  // index peels one dimension at a time
+print(grid[1][2]);              // 7
+print(grid.length);            // 3   (outer length)
+print(grid[0].length);         // 4   (inner length)
+
+int[][][] cube = new int[2][2][2];   // a 2x2x2 cube
+
+String[][] table = new String[][]{   // jagged literal: rows may differ in length
+    new String[]{"a", "b"},
+    new String[]{"c"},
+};
+
+byte[3][4] block;               // both dimensions fixed (stack-allocated)
+int[3][] rows;                  // outer fixed (3), inner dynamic
+```
+
+*Lowering.* Each dimension lowers independently, outermost first, so the Rust type mirrors the Jux nesting:
+
+- a **dynamic** dimension becomes a `Vec<…>` of the lowered element type — `int[][]` → `Vec<Vec<isize>>`;
+- a **fixed** dimension becomes a Rust fixed array `[…; N]` — `int[3][4]` → `[[isize; 4]; 3]`;
+- mixed dimensions compose the two, outermost first — `int[3][]` → `[Vec<isize>; 3]`, and `int[][3]` → `Vec<[isize; 3]>`.
+
+Construction mirrors the type: `new int[n][m]` (dynamic) lowers to `vec![vec![0; m]; n]`, and `new int[3][4]` (fixed) lowers to `[[0isize; 4]; 3]`.
+
+*Indexing.* Indexing an `N`-dimensional array once peels exactly one (the outermost) dimension and yields an `(N-1)`-dimensional array; indexing a 1-D array yields the scalar element. So for `int[][] m`, `m[i]` has type `int[]` and `m[i][j]` has type `int`. The `.length` field always reports the length of the current (outermost) dimension.
 
 The other fixed-size types (`RingBuffer<T, N>`, `StackString<N>`) carry their capacity as a const generic parameter and live entirely on the stack. They never allocate. This makes them safe to use in `jux-core` and in real-time code where heap allocation is forbidden.
 

@@ -1,0 +1,72 @@
+// Multi-dimensional arrays (§5.5) — build, write, read, and print.
+//
+// Exercises:
+//   - `int[][]` two-dimensional DYNAMIC array (lowers to Vec<Vec<isize>>).
+//   - `int[][][]` three-dimensional dynamic array.
+//   - `new int[r][c]` multi-dim construction (outermost size first).
+//   - indexed write `m[i][j] = v;` and read `m[i][j]`.
+//   - `.length` on the outer and inner dimensions (Java reading order).
+//
+// Expected output (one value per line):
+//   2
+//   3
+//   0 1 2   (row 0)
+//   10 11 12 (row 1)  -> printed as the multiplication-table-ish fill below
+//   42
+//   sum=...
+//
+// The fills are deterministic so the runner can assert exact output.
+
+public void main() {
+    // ---- 2-D dynamic array: 2 rows x 3 cols ----
+    int[][] grid = new int[2][3];
+
+    // grid.length is the OUTER dimension (number of rows).
+    print(grid.length);        // 2
+    // grid[0].length is the INNER dimension (cols per row).
+    print(grid[0].length);     // 3
+
+    // Fill: grid[i][j] = i * 10 + j.
+    var i = 0;
+    while (i < grid.length) {
+        var j = 0;
+        while (j < grid[i].length) {
+            grid[i][j] = i * 10 + j;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    // Read back every element on its own line.
+    i = 0;
+    while (i < grid.length) {
+        var j = 0;
+        while (j < grid[i].length) {
+            print(grid[i][j]);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    // ---- 3-D dynamic array: 2 x 2 x 2 cube ----
+    int[][][] cube = new int[2][2][2];
+    cube[1][0][1] = 42;
+    print(cube[1][0][1]);      // 42
+
+    // Sum of all cube cells (only one is non-zero) to prove zero-init.
+    var sum = 0;
+    var a = 0;
+    while (a < cube.length) {
+        var b = 0;
+        while (b < cube[a].length) {
+            var c = 0;
+            while (c < cube[a][b].length) {
+                sum = sum + cube[a][b][c];
+                c = c + 1;
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    print(sum);                // 42
+}

@@ -4,7 +4,7 @@
 //! reorganization. Behavior is identical to the original methods.
 
 use juxc_ast::{
-    ArrayShape, AssignStmt, BinaryOp, Block, CatchClause, ElseBranch, Expr, ForCStmt, ForEachStmt, IfStmt,
+    ArrayDim, AssignStmt, BinaryOp, Block, CatchClause, ElseBranch, Expr, ForCStmt, ForEachStmt, IfStmt,
     NewArrayLitExpr, Stmt, TryStmt, TypeRef, VarDecl, WhileStmt,
 };
 use juxc_diagnostics::{code, Diagnostic};
@@ -915,17 +915,25 @@ impl<'a> Parser<'a> {
         let end = self.peek_span();
         self.expect(&TokenKind::RBrace, "'}' to close array initializer");
 
-        // Strip the array_shape from the LHS to get the *element* type.
+        // Peel ONE (outermost) dimension off the LHS to get the *element*
+        // type. For a 1-D `int[]`/`int[N]` LHS the element is the scalar
+        // (`peeled()` → `None`); for a multi-dim `int[][]` LHS the element
+        // is itself an array (`int[]`), so its own `array_shape` is kept.
         let element_type = TypeRef {
             name: lhs_ty.name.clone(),
             generic_args: lhs_ty.generic_args.clone(),
             nullable: lhs_ty.nullable,
-            array_shape: None,
+            array_shape: lhs_ty.array_shape.as_ref().and_then(|s| s.peeled()),
             fn_shape: lhs_ty.fn_shape.clone(),
             ptr_depth: 0,
             span: lhs_ty.span,
         };
-        let fixed = matches!(lhs_ty.array_shape, Some(ArrayShape::Fixed(_)));
+        // Fixed-vs-dynamic dispatch keys off the OUTERMOST dimension —
+        // the one this literal directly fills.
+        let fixed = matches!(
+            lhs_ty.array_shape.as_ref().map(|s| s.outer()),
+            Some(ArrayDim::Fixed(_)),
+        );
         Some(Expr::NewArrayLit(NewArrayLitExpr {
             element_type,
             elements,

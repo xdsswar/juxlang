@@ -18,7 +18,7 @@
 //! resolution stays in the compiler; we only surface what it produced.
 
 // Syntactic AST pieces exposed in the public fields of the `*Sig` types.
-use juxc_ast::{ArrayShape, GenericArg, ReturnType, TypeParam, TypeRef, Visibility, WildcardBound};
+use juxc_ast::{ArrayDim, GenericArg, ReturnType, TypeParam, TypeRef, Visibility, WildcardBound};
 // Semantic declaration signatures, produced by the symbol-table build pass.
 use juxc_tycheck::symbol_table::{
     ClassSig, EnumSig, FieldSig, FunctionSig, InterfaceSig, MethodSig, ParamSig, RecordSig,
@@ -662,9 +662,12 @@ pub fn render_type(t: &TypeRef) -> String {
         s.push('>');
     }
     if let Some(shape) = &t.array_shape {
-        match shape {
-            ArrayShape::Fixed(_) => s.push_str("[N]"),
-            ArrayShape::Dynamic => s.push_str("[]"),
+        // One suffix per dimension, outermost-first: `int[][]`, `int[N][]`.
+        for dim in &shape.dims {
+            match dim {
+                ArrayDim::Fixed(_) => s.push_str("[N]"),
+                ArrayDim::Dynamic => s.push_str("[]"),
+            }
         }
     }
     if t.nullable {

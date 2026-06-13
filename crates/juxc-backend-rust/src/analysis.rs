@@ -428,7 +428,12 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
             collect_mutating_calls(&idx.index, out, user_mut);
         }
         Expr::Field(f) => collect_mutating_calls(&f.object, out, user_mut),
-        Expr::NewArray(n) => collect_mutating_calls(&n.size, out, user_mut),
+        Expr::NewArray(n) => {
+            collect_mutating_calls(&n.size, out, user_mut);
+            for inner in &n.inner_sizes {
+                collect_mutating_calls(inner, out, user_mut);
+            }
+        }
         Expr::NewArrayLit(n) => {
             for el in &n.elements {
                 collect_mutating_calls(el, out, user_mut);
@@ -576,7 +581,9 @@ fn expr_contains_await(e: &Expr) -> bool {
         Expr::Range(r) => expr_contains_await(&r.start) || expr_contains_await(&r.end),
         Expr::Field(f) => expr_contains_await(&f.object),
         Expr::Index(i) => expr_contains_await(&i.array) || expr_contains_await(&i.index),
-        Expr::NewArray(n) => expr_contains_await(&n.size),
+        Expr::NewArray(n) => {
+            expr_contains_await(&n.size) || n.inner_sizes.iter().any(|s| expr_contains_await(s))
+        }
         Expr::NewArrayLit(n) => n.elements.iter().any(expr_contains_await),
         Expr::NewObject(n) => n.args.iter().any(expr_contains_await),
         Expr::Elvis(e) => expr_contains_await(&e.value) || expr_contains_await(&e.fallback),

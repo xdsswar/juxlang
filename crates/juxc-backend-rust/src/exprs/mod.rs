@@ -1746,19 +1746,22 @@ pub(crate) fn ty_kind_from_ref_with_params(
 ) -> Ty {
     use juxc_tycheck::{ArrayKind, Primitive};
     if let Some(shape) = &t.array_shape {
+        // Peel ONE (outer) dimension; the element type carries the
+        // remaining dimensions (or none, for a 1-D array's scalar elem),
+        // so a multi-dim shape nests as `Array { element: Array { … } }`.
         let element_ref = juxc_ast::TypeRef {
             name: t.name.clone(),
             generic_args: t.generic_args.clone(),
             nullable: t.nullable,
-            array_shape: None,
+            array_shape: shape.peeled(),
             fn_shape: t.fn_shape.clone(),
             ptr_depth: 0,
             span: t.span,
         };
         let element = ty_kind_from_ref_with_params(&element_ref, generic_params);
-        let kind = match shape {
-            juxc_ast::ArrayShape::Fixed(_) => ArrayKind::Fixed,
-            juxc_ast::ArrayShape::Dynamic => ArrayKind::Dynamic,
+        let kind = match shape.outer() {
+            juxc_ast::ArrayDim::Fixed(_) => ArrayKind::Fixed,
+            juxc_ast::ArrayDim::Dynamic => ArrayKind::Dynamic,
         };
         return Ty::Array {
             element: Box::new(element),
@@ -1938,7 +1941,12 @@ fn collect_bare_names_expr(e: &Expr, sink: &mut dyn FnMut(&str)) {
                 collect_bare_names_expr(el, sink);
             }
         }
-        Expr::NewArray(n) => collect_bare_names_expr(&n.size, sink),
+        Expr::NewArray(n) => {
+            collect_bare_names_expr(&n.size, sink);
+            for inner in &n.inner_sizes {
+                collect_bare_names_expr(inner, sink);
+            }
+        }
         Expr::Binary(b) => {
             collect_bare_names_expr(&b.left, sink);
             collect_bare_names_expr(&b.right, sink);

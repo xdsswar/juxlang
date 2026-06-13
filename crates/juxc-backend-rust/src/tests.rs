@@ -1202,6 +1202,76 @@ fn fixed_double_array_zero_inits_to_zero_point_zero() {
     );
 }
 
+// ----------------------------------------------------------------------
+// Multi-dimensional arrays (nested Vec / nested fixed / mixed)
+// ----------------------------------------------------------------------
+
+/// `int[][]` (both dimensions dynamic) lowers to a nested
+/// `Vec<Vec<isize>>`, and `new int[n][m]` to `vec![vec![0; m]; n]`.
+#[test]
+fn two_dim_dynamic_array_lowers_to_nested_vec() {
+    let rust = emit(
+        "public void main() { int[][] m = new int[3][4]; m[0][0] = 1; print(m[0][0]); }",
+    );
+    assert!(
+        rust.contains("let mut m: Vec<Vec<isize>> = vec![vec![0; 4]; 3];"),
+        "got: {rust}",
+    );
+}
+
+/// `int[3][4]` (both dimensions fixed) lowers to a nested fixed array
+/// `[[isize; 4]; 3]`, and `new int[3][4]` to `[[0; 4]; 3]`.
+#[test]
+fn two_dim_fixed_array_lowers_to_nested_fixed() {
+    let rust = emit(
+        "public void main() { int[3][4] b = new int[3][4]; b[0][0] = 1; print(b[0][0]); }",
+    );
+    assert!(
+        rust.contains("let mut b: [[isize; 4]; 3] = [[0; 4]; 3];"),
+        "got: {rust}",
+    );
+}
+
+/// `int[3][]` mixes a fixed OUTER dimension with a dynamic inner one:
+/// the Rust type is `[Vec<isize>; 3]` (outer fixed, inner Vec).
+#[test]
+fn mixed_fixed_outer_dynamic_inner_array_lowers_to_array_of_vec() {
+    let rust = emit(
+        "public void main() { int[3][] r = new int[3][4]; print(r[0].length); }",
+    );
+    assert!(
+        rust.contains("let r: [Vec<isize>; 3] = [vec![0; 4]; 3];"),
+        "got: {rust}",
+    );
+}
+
+/// `int[][][]` (three dynamic dimensions) lowers to `Vec<Vec<Vec<isize>>>`.
+#[test]
+fn three_dim_dynamic_array_lowers_to_triple_nested_vec() {
+    let rust = emit(
+        "public void main() { int[][][] c = new int[2][2][2]; print(c[0][0][0]); }",
+    );
+    assert!(
+        rust.contains("Vec<Vec<Vec<isize>>>"),
+        "expected triply-nested Vec type, got: {rust}",
+    );
+    assert!(
+        rust.contains("vec![vec![vec![0; 2]; 2]; 2]"),
+        "expected triply-nested vec! init, got: {rust}",
+    );
+}
+
+/// `String[][]` lowers to `Vec<Vec<String>>` — element type threads
+/// through both dimensions.
+#[test]
+fn two_dim_string_array_lowers_to_nested_vec_of_string() {
+    let rust = emit("public void main() { String[][] t; print(t.length); }");
+    assert!(
+        rust.contains("Vec<Vec<String>>"),
+        "got: {rust}",
+    );
+}
+
 /// Integer literal indices emit raw (no `as usize`) — Rust infers
 /// `usize` from the indexing context.
 #[test]

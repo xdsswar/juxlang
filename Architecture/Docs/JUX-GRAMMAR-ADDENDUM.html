@@ -507,13 +507,16 @@ tuple-type        = '(' ')'                                   -- unit; reserved
 function-type     = '(' type-list? ')' ( 'async' )? ( 'throws' type-list )?
                     '->' type
 
-array-type        = type '[' ']'
-                  | type '[' const-expr ']'
+array-type        = type array-dim+
+array-dim         = '[' ']'                                   -- dynamic dimension (runtime size)
+                  | '[' const-expr ']'                        -- fixed dimension (static size)
 
 pointer-type      = type '*'
 
 type-list         = type ( ',' type )*
 ```
+
+An `array-type` may carry **one or more** dimension suffixes (`array-dim+`), so `int[][]` ("array of array of int"), `int[][][]`, `int[3][4]`, and the mixed `int[3][]` are all well-formed. Dimensions read left-to-right in Java order: the **leftmost** suffix is the OUTERMOST dimension. A dimension is *dynamic* (`[]`, runtime size) or *fixed* (`[const-expr]`, statically-known size); the two may be freely mixed across dimensions. See §5.5 of `JUX-LANG-V1.md` for the type semantics, lowering, and indexing rules.
 
 The unit tuple `()` is reserved syntax; v1 reserves it but grants it no current type meaning, to allow a future addition without a grammar break.
 

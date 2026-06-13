@@ -1264,11 +1264,26 @@ impl<'a> Parser<'a> {
                 }
 
                 let size = self.parse_expr()?;
-                let end = self.peek_span();
                 self.expect(&TokenKind::RBracket, "']' to close `new T[size]`");
+                // Additional `[size]` suffixes form a multi-dimensional
+                // allocation (`new int[3][4]`): outermost-first, with the
+                // first size in `size` and the rest in `inner_sizes`. A
+                // trailing `[]` (empty) is NOT accepted after a sized
+                // dimension here — `new T[3][]` would have no element
+                // source, so the construction form requires a size on
+                // every dimension.
+                let mut inner_sizes: Vec<Box<Expr>> = Vec::new();
+                while self.at(&TokenKind::LBracket) {
+                    self.advance(); // '['
+                    let inner = self.parse_expr()?;
+                    self.expect(&TokenKind::RBracket, "']' to close inner `new T[…][size]`");
+                    inner_sizes.push(Box::new(inner));
+                }
+                let end = self.last_consumed_span();
                 return Some(Expr::NewArray(NewArrayExpr {
                     element_type,
                     size: Box::new(size),
+                    inner_sizes,
                     span: start.join(end),
                 }));
             }

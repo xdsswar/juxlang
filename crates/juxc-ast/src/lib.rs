@@ -66,4 +66,4 @@ pub use stmts::{
     AssignStmt, Block, CatchClause, DoWhileStmt, ElseBranch, ForCStmt, ForEachStmt, IfStmt,
     Stmt, TryStmt, VarDecl, WhileStmt,
 };
-pub use types::{ArrayShape, FnTypeShape, GenericArg, TypeRef, WildcardArg, WildcardBound, TUPLE_SENTINEL};
+pub use types::{ArrayDim, ArrayShape, FnTypeShape, GenericArg, TypeRef, WildcardArg, WildcardBound, TUPLE_SENTINEL};

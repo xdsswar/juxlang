@@ -34,8 +34,10 @@ pub struct TypeRef {
     pub generic_args: Vec<GenericArg>,
     /// Whether the type carries a trailing `?` (nullable).
     pub nullable: bool,
-    /// Array shape — `Some` for array types (`T[N]` or `T[]`), `None`
-    /// for plain (scalar) types. Multi-dimensional support is deferred.
+    /// Array shape — `Some` for array types (`T[]`, `T[N]`, and
+    /// multi-dimensional forms like `T[][]` / `T[3][4]`), `None` for
+    /// plain (scalar) types. The [`ArrayShape`] holds one [`ArrayDim`]
+    /// per dimension, outermost first.
     pub array_shape: Option<ArrayShape>,
     /// Function-type shape — `Some` when the user wrote
     /// `(A, B) -> R` (or `() async -> R`, `(A) throws E -> R`) per
@@ -168,15 +170,75 @@ impl GenericArg {
     }
 }
 
-/// Shape of an array type's dimension(s) per §A.2.7.
+/// One dimension of an array type per §A.2.7 — `[N]` (fixed) or `[]`
+/// (dynamic). A multi-dimensional array type is an ordered list of these
+/// (see [`ArrayShape`]).
 #[derive(Debug, Clone)]
-pub enum ArrayShape {
-    /// `T[N]` — fixed-size, size is a const-expr (typically an integer literal).
-    /// Lowers to Rust `[T; N]`. Stack-allocated, no heap, no `Vec`.
+pub enum ArrayDim {
+    /// `[N]` — fixed-size dimension; the size is a const-expr (typically
+    /// an integer literal). Lowers to a Rust fixed array `[T; N]`:
+    /// stack-allocated, no heap, no `Vec`.
     Fixed(Box<Expr>),
-    /// `T[]` — dynamic-size, sized at runtime. Lowers to Rust `Vec<T>`.
-    /// Not implemented in Turn 1.
+    /// `[]` — dynamic-size dimension, sized at runtime. Lowers to Rust
+    /// `Vec<T>` (owned, heap-backed, growable).
     Dynamic,
+}
+
+/// Shape of an array TYPE per §A.2.7 — one or more dimensions, stored
+/// **OUTERMOST first** in Java reading order. The leftmost `[…]` written
+/// in source (the outermost dimension) is `dims[0]`.
+///
+/// Examples:
+/// - `int[]`     → `dims = [Dynamic]`
+/// - `int[][]`   → `dims = [Dynamic, Dynamic]`
+/// - `int[3][4]` → `dims = [Fixed(3), Fixed(4)]`
+/// - `int[3][]`  → `dims = [Fixed(3), Dynamic]`
+///
+/// `TypeRef.array_shape` is `Some(ArrayShape)` for any array type and
+/// `None` for a scalar — the `is_some()` / `as_ref()` access pattern is
+/// unchanged from the single-dimension representation. Only sites that
+/// match the individual dimensions need to walk `dims`.
+#[derive(Debug, Clone)]
+pub struct ArrayShape {
+    /// The dimensions, OUTERMOST first. Always non-empty for a real
+    /// array shape (the parser never produces a zero-dimension shape).
+    pub dims: Vec<ArrayDim>,
+}
+
+impl ArrayShape {
+    /// Construct a single-dimension (1-D) array shape — the common case
+    /// (`T[]` / `T[N]`) and what synthetic call sites (e.g. varargs)
+    /// produce.
+    pub fn single(d: ArrayDim) -> Self {
+        ArrayShape { dims: vec![d] }
+    }
+
+    /// Number of dimensions (the array's rank). `int[]` → 1,
+    /// `int[][]` → 2, etc. Always ≥ 1 for a real shape.
+    pub fn rank(&self) -> usize {
+        self.dims.len()
+    }
+
+    /// The OUTERMOST dimension (`dims[0]`) — the one a single index
+    /// operation peels and the one `.length` reports. Safe to call on
+    /// any real shape (always non-empty).
+    pub fn outer(&self) -> &ArrayDim {
+        &self.dims[0]
+    }
+
+    /// Drop the outermost dimension, yielding the shape of the element
+    /// produced by indexing once. Returns:
+    /// - `Some(shape)` with one fewer dimension when rank was ≥ 2
+    ///   (e.g. `int[][]` → `Some(int[])`);
+    /// - `None` when rank was 1 — the element is then a plain scalar, so
+    ///   the caller drops `array_shape` entirely.
+    pub fn peeled(&self) -> Option<ArrayShape> {
+        if self.dims.len() <= 1 {
+            None
+        } else {
+            Some(ArrayShape { dims: self.dims[1..].to_vec() })
+        }
+    }
 }
 
 impl TypeRef {

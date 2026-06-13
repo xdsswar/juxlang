@@ -3,7 +3,7 @@
 //! Split out from `lib.rs` during the action-focused module
 //! reorganization. Behavior is identical to the original methods.
 
-use juxc_ast::{ArrayShape, FnTypeShape, QualifiedName, TypeRef};
+use juxc_ast::{ArrayDim, ArrayShape, FnTypeShape, QualifiedName, TypeRef};
 use juxc_lex::{Keyword, TokenKind};
 use juxc_source::Span;
 
@@ -12,8 +12,9 @@ use crate::Parser;
 
 impl<'a> Parser<'a> {
     /// Per §A.2.7 `type` — a qualified-name optionally followed by `?`
-    /// (nullable) and an array suffix `[N]` (fixed-size) or `[]`
-    /// (dynamic, not yet implemented).
+    /// (nullable) and one or more array suffixes `[N]` (fixed-size) /
+    /// `[]` (dynamic). Multiple suffixes form a multi-dimensional array
+    /// type (`int[][]`, `int[3][4]`, `int[3][]`), stored outermost-first.
     ///
     /// Generics, pointers, function types, tuple types are still future
     /// extensions.
@@ -104,32 +105,43 @@ impl<'a> Parser<'a> {
             });
         }
 
-        // Optional `?` (nullable, §A.2.7) and array suffix (`[]` / `[N]`) in
-        // **either order** — both `T?[]` (nullable element, arrayed) and `T[]?`
-        // (nullable array) occur in generated stubs (from `&[Option<V>]` and
-        // `Option<&[u8]>` respectively). `TypeRef` flattens them into one
-        // `nullable` flag + one `array_shape`, so a loop that ORs each suffix in
-        // as it appears captures both spellings.
+        // Optional `?` (nullable, §A.2.7) and array suffixes (`[]` / `[N]`).
+        //
+        // A type may carry MULTIPLE array dimensions (`int[][]`,
+        // `int[3][4]`, `int[3][]`); each consecutive `[…]` is one
+        // dimension, collected OUTERMOST-first in source order (the
+        // leftmost `[…]` is the outermost dimension → `dims[0]`).
+        //
+        // The nullable `?` can sit on EITHER side of the brackets: `T?[]`
+        // (nullable element, arrayed) and `T[]?` (nullable array) both
+        // occur in generated stubs (from `&[Option<V>]` and
+        // `Option<&[u8]>` respectively). `TypeRef` flattens nullability
+        // into one flag, so we OR it in wherever it appears.
         let mut nullable = false;
-        let mut array_shape = None;
+        let mut dims: Vec<ArrayDim> = Vec::new();
         loop {
             if !nullable && self.eat(&TokenKind::Question) {
                 nullable = true;
                 continue;
             }
-            if array_shape.is_none() && self.eat(&TokenKind::LBracket) {
-                array_shape = Some(if self.eat(&TokenKind::RBracket) {
-                    // `T[]` — dynamic. Accepted; lowering is Turn-2 work.
-                    ArrayShape::Dynamic
+            if self.eat(&TokenKind::LBracket) {
+                let dim = if self.eat(&TokenKind::RBracket) {
+                    // `[]` — dynamic dimension (runtime-sized, lowers to Vec).
+                    ArrayDim::Dynamic
                 } else {
+                    // `[N]` — fixed dimension (const-sized, lowers to [T; N]).
                     let size = self.parse_expr()?;
                     self.expect(&TokenKind::RBracket, "']' to close array size");
-                    ArrayShape::Fixed(Box::new(size))
-                });
+                    ArrayDim::Fixed(Box::new(size))
+                };
+                dims.push(dim);
                 continue;
             }
             break;
         }
+        // `Some` only when at least one dimension was read — keeps the
+        // scalar case as `None` exactly as before.
+        let array_shape = if dims.is_empty() { None } else { Some(ArrayShape { dims }) };
 
         // Trailing raw-pointer markers `*` (§5.5 / §A.2.7), the OUTERMOST
         // modifier: `T*` → `*mut T`, `T**` → `*mut *mut T`. In type position a

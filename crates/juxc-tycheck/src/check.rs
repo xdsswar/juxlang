@@ -2950,13 +2950,21 @@ impl<'a> Checker<'a> {
             Expr::NewObject(n) => self.check_new_object(n),
 
             Expr::NewArray(n) => {
+                // Check every dimension's size (outer + inner dims of a
+                // multi-dim `new T[a][b]`).
                 self.check_expr(&n.size);
+                for inner in &n.inner_sizes {
+                    self.check_expr(inner);
+                }
                 // A fixed-array size is a Rust const position: when it
                 // references a const-generic param it must be the BARE
                 // name (`new int[N]`) — arithmetic over it (`N + 1`)
                 // needs the const-eval interpreter (spec phase 16) and
                 // would leak rustc's `generic_const_exprs` error.
                 self.check_const_size_expr(&n.size);
+                for inner in &n.inner_sizes {
+                    self.check_const_size_expr(inner);
+                }
             }
 
             Expr::NewArrayLit(n) => {
@@ -4141,9 +4149,15 @@ impl<'a> Checker<'a> {
     /// the size out of a `T[«size»]` declared type (field / local /
     /// param / return) and run the same const-arithmetic guard.
     fn check_fixed_array_size_in_type(&mut self, tref: &juxc_ast::TypeRef) {
-        if let Some(juxc_ast::ArrayShape::Fixed(size)) = &tref.array_shape {
-            let size = size.clone();
-            self.check_const_size_expr(&size);
+        // A multi-dimensional type can carry several fixed dimensions
+        // (`int[3][4]`); guard each one's size expression.
+        if let Some(shape) = &tref.array_shape {
+            for dim in &shape.dims {
+                if let juxc_ast::ArrayDim::Fixed(size) = dim {
+                    let size = size.clone();
+                    self.check_const_size_expr(&size);
+                }
+            }
         }
     }
 

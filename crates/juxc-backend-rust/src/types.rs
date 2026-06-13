@@ -5,7 +5,7 @@
 //! Split out from `lib.rs` during the action-focused module
 //! reorganization. Behavior is identical to the original methods.
 
-use juxc_ast::ArrayShape;
+use juxc_ast::ArrayDim;
 
 use crate::analysis::is_jux_string_type;
 use crate::RustEmitter;
@@ -218,24 +218,30 @@ impl RustEmitter {
             self.w.push('>');
             return;
         }
-        // Array types lower to Rust `[ElementType; N]` for fixed-size
-        // (Turn 1) or `Vec<ElementType>` for dynamic (Turn 2, deferred).
+        // Array types lower one dimension at a time, OUTERMOST first, so a
+        // multi-dimensional shape nests naturally:
+        //   `int[][]`   → `Vec<Vec<isize>>`
+        //   `int[3][4]` → `[[isize; 4]; 3]`
+        //   `int[3][]`  → `[Vec<isize>; 3]`   (outer fixed, inner dynamic)
+        // The recursion is driven by `peeled()`: we emit the outer
+        // dimension's wrapper, then recurse on a `TypeRef` whose
+        // `array_shape` is the remaining (inner) dimensions — or `None`
+        // (a scalar element) once the last dimension is consumed.
         if let Some(shape) = &ty.array_shape {
-            match shape {
-                ArrayShape::Fixed(size) => {
+            // `element_ty` is `ty` with the outermost dimension stripped.
+            let element_ty = juxc_ast::TypeRef {
+                name: ty.name.clone(),
+                generic_args: ty.generic_args.clone(),
+                nullable: ty.nullable,
+                array_shape: shape.peeled(),
+                fn_shape: ty.fn_shape.clone(),
+                ptr_depth: 0,
+                span: ty.span,
+            };
+            match shape.outer() {
+                ArrayDim::Fixed(size) => {
                     // `[ElementType; size]`
                     self.w.push('[');
-                    // Recurse with a copy of `ty` minus the array shape
-                    // so we emit just the element type.
-                    let element_ty = juxc_ast::TypeRef {
-                        name: ty.name.clone(),
-                        generic_args: ty.generic_args.clone(),
-                        nullable: ty.nullable,
-                        array_shape: None,
-                        fn_shape: ty.fn_shape.clone(),
-                        ptr_depth: 0,
-                        span: ty.span,
-                    };
                     self.emit_type_as_rust(&element_ty);
                     self.w.push_str("; ");
                     // A const-evaluable size (`byte[SIZE + 1]`) emits the
@@ -252,23 +258,14 @@ impl RustEmitter {
                     }
                     self.w.push(']');
                 }
-                ArrayShape::Dynamic => {
-                    // `T[]` — runtime-sized array. We pick `Vec<T>` as
+                ArrayDim::Dynamic => {
+                    // `T[]` — runtime-sized dimension. We pick `Vec<T>` as
                     // the lowering: owned, heap-backed, `.len()` works,
-                    // indexable. Trades stack-allocation off (vs Turn-1
+                    // indexable. Trades stack-allocation off (vs a fixed
                     // `[T; N]`) for size-at-runtime. Future work: when
                     // a function param has `T[]` type, lower to slice
                     // (`&[T]`) instead — needs lifetime threading.
                     self.w.push_str("Vec<");
-                    let element_ty = juxc_ast::TypeRef {
-                        name: ty.name.clone(),
-                        generic_args: ty.generic_args.clone(),
-                        nullable: ty.nullable,
-                        array_shape: None,
-                        fn_shape: ty.fn_shape.clone(),
-                        ptr_depth: 0,
-                        span: ty.span,
-                    };
                     self.emit_type_as_rust(&element_ty);
                     self.w.push('>');
                 }
@@ -880,9 +877,14 @@ impl RustEmitter {
             return;
         }
         if let Some(shape) = &ty.array_shape {
-            match shape {
-                juxc_ast::ArrayShape::Dynamic => self.w.push_str("Vec::new()"),
-                juxc_ast::ArrayShape::Fixed(_) => self.w.push_str("Default::default()"),
+            // The OUTERMOST dimension picks the default: a dynamic outer is
+            // an empty `Vec`, a fixed outer relies on `Default` for the
+            // Rust array type. The field's declared Rust type (emitted by
+            // `emit_type_as_rust`) drives inference for the nested element,
+            // so the default need only name the outer wrapper.
+            match shape.outer() {
+                juxc_ast::ArrayDim::Dynamic => self.w.push_str("Vec::new()"),
+                juxc_ast::ArrayDim::Fixed(_) => self.w.push_str("Default::default()"),
             }
             return;
         }

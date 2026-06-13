@@ -273,7 +273,12 @@ fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
         }
         Expr::Cast(c) => expand_expr(&mut c.value, plans),
         Expr::SizeOf(s) => expand_expr(&mut s.operand, plans),
-        Expr::NewArray(n) => expand_expr(&mut n.size, plans),
+        Expr::NewArray(n) => {
+            expand_expr(&mut n.size, plans);
+            for inner in &mut n.inner_sizes {
+                expand_expr(inner, plans);
+            }
+        }
         Expr::NewArrayLit(n) => {
             for e in &mut n.elements {
                 expand_expr(e, plans);
