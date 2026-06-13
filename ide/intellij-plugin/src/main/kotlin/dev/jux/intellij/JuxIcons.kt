@@ -19,6 +19,14 @@ object JuxIcons {
     @JvmField
     val FILE = load("/icons/jux.svg")
 
+    /**
+     * Tool-window stripe icon (13×13, monochrome): dark on light themes, white
+     * on dark themes (via the `_dark` sibling), so it dims when the tool window
+     * is unselected and reads as the theme foreground when selected.
+     */
+    @JvmField
+    val TOOL_WINDOW = load("/icons/juxToolWindow.svg")
+
     /** New → "File" (plain source file) kind. */
     @JvmField
     val NEW_FILE = load("/icons/juxFile.svg")

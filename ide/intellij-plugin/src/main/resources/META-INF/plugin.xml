@@ -454,14 +454,14 @@
     <toolWindow id="Jux Build"
                 anchor="bottom"
                 factoryClass="dev.jux.intellij.toolwindow.JuxToolWindowFactory"
-                icon="dev.jux.intellij.JuxIcons.FILE"/>
+                icon="dev.jux.intellij.JuxIcons.TOOL_WINDOW"/>
     <!-- Project structure — anchored RIGHT, like Cargo / Gradle: a tree of the
          project's modules (from jux.toml), their versions, dependencies, and
          source roots. -->
     <toolWindow id="Jux Project"
                 anchor="right"
                 factoryClass="dev.jux.intellij.toolwindow.JuxProjectToolWindowFactory"
-                icon="dev.jux.intellij.JuxIcons.FILE"/>
+                icon="dev.jux.intellij.JuxIcons.TOOL_WINDOW"/>
 
     <!-- Persisted, IDE-wide Jux toolchain configuration (juxc / juxc-lsp / jux).
          Auto-detected from $JUX_HOME / PATH / install locations; configurable in
