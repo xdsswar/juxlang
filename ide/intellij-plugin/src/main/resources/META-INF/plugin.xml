@@ -122,6 +122,10 @@
         fieldName="INSTANCE"
         language="Jux"
         extensions="jux"/>
+    <!-- Per-content file icons: a `.jux` file shows its primary type's glyph
+         (class / interface / enum / record / struct / annotation) instead of
+         the uniform file-type icon. -->
+    <iconProvider implementation="dev.jux.intellij.JuxIconProvider"/>
 
     <!-- Internal templates backing the New → Jux File kinds (§I.5). The
          registered name must match the `.ft` filename stem. -->
