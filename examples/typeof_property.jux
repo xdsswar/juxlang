@@ -1,0 +1,25 @@
+// Regression: `typeof` of a C#-style property read must report the
+// property's declared type, not `<unknown>`. A property's backing field is
+// mangled and its getter lives among the methods, so the property signature's
+// declared type is what gives `obj.Name` its static type (§5.9.10 typeof,
+// §M.7/§P properties).
+
+public class Box {
+    public String Name {
+        get;
+        set;
+    } = "Unknown"
+
+    public int Count {
+        get;
+        set;
+    } = 0
+}
+
+public void main() {
+    var b = new Box();
+    var r = b.Name;
+    print(typeof(r));        // String  (inferred through `var`)
+    print(typeof(b.Name));   // String  (direct property read)
+    print(typeof(b.Count));  // int
+}

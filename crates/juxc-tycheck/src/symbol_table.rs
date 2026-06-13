@@ -511,6 +511,44 @@ impl SymbolTable {
         }
         None
     }
+
+    /// Look up a C#-style **property** (§M.7 / §P) by name, walking the
+    /// `extends` chain exactly like [`Self::lookup_field`]. Returns the
+    /// matching [`PropertySig`] plus the FQN of the declaring class (needed to
+    /// lower the property's declared type in the right generic-param scope).
+    ///
+    /// A property read `obj.Name` is typed from this — its backing field has a
+    /// mangled name (`lookup_field` won't find it) and its getter lives in
+    /// `methods`, so the declared type on the property signature is the
+    /// authoritative source for `obj.Name`'s static type.
+    pub fn lookup_property<'a>(
+        &'a self,
+        class_name: &str,
+        prop_name: &str,
+    ) -> Option<(&'a PropertySig, &'a str)> {
+        let mut cursor: Option<&str> = Some(class_name);
+        let mut depth = 0usize;
+        while let Some(name) = cursor {
+            if depth > 64 {
+                return None;
+            }
+            let (class_key, class) = self.classes.get_key_value(name)?;
+            if let Some(prop) = class.properties.get(prop_name) {
+                return Some((prop, class_key.as_str()));
+            }
+            cursor = class
+                .extends_fqn
+                .as_deref()
+                .or_else(|| {
+                    class
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+                });
+            depth += 1;
+        }
+        None
+    }
 }
 
 // ============================================================================
