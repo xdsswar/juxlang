@@ -72,6 +72,23 @@ class JuxSyntaxHintInspectionsTest : BasePlatformTestCase() {
         assertTrue("terminal kept", myFixture.file.text.contains("return 1;"))
     }
 
+    fun testInspectionSurvivesMalformedTailAfterTerminal() {
+        // Regression: error recovery after a terminal statement could yield a
+        // zero-width statement, which createProblemDescriptor rejects (IDEA
+        // throws). The inspections must skip empty-range anchors, so
+        // highlighting completes on these half-typed buffers without throwing.
+        val snippets = listOf(
+            "package d; public class A { public int f() { return 1; . } }",
+            "package d; public class A { public void f() { return; * } }",
+            "package d; public class A { public void f() { return; @ } }",
+            "package d; public class A { public void f() { return; ) } }",
+        )
+        for (s in snippets) {
+            myFixture.configureByText("a.jux", s)
+            myFixture.doHighlighting() // must not throw
+        }
+    }
+
     fun testRedundantSemicolonFlaggedAndFixed() {
         myFixture.configureByText(
             "a.jux",

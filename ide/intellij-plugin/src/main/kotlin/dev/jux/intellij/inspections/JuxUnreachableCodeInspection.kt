@@ -36,6 +36,10 @@ class JuxUnreachableCodeInspection : LocalInspectionTool() {
             for (child in block.children) {
                 val t = child.elementType
                 if (t !in STATEMENT_TYPES) continue // skip braces / whitespace / comments
+                // Error recovery can yield a zero-width statement mid-edit; an
+                // empty range is not a valid problem anchor (the platform
+                // rejects it) and isn't really "code", so skip it entirely.
+                if (child.textRange.isEmpty) continue
                 if (terminalSeen) {
                     problems.add(
                         manager.createProblemDescriptor(
