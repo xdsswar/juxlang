@@ -318,4 +318,23 @@ impl<'a> Parser<'a> {
             None
         }
     }
+
+    /// Consume a **member name** — an identifier OR a keyword used as one.
+    ///
+    /// After a `.` / `?.` (and in a few other member positions) the grammar is
+    /// unambiguous: whatever follows names a field or method, never a statement.
+    /// So a token that is a reserved keyword in *statement* position (`default`,
+    /// `type`, `match`, `loop`, `box`, …) is just a plain member name here. This
+    /// is what lets Jux call Rust APIs whose members collide with Jux keywords
+    /// (`WindowOptions.default()`); the keyword-ness is purely contextual. Falls
+    /// back to [`Self::parse_ident`] (and its diagnostic) for anything else.
+    pub(crate) fn parse_member_name(&mut self) -> Option<Ident> {
+        if let TokenKind::Kw(kw) = self.peek() {
+            let span = self.peek_span();
+            let text = kw.as_str().to_string();
+            self.advance();
+            return Some(Ident { text, span });
+        }
+        self.parse_ident()
+    }
 }

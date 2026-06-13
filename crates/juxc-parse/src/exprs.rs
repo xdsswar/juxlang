@@ -828,7 +828,10 @@ impl<'a> Parser<'a> {
                         self.advance(); // consume the int literal
                         juxc_ast::Ident { text, span }
                     } else {
-                        self.parse_ident()?
+                        // A keyword after `.` is a member name, not a keyword
+                        // (`opts.default()`, `v.type()`): member position is
+                        // unambiguous, so we accept the keyword spelling here.
+                        self.parse_member_name()?
                     };
                     let span = expr_span(&expr).join(field.span);
                     expr = Expr::Field(FieldExpr {
@@ -856,7 +859,7 @@ impl<'a> Parser<'a> {
                     // Call-form follows by the next loop iteration
                     // picking up the `(` and wrapping in `CallExpr`.
                     self.advance(); // '?.'
-                    let field = self.parse_ident()?;
+                    let field = self.parse_member_name()?;
                     let span = expr_span(&expr).join(field.span);
                     expr = Expr::Field(FieldExpr {
                         object: Box::new(expr),
