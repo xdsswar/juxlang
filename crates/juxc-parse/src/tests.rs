@@ -46,6 +46,38 @@ fn parse_has_code(src: &str, code: juxc_diagnostics::code::Code) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Contextual keywords in member position (consuming Rust APIs)
+// ---------------------------------------------------------------------------
+
+/// After `.` / `?.` a reserved keyword is just a member name — so a Rust API
+/// member like `WindowOptions::default()` / `value.type()` is callable. The
+/// keyword-ness is purely contextual (statement position is unaffected).
+#[test]
+fn keyword_in_member_position_parses() {
+    parse_clean(
+        "public void f() {\n\
+         \x20   var a = opts.default();\n\
+         \x20   var b = node.type;\n\
+         \x20   var c = handle?.match;\n\
+         }",
+    );
+}
+
+/// The same word stays a keyword in statement position: a `default ->` arm in a
+/// switch must still parse as the switch default, not a member access.
+#[test]
+fn keyword_in_statement_position_still_keyword() {
+    parse_clean(
+        "public int f(int x) {\n\
+         \x20   return switch (x) {\n\
+         \x20       case 1 -> 10;\n\
+         \x20       default -> 0;\n\
+         \x20   };\n\
+         }",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // §M.14.5 — parameter binding-mode combination matrix
 // ---------------------------------------------------------------------------
 
