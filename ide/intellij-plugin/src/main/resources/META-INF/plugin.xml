@@ -392,11 +392,19 @@
     <runConfigurationProducer
         implementation="dev.jux.intellij.run.JuxTestRunConfigurationProducer"/>
 
-    <!-- The "Jux" tool window (right side, like Gradle/Cargo): one-click
-         Build / Run / Test / Build Release / Check over a live console. -->
-    <toolWindow id="Jux"
-                anchor="right"
+    <!-- Build/run CONSOLE — anchored at the BOTTOM, next to Terminal / Build /
+         Run: one-click Build / Run / Test / Build Release / Check over a live
+         console. -->
+    <toolWindow id="Jux Build"
+                anchor="bottom"
                 factoryClass="dev.jux.intellij.toolwindow.JuxToolWindowFactory"
+                icon="dev.jux.intellij.JuxIcons.FILE"/>
+    <!-- Project structure — anchored RIGHT, like Cargo / Gradle: a tree of the
+         project's modules (from jux.toml), their versions, dependencies, and
+         source roots. -->
+    <toolWindow id="Jux Project"
+                anchor="right"
+                factoryClass="dev.jux.intellij.toolwindow.JuxProjectToolWindowFactory"
                 icon="dev.jux.intellij.JuxIcons.FILE"/>
 
     <!-- Persisted, IDE-wide Jux toolchain configuration (juxc / juxc-lsp / jux).
