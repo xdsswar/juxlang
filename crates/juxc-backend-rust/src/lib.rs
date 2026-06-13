@@ -216,6 +216,18 @@ pub fn lower_workspace_with_entry(
         let unit_set = collect_user_mut_methods(unit);
         e.user_mut_methods.extend(unit_set);
     }
+    // C6 pre-pass: with the full cross-file `user_mut_methods` set in
+    // hand (mutation discovery folds in `@MutSelf` callees), record the
+    // by-`&mut` foreign-collection params for every function/method/
+    // ctor across ALL units, so a call in `app.jux` to `fill` declared
+    // in `util.jux` emits `&mut <arg>` matching the `&mut T` signature.
+    e.populate_byref_params(units);
+    // C6: methods containing a self-aliasing byref call become
+    // receiver-mutating (write-back assigns `self.field`); register
+    // them so they emit `&mut self` and their callers promote the
+    // receiver to `let mut`. Workspace mode keeps this set (the
+    // per-unit reset is gated off there).
+    e.mark_self_aliasing_mut_methods(units);
     // Build FQN → ClassDecl map so emit_class_decl can walk
     // parent chains and copy inherited concrete method bodies
     // down. The FQN is `<package>.<class>` (empty package → bare
@@ -360,6 +372,9 @@ pub fn lower_workspace_test(
         let unit_set = collect_user_mut_methods(unit);
         e.user_mut_methods.extend(unit_set);
     }
+    // C6 pre-pass (see lower_workspace_with_entry).
+    e.populate_byref_params(units);
+    e.mark_self_aliasing_mut_methods(units);
     // Phase B (§CR.3.3): wrap only wrap-eligible AND aliased classes;
     // non-aliased eligible classes demote to the legacy Inline shape.
     e.wrapper_classes = compute_wrapped_set(units, &e.expr_types);
@@ -528,6 +543,41 @@ struct RustEmitter {
     /// [`Self::new`]; re-unioned into `user_mut_methods` after every
     /// per-unit recompute so `let mut` promotion sees stub mutators.
     extern_mut_methods: HashSet<String>,
+    /// **C6 — foreign collection pass-by-`&mut`.** Maps a callee's
+    /// identity key to the set of parameter indices that lower to a
+    /// Rust `&mut T` (instead of by-value `mut T`) because the
+    /// parameter's declared type is an EXTERNAL/foreign non-`Copy`
+    /// type (a `.jux.d` stub class, `is_external`) AND the body
+    /// MUTATES it (reassign / index-assign / a call to a `@MutSelf`
+    /// or known-mutating method on it — all DISCOVERED, never a
+    /// hardcoded type-name list). Java container-passing semantics:
+    /// the callee's `v.push(x)` is visible to the caller.
+    ///
+    /// Single source of truth: BOTH the parameter declaration
+    /// (`&mut T`) and every matching call site (`&mut <arg>`) read
+    /// this same precomputed map, so the two can never diverge (the
+    /// #1 borrow-checker hazard). Keys:
+    /// - free function: `"fn::" + name`
+    /// - method:       `"m::" + class_bare + "::" + method_name`
+    /// - constructor:  `"ctor::" + class_bare`
+    ///
+    /// Computed once over ALL compilation units (so cross-file calls
+    /// resolve) in the workspace pre-pass, and per-unit in
+    /// `emit_compilation_unit` for the single-file path. Only ever
+    /// extended; the predicate is deterministic, so re-running over a
+    /// unit is idempotent.
+    byref_params: std::collections::HashMap<String, HashSet<usize>>,
+    /// **C6 runtime set.** Names of the parameters in the body currently
+    /// being emitted that were lowered to `&mut T` (the per-call-site
+    /// `&mut` from `byref_params`). Seeded at each body-emission site
+    /// (free fn / method / ctor) and restored afterwards, mirroring the
+    /// `out_params` discipline. Consulted by the body emitters to:
+    /// - reborrow when the param flows onward to another `&mut` slot
+    ///   (`&mut *v`),
+    /// - clone out of the borrow when it is returned / stored into an
+    ///   owned slot (`(*v).clone()`),
+    /// - deref on reassignment (`*v = expr;`).
+    byref_param_names: HashSet<String>,
     /// True while we're emitting the LHS of an assignment statement —
     /// suppresses the `.clone()` insertion in `emit_field` so we don't
     /// produce nonsense like `self.name.clone() = "x";`.
@@ -3119,6 +3169,8 @@ impl RustEmitter {
             enclosing_interface: None,
             user_mut_methods: extern_mut_methods.clone(),
             extern_mut_methods,
+            byref_params: std::collections::HashMap::new(),
+            byref_param_names: HashSet::new(),
             emitting_lvalue: false,
             emitting_out_place: false,
             collection_args_prehoisted: false,
@@ -3218,6 +3270,15 @@ impl RustEmitter {
         self.user_mut_methods = collect_user_mut_methods(unit);
         self.user_mut_methods
             .extend(self.extern_mut_methods.iter().cloned());
+        // Pre-pass (C6): record by-`&mut` foreign-collection params for
+        // this unit. In workspace mode the entry point already populated
+        // the map from EVERY unit (so cross-file calls resolve); this
+        // per-unit call covers the single-file path and is idempotent.
+        let unit_slice = std::slice::from_ref(unit);
+        self.populate_byref_params(unit_slice);
+        // C6: re-mark methods containing a self-aliasing byref call (the
+        // per-unit `collect_user_mut_methods` above clobbered the set).
+        self.mark_self_aliasing_mut_methods(unit_slice);
         // Pre-pass: stash this unit's class ASTs by FQN so
         // `emit_class_decl` can walk parents and copy inherited
         // concrete method bodies. Workspace mode does the same

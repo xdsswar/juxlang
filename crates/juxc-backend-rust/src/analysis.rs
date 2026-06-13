@@ -1690,6 +1690,423 @@ impl crate::RustEmitter {
             .unwrap_or(false)
     }
 
+    // ============================================================
+    // C6: foreign collection pass-by-`&mut` (Java container semantics)
+    // ============================================================
+
+    /// DISCOVERY predicate: does the parameter's declared type name a
+    /// **non-`Copy`, EXTERNAL/foreign** type — a `.jux.d` stub class
+    /// whose `ClassSig::is_external` is set (covers `rust.std` `Vec` /
+    /// `HashMap` today and C/C++ FFI stubs later, through the SAME
+    /// mechanism)? This is the "foreign type" half of the C6 rule.
+    ///
+    /// No hardcoded type-name list: the only signal consulted is the
+    /// resolved class's `is_external` flag. Primitives, `String`,
+    /// records, user classes, and the function's own generic params
+    /// all resolve to NON-external (or to no class at all) and are
+    /// rejected here, so they keep their current passing behavior.
+    ///
+    /// `generic_names` is the set of type-parameter names in scope for
+    /// the declaring function/method/class — a bare param typed by one
+    /// of them (`T`) is a generic, never a foreign concrete type.
+    pub(crate) fn param_type_is_external(
+        &self,
+        ty: &juxc_ast::TypeRef,
+        generic_names: &HashSet<String>,
+    ) -> bool {
+        // Pointer / array / function-typed params are never the
+        // collection-handle shape; nullable foreign params keep their
+        // (Option-wrapped) value path. Stay narrow — minimize blast
+        // radius (the user was emphatic).
+        if ty.ptr_depth > 0
+            || ty.array_shape.is_some()
+            || ty.fn_shape.is_some()
+            || ty.nullable
+        {
+            return false;
+        }
+        let Some(last) = ty.name.segments.last().map(|s| s.text.as_str()) else {
+            return false;
+        };
+        // A bare generic-parameter name (`T`) is not a concrete type.
+        if ty.name.segments.len() == 1 && generic_names.contains(last) {
+            return false;
+        }
+        // Resolve to a class signature and read the foreign flag. The
+        // FQN spelling (`rust.std.Vec`) and the bare spelling (`Vec`)
+        // both route through the package-aware lookup.
+        self.lookup_class_by_bare_or_fqn(last)
+            .map(|c| c.is_external)
+            .unwrap_or(false)
+    }
+
+    /// DISCOVERY predicate: the full C6 test for ONE parameter of a
+    /// function/method/constructor whose `body` is available. True iff
+    ///
+    ///   1. the parameter is an ordinary by-value binding (not
+    ///      `final` / `out` / `ref` / `weak` / varargs — those carry
+    ///      their own passing convention), AND
+    ///   2. its declared type is external/foreign non-`Copy`
+    ///      ([`Self::param_type_is_external`]), AND
+    ///   3. the body MUTATES it — its name lands in
+    ///      [`collect_mutated_names`], which already folds in
+    ///      reassignment, index-assign, and any `@MutSelf` /
+    ///      known-mutating method call on the binding (the latter via
+    ///      `self.user_mut_methods`, seeded from the bindgen
+    ///      `@MutSelf` markers — no hardcoded list).
+    ///
+    /// Read-only foreign params fail step 3 and keep their CURRENT
+    /// by-value behavior, exactly as required.
+    fn param_is_byref(
+        &self,
+        param: &juxc_ast::Param,
+        mutated: &HashSet<String>,
+        generic_names: &HashSet<String>,
+    ) -> bool {
+        if param.is_final
+            || param.is_out
+            || param.is_shared_ref
+            || param.is_weak
+            || param.is_varargs
+        {
+            return false;
+        }
+        if !mutated.contains(&param.name.text) {
+            return false;
+        }
+        self.param_type_is_external(&param.ty, generic_names)
+    }
+
+    /// Compute, for one parameter list + body, the set of parameter
+    /// indices that lower to `&mut T` under the C6 rule. Shared by the
+    /// map pre-pass and the decl emitters so the same indices drive the
+    /// signature and the call site.
+    pub(crate) fn byref_param_indices(
+        &self,
+        params: &[juxc_ast::Param],
+        body: &Block,
+        generic_names: &HashSet<String>,
+    ) -> HashSet<usize> {
+        let mut mutated = HashSet::new();
+        collect_mutated_names(body, &mut mutated, &self.user_mut_methods);
+        let mut out = HashSet::new();
+        for (i, p) in params.iter().enumerate() {
+            if self.param_is_byref(p, &mutated, generic_names) {
+                out.insert(i);
+            }
+        }
+        out
+    }
+
+    /// Pre-pass: walk every compilation unit and record each
+    /// function/method/constructor's by-`&mut` parameter indices into
+    /// [`Self::byref_params`] under the shared key scheme. Idempotent —
+    /// safe to call per-unit and over the whole workspace.
+    pub(crate) fn populate_byref_params(&mut self, units: &[juxc_ast::CompilationUnit]) {
+        for unit in units {
+            // Stub units have no bodies to analyze.
+            if unit.is_external {
+                continue;
+            }
+            for item in &unit.items {
+                match item {
+                    juxc_ast::TopLevelDecl::Function(f) => {
+                        let Some(body) = &f.body else { continue };
+                        let generics: HashSet<String> = f
+                            .generic_params
+                            .iter()
+                            .map(|g| g.name.text.clone())
+                            .collect();
+                        let idxs = self.byref_param_indices(&f.params, body, &generics);
+                        if !idxs.is_empty() {
+                            self.byref_params
+                                .entry(format!("fn::{}", f.name.text))
+                                .or_default()
+                                .extend(idxs);
+                        }
+                    }
+                    juxc_ast::TopLevelDecl::Class(c) => {
+                        let class_generics: HashSet<String> = c
+                            .generic_params
+                            .iter()
+                            .map(|g| g.name.text.clone())
+                            .collect();
+                        for m in &c.methods {
+                            let Some(body) = &m.body else { continue };
+                            let mut generics = class_generics.clone();
+                            generics.extend(
+                                m.generic_params.iter().map(|g| g.name.text.clone()),
+                            );
+                            let idxs = self.byref_param_indices(&m.params, body, &generics);
+                            if !idxs.is_empty() {
+                                self.byref_params
+                                    .entry(format!("m::{}::{}", c.name.text, m.name.text))
+                                    .or_default()
+                                    .extend(idxs);
+                            }
+                        }
+                        // NOTE: constructors are intentionally EXCLUDED from
+                        // C6 by-`&mut` lowering. A constructor parameter is
+                        // almost always forwarded INTO an owned field (the
+                        // opposite of pass-by-ref intent), and the several
+                        // ctor-emitter variants (plain / wrapper / delegating)
+                        // each store params differently — supporting `&mut T`
+                        // there would widen the blast radius for a vanishingly
+                        // rare shape. Ctor params keep their current by-value
+                        // behavior; decl and call site stay consistent because
+                        // neither side ever finds a `ctor::` key here.
+                        let _ = &c.constructors;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// C6 follow-up: after [`Self::populate_byref_params`] has built the
+    /// full map, mark every CLASS METHOD whose body contains a
+    /// self-aliasing by-`&mut` foreign-collection call
+    /// (`this.m(this.field)`) as a receiver-mutating method (insert its
+    /// name into `user_mut_methods`). The `std::mem::take` write-back
+    /// form that lowers such a call assigns `self.field` back, so the
+    /// enclosing method genuinely needs `&mut self` AND its callers must
+    /// promote the receiver to `let mut` — both follow from
+    /// `user_mut_methods` membership. Cheap: only fires when the map is
+    /// non-empty (i.e. C6 is in play at all).
+    pub(crate) fn mark_self_aliasing_mut_methods(
+        &mut self,
+        units: &[juxc_ast::CompilationUnit],
+    ) {
+        if self.byref_params.is_empty() {
+            return;
+        }
+        let mut newly: HashSet<String> = HashSet::new();
+        for unit in units {
+            if unit.is_external {
+                continue;
+            }
+            for item in &unit.items {
+                if let juxc_ast::TopLevelDecl::Class(c) = item {
+                    for m in &c.methods {
+                        let Some(body) = &m.body else { continue };
+                        let mut found = false;
+                        self.scan_block_for_self_aliasing_byref(body, &mut found);
+                        if found {
+                            newly.insert(m.name.text.clone());
+                        }
+                    }
+                }
+            }
+        }
+        self.user_mut_methods.extend(newly);
+    }
+
+    /// Recursively scan `block`'s statements/expressions for a call
+    /// `recv.M(recv.field, …)` whose argument is a C6 by-`&mut`
+    /// foreign-collection slot AND a field rooted at the same receiver
+    /// (the write-back shape). Sets `*found` on the first hit.
+    pub(crate) fn scan_block_for_self_aliasing_byref(&self, block: &Block, found: &mut bool) {
+        for stmt in &block.statements {
+            if *found {
+                return;
+            }
+            match stmt {
+                Stmt::Expr(e) | Stmt::Throw(e, _) | Stmt::Return(Some(e)) => {
+                    self.scan_expr_for_self_aliasing_byref(e, found)
+                }
+                Stmt::Assign(a) => {
+                    self.scan_expr_for_self_aliasing_byref(&a.value, found);
+                    self.scan_expr_for_self_aliasing_byref(&a.target, found);
+                }
+                Stmt::VarDecl(v) => {
+                    if let Some(init) = &v.init {
+                        self.scan_expr_for_self_aliasing_byref(init, found);
+                    }
+                }
+                Stmt::If(i) => {
+                    self.scan_expr_for_self_aliasing_byref(&i.condition, found);
+                    self.scan_block_for_self_aliasing_byref(&i.then_block, found);
+                    if let Some(eb) = &i.else_branch {
+                        match eb.as_ref() {
+                            ElseBranch::Block(b) => {
+                                self.scan_block_for_self_aliasing_byref(b, found)
+                            }
+                            ElseBranch::If(nested) => {
+                                let scratch = Block {
+                                    statements: vec![Stmt::If(nested.clone())],
+                                    span: juxc_source::Span::DUMMY,
+                                };
+                                self.scan_block_for_self_aliasing_byref(&scratch, found);
+                            }
+                        }
+                    }
+                }
+                Stmt::While(w) => {
+                    self.scan_expr_for_self_aliasing_byref(&w.condition, found);
+                    self.scan_block_for_self_aliasing_byref(&w.body, found);
+                }
+                Stmt::DoWhile(d) => self.scan_block_for_self_aliasing_byref(&d.body, found),
+                Stmt::ForEach(fe) => {
+                    self.scan_expr_for_self_aliasing_byref(&fe.iter, found);
+                    self.scan_block_for_self_aliasing_byref(&fe.body, found);
+                }
+                Stmt::ForC(fc) => self.scan_block_for_self_aliasing_byref(&fc.body, found),
+                Stmt::Unsafe(b) => self.scan_block_for_self_aliasing_byref(b, found),
+                Stmt::Try(t) => {
+                    self.scan_block_for_self_aliasing_byref(&t.body, found);
+                    for c in &t.catches {
+                        self.scan_block_for_self_aliasing_byref(&c.body, found);
+                    }
+                    if let Some(fin) = &t.finally {
+                        self.scan_block_for_self_aliasing_byref(fin, found);
+                    }
+                }
+                Stmt::Labeled { stmt, .. } => {
+                    let scratch = Block {
+                        statements: vec![(**stmt).clone()],
+                        span: juxc_source::Span::DUMMY,
+                    };
+                    self.scan_block_for_self_aliasing_byref(&scratch, found);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Expression half of [`Self::scan_block_for_self_aliasing_byref`].
+    /// Only needs to reach `Call` nodes; recurses through the common
+    /// value-carrying shapes (the conservative miss on an exotic nesting
+    /// merely leaves a method off `user_mut_methods`, which a later
+    /// rustc error would surface — but the common shapes are covered).
+    fn scan_expr_for_self_aliasing_byref(&self, e: &Expr, found: &mut bool) {
+        if *found {
+            return;
+        }
+        fn root_first(p: &str) -> String {
+            p.split('.').next().unwrap_or(p).to_string()
+        }
+        fn place_path(e: &Expr) -> Option<String> {
+            match e {
+                Expr::This(_) => Some("this".to_string()),
+                Expr::Path(qn) if qn.segments.len() == 1 => Some(qn.segments[0].text.clone()),
+                Expr::Field(f) => Some(format!("{}.{}", place_path(&f.object)?, f.field.text)),
+                _ => None,
+            }
+        }
+        if let Expr::Call(c) = e {
+            if let Expr::Field(f) = &*c.callee {
+                if let Some(recv) = place_path(&f.object) {
+                    let recv_first = root_first(&recv);
+                    for (i, arg) in c.args.iter().enumerate() {
+                        if self.callee_byref_param(&c.callee, i)
+                            && matches!(arg, Expr::Field(_))
+                            && place_path(arg)
+                                .map(|p| root_first(&p) == recv_first)
+                                .unwrap_or(false)
+                        {
+                            *found = true;
+                            return;
+                        }
+                    }
+                }
+            }
+            self.scan_expr_for_self_aliasing_byref(&c.callee, found);
+            for arg in &c.args {
+                self.scan_expr_for_self_aliasing_byref(arg, found);
+            }
+            return;
+        }
+        match e {
+            Expr::Binary(b) => {
+                self.scan_expr_for_self_aliasing_byref(&b.left, found);
+                self.scan_expr_for_self_aliasing_byref(&b.right, found);
+            }
+            Expr::Unary(u) => self.scan_expr_for_self_aliasing_byref(&u.operand, found),
+            Expr::Field(f) => self.scan_expr_for_self_aliasing_byref(&f.object, found),
+            Expr::Index(idx) => {
+                self.scan_expr_for_self_aliasing_byref(&idx.array, found);
+                self.scan_expr_for_self_aliasing_byref(&idx.index, found);
+            }
+            Expr::Cast(c) => self.scan_expr_for_self_aliasing_byref(&c.value, found),
+            Expr::NotNullAssert(inner, _) | Expr::Await(inner, _) => {
+                self.scan_expr_for_self_aliasing_byref(inner, found)
+            }
+            Expr::Ternary(t) => {
+                self.scan_expr_for_self_aliasing_byref(&t.condition, found);
+                self.scan_expr_for_self_aliasing_byref(&t.then_branch, found);
+                self.scan_expr_for_self_aliasing_byref(&t.else_branch, found);
+            }
+            Expr::Elvis(el) => {
+                self.scan_expr_for_self_aliasing_byref(&el.value, found);
+                self.scan_expr_for_self_aliasing_byref(&el.fallback, found);
+            }
+            Expr::InterpString(s) => {
+                for seg in &s.segments {
+                    if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                        self.scan_expr_for_self_aliasing_byref(inner, found);
+                    }
+                }
+            }
+            Expr::NewObject(n) => {
+                for a in &n.args {
+                    self.scan_expr_for_self_aliasing_byref(a, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// CALL-SITE mirror of the decl decision: does argument `arg_idx`
+    /// of `callee` map to a parameter that was lowered to `&mut T`
+    /// under the C6 rule? Reads the SAME [`Self::byref_params`] map the
+    /// declaration consulted, so the `&mut <arg>` at the call exactly
+    /// matches the `&mut T` in the signature. Handles free-function
+    /// calls (`fill(v)`) and instance/static method calls
+    /// (`x.fill(v)` / `Cls.fill(v)`).
+    pub(crate) fn callee_byref_param(
+        &self,
+        callee: &juxc_ast::Expr,
+        arg_idx: usize,
+    ) -> bool {
+        if self.byref_params.is_empty() {
+            return false;
+        }
+        match callee {
+            // Free function `name(args)`.
+            juxc_ast::Expr::Path(qn) if qn.segments.len() == 1 => self
+                .byref_params
+                .get(&format!("fn::{}", qn.segments[0].text))
+                .map(|s| s.contains(&arg_idx))
+                .unwrap_or(false),
+            // Method / static call `recv.method(args)`.
+            juxc_ast::Expr::Field(f) => {
+                let method = f.field.text.as_str();
+                // Static `ClassName.method(...)`: receiver is a class name.
+                if let juxc_ast::Expr::Path(qn) = &*f.object {
+                    if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                        let bare = class_fqn.rsplit('.').next().unwrap_or(&class_fqn);
+                        return self
+                            .byref_params
+                            .get(&format!("m::{bare}::{method}"))
+                            .map(|s| s.contains(&arg_idx))
+                            .unwrap_or(false);
+                    }
+                }
+                // Instance `recv.method(...)`: resolve the receiver's class.
+                if let Some(bare) = self.receiver_class_bare(&f.object) {
+                    let bare = bare.rsplit('.').next().unwrap_or(&bare).to_string();
+                    return self
+                        .byref_params
+                        .get(&format!("m::{bare}::{method}"))
+                        .map(|s| s.contains(&arg_idx))
+                        .unwrap_or(false);
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     /// Look up the i-th formal parameter's declared type ref for
     /// the given callee expression. Mirrors
     /// [`Self::callee_param_is_nullable`] but returns the whole

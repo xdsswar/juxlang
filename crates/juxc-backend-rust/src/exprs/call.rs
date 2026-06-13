@@ -1284,6 +1284,16 @@ impl RustEmitter {
             self.emit_call_with_hoisted_args(call);
             return;
         }
+        // C6 self-aliasing guard: an instance-method call that passes a
+        // `&mut T` foreign-collection argument rooted at the SAME
+        // receiver (`this.take(this.data)`) would borrow `self` twice
+        // (E0502). Route it through a `std::mem::take` + write-back
+        // wrapper so the field is moved out, passed by exclusive ref,
+        // and stored back — no overlapping borrow, mutation preserved.
+        if self.call_has_self_aliasing_byref_arg(call) {
+            self.emit_call_with_byref_writeback(call);
+            return;
+        }
         if self.call_needs_borrow_hoist(call) {
             // When the RECEIVER is itself read through a wrapper
             // `.0.borrow()` (field-path receiver), both the receiver
@@ -1415,7 +1425,15 @@ impl RustEmitter {
             if self.callee_param_is_ref(&call.callee, i) {
                 self.w.push('&');
             }
-            self.emit_call_arg_value(call, i, arg);
+            // C6: a foreign-collection param lowered to `&mut T` takes the
+            // call-site `&mut <place>` (Java container-passing). Two-phase
+            // borrows cover the common `f(v)` shape; an arg that re-reads
+            // the receiver is hoisted by `call_needs_borrow_hoist`.
+            if self.arg_is_byref(call, i) {
+                self.emit_byref_arg(arg);
+            } else {
+                self.emit_call_arg_value(call, i, arg);
+            }
         }
         self.emitting_format_arg = prev;
         self.w.push(')');
@@ -1432,6 +1450,169 @@ impl RustEmitter {
                 self.w.push_str(".unwrap()");
             }
         }
+    }
+
+    /// C6: emit a COMPLETE foreign-collection argument whose matching
+    /// parameter lowers to `&mut T` (Java container-passing). The whole
+    /// arg is `&mut <place>` — the caller's actual place, NOT a coerced
+    /// value (no `.clone()` / `Some(…)` ladder; cloning would lose the
+    /// mutation visibility this feature exists to provide). When the
+    /// argument is itself a `&mut T` parameter of the CURRENT body
+    /// flowing onward into another `&mut` slot, emits a reborrow
+    /// `&mut *v` instead of nesting (`&mut &mut Vec`).
+    ///
+    /// The value emit runs with the share/format/comparison flags
+    /// cleared and the lvalue flag SET, so `emit_field` / `emit_path`
+    /// emit the bare place (`more`, `self.items`, `g[i]`) with no
+    /// auto-`.clone()`.
+    pub(crate) fn emit_byref_arg(&mut self, arg: &Expr) {
+        self.w.push_str("&mut ");
+        if let Expr::Path(qn) = arg {
+            if qn.segments.len() == 1
+                && self.byref_param_names.contains(&qn.segments[0].text)
+            {
+                // Reborrow an inherited `&mut T` param.
+                self.w.push('*');
+            }
+        }
+        // Emit the place with coercion suppressed: a `&mut` target must
+        // be the place itself, never a cloned temporary.
+        let prev_lval = std::mem::replace(&mut self.emitting_lvalue, true);
+        let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
+        let prev_cmp = std::mem::take(&mut self.emitting_comparison_operand);
+        self.emit_expr(arg);
+        self.emitting_lvalue = prev_lval;
+        self.emitting_format_arg = prev_fmt;
+        self.emitting_comparison_operand = prev_cmp;
+    }
+
+    /// C6: true when argument `i` of `call` is a foreign-collection
+    /// slot lowered to `&mut T`. Used by the borrow-hoist forms to skip
+    /// binding such an argument into a value temp (which would mutate
+    /// the temp, not the caller's place) and instead borrow the place
+    /// directly at the call slot.
+    pub(crate) fn arg_is_byref(&self, call: &CallExpr, i: usize) -> bool {
+        self.callee_byref_param(&call.callee, i)
+    }
+
+    /// C6: true when any `&mut T` foreign-collection argument is a
+    /// FIELD place rooted at the call's own receiver
+    /// (`this.m(this.data)` / `r.m(r.data)`). Such a call borrows the
+    /// receiver for the method AND mutably for the field at once
+    /// (rustc E0502) — it needs the `std::mem::take` write-back form.
+    /// A bare-local arg (`m(local)`) never aliases the receiver, so it
+    /// stays on the cheap inline path.
+    fn call_has_self_aliasing_byref_arg(&self, call: &CallExpr) -> bool {
+        let Expr::Field(f) = &*call.callee else {
+            return false;
+        };
+        let Some(recv_root) = place_path_of(&f.object) else {
+            return false;
+        };
+        call.args.iter().enumerate().any(|(i, arg)| {
+            if !self.arg_is_byref(call, i) {
+                return false;
+            }
+            // Only FIELD places can alias the receiver; a bare local
+            // cannot. Compare the arg's place root to the receiver's.
+            matches!(arg, Expr::Field(_))
+                && place_path_of(arg)
+                    .map(|p| {
+                        let arg_root = p.split('.').next().unwrap_or(&p);
+                        let recv_first = recv_root.split('.').next().unwrap_or(&recv_root);
+                        arg_root == recv_first
+                    })
+                    .unwrap_or(false)
+        })
+    }
+
+    /// C6: emit `recv.m(…)` where a `&mut T` foreign-collection argument
+    /// aliases the receiver, via `std::mem::take` + write-back:
+    ///
+    /// ```ignore
+    /// { let mut __jux_byref0 = std::mem::take(&mut self.data);
+    ///   let __jux_ret = self.take(&mut __jux_byref0);
+    ///   self.data = __jux_byref0;
+    ///   __jux_ret }
+    /// ```
+    ///
+    /// The field is moved out (leaving `T::default()`), passed by
+    /// exclusive reference, then stored back — so the two borrows of
+    /// the receiver never overlap and the callee's mutation is
+    /// preserved. Non-aliasing args emit normally. The receiver itself
+    /// is read once for the call (its `&mut self`/`&self` borrow no
+    /// longer conflicts since the field was already taken).
+    fn emit_call_with_byref_writeback(&mut self, call: &CallExpr) {
+        let Expr::Field(f) = &*call.callee else {
+            // Defensive: detection guarantees a Field callee.
+            self.emit_call(call);
+            return;
+        };
+        self.w.push_str("{ ");
+        // 1. Take out each self-aliasing byref field into a temp.
+        let recv_first = place_path_of(&f.object)
+            .and_then(|p| p.split('.').next().map(str::to_string))
+            .unwrap_or_default();
+        let mut taken: Vec<(usize, &Expr)> = Vec::new();
+        for (i, arg) in call.args.iter().enumerate() {
+            let aliases = self.arg_is_byref(call, i)
+                && matches!(arg, Expr::Field(_))
+                && place_path_of(arg)
+                    .map(|p| p.split('.').next().unwrap_or(&p) == recv_first)
+                    .unwrap_or(false);
+            if aliases {
+                self.w.push_str(&format!("let mut __jux_byref{i} = std::mem::take(&mut "));
+                let prev_lval = std::mem::replace(&mut self.emitting_lvalue, true);
+                self.emit_expr(arg);
+                self.emitting_lvalue = prev_lval;
+                self.w.push_str("); ");
+                taken.push((i, arg));
+            }
+        }
+        // 2. Emit the call, binding its result so the write-back can
+        //    follow before the block yields the value.
+        self.w.push_str("let __jux_ret = ");
+        let prev_callee = self.emitting_call_callee;
+        self.emitting_call_callee = true;
+        self.emit_expr(&call.callee);
+        self.emitting_call_callee = prev_callee;
+        if let Some(sfx) = self.pending_method_suffix.take() {
+            self.w.push_str(&sfx);
+        }
+        self.w.push('(');
+        let prev_fmt = std::mem::replace(&mut self.emitting_format_arg, false);
+        for (i, arg) in call.args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            if self.callee_param_is_ref(&call.callee, i) {
+                self.w.push('&');
+            }
+            if taken.iter().any(|(ti, _)| *ti == i) {
+                self.w.push_str(&format!("&mut __jux_byref{i}"));
+            } else if self.arg_is_byref(call, i) {
+                self.emit_byref_arg(arg);
+            } else {
+                self.emit_call_arg_value(call, i, arg);
+            }
+        }
+        self.emitting_format_arg = prev_fmt;
+        self.w.push_str("); ");
+        // 3. Write each taken field back.
+        for (_, arg) in &taken {
+            let prev_lval = std::mem::replace(&mut self.emitting_lvalue, true);
+            self.emit_expr(arg);
+            self.emitting_lvalue = prev_lval;
+            // Find this arg's slot index for the temp name.
+            let idx = call
+                .args
+                .iter()
+                .position(|a| std::ptr::eq(a, *arg))
+                .unwrap_or(0);
+            self.w.push_str(&format!(" = __jux_byref{idx}; "));
+        }
+        // 4. Yield the call's result.
+        self.w.push_str("__jux_ret }");
     }
 
     /// Emit ONE call argument through the full coercion ladder —
@@ -2002,6 +2183,13 @@ impl RustEmitter {
         };
         for &i in &bind_order {
             let Some(arg) = call.args.get(i) else { continue };
+            // C6: a `&mut T` foreign-collection arg must borrow the
+            // caller's PLACE at the call slot, not a hoisted value temp
+            // (a `&mut` into a temp would lose the caller's mutation).
+            // Skip binding it here.
+            if self.arg_is_byref(call, i) {
+                continue;
+            }
             self.w.push_str("let __jux_arg");
             self.w.push_str(&i.to_string());
             self.w.push_str(" = ");
@@ -2038,6 +2226,14 @@ impl RustEmitter {
             }
             if self.callee_param_is_ref(&call.callee, i) {
                 self.w.push('&');
+            }
+            // C6 by-ref arg: borrow the original place directly (it was
+            // NOT hoisted into a temp above).
+            if self.arg_is_byref(call, i) {
+                if let Some(arg) = call.args.get(i) {
+                    self.emit_byref_arg(arg);
+                }
+                continue;
             }
             self.w.push_str("__jux_arg");
             self.w.push_str(&i.to_string());
@@ -2084,6 +2280,11 @@ impl RustEmitter {
         if hoist_args {
             let prev_args_fmt = std::mem::take(&mut self.emitting_format_arg);
             for (i, arg) in call.args.iter().enumerate() {
+                // C6 by-ref arg: borrow the place at the call slot, never
+                // hoist it into a value temp (see emit_call_with_hoisted_args).
+                if self.arg_is_byref(call, i) {
+                    continue;
+                }
                 self.w.push_str("let __jux_arg");
                 self.w.push_str(&i.to_string());
                 self.w.push_str(" = ");
@@ -2119,6 +2320,11 @@ impl RustEmitter {
             }
             if self.callee_param_is_ref(&call.callee, i) {
                 self.w.push('&');
+            }
+            // C6 by-ref arg: borrow the place directly (not hoisted).
+            if self.arg_is_byref(call, i) {
+                self.emit_byref_arg(arg);
+                continue;
             }
             if hoist_args {
                 self.w.push_str("__jux_arg");

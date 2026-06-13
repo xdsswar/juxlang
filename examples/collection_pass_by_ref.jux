@@ -1,0 +1,52 @@
+// C6 — foreign collection pass-by-reference (Java container semantics).
+//
+// A function parameter whose declared type is a FOREIGN/external,
+// non-Copy collection (here `Vec`, imported from `rust.std`) and whose
+// body MUTATES it lowers to a Rust `&mut T`; the matching call-site
+// argument is passed as `&mut <arg>`. The callee's `v.push(x)` is then
+// VISIBLE to the caller — exactly how Java passes container references.
+//
+// The two properties that ALREADY worked must be unchanged:
+//   - object elements stored in a collection stay SHARED (mutating an
+//     element through the collection is observed through an alias), and
+//   - a primitive pushed into a collection is COPIED (the source local
+//     is untouched).
+//
+// The rule is discovery-driven (the parameter's class is `is_external`
+// from its `.jux.d` stub, and mutation is found via the `@MutSelf`
+// marker / reassignment / index-assign) — no hardcoded type-name list,
+// so it applies uniformly to rust.std today and to library / C-FFI
+// stubs later.
+
+import rust.std.Vec;
+
+// A plain user class so the object-sharing property is observable.
+public class Acc {
+    public int bal;
+    public Acc(int b) { this.bal = b; }
+    public void deposit(int d) { this.bal = this.bal + d; }
+    public int balance() { return this.bal; }
+}
+
+// Mutates a foreign-collection parameter — lowers to `fill(v: &mut Vec)`.
+public void fill(Vec<int> v) { v.push(99); }
+
+public void main() {
+    // Object element: stored objects are shared references.
+    var a = new Acc(5);
+    var accs = new Vec<Acc>();
+    accs.push(a);
+    accs[0].deposit(10);                          // mutate via the collection
+    print($"obj-share: ${a.balance()}");          // 15
+
+    // Primitive element: pushed by value, source unaffected.
+    var x = 7;
+    var nums = new Vec<int>();
+    nums.push(x);
+    print($"prim-copy: ${x}");                     // 7
+
+    // Container pass: the callee's push is visible to the caller.
+    var more = new Vec<int>();
+    fill(more);
+    print($"container-pass: ${more.len()}");       // 1
+}

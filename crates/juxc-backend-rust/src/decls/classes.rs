@@ -3222,13 +3222,28 @@ impl RustEmitter {
         // interior mutability through `Rc<RefCell<C_Inner>>` means a
         // field write doesn't need a mutable receiver. Mutation goes
         // through `self.0.borrow_mut()` inside the body instead.
+        // C6: a body with a self-aliasing by-`&mut` foreign-collection
+        // call (`this.m(this.field)`) lowers to a `std::mem::take`
+        // write-back that ASSIGNS `self.field`, so the method genuinely
+        // needs `&mut self` — fold that into the receiver decision.
+        let has_self_aliasing_byref = body
+            .map(|b| {
+                let mut found = false;
+                self.scan_block_for_self_aliasing_byref(b, &mut found);
+                found
+            })
+            .unwrap_or(false);
         let needs_mut_self = !self.emitting_wrapper_class
-            && body
-                .map(|b| {
-                    body_writes_to_this(b)
-                        || crate::analysis::body_calls_mut_method_on_this(b, &self.user_mut_methods)
-                })
-                .unwrap_or(false);
+            && (has_self_aliasing_byref
+                || body
+                    .map(|b| {
+                        body_writes_to_this(b)
+                            || crate::analysis::body_calls_mut_method_on_this(
+                                b,
+                                &self.user_mut_methods,
+                            )
+                    })
+                    .unwrap_or(false));
 
         // Wildcard-lift pre-pass (same rule as `emit_fn_decl`):
         // promote each `? extends T` / `? super T` / `?` in a param
@@ -3309,18 +3324,35 @@ impl RustEmitter {
         if let Some(b) = &method.body {
             collect_mutated_names(b, &mut param_muts, &self.user_mut_methods);
         }
+        // C6: foreign-collection params the body mutates lower to `&mut T`.
+        // Keyed by the enclosing (bare) class — the SAME key every call
+        // site uses (`m::Class::method`), so decl and call never diverge.
+        let byref_idxs = self
+            .enclosing_class
+            .as_ref()
+            .map(|cls| format!("m::{cls}::{}", method.name.text))
+            .and_then(|k| self.byref_params.get(&k).cloned())
+            .unwrap_or_default();
         for (i, param) in method.params.iter().enumerate() {
             if !first_param {
                 self.w.push_str(", ");
             }
             first_param = false;
-            if !param.is_out && !param.is_shared_ref && param_muts.contains(&param.name.text) {
+            let is_byref = byref_idxs.contains(&i);
+            if !is_byref
+                && !param.is_out
+                && !param.is_shared_ref
+                && param_muts.contains(&param.name.text)
+            {
                 self.w.push_str("mut ");
             }
             self.w.push_str(&param.name.text);
             self.w.push_str(": ");
             if param.is_out {
                 self.w.push_str("&mut "); // `out T` (§M.4) lowers to `&mut T`
+            }
+            if is_byref {
+                self.w.push_str("&mut "); // C6: foreign collection by exclusive ref
             }
             if param.is_shared_ref {
                 // `ref T` (§M.13) — shared reference to a value object.
@@ -3425,6 +3457,17 @@ impl RustEmitter {
                     .map(|p| p.name.text.clone())
                     .collect(),
             );
+            // C6: register `&mut T` foreign-collection params for the body.
+            let prev_byref = std::mem::replace(
+                &mut self.byref_param_names,
+                method
+                    .params
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| byref_idxs.contains(i))
+                    .map(|(_, p)| p.name.text.clone())
+                    .collect(),
+            );
             // First-use trigger for `static { }` blocks (§S.4.1): a static
             // method call is an observable use. (Instance methods aren't —
             // constructing the receiver already triggered init.)
@@ -3432,6 +3475,7 @@ impl RustEmitter {
                 self.emit_static_init_trigger();
             }
             self.emit_fn_body_at(body, &method.return_type);
+            self.byref_param_names = prev_byref;
             self.out_params = prev_out;
             self.const_int_params = prev_const_ints;
             self.current_type_params = prev_type_params;

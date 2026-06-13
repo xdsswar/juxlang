@@ -154,14 +154,30 @@ impl RustEmitter {
         if let Some(body) = &fn_decl.body {
             collect_mutated_names(body, &mut param_muts, &self.user_mut_methods);
         }
+        // C6: foreign-collection params that the body mutates lower to
+        // `&mut T` (Java container-passing). Read the index set from the
+        // shared `byref_params` map (keyed `fn::name`) — the SAME set
+        // every call site consults — so the signature and `&mut <arg>`
+        // can never diverge. `is_args_main` is renamed but keeps its
+        // name as the key; an args-main never takes a foreign-collection
+        // param, so the lookup harmlessly misses.
+        let byref_idxs = self
+            .byref_params
+            .get(&format!("fn::{}", fn_decl.name.text))
+            .cloned()
+            .unwrap_or_default();
         for (i, param) in fn_decl.params.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
             }
+            let is_byref = byref_idxs.contains(&i);
             // A `final` parameter (§M.14.2) is an immutable binding: never emit
             // `mut`. Any reassignment was already rejected by tycheck (E0464), so
             // the body cannot legitimately need a mutable binding.
-            if !param.is_final
+            // A C6 `&mut T` param is an exclusive reference, not a `mut`
+            // by-value binding — skip the `mut` keyword for it.
+            if !is_byref
+                && !param.is_final
                 && !param.is_out
                 && !param.is_shared_ref
                 && !param.is_weak
@@ -173,6 +189,9 @@ impl RustEmitter {
             self.w.push_str(": ");
             if param.is_out {
                 self.w.push_str("&mut "); // `out T` (§M.4) lowers to `&mut T`
+            }
+            if is_byref {
+                self.w.push_str("&mut "); // C6: foreign collection by exclusive ref
             }
             if param.is_weak {
                 // `weak T` (§M.14.3) — a weak reference to a class object. The
@@ -369,7 +388,19 @@ impl RustEmitter {
                     .map(|p| p.name.text.clone())
                     .collect(),
             );
+            // C6: register `&mut T` foreign-collection params for the body.
+            let prev_byref = std::mem::replace(
+                &mut self.byref_param_names,
+                fn_decl
+                    .params
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| byref_idxs.contains(i))
+                    .map(|(_, p)| p.name.text.clone())
+                    .collect(),
+            );
             self.emit_fn_body(body, &fn_decl.return_type);
+            self.byref_param_names = prev_byref;
             self.out_params = prev_out;
             self.const_int_params = prev_const_ints;
             self.current_type_params = prev_type_params;
