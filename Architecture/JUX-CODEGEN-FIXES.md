@@ -516,4 +516,67 @@ Regression: `examples/interface_default_inherit.jux` +
 `bin/jux/tests/interface_default_inherit.rs`. Behavior already specified
 in §7.4.3 — this was a pure codegen gap, no spec change.
 
+---
+
+## Fix 7 — Foreign collection parameters pass by `&mut` (Java container semantics, gap C6)
+
+**Symptom.** A function that takes a `rust.std` collection and mutates it
+left the caller's collection unchanged — Rust's by-value move, not Java's
+by-reference container passing:
+
+```jux
+import rust.std.Vec;
+
+void fill(Vec<int> v) { v.push(99); }   // callee's push...
+
+public void main() {
+    var more = new Vec<int>();
+    fill(more);
+    print(more.len());                   // ...was 0 (invisible); Java expects 1
+}
+```
+
+**Model (what Jux guarantees, matching Java).** Collections are the Rust std
+collections used as-is — `Vec`/`HashMap`/… imported from `rust.std`, Rust
+method names (`push`/`insert`/`len`/`containsKey`), lowering to genuine
+`std::vec::Vec`. There is **no** Jux `List`/`ArrayList`. Of Java's three
+behaviors, two already held: class **objects** added to a collection are
+SHARED (Jux instances are `Rc` handles) and **primitives** are COPIED (Rust
+value). The only gap was container-passing, fixed here.
+
+**The rule (general, discovery-based, NOT hardcoded).** A parameter lowers
+to Rust `&mut T` — and every call site emits `&mut <place>` — when:
+
+1. its type resolves to a **non-`Copy` external/foreign type**, discovered
+   from `ClassSig::is_external` (set on `.jux.d` stub types), never a
+   hardcoded `{Vec, HashMap}` name set; and
+2. the body **mutates** it, discovered via `collect_mutated_names` (folds in
+   reassignment, index-assignment, and any method the stub marks `@MutSelf`).
+
+Because the signal is `is_external` + `@MutSelf` (not a name list), the same
+rule serves `rust.std` today and Jux-library / C/C++ FFI stubs later through
+one discovery path. `Vec` stays exactly `std::Vec`, so rust.std interop is
+preserved (no handle wrapper). User-class params (already `Rc` handles),
+primitives, records, and read-only params are untouched.
+
+```rust
+// emitted for the example above:
+pub fn fill(v: &mut std::vec::Vec<isize>) { v.push(99); }
+// ... at the call site:
+fill(&mut more);
+```
+
+**Where.** A single precomputed `byref_params` map (built over all units in
+`crates/juxc-backend-rust/src/lib.rs`) is the one source of truth read by
+BOTH the parameter declaration (`decls/functions.rs`, `decls/classes.rs`)
+and the call sites (`exprs/call.rs`), so `&mut T` and `&mut arg` can never
+diverge. Reuses param-mut inference (C3), `@MutSelf` discovery (H2-5), and
+the §G.9.2 call-site-borrow mechanism. A self-aliasing call
+(`this.m(this.field)`) routes through a `mem::take` + write-back wrapper to
+avoid `E0502`. Constructors are excluded (their params forward into owned
+fields — the opposite of pass-by-reference).
+
+Regression: `examples/collection_pass_by_ref.jux` +
+`bin/jux/tests/collection_pass_by_ref.rs`.
+
 *End of codegen fixes addendum.*
