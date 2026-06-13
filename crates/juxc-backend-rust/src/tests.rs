@@ -1035,6 +1035,26 @@ fn sizeof_multi_segment_path_emits_type_form() {
     );
 }
 
+/// A dotted operand whose root is a **value in scope** (`p.x`) is a
+/// member access — the value form (§5.9.2) — not a type path, even though
+/// it wears the same `a.B` shape as §5.9.3 rule 4. Regression for
+/// `sizeof(obj.Name)` emitting the unresolvable `size_of::<obj::Name>()`.
+#[test]
+fn sizeof_member_access_on_local_emits_value_form() {
+    let rust = emit(
+        "public class Point { public int x; } \
+         public void main() { var p = new Point(); print(sizeof(p.x)); }",
+    );
+    assert!(
+        rust.contains("std::mem::size_of_val(&("),
+        "expected value form for member access, got: {rust}",
+    );
+    assert!(
+        !rust.contains("size_of::<p::x>()"),
+        "should not emit a type path for member access: {rust}",
+    );
+}
+
 /// Hex literal `0xF0` lowers to Rust `0xF0` — radix preserved.
 #[test]
 fn hex_literal_preserves_radix() {
