@@ -4,8 +4,11 @@ import com.intellij.lexer.Lexer
 import com.intellij.openapi.editor.DefaultLanguageHighlighterColors as D
 import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.editor.colors.TextAttributesKey.createTextAttributesKey
+import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileTypes.SyntaxHighlighterBase
 import com.intellij.psi.tree.IElementType
+import com.intellij.ui.JBColor
+import java.awt.Font
 
 /**
  * Maps the [JuxLexer]'s fine-grained tokens to colour attribute keys. Each key
@@ -37,7 +40,16 @@ class JuxSyntaxHighlighter : SyntaxHighlighterBase() {
         val METHOD_CALL = key("JUX_METHOD_CALL", D.FUNCTION_CALL)
         val PARAMETER = key("JUX_PARAMETER", D.PARAMETER)
         val LOCAL_VARIABLE = key("JUX_LOCAL_VARIABLE", D.LOCAL_VARIABLE)
-        val TYPE_PARAMETER = key("JUX_TYPE_PARAMETER", D.PARAMETER)
+        // Generic type parameters (`T`, `R`, …) — a DARK BLUE hardcoded as the
+        // key's default so it shows on EVERY color scheme (the per-scheme
+        // bundled defaults only cover named schemes; custom themes fell back to
+        // the plain parameter color). JBColor adapts: a deep navy on light
+        // backgrounds, a darker-but-readable blue on dark ones. Users can still
+        // recolor it under Color Scheme | Jux | References | Type parameter.
+        val TYPE_PARAMETER = createTextAttributesKey(
+            "JUX_TYPE_PARAMETER",
+            TextAttributes(JBColor(0x000080, 0x2D55A8), null, null, null, Font.PLAIN),
+        )
         val ENUM_CONSTANT = key("JUX_ENUM_CONSTANT", D.STATIC_FIELD)
         // §P.5 native coloring (annotator-driven, property context only): the
         // attach/detach/clear/size + bind/unbind/bindBidirectional operations.

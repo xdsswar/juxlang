@@ -213,15 +213,9 @@
         implementationClass="dev.jux.intellij.highlight.JuxSyntaxHighlighterFactory"/>
     <colorSettingsPage
         implementation="dev.jux.intellij.highlight.JuxColorSettingsPage"/>
-    <!-- Bundle a green default for generic type parameters (`T`, `R`, …) on
-         the stock light/dark schemes — the Java-like look users expect. Users
-         can still recolor it under Color Scheme | Jux. -->
-    <additionalTextAttributes scheme="Default" file="colorSchemes/JuxDefault.xml"/>
-    <additionalTextAttributes scheme="Darcula" file="colorSchemes/JuxDarcula.xml"/>
-    <!-- New-UI editor schemes use distinct names ("Light"/"Dark"); register
-         them too or the default never applies there. -->
-    <additionalTextAttributes scheme="Light" file="colorSchemes/JuxLight.xml"/>
-    <additionalTextAttributes scheme="Dark" file="colorSchemes/JuxDark.xml"/>
+    <!-- The dark-blue type-parameter color is hardcoded as the JUX_TYPE_PARAMETER
+         key's default (JuxSyntaxHighlighter), so it applies on EVERY scheme —
+         including custom themes — not just named ones. No per-scheme files. -->
 
     <!-- Editor behaviour: auto-close quotes, match/auto-close brackets, and
          Java-like Enter/auto-indent. -->
