@@ -116,6 +116,51 @@ pub struct Manifest {
     /// async addendum §18.1.11). Drives async availability (`core` forbids it,
     /// E0701). Defaults to [`juxc_tycheck::Profile::Full`].
     pub profile: juxc_tycheck::Profile,
+    /// `[build] optimization` (§B.9) — the default build type when the CLI
+    /// passes no `--release`. `"release"`/`"size"` select an optimized build,
+    /// `"debug"`/`"none"` (and absence) select a debug build. See
+    /// [`Manifest::effective_release`].
+    pub optimization: Option<String>,
+    /// `[build] target` (§B.9) — default cross-compilation target triple
+    /// (`"native"` or a Rust triple). The CLI `--target` flag overrides it.
+    pub build_target: Option<String>,
+    /// `[profile.<name>]` tables (§B.9) — Cargo build-profile overrides
+    /// (`opt-level`, `lto`, `strip`, …). Lowered to
+    /// [`juxc_backend_rust::CargoProfile`] by [`Manifest::cargo_profiles`]
+    /// and emitted into the generated `Cargo.toml`.
+    pub profiles: Vec<ProfileSpec>,
+}
+
+/// A `[profile.<name>]` table (§B.9). Fields mirror the spec's profile
+/// knobs; each is optional and only emitted when set. The raw values are
+/// kept as [`toml::Value`] for the int-or-string fields (`opt-level`,
+/// `debug`, `codegen-units`) so the Cargo renderer can choose bare-vs-quoted
+/// output faithfully.
+#[derive(Debug, Clone)]
+pub struct ProfileSpec {
+    /// Profile name: a Cargo built-in (`dev`/`release`/`test`/`bench`) or a
+    /// custom name (which is emitted with an `inherits` line).
+    pub name: String,
+    /// `opt-level` — `0`–`3` (integer) or `"s"`/`"z"` (string).
+    pub opt_level: Option<toml::Value>,
+    /// `debug` — `false`/`true`, `0`–`2`, or `"line-tables"`/`"full"`/`"none"`.
+    pub debug: Option<toml::Value>,
+    /// `strip` — `false`, `"debuginfo"`, `"all"` (→ Cargo `"symbols"`).
+    pub strip: Option<toml::Value>,
+    /// `lto` — `"off"`/`"thin"`/`"fat"` (or a bool).
+    pub lto: Option<toml::Value>,
+    /// `overflow-checks` — trap on integer overflow.
+    pub overflow_checks: Option<bool>,
+    /// `panic` — `"unwind"`/`"abort"`.
+    pub panic: Option<String>,
+    /// `incremental` — cache intermediates.
+    pub incremental: Option<bool>,
+    /// `codegen-units` — integer (Cargo rejects non-integers, so a string is
+    /// dropped during lowering).
+    pub codegen_units: Option<toml::Value>,
+    /// `extends` (spec) / `inherits` (Cargo) — the parent profile a custom
+    /// profile derives from.
+    pub extends: Option<String>,
 }
 
 /// A single `[dependencies]` entry. Phase 1 supports `path` and `git`
@@ -211,11 +256,35 @@ struct RawWorkspace {
     members: Vec<String>,
 }
 
-/// Serde shape for the `[build]` table. Only the language `profile` is consumed
-/// here (`full` / `embedded` / `core`); other `[build]` keys are tolerated.
+/// Serde shape for the `[build]` table (§B.9). The language `profile`
+/// (`full`/`embedded`/`core`), the default `optimization` build type, and a
+/// default `target` triple are consumed; other `[build]` keys are tolerated.
 #[derive(Debug, Default, Deserialize)]
 struct RawBuild {
     profile: Option<String>,
+    optimization: Option<String>,
+    target: Option<String>,
+}
+
+/// Serde shape for one `[profile.<name>]` table (§B.9). Every key is
+/// optional. Int-or-string knobs are kept as [`toml::Value`] so the renderer
+/// can emit them with faithful TOML typing. Both the spec's `extends` and
+/// Cargo's `inherits` spelling are accepted.
+#[derive(Debug, Default, Deserialize)]
+struct RawProfile {
+    #[serde(rename = "opt-level")]
+    opt_level: Option<toml::Value>,
+    debug: Option<toml::Value>,
+    strip: Option<toml::Value>,
+    lto: Option<toml::Value>,
+    #[serde(rename = "overflow-checks")]
+    overflow_checks: Option<bool>,
+    panic: Option<String>,
+    incremental: Option<bool>,
+    #[serde(rename = "codegen-units")]
+    codegen_units: Option<toml::Value>,
+    extends: Option<String>,
+    inherits: Option<String>,
 }
 
 /// Serde shape for a `[dependencies]` value. A dependency value is either
@@ -257,6 +326,8 @@ struct RawManifest {
     dependencies: std::collections::BTreeMap<String, RawDependency>,
     workspace: Option<RawWorkspace>,
     build: Option<RawBuild>,
+    #[serde(default)]
+    profile: std::collections::BTreeMap<String, RawProfile>,
 }
 
 impl Manifest {
@@ -427,12 +498,53 @@ impl Manifest {
         // ---- [workspace] --------------------------------------------------
         let workspace_members = raw.workspace.map(|w| w.members).unwrap_or_default();
 
-        // ---- [build] profile ----------------------------------------------
-        let profile = raw
-            .build
-            .and_then(|b| b.profile)
+        // ---- [build] table ------------------------------------------------
+        let raw_build = raw.build.unwrap_or_default();
+        let profile = raw_build
+            .profile
             .map(|s| juxc_tycheck::Profile::from_manifest_str(&s))
             .unwrap_or_default();
+        let optimization = raw_build.optimization;
+        // `target = "native"` means "the host" — the same as leaving it
+        // unset, so normalize it away here.
+        let build_target = raw_build
+            .target
+            .filter(|t| !t.is_empty() && t != "native");
+
+        // ---- [profile.*] tables -------------------------------------------
+        // Preserve a stable, readable emission order: the Cargo built-ins
+        // first (dev, release, test, bench), then any custom profiles
+        // alphabetically (BTreeMap iteration).
+        let mut profiles: Vec<ProfileSpec> = Vec::new();
+        let order = ["dev", "release", "test", "bench"];
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut push_profile = |name: &str, rp: &RawProfile, profiles: &mut Vec<ProfileSpec>| {
+            profiles.push(ProfileSpec {
+                name: name.to_string(),
+                opt_level: rp.opt_level.clone(),
+                debug: rp.debug.clone(),
+                strip: rp.strip.clone(),
+                lto: rp.lto.clone(),
+                overflow_checks: rp.overflow_checks,
+                panic: rp.panic.clone(),
+                incremental: rp.incremental,
+                codegen_units: rp.codegen_units.clone(),
+                // Spec `extends` is preferred; Cargo's `inherits` is accepted
+                // as a synonym.
+                extends: rp.extends.clone().or_else(|| rp.inherits.clone()),
+            });
+        };
+        for name in order {
+            if let Some(rp) = raw.profile.get(name) {
+                push_profile(name, rp, &mut profiles);
+                seen.insert(name.to_string());
+            }
+        }
+        for (name, rp) in &raw.profile {
+            if !seen.contains(name) {
+                push_profile(name, rp, &mut profiles);
+            }
+        }
 
         Some(Manifest {
             project_root: project_root.to_path_buf(),
@@ -442,7 +554,138 @@ impl Manifest {
             dependencies,
             workspace_members,
             profile,
+            optimization,
+            build_target,
+            profiles,
         })
+    }
+
+    /// Resolve the effective build type (`true` = release / optimized).
+    ///
+    /// Precedence (§B.9): an explicit CLI `--release` always wins; otherwise
+    /// the manifest's `[build] optimization` decides — `"release"`/`"size"`
+    /// build optimized, everything else (`"debug"`/`"none"`/absent) builds
+    /// debug. `size` additionally implies `opt-level = "z"` (applied in
+    /// [`Manifest::cargo_profiles`]) unless the user set `[profile.release]`.
+    pub fn effective_release(&self, cli_release: bool) -> bool {
+        if cli_release {
+            return true;
+        }
+        matches!(
+            self.optimization.as_deref(),
+            Some("release") | Some("size"),
+        )
+    }
+
+    /// Lower the parsed `[profile.*]` tables to the backend's
+    /// [`juxc_backend_rust::CargoProfile`] shape — Cargo-spelled keys with
+    /// pre-rendered TOML values. Also injects `opt-level = "z"` into the
+    /// `release` profile when `[build] optimization = "size"` and the user
+    /// didn't already pin an `opt-level` there (so the size build actually
+    /// optimizes for size).
+    pub fn cargo_profiles(&self) -> Vec<juxc_backend_rust::CargoProfile> {
+        let mut out: Vec<juxc_backend_rust::CargoProfile> =
+            self.profiles.iter().map(lower_profile).collect();
+
+        if self.optimization.as_deref() == Some("size") {
+            // Find or synthesize the `release` profile and ensure it carries a
+            // size-oriented `opt-level` unless the user set one explicitly.
+            let release = match out.iter_mut().find(|p| p.name == "release") {
+                Some(p) => p,
+                None => {
+                    out.push(juxc_backend_rust::CargoProfile {
+                        name: "release".to_string(),
+                        entries: Vec::new(),
+                    });
+                    out.last_mut().unwrap()
+                }
+            };
+            if !release.entries.iter().any(|(k, _)| k == "opt-level") {
+                release.entries.insert(0, ("opt-level".to_string(), "\"z\"".to_string()));
+            }
+        }
+        out
+    }
+}
+
+/// Translate one [`ProfileSpec`] into the backend's Cargo-shaped profile.
+///
+/// Performs the spec→Cargo key/value translations §B.9 documents:
+/// `debug = "line-tables"` → Cargo `"line-tables-only"`; `strip = "all"` →
+/// Cargo `"symbols"`; spec `extends` → Cargo `inherits`. Custom profile names
+/// (anything but `dev`/`release`/`test`/`bench`) always get an `inherits`
+/// (defaulting to `"dev"`) because Cargo requires it. A non-integer
+/// `codegen-units` is dropped (Cargo only accepts integers).
+fn lower_profile(p: &ProfileSpec) -> juxc_backend_rust::CargoProfile {
+    let mut entries: Vec<(String, String)> = Vec::new();
+
+    if let Some(v) = &p.opt_level {
+        entries.push(("opt-level".to_string(), render_toml_value(v)));
+    }
+    if let Some(v) = &p.debug {
+        // `"line-tables"` (spec) → `"line-tables-only"` (Cargo).
+        let rendered = match v.as_str() {
+            Some("line-tables") => "\"line-tables-only\"".to_string(),
+            _ => render_toml_value(v),
+        };
+        entries.push(("debug".to_string(), rendered));
+    }
+    if let Some(v) = &p.strip {
+        // `"all"` (spec) → `"symbols"` (Cargo).
+        let rendered = match v.as_str() {
+            Some("all") => "\"symbols\"".to_string(),
+            _ => render_toml_value(v),
+        };
+        entries.push(("strip".to_string(), rendered));
+    }
+    if let Some(v) = &p.lto {
+        entries.push(("lto".to_string(), render_toml_value(v)));
+    }
+    if let Some(b) = p.overflow_checks {
+        entries.push(("overflow-checks".to_string(), b.to_string()));
+    }
+    if let Some(s) = &p.panic {
+        entries.push(("panic".to_string(), format!("\"{}\"", s.replace('"', ""))));
+    }
+    if let Some(b) = p.incremental {
+        entries.push(("incremental".to_string(), b.to_string()));
+    }
+    if let Some(v) = &p.codegen_units {
+        // Cargo only accepts an integer here; silently skip anything else.
+        if v.as_integer().is_some() {
+            entries.push(("codegen-units".to_string(), render_toml_value(v)));
+        }
+    }
+
+    let is_builtin = matches!(p.name.as_str(), "dev" | "release" | "test" | "bench");
+    if let Some(parent) = &p.extends {
+        // `inherits` is meaningful (and required) only on custom profiles.
+        if !is_builtin {
+            entries.push(("inherits".to_string(), format!("\"{}\"", parent.replace('"', ""))));
+        }
+    } else if !is_builtin {
+        // Cargo rejects a custom profile with no `inherits`; default to `dev`.
+        entries.push(("inherits".to_string(), "\"dev\"".to_string()));
+    }
+
+    juxc_backend_rust::CargoProfile {
+        name: p.name.clone(),
+        entries,
+    }
+}
+
+/// Render a scalar `toml::Value` back to its TOML source form for emission
+/// into a `Cargo.toml`: integers/bools/floats bare, strings double-quoted
+/// (and escaped). Non-scalar values (arrays/tables — not valid for these
+/// profile keys) fall back to a quoted debug form, which Cargo will reject
+/// loudly rather than mis-parse.
+fn render_toml_value(v: &toml::Value) -> String {
+    match v {
+        toml::Value::Integer(i) => i.to_string(),
+        toml::Value::Boolean(b) => b.to_string(),
+        toml::Value::Float(f) => f.to_string(),
+        toml::Value::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+        other => format!("\"{}\"", other.to_string().replace('"', "\\\"")),
     }
 }
 
@@ -499,7 +742,24 @@ impl PackageMetadata {
             company: self.company.clone(),
             copyright: self.copyright.clone(),
             has_icon: self.icon.is_some(),
+            // Profiles live on the [`Manifest`], not on `[package]` — the
+            // package-only projection carries none. Use
+            // [`Manifest::to_cargo_meta`] to include them.
+            profiles: Vec::new(),
         }
+    }
+}
+
+impl Manifest {
+    /// Project this manifest into the backend's
+    /// [`juxc_backend_rust::CargoMeta`], including the lowered `[profile.*]`
+    /// tables (§B.9). Prefer this over `manifest.package.to_cargo_meta()` at
+    /// any call site that emits a `Cargo.toml`, so profile overrides flow
+    /// through.
+    pub fn to_cargo_meta(&self) -> juxc_backend_rust::CargoMeta {
+        let mut meta = self.package.to_cargo_meta();
+        meta.profiles = self.cargo_profiles();
+        meta
     }
 }
 
@@ -688,6 +948,108 @@ mod tests {
             m.workspace_members,
             vec!["greeter".to_string(), "app".to_string()]
         );
+    }
+
+    #[test]
+    fn build_optimization_drives_effective_release() {
+        // `optimization = "release"` builds release with no CLI flag.
+        let (rel, _d1) =
+            load_toml("[package]\nname = \"app\"\n\n[build]\noptimization = \"release\"\n");
+        assert!(rel.effective_release(false));
+        // `"size"` is also an optimized build.
+        let (size, _d2) =
+            load_toml("[package]\nname = \"app\"\n\n[build]\noptimization = \"size\"\n");
+        assert!(size.effective_release(false));
+        // `"debug"` builds debug unless the CLI forces release.
+        let (dbg, _d3) =
+            load_toml("[package]\nname = \"app\"\n\n[build]\noptimization = \"debug\"\n");
+        assert!(!dbg.effective_release(false));
+        assert!(dbg.effective_release(true)); // CLI --release wins
+        // Absent → debug by default.
+        let (none, _d4) = load_toml("[package]\nname = \"app\"\n");
+        assert!(!none.effective_release(false));
+    }
+
+    #[test]
+    fn build_target_native_normalized_away() {
+        let (native, _d1) =
+            load_toml("[package]\nname = \"app\"\n\n[build]\ntarget = \"native\"\n");
+        assert_eq!(native.build_target, None);
+        let (triple, _d2) = load_toml(
+            "[package]\nname = \"app\"\n\n[build]\ntarget = \"x86_64-pc-windows-gnu\"\n",
+        );
+        assert_eq!(triple.build_target.as_deref(), Some("x86_64-pc-windows-gnu"));
+    }
+
+    #[test]
+    fn profile_tables_parsed_and_lowered_to_cargo() {
+        let (m, _dir) = load_toml(
+            "[package]\nname = \"app\"\n\n\
+             [profile.release]\n\
+             opt-level = 3\n\
+             lto = \"thin\"\n\
+             strip = \"all\"\n\
+             debug = false\n\
+             codegen-units = 1\n\
+             overflow-checks = false\n\
+             panic = \"abort\"\n\n\
+             [profile.dev]\n\
+             opt-level = 0\n\
+             debug = \"line-tables\"\n",
+        );
+        let profiles = m.cargo_profiles();
+        // Built-in order: dev before release-by-name? We emit dev, release,
+        // test, bench order — so dev first.
+        let dev = profiles.iter().find(|p| p.name == "dev").unwrap();
+        let release = profiles.iter().find(|p| p.name == "release").unwrap();
+
+        // `strip = "all"` (spec) → Cargo `"symbols"`.
+        assert!(release.entries.contains(&("strip".into(), "\"symbols\"".into())));
+        // Integer opt-level emitted bare; string lto quoted.
+        assert!(release.entries.contains(&("opt-level".into(), "3".into())));
+        assert!(release.entries.contains(&("lto".into(), "\"thin\"".into())));
+        assert!(release.entries.contains(&("codegen-units".into(), "1".into())));
+        assert!(release.entries.contains(&("overflow-checks".into(), "false".into())));
+        assert!(release.entries.contains(&("panic".into(), "\"abort\"".into())));
+        // `debug = "line-tables"` (spec) → Cargo `"line-tables-only"`.
+        assert!(dev.entries.contains(&("debug".into(), "\"line-tables-only\"".into())));
+        // Built-in profiles never get an `inherits` line.
+        assert!(!release.entries.iter().any(|(k, _)| k == "inherits"));
+    }
+
+    #[test]
+    fn custom_profile_gets_inherits_from_extends() {
+        let (m, _dir) = load_toml(
+            "[package]\nname = \"app\"\n\n\
+             [profile.embedded]\n\
+             extends = \"release\"\n\
+             opt-level = \"s\"\n",
+        );
+        let p = m.cargo_profiles();
+        let embedded = p.iter().find(|p| p.name == "embedded").unwrap();
+        // `extends` (spec) → Cargo `inherits`; string opt-level stays quoted.
+        assert!(embedded.entries.contains(&("inherits".into(), "\"release\"".into())));
+        assert!(embedded.entries.contains(&("opt-level".into(), "\"s\"".into())));
+    }
+
+    #[test]
+    fn size_optimization_injects_opt_level_z_into_release() {
+        // No explicit [profile.release] → one is synthesized with opt-level z.
+        let (m, _dir) =
+            load_toml("[package]\nname = \"app\"\n\n[build]\noptimization = \"size\"\n");
+        let p = m.cargo_profiles();
+        let release = p.iter().find(|p| p.name == "release").unwrap();
+        assert!(release.entries.contains(&("opt-level".into(), "\"z\"".into())));
+
+        // A user-set opt-level is NOT overridden.
+        let (m2, _d2) = load_toml(
+            "[package]\nname = \"app\"\n\n[build]\noptimization = \"size\"\n\n\
+             [profile.release]\nopt-level = 2\n",
+        );
+        let p2 = m2.cargo_profiles();
+        let release2 = p2.iter().find(|p| p.name == "release").unwrap();
+        assert!(release2.entries.contains(&("opt-level".into(), "2".into())));
+        assert!(!release2.entries.contains(&("opt-level".into(), "\"z\"".into())));
     }
 
     #[test]
