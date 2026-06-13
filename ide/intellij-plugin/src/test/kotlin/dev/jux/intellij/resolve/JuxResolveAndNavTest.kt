@@ -183,6 +183,80 @@ class JuxResolveAndNavTest : BasePlatformTestCase() {
         assertEquals("shared", (resolved as dev.jux.intellij.psi.JuxNamedElement).name)
     }
 
+    // ---- reverse (down-arrow) subtype / override gutters --------------------
+
+    fun testIsSubclassedAndOverriddenGuttersOnSuperclass() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class Shape { public double area() { return 0.0; } }
+            public class Circle extends Shape { public double area() { return 1.0; } }
+            """.trimIndent(),
+        )
+        myFixture.doHighlighting()
+        val gutters = myFixture.findAllGutters().mapNotNull { it.tooltipText }
+        assertTrue("Shape is subclassed by Circle: $gutters", gutters.any { it.contains("subclassed by", true) })
+        assertTrue("Shape.area is overridden in Circle: $gutters", gutters.any { it.contains("overridden in", true) })
+    }
+
+    fun testIsImplementedGuttersOnInterface() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public interface Speaker { void speak(); }
+            public class Dog implements Speaker { public void speak() {} }
+            """.trimIndent(),
+        )
+        myFixture.doHighlighting()
+        val gutters = myFixture.findAllGutters().mapNotNull { it.tooltipText }
+        assertTrue("Speaker is implemented by Dog: $gutters", gutters.any { it.contains("implemented by", true) })
+        assertTrue("speak() is implemented in Dog: $gutters", gutters.any { it.contains("implemented in", true) })
+    }
+
+    fun testNoReverseGutterWithoutSubtypes() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class Lonely { public void solo() {} }
+            """.trimIndent(),
+        )
+        myFixture.doHighlighting()
+        val gutters = myFixture.findAllGutters().mapNotNull { it.tooltipText }
+        assertFalse("no down-markers when nothing extends it: $gutters", gutters.any { it.contains("subclassed", true) })
+        assertFalse(gutters.any { it.contains("overridden in", true) })
+    }
+
+    // ---- Go To Implementation (Ctrl+Alt+B) ----------------------------------
+
+    fun testGoToImplementationFindsSubtypesAndOverrides() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class Shape { public double area() { return 0.0; } }
+            public class Circle extends Shape { public double area() { return 1.0; } }
+            public class Square extends Shape { public double area() { return 2.0; } }
+            """.trimIndent(),
+        )
+        // Subtypes of Shape (the declaration), via the shared reverse index.
+        val shape = com.intellij.psi.util.PsiTreeUtil
+            .findChildrenOfType(myFixture.file, JuxTypeDeclaration::class.java)
+            .first { it.name == "Shape" }
+        val subs = JuxSubtypes.subtypesOf(shape).mapNotNull { it.name }.toSet()
+        assertEquals(setOf("Circle", "Square"), subs)
+
+        // Overrides of Shape.area().
+        val area = com.intellij.psi.util.PsiTreeUtil
+            .findChildrenOfType(myFixture.file, dev.jux.intellij.psi.JuxMethodDeclaration::class.java)
+            .first { it.name == "area" && JuxHierarchy.enclosingType(it)?.name == "Shape" }
+        val overrides = JuxSubtypes.overridingMethods(area)
+            .mapNotNull { JuxHierarchy.enclosingType(it)?.name }.toSet()
+        assertEquals(setOf("Circle", "Square"), overrides)
+    }
+
     // ---- §P.7.8 property gutter trio ----------------------------------------
 
     fun testPropertyGutterTrioStatuses() {
