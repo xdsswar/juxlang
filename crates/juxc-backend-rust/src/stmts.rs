@@ -3085,7 +3085,14 @@ impl RustEmitter {
                 }
             }
         }
-        if let Some(tref) = iface_tref {
+        if !is_compound
+            && matches!(a.value, Expr::Literal(juxc_ast::Literal::Null))
+            && self.assign_target_is_raw_pointer(&a.target)
+        {
+            // A `null` assigned to a raw-pointer field is a null pointer, not
+            // `None` (§L.6.1). No wrapper-clone / nullable-wrap applies.
+            self.w.push_str("std::ptr::null_mut()");
+        } else if let Some(tref) = iface_tref {
             self.emit_expr_coerced_to_iface(&tref, &a.value);
         } else {
             self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
@@ -3297,6 +3304,26 @@ impl RustEmitter {
         if let Some(record) = self.symbols.records.get(name) {
             if let Some(c) = record.components.iter().find(|c| c.name == f.field.text) {
                 return c.ty.nullable;
+            }
+        }
+        false
+    }
+
+    /// True when an assignment target is a **raw-pointer field** (`obj.ptr`,
+    /// `this.ptr` where `ptr` is declared `T*`). Used so `obj.ptr = null` lowers
+    /// to `std::ptr::null_mut()` instead of `None` (§L.6.1). Mirrors
+    /// [`Self::assign_target_is_nullable`]'s field resolution but reads the
+    /// declared `TypeRef`'s `ptr_depth` (which the erased `Ty` drops).
+    pub(crate) fn assign_target_is_raw_pointer(&self, target: &Expr) -> bool {
+        let Expr::Field(f) = target else { return false };
+        let Some(juxc_tycheck::Ty::User { name, .. }) =
+            self.expr_types.get(&expr_span_of(&f.object))
+        else {
+            return false;
+        };
+        if let Some(class) = self.symbols.classes.get(name) {
+            if let Some(field) = class.fields.get(&f.field.text) {
+                return field.ty.ptr_depth > 0;
             }
         }
         false

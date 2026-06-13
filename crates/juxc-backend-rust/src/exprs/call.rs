@@ -9,6 +9,40 @@ use crate::analysis::is_string_literal;
 use crate::exprs::ArgRef;
 use crate::RustEmitter;
 
+/// How a single foreign-call argument crosses the C boundary (§L.7).
+#[derive(Clone, Copy)]
+enum FfiArg {
+    /// A numeric/pointer value passed verbatim.
+    Plain,
+    /// A Jux `String` marshalled through a `CString` temp to a `const char*`.
+    Str,
+    /// A Jux `char` (4-byte) truncated to a C `char` (`core::ffi::c_char`).
+    Char,
+}
+
+/// How a foreign-call RETURN crosses the C boundary (§L.7).
+#[derive(Clone, Copy)]
+enum FfiRet {
+    /// A numeric/pointer value used verbatim.
+    Plain,
+    /// A C `const char*` copied out into an owned Jux `String`. `nullable` maps
+    /// a null pointer to Jux `null` (`String?`) rather than the empty string.
+    Str { nullable: bool },
+    /// A C `char` widened back to a Jux `char`.
+    Char,
+}
+
+/// Classify a foreign parameter type into its [`FfiArg`] marshalling kind.
+fn ffi_arg_kind(t: &juxc_ast::TypeRef) -> FfiArg {
+    if type_ref_is_string(t) {
+        FfiArg::Str
+    } else if type_ref_is_char(t) {
+        FfiArg::Char
+    } else {
+        FfiArg::Plain
+    }
+}
+
 /// True when `t` is the Jux `String` type (or `String?`) at the value level: a
 /// single-segment `String` name with no pointer / array / generic shape. Unlike
 /// `analysis::is_jux_string_type` this accepts the nullable form, so FFI
@@ -21,6 +55,18 @@ fn type_ref_is_string(t: &juxc_ast::TypeRef) -> bool {
         && t.generic_args.is_empty()
         && t.name.segments.len() == 1
         && t.name.segments[0].text == "String"
+}
+
+/// True when `t` is a plain Jux `char` (no pointer / array / generic / nullable
+/// shape) — the value-level `char` that maps to a C `char` at the FFI boundary.
+fn type_ref_is_char(t: &juxc_ast::TypeRef) -> bool {
+    t.ptr_depth == 0
+        && t.array_shape.is_none()
+        && t.fn_shape.is_none()
+        && t.generic_args.is_empty()
+        && !t.nullable
+        && t.name.segments.len() == 1
+        && t.name.segments[0].text == "char"
 }
 
 /// Mirror of `binary::collect_string_concat_operands` for the
@@ -235,16 +281,14 @@ impl RustEmitter {
             }
         }
         // C FFI call-site marshalling (Layout-ABI §L.7): a call to a foreign
-        // function declared in an `unsafe native` block marshals its `String`
-        // arguments to C `const char*` and copies a `String` return value out of
-        // the C buffer. Only intercept when marshalling is actually needed; a
-        // numeric/pointer-only foreign call flows through the generic path
-        // unchanged (it already lowers to a bare `name(args)`).
-        if let Some((string_arg, ret_string, ret_nullable)) =
-            self.extern_c_call_shape(&call.callee)
-        {
-            if ret_string || string_arg.iter().any(|&b| b) {
-                self.emit_extern_c_call(call, &string_arg, ret_string, ret_nullable);
+        // function declared in an `unsafe native` block marshals `String`
+        // arguments/returns to/from C `const char*` and `char` arguments/returns
+        // to/from C `char` (`core::ffi::c_char`). Only intercept when marshalling
+        // is actually needed; a numeric/pointer-only foreign call flows through
+        // the generic path unchanged (it already lowers to a bare `name(args)`).
+        if let Some((args, ret)) = self.extern_c_call_shape(&call.callee) {
+            if !matches!(ret, FfiRet::Plain) || args.iter().any(|a| !matches!(a, FfiArg::Plain)) {
+                self.emit_extern_c_call(call, &args, ret);
                 return;
             }
         }
@@ -1571,11 +1615,11 @@ impl RustEmitter {
     /// is read once for the call (its `&mut self`/`&self` borrow no
     /// longer conflicts since the field was already taken).
     /// If `callee` names a C foreign function (declared in an `unsafe native`
-    /// block, `FunctionSig::is_extern_c`), return its marshalling shape:
-    /// `(per-arg is-String, return-is-String, return-is-nullable)`. Returns
-    /// `None` for any non-foreign call. The data is owned so the caller can then
-    /// take `&mut self` to emit.
-    fn extern_c_call_shape(&self, callee: &Expr) -> Option<(Vec<bool>, bool, bool)> {
+    /// block, `FunctionSig::is_extern_c`), return its marshalling shape: a
+    /// [`FfiArg`] per parameter and the [`FfiRet`] for the return. Returns `None`
+    /// for any non-foreign call. The data is owned so the caller can then take
+    /// `&mut self` to emit.
+    fn extern_c_call_shape(&self, callee: &Expr) -> Option<(Vec<FfiArg>, FfiRet)> {
         let Expr::Path(qn) = callee else { return None };
         if qn.segments.len() != 1 {
             return None;
@@ -1595,12 +1639,15 @@ impl RustEmitter {
                     .find(|(k, v)| v.is_extern_c && k.rsplit('.').next() == Some(name))
                     .map(|(_, v)| v)
             })?;
-        let string_arg = sig.params.iter().map(|p| type_ref_is_string(&p.ty)).collect();
-        let (ret_string, ret_nullable) = match &sig.return_type {
-            juxc_ast::ReturnType::Type(t) if type_ref_is_string(t) => (true, t.nullable),
-            _ => (false, false),
+        let args = sig.params.iter().map(|p| ffi_arg_kind(&p.ty)).collect();
+        let ret = match &sig.return_type {
+            juxc_ast::ReturnType::Type(t) if type_ref_is_string(t) => {
+                FfiRet::Str { nullable: t.nullable }
+            }
+            juxc_ast::ReturnType::Type(t) if type_ref_is_char(t) => FfiRet::Char,
+            _ => FfiRet::Plain,
         };
-        Some((string_arg, ret_string, ret_nullable))
+        Some((args, ret))
     }
 
     /// Emit a foreign C call with `String` marshalling (Layout-ABI §L.7), as a
@@ -1618,18 +1665,14 @@ impl RustEmitter {
     /// the end of the block, keeping its buffer alive across the call. The
     /// surrounding Jux `unsafe { }` provides the unsafe context for the foreign
     /// call and the `CStr::from_ptr` read.
-    fn emit_extern_c_call(
-        &mut self,
-        call: &CallExpr,
-        string_arg: &[bool],
-        ret_string: bool,
-        ret_nullable: bool,
-    ) {
+    fn emit_extern_c_call(&mut self, call: &CallExpr, args: &[FfiArg], ret: FfiRet) {
         self.w.push_str("{ ");
         let prev = std::mem::take(&mut self.emitting_format_arg);
-        // 1. Marshal each `String` argument into a NUL-terminated `CString` temp.
+        // 1. Marshal each `String` argument into a NUL-terminated `CString` temp
+        //    (kept alive until the end of the block, across the call). `char`
+        //    args need no temp — they convert inline below.
         for (i, arg) in call.args.iter().enumerate() {
-            if string_arg.get(i).copied().unwrap_or(false) {
+            if matches!(args.get(i), Some(FfiArg::Str)) {
                 self.w.push_str(&format!("let __c{i} = ::std::ffi::CString::new("));
                 self.emit_expr(arg);
                 self.w.push_str(
@@ -1638,7 +1681,8 @@ impl RustEmitter {
             }
         }
         // 2. The call (bound to `__ret` only when we convert the return).
-        if ret_string {
+        let convert_ret = !matches!(ret, FfiRet::Plain);
+        if convert_ret {
             self.w.push_str("let __ret = ");
         }
         self.emit_expr(&call.callee);
@@ -1647,27 +1691,41 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            if string_arg.get(i).copied().unwrap_or(false) {
-                self.w
-                    .push_str(&format!("__c{i}.as_ptr() as *const core::ffi::c_char"));
-            } else {
-                self.emit_expr(arg);
+            match args.get(i) {
+                // `String` arg: pass the kept-alive `CString`'s `const char*`.
+                Some(FfiArg::Str) => {
+                    self.w
+                        .push_str(&format!("__c{i}.as_ptr() as *const core::ffi::c_char"));
+                }
+                // `char` arg: a Jux/Rust `char` (4-byte) truncates to a C `char`.
+                Some(FfiArg::Char) => {
+                    self.w.push('(');
+                    self.emit_expr(arg);
+                    self.w.push_str(") as core::ffi::c_char");
+                }
+                _ => self.emit_expr(arg),
             }
         }
         self.w.push(')');
         self.emitting_format_arg = prev;
-        // 3. Copy a `String` return out of the C buffer (never freeing it).
-        if ret_string {
-            self.w.push_str("; ");
-            let copy = "unsafe { ::std::ffi::CStr::from_ptr(__ret as *const core::ffi::c_char) }\
-                        .to_string_lossy().into_owned()";
-            if ret_nullable {
-                self.w
-                    .push_str(&format!("if __ret.is_null() {{ None }} else {{ Some({copy}) }}"));
-            } else {
-                self.w
-                    .push_str(&format!("if __ret.is_null() {{ String::new() }} else {{ {copy} }}"));
+        // 3. Convert the return.
+        match ret {
+            FfiRet::Plain => {}
+            // Copy a `String` out of the C buffer (read-only, never freed).
+            FfiRet::Str { nullable } => {
+                self.w.push_str("; ");
+                let copy = "unsafe { ::std::ffi::CStr::from_ptr(__ret as *const core::ffi::c_char) }\
+                            .to_string_lossy().into_owned()";
+                if nullable {
+                    self.w
+                        .push_str(&format!("if __ret.is_null() {{ None }} else {{ Some({copy}) }}"));
+                } else {
+                    self.w
+                        .push_str(&format!("if __ret.is_null() {{ String::new() }} else {{ {copy} }}"));
+                }
             }
+            // A C `char` widens back to a Jux/Rust `char` (via the byte value).
+            FfiRet::Char => self.w.push_str("; (__ret as u8) as char"),
         }
         self.w.push_str(" }");
     }

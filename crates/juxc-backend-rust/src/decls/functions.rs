@@ -89,6 +89,12 @@ impl RustEmitter {
             self.w.push_str("core::ffi::c_void");
             return;
         }
+        // `char` at the boundary is a C `char` (1 byte), not a Jux/Rust `char`
+        // (4-byte Unicode scalar). The call site converts (`emit_extern_c_call`).
+        if t.ptr_depth == 0 && t.array_shape.is_none() && last == "char" {
+            self.w.push_str("core::ffi::c_char");
+            return;
+        }
         self.emit_value_type_as_rust(t);
     }
 

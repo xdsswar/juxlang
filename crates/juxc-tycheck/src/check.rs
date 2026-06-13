@@ -2414,7 +2414,13 @@ impl<'a> Checker<'a> {
                 } else {
                     target_ty.clone()
                 };
-                if !compatible(&effective_target, &value_ty, self.symbols) {
+                // A raw-pointer target accepts the `null` literal (`this.ptr =
+                // null;`, the FFI handle-reset idiom) — `null` is the sole `T*`
+                // literal (§L.6.1). The erased `Ty` drops `ptr_depth`, so we read
+                // the target's declared `TypeRef` to recognize the pointer slot.
+                let ptr_null_ok = matches!(a.value, Expr::Literal(juxc_ast::Literal::Null))
+                    && self.assign_target_is_raw_pointer(&a.target);
+                if !ptr_null_ok && !compatible(&effective_target, &value_ty, self.symbols) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0410_TypeMismatch,
@@ -3677,6 +3683,25 @@ impl<'a> Checker<'a> {
                     .symbols
                     .lookup_field(name, &f.field.text)
                     .map_or(false, |(fs, _)| fs.is_weak);
+            }
+        }
+        false
+    }
+
+    /// True when an assignment target is a **raw-pointer field** (`obj.ptr`
+    /// where `ptr` is declared `T*`). Used to accept `obj.ptr = null` (§L.6.1).
+    /// The erased `Ty` drops `ptr_depth`, so we read the field's declared
+    /// `TypeRef`. (A bare-local pointer reassign isn't covered: `env` only keeps
+    /// the erased `Ty`; the local DECLARATION `T* p = null;` is handled in the
+    /// var-decl check.)
+    fn assign_target_is_raw_pointer(&self, target: &juxc_ast::Expr) -> bool {
+        if let juxc_ast::Expr::Field(f) = target {
+            let recv = infer_expr(&f.object, &self.env, self.symbols);
+            if let Ty::User { name, .. } = &recv {
+                return self
+                    .symbols
+                    .lookup_field(name, &f.field.text)
+                    .map_or(false, |(fs, _)| fs.ty.ptr_depth > 0);
             }
         }
         false
@@ -6604,6 +6629,9 @@ fn ffi_type_ok(t: &juxc_ast::TypeRef) -> bool {
     if t.nullable {
         return false;
     }
+    // `char` is permitted: Jux `char` is a 4-byte Unicode scalar (a Rust
+    // `char`), but at the FFI boundary it maps to a C `char` (`core::ffi::c_char`)
+    // and the compiler converts at the call site (see `emit_extern_c_call`).
     crate::ty::primitive_from_name(name).is_some()
 }
 

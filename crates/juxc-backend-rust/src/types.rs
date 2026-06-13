@@ -900,6 +900,14 @@ impl RustEmitter {
     /// implement `Default + Copy`, otherwise Rust will surface the
     /// constraint failure.
     pub(crate) fn emit_default_value_for(&mut self, ty: &juxc_ast::TypeRef) {
+        // A raw pointer (`T*`, `void*`) defaults to the null pointer, not the
+        // pointee's `0` (§L.6.1) — a `*mut T` can't hold an integer literal.
+        // Checked first so the `__self`-builder placeholder for a pointer field
+        // is `null_mut()` (the real value is assigned in the ctor body).
+        if ty.ptr_depth > 0 {
+            self.w.push_str("std::ptr::null_mut()");
+            return;
+        }
         // Shape modifiers come first — `int[]` is a Vec (its ELEMENT
         // primitive must not leak through as the default), and a
         // nullable slot's default is `None` regardless of the inner.
