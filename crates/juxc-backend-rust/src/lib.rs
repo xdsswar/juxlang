@@ -1401,6 +1401,8 @@ pub(crate) fn compute_aliased_classes(
                 walk_expr(&i.index, aliased, mark);
             }
             Expr::Field(f) => walk_expr(&f.object, aliased, mark),
+            // `++place` / `place++` — walk the place for nested calls.
+            Expr::IncDec(i) => walk_expr(&i.target, aliased, mark),
             Expr::InterpString(s) => {
                 for seg in &s.segments {
                     if let juxc_ast::InterpSegment::Expr(inner) = seg {
@@ -2455,6 +2457,8 @@ fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
             cast_targets_expr(&i.index, out);
         }
         Expr::Field(f) => cast_targets_expr(&f.object, out),
+        // `++place` / `place++` — walk the place for cast targets.
+        Expr::IncDec(i) => cast_targets_expr(&i.target, out),
         Expr::InterpString(s) => {
             for seg in &s.segments {
                 if let juxc_ast::InterpSegment::Expr(inner) = seg {

@@ -3271,6 +3271,46 @@ impl<'a> Checker<'a> {
             // outcome is a runtime property (NullPointerException), not a
             // static one, so no extra diagnostic fires here.
             Expr::NotNullAssert(inner, _) => self.check_expr(inner),
+            // `++place` / `place++` (§A `incdec`, value form). Two
+            // validations, mirroring the statement-form rules but at
+            // expression level:
+            //   1. the operand must be an ASSIGNABLE place — a name,
+            //      array element, or field (E0200 otherwise; same gate
+            //      `make_incdec` applies in the parser, re-checked here
+            //      because a place may also arrive via desugaring).
+            //   2. the operand's type must be a NUMERIC primitive —
+            //      `++` on a `String`/`bool`/class is meaningless
+            //      (E0200). `Unknown` stays lenient (an upstream
+            //      inference gap must never manufacture a type error).
+            Expr::IncDec(i) => {
+                self.check_expr(&i.target);
+                if !Self::is_assignable_place(&i.target) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0200_UnexpectedToken,
+                            "`++`/`--` requires an assignable place (a name, array element, or field)",
+                        )
+                        .with_span(i.span),
+                    );
+                } else {
+                    let ty = infer_expr(&i.target, &self.env, self.symbols);
+                    // Reject non-numeric known types; `char`/`bool` are
+                    // excluded by `is_numeric`. Unknown is tolerated.
+                    if !matches!(ty, Ty::Unknown) && !ty.is_numeric() {
+                        let op = if i.is_inc { "`++`" } else { "`--`" };
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0200_UnexpectedToken,
+                                format!(
+                                    "{op} applies only to numeric values, but the operand has type `{}`",
+                                    ty.display(),
+                                ),
+                            )
+                            .with_span(i.span),
+                        );
+                    }
+                }
+            }
             Expr::Await(inner, span) => {
                 // `await` is permitted ONLY inside an async context — an
                 // `async` function/method or an async lambda (§18.1.2). Outside
@@ -6531,6 +6571,10 @@ fn collect_bare_name_reads(e: &Expr, sink: &mut dyn FnMut(&juxc_ast::QualifiedNa
         Expr::Unary(u) => collect_bare_name_reads(&u.operand, sink),
         Expr::Cast(c) => collect_bare_name_reads(&c.value, sink),
         Expr::NotNullAssert(inner, _) => collect_bare_name_reads(inner, sink),
+        // `++place` / `place++` reads (and writes) the place — count the
+        // place itself as a bare-name read so the borrow-share analysis
+        // treats it like any other access.
+        Expr::IncDec(i) => collect_bare_name_reads(&i.target, sink),
         Expr::Field(f) => collect_bare_name_reads(&f.object, sink),
         Expr::Index(ix) => {
             collect_bare_name_reads(&ix.array, sink);
@@ -6669,6 +6713,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::Ternary(t) => t.span,
         Expr::Await(_, s) => *s,
         Expr::NotNullAssert(_, s) => *s,
+        Expr::IncDec(i) => i.span,
     }
 }
 
@@ -9117,6 +9162,50 @@ mod tests {
         assert!(
             !has(&d, code::Code::E0445_ConstGenericUnsupported),
             "core const-generic subset should be clean: {d:?}",
+        );
+    }
+
+    // --- §A `incdec` — expression-position ++/-- (value form, N3) ---
+
+    /// `var y = x++;` over a numeric local is clean, and `y` is typed as
+    /// the operand's type — proven by using `y` in a further numeric
+    /// step without any type error.
+    #[test]
+    fn incdec_value_initializes_numeric_local_cleanly() {
+        let d = run("public void main() { int x = 1; var y = x++; y += 1; print(y); }");
+        assert!(
+            d.is_empty(),
+            "`var y = x++` over an int should typecheck cleanly: {d:?}",
+        );
+    }
+
+    /// Both prefix and postfix value forms on a numeric place are clean
+    /// in every common consuming position (call arg, index, initializer).
+    #[test]
+    fn incdec_value_forms_are_clean_on_numeric() {
+        let d = run(
+            r#"public void main() {
+                   int x = 1;
+                   var arr = new int[]{0, 0};
+                   int i = 0;
+                   print(x++);
+                   print(++x);
+                   var a = arr[i++];
+                   var b = --arr[i];
+                   print(a + b);
+               }"#,
+        );
+        assert!(d.is_empty(), "numeric inc/dec value forms should be clean: {d:?}");
+    }
+
+    /// `++` / `--` on a NON-numeric place (a `String`) is rejected
+    /// (E0200) — the operator only applies to numeric values.
+    #[test]
+    fn incdec_on_non_numeric_is_e0200() {
+        let d = run(r#"public void main() { String s = "hi"; print(s++); }"#);
+        assert!(
+            has(&d, code::Code::E0200_UnexpectedToken),
+            "`s++` on a String should fire E0200: {d:?}",
         );
     }
 }

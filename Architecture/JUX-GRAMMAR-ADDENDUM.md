@@ -499,8 +499,10 @@ incdec-stmt       = incdec ';'
 incdec            = ( '++' | '--' ) lvalue          -- prefix
                   | lvalue ( '++' | '--' )           -- postfix
 -- `lvalue` is a name, array element, or field. In STATEMENT and
--- for-update position only; `++`/`--` produce no value in expression
--- position (Phase 1). Desugars to `lvalue += 1` / `lvalue -= 1`.
+-- for-update position the value is DISCARDED, so the compiler desugars
+-- the form to `lvalue += 1` / `lvalue -= 1` (no temporary). The SAME
+-- `++`/`--` surface is ALSO a value-producing operator in EXPRESSION
+-- position — see `incdec-expr` in §A.2.9 and the value semantics in §A.6.
 
 for-each-stmt     = 'for' '(' ( 'var' | type ) identifier ':' expression ')'
                     statement
@@ -574,6 +576,7 @@ multiplicative    = unary ( ('*' | '/' | '%') unary )*
 unary             = ('!' | '-' | '+' | '~' | 'move' | 'await') unary
                   | '&' unary                                 -- address-of, unsafe-only
                   | '*' unary                                 -- pointer dereference, unsafe-only
+                  | ('++' | '--') unary                       -- PREFIX inc/dec (value), §A.6
                   | c-style-cast
                   | postfix
 
@@ -590,6 +593,8 @@ postfix-op        = '.' identifier
                   | '[' expression ']' '=' assignment        -- desugars to operator[]=
                   | '?'                                      -- error propagation
                   | '!!'                                     -- non-null assertion
+                  | '++'                                     -- POSTFIX increment (value), §A.6
+                  | '--'                                     -- POSTFIX decrement (value), §A.6
                   | generic-args                             -- explicit type args
                   | 'as' type                                -- explicit cast
 
@@ -671,6 +676,28 @@ switch (event) {
 `try-expr` produces the value of its successfully-completing block, or the value of the catch clause that handled the exception. It has no `finally`.
 
 The unary operators `move` and `await` bind tighter than any binary operator. The chained postfix `expr?` (error propagation, §7.11) and `expr!!` (non-null assertion) bind tighter than any binary operator and tighter than `as` casts.
+
+#### Increment / decrement as a value (§A.6)
+
+`++` and `--` are value-producing operators in expression position. The prefix form (`incdec-expr` at the `unary` level) and the postfix form (at the `postfix` level) wrap an assignable numeric **place** — a name, an array element, or a field. Their value semantics are:
+
+- **Prefix** `++place` / `--place` — steps the place, then evaluates to the **NEW** value (after the step).
+- **Postfix** `place++` / `place--` — evaluates to the **OLD** value (before the step), then steps the place.
+
+```jux
+int x = 5;
+print(x++);          // prints 5 (OLD); x is now 6
+int y = ++x;         // x is now 7; y is 7 (NEW)
+var arr = new int[]{10, 20};
+int i = 0;
+print(arr[i++]);     // prints 10; i is now 1 — the index runs ONCE
+```
+
+The operand must be an assignable place (otherwise `E0200`) of a numeric primitive type (`int`, `long`, `short`, `byte`, their unsigned variants, `float`, `double`; not `bool`/`char`/`String`/a class — otherwise `E0200`). The result type is the operand's type. The place is **evaluated exactly once**: for an indexed or field place with a side-effecting index/receiver (e.g. `arr[next()]++`), the index/receiver is hoisted into a temporary before the single load-and-store, so `next()` runs once.
+
+When the value is **discarded** — a bare statement `place++;` or a C-style `for`-update `i++` — the compiler emits the value-less `place += 1` / `place -= 1` form (§A.2.8 `incdec`); the value-producing block is generated only when the result is actually consumed.
+
+See §A.6 for the full value semantics and the Phase-1 Rust lowering.
 
 ### A.2.10. Cfg Predicates
 
@@ -785,8 +812,8 @@ The table is from loosest binding (top) to tightest (bottom). Within each level,
 | 15  | `+`  `-`                                                         | left          | binary        | Addition / subtraction.                                                      |
 | 16  | `*`  `/`  `%`                                                    | left          | binary        | Multiplication / division / remainder.                                       |
 | 17  | `as`                                                             | left          | binary-keyword| Explicit cast: `e as T`. Must be a permitted cast (§A.5).                   |
-| 18  | `!`  unary `-`  unary `+`  `~`  `move`  `await`  prefix `&`  prefix `*` | right         | unary prefix  | Prefix unary operators. `&x` (address-of) and `*p` (deref) are unsafe-only.  |
-| 19  | `?` (postfix)  `!!`                                              | left          | unary postfix | Error propagation; non-null assertion.                                      |
+| 18  | `!`  unary `-`  unary `+`  `~`  `move`  `await`  prefix `&`  prefix `*`  prefix `++`  prefix `--` | right         | unary prefix  | Prefix unary operators. `&x` (address-of) and `*p` (deref) are unsafe-only. Prefix `++`/`--` yield the NEW value (§A.6). |
+| 19  | `?` (postfix)  `!!`  postfix `++`  postfix `--`                  | left          | unary postfix | Error propagation; non-null assertion; postfix `++`/`--` yield the OLD value (§A.6). |
 | 20  | `.`  `?.`  `.<int>`  `(args)`  `[index]`  `<TypeArgs>(args)` `::` | left          | postfix       | Member access, safe-nav, tuple-field, call, index, generic-call, method-ref.|
 
 A few notes:
@@ -875,6 +902,55 @@ return value => MyError;           // bool result
 All numeric conversions via `as` are **unchecked** at the language level; runtime wrapping/truncation rules follow `JUX-SEMANTICS-ADDENDUM.md` §S.2. This matches Java's cast semantics on primitive types.
 
 `as` between `int` and `char` is bit-preserving; `as` between signed and unsigned of the same width is bit-preserving. Float-to-int truncates toward zero and saturates (does not produce undefined values for out-of-range floats).
+
+---
+
+## Appendix A.6 — Increment / Decrement (`++` / `--`)
+
+`++` and `--` step an assignable numeric **place** by one. The same surface serves two roles, decided by position:
+
+1. **Statement / for-update position** — the value is discarded; the form desugars to the compound assignment `place += 1` / `place -= 1` (§A.2.8 `incdec`). No temporary is generated.
+2. **Expression position** — the form is a value-producing operator (`incdec-expr`, §A.2.9). The value depends on prefix vs postfix.
+
+### A.6.1. Value semantics
+
+| Form    | Steps | Yields |
+|---------|-------|--------|
+| `++p`   | `p = p + 1` | the **NEW** value (post-step `p`) |
+| `--p`   | `p = p - 1` | the **NEW** value |
+| `p++`   | `p = p + 1` | the **OLD** value (pre-step `p`) |
+| `p--`   | `p = p - 1` | the **OLD** value |
+
+The operand `p` must be:
+
+- an **assignable place** — a name, an array element (`a[i]`), or a field (`o.f`); any other operand is `E0200`;
+- of a **numeric primitive** type — `int`, `long`, `short`, `byte` and their unsigned variants, `float`, `double`; `bool`, `char`, `String`, and class types are rejected with `E0200`.
+
+The result type is the operand's type, so `var n = x++;` gives `n` the same type as `x`.
+
+### A.6.2. Single evaluation of the place
+
+The place is evaluated **exactly once**. For an indexed or field place whose index/receiver has side effects (e.g. `arr[next()]++`, `obj.f++` where `obj` is itself a call), the index / non-trivial receiver is hoisted into a temporary, and the load and the store both reference that temporary. So `arr[next()]++` calls `next()` a single time.
+
+### A.6.3. Phase-1 Rust lowering
+
+Rust has no `++`/`--`, so the value form lowers to a value-returning block. A trivial place needs no hoist; a side-effecting index/receiver is bound to a `__jux_*` temporary first. The OLD value is captured in `__jux_t` for the postfix form; the prefix form re-reads the place after the step. (`--` is identical with `- 1`.)
+
+```rust
+// x++           (postfix, numeric name)
+{ let __jux_t = x; x += 1; __jux_t }
+
+// ++x           (prefix, numeric name)
+{ x += 1; x }
+
+// arr[i]++      (postfix, indexed; index hoisted for single-eval)
+{ let __jux_i = i; let __jux_t = arr[__jux_i]; arr[__jux_i] += 1; __jux_t }
+
+// ++arr[i]      (prefix, indexed)
+{ let __jux_i = i; arr[__jux_i] += 1; arr[__jux_i] }
+```
+
+The store step reuses the ordinary compound-assignment lowering, so wrapper-class places (`obj.0.borrow_mut()`), `ref` cells, mutable statics, and `operator[]=` overloads all behave exactly as they do for a hand-written `place += 1`. The whole block is a Rust primary expression, so it composes without extra parentheses even inside a format argument (`$"${x++}"`) or a call argument.
 
 ---
 

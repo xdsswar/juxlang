@@ -231,6 +231,10 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
             expr_moves_path_at_top(&i.array, name) || expr_moves_path_at_top(&i.index, name)
         }
         Expr::Field(f) => expr_moves_path_at_top(&f.object, name),
+        // `++place` / `place++` steps a numeric place in situ — the
+        // place itself isn't moved, but the loop var may appear in a
+        // hoisted index/receiver, so flow the analysis into the target.
+        Expr::IncDec(i) => expr_moves_path_at_top(&i.target, name),
         Expr::InterpString(s) => s.segments.iter().any(|seg| match seg {
             // Bare-ident interp is a borrow (Display); no move.
             juxc_ast::InterpSegment::Literal(_) | juxc_ast::InterpSegment::Bare(_) => false,

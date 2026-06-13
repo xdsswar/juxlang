@@ -289,6 +289,10 @@ fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
             expand_expr(&mut i.index, plans);
         }
         Expr::Field(f) => expand_expr(&mut f.object, plans),
+        // `++place` / `place++` — recurse into the place so any
+        // call-sugar (named/default args) inside an index/receiver
+        // expands (`arr[make(x: 1)]++`).
+        Expr::IncDec(i) => expand_expr(&mut i.target, plans),
         Expr::InterpString(s) => {
             for seg in &mut s.segments {
                 if let InterpSegment::Expr(e) = seg {

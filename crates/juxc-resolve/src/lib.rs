@@ -1234,6 +1234,9 @@ impl Resolver {
                 self.visit_expr(&t.else_branch);
             }
             Expr::NotNullAssert(inner, _) => self.visit_expr(inner),
+            // `++place` / `place++` — resolve the place expression
+            // (its names must bind like any other read/write).
+            Expr::IncDec(i) => self.visit_expr(&i.target),
             Expr::Await(inner, _) => {
                 // `await expr` just walks its operand — the operand
                 // is a normal expression whose names need resolving.

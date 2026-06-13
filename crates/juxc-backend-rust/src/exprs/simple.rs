@@ -218,4 +218,177 @@ impl RustEmitter {
         // wrapping for free.
         self.emit_expr_with_parent_prec(&u.operand, UNARY_PREC, /*right=*/ false);
     }
+
+    /// Lower an expression-position `++place` / `place++` (§A `incdec`,
+    /// value form) to a value-returning Rust block.
+    ///
+    /// Rust has no `++`/`--`, so we synthesize a block that:
+    ///   1. hoists any **side-effecting** sub-part of the place (an
+    ///      index expression, or a non-trivial index/field receiver)
+    ///      into a `let` temp so the place is evaluated EXACTLY ONCE
+    ///      (`arr[next()]++` runs `next()` a single time);
+    ///   2. performs the `+= 1` / `-= 1` mutation by REUSING the full
+    ///      statement-level assignment machinery ([`Self::emit_assign`])
+    ///      against the rewritten (already-hoisted) place — so wrapper-
+    ///      class `.0.borrow_mut()`, `ref` cells, mutable statics, and
+    ///      `operator[]=` places all stay correct without re-deriving
+    ///      that logic here;
+    ///   3. yields the right value: the **postfix** form caches the OLD
+    ///      value in `let __jux_t` before the mutation and returns it;
+    ///      the **prefix** form mutates first, then re-reads the place
+    ///      (the NEW value).
+    ///
+    /// Shapes produced (decrement is identical with `- 1`):
+    /// ```text
+    /// x++       -> { let __jux_t = x; x += 1; __jux_t }
+    /// ++x       -> { x += 1; x }
+    /// a[i]++    -> { let __jux_i = i; let __jux_t = a[__jux_i]; a[__jux_i] += 1; __jux_t }
+    /// ++a[i]    -> { let __jux_i = i; a[__jux_i] += 1; a[__jux_i] }
+    /// o.f++     -> { let __jux_t = o.f; o.f += 1; __jux_t }   (o hoisted if non-trivial)
+    /// ```
+    ///
+    /// The whole thing is a single Rust block expression — already a
+    /// primary, so it needs no extra parens even in a format argument
+    /// (`$"${x++}"`) or as a call argument.
+    pub(crate) fn emit_incdec_value(&mut self, i: &juxc_ast::IncDecExpr) {
+        // Build the rewritten place (with side-effecting parts replaced
+        // by references to hoisted temps) and the list of `let` bindings
+        // those temps need. `hoists` is emitted first inside the block.
+        let mut hoists: Vec<(String, juxc_ast::Expr)> = Vec::new();
+        let target = self.hoist_incdec_place(&i.target, &mut hoists);
+
+        // The step operator + amount: `+= 1` / `-= 1`. We reuse
+        // `emit_assign` with a compound op so every place shape is
+        // handled by the existing, battle-tested store path.
+        let one = juxc_ast::Expr::Literal(juxc_ast::Literal::Int(juxc_ast::IntLit {
+            value: 1,
+            kind: None,
+            radix: juxc_ast::IntRadix::Decimal,
+            digit_width: 1,
+        }));
+        let step = juxc_ast::AssignStmt {
+            target: target.clone(),
+            op: Some(if i.is_inc {
+                juxc_ast::BinaryOp::Add
+            } else {
+                juxc_ast::BinaryOp::Sub
+            }),
+            value: one,
+            span: i.span,
+        };
+
+        // The block reads a place value verbatim — never as a format
+        // argument (`&` / borrow context would be wrong for the numeric
+        // copy we want), so clear the flag while emitting the body and
+        // restore it after.
+        let prev_fmt = self.emitting_format_arg;
+        self.emitting_format_arg = false;
+
+        self.w.push_str("{ ");
+        // 1. Hoist side-effecting sub-parts into temps (single-eval).
+        for (name, expr) in &hoists {
+            self.w.push_str("let ");
+            self.w.push_str(name);
+            self.w.push_str(" = ");
+            self.emit_expr(expr);
+            self.w.push_str("; ");
+        }
+        if i.is_prefix {
+            // Prefix: mutate first, then yield the NEW value.
+            self.emit_assign(&step); // emits `<place> += 1;\n`
+            self.w.push(' ');
+            self.emit_expr(&target);
+        } else {
+            // Postfix: cache the OLD value, mutate, then yield the cache.
+            self.w.push_str("let __jux_t = ");
+            self.emit_expr(&target);
+            self.w.push_str("; ");
+            self.emit_assign(&step);
+            self.w.push_str(" __jux_t");
+        }
+        self.w.push_str(" }");
+
+        self.emitting_format_arg = prev_fmt;
+    }
+
+    /// Rewrite an inc/dec place so it can be evaluated more than once
+    /// (read THEN write) without re-running any side effects, by hoisting
+    /// the side-effecting sub-parts into `let` temps.
+    ///
+    /// - **Name** (`x`) — no sub-parts, returned unchanged.
+    /// - **Index** (`a[idx]`) — the index `idx` is ALWAYS hoisted to
+    ///   `__jux_i` (it's read on both the load and the store), and a
+    ///   non-trivial array receiver is hoisted too.
+    /// - **Field** (`o.f`) — a non-trivial receiver `o` is hoisted.
+    ///
+    /// "Trivial" = a bare name or a `this`/`super` receiver: re-emitting
+    /// it is free and side-effect-free, so it stays inline for readable
+    /// output. Each hoisted sub-part is pushed onto `hoists` as
+    /// `(temp_name, original_expr)` for the caller to emit as a `let`.
+    fn hoist_incdec_place(
+        &self,
+        place: &juxc_ast::Expr,
+        hoists: &mut Vec<(String, juxc_ast::Expr)>,
+    ) -> juxc_ast::Expr {
+        match place {
+            // Index place: hoist the index (read+written), plus a
+            // non-trivial receiver. `__jux_i` shadows safely inside this
+            // block; nested inc/dec each get their own block scope.
+            juxc_ast::Expr::Index(ix) => {
+                let array = if Self::incdec_trivial_receiver(&ix.array) {
+                    (*ix.array).clone()
+                } else {
+                    let name = "__jux_recv".to_string();
+                    hoists.push((name.clone(), (*ix.array).clone()));
+                    Self::incdec_temp_path(&name, ix.span)
+                };
+                let idx_name = "__jux_i".to_string();
+                hoists.push((idx_name.clone(), (*ix.index).clone()));
+                let index = Self::incdec_temp_path(&idx_name, ix.span);
+                juxc_ast::Expr::Index(juxc_ast::IndexExpr {
+                    array: Box::new(array),
+                    index: Box::new(index),
+                    span: ix.span,
+                })
+            }
+            // Field place: hoist a non-trivial receiver.
+            juxc_ast::Expr::Field(f) => {
+                if Self::incdec_trivial_receiver(&f.object) {
+                    place.clone()
+                } else {
+                    let name = "__jux_recv".to_string();
+                    hoists.push((name.clone(), (*f.object).clone()));
+                    juxc_ast::Expr::Field(juxc_ast::FieldExpr {
+                        object: Box::new(Self::incdec_temp_path(&name, f.span)),
+                        field: f.field.clone(),
+                        safe: f.safe,
+                        span: f.span,
+                    })
+                }
+            }
+            // Bare name (or any other place the parser admitted) — no
+            // sub-parts to hoist; emit it in place.
+            other => other.clone(),
+        }
+    }
+
+    /// True when a place receiver is side-effect-free AND free to
+    /// re-emit: a single-segment name, `this`, or `super`. Anything else
+    /// (a call, an index, a chained field) gets hoisted.
+    fn incdec_trivial_receiver(e: &juxc_ast::Expr) -> bool {
+        matches!(e, juxc_ast::Expr::Path(_) | juxc_ast::Expr::This(_) | juxc_ast::Expr::Super(_))
+    }
+
+    /// Build a synthetic single-segment [`juxc_ast::Expr::Path`] naming a
+    /// hoist temp (e.g. `__jux_i`). The span is cosmetic — these nodes
+    /// never reach a diagnostic.
+    fn incdec_temp_path(name: &str, span: juxc_source::Span) -> juxc_ast::Expr {
+        juxc_ast::Expr::Path(juxc_ast::QualifiedName {
+            segments: vec![juxc_ast::Ident {
+                text: name.to_string(),
+                span,
+            }],
+            span,
+        })
+    }
 }

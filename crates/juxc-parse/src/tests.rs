@@ -814,6 +814,118 @@ fn plain_assignment_has_no_compound_op() {
 }
 
 // ---------------------------------------------------------------------------
+// §A `incdec` — expression-position ++/-- (value form, N3)
+// ---------------------------------------------------------------------------
+
+/// `print(x++)` parses the argument to a postfix `Expr::IncDec`
+/// (`is_inc: true`, `is_prefix: false`) wrapping the name `x`.
+#[test]
+fn postfix_incr_in_call_arg_parses_to_incdec() {
+    let ast = parse_clean("public void main() { var x = 1; print(x++); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(c)) = &body.statements[1] else {
+        panic!("expected a call statement, got {:?}", body.statements[1]);
+    };
+    let Expr::IncDec(i) = &c.args[0] else {
+        panic!("expected Expr::IncDec arg, got {:?}", c.args[0]);
+    };
+    assert!(i.is_inc, "++ should set is_inc");
+    assert!(!i.is_prefix, "postfix x++ should set is_prefix=false");
+    let Expr::Path(qn) = &*i.target else { panic!("target should be a Path") };
+    assert_eq!(qn.segments[0].text, "x");
+}
+
+/// `var y = ++x;` parses the RHS to a prefix `Expr::IncDec`
+/// (`is_inc: true`, `is_prefix: true`).
+#[test]
+fn prefix_incr_in_initializer_parses_to_incdec() {
+    let ast = parse_clean("public void main() { var x = 1; var y = ++x; }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[1] else {
+        panic!("expected a var decl, got {:?}", body.statements[1]);
+    };
+    let Some(Expr::IncDec(i)) = &v.init else {
+        panic!("expected Expr::IncDec init, got {:?}", v.init);
+    };
+    assert!(i.is_inc && i.is_prefix, "++x should be inc + prefix");
+}
+
+/// `arr[i++]` parses the INDEX to a postfix increment, leaving the
+/// outer expression an `Expr::Index`.
+#[test]
+fn postfix_incr_as_array_index_parses_to_incdec() {
+    let ast =
+        parse_clean("public void main() { var arr = new int[]{0}; var i = 0; print(arr[i++]); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(c)) = &body.statements[2] else { panic!() };
+    let Expr::Index(ix) = &c.args[0] else {
+        panic!("expected Expr::Index arg, got {:?}", c.args[0]);
+    };
+    let Expr::IncDec(i) = &*ix.index else {
+        panic!("index should be Expr::IncDec, got {:?}", ix.index);
+    };
+    assert!(i.is_inc && !i.is_prefix, "i++ in index should be inc + postfix");
+}
+
+/// All four value forms (`++x`, `x++`, `--x`, `x--`) parse to
+/// `Expr::IncDec` with the right `is_inc` / `is_prefix` flags when used
+/// in expression position (here, a call argument).
+#[test]
+fn all_four_incdec_value_forms_parse() {
+    let cases = [
+        ("++x", true, true),
+        ("x++", true, false),
+        ("--x", false, true),
+        ("x--", false, false),
+    ];
+    for (form, is_inc, is_prefix) in cases {
+        let src = format!("public void main() {{ var x = 1; print({form}); }}");
+        let ast = parse_clean(&src);
+        let body = body_of(&ast.items[0]);
+        let Stmt::Expr(Expr::Call(c)) = &body.statements[1] else {
+            panic!("{form}: expected call");
+        };
+        let Expr::IncDec(i) = &c.args[0] else {
+            panic!("{form}: expected Expr::IncDec, got {:?}", c.args[0]);
+        };
+        assert_eq!(i.is_inc, is_inc, "{form}: wrong is_inc");
+        assert_eq!(i.is_prefix, is_prefix, "{form}: wrong is_prefix");
+    }
+}
+
+/// REGRESSION: a bare statement `x++;` STILL desugars to the
+/// value-less `x += 1` assignment (the statement path is untouched) —
+/// it must NOT become an `Expr::IncDec`.
+#[test]
+fn statement_postfix_incr_stays_compound_assign() {
+    use juxc_ast::BinaryOp;
+    let ast = parse_clean("public void main() { var x = 1; x++; }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Assign(a) = &body.statements[1] else {
+        panic!("statement x++ should be an AssignStmt, got {:?}", body.statements[1]);
+    };
+    assert_eq!(a.op, Some(BinaryOp::Add), "x++ statement should be `x += 1`");
+}
+
+/// REGRESSION: a C-style for-update `i++` STILL desugars to `i += 1`
+/// (statement path) — no `Expr::IncDec` leaks into the for header.
+#[test]
+fn for_update_incr_stays_compound_assign() {
+    use juxc_ast::BinaryOp;
+    let ast = parse_clean(
+        "public void main() { for (int i = 0; i < 3; i++) { print(i); } }",
+    );
+    let body = body_of(&ast.items[0]);
+    let Stmt::ForC(f) = &body.statements[0] else {
+        panic!("expected a C-style for, got {:?}", body.statements[0]);
+    };
+    let Some(Stmt::Assign(a)) = f.update.as_deref() else {
+        panic!("for-update should be an AssignStmt, got {:?}", f.update);
+    };
+    assert_eq!(a.op, Some(BinaryOp::Add), "for-update i++ should be `i += 1`");
+}
+
+// ---------------------------------------------------------------------------
 // break / continue
 // ---------------------------------------------------------------------------
 
