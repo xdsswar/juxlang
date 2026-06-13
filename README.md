@@ -374,9 +374,27 @@ public void main() {
 }
 ```
 
-> Not yet: `unsafe { }` blocks and raw pointers (`int*`, `(byte*) buf`) are
-> specced but still placeholder, and parked behind the C/C++ FFI work. Don't reach
-> for them yet.
+`unsafe { }` blocks, `unsafe` functions, and the raw-pointer basics work today:
+`T*` types, address-of a local (`&n`), and dereference (`*p`), all gated to an
+`unsafe` context (the type checker raises `E0506` outside one). The example below
+compiles and runs:
+
+```java
+public unsafe void store(int* p, int value) { *p = value; }
+
+public void main() {
+    int n = 10;
+    unsafe {
+        int* p = &n;
+        store(p, *p * 2);
+    }
+    print($"n = $n");          // n = 20
+}
+```
+
+> Coming features (specced, not emitted yet): a `delete` keyword for freeing,
+> address-of an rvalue or object (`&42`, `&obj`), and the full C/C++ FFI binding
+> layer they hang off. Until those land, raw pointers are for value-typed locals.
 
 ---
 
@@ -418,7 +436,11 @@ runs. That currently includes:
 - `rust.std` compile coverage is partial: construction and method calls work;
   free functions, traits/operators, and the full type mapping are being filled in.
 - **C/C++ FFI** is specced and is a priority, but deferred for now.
-- Real tuple/pointer/unsafe interop syntax is still placeholder.
+- Raw-pointer basics work (`T*`, `&local`, `*p` inside `unsafe`); `delete`,
+  `&obj`/`&42`, and the full FFI binding layer are still to come.
+- Tuple syntax is still placeholder.
+- Expect bugs. This is experimental, one person is building it, and corners of the
+  language will break, change, or get rewritten without warning. File issues.
 
 ---
 
