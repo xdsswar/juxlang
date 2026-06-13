@@ -117,10 +117,12 @@ class JuxAnnotatorTest : BasePlatformTestCase() {
         assertContainsElements(keysAt(propsDemo, "observer", 1), "JUX_TYPE")
     }
 
-    fun testObserversMemberIsNativeColored() {
-        assertContainsElements(keysAt(propsDemo, "observers", 1), "JUX_NATIVE_MEMBER")
+    fun testObserversMemberIsPrimitiveColored() {
+        // `observers` is colored like `observer` / a primitive (TYPE), so the
+        // built-in §P member reads as language vocabulary, not a user field.
+        assertContainsElements(keysAt(propsDemo, "observers", 1), "JUX_TYPE")
         // Cross-object receiver (`m.Name.observers`) colors via the heuristic.
-        assertContainsElements(keysAt(propsDemo, "observers", 4), "JUX_NATIVE_MEMBER")
+        assertContainsElements(keysAt(propsDemo, "observers", 4), "JUX_TYPE")
     }
 
     fun testObserversOpsAreNativeColored() {

@@ -158,9 +158,11 @@ class JuxAnnotator : Annotator {
         val recv = parent.firstChild ?: return null
 
         return when {
-            // `<property>.observers`
+            // `<property>.observers` — colored like a primitive/`observer`
+            // (the TYPE attribute), so the §P built-in member reads as
+            // language vocabulary, not a user field.
             isMember ->
-                if (isPropertyReceiver(recv, optimistic = true)) JuxSyntaxHighlighter.NATIVE_MEMBER
+                if (isPropertyReceiver(recv, optimistic = true)) JuxSyntaxHighlighter.TYPE
                 else null
             // `<property>.observers.attach(…)` / `.detach(…)` (calls) and
             // `.clear` / `.size` (paren-free command accessors, §P.3.2 — with

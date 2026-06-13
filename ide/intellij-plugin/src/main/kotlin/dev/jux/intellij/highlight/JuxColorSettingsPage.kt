@@ -40,7 +40,6 @@ class JuxColorSettingsPage : ColorSettingsPage {
             "interp" to JuxSyntaxHighlighter.INTERPOLATION,
             "escape" to JuxSyntaxHighlighter.VALID_ESCAPE,
             "badEscape" to JuxSyntaxHighlighter.INVALID_ESCAPE,
-            "nativeMember" to JuxSyntaxHighlighter.NATIVE_MEMBER,
             "nativeOp" to JuxSyntaxHighlighter.NATIVE_OPERATION,
         )
 
@@ -55,7 +54,6 @@ class JuxColorSettingsPage : ColorSettingsPage {
             AttributesDescriptor("References//Parameter", JuxSyntaxHighlighter.PARAMETER),
             AttributesDescriptor("References//Local variable", JuxSyntaxHighlighter.LOCAL_VARIABLE),
             AttributesDescriptor("References//Enum constant", JuxSyntaxHighlighter.ENUM_CONSTANT),
-            AttributesDescriptor("Property//Native member ('observers')", JuxSyntaxHighlighter.NATIVE_MEMBER),
             AttributesDescriptor("Property//Native operation (attach, bind, …)", JuxSyntaxHighlighter.NATIVE_OPERATION),
             AttributesDescriptor("String//Interpolation delimiter", JuxSyntaxHighlighter.INTERPOLATION),
             AttributesDescriptor("String//Valid escape sequence", JuxSyntaxHighlighter.VALID_ESCAPE),
@@ -111,9 +109,9 @@ class JuxColorSettingsPage : ColorSettingsPage {
                 };
 
                 public void <method>wire</method>(<decl>Form</decl> <param>other</param>) {
-                    <field>Name</field>.<nativeMember>observers</nativeMember>.<nativeOp>attach</nativeOp>(<field>nameObs</field>);
-                    <field>Name</field>.<nativeMember>observers</nativeMember>.<nativeOp>clear</nativeOp>;
-                    <call>print</call>(<field>Name</field>.<nativeMember>observers</nativeMember>.<nativeOp>size</nativeOp>);
+                    <field>Name</field>.<type>observers</type>.<nativeOp>attach</nativeOp>(<field>nameObs</field>);
+                    <field>Name</field>.<type>observers</type>.<nativeOp>clear</nativeOp>;
+                    <call>print</call>(<field>Name</field>.<type>observers</type>.<nativeOp>size</nativeOp>);
                     <field>Title</field>.<nativeOp>bind</nativeOp>(<param>other</param>.<field>Name</field>);
                     <field>Title</field>.<nativeOp>unbind</nativeOp>();
                 }
