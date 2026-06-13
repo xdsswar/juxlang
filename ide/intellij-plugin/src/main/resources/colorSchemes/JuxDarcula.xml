@@ -1,11 +1,11 @@
 <scheme name="Darcula" version="142" parent_scheme="Darcula">
-  <!-- Generic type parameters (`T`, `R`, `E`, …) — a dark-leaning blue that
-       still reads on Darcula (pure navy is invisible on a dark background).
+  <!-- Generic type parameters (`T`, `R`, `E`, …) — a dark blue that still
+       reads on a dark background (pure navy would be invisible).
        Customizable under Color Scheme | Jux. -->
   <attributes>
     <option name="JUX_TYPE_PARAMETER">
       <value>
-        <option name="FOREGROUND" value="5189d6"/>
+        <option name="FOREGROUND" value="4a78c8"/>
       </value>
     </option>
   </attributes>
