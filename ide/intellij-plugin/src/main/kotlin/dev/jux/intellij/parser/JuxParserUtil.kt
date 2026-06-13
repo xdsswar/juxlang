@@ -87,12 +87,27 @@ fun PsiBuilder.skipMatched(open: IElementType, close: IElementType) {
     }
 }
 
+/**
+ * `ref` is being reserved compiler-side (parallel work): `public ref String x`
+ * declares a reference to an object rather than a copy. Looked up by NAME so
+ * this compiles before `jux-tokens.json` regenerates — null today; once the
+ * generated registry gains REF_KW it joins the modifier set (and the lexer
+ * colors it as a keyword) with zero edits here. Same pattern as `typeof`.
+ */
+val JUX_REF_KW: IElementType? = T.keywordType("ref")
+
+/** True when the current token is the (post-landing) `ref` keyword. */
+fun PsiBuilder.atRefKw(): Boolean = JUX_REF_KW != null && tokenType === JUX_REF_KW
+
 /** Keyword modifiers that may prefix a declaration. */
-val JUX_MODIFIERS: TokenSet = TokenSet.create(
-    T.PUBLIC_KW, T.PRIVATE_KW, T.PROTECTED_KW, T.INTERNAL_KW,
-    T.STATIC_KW, T.ABSTRACT_KW, T.FINAL_KW, T.CONST_KW, T.SEALED_KW,
-    T.ASYNC_KW, T.NATIVE_KW, T.UNSAFE_KW, T.VOLATILE_KW, T.DEFAULT_KW,
-    T.WEAK_KW, // `weak` field modifier (§6.5)
+val JUX_MODIFIERS: TokenSet = TokenSet.orSet(
+    TokenSet.create(
+        T.PUBLIC_KW, T.PRIVATE_KW, T.PROTECTED_KW, T.INTERNAL_KW,
+        T.STATIC_KW, T.ABSTRACT_KW, T.FINAL_KW, T.CONST_KW, T.SEALED_KW,
+        T.ASYNC_KW, T.NATIVE_KW, T.UNSAFE_KW, T.VOLATILE_KW, T.DEFAULT_KW,
+        T.WEAK_KW, // `weak` field modifier (§6.5)
+    ),
+    JUX_REF_KW?.let { TokenSet.create(it) } ?: TokenSet.EMPTY,
 )
 
 /** Keywords that open a type declaration. */

@@ -20,6 +20,19 @@ import dev.jux.intellij.psi.JuxElementTypes as E
  * (Java/Jux order), per §A.4.
  */
 
+/**
+ * `typeof` is being reserved compiler-side (parallel work): looked up by NAME
+ * so this file compiles before `jux-tokens.json` regenerates. Null today; the
+ * moment the generated [T] registry gains TYPEOF_KW, lexing/coloring/parsing
+ * all light up with zero edits here (the lexer classifies keywords through the
+ * same `keywordType` lookup). Once the token lands for good, these nullable
+ * references can be replaced by direct `T.TYPEOF_KW` — purely cosmetic.
+ */
+private val TYPEOF_KW: IElementType? = T.keywordType("typeof")
+
+private val TYPEOF_SET: TokenSet =
+    TYPEOF_KW?.let { TokenSet.create(it) } ?: TokenSet.EMPTY
+
 /** Tokens that can begin an expression — used for `?` and statement lookahead. */
 val JUX_EXPR_START: TokenSet = TokenSet.orSet(
     T.LITERALS,
@@ -29,6 +42,7 @@ val JUX_EXPR_START: TokenSet = TokenSet.orSet(
         T.LPAREN, T.LBRACKET,
         T.BANG, T.MINUS, T.PLUS, T.TILDE, T.AMP, T.STAR, T.MOVE_KW, T.AWAIT_KW, T.ASYNC_KW,
     ),
+    TYPEOF_SET,
 )
 
 private val ASSIGN_OPS: TokenSet = TokenSet.create(
@@ -47,6 +61,7 @@ private val CAST_FOLLOW: TokenSet = TokenSet.orSet(
         T.IDENTIFIER, T.THIS_KW, T.SUPER_KW, T.NEW_KW, T.LPAREN, T.SIZEOF_KW,
         T.BANG, T.TILDE, T.MOVE_KW, T.AWAIT_KW,
     ),
+    TYPEOF_SET,
 )
 
 /** Entry point: parse a full expression (including lambdas and assignment). */
@@ -255,6 +270,7 @@ private fun PsiBuilder.parsePrimary(): PsiBuilder.Marker? {
         t === T.SUPER_KW -> single(E.SUPER_EXPRESSION)
         t === T.NEW_KW -> parseNew()
         t === T.SIZEOF_KW -> parseSizeof()
+        TYPEOF_KW != null && t === TYPEOF_KW -> parseTypeof()
         t === T.SWITCH_KW -> parseSwitchExpression()
         t === T.IF_KW -> parseIfExpression()
         t === T.TRY_KW -> parseTryExpression() // `var v = try { … } catch (…) { … };`
@@ -288,6 +304,21 @@ private fun PsiBuilder.parseSizeof(): PsiBuilder.Marker {
     } else {
         parseUnary()
     }
+    m.done(E.UNARY_EXPRESSION)
+    return m
+}
+
+/**
+ * `typeof '(' expression ')'` (§5.9.10) — the compile-time static-type-name
+ * query, mirroring `juxc-parse/src/exprs.rs`. Unlike `sizeof` the operand is a
+ * full EXPRESSION (`typeof(i + 1)`), and the parentheses are mandatory.
+ */
+private fun PsiBuilder.parseTypeof(): PsiBuilder.Marker {
+    val m = mark()
+    advanceLexer() // `typeof`
+    expectOrError(T.LPAREN, "'(' expected after 'typeof'")
+    parseExpression()
+    expectOrError(T.RPAREN, "')' expected to close 'typeof'")
     m.done(E.UNARY_EXPRESSION)
     return m
 }

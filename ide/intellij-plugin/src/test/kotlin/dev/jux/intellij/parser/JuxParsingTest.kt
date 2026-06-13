@@ -457,6 +457,66 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         )
     }
 
+    /**
+     * Testing-framework shapes (sec. TS.1): an annotated free function parses
+     * error-free into a top-level METHOD_DECLARATION whose ANNOTATION nodes
+     * are its direct leading children — the structure JuxTestDetector and the
+     * placement inspection rely on. `for await` (sec. 18.6) parses too.
+     */
+    fun testAnnotatedFreeFunctionsAndForAwaitParse() {
+        val psi = createPsiFile(
+            "Tests.jux",
+            """
+            package demo;
+            import jux.std.testing.*;
+
+            @BeforeEach
+            void setup() {}
+
+            @Test
+            async void streams() {
+                for await (var x : source) {
+                    assertTrue(x > 0);
+                }
+            }
+            """.trimIndent(),
+        )
+        assertEmpty(PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java).toList())
+
+        val fns = psi.children.filterIsInstance<JuxMethodDeclaration>()
+        assertEquals(listOf("setup", "streams"), fns.map { it.name })
+        for (fn in fns) {
+            val ann = fn.children.firstOrNull { it.elementType === JuxElementTypes.ANNOTATION }
+            assertNotNull("annotation is a direct child of ${fn.name}", ann)
+        }
+        assertTrue(fns[0].children.any { it.elementType === JuxElementTypes.ANNOTATION && it.text == "@BeforeEach" })
+        assertTrue(fns[1].children.any { it.elementType === JuxElementTypes.ANNOTATION && it.text == "@Test" })
+    }
+
+    /**
+     * `ref` reference declarations (`public ref String x`) — pre-wired like
+     * `typeof`; the assertions only run once the compiler reserves the keyword
+     * and `jux-tokens.json` regenerates, so this passes before AND after.
+     */
+    fun testRefDeclarationsParseOnceReserved() {
+        if ("ref" !in dev.jux.intellij.highlight.JuxKeywords.KEYWORDS) return
+        val psi = createPsiFile(
+            "Refs.jux",
+            """
+            public class Holder {
+                public ref String shared;
+                public void use(ref String s) {
+                    ref String alias = shared;
+                    for (ref String x : items) {
+                        print(x);
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        assertEmpty(PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java).toList())
+    }
+
     /** A use of a type name resolves to its in-file declaration. */
     fun testReferenceResolvesToDeclaration() {
         val file = createPsiFile(

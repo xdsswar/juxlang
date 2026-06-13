@@ -35,6 +35,7 @@ class JuxRunConfigurationProducer : LazyRunConfigurationProducer<JuxRunConfigura
         return try {
             val (vf, text) = juxFileAndText(context) ?: return false
             if (!JuxMainDetector.hasMain(text)) return false
+            configuration.mode = JuxRunConfiguration.MODE_RUN
             configuration.filePath = vf.path
             configuration.name = vf.nameWithoutExtension
             true
@@ -48,6 +49,8 @@ class JuxRunConfigurationProducer : LazyRunConfigurationProducer<JuxRunConfigura
         context: ConfigurationContext,
     ): Boolean {
         return try {
+            // Test-mode configs belong to JuxTestRunConfigurationProducer.
+            if (configuration.isTestMode()) return false
             val vf = juxVirtualFile(context) ?: return false
             configuration.filePath == vf.path
         } catch (_: Exception) {

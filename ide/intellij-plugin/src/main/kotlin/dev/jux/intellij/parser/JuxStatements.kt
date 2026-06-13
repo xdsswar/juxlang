@@ -49,7 +49,9 @@ fun PsiBuilder.parseStatement() {
         T.UNSAFE_KW -> { val m = mark(); advanceLexer(); parseBlock(); m.done(E.UNSAFE_STATEMENT) }
         T.SEMICOLON -> { val m = mark(); advanceLexer(); m.done(E.EMPTY_STATEMENT) }
         T.VAR_KW, T.FINAL_KW, T.CONST_KW -> parseLocalVariable()
-        else -> parseLabeledOrExprOrLocal()
+        // `ref Type name = …;` (reference local) — token exists only once the
+        // compiler reserves `ref`; see JUX_REF_KW.
+        else -> if (atRefKw()) parseLocalVariable() else parseLabeledOrExprOrLocal()
     }
 }
 
@@ -140,7 +142,7 @@ private fun PsiBuilder.parseForStatement() {
 }
 
 private fun PsiBuilder.tryForEachHeader(): Boolean {
-    while (at(T.FINAL_KW) || at(T.CONST_KW)) advanceLexer()
+    while (at(T.FINAL_KW) || at(T.CONST_KW) || atRefKw()) advanceLexer()
     if (at(T.VAR_KW)) advanceLexer() else parseType()
     if (!at(T.IDENTIFIER)) return false
     advanceLexer() // name
@@ -148,8 +150,8 @@ private fun PsiBuilder.tryForEachHeader(): Boolean {
 }
 
 private fun PsiBuilder.parseForInit() {
-    if (at(T.VAR_KW) || at(T.FINAL_KW) || at(T.CONST_KW)) {
-        while (at(T.FINAL_KW) || at(T.CONST_KW)) advanceLexer()
+    if (at(T.VAR_KW) || at(T.FINAL_KW) || at(T.CONST_KW) || atRefKw()) {
+        while (at(T.FINAL_KW) || at(T.CONST_KW) || atRefKw()) advanceLexer()
         if (at(T.VAR_KW)) advanceLexer() else parseType()
         if (at(T.IDENTIFIER)) advanceLexer()
         if (expect(T.EQ)) parseExpression()
@@ -171,7 +173,7 @@ private fun PsiBuilder.parseForInit() {
 
 private fun PsiBuilder.parseLocalVariable() {
     val m = mark()
-    while (at(T.FINAL_KW) || at(T.CONST_KW)) advanceLexer()
+    while (at(T.FINAL_KW) || at(T.CONST_KW) || atRefKw()) advanceLexer()
     if (at(T.VAR_KW)) advanceLexer() else parseType()
     if (at(T.LPAREN)) skipMatched(T.LPAREN, T.RPAREN) // destructuring `var (x, y)`
     else expectOrError(T.IDENTIFIER, "variable name expected")

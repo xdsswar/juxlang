@@ -1,0 +1,13 @@
+<html>
+<body>
+Reports non-interfaces in an <code>implements</code> clause — only interfaces
+can be implemented, while classes are inherited via <code>extends</code>
+(<b>E0424</b>). Also flags <code>implements</code> on an interface declaration
+(interfaces extend other interfaces instead).
+<p>
+Supertypes resolve project-wide; unresolved (library) names are never flagged.
+When the implemented type is a class and the <code>extends</code> slot is
+free, the quick-fix moves it there.
+</p>
+</body>
+</html>

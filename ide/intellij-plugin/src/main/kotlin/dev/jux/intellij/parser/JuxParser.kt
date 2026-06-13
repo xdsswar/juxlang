@@ -465,11 +465,11 @@ class JuxParser : PsiParser {
         m.done(E.PARAMETER_LIST)
     }
 
-    /** `annotation* (final|const|out)? type '...'? name (= expr)?` */
+    /** `annotation* (final|const|ref|out)? type '...'? name (= expr)?` */
     private fun parseParameter(b: PsiBuilder) {
         val p = b.mark()
         parseAnnotations(b)
-        while (b.at(T.FINAL_KW) || b.at(T.CONST_KW)) b.advanceLexer()
+        while (b.at(T.FINAL_KW) || b.at(T.CONST_KW) || b.atRefKw()) b.advanceLexer()
         if (b.at(T.IDENTIFIER) && b.tokenText == "out") b.advanceLexer() // contextual param-mode
         b.parseType()
         if (b.at(T.ELLIPSIS)) b.advanceLexer() // `T... name` varargs

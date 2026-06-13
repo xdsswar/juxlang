@@ -1,5 +1,6 @@
 <templateSet group="Jux">
-  <template name="psvm" value="public void main() {&#10;    $END$&#10;}" description="Entry-point main function" toReformat="true" toShortenFQNames="false">
+  <!-- Free main needs no `public`/`static` (sec. E.1.2.2) — the bare form is canonical. -->
+  <template name="psvm" value="void main() {&#10;    $END$&#10;}" description="Entry-point main function" toReformat="true" toShortenFQNames="false">
     <context><option name="JUX" value="true"/></context>
   </template>
   <template name="sout" value="print($END$);" description="print(...)" toReformat="false" toShortenFQNames="false">
@@ -118,6 +119,35 @@
   </template>
   <template name="opeq" value="public bool operator==($OTHER$ o) {&#10;    return $END$;&#10;}" description="equality operator overload (§O.2)" toReformat="true" toShortenFQNames="false">
     <variable name="OTHER" expression="" defaultValue="&quot;Other&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="fawe" value="for await (var $ITEM$ : $STREAM$) {&#10;    $END$&#10;}" description="for-await loop over a Stream (§18.6)" toReformat="true" toShortenFQNames="false">
+    <variable name="ITEM" expression="" defaultValue="&quot;item&quot;" alwaysStopAt="true"/>
+    <variable name="STREAM" expression="" defaultValue="&quot;stream&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="test" value="@Test&#10;void $NAME$() {&#10;    $END$&#10;}" description="test function (§TS.1)" toReformat="true" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue="&quot;testName&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="tbe" value="@BeforeEach&#10;void setup() {&#10;    $END$&#10;}" description="before-each hook (§TS.1)" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="tae" value="@AfterEach&#10;void teardown() {&#10;    $END$&#10;}" description="after-each hook (§TS.1)" toReformat="true" toShortenFQNames="false">
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="aeq" value="assertEqual($EXPECTED$, $ACTUAL$);$END$" description="assertEqual (§TS.3)" toReformat="false" toShortenFQNames="false">
+    <variable name="EXPECTED" expression="" defaultValue="" alwaysStopAt="true"/>
+    <variable name="ACTUAL" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="atr" value="assertTrue($COND$);$END$" description="assertTrue (§TS.3)" toReformat="false" toShortenFQNames="false">
+    <variable name="COND" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
+  <template name="athr" value="var $E$ = assertThrows(() -&gt; $CALL$);$END$" description="assertThrows capturing the exception (§TS.3)" toReformat="false" toShortenFQNames="false">
+    <variable name="E" expression="" defaultValue="&quot;e&quot;" alwaysStopAt="true"/>
+    <variable name="CALL" expression="" defaultValue="" alwaysStopAt="true"/>
     <context><option name="JUX" value="true"/></context>
   </template>
 </templateSet>
