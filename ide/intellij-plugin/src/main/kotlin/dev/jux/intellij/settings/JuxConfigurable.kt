@@ -25,11 +25,19 @@ class JuxConfigurable : Configurable {
     override fun getDisplayName(): String = "Jux Toolchain"
 
     override fun createComponent(): JComponent {
+        // TextBrowseFolderListener form: present on every platform since 242 and
+        // NOT scheduled for removal, unlike the 4-arg
+        // addBrowseFolderListener(title, description, project, descriptor)
+        // overload (verifier flags it for removal). Same migration the run-config
+        // editor (JuxSettingsEditor) already uses; title/description move onto
+        // the descriptor.
         field.addBrowseFolderListener(
-            "Jux Toolchain",
-            "Select the Jux install root (containing bin/juxc) or the juxc executable",
-            null,
-            FileChooserDescriptorFactory.createSingleFileOrFolderDescriptor(),
+            com.intellij.openapi.ui.TextBrowseFolderListener(
+                FileChooserDescriptorFactory.createSingleFileOrFolderDescriptor()
+                    .withTitle("Jux Toolchain")
+                    .withDescription("Select the Jux install root (containing bin/juxc) or the juxc executable"),
+                null,
+            ),
         )
         field.textField.document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent) = refresh()
