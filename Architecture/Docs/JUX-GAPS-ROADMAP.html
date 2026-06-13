@@ -279,6 +279,12 @@ public async void readLines(Path file) {
 
 **Recommended approach:** Write addendum §18.6 — "Async Streams." Sits inside the concurrency section.
 
+> **Status (2026-06-12): DONE.** §18.6 written into `JUX-ASYNC-ADDENDUM-v2.md`
+> and implemented: built-in `Stream<T>` (`async T? next()`), `for await`,
+> `of`/`from`/`generate`, `mapAsync`/`filterAsync`/`take`/`skip`/`chain`,
+> implicit backpressure, E0703/E0704 diagnostics. Async generators and async
+> transform lambdas remain deferred (§18.7).
+
 ---
 
 ### 1.6. Networking, HTTP, JSON
@@ -452,6 +458,14 @@ Need:
 - Property testing: `@Property` with generated inputs (later, not v0.1).
 
 **Recommendation:** Write addendum §21 — "Testing." Mostly mechanical.
+
+> **Status (2026-06-12): DONE.** `JUX-TESTING-ADDENDUM.md` written and
+> implemented: `@Test` + the four lifecycle hooks (per-file scope),
+> `jux.std.testing` assertions (incl. `assertNear`, the Phase-1
+> `assertThrows` ruling), async tests via `block_on`, runtime filtering
+> (`jux test <pattern>`), `--release` with always-checked `assert`.
+> Deferred per §TS.9: parallel execution, JUnit XML, `@Property`,
+> `@Ignore`.
 
 ---
 

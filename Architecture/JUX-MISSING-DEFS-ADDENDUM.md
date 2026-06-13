@@ -285,10 +285,10 @@ JUX-LANG-V1 §8.1 uses `out RawHandle* db` and `out CString error` without speci
 ### M.4.1. Syntax
 
 ```
-param-mode        = 'final' | 'out'
+param-mode        = binding-immut | 'out'      -- binding-immut = 'const' | 'final'
 ```
 
-An `out` parameter is a parameter the function **writes to** rather than reads from. The caller passes a binding (a variable or a field) that will be assigned by the function.
+An `out` parameter is a parameter the function **writes to** rather than reads from. The caller passes a binding (a variable or a field) that will be assigned by the function. (The full parameter-modifier reference, including `final` semantics and the combination matrix, is §M.14.)
 
 ```jux
 public bool tryParse(String s, out int result) {
@@ -1159,6 +1159,154 @@ rejected in Phase 1.
 
 ---
 
+## §M.14 — Parameters: Comprehensive Reference
+
+Parameters accumulated their modifiers across several addenda — `out` (§M.4),
+`ref` (§M.13), defaults (§S.1.3), varargs (§E), and `final` (grammar §A.2.4) — but
+two of them were never given prose, and the legal *combinations* were never pinned
+down. This section is the single normative reference: it defines `final` parameter
+semantics, introduces `weak` parameters, states the default-parameter ordering rule,
+and gives the complete modifier-combination matrix. It introduces no new surface
+beyond `weak` on a parameter; everything else consolidates rules stated elsewhere.
+
+### M.14.1. The Two Modifier Axes
+
+A parameter carries modifiers on **two independent axes**:
+
+1. **Param-mode** — the slot *before* the type (`param-mode = binding-immut | 'out'`,
+   grammar §A.2.4): `final`/`const` (an immutable binding) or `out` (a write-back
+   slot, §M.4). The two are mutually exclusive — there is one slot.
+2. **Binding mode** — a prefix that is part of the *type* (`ref-type = 'ref' type`,
+   §M.13.4; `weak-type = 'weak' type`, §M.14.3): `ref` (a shared reference to a
+   value type) or `weak` (a weak reference to a class). At most one binding-mode
+   prefix may appear, and it is also mutually exclusive with `out`.
+
+Because the two axes are orthogonal, `final` composes with `ref` and `weak`
+(`final ref String x`, `final weak Node n`): the binding is both immutable (cannot
+be reassigned in the body) and shared/weak. The full matrix is §M.14.5.
+
+```
+param        = annotation* param-mode? type identifier ('=' expression)?
+param-mode   = binding-immut | 'out'          -- 'final'/'const', or 'out'
+type         = … | ref-type | weak-type | …    -- binding-mode prefixes live here
+ref-type     = 'ref' type                       -- §M.13.4
+weak-type    = 'weak' type                       -- §M.14.3 (new)
+```
+
+### M.14.2. `final` Parameters
+
+A `final` (equivalently `const` — synonyms, §A.2.4) parameter is an **immutable
+binding**: the parameter name cannot be reassigned within the function body. It
+mirrors a `final`/`const` local and Java's `final` parameter.
+
+```java
+public int distance(final int x, final int y) {
+    x = 0;                      // ERROR E0464 — cannot reassign a final parameter
+    return abs(x) + abs(y);     // reading is fine
+}
+```
+
+- **Reassignment is the only thing forbidden.** `final` constrains the *binding*,
+  not the object: a `final` parameter of a class type may still have its fields
+  mutated (the reference is fixed, the target is not), exactly like a `final` local.
+- **It is orthogonal to `ref`/`weak`/default/varargs** (§M.14.5) and mutually
+  exclusive with `out` (an `out` parameter must be assigned — §M.4 — so making it
+  `final` is contradictory: `E0944`).
+- **Lowering.** A `final` parameter lowers to a Rust binding with no `mut`. (An
+  ordinary parameter gains `mut` only when the body reassigns it; a `final`
+  parameter that is reassigned has already been rejected by `E0464`, so suppressing
+  `mut` is always sound.)
+
+### M.14.3. `weak` Parameters
+
+A `weak` parameter is a **weak reference to a class object** — the parameter form of
+the `weak` field (§6.5). It does not keep the referent alive; the referent may have
+been freed by the time the function runs.
+
+```java
+public void onTick(weak Sprite owner) {
+    var s = owner.get();        // .get() → Sprite? — may be null if the owner died
+    if (s != null) {
+        s.advance();
+    }
+}
+```
+
+- **Type restriction.** The pointee `T` must be a plain (non-generic-applied) class,
+  exactly as for `weak` fields. `weak` on a primitive, array, nullable, interface,
+  record, enum, type parameter, or generic-applied class is `E0455` (the same code
+  weak fields use; its scope now reads "field **or parameter** type").
+- **Reads require `.get()`.** A `weak` binding's strong view is reached only through
+  `.get()`, which yields `T?` (a nullable you must null-check); reading the parameter
+  bare is `E0456` (shared with weak fields). This is the §6.5 rule applied to a
+  parameter.
+- **No default value.** A `weak` parameter may not carry a default (`weak T x = …`)
+  in Phase 1 — a defaulted weak reference would bind a literal that is immediately
+  unreferenced and so always dead. This is `E0466` (§M.14.5).
+- **Lowering.** A `weak T` parameter lowers to `std::rc::Weak<RefCell<T_Inner>>`,
+  matching the weak-field storage (§6.5). At the call site, a class argument is
+  **downgraded** to a weak handle (`std::rc::Weak::clone` of an existing weak, or
+  `std::rc::Rc::downgrade(&arg)` of a strong reference). `.get()` lowers to the same
+  `.upgrade().map(…)` form weak fields use.
+- **Composition.** `final weak T` (an immutable weak binding) is allowed; `weak` is
+  mutually exclusive with `ref`, `out`, and varargs (§M.14.5).
+
+### M.14.4. Default-Parameter Ordering
+
+A parameter with a default value may not precede a parameter without one — defaults
+fill *trailing* omitted arguments, so a non-defaulted parameter after a defaulted one
+could never be omitted and the position would be unreachable.
+
+```java
+void connect(String host, int port = 80, int timeout = 30) { … }   // OK
+void bad(int port = 80, String host) { … }                          // ERROR E0467
+```
+
+This is `E0467`. (The pre-existing `E0449` — a default expression that references
+another parameter — is unchanged and independent.) Defaults compose with `final`
+and `ref` (`final String s = "hi"`, `ref int n = 0`) but not with `weak` or `out`.
+
+### M.14.5. The Combination Matrix
+
+`final` is orthogonal (binding immutability); `ref`/`weak` are mutually-exclusive
+binding modes on the type; `out` is a param-mode; varargs (`T…`) binds an array.
+
+| Combination                         | Verdict | Code |
+|-------------------------------------|---------|------|
+| `final T`, `final T = d`            | allowed | — |
+| `ref T`, `ref T = d`, `final ref T` | allowed | — |
+| `weak T` (T a class), `final weak T`| allowed | — |
+| `T…`, `final T…`                    | allowed | — |
+| `final` + `out`                     | rejected | `E0944` |
+| `out` + `ref`, `out` + `weak`       | rejected | `E0944` |
+| `out` + varargs / default / on ctor | rejected | `E0944` |
+| `ref` + `weak` (`ref weak T`)       | rejected | `E0466` |
+| `ref T…` / `weak T…` (binding-mode varargs) | rejected | `E0466` |
+| `weak T = d` (weak + default)       | rejected | `E0466` |
+| `weak T` where T is not a class     | rejected | `E0455` |
+| `weak` parameter read without `.get()` | rejected | `E0456` |
+| reassigning a `final` parameter     | rejected | `E0464` |
+| defaulted param before a plain one  | rejected | `E0467` |
+
+`E0466` is the umbrella for an **invalid parameter binding-mode combination**:
+combining `ref` with `weak`, applying `ref`/`weak` to a varargs parameter, or giving
+a `weak` parameter a default. `ref`/`weak` on an array ELEMENT or generic argument
+remains barred by §M.13.4 / §M.14.3; a varargs parameter binds a `T[]` array, so a
+binding-mode varargs is the array-element case and falls under the same bar.
+
+### M.14.6. Diagnostics (new + generalized)
+
+| Code    | Condition                                                                 |
+|---------|---------------------------------------------------------------------------|
+| `E0464` | Reassignment of a `final`/`const` binding (parameter or local).            |
+| `E0466` | Invalid parameter binding-mode combination (`ref`+`weak`, `ref`/`weak` on varargs, `weak`+default). |
+| `E0467` | A defaulted parameter precedes a non-defaulted parameter.                  |
+| `E0455` | (generalized) `weak` modifier on a non-class field **or parameter** type.  |
+| `E0456` | (generalized) `weak` field **or parameter** read without `.get()` (weak fields also: with an initializer). |
+| `E0944` | (generalized) Misuse of a write-back/immut modifier: `out` combined with `final`/`ref`/`weak`/varargs/default, or on a constructor parameter. |
+
+---
+
 ## Summary
 
 This addendum closes every dangling reference and acknowledged inconsistency identified in the gap analysis:
@@ -1177,6 +1325,7 @@ This addendum closes every dangling reference and acknowledged inconsistency ide
 | Foundational interfaces                       | §M.10   | Full contracts; `Iterator` resolved to `next() -> T?` |
 | `@Reflectable`                                | §M.11   | Opt-in compile-time reflection metadata     |
 | `ref` bindings                                | §M.13   | Shared references to value types (`Rc<RefCell>`) |
+| Parameter modifiers (final/weak/defaults/combos) | §M.14 | `final` semantics, `weak` parameters, default ordering, combination matrix |
 | `spawn` keyword/function                      | §M.12.1 | Library function only                       |
 | Cross-module class extension                   | §M.12.2 | Java-style: extendable by default, `final`/`const` opts out |
 | Static thread safety per profile              | §M.12.3 | Per-profile rule                            |

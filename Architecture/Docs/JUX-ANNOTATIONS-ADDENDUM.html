@@ -110,7 +110,7 @@ The annotations the compiler gives meaning to. Their full semantics live in thei
 | Annotation                            | Purpose                                                                | Specified in                              |
 |---------------------------------------|------------------------------------------------------------------------|-------------------------------------------|
 | `@Test`                               | Marks a function as a test case                                        | JUX-BUILD-SYSTEM-ADDENDUM (testing)       |
-| `@Derive(...)`                        | Auto-generates implementations (e.g., `@Derive(Equals, Hash)`)         | JUX-OPERATORS-ADDENDUM §O.3 / JUX-MISSING-DEFS §M.3 |
+| `@Derive(...)`                        | **Deprecated no-op** — accepted for forward compatibility, ignored (W0240 suggests removal); operator capabilities auto-derive unconditionally | JUX-OPERATORS-ADDENDUM §O.9 / JUX-MISSING-DEFS §M.3 |
 | `@Deprecated`                         | Marks an API as deprecated                                             | JUX-LANG-V1.md §3.6                       |
 | `@Override`                           | Verifies a method overrides a parent method                            | JUX-LANG-V1.md §7.4                       |
 | `@Inline`, `@NoInline`                | Inlining hints                                                         | JUX-LANG-V1.md §3.6                       |

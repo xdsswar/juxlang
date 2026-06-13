@@ -327,6 +327,48 @@ tracked as the observable-properties implementation work.
 
 ---
 
+## E10 — Parameter modifiers: `final` semantics, `weak` parameters, defaults ordering
+
+**Conflict.** Parameter modifiers were specified piecemeal and left two
+gaps and one terse contradiction:
+
+1. `final` appeared in the grammar (`param-mode`, §A.2.4) but its
+   *semantics* were never written — what does `final` on a parameter do?
+2. `weak` was specified for fields only (§6.5); whether it could apply to
+   a parameter was undefined.
+3. `JUX-MISSING-DEFS-ADDENDUM.md` §M.4.1 wrote `param-mode = 'final' | 'out'`,
+   while the grammar (§A.2.4) writes `param-mode = binding-immut | 'out'`
+   (with `binding-immut = 'const' | 'final'`). The `const` synonym was
+   dropped in the §M.4 snippet.
+4. The default-parameter *ordering* rule (defaults must be trailing) and
+   the legal *combinations* of all the modifiers were never stated.
+
+**Resolution.** A new consolidated section, **§M.14 "Parameters:
+Comprehensive Reference"**, is normative for all of the above:
+
+1. A `final`/`const` parameter is an **immutable binding** — it cannot be
+   reassigned in the body (new code `E0464`); reading it and mutating the
+   *fields* of a `final` class parameter remain legal. Lowering omits Rust
+   `mut`.
+2. `weak T` is allowed as a **parameter** (T a class), mirroring weak
+   fields: read via `.get()` → `T?`, lowers to `Weak<RefCell<T_Inner>>`,
+   call-site downgrades the argument. Reuses `E0455`/`E0456` (now
+   "field **or parameter**"). No default-valued weak parameter in Phase 1.
+3. `param-mode = binding-immut | 'out'` (the grammar form) is canonical;
+   the terse §M.4.1 line is read as shorthand.
+4. Defaults must be trailing (`E0467`); the full combination matrix
+   (§M.14.5) allows `final` to compose with `ref`/`weak`/defaults/varargs,
+   keeps `ref`/`weak`/`out` mutually exclusive, and forbids the
+   meaningless combos via `E0466` (and the generalized `E0944`).
+
+**Spec status:** Aligned (docs) — §M.14 added, grammar §A.2.4 annotated,
+diagnostics §D rows added (`E0464`/`E0466`/`E0467`, generalized
+`E0455`/`E0456`/`E0944`). Compiler implementation tracked as the
+parameter-features work (`final` enforcement, `weak` parameters, combination
+validation, default-ordering check).
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,
