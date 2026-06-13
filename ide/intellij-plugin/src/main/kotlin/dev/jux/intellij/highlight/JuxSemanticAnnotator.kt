@@ -7,6 +7,7 @@ import com.intellij.lang.annotation.ExternalAnnotator
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiFile
@@ -41,7 +42,6 @@ class JuxSemanticAnnotator : ExternalAnnotator<JuxSemanticAnnotator.Request, Lis
     data class Request(
         val project: Project,
         val filePath: String,
-        val text: String,
         val root: String,
         val juxc: String,
     )
@@ -50,10 +50,17 @@ class JuxSemanticAnnotator : ExternalAnnotator<JuxSemanticAnnotator.Request, Lis
         if (file !is JuxFile) return null
         if (ApplicationManager.getApplication().isUnitTestMode) return null
         if (JuxLspState.isServing(file.project)) return null
+        // juxc reads the file from DISK; its byte offsets are relative to the
+        // saved bytes. If the document has unsaved edits, those offsets wouldn't
+        // line up with the in-memory text we paint into — so we'd underline the
+        // wrong spans. Skip until saved (IDE autosave / Ctrl+S re-triggers the
+        // pass); never show mis-positioned diagnostics. (A future juxc stdin/
+        // overlay mode could make this keystroke-live.)
+        if (FileDocumentManager.getInstance().isDocumentUnsaved(editor.document)) return null
         val vf = file.virtualFile ?: return null
         val juxc = JuxToolchain.find("juxc") ?: return null
         val root = checkRoot(vf.path) ?: return null
-        return Request(file.project, vf.path, file.text, root, juxc)
+        return Request(file.project, vf.path, root, juxc)
     }
 
     override fun doAnnotate(info: Request): List<JuxDiagnostic> {

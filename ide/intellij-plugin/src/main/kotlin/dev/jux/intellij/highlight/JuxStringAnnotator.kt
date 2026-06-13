@@ -93,16 +93,16 @@ class JuxStringAnnotator : Annotator {
                 // scalar: ≤ 0x10FFFF and not a surrogate (the same
                 // `char::from_u32` rule `process_string_escapes` applies).
                 if (text.getOrNull(start + 2) != '{') return 2 to false
-                val close = text.indexOf('}', start + 3)
-                if (close < 0) return 2 to false
-                val hex = text.substring(start + 3, close)
-                val value = if (hex.isNotEmpty() && hex.length <= 6 && hex.all { it.isHexDigit() }) {
-                    hex.toLong(16)
-                } else {
-                    -1L
-                }
+                // Scan AT MOST 6 hex digits, then require the closing `}` right
+                // after. Bounded so a stray `\u{` can't `indexOf` a distant `}`
+                // (e.g. an interpolation hole's close) and miscolor a huge span.
+                var j = start + 3
+                while (j < text.length && j < start + 9 && text[j].isHexDigit()) j++
+                if (text.getOrNull(j) != '}') return 2 to false
+                val hex = text.substring(start + 3, j)
+                val value = if (hex.isNotEmpty()) hex.toLong(16) else -1L
                 val ok = value in 0..0x10FFFF && value !in 0xD800..0xDFFF
-                (close - start + 1) to ok
+                (j - start + 1) to ok
             }
             else -> 2 to false
         }

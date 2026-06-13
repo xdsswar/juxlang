@@ -77,7 +77,14 @@ class JuxReference(element: PsiElement, range: TextRange) :
         val end = i + 1
         while (i >= 0 && (text[i].isLetterOrDigit() || text[i] == '_')) i--
         val start = i + 1
-        return if (end > start) text.substring(start, end) else null
+        if (end <= start) return null
+        // Defer chained receivers (`a.b.name`): the receiver `b` is itself
+        // qualified, so resolving it as a bare in-scope value/type would be
+        // wrong (its type is `a`'s member type, which is the LSP's job). Only a
+        // single-identifier receiver (`recv.name`, `this.name`) is handled.
+        while (i >= 0 && text[i].isWhitespace()) i--
+        if (i >= 0 && text[i] == '.') return null
+        return text.substring(start, end)
     }
 
     /**

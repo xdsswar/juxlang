@@ -57,7 +57,9 @@ class JuxUnusedImportInspection : LocalInspectionTool() {
             // is left behind.
             val next = stmt.nextSibling
             stmt.delete()
-            if (next is PsiWhiteSpace && next.isValid && next.text.startsWith("\n")) {
+            if (next is PsiWhiteSpace && next.isValid &&
+                (next.text.startsWith("\n") || next.text.startsWith("\r"))
+            ) {
                 next.delete()
             }
         }

@@ -229,6 +229,46 @@ class JuxResolveAndNavTest : BasePlatformTestCase() {
         assertFalse(gutters.any { it.contains("overridden in", true) })
     }
 
+    fun testChainedMemberAccessDefersInsteadOfMisResolving() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class Wrong { public int v; }
+            public class Right { public int v; }
+            public class Mid { public Right leaf; }
+            public class App {
+                public Wrong leaf;
+                public void go(Mid m) {
+                    var z = m.leaf.v;
+                }
+            }
+            """.trimIndent(),
+        )
+        // `m.leaf.v` is a chained receiver (`m.leaf`). The in-file resolver must
+        // DEFER (null) rather than mis-resolve `v` via App's same-named `leaf`
+        // field (type Wrong) — that would jump to the wrong `v`.
+        val offset = myFixture.file.text.indexOf(".v;") + 1
+        val resolved = myFixture.file.findReferenceAt(offset)?.resolve()
+        assertNull("chained member must defer, not mis-resolve to Wrong.v", resolved)
+    }
+
+    fun testStaticMethodIsNotAnOverride() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class Base { public void f() {} }
+            public class Sub extends Base { public static void f() {} }
+            """.trimIndent(),
+        )
+        val f = com.intellij.psi.util.PsiTreeUtil
+            .findChildrenOfType(myFixture.file, dev.jux.intellij.psi.JuxMethodDeclaration::class.java)
+            .first { it.name == "f" && JuxHierarchy.enclosingType(it)?.name == "Base" }
+        // Sub.f is static — a same-signature static method is not an override.
+        assertEmpty(JuxSubtypes.overridingMethods(f))
+    }
+
     // ---- Go To Implementation (Ctrl+Alt+B) ----------------------------------
 
     fun testGoToImplementationFindsSubtypesAndOverrides() {
