@@ -25,13 +25,17 @@ import dev.jux.intellij.resolve.JuxReference
 import dev.jux.intellij.resolve.JuxTypeIndex
 
 /**
- * Live "Cannot resolve symbol" detection — the IDE feedback that lights up the
- * moment a local / parameter / field / method / function is renamed away and a
- * usage below is left dangling, with no compiler round-trip.
+ * Live "Cannot resolve symbol / type" detection — the IDE feedback that lights
+ * up the moment a local / parameter / field / method / function / **type** is
+ * renamed away and a usage below is left dangling, with no compiler round-trip.
+ *
+ * Two positions are covered: bare value references (`REFERENCE_EXPRESSION`) and
+ * type references (`TYPE_REFERENCE`), each with its own gate ([shouldFlagValue] /
+ * [shouldFlagType]). Member accesses (`obj.x`) stay with the language server.
  *
  * The deliberate non-goal is matching `juxc` exactly; the deliberate goal is
  * **zero false positives** on valid code (the reason [JuxReference] itself stays
- * soft). A bare value reference is flagged only when EVERY way the name could be
+ * soft). A reference is flagged only when EVERY way the name could be
  * legitimately bound has been ruled out:
  *
  *  - its first letter is lowercase — a bare *Capitalized* name may be a
@@ -75,18 +79,24 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
 
         val problems = ArrayList<ProblemDescriptor>()
         PsiTreeUtil.processElements(file) { e ->
-            if (e.elementType === E.REFERENCE_EXPRESSION) {
+            val isValue = e.elementType === E.REFERENCE_EXPRESSION
+            val isType = e.elementType === E.TYPE_REFERENCE
+            if (isValue || isType) {
                 val ref = e.references.firstOrNull() as? JuxReference
                 if (ref != null) {
                     val name = ref.value
                     val target = e.findElementAt(ref.rangeInElement.startOffset)
-                    if (target != null && shouldFlag(e, name, definedNames, importedNames, projectNames)) {
+                    val flag =
+                        if (isType) shouldFlagType(e, name, definedNames, importedNames, projectNames)
+                        else shouldFlagValue(e, name, definedNames, importedNames, projectNames)
+                    if (target != null && flag) {
+                        val noun = if (isType) "type" else "symbol"
                         problems.add(
                             manager.createProblemDescriptor(
                                 target,
-                                "Cannot resolve symbol '$name'",
+                                "Cannot resolve $noun '$name'",
                                 isOnTheFly,
-                                fixesFor(e, name, definedNames),
+                                fixesFor(e, name, isType),
                                 ProblemHighlightType.LIKE_UNKNOWN_SYMBOL,
                             ),
                         )
@@ -98,8 +108,12 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         return problems.toTypedArray()
     }
 
-    /** The escape-hatch gate from the class doc — all must be ruled out. */
-    private fun shouldFlag(
+    /**
+     * Value gate (bare `REFERENCE_EXPRESSION`): the escape hatches from the class
+     * doc. Restricted to lowercase names — a capitalized bare reference may be a
+     * type-as-value / std singleton, which the LSP owns.
+     */
+    private fun shouldFlagValue(
         element: PsiElement,
         name: String,
         definedNames: Set<String>,
@@ -107,9 +121,36 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         projectNames: Set<String>,
     ): Boolean {
         if (name.isEmpty() || name == "_") return false
-        if (!name[0].isLowerCase()) return false // Capitalized → type/std, LSP's job
+        if (!name[0].isLowerCase()) return false
         if (name in JuxKeywords.KEYWORDS || name in JuxKeywords.PRIMITIVES ||
             name in JuxKeywords.CONSTANTS || name in BUILTIN_GLOBALS
+        ) return false
+        if (name in definedNames || name in importedNames || name in projectNames) return false
+        return !isBlind(element)
+    }
+
+    /**
+     * Type gate (`TYPE_REFERENCE`): mirrors the value gate but keeps capitalized
+     * names (types usually are) and adds the always-in-scope [STD_PRELUDE_TYPES]
+     * — the `jux.std` `java.lang`-style prelude (`Map`, `List`, `Throwable`, …)
+     * the compiler prepends to every unit. Type parameters and in-file types are
+     * already covered by [definedNames]; `rust.std` types (`Vec`, `Box`, …) need
+     * an `import`, so flagging them unqualified matches `juxc`'s own E0301.
+     *
+     * Qualified references (`a.b.C`) are skipped — package-path resolution is the
+     * language server's job, not the per-file resolver's.
+     */
+    private fun shouldFlagType(
+        element: PsiElement,
+        name: String,
+        definedNames: Set<String>,
+        importedNames: Set<String>,
+        projectNames: Set<String>,
+    ): Boolean {
+        if (name.isEmpty() || name == "_") return false
+        if (element.text.substringBefore('<').contains('.')) return false // qualified → LSP
+        if (name in JuxKeywords.KEYWORDS || name in JuxKeywords.PRIMITIVES ||
+            name == "observer" || name in STD_PRELUDE_TYPES
         ) return false
         if (name in definedNames || name in importedNames || name in projectNames) return false
         return !isBlind(element)
@@ -147,12 +188,32 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
     }
 
     /**
-     * Offer "change to the nearest declaration" when an in-scope name is a close
+     * Offer "change to the nearest declaration" when a known name is a close
      * spelling match (edit distance ≤ 2) — the orphaned-by-rename / typo fix.
+     * Candidate pool depends on position: in-scope declarations for a value,
+     * visible type names for a type.
      */
-    private fun fixesFor(element: PsiElement, name: String, definedNames: Set<String>): Array<LocalQuickFix> {
-        val suggestion = nearestVisibleName(element, name) ?: return LocalQuickFix.EMPTY_ARRAY
+    private fun fixesFor(element: PsiElement, name: String, isType: Boolean): Array<LocalQuickFix> {
+        val suggestion =
+            (if (isType) nearestTypeName(element, name) else nearestVisibleName(element, name))
+                ?: return LocalQuickFix.EMPTY_ARRAY
         return arrayOf(RenameReferenceFix(suggestion))
+    }
+
+    /**
+     * The type name closest to [name] by edit distance (≤ 2): project-wide type
+     * declarations plus the [STD_PRELUDE_TYPES]. Null when nothing is close.
+     */
+    private fun nearestTypeName(element: PsiElement, name: String): String? {
+        val candidates = LinkedHashSet<String>()
+        candidates.addAll(JuxTypeIndex.allTypeNames(element.project))
+        candidates.addAll(STD_PRELUDE_TYPES)
+        candidates.remove(name)
+        return candidates
+            .map { it to levenshtein(name, it) }
+            .filter { it.second in 1..2 }
+            .minByOrNull { it.second }
+            ?.first
     }
 
     /**
@@ -229,6 +290,28 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
             E.TYPE_REFERENCE,
             E.FIELD_ACCESS_EXPRESSION,
             E.METHOD_REF_EXPRESSION,
+        )
+
+        /**
+         * The `jux.std` prelude types the compiler prepends to every unit, so
+         * they resolve unqualified `java.lang`-style (see `juxc-driver`'s
+         * `stdlib` loader / `stdlib_embedded`). Mirrors the public type
+         * declarations there — keep in sync if that surface changes. Deliberately
+         * excludes `rust.std`-only types (`Vec`, `Box`, `Rc`, …): those require an
+         * `import`, so an unqualified use of them is a real error.
+         */
+        val STD_PRELUDE_TYPES = setOf(
+            "String", "Object", "Self",
+            "ArrayList", "Collection", "HashMap", "HashSet", "Deque",
+            "Iterable", "Iterator", "List", "Map", "Set",
+            "MemoryOrder", "AtomicInt", "AtomicLong", "Worker",
+            "Option", "Result", "Clock", "Instant", "File", "Path", "Console",
+            "Throwable", "Error", "Exception", "RuntimeException",
+            "ArithmeticException", "ClassCastException", "FileNotFoundException",
+            "IllegalArgumentException", "IllegalStateException",
+            "IndexOutOfBoundsException", "IOException", "NoSuchElementException",
+            "NullPointerException", "TimeoutException", "CancellationException",
+            "UnsupportedOperationException",
         )
 
         /**
