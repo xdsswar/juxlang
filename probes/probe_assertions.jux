@@ -1,0 +1,27 @@
+// Smoke-test jux.std.testing assertions OUTSIDE the runner (plain
+// program, debug build → assert fires on failure paths).
+package asmoke;
+
+import jux.std.testing.{assertEqual, assertNotEqual, assertTrue, assertFalse, assertNull, assertNotNull, assertNear, assertThrows};
+
+int divide(int a, int b) {
+    if (b == 0) {
+        throw new RuntimeException("div by zero");
+    }
+    return a / b;
+}
+
+public void main() {
+    assertEqual(5, 2 + 3);
+    assertNotEqual(4, 2 + 3);
+    assertTrue(1 < 2);
+    assertFalse(2 < 1, "ordering broke");
+    String? none = null;
+    assertNull(none);
+    assertNotNull("x");
+    assertNear(0.3, 0.1 + 0.2, 0.0001);
+    var e = assertThrows(() -> divide(10, 0));
+    assertTrue(e.getMessage().contains("zero"));
+    assertEqual("ok", "o" + "k");
+    print("all assertions passed");
+}

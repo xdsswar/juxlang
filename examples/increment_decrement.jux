@@ -1,0 +1,20 @@
+public void main() {
+    int sum = 0;
+    for (int i = 0; i < 5; i++) {
+        sum += i;
+    }
+    print("sum: " + sum);
+    int j = 10;
+    j--;
+    print("j: " + j);
+    ++j;
+    print("j2: " + j);
+    var arr = new int[]{0, 0, 0};
+    int k = 0;
+    arr[k]++;
+    print("arr0: " + arr[0]);
+    for (int n = 3; n > 0; --n) {
+        print("countdown " + n);
+    }
+    print("done");
+}

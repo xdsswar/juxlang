@@ -299,6 +299,10 @@ pub struct NewObjectExpr {
     /// constructors, and static members are rejected by the
     /// parser. `None` for the regular `new T(args)` form.
     pub anonymous_body: Option<AnonymousBody>,
+    /// **Lexical evaluation order** (§S.1.4) for re-ordered named
+    /// constructor arguments — see [`CallExpr::eval_order`]. Empty
+    /// when the args evaluate positionally (the common case).
+    pub eval_order: Vec<usize>,
     /// Span of the whole `new T(args) [ { body } ]` form.
     pub span: Span,
 }
@@ -728,6 +732,16 @@ pub struct CallExpr {
     /// default-valued parameters, then clears the labels — so the
     /// backend only ever sees plain positional calls.
     pub arg_names: Vec<Option<Ident>>,
+    /// **Lexical evaluation order** (§S.1.4) — set by the call-sugar
+    /// expansion pass when NAMED arguments were re-ordered relative to
+    /// declaration order. Empty (the common case) means "evaluate
+    /// positionally", which is already source order. When non-empty,
+    /// it lists the slot indices in CALL-SITE LEXICAL order, so the
+    /// backend can hoist each argument into a temp in that order
+    /// before passing them positionally — preserving the spec's
+    /// left-to-right side-effect order even though `args` is now in
+    /// parameter-slot order.
+    pub eval_order: Vec<usize>,
     /// Span covering callee and argument list.
     pub span: Span,
 }

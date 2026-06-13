@@ -1,0 +1,25 @@
+// Wave-3 borrow stress #15: for-each over a GETTER-returned live
+// collection with structural mutation in the body — the H6 snapshot
+// was keyed on field iterables; this is the method-call twin.
+// Expect 1 2 3 then 0 (snapshot semantics), and above all NO panic.
+package stress15;
+
+public class S15 {
+    public ArrayList<int> items = new ArrayList<int>();
+    public ArrayList<int> getItems() { return this.items; }
+    public void clearItems() { this.items.clear(); }
+}
+
+void main() {
+    var s = new S15();
+    s.items.add(1);
+    s.items.add(2);
+    s.items.add(3);
+    for (var x : s.getItems()) {
+        if (x == 2) {
+            s.clearItems();
+        }
+        print(x);
+    }
+    print(s.items.size());
+}

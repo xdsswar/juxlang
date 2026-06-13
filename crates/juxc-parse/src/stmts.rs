@@ -39,6 +39,29 @@ impl<'a> Parser<'a> {
         Block { statements, span: start.join(end) }
     }
 
+    /// Parse a control-flow body that the grammar spells `statement`
+    /// (§A.2.8 — `if`/`while`/`for` bodies): either a brace `{ … }`
+    /// block, or a SINGLE braceless statement (`if (c) return;`)
+    /// wrapped in a synthetic one-statement [`Block`] so every
+    /// downstream consumer keeps seeing a block. Tuple-destructure
+    /// desugaring queues follow-ups into `pending_stmts`, which are
+    /// folded into the synthetic block in source order.
+    pub(crate) fn parse_block_or_stmt(&mut self) -> Block {
+        if self.at(&TokenKind::LBrace) {
+            return self.parse_block();
+        }
+        let start = self.peek_span();
+        let mut statements = Vec::new();
+        if let Some(stmt) = self.parse_stmt() {
+            statements.push(stmt);
+            statements.append(&mut self.pending_stmts);
+        } else {
+            self.recover_to_stmt_boundary();
+        }
+        let end = self.last_consumed_span();
+        Block { statements, span: start.join(end) }
+    }
+
     /// Parse one statement. Returns `None` on unrecoverable parse failure;
     /// caller handles recovery.
     ///
@@ -131,7 +154,7 @@ impl<'a> Parser<'a> {
             // least once; the condition is checked AFTER each pass.
             let start = self.peek_span();
             self.advance(); // 'do'
-            let body = self.parse_block();
+            let body = self.parse_block_or_stmt();
             self.expect_kw(Keyword::While, "`while` after `do` block");
             self.expect(&TokenKind::LParen, "'(' before do-while condition");
             let condition = self.parse_expr()?;
@@ -257,6 +280,18 @@ impl<'a> Parser<'a> {
         if self.looks_like_typed_local() {
             return self.parse_typed_local().map(Stmt::VarDecl);
         }
+        // **Prefix `++x` / `--x`** (§A) — desugar to `x += 1` / `x -= 1`
+        // before the expression path. (Jux has no value-producing
+        // increment in expression position; the statement form is what
+        // the spec's C-style `for` and counter loops use.)
+        if matches!(self.peek(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
+            let is_inc = matches!(self.peek(), TokenKind::PlusPlus);
+            self.advance(); // '++' / '--'
+            let target = self.parse_expr()?;
+            let stmt = self.make_incdec(target, is_inc)?;
+            self.expect(&TokenKind::Semicolon, "';' after `++`/`--` statement");
+            return Some(stmt);
+        }
         // Otherwise it's either an assignment statement or an expression
         // statement. We parse the leading expression first and then peek
         // at the next token — if it's `=` (or a compound assignment op
@@ -269,8 +304,48 @@ impl<'a> Parser<'a> {
         if let Some(op) = compound_assign_op(self.peek()) {
             return self.parse_assignment_tail(expr, Some(op));
         }
+        // **Postfix `x++` / `x--`** — same desugaring. The expression
+        // we just parsed is the lvalue.
+        if matches!(self.peek(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
+            let is_inc = matches!(self.peek(), TokenKind::PlusPlus);
+            self.advance();
+            let stmt = self.make_incdec(expr, is_inc)?;
+            self.expect(&TokenKind::Semicolon, "';' after `++`/`--` statement");
+            return Some(stmt);
+        }
         self.expect(&TokenKind::Semicolon, "';' after expression statement");
         Some(Stmt::Expr(expr))
+    }
+
+    /// Build the desugared `target += 1` / `target -= 1` assignment for
+    /// a `++` / `--` (§A). The target must be an assignable place
+    /// (name / index / field); anything else is `E0200`.
+    pub(crate) fn make_incdec(&mut self, target: Expr, is_inc: bool) -> Option<Stmt> {
+        let span = expr_span(&target);
+        let is_lvalue = matches!(&target, Expr::Path(qn) if qn.segments.len() == 1)
+            || matches!(&target, Expr::Index(_) | Expr::Field(_));
+        if !is_lvalue {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "`++`/`--` requires an assignable place (a name, array element, or field)",
+                )
+                .with_span(span),
+            );
+            return None;
+        }
+        let one = Expr::Literal(juxc_ast::Literal::Int(juxc_ast::IntLit {
+            value: 1,
+            kind: None,
+            radix: juxc_ast::IntRadix::Decimal,
+            digit_width: 1,
+        }));
+        Some(Stmt::Assign(AssignStmt {
+            target,
+            op: Some(if is_inc { BinaryOp::Add } else { BinaryOp::Sub }),
+            value: one,
+            span,
+        }))
     }
 
     /// `for-each-stmt = 'for' '(' ( 'var' | type ) identifier ':' expression ')' block`
@@ -354,7 +429,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Colon, "':' in for-each loop header");
         let iter = self.parse_expr()?;
         self.expect(&TokenKind::RParen, "')' after for-each header");
-        let body = self.parse_block();
+        let body = self.parse_block_or_stmt();
         let end = self.last_consumed_span();
         Some(ForEachStmt { is_await, var_type, var_name, iter, body, span: start.join(end) })
     }
@@ -434,12 +509,23 @@ impl<'a> Parser<'a> {
         // ---- update clause (terminated by `)`) ----
         let update: Option<Box<Stmt>> = if self.at(&TokenKind::RParen) {
             None
+        } else if matches!(self.peek(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
+            // Prefix `++i` / `--i` in the update clause.
+            let is_inc = matches!(self.peek(), TokenKind::PlusPlus);
+            self.advance();
+            let target = self.parse_expr()?;
+            Some(Box::new(self.make_incdec(target, is_inc)?))
         } else {
             let expr = self.parse_expr()?;
             let s = if self.at(&TokenKind::Eq) {
                 self.parse_assignment_tail_no_semi(expr, None)?
             } else if let Some(op) = compound_assign_op(self.peek()) {
                 self.parse_assignment_tail_no_semi(expr, Some(op))?
+            } else if matches!(self.peek(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
+                // Postfix `i++` / `i--` — the common C-style for-update.
+                let is_inc = matches!(self.peek(), TokenKind::PlusPlus);
+                self.advance();
+                self.make_incdec(expr, is_inc)?
             } else {
                 Stmt::Expr(expr)
             };
@@ -447,7 +533,7 @@ impl<'a> Parser<'a> {
         };
         self.expect(&TokenKind::RParen, "')' after for-update");
 
-        let body = self.parse_block();
+        let body = self.parse_block_or_stmt();
         let end = self.last_consumed_span();
         Some(ForCStmt { init, cond, update, body, span: start.join(end) })
     }
@@ -459,7 +545,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::LParen, "'(' after `while`");
         let condition = self.parse_expr()?;
         self.expect(&TokenKind::RParen, "')' after `while` condition");
-        let body = self.parse_block();
+        let body = self.parse_block_or_stmt();
         let end = self.last_consumed_span();
         Some(WhileStmt { condition, body, span: start.join(end) })
     }
@@ -857,16 +943,18 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::LParen, "'(' after `if`");
         let condition = self.parse_expr()?;
         self.expect(&TokenKind::RParen, "')' after `if` condition");
-        let then_block = self.parse_block();
+        // §A.2.8: an `if` body is a `statement` — a brace block OR a
+        // single braceless statement (`if (c) return;`).
+        let then_block = self.parse_block_or_stmt();
 
         // Optional else clause. After `else` we either nest another `if`
-        // (else-if chain) or parse a block.
+        // (else-if chain) or parse a block / single statement.
         let else_branch = if self.eat_kw(Keyword::Else) {
             if self.at_kw(Keyword::If) {
                 let nested = self.parse_if_stmt()?;
                 Some(Box::new(ElseBranch::If(nested)))
             } else {
-                let block = self.parse_block();
+                let block = self.parse_block_or_stmt();
                 Some(Box::new(ElseBranch::Block(block)))
             }
         } else {

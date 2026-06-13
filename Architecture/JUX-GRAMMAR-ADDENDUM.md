@@ -485,7 +485,14 @@ do-while-stmt     = 'do' statement 'while' '(' expression ')' ';'
 for-stmt          = 'for' '(' for-init? ';' expression? ';'
                     for-update? ')' statement
 for-init          = local-decl-no-semi | expression-list
-for-update        = expression-list
+for-update        = expression-list | incdec
+
+incdec-stmt       = incdec ';'
+incdec            = ( '++' | '--' ) lvalue          -- prefix
+                  | lvalue ( '++' | '--' )           -- postfix
+-- `lvalue` is a name, array element, or field. In STATEMENT and
+-- for-update position only; `++`/`--` produce no value in expression
+-- position (Phase 1). Desugars to `lvalue += 1` / `lvalue -= 1`.
 
 for-each-stmt     = 'for' '(' ( 'var' | type ) identifier ':' expression ')'
                     statement

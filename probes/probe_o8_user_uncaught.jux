@@ -1,0 +1,12 @@
+package userunc;
+
+public class BoomException extends RuntimeException {
+    public BoomException(String message) {
+        super(message);
+    }
+}
+
+public void main() {
+    print("start");
+    throw new BoomException("kaboom");
+}

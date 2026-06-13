@@ -1,0 +1,55 @@
+// Wave-3 borrow stress #12: operator overloads with SELF-REFERENTIAL
+// operands — `a = a + a.scale(2)` (mutating RHS call on the same
+// object) and `m[k] = m[k] + m.total()` (O4 covered `m[k] += v` only).
+// Expect 12 then 11: reference semantics — the arg `a.scale(2)`
+// mutates `a` to 6 BEFORE `operator+` reads `this.x`, so 6+6=12
+// (same as Java's `a.plus(a.scale(2))` on a shared reference).
+package stress12;
+
+public class Num12 {
+    public int x;
+    public Num12(int x) { this.x = x; }
+    public Num12 operator+(Num12 other) {
+        return new Num12(this.x + other.x);
+    }
+    public Num12 scale(int k) {
+        this.x = this.x * k;
+        return new Num12(this.x);
+    }
+    public int get() { return this.x; }
+}
+
+public class Grid12 {
+    public ArrayList<int> cells = new ArrayList<int>();
+    public Grid12() {
+        this.cells.add(5);
+        this.cells.add(1);
+    }
+    public int operator [](int i) {
+        return this.cells.get(i);
+    }
+    public void operator []=(int i, int v) {
+        this.cells.set(i, v);
+    }
+    public int total() {
+        var t = 0;
+        for (var c : this.cells) {
+            t = t + c;
+        }
+        return t;
+    }
+}
+
+void main() {
+    // scale mutates a to 6 and returns Num12(6); operator+ then reads
+    // this.x = 6 → 12 (reference semantics).
+    var a = new Num12(3);
+    a = a + a.scale(2);
+    print(a.get());
+
+    // g[0]=5, g[1]=1, total=6 → g[1] = 5 + 6 = 11; both index ops and
+    // the total() read borrow `g` inside one statement.
+    var g = new Grid12();
+    g[1] = g[0] + g.total();
+    print(g[1]);
+}

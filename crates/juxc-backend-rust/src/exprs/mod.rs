@@ -544,6 +544,10 @@ impl RustEmitter {
                         (joined, true)
                     }
                 };
+                // Mark the writer BEFORE the callee so a re-ordered
+                // named ctor (§S.1.4 / C7) can split off `Class::new(`
+                // and re-emit it after the lexical-order arg temps.
+                let mark_callee = self.w.len();
                 if prepend_crate {
                     self.w.push_str("crate::");
                 }
@@ -708,32 +712,59 @@ impl RustEmitter {
                     .unwrap_or_default();
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
-                for (i, arg) in n.args.iter().enumerate() {
-                    if i > 0 {
-                        self.w.push_str(", ");
-                    }
-                    // Interface / polymorphic-base parameter slot → coerce.
+                // The per-arg coercion (iface/base wrap, nullable
+                // `Some()`, wrapper share-clone), shared by the inline
+                // and the lexical-hoist paths.
+                let emit_one = |this: &mut Self, i: usize, arg: &juxc_ast::Expr| {
                     if let Some(pty) = ctor_param_types.get(i) {
                         if !matches!(
-                            self.iface_coercion_to(pty, arg),
+                            this.iface_coercion_to(pty, arg),
                             crate::analysis::IfaceCoercion::None,
                         ) {
-                            self.emit_expr_coerced_to_iface(pty, arg);
-                            continue;
+                            this.emit_expr_coerced_to_iface(pty, arg);
+                            return;
                         }
                     }
                     let nullable = ctor_nullable_flags.get(i).copied().unwrap_or(false);
-                    self.emit_arg_with_nullable_wrap(arg, nullable);
-                    // Wrapper-class share-on-pass (§CR.4.1): a wrapped
-                    // place handed to `new C(arg)` shares the instance —
-                    // append the `Rc` refcount-bump clone so the
-                    // constructor stores a shared handle, not a move.
-                    if !nullable && self.wrapper_value_needs_clone(arg) {
-                        self.w.push_str(".clone()");
+                    this.emit_arg_with_nullable_wrap(arg, nullable);
+                    if !nullable && this.wrapper_value_needs_clone(arg) {
+                        this.w.push_str(".clone()");
                     }
+                };
+                if !n.eval_order.is_empty() {
+                    // §S.1.4 (C7): the named args were re-ordered. Pull
+                    // the already-emitted `Class::new(` back out, bind
+                    // each (coerced) arg to `__jux_arg{slot}` in
+                    // call-site LEXICAL order, then re-emit the callee
+                    // passing the temps POSITIONALLY — side effects fire
+                    // left-to-right as written, slots stay correct.
+                    let callee = self.w.split_off_from(mark_callee);
+                    self.w.push_str("{ ");
+                    for &slot in &n.eval_order {
+                        if let Some(arg) = n.args.get(slot) {
+                            self.w.push_str(&format!("let __jux_arg{slot} = "));
+                            emit_one(self, slot, arg);
+                            self.w.push_str("; ");
+                        }
+                    }
+                    self.w.push_str(&callee);
+                    for i in 0..n.args.len() {
+                        if i > 0 {
+                            self.w.push_str(", ");
+                        }
+                        self.w.push_str(&format!("__jux_arg{i}"));
+                    }
+                    self.w.push_str(") }");
+                } else {
+                    for (i, arg) in n.args.iter().enumerate() {
+                        if i > 0 {
+                            self.w.push_str(", ");
+                        }
+                        emit_one(self, i, arg);
+                    }
+                    self.w.push(')');
                 }
                 self.emitting_format_arg = prev;
-                self.w.push(')');
             }
             Expr::Lambda(l) => self.emit_lambda(l),
             Expr::Elvis(e) => self.emit_elvis(e),

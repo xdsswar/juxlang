@@ -1,0 +1,38 @@
+// C7 / §S.1.4 — reordered NAMED arguments evaluate in call-site
+// lexical order, while still landing in the right parameter slots.
+package c7;
+
+int trace(String tag, int v) {
+    print("eval " + tag);
+    return v;
+}
+
+void three(int a, int b, int c) {
+    print("three a=" + a + " b=" + b + " c=" + c);
+}
+
+public class Box {
+    public int x;
+    public int y;
+    public Box(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
+public void main() {
+    // Fully reversed 3-arg named call: lexical order C,B,A; slots a,b,c.
+    three(c: trace("C", 3), b: trace("B", 2), a: trace("A", 1));
+
+    // Partial reorder: b first (lexical), then a.
+    three(b: trace("Y", 20), a: trace("X", 10), c: trace("Z", 30));
+
+    // Non-reordered named call: in declaration order — no hoist needed.
+    three(a: trace("P", 1), b: trace("Q", 2), c: trace("R", 3));
+
+    // Constructor with reordered named args.
+    var bx = new Box(y: trace("BY", 9), x: trace("BX", 4));
+    print("bx: " + bx.x + "," + bx.y);
+
+    print("done");
+}

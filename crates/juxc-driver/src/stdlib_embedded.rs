@@ -1542,9 +1542,9 @@ public void assertNear(double expected, double actual, double epsilon = 0.000000
  * normally. Phase-1 form of the spec's typed assertThrows — see
  * §TS.3 for the divergence note.
  */
-public Exception assertThrows(() -> void f) {
+public Exception assertThrows(() -> void action) {
     try {
-        f();
+        action();
     } catch (Exception e) {
         return e;
     }

@@ -858,6 +858,13 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 // extend), but substitution applies for the record's
                 // own generic params.
                 if let Some(record) = symbols.records.get(name) {
+                    // §M.5 synthesized wither: `r.with(name: v, …)`
+                    // returns a NEW record of the same type. A
+                    // user-declared `with` method (below) shadows the
+                    // synthesized one.
+                    if method_name == "with" && !record.methods.contains_key("with") {
+                        return receiver_ty.clone();
+                    }
                     if let Some(method) = record.methods.get(method_name) {
                         let raw = return_type_in_method(
                             &method.return_type,

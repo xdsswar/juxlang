@@ -787,6 +787,13 @@ struct RustEmitter {
     /// `(N as isize)` value-cast for const params — the size slot
     /// needs the raw `usize`.
     pub(crate) in_array_size_position: bool,
+    /// Set while emitting the initializer of a DYNAMIC-array slot
+    /// (`int[] a = new int[3]`, §5.6). A `new T[N]` then lowers to a
+    /// heap `vec![default; N]` instead of a stack `[default; N]` — the
+    /// Java-standard array allocation, and the only valid form for a
+    /// runtime-sized `N`. Cleared for fixed-array (`int[N] a`) and
+    /// `var` slots, which keep the stack-array shape.
+    pub(crate) dynamic_array_target: bool,
     /// A loop label waiting to be attached — set by the
     /// `Stmt::Labeled` emission arm, consumed by the next loop
     /// emitter (`emit_while` / `emit_do_while` / `emit_for_each` /
@@ -3088,6 +3095,7 @@ impl RustEmitter {
             out_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),
             in_array_size_position: false,
+            dynamic_array_target: false,
             pending_loop_label: None,
             downcast_targets: std::collections::HashSet::new(),
             emitting_wrapper_class: false,

@@ -1,0 +1,11 @@
+// A Stream captured by spawn must be rejected (task-local handles).
+package sgate;
+
+public async void main() {
+    var s = Stream.of(1, 2, 3);
+    var t = spawn(async () -> {
+        var v = await s.next();
+        return v;
+    });
+    await t;
+}

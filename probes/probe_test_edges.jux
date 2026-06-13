@@ -1,0 +1,19 @@
+// assertEqual over records and enums (operator==/string come from
+// the auto-derives); assertNull on a smart-cast nullable.
+import jux.std.testing.{assertEqual, assertNotEqual, assertNull, assertNotNull};
+
+record Point(int x, int y) {}
+
+enum Color { Red, Green }
+
+public void main() {
+    assertEqual(new Point(1, 2), new Point(1, 2));
+    assertNotEqual(new Point(1, 2), new Point(3, 4));
+    assertEqual(Color.Red, Color.Red);
+    assertNotEqual(Color.Red, Color.Green);
+    String? s = null;
+    assertNull(s);
+    s = "v";
+    assertNotNull(s);
+    print("edges ok");
+}

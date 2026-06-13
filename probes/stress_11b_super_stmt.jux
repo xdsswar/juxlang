@@ -1,0 +1,19 @@
+// Minimal: is a statement-position `super.method(...)` call parsed?
+package stress11b;
+
+public class B {
+    public void greet() { print("base"); }
+}
+
+public class D extends B {
+    @Override
+    public void greet() {
+        super.greet();
+        print("derived");
+    }
+}
+
+void main() {
+    var d = new D();
+    d.greet();
+}
