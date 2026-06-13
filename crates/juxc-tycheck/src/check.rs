@@ -1069,6 +1069,30 @@ impl<'a> Checker<'a> {
     }
 
     fn check_param_defaults(&mut self, params: &[juxc_ast::Param]) {
+        // §M.14.4 (E0467): a default fills a TRAILING omitted argument, so a
+        // plain (non-defaulted, non-varargs) parameter may not follow a
+        // defaulted one — its position could never be omitted. A trailing
+        // varargs after a default is exempt (it's handled by the E0212
+        // last-param rule and can be empty).
+        let mut seen_default = false;
+        for param in params {
+            if param.default.is_some() {
+                seen_default = true;
+            } else if seen_default && !param.is_varargs {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0467_DefaultParamOrdering,
+                        format!(
+                            "parameter `{}` has no default value but follows a defaulted \
+                             parameter — move all defaulted parameters to the end of the \
+                             list (§M.14.4)",
+                            param.name.text,
+                        ),
+                    )
+                    .with_span(param.span),
+                );
+            }
+        }
         for param in params {
             let Some(default) = &param.default else { continue };
             for other in params {
@@ -1227,9 +1251,12 @@ impl<'a> Checker<'a> {
         params: &[juxc_ast::Param],
         body: &juxc_ast::Block,
     ) {
+        // `ref`/`weak` bindings are excluded: on those, `x = v` is a
+        // store-through / handle operation (§M.13.2), not a binding
+        // reassignment, so `final ref` / `final weak` never trip E0464.
         let finals: std::collections::HashSet<String> = params
             .iter()
-            .filter(|p| p.is_final)
+            .filter(|p| p.is_final && !p.is_shared_ref && !p.is_weak)
             .map(|p| p.name.text.clone())
             .collect();
         // A body with no `final` params can still declare `final` locals, so we
@@ -1261,10 +1288,11 @@ impl<'a> Checker<'a> {
         finals: &mut std::collections::HashSet<String>,
     ) {
         match stmt {
-            // A local declaration (re)binds its name in this scope: `final var`
-            // makes it final, a plain `var` un-finals a shadowed outer name.
+            // A local declaration (re)binds its name in this scope: a `final`
+            // (non-`ref`) local makes it final; a plain `var` — or a `final ref`
+            // local, whose `=` stores through (§M.13.2) — un-finals the name.
             Stmt::VarDecl(v) => {
-                if v.is_final {
+                if v.is_final && !v.is_ref {
                     finals.insert(v.name.text.clone());
                 } else {
                     finals.remove(&v.name.text);
@@ -7209,6 +7237,29 @@ mod tests {
     fn weak_param_bare_read_is_e0456() {
         let d = run("public class N { } public void f(weak N n) { var x = n; }");
         assert!(has(&d, code::Code::E0456_WeakReadNeedsGet), "{d:?}");
+    }
+
+    // --- §M.14.4 default-parameter ordering (E0467) ---
+
+    /// A non-defaulted parameter after a defaulted one is E0467.
+    #[test]
+    fn default_before_plain_param_is_e0467() {
+        let d = run("public void f(int a = 1, int b) { }");
+        assert!(has(&d, code::Code::E0467_DefaultParamOrdering), "{d:?}");
+    }
+
+    /// Trailing defaults are fine.
+    #[test]
+    fn trailing_defaults_are_ok() {
+        let d = run("public void f(int a, int b = 1, int c = 2) { }");
+        assert!(!has(&d, code::Code::E0467_DefaultParamOrdering), "{d:?}");
+    }
+
+    /// A trailing varargs after a default is exempt.
+    #[test]
+    fn default_then_varargs_is_ok() {
+        let d = run("public void f(int a = 1, int... xs) { }");
+        assert!(!has(&d, code::Code::E0467_DefaultParamOrdering), "{d:?}");
     }
 
     /// Bare `return;` in a void function is fine.

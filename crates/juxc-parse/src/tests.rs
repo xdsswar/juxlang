@@ -37,6 +37,78 @@ fn parse_with_errors(src: &str) -> (juxc_ast::CompilationUnit, usize) {
     (parse_result.ast, n)
 }
 
+/// True when parsing `src` produces a diagnostic with `code`.
+fn parse_has_code(src: &str, code: juxc_diagnostics::code::Code) -> bool {
+    let sf = SourceFile::new("test.jux", src);
+    let lex_result = lex(&sf);
+    let parse_result = parse(&lex_result.tokens);
+    parse_result.diagnostics.iter().any(|d| d.code == code)
+}
+
+// ---------------------------------------------------------------------------
+// §M.14.5 — parameter binding-mode combination matrix
+// ---------------------------------------------------------------------------
+
+/// `ref weak T` (and `weak ref T`) — mutually exclusive binding modes (E0466).
+#[test]
+fn ref_and_weak_param_is_e0466() {
+    use juxc_diagnostics::code::Code;
+    assert!(parse_has_code(
+        "public class N { } public void f(ref weak N n) { }",
+        Code::E0466_InvalidParamBindingCombo,
+    ));
+    assert!(parse_has_code(
+        "public class N { } public void f(weak ref N n) { }",
+        Code::E0466_InvalidParamBindingCombo,
+    ));
+}
+
+/// `ref T...` / `weak T...` — a binding mode on a varargs parameter (E0466).
+#[test]
+fn binding_mode_varargs_is_e0466() {
+    use juxc_diagnostics::code::Code;
+    assert!(parse_has_code(
+        "public void f(ref int... xs) { }",
+        Code::E0466_InvalidParamBindingCombo,
+    ));
+    assert!(parse_has_code(
+        "public class N { } public void f(weak N... ns) { }",
+        Code::E0466_InvalidParamBindingCombo,
+    ));
+}
+
+/// `weak T = default` — a defaulted weak parameter (E0466).
+#[test]
+fn weak_default_param_is_e0466() {
+    use juxc_diagnostics::code::Code;
+    assert!(parse_has_code(
+        "public class N { } public void f(weak N n = null) { }",
+        Code::E0466_InvalidParamBindingCombo,
+    ));
+}
+
+/// `out ref T` / `out weak T` — `out` is incompatible with a binding mode (E0944).
+#[test]
+fn out_with_binding_mode_is_e0944() {
+    use juxc_diagnostics::code::Code;
+    assert!(parse_has_code(
+        "public void f(out ref int x) { }",
+        Code::E0944_OutParamModifierMisuse,
+    ));
+    assert!(parse_has_code(
+        "public class N { } public void f(out weak N n) { }",
+        Code::E0944_OutParamModifierMisuse,
+    ));
+}
+
+/// Sensible combinations parse cleanly: `final ref`, `final weak`,
+/// `final T = default`, `final T...`.
+#[test]
+fn sensible_param_combos_parse_clean() {
+    parse_clean("public class N { } public void f(final ref int x, final weak N n) { }");
+    parse_clean("public void f(final int a = 1, final int... xs) { }");
+}
+
 // ---------------------------------------------------------------------------
 // Triviality
 // ---------------------------------------------------------------------------
