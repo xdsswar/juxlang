@@ -89,6 +89,25 @@ pub struct BinTarget {
     /// Source entry point. Resolved to an absolute path against the
     /// project root. Default: `<root>/src/main.jux`.
     pub path: PathBuf,
+    /// `[[bin]] main` — the entry point named by its **dotted source path**
+    /// (`"xss.it.Main"` ⇒ `src/xss/it/Main.jux`, whose `package xss.it;`
+    /// declares the `main`). `None` for the legacy file-path / default form.
+    /// Kept verbatim so editor tooling can resolve "go to entry point" from
+    /// the same manifest key the build uses.
+    pub entry: Option<String>,
+}
+
+impl BinTarget {
+    /// The package segments of a dotted `main` entry — every segment but the
+    /// last (which is the file's base name). `"xss.it.Main"` ⇒
+    /// `["xss", "it"]`; a single-segment `"Main"` (crate-root file) ⇒ `[]`.
+    /// `None` when this target wasn't declared with a dotted `main`.
+    pub fn entry_package(&self) -> Option<Vec<String>> {
+        let entry = self.entry.as_ref()?;
+        let mut segs: Vec<String> = entry.split('.').map(|s| s.to_string()).collect();
+        segs.pop(); // drop the file base name
+        Some(segs)
+    }
 }
 
 /// A loaded `jux.toml` together with the project root it was found in.
@@ -242,11 +261,14 @@ struct RawLib {
     crate_type: Vec<String>,
 }
 
-/// Serde shape for one `[[bin]]` table entry.
+/// Serde shape for one `[[bin]]` table entry. `path` is a filesystem path;
+/// `main` is the dotted source-path form (`"xss.it.Main"`). At most one
+/// should be given — `main` takes precedence when both appear.
 #[derive(Debug, Default, Deserialize)]
 struct RawBin {
     name: Option<String>,
     path: Option<String>,
+    main: Option<String>,
 }
 
 /// Serde shape for the `[workspace]` table.
@@ -421,12 +443,21 @@ impl Manifest {
         // *if that file exists* (a lib-only project has no default bin).
         let mut bins: Vec<BinTarget> = Vec::new();
         for rb in raw.bin {
+            // `main = "xss.it.Main"` (dotted source path) takes precedence
+            // over `path`: it locates the entry file at `src/xss/it/Main.jux`
+            // AND records the dotted form so the entry's `main` is selected
+            // by package (and the IDE resolves it from the same key).
+            let (path, entry) = if let Some(dotted) = &rb.main {
+                (entry_path_from_dotted(project_root, dotted), Some(dotted.clone()))
+            } else {
+                let path = rb
+                    .path
+                    .map(|p| resolve_against(project_root, &p))
+                    .unwrap_or_else(|| project_root.join("src").join("main.jux"));
+                (path, None)
+            };
             let name = rb.name.unwrap_or_else(|| default_target_name.clone());
-            let path = rb
-                .path
-                .map(|p| resolve_against(project_root, &p))
-                .unwrap_or_else(|| project_root.join("src").join("main.jux"));
-            bins.push(BinTarget { name, path });
+            bins.push(BinTarget { name, path, entry });
         }
         if bins.is_empty() {
             let main_default = project_root.join("src").join("main.jux");
@@ -434,6 +465,7 @@ impl Manifest {
                 bins.push(BinTarget {
                     name: default_target_name.clone(),
                     path: main_default,
+                    entry: None,
                 });
             }
         }
@@ -689,6 +721,20 @@ fn render_toml_value(v: &toml::Value) -> String {
     }
 }
 
+/// Resolve a dotted `[[bin]] main` entry (`"xss.it.Main"`) to its source
+/// file under `<root>/src/` — `src/xss/it/Main.jux`. Each `.`-segment is a
+/// path component and the last is the file base name (`+ ".jux"`). A trailing
+/// `.jux` the user may have written is tolerated (stripped before splitting).
+fn entry_path_from_dotted(project_root: &Path, dotted: &str) -> PathBuf {
+    let dotted = dotted.strip_suffix(".jux").unwrap_or(dotted);
+    let mut p = project_root.join("src");
+    for seg in dotted.split('.') {
+        p.push(seg);
+    }
+    p.set_extension("jux");
+    p
+}
+
 /// Resolve a possibly-relative manifest path against `base`. Absolute
 /// paths are returned as-is.
 fn resolve_against(base: &Path, rel: &str) -> PathBuf {
@@ -873,6 +919,46 @@ mod tests {
         assert_eq!(default_target_name("a.b.my-lib"), "my-lib");
         // Leading digit gets an underscore prefix.
         assert_eq!(default_target_name("x.9foo"), "_9foo");
+    }
+
+    #[test]
+    fn bin_main_dotted_entry_resolves_to_file() {
+        let (m, dir) = load_toml(
+            "[package]\nname = \"com.example.demo\"\n\n\
+             [[bin]]\nname = \"App\"\nmain = \"xss.it.Main\"\n",
+        );
+        assert_eq!(m.bins.len(), 1);
+        let bin = &m.bins[0];
+        assert_eq!(bin.name, "App");
+        // Dotted entry → src/xss/it/Main.jux.
+        assert_eq!(
+            bin.path,
+            dir.path().join("src").join("xss").join("it").join("Main.jux"),
+        );
+        assert_eq!(bin.entry.as_deref(), Some("xss.it.Main"));
+        // The entry package is everything but the file base name.
+        assert_eq!(bin.entry_package(), Some(vec!["xss".to_string(), "it".to_string()]));
+    }
+
+    #[test]
+    fn bin_main_crate_root_entry_has_empty_package() {
+        let (m, dir) = load_toml(
+            "[package]\nname = \"app\"\n\n[[bin]]\nname = \"App\"\nmain = \"Main\"\n",
+        );
+        let bin = &m.bins[0];
+        assert_eq!(bin.path, dir.path().join("src").join("Main.jux"));
+        assert_eq!(bin.entry_package(), Some(Vec::new()));
+    }
+
+    #[test]
+    fn bin_main_tolerates_trailing_jux() {
+        let (m, dir) = load_toml(
+            "[package]\nname = \"app\"\n\n[[bin]]\nname = \"App\"\nmain = \"pkg.Main.jux\"\n",
+        );
+        assert_eq!(
+            m.bins[0].path,
+            dir.path().join("src").join("pkg").join("Main.jux"),
+        );
     }
 
     #[test]

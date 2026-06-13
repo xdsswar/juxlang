@@ -139,12 +139,27 @@ pub fn build_package(
 
     // ---- [[bin]] targets ------------------------------------------------
     for bin in &manifest.bins {
+        // A `[[bin]] main = "xss.it.Main"` key names the entry file by dotted
+        // path — validate it resolves to a real source so a typo is a clean
+        // jux-level error, not a silent "no main found" later.
+        if bin.entry.is_some() && !bin.path.is_file() {
+            anyhow::bail!(
+                "bin `{}`: entry `main = \"{}\"` resolves to {}, which does not exist",
+                bin.name,
+                bin.entry.as_deref().unwrap_or(""),
+                bin.path.display(),
+            );
+        }
         let mut sources = dep_sources.to_vec();
         sources.extend(stub_sources.clone());
         sources.extend(load_bin_sources(manifest, &bin.path)?);
+        // Prefer the manifest-named entry package for the `fn main` shim.
+        let entry_pkg = bin.entry_package();
         let result = crate::compile_workspace_as(
             sources,
-            juxc_backend_rust::lower_workspace,
+            move |u, s, e, src| {
+                juxc_backend_rust::lower_workspace_with_entry(u, s, e, src, entry_pkg)
+            },
             manifest.profile,
         )?;
         record(&result, &mut all_diagnostics, &mut all_sources);

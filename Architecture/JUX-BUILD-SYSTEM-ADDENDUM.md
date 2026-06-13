@@ -163,6 +163,13 @@ crate-type = ["dylib", "staticlib"]     # Optional. What artifacts to produce.
 # An executable target. Multiple [[bin]] blocks are allowed.
 name = "myapp"                          # REQUIRED for explicit binaries.
 path = "src/main.jux"                   # Optional. Default: src/main.jux if exists.
+main = "xss.it.Main"                    # Optional. Names the entry file by its
+                                        # DOTTED source path: "xss.it.Main" ⇒
+                                        # src/xss/it/Main.jux (package xss.it).
+                                        # Takes precedence over `path`. The build
+                                        # selects the `main` declared in that
+                                        # package, and editor tooling resolves
+                                        # "go to entry point" from the same key.
 
 [dependencies]
 # Jux-package dependencies, identified by reverse-DNS name.
