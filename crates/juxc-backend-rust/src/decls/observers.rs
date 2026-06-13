@@ -232,7 +232,12 @@ fn walk_expr_deps(e: &Expr, settable: &[&str], out: &mut Vec<String>) {
         Expr::Cast(c) => walk_expr_deps(&c.value, settable, out),
         Expr::TypeTest(t) => walk_expr_deps(&t.value, settable, out),
         Expr::SizeOf(s) => walk_expr_deps(&s.operand, settable, out),
-        Expr::NewArray(n) => walk_expr_deps(&n.size, settable, out),
+        Expr::NewArray(n) => {
+            walk_expr_deps(&n.size, settable, out);
+            for inner in &n.inner_sizes {
+                walk_expr_deps(inner, settable, out);
+            }
+        }
         Expr::NewArrayLit(n) => {
             for el in &n.elements {
                 walk_expr_deps(el, settable, out);

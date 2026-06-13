@@ -1449,18 +1449,19 @@ fn sizeof_of_compound_expression_parses() {
 /// type plus a matching `new T[size]` initializer.
 #[test]
 fn fixed_array_typed_local_and_new_array_parse() {
-    use juxc_ast::ArrayShape;
+    use juxc_ast::ArrayDim;
     let ast = parse_clean("public void main() { int[10] xs = new int[10]; }");
     let body = body_of(&ast.items[0]);
     let Stmt::VarDecl(v) = &body.statements[0] else {
         panic!("expected typed local, got {:?}", body.statements[0]);
     };
-    // Type carries the fixed-size shape.
+    // Type carries the fixed-size shape — a single (1-D) dimension.
     let ty = v.ty.as_ref().expect("typed local has explicit type");
     assert_eq!(ty.name.segments[0].text, "int");
     let shape = ty.array_shape.as_ref().expect("array_shape is set");
-    let ArrayShape::Fixed(size) = shape else {
-        panic!("expected Fixed shape, got {:?}", shape);
+    assert_eq!(shape.rank(), 1, "int[10] is one-dimensional");
+    let ArrayDim::Fixed(size) = shape.outer() else {
+        panic!("expected Fixed outer dim, got {:?}", shape.outer());
     };
     assert!(
         matches!(&**size, Expr::Literal(juxc_ast::Literal::Int(_))),
@@ -1522,12 +1523,14 @@ fn array_length_field_access_parses() {
 /// `T[]` (no size) parses as a `TypeRef` carrying `ArrayShape::Dynamic`.
 #[test]
 fn dynamic_array_type_parses() {
-    use juxc_ast::ArrayShape;
+    use juxc_ast::ArrayDim;
     let ast = parse_clean("public void main() { int[] xs = new int[]{1, 2}; }");
     let body = body_of(&ast.items[0]);
     let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
     let ty = v.ty.as_ref().expect("typed local has explicit type");
-    assert!(matches!(ty.array_shape, Some(ArrayShape::Dynamic)), "expected Dynamic shape");
+    let shape = ty.array_shape.as_ref().expect("array_shape is set");
+    assert_eq!(shape.rank(), 1, "int[] is one-dimensional");
+    assert!(matches!(shape.outer(), ArrayDim::Dynamic), "expected Dynamic outer dim");
     assert_eq!(ty.name.segments[0].text, "int");
 }
 
@@ -1543,6 +1546,99 @@ fn new_array_lit_parses() {
     };
     assert_eq!(n.element_type.name.segments[0].text, "int");
     assert_eq!(n.elements.len(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// Multi-dimensional array types (`int[][]`, `int[3][4]`, `int[3][]`)
+// ---------------------------------------------------------------------------
+
+/// `int[][] m` parses to a TWO-dimension dynamic shape (`[Dynamic, Dynamic]`),
+/// outermost-first.
+#[test]
+fn two_dim_dynamic_array_type_parses() {
+    use juxc_ast::ArrayDim;
+    let ast = parse_clean("public void main() { int[][] m; }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let ty = v.ty.as_ref().expect("typed local has explicit type");
+    let shape = ty.array_shape.as_ref().expect("array_shape is set");
+    assert_eq!(shape.rank(), 2, "int[][] has two dimensions");
+    assert!(matches!(shape.dims[0], ArrayDim::Dynamic));
+    assert!(matches!(shape.dims[1], ArrayDim::Dynamic));
+}
+
+/// `int[][][] c` parses to a THREE-dimension dynamic shape.
+#[test]
+fn three_dim_dynamic_array_type_parses() {
+    use juxc_ast::ArrayDim;
+    let ast = parse_clean("public void main() { int[][][] c; }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let ty = v.ty.as_ref().expect("typed local has explicit type");
+    let shape = ty.array_shape.as_ref().expect("array_shape is set");
+    assert_eq!(shape.rank(), 3, "int[][][] has three dimensions");
+    assert!(shape.dims.iter().all(|d| matches!(d, ArrayDim::Dynamic)));
+}
+
+/// `int[3][4] b` parses to a two-dimension FIXED shape, outermost-first:
+/// `dims[0]` is the outer `3`, `dims[1]` the inner `4`.
+#[test]
+fn fixed_two_dim_array_type_parses_outermost_first() {
+    use juxc_ast::ArrayDim;
+    let ast = parse_clean("public void main() { int[3][4] b; }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let ty = v.ty.as_ref().expect("typed local has explicit type");
+    let shape = ty.array_shape.as_ref().expect("array_shape is set");
+    assert_eq!(shape.rank(), 2);
+    // Helper to read an int-literal size off a Fixed dim.
+    let lit = |d: &ArrayDim| -> i64 {
+        let ArrayDim::Fixed(e) = d else { panic!("expected Fixed dim") };
+        let Expr::Literal(juxc_ast::Literal::Int(i)) = &**e else { panic!("expected int literal") };
+        i.value
+    };
+    assert_eq!(lit(&shape.dims[0]), 3, "outer dim (leftmost) is 3");
+    assert_eq!(lit(&shape.dims[1]), 4, "inner dim is 4");
+}
+
+/// `int[3][] r` mixes a fixed OUTER dimension with a dynamic inner one.
+#[test]
+fn mixed_fixed_dynamic_array_type_parses() {
+    use juxc_ast::ArrayDim;
+    let ast = parse_clean("public void main() { int[3][] r; }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let ty = v.ty.as_ref().expect("typed local has explicit type");
+    let shape = ty.array_shape.as_ref().expect("array_shape is set");
+    assert_eq!(shape.rank(), 2);
+    assert!(matches!(shape.dims[0], ArrayDim::Fixed(_)), "outer dim fixed");
+    assert!(matches!(shape.dims[1], ArrayDim::Dynamic), "inner dim dynamic");
+}
+
+/// `new int[3][4]` parses to a `NewArray` carrying the outer size plus
+/// one inner size, outermost-first.
+#[test]
+fn new_multi_dim_array_parses_sizes() {
+    let ast = parse_clean("public void main() { var g = new int[3][4]; }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else { panic!() };
+    let Some(Expr::NewArray(n)) = v.init.as_ref() else {
+        panic!("expected NewArray init, got {:?}", v.init);
+    };
+    assert_eq!(n.element_type.name.segments[0].text, "int");
+    assert!(n.element_type.array_shape.is_none(), "element type is the scalar");
+    // Outer size 3, one inner size (4).
+    let outer = match &*n.size {
+        Expr::Literal(juxc_ast::Literal::Int(i)) => i.value,
+        _ => panic!("outer size not an int literal"),
+    };
+    assert_eq!(outer, 3, "outer size is 3");
+    assert_eq!(n.inner_sizes.len(), 1, "one inner dimension");
+    let inner = match &*n.inner_sizes[0] {
+        Expr::Literal(juxc_ast::Literal::Int(i)) => i.value,
+        _ => panic!("inner size not an int literal"),
+    };
+    assert_eq!(inner, 4, "inner size is 4");
 }
 
 /// Empty initializer `new int[]{}` parses to an empty `NewArrayLit`.

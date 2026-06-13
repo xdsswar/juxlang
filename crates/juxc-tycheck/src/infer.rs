@@ -1551,10 +1551,22 @@ pub(crate) fn infer_ctor_generic_args(
 
 /// `new T[size]` → fixed-size array of `T`.
 fn infer_new_array(n: &NewArrayExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
-    Ty::Array {
-        element: Box::new(ty_from_ref(&n.element_type, env, symbols)),
-        kind: ArrayKind::Fixed,
+    // Build a nested `Ty::Array` one level per dimension (outer `size`
+    // plus each `inner_sizes` entry), so `new int[3][4]` infers as
+    // `int[][]` (`Array { element: Array { element: Int } }`). The
+    // concrete fixed/dynamic kind is reconciled with the LHS slot during
+    // assignment compatibility; here every dimension is reported `Fixed`
+    // (the construction's natural shape) and unifies with a dynamic slot
+    // via the fixed→dynamic rule (§5.6).
+    let mut ty = ty_from_ref(&n.element_type, env, symbols);
+    // One wrap per dimension. `+ 1` accounts for the outer `size`.
+    for _ in 0..(n.inner_sizes.len() + 1) {
+        ty = Ty::Array {
+            element: Box::new(ty),
+            kind: ArrayKind::Fixed,
+        };
     }
+    ty
 }
 
 /// `new T[]{…}` or `T[]{…}`. Picks Fixed vs Dynamic per the AST node's
@@ -2141,6 +2153,70 @@ mod tests {
         let mut env = TypeEnv::new();
         infer_block(block, &mut env, &table);
         assert_eq!(env.lookup("e"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// `int[][] m` lowers to a nested `Array { element: Array { element: Int } }`,
+    /// and indexing peels exactly one dimension per `[…]`:
+    /// `m[i]` is `int[]`, `m[i][j]` is `int`.
+    #[test]
+    fn multi_dim_array_index_peels_one_dimension() {
+        let (table, unit) = build_table(
+            r#"
+            public void main() {
+                int[][] m;
+                var row = m[0];
+                var cell = m[0][1];
+            }
+            "#,
+        );
+        let block = first_fn_body(&unit);
+        let mut env = TypeEnv::new();
+        infer_block(block, &mut env, &table);
+        // `m` itself: a 2-D nested array of int.
+        let inner_int = Ty::Array {
+            element: Box::new(Ty::Primitive(Primitive::Int)),
+            kind: ArrayKind::Dynamic,
+        };
+        assert_eq!(
+            env.lookup("m"),
+            Some(&Ty::Array {
+                element: Box::new(inner_int.clone()),
+                kind: ArrayKind::Dynamic,
+            }),
+            "int[][] is a nested Array of Array of Int",
+        );
+        // `m[0]` peels one dim → `int[]`.
+        assert_eq!(env.lookup("row"), Some(&inner_int), "m[0] is int[]");
+        // `m[0][1]` peels both → scalar `int`.
+        assert_eq!(
+            env.lookup("cell"),
+            Some(&Ty::Primitive(Primitive::Int)),
+            "m[0][1] is int",
+        );
+    }
+
+    /// `new int[3][4]` infers a 2-D nested array, one `Array` wrap per
+    /// dimension (outer size + one inner size).
+    #[test]
+    fn new_multi_dim_array_infers_nested_array() {
+        let (table, unit) = build_table(
+            r#"
+            public void main() {
+                var g = new int[3][4];
+            }
+            "#,
+        );
+        let init = first_var_init(first_fn_body(&unit));
+        let env = TypeEnv::new();
+        match infer_expr(init, &env, &table) {
+            Ty::Array { element, .. } => match *element {
+                Ty::Array { element: inner, .. } => {
+                    assert_eq!(*inner, Ty::Primitive(Primitive::Int));
+                }
+                other => panic!("expected inner Array, got {other:?}"),
+            },
+            other => panic!("expected outer Array, got {other:?}"),
+        }
     }
 
     /// `sizeof(int)` → `Primitive::Int`.

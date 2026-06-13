@@ -1037,8 +1037,12 @@ impl Resolver {
                 // The element type's name doesn't need resolution
                 // (primitive types aren't in the symbol table; user
                 // types will be checked once we have a type table).
-                // The size expression does.
+                // The size expression(s) do — including each inner
+                // dimension of a multi-dim `new T[a][b]`.
                 self.visit_expr(&n.size);
+                for inner in &n.inner_sizes {
+                    self.visit_expr(inner);
+                }
             }
             Expr::NewArrayLit(n) => {
                 // Element type isn't resolved (see NewArray above) —

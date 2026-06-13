@@ -386,17 +386,28 @@ pub struct FieldExpr {
     pub span: Span,
 }
 
-/// `new T[size]` per §A.2.9. Allocates a fresh array of the given size,
-/// every element initialized to the element type's default value.
+/// `new T[size]` (and multi-dimensional `new T[a][b]…`) per §A.2.9.
+/// Allocates a fresh array, every element initialized to the element
+/// type's default value.
+///
+/// Sizes are stored OUTERMOST first, matching Java reading order:
+/// `new int[3][4]` has `size = 3` (outer, 3 rows) and
+/// `inner_sizes = [4]` (each row holds 4 elements).
 #[derive(Debug, Clone)]
 pub struct NewArrayExpr {
-    /// Element type (the `T` in `new T[size]`). Has no array_shape of
-    /// its own — the array shape is implicit in this expression.
+    /// Element type (the scalar `T` in `new T[a][b]`). Has no array_shape
+    /// of its own — the array shape is implicit in this expression's
+    /// `size` + `inner_sizes`.
     pub element_type: TypeRef,
-    /// Array size. Must be a compile-time constant for Phase-1 lowering
-    /// (Rust's `[T; N]` requires a `const` length).
+    /// OUTERMOST array size. Must be a compile-time constant for the
+    /// fixed (`[T; N]`) lowering; a runtime value forces the `Vec`
+    /// (heap) lowering instead.
     pub size: Box<Expr>,
-    /// Span of the whole `new T[size]` expression.
+    /// Sizes of the inner dimensions, outermost-first, for a
+    /// multi-dimensional `new T[a][b][c]` (`size = a`,
+    /// `inner_sizes = [b, c]`). Empty for an ordinary 1-D `new T[n]`.
+    pub inner_sizes: Vec<Box<Expr>>,
+    /// Span of the whole `new T[…]…` expression.
     pub span: Span,
 }
 

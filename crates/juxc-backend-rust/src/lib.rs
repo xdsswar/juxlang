@@ -823,6 +823,16 @@ struct RustEmitter {
     /// runtime-sized `N`. Cleared for fixed-array (`int[N] a`) and
     /// `var` slots, which keep the stack-array shape.
     pub(crate) dynamic_array_target: bool,
+    /// The FULL array shape of the current initializer's LHS slot, when
+    /// it is an array type (`int[][] g = new int[3][4]` → the `int[][]`
+    /// shape). A multi-dimensional `new T[a][b]` consults this per
+    /// dimension to choose, INDEPENDENTLY at each level, between the
+    /// fixed (`[v; N]`) and dynamic (`vec![v; N]`) lowering — so
+    /// `int[3][] g = new int[3][4]` lowers the outer dim fixed and the
+    /// inner dim dynamic. `None` outside an array-typed slot
+    /// initializer (the new-array then keys off `dynamic_array_target`
+    /// for the outer dim and treats all inner dims as fixed).
+    pub(crate) target_array_shape: Option<juxc_ast::ArrayShape>,
     /// A loop label waiting to be attached — set by the
     /// `Stmt::Labeled` emission arm, consumed by the next loop
     /// emitter (`emit_while` / `emit_do_while` / `emit_for_each` /
@@ -1368,7 +1378,12 @@ pub(crate) fn compute_aliased_classes(
                     walk_expr(el, aliased, mark);
                 }
             }
-            Expr::NewArray(n) => walk_expr(&n.size, aliased, mark),
+            Expr::NewArray(n) => {
+                walk_expr(&n.size, aliased, mark);
+                for inner in &n.inner_sizes {
+                    walk_expr(inner, aliased, mark);
+                }
+            }
             Expr::Binary(b) => {
                 walk_expr(&b.left, aliased, mark);
                 walk_expr(&b.right, aliased, mark);
@@ -1606,7 +1621,12 @@ pub(crate) fn compute_aliased_classes(
                     mark_lambda_captures(el, aliased, mark);
                 }
             }
-            Expr::NewArray(n) => mark_lambda_captures(&n.size, aliased, mark),
+            Expr::NewArray(n) => {
+                mark_lambda_captures(&n.size, aliased, mark);
+                for inner in &n.inner_sizes {
+                    mark_lambda_captures(inner, aliased, mark);
+                }
+            }
             Expr::Binary(b) => {
                 mark_lambda_captures(&b.left, aliased, mark);
                 mark_lambda_captures(&b.right, aliased, mark);
@@ -2414,7 +2434,12 @@ fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
                 cast_targets_expr(el, out);
             }
         }
-        Expr::NewArray(n) => cast_targets_expr(&n.size, out),
+        Expr::NewArray(n) => {
+            cast_targets_expr(&n.size, out);
+            for inner in &n.inner_sizes {
+                cast_targets_expr(inner, out);
+            }
+        }
         Expr::Binary(b) => {
             cast_targets_expr(&b.left, out);
             cast_targets_expr(&b.right, out);
@@ -3127,6 +3152,7 @@ impl RustEmitter {
             current_type_params: std::collections::HashSet::new(),
             in_array_size_position: false,
             dynamic_array_target: false,
+            target_array_shape: None,
             pending_loop_label: None,
             downcast_targets: std::collections::HashSet::new(),
             emitting_wrapper_class: false,

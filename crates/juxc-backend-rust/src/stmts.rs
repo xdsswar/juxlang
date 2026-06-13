@@ -200,7 +200,10 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
             .args
             .iter()
             .any(|a| is_path_named(a, name) || expr_moves_path_at_top(a, name)),
-        Expr::NewArray(n) => expr_moves_path_at_top(&n.size, name),
+        Expr::NewArray(n) => {
+            expr_moves_path_at_top(&n.size, name)
+                || n.inner_sizes.iter().any(|s| expr_moves_path_at_top(s, name))
+        }
         Expr::NewArrayLit(n) => n
             .elements
             .iter()
@@ -2063,14 +2066,19 @@ impl RustEmitter {
                 // is read by `emit_new_array`; a `var` / fixed-array
                 // (`int[N]`) slot leaves it clear (stack array).
                 let prev_dyn = self.dynamic_array_target;
-                self.dynamic_array_target = var
-                    .ty
-                    .as_ref()
-                    .map_or(false, |t| {
-                        matches!(t.array_shape, Some(juxc_ast::ArrayShape::Dynamic))
-                    });
+                let prev_shape = self.target_array_shape.take();
+                let lhs_shape = var.ty.as_ref().and_then(|t| t.array_shape.clone());
+                self.dynamic_array_target = lhs_shape.as_ref().map_or(false, |s| {
+                    // Only the OUTERMOST dimension decides the outer
+                    // wrapper (`Vec` vs fixed array) of `new T[…]`.
+                    matches!(s.outer(), juxc_ast::ArrayDim::Dynamic)
+                });
+                // Carry the full LHS shape so a multi-dim `new T[a][b]`
+                // can pick fixed/dynamic INDEPENDENTLY per dimension.
+                self.target_array_shape = lhs_shape;
                 self.emit_expr(init);
                 self.dynamic_array_target = prev_dyn;
+                self.target_array_shape = prev_shape;
                 // **Wrapper-class share-on-assignment (§CR.4.1).** When the
                 // init re-reads an existing wrapper-class binding
                 // (`var y = x;`, `var y = obj.child;`, `var y = this;`),

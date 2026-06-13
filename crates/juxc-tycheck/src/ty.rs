@@ -417,21 +417,27 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
             is_async: fn_shape.is_async,
         };
     }
-    // 1. Array shape — peel one shape, recurse on the element form.
+    // 1. Array shape — peel ONE (outermost) dimension and recurse on the
+    //    element form, so a multi-dimensional `int[][]` lowers to nested
+    //    `Ty::Array { element: Ty::Array { element: Int } }`. `peeled()`
+    //    drops the outer dim; `None` means the element is now a scalar
+    //    (so `element_ref` carries no `array_shape`).
     if let Some(shape) = &t.array_shape {
         let element_ref = TypeRef {
             name: t.name.clone(),
             generic_args: t.generic_args.clone(),
             nullable: t.nullable,
-            array_shape: None,
+            array_shape: shape.peeled(),
             fn_shape: t.fn_shape.clone(),
             ptr_depth: t.ptr_depth,
             span: t.span,
         };
         let element = ty_from_ref(&element_ref, env, symbols);
-        let kind = match shape {
-            juxc_ast::ArrayShape::Fixed(_) => ArrayKind::Fixed,
-            juxc_ast::ArrayShape::Dynamic => ArrayKind::Dynamic,
+        // The kind tracked by `Ty::Array` is the OUTERMOST dimension's —
+        // each nested level records its own dimension's kind.
+        let kind = match shape.outer() {
+            juxc_ast::ArrayDim::Fixed(_) => ArrayKind::Fixed,
+            juxc_ast::ArrayDim::Dynamic => ArrayKind::Dynamic,
         };
         return Ty::Array {
             element: Box::new(element),
