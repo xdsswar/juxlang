@@ -6,10 +6,12 @@ import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.annotation.ExternalAnnotator
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
+import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
 import dev.jux.intellij.diagnostics.JuxCheckParser
 import dev.jux.intellij.diagnostics.JuxDiagnostic
@@ -79,8 +81,12 @@ class JuxSemanticAnnotator : ExternalAnnotator<JuxSemanticAnnotator.Request, Lis
 
     override fun apply(file: PsiFile, annotationResult: List<JuxDiagnostic>, holder: AnnotationHolder) {
         val text = file.text
+        // The document gives line-start offsets for the line/column mapping —
+        // line endings differ (juxc sees `\r\n` on disk; the document is
+        // `\n`-normalized), so byte offsets would drift; line/column don't.
+        val document = PsiDocumentManager.getInstance(file.project).getDocument(file)
         for (d in annotationResult) {
-            val range = byteRange(text, d.byteStart, d.byteEnd) ?: continue
+            val range = rangeFor(document, text, d) ?: continue
             val severity = when (d.severity) {
                 "warning", "lint" -> HighlightSeverity.WARNING
                 "note", "help" -> HighlightSeverity.WEAK_WARNING
@@ -118,15 +124,33 @@ class JuxSemanticAnnotator : ExternalAnnotator<JuxSemanticAnnotator.Request, Lis
     }
 
     /**
-     * Convert juxc's UTF-8 byte span to a document [TextRange], clamped to the
-     * current text. An empty span is widened to one char so the marker shows.
+     * The document [TextRange] for a diagnostic — preferring its 1-based
+     * line/column (line-ending-agnostic, so it lands correctly on the
+     * `\n`-normalized document even though juxc counted `\r\n` on disk), and
+     * falling back to the byte span only when line/column are absent. Clamped
+     * to the current text; an empty span is widened by one char so it shows.
      */
-    private fun byteRange(text: String, byteStart: Int, byteEnd: Int): TextRange? {
-        val start = JuxCheckParser.byteToCharOffset(text, byteStart)
+    private fun rangeFor(document: Document?, text: String, d: JuxDiagnostic): TextRange? {
+        if (document != null && d.lineStart >= 1) {
+            val start = lineColOffset(document, d.lineStart, d.colStart)
+            var end = lineColOffset(document, d.lineEnd.takeIf { it >= 1 } ?: d.lineStart, d.colEnd)
+            if (end <= start) end = (start + 1).coerceAtMost(document.textLength)
+            return if (end > start) TextRange(start, end) else null
+        }
+        // Fallback: UTF-8 byte mapping (correct when there are no `\r`s).
+        val start = JuxCheckParser.byteToCharOffset(text, d.byteStart)
         if (start > text.length) return null
-        var end = JuxCheckParser.byteToCharOffset(text, byteEnd)
+        var end = JuxCheckParser.byteToCharOffset(text, d.byteEnd)
         if (end <= start) end = (start + 1).coerceAtMost(text.length)
         return if (end > start) TextRange(start, end) else null
+    }
+
+    /** Document offset for a 1-based [line]/[col], clamped within that line. */
+    private fun lineColOffset(document: Document, line: Int, col: Int): Int {
+        val lineIdx = (line - 1).coerceIn(0, (document.lineCount - 1).coerceAtLeast(0))
+        val lineStart = document.getLineStartOffset(lineIdx)
+        val lineEnd = document.getLineEndOffset(lineIdx)
+        return (lineStart + (col - 1).coerceAtLeast(0)).coerceIn(lineStart, lineEnd)
     }
 
     private companion object {
