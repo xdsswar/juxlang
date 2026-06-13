@@ -1371,10 +1371,18 @@ fn build_completions(doc: &Document, ws: &Workspace, uri: &Url, offset: usize) -
     };
     for name in &doc.type_names {
         if seen.insert(name.clone()) {
+            // Attach the same auto-import edit workspace types get: a type
+            // surfaced by the file's live analysis that actually lives in
+            // another (unambiguous) package still needs its `import` on accept.
+            // For genuinely same-file / same-package names `auto_import_for`
+            // returns None, so this stays a no-op there.
+            let import = auto_import_for(name, ws, cur_pkg.as_deref(), &doc.rope);
             items.push(CompletionItem {
                 label: name.clone(),
                 kind: Some(CompletionItemKind::CLASS),
+                detail: import.as_ref().map(|_| format!("auto-imports {name}")),
                 sort_text: Some(format!("2_{name}")),
+                additional_text_edits: import.map(|e| vec![e]),
                 data: Some(type_data(name)),
                 ..Default::default()
             });
