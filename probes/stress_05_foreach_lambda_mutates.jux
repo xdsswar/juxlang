@@ -1,0 +1,24 @@
+// Wave-3 borrow stress #5: stdlib higher-order iteration (forEach with
+// a lambda) where the lambda mutates the SAME object being iterated —
+// the statement-form for-each got the snapshot fix (H6); this is the
+// higher-order twin. Expect total 6, audit size 3, no panic.
+package stress05;
+
+public class Sums {
+    public ArrayList<int> items = new ArrayList<int>();
+    public int total = 0;
+    public ArrayList<int> audit = new ArrayList<int>();
+}
+
+void main() {
+    var s = new Sums();
+    s.items.add(1);
+    s.items.add(2);
+    s.items.add(3);
+    s.items.forEach(x -> {
+        s.total = s.total + x;
+        s.audit.add(x);
+    });
+    print(s.total);
+    print(s.audit.size());
+}

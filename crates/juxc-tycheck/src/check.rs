@@ -3688,6 +3688,45 @@ impl<'a> Checker<'a> {
                 if self.symbols.enums.contains_key(name) {
                     return;
                 }
+                // §P.3 helper: `obj.observers` reaches for the observer
+                // namespace at the OBJECT level, but `.observers` hangs
+                // off an observable PROPERTY — `obj.<Property>.observers`.
+                // When the receiver's class has observable properties,
+                // point the user at the right form instead of a bare
+                // "no field" message.
+                if field_name == "observers" {
+                    let observable: Vec<String> = self
+                        .symbols
+                        .classes
+                        .get(name)
+                        .map(|c| {
+                            // `{ get; set; }` — settable, non-static,
+                            // not read-only / init-only — is observable.
+                            c.properties
+                                .iter()
+                                .filter(|(_, sig)| {
+                                    !sig.is_static
+                                        && !sig.is_read_only
+                                        && !sig.is_init_only
+                                })
+                                .map(|(pname, _)| pname.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if !observable.is_empty() {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0412_UnresolvedField,
+                                format!(
+                                    "`.observers` is a member of an observable PROPERTY, not of `{name}` itself — write `<value>.{}.observers` (§P.3)",
+                                    observable[0],
+                                ),
+                            )
+                            .with_span(f.span),
+                        );
+                        return;
+                    }
+                }
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0412_UnresolvedField,
@@ -4310,11 +4349,22 @@ impl<'a> Checker<'a> {
                     self.in_future_slot = prev_slot;
                     return;
                 }
+                // **Lexical shadowing.** A LOCAL variable / parameter
+                // of this name shadows any same-named top-level free
+                // function — `f(...)` then calls the local closure, not
+                // the global `f`. Without this, a user free function
+                // named `f` would hijack a call to a local lambda
+                // parameter `f` (e.g. inside the std `assertThrows`),
+                // surfacing a bogus arg-count error. A function-typed
+                // local falls through to the closure-call path below.
+                let shadowed_by_local = self.env.lookup(name.as_str()).is_some();
                 // Resolve the callee FQN: an exact bare key (same-package free
                 // function), or an imported FQN — a foreign (`rust.libc.getpid`)
                 // or cross-package free function brought into scope via
                 // `import a.b.f`, keyed in the table by its full path.
-                let resolved_fqn = if self.symbols.functions.contains_key(name.as_str()) {
+                let resolved_fqn = if shadowed_by_local {
+                    None
+                } else if self.symbols.functions.contains_key(name.as_str()) {
                     Some(name.to_string())
                 } else {
                     self.env
@@ -4965,6 +5015,49 @@ impl<'a> Checker<'a> {
                 // inheritance chain, so substitution applies for the
                 // record's own generic params.
                 if let Some(record) = self.symbols.records.get(&name) {
+                    // §M.5 synthesized wither: `r.with(field: v, …)`.
+                    // Every argument must be NAMED and name a record
+                    // component; values type-check against the
+                    // component's type. A user-declared `with` method
+                    // (below) shadows the synthesized one.
+                    if method_name == "with" && !record.methods.contains_key("with") {
+                        let components = record.components.clone();
+                        for (i, arg) in c.args.iter().enumerate() {
+                            self.check_expr(arg);
+                            let Some(Some(arg_name)) =
+                                c.arg_names.get(i).map(|n| n.as_ref())
+                            else {
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        code::Code::E0448_BadNamedArgument,
+                                        format!(
+                                            "`with(...)` takes NAMED arguments only — write `{name}.with(field: value)` (§M.5)"
+                                        ),
+                                    )
+                                    .with_span(c.span),
+                                );
+                                continue;
+                            };
+                            if !components.iter().any(|comp| comp.name == arg_name.text) {
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        code::Code::E0448_BadNamedArgument,
+                                        format!(
+                                            "`{}` is not a component of record `{name}` — `with(...)` accepts: {}",
+                                            arg_name.text,
+                                            components
+                                                .iter()
+                                                .map(|comp| comp.name.as_str())
+                                                .collect::<Vec<_>>()
+                                                .join(", "),
+                                        ),
+                                    )
+                                    .with_span(arg_name.span),
+                                );
+                            }
+                        }
+                        return;
+                    }
                     if let Some(method) = record.methods.get(method_name) {
                         let params = method.params.clone();
                         let method_generic_params = method.generic_params.clone();
@@ -6598,11 +6691,21 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
         {
             true
         }
-        // Arrays — recurse on element and require matching kind.
+        // Arrays — recurse on element. Per JUX-LANG-V1 §5.6, a
+        // FIXED-size array (`found`) flows into a runtime-sized
+        // (`Dynamic`) slot (`expected`) — the size info is simply
+        // dropped, so `int[] a = new int[3];` is valid. The reverse
+        // direction (dynamic → fixed) loses the compile-time size
+        // guarantee and needs an explicit check, so it's rejected.
         (
             Ty::Array { element: e1, kind: k1 },
             Ty::Array { element: e2, kind: k2 },
-        ) => k1 == k2 && compatible(e1, e2, symbols),
+        ) => {
+            let kind_ok = k1 == k2
+                || (*k1 == crate::ty::ArrayKind::Dynamic
+                    && *k2 == crate::ty::ArrayKind::Fixed);
+            kind_ok && compatible(e1, e2, symbols)
+        }
         // User types — same name AND pairwise compatible generic
         // args, OR `found` is a subclass of `expected` (Java
         // upcasting). The backend pairs this rule with sealed-class

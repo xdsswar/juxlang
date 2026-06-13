@@ -1,0 +1,21 @@
+// `new T[N]` array allocation (§5.6). `int[]` is a heap (Vec-backed)
+// array; `int[N]` is a fixed-size stack array. A fixed array is
+// assignable to a dynamic slot (size info dropped).
+public void main() {
+    // dynamic array, compile-time size
+    int[] a = new int[3];
+    a[0] = 10; a[1] = 20; a[2] = 30;
+    print("dyn len " + a.length + " sum " + (a[0] + a[1] + a[2]));
+
+    // dynamic array, RUNTIME size
+    int n = 5;
+    int[] b = new int[n];
+    for (int i = 0; i < b.length; i++) b[i] = i * i;
+    print("runtime len " + b.length + " last " + b[4]);
+
+    // fixed-size stack array
+    int[3] c = new int[3];
+    c[0] = 99;
+    print("fixed " + c[0]);
+    print("done");
+}

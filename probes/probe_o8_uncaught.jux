@@ -1,0 +1,11 @@
+package arithuncaught;
+
+int readZero() {
+    return 0;
+}
+
+public void main() {
+    print("before");
+    print(10 / readZero());
+    print("after");
+}

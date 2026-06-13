@@ -273,7 +273,7 @@ Classification: (A) rustc-leaked compile error · (B) runtime RefCell panic ·
 | C4 | ~~Init blocks ran AFTER the constructor body (spec: before — §S.4.4/ERRATA E2)~~ | A | ✅ **Fixed (2026-06-12).** All ctor paths reordered; simple-ctor fast path skipped when init blocks exist; §M.1 prose/example rewritten; `probes/probe_init_order.jux` + rewritten `examples/init_blocks.jux` e2e. Side-fix: `this.<AutoProp>` in init blocks now gets the ctor backing-field rewrite. |
 | C5 | ~~E0431 code collision (method-modifiers vs generic-inference)~~ | B | ✅ **Fixed (2026-06-12).** Inference-failure diagnostic renumbered to `E0453` (catalog's reserved §T.4.2 slot); catalog/§T.4.2/collision note updated; `E0446`+`W0240` rows added; `@Derive` annotation-table wording fixed. |
 | C6 | Collections pass **by value** — a callee's `push` is invisible to the caller (`probes/probe_vec_param.jux` prints `len after call: 0`) | B | OPEN — unspecced; Java intuition says reference. Decide share-vs-value in the collections spec session (next-session backlog item 2), then implement (likely `&mut` params or container handles). |
-| C7 | Reordered named args evaluate in parameter-slot order, not §S.1.4's call-site lexical order | C | OPEN — documented Phase-1 divergence (§S.1.3 note); fix shape known (expansion plan retains the lexical permutation; backend can hoist in lexical order). Probe `probes/probe_risk6_evalorder.jux`. |
+| C7 | ~~Reordered named args evaluate in parameter-slot order, not §S.1.4's lexical order~~ | C | ✅ **Fixed (2026-06-13).** `splice_args` records the lexical permutation on `CallExpr.eval_order`/`NewObjectExpr.eval_order`; the backend hoists each (coerced) arg into a temp in lexical order, then passes them positionally — free fns, methods, AND constructors. `examples/named_arg_eval_order.jux` + e2e. Pure structural, no name lists. |
 | C8 | Bare property reads (without `this.`) inside `init { }` blocks don't get the implicit-this rewrite (`cannot find value` rustc leak); `this.Prop` works | C | OPEN — the accessor-body bare-name rewrite (desugar) doesn't run over init blocks; low priority, workaround is explicit `this.`. |
 
 ### Bug-hunt wave 3 (2026-06-12, `probes/probe_hunt2_mixed.jux` + follow-ons)
@@ -292,8 +292,39 @@ Classification: (A) rustc-leaked compile error · (B) runtime RefCell panic ·
 
 | ID | Issue | Severity | Notes |
 |----|-------|----------|-------|
-| H4-1 | `record.with(...)` (§M.5 wither) not implemented — clean E0413 | B | OPEN — spec'd in §M.5; needs tycheck method synth + backend emission. |
+| H4-1 | ~~`record.with(...)` (§M.5 wither) not implemented~~ | B | ✅ **Fixed (2026-06-13).** Synthesized wither: tycheck validates named args against the record's components (E0448 on bad name / positional); backend emits Rust struct-update copy `Rec { x: v, ..(recv).clone() }` (zero args → `.clone()`). Nested withers work. A user `with` method shadows it. `examples/record_with.jux` + e2e. |
 | H4-2 | ~~`map[key]` indexing hardcoded the `(key) as usize` sequence cast — rustc E0308 on HashMap~~ | A | ✅ **Fixed (2026-06-12) — discovery.** bindgen records `Index<&K>` trait impls as the `@RustIndexRef` class annotation; the backend emits `map[&(key)]` for marked containers (name fallback only for pre-marker caches). Std stub cache v9. Probe `probes/probe_hunt4_data.jux` (map-shared-mutation, records, enum guards, tuples, string chains — all green). |
 | H4-3 | `ref` bindings (§M.13) — NEW feature: shared references to value types (`ref String a = ...; ref String b = a; b = "x"` → both see it; `ref` params write through) | — | ✅ **Locals + params shipped (2026-06-12).** `Rc<RefCell<T>>` lowering; reads clone out, assigns store through (RHS-temp first), ref-arg aliases / plain-arg wraps+copies; RISK-3 arg-hoist covers ref reads; `ref` is keyword no. 58. `probes/probe_ref_bindings.jux`. |
 | H4-4 | ~~`ref` FIELDS (`public ref String x`) lowering~~ | A | ✅ **Fixed (2026-06-12).** Storage wraps to `Rc<RefCell<T>>` (inline + wrapper inner structs), every ctor-literal shape seeds a fresh cell (place inits cloned — a param may feed two fields), reads clone the value out, writes store through (owner read with a SHARED borrow), and a `ref` field passed to a `ref` param shares the HANDLE (`emitting_ref_handle`). `examples/ref_fields.jux` + `ref_bindings` e2e. |
 | H4-5 | ~~Bare-name free-fn lookup went ambiguous when a user fn shadows a same-named bindgen stub fn (`rename` vs `rust.std.rename`)~~ | B | ✅ **Fixed (2026-06-12).** Symbol lookup prefers the candidate without a `@rust` path (user code shadows the foreign surface — discovered property, not a name list). |
+
+### Diagnostics polish (2026-06-13)
+
+| ID | Issue | Severity | Notes |
+|----|-------|----------|-------|
+| D1 | ~~`obj.observers` (object-level, missing the property) gave a bare "no field `observers`" message~~ | — | ✅ **Improved (2026-06-13).** When a class has observable properties, E0412 on `.observers` now says "`.observers` is a member of an observable PROPERTY ... write `<value>.<Prop>.observers` (§P.3)". Found via user test project. |
+
+### `++`/`--` operators + user-found issues (2026-06-13)
+
+| ID | Issue | Severity | Notes |
+|----|-------|----------|-------|
+| U1 | ~~`++`/`--` increment/decrement operators unimplemented~~ (spec uses `for (i=0; i<n; i++)` throughout but the lexer/parser never had them) | A | ✅ **Fixed (2026-06-13).** Lexer emits `PlusPlus`/`MinusMinus`; parser desugars prefix `++x`/`--x` and postfix `x++`/`x--` to `x += 1`/`x -= 1` in STATEMENT and for-update position (lvalue = name/index/field; E0200 otherwise). Expression-position value semantics deferred. Grammar §A `incdec`. `examples/increment_decrement.jux`. Found via user test project. |
+
+### Java-parity gaps found by empirical probing (2026-06-13)
+
+| ID | Issue | Severity | Notes |
+|----|-------|----------|-------|
+| J1 | ~~Braceless control-flow bodies rejected~~ — grammar spells `if`/`while`/`for` bodies `statement` but the parser forced `block` | A | ✅ **Fixed (2026-06-13).** `parse_block_or_stmt()` accepts a brace block OR a single braceless statement (wrapped in a synthetic 1-stmt Block); wired into `if`/`else`/`while`/`do-while`/`for-c`/`for-each`. `try`/`catch`/`finally` keep requiring braces (Java too). `examples/braceless_control_flow.jux`. |
+| J2 | ~~`int[] a = new int[N]` rejected (fixed `new int[N]` not assignable to dynamic `int[]`)~~ — and `new int[runtimeN]` emitted an invalid Rust `[v; N]` | A | ✅ **Fixed (2026-06-13).** `compatible` allows fixed→dynamic array (§5.6 "interchangeable", reverse needs a check); backend emits `vec![v; N]` for dynamic slots / runtime sizes (`dynamic_array_target` flag), `[v; N]` for fixed/const slots; repeat-length casts runtime `isize`→`usize`. `examples/dynamic_arrays.jux`. |
+| J3 | `++`/`--` operators were unimplemented (see U1) — all four forms `++x`/`x++`/`--x`/`x--` now work | A | ✅ done (U1). |
+| J4 | Unresolved type name in a method signature (`void test(T t)` where `T` is out of scope) PASSES tycheck and leaks to rustc (E0412) instead of a clean juxc diagnostic | B | OPEN — tycheck should validate that param/return type names resolve to a known class/interface/enum/record/primitive/in-scope type-param. Found via user's `HolderName implements Holder<Object>` with `test(T t)`. |
+| J5 | 2D/multi-dim array TYPE syntax `int[][]` doesn't parse (`new int[3][3]` parses but the type annotation doesn't) | B | OPEN — parser's array-shape only handles one dimension. |
+| — | E0424 false positive on `implements Holder<Object>` is an INTELLIJ PLUGIN bug (`JuxImplementsClauseInspection.kt` resolves the generic ARG `Object` as an implemented type) — juxc itself is correct. For the plugin AI. | — | not juxc |
+
+### Name-resolution + operator-token follow-ups (2026-06-13)
+
+| ID | Issue | Severity | Notes |
+|----|-------|----------|-------|
+| N1 | ~~A user free function named `f` collided with a same-named LOCAL/lambda parameter inside std code (`assertThrows(() -> void f)`) — `f()` resolved to the global, giving a bogus E0411 arg-count error~~ | A | ✅ **Fixed (2026-06-13).** `check_call` now lets an in-scope local/parameter SHADOW a same-named top-level function (`shadowed_by_local` guard). Std `assertThrows` param also renamed `f`→`action` as defense-in-depth. Any function name now safe regardless of std internals. |
+| N2 | `--x` was two unary minuses (double negation); now lexes as the DECREMENT token (greedy, like Java/C) | — | Expected with the `++`/`--` work; double-negation is now written `- -x` / `-(-x)`. Parse test updated. |
+| N3 | Expression-position `++`/`--` (`print(x++)`, `arr[i++]` as a value) not supported — only statement + for-update positions | C | OPEN — value-returning pre/post inc-dec deferred; the common loop forms work. |

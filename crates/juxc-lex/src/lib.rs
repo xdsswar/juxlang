@@ -397,16 +397,18 @@ impl<'a> Lexer<'a> {
         self.bump();
         match self.peek() {
             Some(b'=') => { self.bump(); self.emit(TokenKind::PlusEq, start, self.pos); }
+            Some(b'+') => { self.bump(); self.emit(TokenKind::PlusPlus, start, self.pos); }
             Some(b'%') => { self.bump(); self.emit(TokenKind::PlusPercent, start, self.pos); }
             _          => self.emit(TokenKind::Plus, start, self.pos),
         }
     }
 
-    /// `-`, `-=`, `->`, or `-%` (wrapping sub, §S.2.1).
+    /// `-`, `-=`, `--`, `->`, or `-%` (wrapping sub, §S.2.1).
     fn lex_minus(&mut self, start: usize) {
         self.bump();
         match self.peek() {
             Some(b'=') => { self.bump(); self.emit(TokenKind::MinusEq, start, self.pos); }
+            Some(b'-') => { self.bump(); self.emit(TokenKind::MinusMinus, start, self.pos); }
             Some(b'>') => { self.bump(); self.emit(TokenKind::Arrow,   start, self.pos); }
             Some(b'%') => { self.bump(); self.emit(TokenKind::MinusPercent, start, self.pos); }
             _          => self.emit(TokenKind::Minus, start, self.pos),

@@ -1,0 +1,34 @@
+// Wave-3 borrow stress #9: a VALUE-producing lambda whose body is a
+// try/catch over a captured wrapped collection, driven from a loop
+// that breaks on the sentinel result. Expect 10 / 20 / done.
+package stress09;
+
+public class S9 {
+    public ArrayList<int> items = new ArrayList<int>();
+}
+
+void main() {
+    var s = new S9();
+    s.items.add(10);
+    s.items.add(20);
+    var pop = () -> {
+        try {
+            if (s.items.isEmpty()) {
+                throw new RuntimeException("empty");
+            }
+            var v = s.items.get(0);
+            s.items.remove(0);
+            return v;
+        } catch (RuntimeException e) {
+            return -1;
+        }
+    };
+    while (true) {
+        var v = pop();
+        if (v == -1) {
+            break;
+        }
+        print(v);
+    }
+    print("done");
+}

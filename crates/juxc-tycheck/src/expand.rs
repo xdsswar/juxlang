@@ -234,7 +234,7 @@ fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
             // argument vector), then recurse into the result so
             // spliced defaults containing sugar calls expand too.
             if let Some(plan) = plans.get(&c.span) {
-                splice_args(&mut c.args, &mut c.arg_names, plan);
+                c.eval_order = splice_args(&mut c.args, &mut c.arg_names, plan);
             }
             expand_expr(&mut c.callee, plans);
             for a in &mut c.args {
@@ -243,7 +243,9 @@ fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
         }
         Expr::NewObject(n) => {
             if let Some(plan) = plans.get(&n.span) {
-                splice_args(&mut n.args, &mut n.arg_names, plan);
+                // Constructors share the §S.1.4 lexical-order contract;
+                // `NewObjectExpr` carries its own `eval_order`.
+                n.eval_order = splice_args(&mut n.args, &mut n.arg_names, plan);
             }
             for a in &mut n.args {
                 expand_expr(a, plans);
@@ -345,7 +347,45 @@ fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
 /// `Default(e)` slots take a fresh clone of the declaration's
 /// default expression. Labels are cleared — the result is a plain
 /// positional call.
-fn splice_args(args: &mut Vec<Expr>, arg_names: &mut Vec<Option<juxc_ast::Ident>>, plan: &[ArgSource]) {
+/// Apply the plan, returning the **lexical evaluation order** (§S.1.4):
+/// the slot indices in call-site source order, but ONLY when named
+/// args were re-ordered relative to declaration order (so the backend
+/// must hoist to preserve side-effect order). Empty otherwise — the
+/// positional `args` already evaluate in source order.
+fn splice_args(
+    args: &mut Vec<Expr>,
+    arg_names: &mut Vec<Option<juxc_ast::Ident>>,
+    plan: &[ArgSource],
+) -> Vec<usize> {
+    // The lexical order is recoverable from an all-`Explicit` plan: the
+    // `Explicit(i)` source index of each slot gives its written
+    // position. If those source indices aren't already ascending the
+    // call re-ordered its args, so the backend needs the hoist. A plan
+    // containing defaults/variadics is left positional (defaults have
+    // no lexical position; mixing them is a rarer, documented edge).
+    let eval_order = if plan
+        .iter()
+        .all(|s| matches!(s, ArgSource::Explicit(_)))
+    {
+        let src: Vec<usize> = plan
+            .iter()
+            .map(|s| match s {
+                ArgSource::Explicit(i) => *i,
+                _ => unreachable!(),
+            })
+            .collect();
+        let reordered = src.windows(2).any(|w| w[0] > w[1]);
+        if reordered {
+            // Slot indices sorted by ascending source (lexical) rank.
+            let mut order: Vec<usize> = (0..src.len()).collect();
+            order.sort_by_key(|&slot| src[slot]);
+            order
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
     // Move the originals out, leaving placeholders we never read twice
     // (the checker guarantees each Explicit index appears once).
     let mut originals: Vec<Option<Expr>> = args.drain(..).map(Some).collect();
@@ -389,4 +429,5 @@ fn splice_args(args: &mut Vec<Expr>, arg_names: &mut Vec<Option<juxc_ast::Ident>
     }
     *args = rebuilt;
     arg_names.clear();
+    eval_order
 }

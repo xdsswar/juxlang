@@ -153,6 +153,38 @@ impl RustEmitter {
             && self
                 .current_type_params
                 .contains(n.element_type.name.segments[0].text.as_str());
+        // **Dynamic (heap `Vec`) array** — `int[] a = new int[N]`
+        // (§5.6, Java-standard). Required whenever the size is a
+        // RUNTIME value (a Rust `[v; N]` demands a *const* `N`), and
+        // chosen for an explicit `T[]` slot even with a const size.
+        // A const-generic param (`new T[N]` inside `<int N>` scope) is
+        // a compile-time constant — it stays a fixed stack array, so
+        // it is NOT a runtime size. `vec![default; N]` covers the
+        // dynamic case; a generic element repeats via a collect so
+        // only `T: Default` is needed (not `Copy`).
+        let size_is_const = self.try_const_int(&n.size).is_some()
+            || matches!(
+                &*n.size,
+                Expr::Path(qn)
+                    if qn.segments.len() == 1
+                        && self.const_int_params.contains(qn.segments[0].text.as_str())
+            );
+        let want_dynamic = self.dynamic_array_target || !size_is_const;
+        if want_dynamic {
+            if elem_is_type_param {
+                self.w.push_str("(0..");
+                self.emit_array_repeat_len(&n.size);
+                self.w
+                    .push_str(").map(|_| Default::default()).collect::<Vec<_>>()");
+            } else {
+                self.w.push_str("vec![");
+                self.emit_default_value_for(&n.element_type);
+                self.w.push_str("; ");
+                self.emit_array_repeat_len(&n.size);
+                self.w.push(']');
+            }
+            return;
+        }
         if elem_is_type_param {
             self.w
                 .push_str("std::array::from_fn(|_| Default::default())");
@@ -161,19 +193,44 @@ impl RustEmitter {
         self.w.push('[');
         self.emit_default_value_for(&n.element_type);
         self.w.push_str("; ");
-        // A const-evaluable length (`new int[SIZE * 2]`) emits the computed
-        // `usize` literal (§T.11). Otherwise the repeat-length slot is a const
-        // `usize` position — a const-generic param (`new int[N]`) must stay raw
-        // `N`, not the `(N as isize)` value-cast.
-        if let Some(v) = self.try_const_int(&n.size) {
-            self.w.push_str(&v.to_string());
-        } else {
-            let prev = self.in_array_size_position;
-            self.in_array_size_position = true;
-            self.emit_expr(&n.size);
-            self.in_array_size_position = prev;
-        }
+        self.emit_array_repeat_len(&n.size);
         self.w.push(']');
+    }
+
+    /// Emit the repeat-length of a `new T[N]`: a const-evaluable length
+    /// (`SIZE * 2`) becomes its computed `usize` literal (§T.11);
+    /// otherwise the slot stays a raw `usize` expression (a
+    /// const-generic `N`, or a runtime size for the `vec!` form), never
+    /// the `(N as isize)` value-cast.
+    fn emit_array_repeat_len(&mut self, size: &Expr) {
+        // A const literal emits its computed `usize` value.
+        if let Some(v) = self.try_const_int(size) {
+            self.w.push_str(&v.to_string());
+            return;
+        }
+        // A const-generic param `N` emits BARE — it's already a
+        // `usize` const generic, and a const operation on it
+        // (`N as usize`) is forbidden in a fixed-array `[T; N]`
+        // position ("generic parameters may not be used in const
+        // operations"). `in_array_size_position` keeps it raw.
+        if let Expr::Path(qn) = size {
+            if qn.segments.len() == 1
+                && self.const_int_params.contains(qn.segments[0].text.as_str())
+            {
+                let prev = self.in_array_size_position;
+                self.in_array_size_position = true;
+                self.emit_expr(size);
+                self.in_array_size_position = prev;
+                return;
+            }
+        }
+        // A RUNTIME `int` size is `isize`, but the `vec![v; N]` repeat
+        // position wants `usize` — cast. (Runtime sizes only reach the
+        // `vec!` / dynamic form; a fixed `[v; N]` always has a const
+        // size handled above.)
+        self.w.push('(');
+        self.emit_expr(size);
+        self.w.push_str(") as usize");
     }
 
     /// Lower an array initializer literal — `new T[]{a, b, c}` or the

@@ -1,0 +1,18 @@
+// Wave-3 borrow stress #4: compound assignment to a property with an
+// observer attached — `m.Count += 1` must read through the getter,
+// write through the setter, and FIRE the observer (setter bypass would
+// be silent-wrong). Expect: "fire: 0 -> 1", then 1.
+package stress04;
+
+public class M {
+    public int Count { get; set; } = 0;
+}
+
+void main() {
+    var m = new M();
+    m.Count.observers.attach((old, now) -> {
+        print($"fire: $old -> $now");
+    });
+    m.Count += 1;
+    print(m.Count);
+}

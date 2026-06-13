@@ -1,0 +1,21 @@
+// Wave-3 borrow stress #2: an observer mutates a SIBLING collection
+// field of the same (wrapped) object while the property fire still
+// holds a borrow of the inner cell. Expect: log [7, 9], no panic.
+package stress02;
+
+public class Model {
+    public int Count { get; set; } = 0;
+    public ArrayList<int> log = new ArrayList<int>();
+}
+
+void main() {
+    var m = new Model();
+    m.Count.observers.attach((old, now) -> {
+        m.log.add(now);
+    });
+    m.Count = 7;
+    m.Count = 9;
+    print(m.log.size());
+    print(m.log.get(0));
+    print(m.log.get(1));
+}

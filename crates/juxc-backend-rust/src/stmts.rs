@@ -2049,7 +2049,19 @@ impl RustEmitter {
             if let Some(decl_ty) = iface_target {
                 self.emit_expr_coerced_to_iface(&decl_ty.clone(), init);
             } else {
+                // §5.6: a `new T[N]` flowing into a DYNAMIC array slot
+                // (`int[] a = …`) lowers to a heap `vec![…]`. The flag
+                // is read by `emit_new_array`; a `var` / fixed-array
+                // (`int[N]`) slot leaves it clear (stack array).
+                let prev_dyn = self.dynamic_array_target;
+                self.dynamic_array_target = var
+                    .ty
+                    .as_ref()
+                    .map_or(false, |t| {
+                        matches!(t.array_shape, Some(juxc_ast::ArrayShape::Dynamic))
+                    });
                 self.emit_expr(init);
+                self.dynamic_array_target = prev_dyn;
                 // **Wrapper-class share-on-assignment (§CR.4.1).** When the
                 // init re-reads an existing wrapper-class binding
                 // (`var y = x;`, `var y = obj.child;`, `var y = this;`),

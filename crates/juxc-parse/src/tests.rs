@@ -805,7 +805,10 @@ fn unary_bitwise_not_parses() {
 #[test]
 fn double_negation_parses_right_associative() {
     use juxc_ast::UnaryOp;
-    let ast = parse_clean("public void main() { print(--x); }");
+    // `--x` now lexes as the DECREMENT operator (greedy, like Java/C),
+    // so a genuine double-negation is written with a space: `- -x`
+    // parses as `-(-x)`.
+    let ast = parse_clean("public void main() { print(- -x); }");
     let body = body_of(&ast.items[0]);
     let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
     let Expr::Unary(outer) = &call.args[0] else { panic!() };

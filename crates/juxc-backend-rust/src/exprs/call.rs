@@ -356,6 +356,58 @@ impl RustEmitter {
                 }
             }
         }
+        // §M.5 record wither: `r.with(field: v, …)` — a copy of the
+        // record with the named components replaced. Lowers to Rust's
+        // struct-update syntax: `Rec { x: v, ..(recv).clone() }`
+        // (zero args → a plain `.clone()`). A user-declared `with`
+        // method shadows the synthesized wither and falls through to
+        // normal dispatch.
+        if let Expr::Field(wf) = &*call.callee {
+            if wf.field.text == "with" {
+                if let Some(bare) = self.receiver_class_bare(&wf.object) {
+                    let rec_sig = self.symbols.records.get(&bare).or_else(|| {
+                        let suffix = format!(".{bare}");
+                        let mut hits = self
+                            .symbols
+                            .records
+                            .iter()
+                            .filter(|(k, _)| k.ends_with(&suffix));
+                        match (hits.next(), hits.next()) {
+                            (Some((_, r)), None) => Some(r),
+                            _ => None,
+                        }
+                    });
+                    if let Some(rec) = rec_sig {
+                        if !rec.methods.contains_key("with") {
+                            let prev = self.emitting_format_arg;
+                            self.emitting_format_arg = false;
+                            if call.args.is_empty() {
+                                // `v.with()` — an identical copy.
+                                self.w.push('(');
+                                self.emit_expr(&wf.object);
+                                self.w.push_str(").clone()");
+                            } else {
+                                self.w.push_str(&bare);
+                                self.w.push_str(" { ");
+                                for (i, arg) in call.args.iter().enumerate() {
+                                    if let Some(Some(n)) = call.arg_names.get(i) {
+                                        self.w.push_str(&n.text);
+                                        self.w.push_str(": ");
+                                        self.emit_expr(arg);
+                                        self.w.push_str(", ");
+                                    }
+                                }
+                                self.w.push_str("..(");
+                                self.emit_expr(&wf.object);
+                                self.w.push_str(").clone() }");
+                            }
+                            self.emitting_format_arg = prev;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         // Recognize a single-segment path `print` for the built-in.
         if let Expr::Path(qn) = &*call.callee {
             if qn.segments.len() == 1 && qn.segments[0].text == "print" {
@@ -1204,6 +1256,16 @@ impl RustEmitter {
         // need this (their methods take `&self`, interior-mutable), but
         // applying the hoist there too would be harmless — the trigger
         // simply fires on the textual shape.
+        // **Lexical evaluation order (§S.1.4 / C7).** A call whose
+        // NAMED arguments were re-ordered relative to declaration order
+        // carries an `eval_order`; hoist the args into temps in that
+        // lexical order so side effects fire left-to-right as written,
+        // then pass them positionally. (`emit_call_with_hoisted_args`
+        // reads `call.eval_order`.)
+        if !call.eval_order.is_empty() {
+            self.emit_call_with_hoisted_args(call);
+            return;
+        }
         if self.call_needs_borrow_hoist(call) {
             // When the RECEIVER is itself read through a wrapper
             // `.0.borrow()` (field-path receiver), both the receiver
@@ -1889,7 +1951,21 @@ impl RustEmitter {
         self.w.push_str("{ ");
         let prev_args_fmt = self.emitting_format_arg;
         self.emitting_format_arg = false;
-        for (i, arg) in call.args.iter().enumerate() {
+        // Hoist each argument into `__jux_arg{slot}` (coerced) BEFORE
+        // the call. The BINDING order is what fixes evaluation order:
+        // a re-ordered named call (§S.1.4) carries `eval_order` listing
+        // slots in call-site LEXICAL order, so the side effects happen
+        // left-to-right as written; an ordinary borrow-hoist has an
+        // empty `eval_order` and binds positionally (already source
+        // order). The final call always references the temps
+        // POSITIONALLY, so the callee still gets its parameter slots.
+        let bind_order: Vec<usize> = if call.eval_order.is_empty() {
+            (0..call.args.len()).collect()
+        } else {
+            call.eval_order.clone()
+        };
+        for &i in &bind_order {
+            let Some(arg) = call.args.get(i) else { continue };
             self.w.push_str("let __jux_arg");
             self.w.push_str(&i.to_string());
             self.w.push_str(" = ");
@@ -2098,6 +2174,7 @@ impl RustEmitter {
                 explicit_generic_args: Vec::new(),
                 args: call.args.clone(),
                 arg_names: vec![None; call.args.len()],
+                eval_order: Vec::new(),
                 span: call.span,
             };
             // Expose `__t`'s type for the duration of the synthetic dispatch
@@ -2857,6 +2934,7 @@ impl RustEmitter {
             explicit_generic_args: call.explicit_generic_args.clone(),
             args: temp_args,
             arg_names: vec![None; call.args.len()],
+            eval_order: Vec::new(),
             span: call.span,
         };
         let handled = dispatch(self, &temp_call);

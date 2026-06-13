@@ -719,6 +719,7 @@ impl<'a> Parser<'a> {
                         explicit_generic_args: Vec::new(),
                         args,
                         arg_names,
+                        eval_order: Vec::new(),
                         span,
                     });
                 }
@@ -738,6 +739,7 @@ impl<'a> Parser<'a> {
                         explicit_generic_args,
                         args,
                         arg_names,
+                        eval_order: Vec::new(),
                         span,
                     });
                 }
@@ -1215,6 +1217,7 @@ impl<'a> Parser<'a> {
                         args,
                         arg_names,
                         anonymous_body,
+                        eval_order: Vec::new(),
                         span: start.join(end),
                     }));
                 }

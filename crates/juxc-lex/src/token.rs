@@ -151,8 +151,12 @@ pub enum TokenKind {
     Spaceship,
     /// `+`
     Plus,
+    /// `++` — increment (§A statement / for-update; desugars to `+= 1`).
+    PlusPlus,
     /// `-`
     Minus,
+    /// `--` — decrement (desugars to `-= 1`).
+    MinusMinus,
     /// `*` — multiplication; also pointer dereference in unsafe contexts.
     Star,
     /// `/`

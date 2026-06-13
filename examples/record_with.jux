@@ -1,0 +1,25 @@
+// §M.5 record with(...) — synthesized wither.
+package rwith;
+
+public record Vector3(double x, double y, double z) {}
+
+public record Address(String city, String country) {}
+public record User(String name, Address addr) {}
+
+public void main() {
+    var v = new Vector3(1.0, 2.0, 3.0);
+    var v2 = v.with(x: 5.0);
+    var v3 = v.with(x: 5.0, z: 7.0);
+    var v4 = v.with();
+    print("v2: " + v2.x + "," + v2.y + "," + v2.z);
+    print("v3: " + v3.x + "," + v3.y + "," + v3.z);
+    print("v4 eq v: " + (v4 == v));
+    print("v unchanged: " + v.x);
+
+    // §M.5.4 nested records — wither at each level.
+    var u = new User("Alice", new Address("Paris", "FR"));
+    var u2 = u.with(addr: u.addr.with(city: "Lyon"));
+    print("u2: " + u2.name + " " + u2.addr.city + "/" + u2.addr.country);
+    print("u unchanged: " + u.addr.city);
+    print("done");
+}
