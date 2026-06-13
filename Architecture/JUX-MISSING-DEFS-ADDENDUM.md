@@ -280,7 +280,7 @@ User-defined derive-style annotations (e.g., `@Serializable`) require the macro/
 
 ## §M.4 — `out` Parameters
 
-JUX-LANG-V1 §8.1 uses `out RawHandle* db` and `out CString error` without specifying `out`. This section does.
+JUX-LANG-V1 §8.1 uses `out RawHandle* db` and `out String error` without specifying `out`. This section does.
 
 ### M.4.1. Syntax
 
@@ -338,8 +338,8 @@ Some C APIs accept null for "I don't care about this output." Jux models this wi
 ```jux
 @extern(lib = "sqlite3")
 unsafe native {
-    int sqlite3_exec(RawHandle* db, CString sql,
-                     void* callback, void* arg, out CString errmsg);
+    int sqlite3_exec(RawHandle* db, String sql,
+                     void* callback, void* arg, out String errmsg);
 }
 
 unsafe {

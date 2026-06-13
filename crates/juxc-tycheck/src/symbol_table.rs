@@ -950,6 +950,10 @@ pub struct FunctionSig {
     /// Rust `Result<T, E>` return (§G.5.4). The backend unwraps the `Result`
     /// at the call site and re-throws the error on `Err`.
     pub is_foreign_result: bool,
+    /// True for a C foreign function declared in a `@extern … unsafe native { … }`
+    /// block (Layout-ABI §L.7). The backend uses this to marshal `String`
+    /// arguments/returns to/from C `const char*` at the call site.
+    pub is_extern_c: bool,
     /// The real Rust path of a foreign free function (`humantime::parse_duration`)
     /// recovered from its `@rust("…")` annotation. The backend imports it as
     /// `use <rust_path> as <jux_name>;` so the snake_case Rust name resolves
@@ -1594,6 +1598,9 @@ fn top_level_name(item: &TopLevelDecl) -> Option<&str> {
         TopLevelDecl::Function(d) => Some(&d.name.text),
         TopLevelDecl::TypeAlias(d) => Some(&d.name.text),
         TopLevelDecl::Const(d) => Some(&d.name.text),
+        // A `native` block is a *group* of foreign functions with no single
+        // name of its own (each inner fn is keyed individually).
+        TopLevelDecl::ExternBlock(_) => None,
     }
 }
 
@@ -1624,13 +1631,21 @@ fn insert_top_level(
             insert_interface(table, interface_decl, package, is_external, diagnostics);
         }
         TopLevelDecl::Function(fn_decl) => {
-            insert_function(table, fn_decl, package, is_external, diagnostics);
+            insert_function(table, fn_decl, package, is_external, /*is_extern_c=*/ false, diagnostics);
         }
         TopLevelDecl::TypeAlias(alias) => {
             insert_type_alias(table, alias, package, unit_idx, diagnostics);
         }
         TopLevelDecl::Const(c) => {
             insert_const(table, c, package, diagnostics);
+        }
+        TopLevelDecl::ExternBlock(block) => {
+            // Each foreign function is registered as an ordinary free function
+            // so call resolution finds it. They carry `FnModifier::Unsafe`, so
+            // `FunctionSig.is_unsafe` is set and an unguarded call trips E0506.
+            for f in &block.fns {
+                insert_function(table, f, package, is_external, /*is_extern_c=*/ true, diagnostics);
+            }
         }
     }
 }
@@ -3326,6 +3341,7 @@ fn insert_function(
     fn_decl: &FnDecl,
     package: &[String],
     is_external: bool,
+    is_extern_c: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // `main()` always lives at the crate root for entry-point
@@ -3370,6 +3386,7 @@ fn insert_function(
             // Rust `fn -> Result<T, E>` (§G.5.4). Its call site must unwrap the
             // `Result` (and re-throw the error) since Jux sees only `T`.
             is_foreign_result: is_external && !fn_decl.throws.is_empty(),
+            is_extern_c,
             // `@rust("real::path")` on a foreign free function records its true
             // Rust path (snake_case name) so the backend can alias it on import.
             rust_path: if is_external {

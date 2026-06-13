@@ -47,6 +47,34 @@ pub enum TopLevelDecl {
     /// which Phase 1 broadly approximates as "any literal /
     /// arithmetic on literals."
     Const(ConstDecl),
+    /// A foreign-function block — `@extern(lib = "…") unsafe native { … }`
+    /// (Layout-ABI §L.7). Declares C functions; lowers to a Rust
+    /// `#[link(name = "…")] extern "C" { … }`. See [`ExternBlockDecl`].
+    ExternBlock(ExternBlockDecl),
+}
+
+/// A foreign-function block: `@extern(lib = "name") unsafe native { … }`
+/// (Layout-ABI §L.7 / JUX-LANG-V1 §8).
+///
+/// Each declared function is **bodyless** and **implicitly `unsafe`** to call,
+/// so calling one outside an `unsafe` context is E0506. The block lowers to a
+/// Rust `#[link(name = "<lib>")] extern "C" { pub fn …; }`. Strings cross the
+/// boundary as ordinary Jux `String` (the compiler marshals to/from C
+/// `const char*` under the hood); `byte*` is the manage-it-yourself escape
+/// hatch. There is no `CString` type.
+#[derive(Debug, Clone)]
+pub struct ExternBlockDecl {
+    /// The foreign library name from `@extern(lib = "…")` — emitted as
+    /// `#[link(name = "<lib>")]`. Drives system-library linkage on the default
+    /// search path (`kernel32` on Windows, `c`/`m` on Linux/macOS).
+    pub lib: String,
+    /// The annotations on the block (`@extern(...)` and any others).
+    pub annotations: Vec<Annotation>,
+    /// The foreign function declarations. Each has `body: None` and carries
+    /// [`FnModifier::Unsafe`].
+    pub fns: Vec<FnDecl>,
+    /// Span of the whole `@extern … native { … }` block.
+    pub span: Span,
 }
 
 /// `const-decl` per grammar §A.2.2:

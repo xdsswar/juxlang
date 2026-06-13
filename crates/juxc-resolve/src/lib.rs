@@ -114,6 +114,13 @@ impl PackageExports {
                     TopLevelDecl::Interface(d) => names.insert(d.name.text.clone()),
                     TopLevelDecl::TypeAlias(d) => names.insert(d.name.text.clone()),
                     TopLevelDecl::Const(d) => names.insert(d.name.text.clone()),
+                    // A `native` block contributes each foreign function name.
+                    TopLevelDecl::ExternBlock(b) => {
+                        for f in &b.fns {
+                            names.insert(f.name.text.clone());
+                        }
+                        false
+                    }
                 };
             }
         }
@@ -525,6 +532,13 @@ impl Resolver {
                     // resolver registers their name like any other.
                     self.user_names.insert(c.name.text.clone());
                 }
+                TopLevelDecl::ExternBlock(b) => {
+                    // Each foreign function is a free name callable from
+                    // `unsafe` code, so register them like ordinary functions.
+                    for f in &b.fns {
+                        self.user_names.insert(f.name.text.clone());
+                    }
+                }
             }
         }
     }
@@ -584,6 +598,11 @@ impl Resolver {
             // Top-level constants — walk the initializer so
             // unresolved names inside it surface as E0301.
             TopLevelDecl::Const(c) => self.visit_expr(&c.value),
+            // Foreign-function blocks are bodyless signatures; their
+            // parameter/return types reference only built-in FFI types
+            // (primitives, `String`, raw pointers, `void`), validated in
+            // tycheck (E0508). Nothing to walk here.
+            TopLevelDecl::ExternBlock(_) => {}
         }
     }
 

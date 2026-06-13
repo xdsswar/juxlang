@@ -77,6 +77,32 @@ impl<'a> Parser<'a> {
             }
             return Some(t);
         }
+        // `void` is normally a return-only keyword, but `void*` (a pointer to an
+        // untyped C region) is a valid FFI type (§L.7). Accept `void` here so
+        // `void*` / `void**` parse in any type position (params, locals). A bare
+        // `void` with no `*` is meaningless as a value type; we still produce the
+        // `void` `TypeRef` and leave rejection to tycheck.
+        if self.at_kw(Keyword::Void) {
+            let start = self.peek_span();
+            self.advance(); // 'void'
+            let mut ptr_depth: u8 = 0;
+            while self.eat(&TokenKind::Star) {
+                ptr_depth = ptr_depth.saturating_add(1);
+            }
+            let span = start.join(self.last_consumed_span());
+            return Some(TypeRef {
+                name: juxc_ast::QualifiedName {
+                    segments: vec![juxc_ast::Ident { text: "void".to_string(), span }],
+                    span,
+                },
+                generic_args: Vec::new(),
+                nullable: false,
+                array_shape: None,
+                fn_shape: None,
+                ptr_depth,
+                span,
+            });
+        }
         let qname = self.parse_qualified_name();
         if qname.segments.is_empty() {
             return None;

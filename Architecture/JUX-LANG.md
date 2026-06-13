@@ -425,7 +425,6 @@ switch (shape) {
 | `Set<T>`            | Hash set (uses heap)                            | full, embedded |
 | `(A, B) -> R`       | Function type                                   | all profiles |
 | `T*`                | Raw pointer (only inside `native` blocks)       | all profiles |
-| `CString`           | Null-terminated C string for FFI                | all profiles |
 
 **Arrays.** Jux uses Java's `T[]` syntax for arrays. Every array carries its length, accessed via the `.length` field. Indexing is bounds-checked at runtime; when the index and size are both compile-time constants, bounds are checked at compile time.
 
@@ -1251,9 +1250,9 @@ package std.ffi.sqlite;
 
 @extern(lib = "sqlite3")
 native {
-    int sqlite3_open(CString path, out RawHandle* db);
+    int sqlite3_open(String path, out RawHandle* db);
     int sqlite3_close(RawHandle* db);
-    int sqlite3_exec(RawHandle* db, CString sql, void* callback, void* arg, out CString errmsg);
+    int sqlite3_exec(RawHandle* db, String sql, void* callback, void* arg, out String errmsg);
 }
 
 @extern(lib = "sqlite3")
@@ -1264,7 +1263,7 @@ public final class Database {
 
     public Database(String path) throws DbError {
         var h: RawHandle* = null;
-        var rc = sqlite3_open(path.toCString(), out h);
+        var rc = sqlite3_open(path, out h);
         if (rc != 0) {
             throw new DbError("Failed to open: " + path);
         }
@@ -1272,10 +1271,10 @@ public final class Database {
     }
 
     public void execute(String sql) throws DbError {
-        var err: CString = null;
-        var rc = sqlite3_exec(handle, sql.toCString(), null, null, out err);
+        var err: String = null;
+        var rc = sqlite3_exec(handle, sql, null, null, out err);
         if (rc != 0) {
-            throw new DbError("SQL error: " + err.toString());
+            throw new DbError("SQL error: " + err);
         }
     }
 
@@ -1379,8 +1378,8 @@ public int compute_distance(double x1, double y1, double x2, double y2) {
 
 // Block form for many functions
 @export {
-    public int json_parse(CString input, out CString error) { /* ... */ }
-    public CString json_get_string(JsonHandle* h, CString key) { /* ... */ }
+    public int json_parse(String input, out String error) { /* ... */ }
+    public String json_get_string(JsonHandle* h, String key) { /* ... */ }
     public void json_destroy(JsonHandle* h) { /* ... */ }
 }
 
@@ -1396,7 +1395,7 @@ The compiler:
 3. Validates that all parameter and return types are C-compatible
 4. Emits the function in the generated `.h` header with `extern "C"` linkage guards
 
-Permitted parameter and return types in `@export` signatures: primitives, `CString`, raw pointers `T*`, plain structs whose fields are all C-compatible, and function pointers. Not permitted: classes, generics, sealed types, exceptions, `String`, collection types.
+Permitted parameter and return types in `@export` signatures: primitives, `String` (marshalled to/from C `const char*` automatically), raw pointers `T*`, plain structs whose fields are all C-compatible, and function pointers. Not permitted: classes, generics, sealed types, exceptions, collection types.
 
 To expose class functionality to C, write `@export` free functions that take handle pointers (the standard `*-sys` pattern from Rust):
 
@@ -1404,10 +1403,10 @@ To expose class functionality to C, write `@export` free functions that take han
 public final class Database { /* full Jux API */ }
 
 @export {
-    public Database* db_open(CString path) { return new Database(path.toString()); }
+    public Database* db_open(String path) { return new Database(path); }
     public void db_close(Database* db) { delete db; }
-    public int db_execute(Database* db, CString sql) {
-        try { db.execute(sql.toString()); return 0; }
+    public int db_execute(Database* db, String sql) {
+        try { db.execute(sql); return 0; }
         catch (DbError e) { return -1; }
     }
 }
@@ -1431,7 +1430,7 @@ The standard library is organized in tiers. Each tier may depend only on tiers b
 | `core.string`        | `StackString<N>`, string slicing              |
 | `core.option`        | `Option<T>` and nullable utilities            |
 | `core.result`        | `Result<T, E>` for error returns              |
-| `core.ffi`           | `CString`, raw pointer utilities              |
+| `core.ffi`           | raw pointer utilities (strings marshalled as `String`) |
 | `core.embedded`      | `Volatile<T>`, register access, `SharedRef<T>`|
 
 **Tier 1 — `std`** (requires allocator; most embedded targets supply one):
@@ -1776,7 +1775,7 @@ public class File {
 
     @cfg(any(os = "linux", os = "macos", os = "freebsd"))
     private static FileHandle* openImpl(String path, int mode) throws IOError {
-        var fd = posix_open(path.toCString(), mode);
+        var fd = posix_open(path, mode);
         if (fd < 0) throw new IOError("open failed");
         return new FileHandle(fd);
     }

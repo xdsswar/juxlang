@@ -202,7 +202,10 @@ impl<'a> Walker<'a> {
                         }
                     }
                 }
-                TopLevelDecl::TypeAlias(_) | TopLevelDecl::Const(_) => {}
+                // Foreign-function blocks are bodyless — no scope to descend into.
+                TopLevelDecl::TypeAlias(_)
+                | TopLevelDecl::Const(_)
+                | TopLevelDecl::ExternBlock(_) => {}
             }
         }
     }

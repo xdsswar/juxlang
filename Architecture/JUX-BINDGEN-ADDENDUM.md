@@ -416,7 +416,7 @@ public class SDL {
 | `int`             | `i32`        | C `int` is 32-bit on supported targets |
 | `unsigned int`    | `u32`        |                                        |
 | `long` / `size_t` | `int` / `uint` | platform-sized                       |
-| `char*` (string)  | `String`     | assumed NUL-terminated UTF-8; `CString` at the boundary (§5.5) |
+| `char*` (string)  | `String`     | assumed NUL-terminated UTF-8; compiler marshals `String` to/from `const char*` automatically (§5.5) |
 | `const char*`     | `String`     |                                        |
 | `void*`           | `T*` / opaque | raw pointer, `unsafe` only (§5.5)     |
 | `struct Foo*`     | `class Foo`  | folded per §G.7.2                      |

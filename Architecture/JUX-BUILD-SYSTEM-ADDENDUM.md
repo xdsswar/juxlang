@@ -798,10 +798,10 @@ package com.example.app.ffi.sqlite.raw;
 @Extern type sqlite3;
 @Extern type sqlite3_stmt;
 
-@Extern int sqlite3_open(CString filename, out sqlite3* db);
+@Extern int sqlite3_open(String filename, out sqlite3* db);
 @Extern int sqlite3_close(sqlite3* db);
-@Extern int sqlite3_prepare_v2(sqlite3* db, CString sql, int nByte,
-                                out sqlite3_stmt* stmt, out CString tail);
+@Extern int sqlite3_prepare_v2(sqlite3* db, String sql, int nByte,
+                                out sqlite3_stmt* stmt, out String tail);
 // ... hundreds of declarations
 ```
 
@@ -823,7 +823,7 @@ public final class Database {
 
     public Database(String path) throws SqlError {
         var h: sqlite3* = null;
-        var rc = sqlite3_open(path.toCString(), out h);
+        var rc = sqlite3_open(path, out h);
         if (rc != 0) {
             throw new SqlError($"Failed to open: $path (code $rc)");
         }
@@ -832,8 +832,8 @@ public final class Database {
 
     public Statement prepare(String sql) throws SqlError {
         var stmt: sqlite3_stmt* = null;
-        var tail: CString = null;
-        var rc = sqlite3_prepare_v2(handle, sql.toCString(), -1, out stmt, out tail);
+        var tail: String = null;
+        var rc = sqlite3_prepare_v2(handle, sql, -1, out stmt, out tail);
         if (rc != 0) throw new SqlError($"Prepare failed: $sql");
         return new Statement(stmt);
     }

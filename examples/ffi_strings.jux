@@ -1,0 +1,37 @@
+// C FFI (Layout-ABI §L.7): declare foreign functions in an `unsafe native`
+// block, link the library with `@extern(lib = "…")`, and call them inside
+// `unsafe`. Strings cross the boundary as ordinary Jux `String` — the compiler
+// marshals to/from C `const char*` automatically. There is no `CString`.
+//
+// This demo links the always-available Windows `kernel32` library. On other
+// platforms swap in a system library you have (e.g. `@extern(lib = "c")` with
+// `int puts(String s);` / `String getenv(String name);`).
+
+@extern(lib = "kernel32")
+unsafe native {
+    // Outbound: a Jux String is marshalled to a C `const char*`. Returns the
+    // string length (a C `int`, so the width-explicit `i32` at the boundary).
+    i32 lstrlenA(String s);
+
+    // Inbound: the C `char*` is copied into an owned Jux String (the C buffer
+    // is read, never freed).
+    String GetCommandLineA();
+
+    // A plain primitive return (DWORD = u32).
+    u32 GetCurrentProcessId();
+}
+
+public void main() {
+    unsafe {
+        // Pass a String straight to C — no `.toCString()`, no `CString`.
+        i32 len = lstrlenA("hello ffi");
+
+        // Receive a String back from C — the compiler copies it out.
+        String cmd = GetCommandLineA();
+
+        u32 pid = GetCurrentProcessId();
+
+        print($"len=$len pid=$pid");
+        print($"cmd=$cmd");
+    }
+}

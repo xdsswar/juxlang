@@ -383,6 +383,27 @@ impl<'a> Parser<'a> {
         let annotations = self.parse_annotations();
         let visibility = self.parse_visibility();
 
+        // `@extern(lib = "…") unsafe native { … }` — a foreign-function block
+        // (Layout-ABI §L.7). Recognized by the `@extern` annotation followed by
+        // the block keywords `unsafe native` (or a bare `native`); the latter is
+        // tolerated and diagnosed (the spec requires `unsafe`). This must be
+        // checked before the class/fn dispatch since `unsafe`/`native` are also
+        // ordinary function modifiers.
+        let has_extern_anno = annotations
+            .iter()
+            .any(|a| a.name.segments.last().is_some_and(|s| s.text.eq_ignore_ascii_case("extern")));
+        let at_native_block = self.at_kw(Keyword::Native)
+            || (self.at_kw(Keyword::Unsafe)
+                && matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::Kw(Keyword::Native)),
+                ));
+        if has_extern_anno && at_native_block {
+            return self
+                .parse_extern_native_block(annotations)
+                .map(TopLevelDecl::ExternBlock);
+        }
+
         // `const NAME …;` is unambiguously a top-level constant —
         // `const` is never a class modifier in Jux.
         if self.eat_kw(Keyword::Const) {

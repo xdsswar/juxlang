@@ -847,6 +847,24 @@ impl<'a> Parser<'a> {
     /// types (`List<int> nums = …;`) don't trip the heuristic — those
     /// users can fall back to `var`.
     pub(crate) fn looks_like_typed_local(&self) -> bool {
+        // `void* p = …;` / `void** pp;` — a raw pointer to an untyped C region
+        // (§L.7). `void` is a keyword (not an `Ident`) and a bare `void` is never
+        // a value type, so the shape is unambiguous: `void` + at least one `*` +
+        // a name + (`=` | `;`).
+        if self.at_kw(Keyword::Void) {
+            let mut j = self.pos + 1;
+            let mut stars = 0u32;
+            while matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Star)) {
+                j += 1;
+                stars += 1;
+            }
+            return stars > 0
+                && matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Ident(_)))
+                && matches!(
+                    self.tokens.get(j + 1).map(|t| &t.kind),
+                    Some(TokenKind::Eq) | Some(TokenKind::Semicolon),
+                );
+        }
         if !matches!(self.peek(), TokenKind::Ident(_)) {
             return false;
         }

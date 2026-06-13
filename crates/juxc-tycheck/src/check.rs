@@ -577,6 +577,65 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
+                // Foreign-function blocks: validate each signature is
+                // FFI-compatible (E0508). No bodies to walk.
+                TopLevelDecl::ExternBlock(block) => self.check_extern_block(block),
+            }
+        }
+    }
+
+    /// Validate every signature in a `@extern … unsafe native { … }` block is
+    /// FFI-compatible (Layout-ABI §L.7). Each parameter and the return type must
+    /// be a primitive, a raw pointer (`T*`/`void*`), `String` (marshalled to/from
+    /// C `const char*`), or `void` (return only). Anything else (classes,
+    /// generics, arrays, collections, `throws`) trips **E0508**.
+    fn check_extern_block(&mut self, block: &juxc_ast::ExternBlockDecl) {
+        for f in &block.fns {
+            if !f.throws.is_empty() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0508_FfiTypeNotAllowed,
+                        format!(
+                            "foreign function `{}` cannot declare `throws` — C has no \
+                             exceptions; return an error code or `out` parameter instead",
+                            f.name.text,
+                        ),
+                    )
+                    .with_span(f.span),
+                );
+            }
+            for p in &f.params {
+                if !ffi_type_ok(&p.ty) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0508_FfiTypeNotAllowed,
+                            format!(
+                                "parameter `{}` of foreign function `{}` has type `{}`, which is \
+                                 not allowed at the C boundary — use a primitive, a raw pointer \
+                                 (`T*`), or `String`",
+                                p.name.text, f.name.text, type_ref_display(&p.ty),
+                            ),
+                        )
+                        .with_span(p.span),
+                    );
+                }
+            }
+            // Return type: `void` is fine; otherwise the same rule as a param.
+            if let juxc_ast::ReturnType::Type(t) = &f.return_type {
+                if !ffi_type_ok(t) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0508_FfiTypeNotAllowed,
+                            format!(
+                                "return type `{}` of foreign function `{}` is not allowed at the \
+                                 C boundary — use a primitive, a raw pointer (`T*`), `String`, or \
+                                 `void`",
+                                type_ref_display(t), f.name.text,
+                            ),
+                        )
+                        .with_span(f.span),
+                    );
+                }
             }
         }
     }
@@ -6504,6 +6563,50 @@ fn op_kind_for_binary(op: BinaryOp) -> Option<OperatorKind> {
     })
 }
 
+/// True when `t` is a type permitted at the C FFI boundary (Layout-ABI §L.7):
+/// a primitive, a raw pointer (`T*` / `void*`, any pointee), or `String`
+/// (`String?` included, for the null-return case). Arrays, function types,
+/// generic instantiations, nullable primitives, and user/class types are not.
+/// Render a `TypeRef` for an FFI diagnostic (`TypeRef` has no `Display`):
+/// dotted name, then `?` for nullable, then one `*` per pointer level.
+fn type_ref_display(t: &juxc_ast::TypeRef) -> String {
+    let mut s = t
+        .name
+        .segments
+        .iter()
+        .map(|x| x.text.as_str())
+        .collect::<Vec<_>>()
+        .join(".");
+    if t.nullable {
+        s.push('?');
+    }
+    for _ in 0..t.ptr_depth {
+        s.push('*');
+    }
+    s
+}
+
+fn ffi_type_ok(t: &juxc_ast::TypeRef) -> bool {
+    // Composite shapes have no stable C representation.
+    if t.array_shape.is_some() || t.fn_shape.is_some() || !t.generic_args.is_empty() {
+        return false;
+    }
+    // Any raw pointer is fine; the pointee is opaque at the boundary.
+    if t.ptr_depth > 0 {
+        return true;
+    }
+    let name = t.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+    // `String` (and `String?`) marshal to/from C `const char*`.
+    if name == "String" {
+        return true;
+    }
+    // A nullable primitive would lower to `Option<T>`, not C-compatible.
+    if t.nullable {
+        return false;
+    }
+    crate::ty::primitive_from_name(name).is_some()
+}
+
 /// Map a [`UnaryOp`] to the [`OperatorKind`] whose deletion would
 /// suppress this op. `!x` (logical NOT) isn't overloadable per spec
 /// §O.2.5.
@@ -7233,6 +7336,53 @@ mod tests {
     /// Convenience: count diagnostics matching `code`.
     fn count(diags: &[Diagnostic], wanted: code::Code) -> usize {
         diags.iter().filter(|d| d.code == wanted).count()
+    }
+
+    // --- §L.7 C FFI: `unsafe native` blocks ---
+
+    /// Calling a foreign function outside an `unsafe` context is E0506
+    /// (each `unsafe native` fn is implicitly unsafe to call).
+    #[test]
+    fn foreign_call_outside_unsafe_is_e0506() {
+        let d = run(
+            "@extern(lib = \"c\") unsafe native { i32 getpid(); } \
+             public void main() { i32 p = getpid(); }",
+        );
+        assert!(has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "{d:?}");
+    }
+
+    /// The same call inside `unsafe { … }` is clean (no E0506).
+    #[test]
+    fn foreign_call_inside_unsafe_is_clean() {
+        let d = run(
+            "@extern(lib = \"c\") unsafe native { i32 getpid(); } \
+             public void main() { unsafe { i32 p = getpid(); } }",
+        );
+        assert!(!has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "{d:?}");
+    }
+
+    /// A non-FFI parameter type (a user class) in a foreign signature is E0508.
+    #[test]
+    fn foreign_class_param_is_e0508() {
+        let d = run(
+            "public class Foo { public int x; public Foo(int x) { this.x = x; } } \
+             @extern(lib = \"c\") unsafe native { void takes(Foo f); } \
+             public void main() {}",
+        );
+        assert!(has(&d, code::Code::E0508_FfiTypeNotAllowed), "{d:?}");
+    }
+
+    /// Primitives, raw pointers, `String`, and `void` are all FFI-allowed —
+    /// no E0508 for the canonical malloc/free/puts shapes.
+    #[test]
+    fn foreign_ffi_types_are_allowed() {
+        let d = run(
+            "@extern(lib = \"c\") unsafe native { \
+                void* malloc(ulong size); void free(void* p); \
+                i32 puts(String s); String getenv(String name); \
+             } public void main() {}",
+        );
+        assert!(!has(&d, code::Code::E0508_FfiTypeNotAllowed), "{d:?}");
     }
 
     // --- §M.14.2 `final` parameter / local reassignment (E0464) ---

@@ -46,7 +46,7 @@ pub use common::{Ident, QualifiedName, Visibility};
 pub use compilation::{CompilationUnit, ImportDecl, ImportItem, ImportSpec, PackageDecl};
 pub use decls::{
     AccessorBody, Annotation, AnnotationArg, ClassDecl, ConstDecl, ConstructorDecl, EnumDecl,
-    EnumPayload, EnumVariant, FieldDecl, FnDecl, FnModifier, InterfaceDecl, OperatorDecl,
+    EnumPayload, EnumVariant, ExternBlockDecl, FieldDecl, FnDecl, FnModifier, InterfaceDecl, OperatorDecl,
     OperatorKind, Param, PropertyAccessor, PropertyDecl, PropertySetter, RecordComponent,
     RecordDecl, ReturnType, TopLevelDecl, TypeAliasDecl, TypeParam, WhereConstraint,
 };
