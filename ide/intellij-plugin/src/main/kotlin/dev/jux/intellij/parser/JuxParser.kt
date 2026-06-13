@@ -45,13 +45,16 @@ class JuxParser : PsiParser {
                     // Script mode (§E): a file may carry top-level statements
                     // (`print(…)`, `var x = …`, loops, …). Anything that isn't
                     // a declaration parses as a statement; the progress guard
-                    // turns a truly stuck token into an error node.
+                    // turns a truly stuck token into an error node — and we
+                    // re-sync to the next declaration/import so one stray token
+                    // doesn't red-flag the rest of the file.
                     val before = b.currentOffset
                     b.parseStatement()
                     if (b.currentOffset == before) {
                         val m = b.mark()
                         b.advanceLexer()
-                        m.error("unexpected token")
+                        while (!b.eof() && !b.at(T.IMPORT_KW) && !isDeclarationStart(b)) b.advanceLexer()
+                        m.error("Declaration or statement expected")
                     }
                 }
             }
@@ -207,9 +210,13 @@ class JuxParser : PsiParser {
             if (isMemberStart(b)) {
                 parseDeclaration(b)
             } else {
+                // Re-sync: swallow the run of stray tokens up to the next member
+                // or `}` as ONE error, so a single bad token doesn't cascade
+                // into an error on every token until the brace.
                 val m = b.mark()
                 b.advanceLexer()
-                m.error("unexpected token in body")
+                while (!b.eof() && !b.at(T.RBRACE) && !isMemberStart(b)) b.advanceLexer()
+                m.error("Member declaration expected")
             }
         }
         b.expectOrError(T.RBRACE, "'}' expected")

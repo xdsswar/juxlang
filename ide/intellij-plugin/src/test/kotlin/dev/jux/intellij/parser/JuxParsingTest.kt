@@ -77,6 +77,51 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
     }
 
     /**
+     * Error recovery: a stray run of tokens in a class body becomes ONE
+     * "Member declaration expected" error (no per-token cascade), and the
+     * valid member after it still parses.
+     */
+    fun testClassBodyErrorMessageAndRecovery() {
+        val psi = createPsiFile(
+            "a.jux",
+            """
+            package demo;
+            public class A {
+                42 + 7
+                public void ok() {}
+            }
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertEquals(
+            "stray tokens collapse into one member error: ${errors.map { it.errorDescription }}",
+            1,
+            errors.count { it.errorDescription == "Member declaration expected" },
+        )
+        val methods = PsiTreeUtil.collectElementsOfType(psi, JuxMethodDeclaration::class.java).map { it.name }
+        assertTrue("member after the stray run still parsed", methods.contains("ok"))
+    }
+
+    /** Top-level recovery: a stray token re-syncs to the next declaration. */
+    fun testTopLevelErrorMessageAndRecovery() {
+        val psi = createPsiFile(
+            "a.jux",
+            """
+            package demo;
+            }
+            public class A {}
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertTrue(
+            "precise top-level message: ${errors.map { it.errorDescription }}",
+            errors.any { it.errorDescription == "Declaration or statement expected" },
+        )
+        val types = PsiTreeUtil.collectElementsOfType(psi, JuxTypeDeclaration::class.java).map { it.name }
+        assertTrue("declaration after the stray token still parsed", types.contains("A"))
+    }
+
+    /**
      * `ref` (§M.13) is a leading modifier keyword on fields, parameters, and
      * locals. Because the type name sits nested in a TYPE_REFERENCE (never a
      * direct child) the declaration name must still resolve to the trailing
