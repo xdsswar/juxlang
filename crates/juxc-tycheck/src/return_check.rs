@@ -16,7 +16,7 @@ use juxc_ast::{Block, ElseBranch, Expr, IfStmt, Literal, Stmt, SwitchBody};
 /// True when `body` can complete normally — reach its end without a
 /// `return`/`throw` on at least one path. A non-void function for which this
 /// holds is missing a return (E0451).
-pub(crate) fn body_can_fall_through(body: &Block) -> bool {
+pub fn body_can_fall_through(body: &Block) -> bool {
     !block_diverges(body)
 }
 

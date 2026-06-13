@@ -872,7 +872,16 @@ impl RustEmitter {
         self.in_catch_arm = true;
         self.emit_block_contents(body);
         self.in_catch_arm = prev_arm;
-        self.w.line("break '__jux_catch;");
+        // Trailing `break '__jux_catch;` is the arm's normal-completion exit:
+        // once a catch matches, stop dispatching the remaining clauses. Omit it
+        // when the Jux body provably diverges (every path `throw`s/`return`s) —
+        // a Jux `throw` already lowers to `break '__jux_catch;` and a `return`
+        // to a Rust return, so the trailing break would be `unreachable_code`.
+        // The check is conservative (kept whenever fall-through is possible), so
+        // control can never escape the dispatch block uncaught.
+        if juxc_tycheck::return_check::body_can_fall_through(body) {
+            self.w.line("break '__jux_catch;");
+        }
         self.w.indent_dec();
         self.w.line("}");
         self.w

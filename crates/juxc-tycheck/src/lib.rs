@@ -47,7 +47,7 @@ pub(crate) mod definite_assign;
 pub mod env;
 pub mod expand;
 pub mod infer;
-pub(crate) mod return_check;
+pub mod return_check;
 pub mod symbol_table;
 pub mod ty;
 
