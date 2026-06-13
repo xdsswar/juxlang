@@ -9,35 +9,37 @@ import com.intellij.openapi.util.IconLoader
  * per-kind icons shown next to each entry in the New → Jux File dialog (§I.5),
  * mirroring Java's class/interface/enum/… glyphs.
  *
- * Icons ship as 16×16 PNGs with a 32×32 `@2x` variant for HiDPI; `IconLoader`
- * picks the right one automatically.
+ * Icons are clean, hand-authored line-art SVGs (16×16 viewBox) — single-color
+ * and theme-adaptive: a charcoal stroke for light themes plus a `_dark` sibling
+ * (soft near-white) that `IconLoader` auto-selects on dark/Dracula themes.
+ * Scalable, so no `@2x` raster variants are needed.
  */
 object JuxIcons {
     /** `.jux` file-type icon. */
     @JvmField
-    val FILE = load("/icons/jux.png")
+    val FILE = load("/icons/jux.svg")
 
     /** New → "File" (plain source file) kind. */
     @JvmField
-    val NEW_FILE = load("/icons/juxFile.png")
+    val NEW_FILE = load("/icons/juxFile.svg")
 
     @JvmField
-    val CLASS = load("/icons/juxClass.png")
+    val CLASS = load("/icons/juxClass.svg")
 
     @JvmField
-    val INTERFACE = load("/icons/juxInterface.png")
+    val INTERFACE = load("/icons/juxInterface.svg")
 
     @JvmField
-    val ENUM = load("/icons/juxEnum.png")
+    val ENUM = load("/icons/juxEnum.svg")
 
     @JvmField
-    val STRUCT = load("/icons/juxStruct.png")
+    val STRUCT = load("/icons/juxStruct.svg")
 
     @JvmField
-    val RECORD = load("/icons/juxRecord.png")
+    val RECORD = load("/icons/juxRecord.svg")
 
     @JvmField
-    val ANNOTATION = load("/icons/juxAnnotation.png")
+    val ANNOTATION = load("/icons/juxAnnotation.svg")
 
     // §P.7.8 property gutter trio (12×12 SVGs with `_dark` variants —
     // IconLoader picks the themed file automatically).
