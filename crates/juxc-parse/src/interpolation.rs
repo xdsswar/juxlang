@@ -35,10 +35,17 @@ impl<'a> Parser<'a> {
     /// backslash sequences decode per §A.1.5) from the RAW form
     /// (false — backslashes are literal bytes; only `$name` /
     /// `${expr}` markers are special).
+    /// `base` is the absolute source byte offset where `raw` (the interp body)
+    /// begins. Each `${expr}` hole is parsed with its inner spans rebased to
+    /// their true absolute position (`base + expr_start`) so they are UNIQUE in
+    /// the span-keyed `expr_types` map. Without this, holes parse in a synthetic
+    /// file at offset 0 and COLLIDE with real expressions (and each other),
+    /// which silently gave `typeof`/`sizeof` inside a `$"…"` the wrong type.
     pub(crate) fn parse_interp_segments(
         &mut self,
         raw: &str,
         decode_escapes: bool,
+        base: usize,
     ) -> Vec<InterpSegment> {
         let bytes = raw.as_bytes();
         let mut segments: Vec<InterpSegment> = Vec::new();
@@ -104,8 +111,10 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 let inner = &raw[expr_start..j];
-                // Recursively lex + parse the inner expression.
-                if let Some(inner_expr) = self.parse_inline_expr(inner) {
+                // Recursively lex + parse the inner expression, rebasing its
+                // spans to the hole's absolute source position so they don't
+                // collide in `expr_types` (see the `base` doc above).
+                if let Some(inner_expr) = self.parse_inline_expr(inner, base + expr_start) {
                     segments.push(InterpSegment::Expr(Box::new(inner_expr)));
                 }
                 // Skip past the closing `}`.
@@ -155,8 +164,15 @@ impl<'a> Parser<'a> {
     /// at the call site. Inner-expression spans live in a different
     /// SourceFile — column fidelity in nested diagnostics is a known
     /// polish item.
-    pub(crate) fn parse_inline_expr(&mut self, source: &str) -> Option<Expr> {
-        let synthetic = juxc_source::SourceFile::new("<interp>", source.to_string());
+    pub(crate) fn parse_inline_expr(&mut self, source: &str, base: usize) -> Option<Expr> {
+        // Prepend `base` spaces so the lexer assigns the inner expression's
+        // tokens spans starting at the hole's true absolute offset — the
+        // produced AST then carries UNIQUE, collision-free spans (the lexer
+        // skips the leading whitespace, so the parse is otherwise identical).
+        // This keeps `expr_types` keys distinct between interpolation holes and
+        // the surrounding code (fixes `typeof`/`sizeof` inside `$"…"`).
+        let padded = format!("{}{}", " ".repeat(base), source);
+        let synthetic = juxc_source::SourceFile::new("<interp>", padded);
         let lex_out = juxc_lex::lex(&synthetic);
         // Propagate any lexer diagnostics to the outer parser so the
         // user sees them.

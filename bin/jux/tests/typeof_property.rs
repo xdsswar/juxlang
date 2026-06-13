@@ -32,4 +32,10 @@ fn typeof_of_property_reports_declared_type() {
     let lines: Vec<&str> = stdout.lines().collect();
     assert!(lines.contains(&"String"), "expected String, got:\n{all}");
     assert!(lines.contains(&"int"), "expected int, got:\n{all}");
+    // `typeof` inside a `$"…"` interpolation hole must resolve the same as
+    // outside it (regression for interp-hole span collisions in expr_types).
+    assert!(
+        lines.contains(&"interp: String int"),
+        "typeof inside interpolation reported the wrong type:\n{all}",
+    );
 }
