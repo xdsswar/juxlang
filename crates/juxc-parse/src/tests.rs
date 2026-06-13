@@ -110,6 +110,56 @@ fn sensible_param_combos_parse_clean() {
 }
 
 // ---------------------------------------------------------------------------
+// §L.7-L.8 — `delete` is not a keyword (E0507)
+// ---------------------------------------------------------------------------
+
+/// `delete p;` is guided to the drop-block model (E0507), NOT misparsed as a
+/// typed local (which would have surfaced a downstream `E0304 cannot find type
+/// 'delete'`).
+#[test]
+fn delete_local_is_e0507() {
+    use juxc_diagnostics::code::Code;
+    assert!(parse_has_code(
+        "public void main() { delete p; }",
+        Code::E0507_NoDeleteKeyword,
+    ));
+}
+
+/// `delete this.buf;` and `delete *p;` also trip the guidance.
+#[test]
+fn delete_member_and_deref_are_e0507() {
+    use juxc_diagnostics::code::Code;
+    assert!(parse_has_code(
+        "public void main() { delete this.buf; }",
+        Code::E0507_NoDeleteKeyword,
+    ));
+    assert!(parse_has_code(
+        "public void main() { delete *p; }",
+        Code::E0507_NoDeleteKeyword,
+    ));
+}
+
+/// `delete` stays usable as an ordinary identifier — a call `delete(x)`, an
+/// assignment `delete = v`, or a member access `delete.run()` must NOT trip
+/// E0507 (a second operand never follows in those shapes).
+#[test]
+fn delete_as_identifier_is_not_e0507() {
+    use juxc_diagnostics::code::Code;
+    assert!(!parse_has_code(
+        "public void main() { delete(x); }",
+        Code::E0507_NoDeleteKeyword,
+    ));
+    assert!(!parse_has_code(
+        "public void main() { delete = 5; }",
+        Code::E0507_NoDeleteKeyword,
+    ));
+    assert!(!parse_has_code(
+        "public void main() { delete.run(); }",
+        Code::E0507_NoDeleteKeyword,
+    ));
+}
+
+// ---------------------------------------------------------------------------
 // Triviality
 // ---------------------------------------------------------------------------
 

@@ -392,9 +392,11 @@ public void main() {
 }
 ```
 
-> Coming features (specced, not emitted yet): a `delete` keyword for freeing,
-> address-of an rvalue or object (`&42`, `&obj`), and the full C/C++ FFI binding
-> layer they hang off. Until those land, raw pointers are for value-typed locals.
+> Coming features (specced, not emitted yet): taking the address of an object
+> (`&obj`) and the full C/C++ FFI binding layer they hang off. Freeing memory
+> needs no `delete` keyword by design: you call the foreign deallocator inside
+> `unsafe`, from a `drop { }` destructor (writing `delete p;` is guided there by
+> a diagnostic). Until those land, raw pointers are for value-typed locals.
 
 ---
 
@@ -436,8 +438,9 @@ runs. That currently includes:
 - `rust.std` compile coverage is partial: construction and method calls work;
   free functions, traits/operators, and the full type mapping are being filled in.
 - **C/C++ FFI** is specced and is a priority, but deferred for now.
-- Raw-pointer basics work (`T*`, `&local`, `*p` inside `unsafe`); `delete`,
-  `&obj`/`&42`, and the full FFI binding layer are still to come.
+- Raw-pointer basics work (`T*`, `&local`, `*p` inside `unsafe`). There is no
+  `delete` keyword by design (`delete p;` is guided to the `drop { }` +
+  foreign-`free` model); `&obj` and the full FFI binding layer are still to come.
 - Tuple syntax is still placeholder.
 - Expect bugs. This is experimental, one person is building it, and corners of the
   language will break, change, or get rewritten without warning. File issues.
