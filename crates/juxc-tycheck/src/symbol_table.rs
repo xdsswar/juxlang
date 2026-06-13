@@ -820,6 +820,11 @@ pub struct ParamSig {
     /// `final` class parameter, stay legal. Drives the backend's `mut`
     /// suppression. Orthogonal to [`Self::is_shared_ref`] / `is_weak`.
     pub is_final: bool,
+    /// `weak` binding mode (§M.14.3) — the parameter is a WEAK reference to a
+    /// class object (`Weak<RefCell<T_Inner>>`); reading requires `.get()`
+    /// (→ `T?`). Drives the backend's weak lowering and the call-site
+    /// downgrade. Mutually exclusive with [`Self::is_shared_ref`] / `is_out`.
+    pub is_weak: bool,
 }
 
 /// Signature of a top-level record declaration.
@@ -3509,6 +3514,7 @@ fn param_sig(p: &juxc_ast::Param) -> ParamSig {
         is_out: p.is_out,
         is_shared_ref: p.is_shared_ref,
         is_final: p.is_final,
+        is_weak: p.is_weak,
     }
 }
 

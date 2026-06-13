@@ -164,6 +164,7 @@ impl RustEmitter {
             if !param.is_final
                 && !param.is_out
                 && !param.is_shared_ref
+                && !param.is_weak
                 && param_muts.contains(&param.name.text)
             {
                 self.w.push_str("mut ");
@@ -173,7 +174,15 @@ impl RustEmitter {
             if param.is_out {
                 self.w.push_str("&mut "); // `out T` (§M.4) lowers to `&mut T`
             }
-            if param.is_shared_ref {
+            if param.is_weak {
+                // `weak T` (§M.14.3) — a weak reference to a class object. The
+                // slot is a `Weak<RefCell<T_Inner>>`, matching the weak-field
+                // storage (E0455 guarantees `T` is a plain class).
+                let cls = param.ty.name.segments.last().map_or("", |s| s.text.as_str());
+                self.w.push_str("std::rc::Weak<std::cell::RefCell<");
+                self.w.push_str(cls);
+                self.w.push_str("_Inner>>");
+            } else if param.is_shared_ref {
                 // `ref T` (§M.13) — shared reference to a value object.
                 self.w.push_str("std::rc::Rc<std::cell::RefCell<");
                 self.emit_value_type_as_rust(&lifted_param_tys[i]);
@@ -288,9 +297,16 @@ impl RustEmitter {
             // `ref` bindings (§M.13): reset per fn, seeded from `ref`
             // params so reads clone out / assigns store through.
             self.ref_locals.clear();
+            // `weak` params (§M.14.3): reset per fn, mapping each to its target
+            // class so `.get()` re-wraps the upgraded inner cell.
+            self.weak_params.clear();
             for p in &fn_decl.params {
                 if p.is_shared_ref {
                     self.ref_locals.insert(p.name.text.clone());
+                }
+                if p.is_weak {
+                    let cls = p.ty.name.segments.last().map_or("", |s| s.text.as_str());
+                    self.weak_params.insert(p.name.text.clone(), cls.to_string());
                 }
             }
             // Register each parameter's type in `local_types` so name-keyed

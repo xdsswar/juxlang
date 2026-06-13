@@ -53,6 +53,12 @@ pub struct TypeEnv {
     /// segment type reference is encountered. Empty when no package
     /// or imports apply (top-level single-unit builds).
     pub unqualified: HashMap<String, String>,
+    /// Names of `weak` parameters (§M.14.3) in the current function/method.
+    /// A weak param's `lookup` type is its class `T` (for `.get()` typing and
+    /// the E0456 bare-read gate), but it is physically a `Weak<…>` handle — so
+    /// `name.get()` infers to `T?` and a bare read of `name` is rejected.
+    /// Repopulated per body; not scoped (params live for the whole body).
+    pub weak_names: HashSet<String>,
 }
 
 impl TypeEnv {
@@ -65,6 +71,7 @@ impl TypeEnv {
             generic_params: HashSet::new(),
             current_package: Vec::new(),
             unqualified: HashMap::new(),
+            weak_names: HashSet::new(),
         }
     }
 

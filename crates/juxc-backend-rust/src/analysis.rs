@@ -1510,6 +1510,38 @@ impl crate::RustEmitter {
         callee: &juxc_ast::Expr,
         arg_idx: usize,
     ) -> bool {
+        self.callee_param_flag(callee, arg_idx, /*weak=*/ false)
+    }
+
+    /// True when arg `arg_idx` maps to a **`weak`** parameter (§M.14.3) of the
+    /// callee — so a class argument is downgraded to a `Weak` handle at the call
+    /// site. Shares its callee resolution with [`Self::callee_param_is_shared_ref`].
+    pub(crate) fn callee_param_is_weak(
+        &self,
+        callee: &juxc_ast::Expr,
+        arg_idx: usize,
+    ) -> bool {
+        self.callee_param_flag(callee, arg_idx, /*weak=*/ true)
+    }
+
+    /// Resolve arg `arg_idx`'s declared parameter across the bare-free-fn /
+    /// static-method / instance-method callee shapes and report the requested
+    /// binding-mode flag — `is_weak` when `weak`, else `is_shared_ref`. One
+    /// resolution path drives both [`Self::callee_param_is_shared_ref`] and
+    /// [`Self::callee_param_is_weak`].
+    fn callee_param_flag(
+        &self,
+        callee: &juxc_ast::Expr,
+        arg_idx: usize,
+        weak: bool,
+    ) -> bool {
+        let pick = |p: &juxc_tycheck::symbol_table::ParamSig| {
+            if weak {
+                p.is_weak
+            } else {
+                p.is_shared_ref
+            }
+        };
         if let juxc_ast::Expr::Path(qn) = callee {
             if qn.segments.len() == 1 {
                 let name = qn.segments[0].text.as_str();
@@ -1537,11 +1569,7 @@ impl crate::RustEmitter {
                         }
                     });
                 if let Some(f) = f_sig {
-                    return f
-                        .params
-                        .get(arg_idx)
-                        .map(|p| p.is_shared_ref)
-                        .unwrap_or(false);
+                    return f.params.get(arg_idx).map(pick).unwrap_or(false);
                 }
             }
         }
@@ -1551,11 +1579,7 @@ impl crate::RustEmitter {
                 if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
                     if let Some(c) = self.symbols.classes.get(&class_fqn) {
                         if let Some(m) = c.methods.get(f.field.text.as_str()) {
-                            return m
-                                .params
-                                .get(arg_idx)
-                                .map(|p| p.is_shared_ref)
-                                .unwrap_or(false);
+                            return m.params.get(arg_idx).map(pick).unwrap_or(false);
                         }
                     }
                 }
@@ -1569,11 +1593,7 @@ impl crate::RustEmitter {
                 });
                 if let Some(c) = sig {
                     if let Some(m) = c.methods.get(f.field.text.as_str()) {
-                        return m
-                            .params
-                            .get(arg_idx)
-                            .map(|p| p.is_shared_ref)
-                            .unwrap_or(false);
+                        return m.params.get(arg_idx).map(pick).unwrap_or(false);
                     }
                 }
             }

@@ -1121,6 +1121,7 @@ impl<'a> Checker<'a> {
         self.env.push_scope();
         // Declare each parameter into the new scope so name lookups
         // inside the body resolve.
+        self.env.weak_names.clear();
         for param in &fn_decl.params {
             self.check_iface_value_type(&param.ty);
             self.check_fixed_array_size_in_type(&param.ty);
@@ -1129,6 +1130,12 @@ impl<'a> Checker<'a> {
             self.validate_sig_type(&param.ty, &fn_decl.generic_params);
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
+            // `weak` parameter (§M.14.3): validate its class type (E0455) and
+            // register it so reads route through `.get()` (E0456).
+            if param.is_weak {
+                self.check_weak_param(param);
+                self.env.weak_names.insert(param.name.text.clone());
+            }
         }
         self.validate_sig_return(&fn_decl.return_type, &fn_decl.generic_params);
         // Const-generic params (`int cap<int N>()`) read as values in
@@ -1161,6 +1168,7 @@ impl<'a> Checker<'a> {
         self.in_unsafe = saved_unsafe;
         self.in_async = saved_async;
         self.current_return = saved;
+        self.env.weak_names.clear();
         self.env.pop_scope();
     }
 
@@ -1651,6 +1659,7 @@ impl<'a> Checker<'a> {
             self.env.add_generic_param(&tp.name.text);
         }
         self.declare_const_generic_params(&method.generic_params);
+        self.env.weak_names.clear();
         for param in &method.params {
             self.check_iface_value_type(&param.ty);
             self.check_fixed_array_size_in_type(&param.ty);
@@ -1659,6 +1668,12 @@ impl<'a> Checker<'a> {
             self.validate_sig_type(&param.ty, &[]);
             let ty = ty_from_ref(&param.ty, &self.env, self.symbols);
             self.env.declare(&param.name.text, ty);
+            // `weak` parameter (§M.14.3): validate class type (E0455) and
+            // register so reads route through `.get()` (E0456).
+            if param.is_weak {
+                self.check_weak_param(param);
+                self.env.weak_names.insert(param.name.text.clone());
+            }
         }
         self.validate_sig_return(&method.return_type, &[]);
         self.check_iface_return_type(&method.return_type);
@@ -1689,6 +1704,7 @@ impl<'a> Checker<'a> {
         self.in_async = saved_async;
         self.current_return = saved;
         self.in_static = saved_static;
+        self.env.weak_names.clear();
         // Method-local generic params would also clear here, but the
         // class's params are still active until check_class finishes.
         // We can't surgically remove just the method's — for Turn 1 we
@@ -2785,6 +2801,29 @@ impl<'a> Checker<'a> {
     /// consumption by the Rust backend.
     #[allow(clippy::only_used_in_recursion)]
     fn check_expr(&mut self, expr: &Expr) {
+        // **E0456 (§M.14.3)** — a bare read of a `weak` parameter. Its strong
+        // view is reached only through `.get()` (→ `T?`); the legitimate
+        // `.get()` receiver is intercepted in `check_call` and never reaches
+        // here, and an assignment place is filtered by the assignment checker —
+        // so any weak-param `Path` that lands here is a bare read in a value /
+        // argument / return position, which would expose the raw `Weak<…>`.
+        if let Expr::Path(qn) = expr {
+            if qn.segments.len() == 1 && self.env.weak_names.contains(&qn.segments[0].text) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0456_WeakReadNeedsGet,
+                        format!(
+                            "`weak` parameter `{}` can only be read via `.get()` (which returns \
+                             the target type, nullable) — a bare read would expose the raw weak \
+                             handle (§M.14.3)",
+                            qn.segments[0].text,
+                        ),
+                    )
+                    .with_span(qn.span),
+                );
+                return;
+            }
+        }
         // Record this expression's type up-front. Sub-expressions get
         // recorded when their containing check_expr recurses into them.
         let _ = self.infer_and_record(expr);
@@ -3455,6 +3494,25 @@ impl<'a> Checker<'a> {
                     ),
                 )
                 .with_span(field.ty.as_ref().map_or(field.span, |t| t.span)),
+            );
+        }
+    }
+
+    /// **E0455 (§M.14.3)** — a `weak` parameter's declared type must be a
+    /// non-generic class (the only weakable target, like a `weak` field). Reuses
+    /// [`Self::type_ref_is_weakable_class`].
+    fn check_weak_param(&mut self, param: &juxc_ast::Param) {
+        if !self.type_ref_is_weakable_class(&param.ty) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0455_WeakOnNonClass,
+                    format!(
+                        "`weak` parameter `{}` must have a non-generic class type — `weak` is a \
+                         reference to a class object, reached via `.get()` (§M.14.3)",
+                        param.name.text,
+                    ),
+                )
+                .with_span(param.ty.span),
             );
         }
     }
@@ -4761,6 +4819,17 @@ impl<'a> Checker<'a> {
                             }
                         }
                     }
+                    // `weakParam.get()` (§M.14.3): the weak→strong promotion on a
+                    // weak parameter. Accept it without resolving a `.get()`
+                    // method and WITHOUT walking the receiver path (which would
+                    // trip the bare-weak-read gate, E0456).
+                    if let Expr::Path(qn) = field.object.as_ref() {
+                        if qn.segments.len() == 1
+                            && self.env.weak_names.contains(&qn.segments[0].text)
+                        {
+                            return;
+                        }
+                    }
                 }
                 // Record the receiver's inferred type up front so the
                 // backend can dispatch builtin/intrinsic methods on ANY
@@ -5585,6 +5654,7 @@ impl<'a> Checker<'a> {
                     is_out: false,
                     is_shared_ref: false,
                     is_final: false,
+                    is_weak: false,
                 })
                 .collect();
             let subst_params = record.generic_params.clone();
@@ -7109,6 +7179,36 @@ mod tests {
     fn shadowing_local_unfinals_param() {
         let d = run("public void f(final int x) { if (true) { var x = 0; x = 1; } }");
         assert!(!has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
+    }
+
+    // --- §M.14.3 `weak` parameters (E0455 non-class, E0456 bare read) ---
+
+    /// A `weak` parameter whose type is not a class is E0455.
+    #[test]
+    fn weak_param_nonclass_is_e0455() {
+        let d = run("public void f(weak int x) { }");
+        assert!(has(&d, code::Code::E0455_WeakOnNonClass), "{d:?}");
+    }
+
+    /// A `weak` parameter of a plain class type is accepted.
+    #[test]
+    fn weak_param_class_is_ok() {
+        let d = run("public class N { } public void f(weak N n) { var x = n.get(); }");
+        assert!(!has(&d, code::Code::E0455_WeakOnNonClass), "{d:?}");
+    }
+
+    /// Reading a `weak` parameter via `.get()` is fine (→ `T?`); no bare-read error.
+    #[test]
+    fn weak_param_get_is_ok() {
+        let d = run("public class N { } public void f(weak N n) { var x = n.get(); }");
+        assert!(!has(&d, code::Code::E0456_WeakReadNeedsGet), "{d:?}");
+    }
+
+    /// A BARE read of a `weak` parameter is E0456 (must go through `.get()`).
+    #[test]
+    fn weak_param_bare_read_is_e0456() {
+        let d = run("public class N { } public void f(weak N n) { var x = n; }");
+        assert!(has(&d, code::Code::E0456_WeakReadNeedsGet), "{d:?}");
     }
 
     /// Bare `return;` in a void function is fine.

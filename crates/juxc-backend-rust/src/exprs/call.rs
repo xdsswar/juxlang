@@ -273,6 +273,24 @@ impl RustEmitter {
                 }
             }
         }
+        // `weakParam.get()` (§M.14.3) — promote a weak PARAMETER. The parameter
+        // IS the `Weak<RefCell<Class_Inner>>` handle, so `.get()` lowers to
+        // `param.upgrade().map(Class)`, yielding `Option<Class>` = `Class?`.
+        if let Expr::Field(getf) = &*call.callee {
+            if getf.field.text == "get" && call.args.is_empty() && !getf.safe {
+                if let Expr::Path(qn) = getf.object.as_ref() {
+                    if qn.segments.len() == 1 {
+                        if let Some(cls) = self.weak_params.get(&qn.segments[0].text).cloned() {
+                            self.w.push_str(&qn.segments[0].text);
+                            self.w.push_str(".upgrade().map(");
+                            self.w.push_str(&cls);
+                            self.w.push(')');
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         // `operator()` dispatch (§O.2.4): the callee is a VALUE whose
         // type declares the call overload — `adder(5)` routes to
         // `adder.__op_call(5)`. Checked before the named-callee paths
@@ -1465,6 +1483,19 @@ impl RustEmitter {
                 self.w.push_str(".clone()");
             }
             self.w.push_str("))");
+            return;
+        }
+        // `weak` parameter slot (§M.14.3): downgrade the (strong) class argument
+        // to a non-owning `Weak<RefCell<Class_Inner>>`. A class value lowers to
+        // the newtype wrapper whose `.0` is the `Rc` we downgrade. (A weak param
+        // can't be passed a bare weak source — tycheck E0456 forbids reading
+        // one — so the argument is always a strong class value here.)
+        if self.callee_param_is_weak(&call.callee, i) {
+            self.w.push_str("std::rc::Rc::downgrade(&(");
+            let prev = std::mem::take(&mut self.emitting_format_arg);
+            self.emit_expr(arg);
+            self.emitting_format_arg = prev;
+            self.w.push_str(").0)");
             return;
         }
         // Interface-typed param slot: wrap a class value in `Rc<dyn

@@ -851,6 +851,14 @@ pub struct Param {
     /// Distinct from [`Self::is_ref`], which is the bindgen foreign
     /// `&T`-borrow marker.
     pub is_shared_ref: bool,
+    /// `weak` binding mode (§M.14.3) — the parameter is a WEAK reference to a
+    /// class object (`Weak<RefCell<T_Inner>>`), the parameter form of a `weak`
+    /// field (§6.5). It does not keep the referent alive; reading it requires
+    /// `.get()` (→ `T?`, E0456), the pointee must be a class (E0455), and it is
+    /// mutually exclusive with [`Self::is_shared_ref`] / `is_out` and may not be
+    /// varargs or defaulted (E0466). Distinct from [`Self::is_shared_ref`]
+    /// (strong shared ref) and [`Self::is_ref`] (bindgen foreign borrow).
+    pub is_weak: bool,
     /// Span of the entire parameter.
     pub span: Span,
 }
