@@ -96,6 +96,17 @@ pub enum Code {
     /// (Phase 1 packages = compilation units). Mirrors Java's
     /// default visibility scoped to the same package.
     E0416_PackagePrivateAccess,
+    /// E0417 — A bare type name in a signature position (parameter,
+    /// return, or field type) doesn't resolve to any known type: not a
+    /// primitive, not `String`, not an in-scope generic parameter, not a
+    /// user/stdlib class/record/enum/interface, and not a builtin. The
+    /// classic case is an override that writes the *interface's* type-
+    /// parameter name (`void test(T t)`) instead of the concrete argument
+    /// it was bound to by `implements Holder<Object>` (`void test(Object
+    /// t)`). Without this, the unknown name leaks straight into the
+    /// emitted Rust and surfaces as a much less helpful rustc `E0412
+    /// cannot find type`.
+    E0417_UnknownType,
     /// E0420 — `class C extends F` where `F` is declared `final`.
     /// Final classes cannot be subclassed.
     E0420_FinalClassExtended,
@@ -636,6 +647,7 @@ impl Code {
             Code::E0414_PrivateAccess            => "E0414",
             Code::E0415_ProtectedAccess          => "E0415",
             Code::E0416_PackagePrivateAccess     => "E0416",
+            Code::E0417_UnknownType              => "E0417",
             Code::E0420_FinalClassExtended       => "E0420",
             Code::E0421_FinalMethodOverridden    => "E0421",
             Code::E0422_SealedClassNotPermitted  => "E0422",

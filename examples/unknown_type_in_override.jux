@@ -1,0 +1,19 @@
+// Negative example (J4 / E0417): an override must name the concrete type
+// argument the supertype was bound to, NOT the supertype's type-parameter
+// name. `Holder<int>` binds `T` to `int`, so the override has to be
+// `void test(int t)`. Writing `void test(T t)` references a type `T` that
+// is not in scope inside `IntHolder` — juxc rejects it with a clean E0417
+// instead of letting `T` leak into the emitted Rust as a rustc E0412.
+
+public interface Holder<T> {
+    void test(T t);
+}
+
+public class IntHolder implements Holder<int> {
+    @override
+    public void test(T t) {}
+}
+
+public void main() {
+    print("should not compile");
+}
