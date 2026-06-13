@@ -218,8 +218,41 @@ class JuxAnnotatorTest : BasePlatformTestCase() {
             }
         """.trimIndent()
         assertContainsElements(keysAt(code, "\${", 1), "JUX_INTERPOLATION")
-        // The interior is re-lexed: `count` is an identifier token.
-        assertContainsElements(keysAt(code, "count + 1", 1).ifEmpty { keysAt(code, "count", 2) }, "JUX_IDENTIFIER")
+        // The interior is re-lexed: a bare identifier read inside a hole is a
+        // variable, so `count` (occurrence #2 — #1 is the `int count` param)
+        // gets the interpolated-variable colour, not the plain identifier one.
+        assertContainsElements(keysAt(code, "count", 2), "JUX_INTERPOLATED_VARIABLE")
+    }
+
+    fun testInterpolationShorthandNameIsColored() {
+        val code = """
+            package demo;
+            public class S {
+                public void p(String who) {
+                    var s = ${'$'}"hi ${'$'}who";
+                }
+            }
+        """.trimIndent()
+        // `$who` shorthand: the `$` is a delimiter, `who` (#2 — #1 is the param)
+        // is an interpolated variable.
+        assertContainsElements(keysAt(code, "who", 2), "JUX_INTERPOLATED_VARIABLE")
+    }
+
+    fun testInterpolationCallNameStaysPlain() {
+        val code = """
+            package demo;
+            public class S {
+                public void p(int x) {
+                    var s = ${'$'}"v = ${'$'}{fmt(x)}";
+                }
+            }
+        """.trimIndent()
+        // A call NAME inside a hole is not a variable: `fmt` keeps the plain
+        // identifier colour (next non-ws char is `(`)…
+        assertContainsElements(keysAt(code, "fmt", 1), "JUX_IDENTIFIER")
+        assertDoesntContain(keysAt(code, "fmt", 1), "JUX_INTERPOLATED_VARIABLE")
+        // …while the argument `x` (#2 — #1 is the param) is still a variable.
+        assertContainsElements(keysAt(code, "x", 2), "JUX_INTERPOLATED_VARIABLE")
     }
 
     fun testRawStringHasNoEscapeColoring() {
