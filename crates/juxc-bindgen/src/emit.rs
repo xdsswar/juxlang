@@ -151,6 +151,12 @@ fn render_ctor(out: &mut String, c: &StubCtor) {
 /// every member is surfaced as a plain abstract signature.
 fn render_fn(f: &StubFn, in_interface: bool) -> String {
     let mut s = String::new();
+    // `&mut self` receiver → `@MutSelf` marker. The compiler reads this
+    // off the stub's symbol table to DISCOVER receiver mutability from
+    // the real library signature (no hardcoded method-name lists).
+    if f.is_mut_self {
+        s.push_str("@MutSelf ");
+    }
     s.push_str(f.visibility.prefix());
     // `static` is valid on a *class* stub method (no body needed there), but on
     // an interface a bodyless `static` is `E0200`. A Rust trait's associated
@@ -243,6 +249,7 @@ mod tests {
             ret: JuxType::Void,
             throws: None,
             is_unsafe: false,
+            is_mut_self: false,
             rust_path: None,
             doc: None,
         });
@@ -256,6 +263,7 @@ mod tests {
             ret: JuxType::nullable(JuxType::Param("V".into())),
             throws: None,
             is_unsafe: false,
+            is_mut_self: false,
             rust_path: None,
             doc: None,
         });
@@ -286,6 +294,7 @@ mod tests {
             ret: JuxType::user("Config"),
             throws: Some(JuxType::user("ConfigError")),
             is_unsafe: false,
+            is_mut_self: false,
             rust_path: None,
             doc: None,
         };
@@ -321,6 +330,7 @@ mod tests {
             ret: JuxType::user("Duration"),
             throws: Some(JuxType::user("DurationError")),
             is_unsafe: false,
+            is_mut_self: false,
             rust_path: Some("humantime::parse_duration".into()),
             doc: None,
         };
@@ -350,6 +360,7 @@ mod tests {
             ret: JuxType::Prim("i32"),
             throws: None,
             is_unsafe: true,
+            is_mut_self: false,
             rust_path: None,
             doc: None,
         };

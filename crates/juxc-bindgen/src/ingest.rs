@@ -368,6 +368,7 @@ fn map_function(name: &str, f: &Function) -> StubFn {
         ret,
         throws,
         is_unsafe: f.header.is_unsafe,
+        is_mut_self: has_mut_self_receiver(f),
         // Set by the free-function call site (which has the rustdoc item); a
         // method leaves this `None` (it's dispatched on its `@rust`-pathed type).
         rust_path: None,
@@ -421,6 +422,15 @@ fn param_name(n: &str) -> String {
 
 fn has_self_receiver(f: &Function) -> bool {
     f.sig.inputs.iter().any(|(n, _)| n == "self")
+}
+
+/// True when the function's receiver is `&mut self` — the method mutates
+/// the value it is called on. (A by-value `self` consumes rather than
+/// mutates and is not flagged.)
+fn has_mut_self_receiver(f: &Function) -> bool {
+    f.sig.inputs.iter().any(|(n, t)| {
+        n == "self" && matches!(t, Type::BorrowedRef { is_mutable: true, .. })
+    })
 }
 
 fn generic_param_names(g: &Generics) -> Vec<String> {

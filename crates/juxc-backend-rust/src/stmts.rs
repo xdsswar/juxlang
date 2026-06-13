@@ -152,6 +152,8 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
     match e {
         // `out <place>` borrows the place (`&mut`), it does not move it.
         Expr::Out(_, _) => false,
+        // `typeof` never evaluates its operand — nothing moves.
+        Expr::TypeOf(..) => false,
         // Tuple literal: each element is a by-value consume site,
         // same as a call argument.
         Expr::TupleLit(elems, _) => elems
@@ -2804,6 +2806,50 @@ impl RustEmitter {
                 }
                 self.w.push_str("; }\n");
                 return;
+            }
+        }
+        // Wrapper-field INDEXED write: `this.slots[i] = v` where the
+        // indexed array/collection is a FIELD of a wrapper-shape class.
+        // The store needs `borrow_mut()` on the owner, and the value
+        // and index are hoisted into statement temps first — either may
+        // read the same object, and an inline read's borrow guard would
+        // overlap the store's `borrow_mut()` (RefCell panic).
+        if let Expr::Index(ix) = &a.target {
+            if let Expr::Field(af) = &*ix.array {
+                let depth = if self.receiver_is_wrapper_class(&af.object) {
+                    self.wrapper_field_parent_depth(&af.object, &af.field.text)
+                } else {
+                    None
+                };
+                if let Some(depth) = depth {
+                    let prev = self.emitting_format_arg;
+                    self.emitting_format_arg = false;
+                    self.w.push_str("{ let __jux_v = ");
+                    self.emit_assign_rhs(&a.value);
+                    self.w.push_str("; let __jux_i = (");
+                    self.emit_expr(&ix.index);
+                    self.w.push_str(") as usize; ");
+                    self.emitting_method_receiver = true;
+                    self.emit_expr(&af.object);
+                    self.emitting_method_receiver = false;
+                    self.w.push_str(".0.borrow_mut()");
+                    for _ in 0..depth {
+                        self.w.push_str(".__parent");
+                    }
+                    self.w.push('.');
+                    self.w.push_str(&af.field.text);
+                    self.w.push_str("[__jux_i]");
+                    if let Some(op) = a.op {
+                        self.w.push(' ');
+                        self.w.push_str(op.as_rust_str());
+                        self.w.push_str("= __jux_v");
+                    } else {
+                        self.w.push_str(" = __jux_v");
+                    }
+                    self.w.push_str("; }\n");
+                    self.emitting_format_arg = prev;
+                    return;
+                }
             }
         }
         // LHS: emit with the lvalue flag set so `emit_field` skips its

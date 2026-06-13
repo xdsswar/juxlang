@@ -225,6 +225,8 @@ fn expand_if(i: &mut juxc_ast::IfStmt, plans: &HashMap<Span, Vec<ArgSource>>) {
 
 fn expand_expr(expr: &mut Expr, plans: &HashMap<Span, Vec<ArgSource>>) {
     match expr {
+        // `typeof(expr)` (§5.9.10) — recurse into the operand.
+        Expr::TypeOf(inner, _) => expand_expr(inner, plans),
         // `out <place>` (§M.4) — recurse into the place.
         Expr::Out(inner, _) => expand_expr(inner, plans),
         Expr::Call(c) => {

@@ -1,0 +1,27 @@
+// §5.9.10 typeof(expr) — compile-time static type name as a String.
+package tof;
+
+import rust.std.Vec;
+
+public class Point {
+    public int x;
+    public Point(int x) { this.x = x; }
+}
+
+public void main() {
+    var i = 42;
+    var d = 3.5;
+    var s = "hi";
+    var p = new Point(1);
+    var xs = new Vec<int>();
+    int? maybe = null;
+
+    print(typeof(i));
+    print(typeof(d));
+    print(typeof(s));
+    print(typeof(p));
+    print(typeof(xs));
+    print(typeof(maybe));
+    print(typeof(i + 1));
+    print("done");
+}

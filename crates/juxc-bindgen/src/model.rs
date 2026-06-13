@@ -130,6 +130,13 @@ pub struct StubFn {
     /// (§A.2.4) so the front end records it and the type checker requires an
     /// `unsafe` context at every call site (§A.2.8).
     pub is_unsafe: bool,
+    /// The Rust receiver is `&mut self` — the method MUTATES the value it is
+    /// called on. Rendered as a `@MutSelf` annotation on the stub method so
+    /// the compiler can DISCOVER receiver mutability from the real library
+    /// signatures (driving `let mut` promotion and the wrapper-field
+    /// `borrow_mut()` upgrade) instead of relying on hardcoded method-name
+    /// lists that drift when the library changes.
+    pub is_mut_self: bool,
     /// The **real** fully-qualified Rust path of a free function
     /// (`humantime::parse_duration`), from the rustdoc summary. Rendered as a
     /// `@rust("…")` annotation so the backend lowers the import to

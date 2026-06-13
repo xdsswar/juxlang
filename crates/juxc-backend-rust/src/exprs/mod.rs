@@ -95,6 +95,25 @@ impl RustEmitter {
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Literal(lit) => self.emit_literal(lit),
+            // `typeof(expr)` (§5.9.10) — replaced at compile time by a
+            // `String` literal of the operand's STATIC Jux type name
+            // (tycheck's `Ty` Display gives the source spelling). The
+            // operand is never evaluated.
+            Expr::TypeOf(inner, _) => {
+                let name = self
+                    .expr_types
+                    .get(&expr_span_of(inner))
+                    .map(|t| bare_type_spelling(&t.to_string()))
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                self.w.push('"');
+                self.w.push_str(&name.escape_default().to_string());
+                self.w.push('"');
+                // Owned-String coercion, same rule as string literals:
+                // format args and const contexts stay `&str`.
+                if !self.emitting_format_arg && !self.emitting_const_context {
+                    self.w.push_str(".to_string()");
+                }
+            }
             // `out <place>` (§M.4) — pass the place by exclusive reference. The
             // place is emitted as an lvalue (no value-read deref / clone), so
             // `out n` → `&mut n`. (Normally reached via `emit_call_arg_value`,
@@ -1612,6 +1631,7 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
         Expr::TryExpr(t) => t.span,
         Expr::ErrorProp(_, s) => *s,
         Expr::Out(_, s) => *s,
+        Expr::TypeOf(_, s) => *s,
         Expr::NotNullAssert(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
@@ -1636,6 +1656,33 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
         Expr::Ternary(t) => t.span,
         Expr::Await(_, s) => *s,
     }
+}
+
+/// Reduce every dotted type name inside a Jux type spelling to its
+/// bare last segment — `tof.Point` → `Point`,
+/// `rust.std.Vec<a.b.C>` → `Vec<C>` — for `typeof`'s user-facing
+/// String (§5.9.10). Operates on the `Ty` Display output, so the
+/// dotted runs are always `ident ('.' ident)+` sequences.
+pub(crate) fn bare_type_spelling(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut segment = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c.is_alphanumeric() || c == '_' {
+            segment.push(c);
+        } else if c == '.' && !segment.is_empty()
+            && chars.peek().is_some_and(|n| n.is_alphabetic() || *n == '_')
+        {
+            // A dotted continuation — drop the prefix segment.
+            segment.clear();
+        } else {
+            out.push_str(&segment);
+            segment.clear();
+            out.push(c);
+        }
+    }
+    out.push_str(&segment);
+    out
 }
 
 /// Cheap "what kind of Ty would this TypeRef lower to?" — primitives,

@@ -1,0 +1,56 @@
+// Java inheritance semantics for observable properties: a subclass
+// object observes, binds, and fires its INHERITED properties exactly
+// like its own — and sets through a base-typed reference fire too.
+package inhobs;
+
+public class Base {
+    public int Score { get; set; } = 0;
+    public String Tag { get; set; } = "none";
+}
+
+public class Child extends Base {
+    public int Own { get; set; } = 5;
+}
+
+public class GrandChild extends Child {
+}
+
+public void main() {
+    var c = new Child();
+    // Attach on the INHERITED property through the subclass handle.
+    c.Score.observers.attach((old, now) -> {
+        print("score " + old + " -> " + now);
+    });
+    c.Score = 7;       // fires
+    c.Score = 7;       // no change: silent
+    print("size: " + c.Score.observers.size);
+
+    // Own property still works alongside.
+    c.Own.observers.attach((o, n) -> { print("own " + o + "->" + n); });
+    c.Own = 6;
+
+    // Set through a BASE-typed reference — observers attached via the
+    // concrete handle still fire (the dyn setter dispatches into the
+    // subclass's gated setter).
+    Base b = c;
+    b.Score = 9;
+
+    // Two levels deep.
+    var g = new GrandChild();
+    g.Tag.observers.attach((o, n) -> { print("tag " + o + "->" + n); });
+    g.Tag = "deep";
+    print("gsize: " + g.Tag.observers.size);
+    g.Tag.observers.clear;
+    g.Tag = "silent";
+
+    // Binding an inherited property.
+    var c2 = new Child();
+    c2.Score.bind(c.Score);
+    c.Score = 42;
+    print("bound: " + c2.Score);
+    c2.Score.unbind();
+    c.Score = 50;
+    print("after unbind: " + c2.Score);
+
+    print("done");
+}

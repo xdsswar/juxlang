@@ -902,6 +902,9 @@ impl Resolver {
     fn visit_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Literal(_) => {}
+            // `typeof(expr)` (§5.9.10) — the operand resolves like any
+            // expression even though it is never evaluated.
+            Expr::TypeOf(inner, _) => self.visit_expr(inner),
             // `out <place>` (§M.4) — resolve the inner place.
             Expr::Out(inner, _) => self.visit_expr(inner),
             // Tuple literal — each element resolves independently.

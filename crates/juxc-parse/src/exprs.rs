@@ -1287,6 +1287,20 @@ impl<'a> Parser<'a> {
                     span: start.join(end),
                 }))
             }
+            TokenKind::Kw(Keyword::Typeof) => {
+                // `typeof '(' expression ')'` per §5.9.10 — a
+                // compile-time STATIC-type-name query. The operand is
+                // type-checked but never evaluated; lowering replaces
+                // the whole form with a `String` literal of the Jux
+                // type spelling.
+                let start = self.peek_span();
+                self.advance(); // 'typeof'
+                self.expect(&TokenKind::LParen, "'(' after `typeof`");
+                let operand = self.parse_expr()?;
+                self.expect(&TokenKind::RParen, "')' to close `typeof`");
+                let end = self.last_consumed_span();
+                Some(Expr::TypeOf(Box::new(operand), start.join(end)))
+            }
             TokenKind::LParen => {
                 // `( expression )` — explicit grouping per §A.2.9.
                 // The parser preserves grouping by *not* wrapping the
@@ -1506,6 +1520,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::TryExpr(t) => t.span,
         Expr::ErrorProp(_, s) => *s,
         Expr::Out(_, s) => *s,
+        Expr::TypeOf(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
         Expr::Binary(b) => b.span,

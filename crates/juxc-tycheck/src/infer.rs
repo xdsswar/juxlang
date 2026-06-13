@@ -138,6 +138,9 @@ pub(crate) fn select_method_overload_typed<'a>(
 pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     match expr {
         Expr::Literal(lit) => infer_literal(lit),
+        // `typeof(expr)` (§5.9.10) — a compile-time String of the
+        // operand's static type name.
+        Expr::TypeOf(..) => Ty::String,
         // `out <place>` (§M.4) — the argument's type is the place's type, so
         // the existing call-arg type check (E0410) fires on a mismatch.
         Expr::Out(inner, _) => infer_expr(inner, env, symbols),

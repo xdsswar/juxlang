@@ -75,7 +75,7 @@ keyword           = 'abstract' | 'annotation' | 'as' | 'async' | 'await'
                   | 'package' | 'permits' | 'private' | 'protected' | 'public' | 'record'
                   | 'return' | 'sealed' | 'sizeof' | 'static' | 'struct'
                   | 'super' | 'switch' | 'this' | 'throw' | 'throws'
-                  | 'try' | 'type' | 'unsafe' | 'var' | 'void'
+                  | 'try' | 'type' | 'typeof' | 'unsafe' | 'var' | 'void'
                   | 'volatile' | 'when' | 'while' | 'yield'
 
 contextual-kw     = 'get' | 'set' | 'operator' | 'out' | 'step' | 'in'
@@ -588,6 +588,11 @@ primary           = literal
                   | new-expr
                   | lambda
                   | method-ref
+                  | sizeof-expr
+                  | typeof-expr
+
+sizeof-expr       = 'sizeof' '(' (type | expression) ')'        -- §5.9
+typeof-expr       = 'typeof' '(' expression ')'                  -- §5.9.10
 
 literal           = int-literal | float-literal | char-literal
                   | string-literal | interp-literal

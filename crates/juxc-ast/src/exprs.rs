@@ -43,6 +43,10 @@ pub enum Expr {
     Cast(CastExpr),
     /// A `sizeof(...)` compile-time type query. See [`SizeOfExpr`].
     SizeOf(SizeOfExpr),
+    /// A `typeof(expr)` compile-time STATIC-type-name query (§5.9.10)
+    /// — evaluates to the Jux spelling of the operand's static type as
+    /// a `String`; the operand itself is never evaluated.
+    TypeOf(Box<Expr>, Span),
     /// `new T[N]` — fixed-size array creation. See [`NewArrayExpr`].
     NewArray(NewArrayExpr),
     /// `new T[]{a, b, c}` — array literal with explicit element type
@@ -155,6 +159,7 @@ impl Expr {
             Expr::Cast(c) => c.span,
             Expr::TypeTest(t) => t.span,
             Expr::SizeOf(s) => s.span,
+            Expr::TypeOf(_, s) => *s,
             Expr::NewArray(n) => n.span,
             Expr::NewArrayLit(n) => n.span,
             Expr::Index(i) => i.span,

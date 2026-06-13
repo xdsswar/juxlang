@@ -678,7 +678,37 @@ The parser parses the operand as a generic expression; the type-vs-value classif
 
 #### 5.9.8. Future siblings
 
-Future revisions may add `alignof(T)` (alignment of T) and `typeof(expr)` (the type of an expression, useful in generic code) here as §5.9.9 and §5.9.10. Both follow the same parens-required, compile-time-constant style.
+Future revisions may add `alignof(T)` (alignment of T) here as §5.9.9, following the same parens-required, compile-time-constant style. `typeof` landed as §5.9.10 below.
+
+#### 5.9.10. `typeof(...)` — static type name query
+
+```java
+var x = 3.5;
+print(typeof(x));            // "double"
+print(typeof("hi"));         // "String"
+print(typeof(new Point(1, 2))); // "Point"
+List<int> xs = ...;
+print(typeof(xs));           // "List<int>"
+```
+
+`typeof(expr)` evaluates — **at compile time** — to the Jux spelling of the
+expression's STATIC type, as a `String`. The operand is type-checked but
+**never evaluated** (no side effects, like `sizeof`'s value form):
+
+- The result is the declared/inferred Jux type name (`int`, `String`,
+  `Point`, `List<int>`, `int?`, `(int) -> void`), not the lowered Rust
+  spelling.
+- Because the type is static, `typeof` on a base-typed reference yields the
+  BASE type name (`Base b = new Child(); typeof(b)` is `"Base"`). Runtime
+  type queries are the `=>` type-test operator's job (§7.10) and, later,
+  reflection.
+- `typeof` is a compile-time constant expression — usable anywhere a
+  `String` literal is.
+- Grammar: `typeof-expr = 'typeof' '(' expression ')'` joins `primary`
+  alongside `sizeof-expr`; `typeof` joins the reserved keywords (§3.2).
+- A TYPE-position `typeof` (declaring a variable as `typeof(x) y;`,
+  C++-`decltype` style, "useful in generic code") is deferred to a future
+  revision of this section.
 
 ---
 

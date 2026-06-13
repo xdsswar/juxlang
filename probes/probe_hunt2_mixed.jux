@@ -1,0 +1,104 @@
+// Bug-hunt wave: cross-feature interactions not covered by earlier waves.
+// 1. for-each over a Vec of wrapper objects calling MUTATING methods
+//    on the elements (loop + interior mutability).
+// 2. Compound assignment through operator[] on a wrapper-class value.
+// 3. Safe-navigation chains over wrapper fields with elvis fallback.
+// 4. Observable property on a SUBCLASS observed through base-typed code.
+// 5. Interpolated strings reading wrapper fields and calling methods.
+// 6. do-while + labeled continue mutating a wrapper.
+package hunt2;
+
+import rust.std.Vec;
+
+public class Counter {
+    public int n;
+    public Counter(int n) { this.n = n; }
+    public void inc() { this.n = this.n + 1; }
+}
+
+public class Wallet {
+    private Vec<int> slots;
+    public Wallet() {
+        this.slots = new Vec<int>();
+        this.slots.push(10);
+        this.slots.push(20);
+    }
+    public int operator[](int i) { return this.slots[i]; }
+    public void operator[]=(int i, int v) { this.slots[i] = v; }
+    public int total() { return this.slots[0] + this.slots[1]; }
+}
+
+public class Base {
+    public int Score { get; set; } = 0;
+    public String describe() { return "base:" + this.Score; }
+}
+
+public class Child extends Base {
+    @Override
+    public String describe() { return "child:" + this.Score; }
+}
+
+public class LinkNode {
+    public int v;
+    public LinkNode? peer;
+    public LinkNode(int v) { this.v = v; this.peer = null; }
+}
+
+void shareAll(Vec<Counter> cs, Counter extra) {
+    // elements share — mutate through the loop variable
+    for (var c : cs) {
+        c.inc();
+    }
+    extra.inc();
+}
+
+public void main() {
+    // 1. for-each mutating wrapper elements.
+    var cs = new Vec<Counter>();
+    var a = new Counter(1);
+    var b = new Counter(2);
+    cs.push(a);
+    cs.push(b);
+    shareAll(cs, a);
+    print("counters: " + a.n + "," + b.n);
+
+    // 2. compound assign through operator[]= with self-referential RHS.
+    var w = new Wallet();
+    var w2 = w; // alias → wrapper rep
+    w[0] += w[1] + w2.total();
+    print("wallet: " + w[0] + "," + w[1]);
+
+    // 3. safe-navigation + elvis over wrapper fields.
+    var n1 = new LinkNode(5);
+    var n2 = new LinkNode(7);
+    n1.peer = n2;
+    var p1 = n1.peer?.v ?: -1;
+    var p2 = n2.peer?.v ?: -1;
+    print("safe-nav: " + p1 + "," + p2);
+
+    // 4. inherited property written through a base-typed var +
+    //    virtual dispatch (observer attach through a base-typed
+    //    reference is a designed Phase-1 compile error — C9).
+    var child = new Child();
+    Base base = child;
+    base.Score = 9;
+    print("virtual: " + base.describe());
+
+    // 5. interpolation reading wrapper fields + method calls.
+    print($"interp: a=${a.n} total=${w.total()} peer=${n1.peer?.v ?: 0}");
+
+    // 6. do-while + labeled continue mutating a wrapper.
+    var k = new Counter(0);
+    var i = 0;
+    outer:
+    do {
+        i = i + 1;
+        if (i == 2) {
+            continue outer;
+        }
+        k.inc();
+    } while (i < 4);
+    print("loop: " + k.n);
+
+    print("done");
+}
