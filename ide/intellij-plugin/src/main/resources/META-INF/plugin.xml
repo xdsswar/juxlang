@@ -232,6 +232,12 @@
         implementation="dev.jux.intellij.editor.JuxEnterHandler"/>
     <lineIndentProvider
         implementation="dev.jux.intellij.editor.JuxLineIndentProvider"/>
+    <!-- Smart typing for interpolation strings: `$"` auto-closes the quote and
+         `${` auto-closes the hole (the lexer-driven quote/brace handlers can't,
+         since `$` alone isn't yet a string token). -->
+    <typedHandler
+        implementation="dev.jux.intellij.editor.JuxTypedHandler"
+        id="juxInterpString"/>
 
     <!-- Optimize Imports (Ctrl+Alt+O): drop unused / duplicate imports and sort
          the survivors, Java-style. The keybinding is the platform default. -->
