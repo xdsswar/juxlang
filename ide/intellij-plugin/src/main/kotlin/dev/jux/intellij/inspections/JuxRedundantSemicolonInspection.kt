@@ -27,6 +27,7 @@ class JuxRedundantSemicolonInspection : LocalInspectionTool() {
         val problems = ArrayList<ProblemDescriptor>()
         for (el in PsiTreeUtil.findChildrenOfType(file, PsiElement::class.java)) {
             if (el.elementType !== E.EMPTY_STATEMENT) continue
+            if (el.textRange.isEmpty) continue // never anchor a descriptor on a 0-width node
             problems.add(
                 manager.createProblemDescriptor(
                     el,
