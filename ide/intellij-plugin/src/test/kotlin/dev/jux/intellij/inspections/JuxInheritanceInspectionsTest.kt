@@ -188,6 +188,27 @@ class JuxInheritanceInspectionsTest : BasePlatformTestCase() {
         assertFalse(text.contains("Car implements"))
     }
 
+    fun testGenericTypeArgumentIsNotFlaggedAsImplementedType() {
+        // Regression: `implements Holder<Object>` has ONE supertype (Holder);
+        // `Object` is a type ARGUMENT, not a separately-implemented type. A
+        // recursive clause walk used to extract it and wrongly fire E0424.
+        val d = highlightDescriptions(
+            """
+            public class Object {}
+            public interface Holder<T> {
+                void write(String name);
+                void test(T t);
+            }
+            public class HolderName implements Holder<Object> {
+                public void write(String name) {}
+                public void test(Object t) {}
+            }
+            """.trimIndent(),
+        )
+        assertFalse("type argument Object must not be flagged (E0424)", d.any { it.contains("E0424") })
+        assertFalse("Holder is implemented, nothing missing (E0429)", d.any { it.contains("E0429") })
+    }
+
     fun testImplementsOnInterfaceFlagged() {
         val d = highlightDescriptions(
             """
