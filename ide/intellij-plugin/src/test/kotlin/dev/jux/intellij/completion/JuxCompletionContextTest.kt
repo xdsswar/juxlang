@@ -247,4 +247,49 @@ class JuxCompletionContextTest : BasePlatformTestCase() {
         )
         assertContainsElements(items, "value")
     }
+
+    // ---- testing framework (sec. TS) + newer surface ---------------------------
+
+    fun testAnnotationNamesAfterAt() {
+        val items = completionsAt(
+            """
+            package demo;
+            @<caret>
+            void f() {}
+            """.trimIndent(),
+        )
+        assertContainsElements(items, "override", "Test", "BeforeEach", "AfterEach", "BeforeAll", "AfterAll")
+        // Only the builtin annotations belong after `@` — no keywords/types.
+        assertDoesntContain(items, "class", "public", "return")
+    }
+
+    fun testForAwaitOfferedInStatementPosition() {
+        val items = completionsAt(
+            """
+            public class A {
+                public async void go() {
+                    <caret>
+                }
+            }
+            """.trimIndent(),
+        )
+        assertContainsElements(items, "for", "for await")
+    }
+
+    fun testTypeofOfferedExactlyWhenReserved() {
+        // Forward-compat (parallel compiler session): the entry must appear in
+        // expression completion exactly when the generated alphabet has it —
+        // this passes both before and after `typeof` lands in jux-tokens.json.
+        val items = completionsAt(
+            """
+            public class A {
+                public void go() {
+                    var x = <caret>
+                }
+            }
+            """.trimIndent(),
+        )
+        val reserved = "typeof" in dev.jux.intellij.highlight.JuxKeywords.KEYWORDS
+        assertEquals("typeof offered iff reserved (got $items)", reserved, "typeof" in items)
+    }
 }

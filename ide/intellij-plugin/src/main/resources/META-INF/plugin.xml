@@ -319,6 +319,50 @@
         enabledByDefault="true"
         level="ERROR"
         implementationClass="dev.jux.intellij.inspections.JuxBindTypeMismatchInspection"/>
+    <!-- Testing-framework (sec. TS) and inheritance-shape inspections. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxTestAnnotationPlacement"
+        displayName="Misplaced @Test/@BeforeEach/... annotation (TS.1)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxTestAnnotationPlacementInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxAbstractNotImplemented"
+        displayName="Class doesn't implement inherited abstract methods (E0429)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxAbstractNotImplementedInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxExtendsClause"
+        displayName="Invalid extends clause (E0420/E0422/E0423)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxExtendsClauseInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxImplementsClause"
+        displayName="Implements a non-interface (E0424)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxImplementsClauseInspection"/>
+
+    <!-- Java-style Implement Methods (Ctrl+I) / Override Methods (Ctrl+O),
+         backed by the same engine as Alt+Insert -> Override/Implement. These
+         EPs feed the platform's ImplementMethods/OverrideMethods actions
+         (CodeInsightActions.IMPLEMENT_METHOD / OVERRIDE_METHOD). -->
+    <codeInsight.implementMethod
+        language="Jux"
+        implementationClass="dev.jux.intellij.codeInsight.JuxImplementMembersHandler"/>
+    <codeInsight.overrideMethod
+        language="Jux"
+        implementationClass="dev.jux.intellij.codeInsight.JuxOverrideMembersHandler"/>
 
     <!-- New Project / New Module support: the "Jux" generator scaffolds a
          jux.toml + src/main.jux project (§I — project model). -->
@@ -332,6 +376,10 @@
         implementation="dev.jux.intellij.run.JuxRunConfigurationType"/>
     <runConfigurationProducer
         implementation="dev.jux.intellij.run.JuxRunConfigurationProducer"/>
+    <!-- Test-mode producer: @Test functions / test files / directories run
+         `jux test <pattern>` with the SM test-tree console (sec. TS). -->
+    <runConfigurationProducer
+        implementation="dev.jux.intellij.run.JuxTestRunConfigurationProducer"/>
 
     <!-- The "Jux" tool window (right side, like Gradle/Cargo): one-click
          Build / Run / Test / Build Release / Check over a live console. -->

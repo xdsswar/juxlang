@@ -14,10 +14,14 @@ import dev.jux.intellij.psi.JuxFile
  * non-keyword (the generated list is single-sourced from `juxc-lex`).
  */
 object JuxKeywordContext {
+    /**
+     * `ref` (reference declaration, `public ref String x`) is pre-wired like
+     * `typeof`: [curated] drops it until the compiler reserves the keyword.
+     */
     private val MODIFIERS = curated(
         "public", "private", "protected", "internal", "static", "abstract",
         "final", "const", "sealed", "async", "unsafe", "volatile", "default",
-        "weak", "native",
+        "weak", "native", "ref",
     )
 
     private val TYPE_DECLS = curated(
@@ -44,17 +48,22 @@ object JuxKeywordContext {
      */
     val ACCESSOR: Set<String> = curated("public", "private", "protected") + setOf("get", "set")
 
-    /** Expression starters — valid anywhere an expression can begin. */
+    /**
+     * Expression starters — valid anywhere an expression can begin. `typeof`
+     * is pre-wired: [curated] drops it until the compiler reserves the keyword
+     * and `jux-tokens.json` regenerates, at which point it appears here with
+     * zero plugin edits (the parser's name-lookup wiring lights up the same way).
+     */
     val EXPRESSION: Set<String> = curated(
         "new", "this", "super", "true", "false", "null", "switch", "move",
-        "await", "async", "sizeof",
+        "await", "async", "sizeof", "typeof",
     )
 
     /** Inside a code block: statement keywords + locals + expression starters. */
     val STATEMENT: Set<String> = curated(
         "if", "else", "while", "for", "do", "switch", "case", "default",
         "return", "throw", "try", "catch", "finally", "break", "continue",
-        "var", "final", "const", "unsafe", "in", "as", "when", "yield",
+        "var", "final", "const", "unsafe", "in", "as", "when", "yield", "ref",
     ) + EXPRESSION + setOf(OBSERVER)
 
     /**

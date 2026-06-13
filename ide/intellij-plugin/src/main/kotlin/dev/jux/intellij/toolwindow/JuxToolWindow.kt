@@ -47,7 +47,7 @@ private class JuxTasksPanel(private val project: Project) {
         val group = DefaultActionGroup().apply {
             add(task("Build", "Compile the project", AllIcons.Actions.Compile, listOf("--build")))
             add(task("Run", "Build and run the project", AllIcons.Actions.Execute, listOf("--run")))
-            add(task("Test", "Run the project's tests", AllIcons.RunConfigurations.TestState.Run, listOf("--test")))
+            add(testTask())
             add(task("Build Release", "Optimized release build", AllIcons.Actions.RealIntentionBulb, listOf("--build", "--release")))
             add(task("Check", "Type-check without building", AllIcons.Actions.CheckOut, emptyList()))
             addSeparator()
@@ -70,29 +70,42 @@ private class JuxTasksPanel(private val project: Project) {
             override fun update(e: AnActionEvent) {
                 e.presentation.isEnabled = project.basePath != null
             }
-            override fun actionPerformed(e: AnActionEvent) = runJuxc(args)
+            override fun actionPerformed(e: AnActionEvent) {
+                val base = project.basePath ?: return
+                // Prefer a `src/` source root if present, else the project root.
+                val input = if (File(base, "src").isDirectory) "src" else "."
+                runTool("juxc", args + input)
+            }
         }
 
-    private fun runJuxc(args: List<String>) {
+    /** The Test action — `jux test` (§TS.2), which needs the project's jux.toml. */
+    private fun testTask(): AnAction =
+        object : AnAction("Test", "Run the project's tests (jux test)", AllIcons.RunConfigurations.TestState.Run) {
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = project.basePath != null
+            }
+            override fun actionPerformed(e: AnActionEvent) = runTool("jux", listOf("test"))
+        }
+
+    /** Shell out to a resolved toolchain binary from the project root. */
+    private fun runTool(tool: String, args: List<String>) {
         val base = project.basePath ?: return
-        // Prefer a `src/` source root if present, else the project root.
-        val input = if (File(base, "src").isDirectory) "src" else "."
-        val found = JuxToolchain.find("juxc")
+        val found = JuxToolchain.find(tool)
         if (found == null) {
             console.print(
-                "Could not locate `juxc`. Configure it in Settings | Tools | Jux Toolchain, " +
-                    "or set the JUX_HOME environment variable / put juxc on your PATH.\n",
+                "Could not locate `$tool`. Configure it in Settings | Tools | Jux Toolchain, " +
+                    "or set the JUX_HOME environment variable / put $tool on your PATH.\n",
                 com.intellij.execution.ui.ConsoleViewContentType.ERROR_OUTPUT,
             )
             return
         }
-        val juxc = found
-        val cmd = GeneralCommandLine(juxc)
-            .withParameters(args + input)
+        val cmd = GeneralCommandLine(found)
+            .withParameters(args)
             .withWorkDirectory(base)
             .withCharset(Charsets.UTF_8)
         console.clear()
-        console.print("> juxc ${(args + input).joinToString(" ")}\n", com.intellij.execution.ui.ConsoleViewContentType.SYSTEM_OUTPUT)
+        console.print("> $tool ${args.joinToString(" ")}\n", com.intellij.execution.ui.ConsoleViewContentType.SYSTEM_OUTPUT)
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 val handler = OSProcessHandler(cmd)
@@ -100,7 +113,7 @@ private class JuxTasksPanel(private val project: Project) {
                 console.attachToProcess(handler)
                 handler.startNotify()
             } catch (t: Throwable) {
-                console.print("Failed to start juxc: ${t.message}\n", com.intellij.execution.ui.ConsoleViewContentType.ERROR_OUTPUT)
+                console.print("Failed to start $tool: ${t.message}\n", com.intellij.execution.ui.ConsoleViewContentType.ERROR_OUTPUT)
             }
         }
     }

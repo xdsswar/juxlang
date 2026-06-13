@@ -22,18 +22,97 @@ import dev.jux.intellij.psi.JuxTypeDeclaration
  */
 object JuxHierarchy {
     /** Type names in `type`'s `extends` and `implements` clauses (bare last segment). */
-    fun superTypeNames(type: JuxTypeDeclaration): List<String> {
-        val out = ArrayList<String>()
-        for (clauseType in listOf(JuxElementTypes.EXTENDS_CLAUSE, JuxElementTypes.IMPLEMENTS_CLAUSE)) {
+    fun superTypeNames(type: JuxTypeDeclaration): List<String> =
+        supertypeReferences(type).map { (ref, _) -> bareTypeName(ref) }.filter { it.isNotEmpty() }
+
+    /**
+     * The TYPE_REFERENCE nodes of `type`'s supertype clauses, in source order,
+     * each paired with `true` when it sits in the `extends` clause (`false` =
+     * `implements`). The PSI-node form [superTypeNames] throws away — needed by
+     * the extends/implements clause inspections to highlight a specific entry.
+     */
+    fun supertypeReferences(type: JuxTypeDeclaration): List<Pair<PsiElement, Boolean>> {
+        val out = ArrayList<Pair<PsiElement, Boolean>>()
+        for ((clauseType, isExtends) in listOf(
+            JuxElementTypes.EXTENDS_CLAUSE to true,
+            JuxElementTypes.IMPLEMENTS_CLAUSE to false,
+        )) {
             val clause = type.node.findChildByType(clauseType)?.psi ?: continue
             for (ref in PsiTreeUtil.findChildrenOfType(clause, PsiElement::class.java)) {
                 if (ref.node.elementType == JuxElementTypes.TYPE_REFERENCE) {
-                    ref.text.trim().substringAfterLast('.').substringBefore('<').trim()
-                        .takeIf { it.isNotEmpty() }?.let(out::add)
+                    out.add(ref to isExtends)
                 }
             }
         }
         return out
+    }
+
+    /** The bare type name of a TYPE_REFERENCE: last segment, generics stripped. */
+    fun bareTypeName(ref: PsiElement): String =
+        ref.text.trim().substringAfterLast('.').substringBefore('<').trim()
+
+    /**
+     * Does the declaration carry modifier [kw]? Modifiers are always wrapped
+     * in a MODIFIER_LIST composite (never direct keyword children), so the
+     * check reads that list's text. Shared by the Generate actions, the
+     * override engine, and the inheritance inspections.
+     */
+    fun hasModifier(el: PsiElement, kw: String): Boolean {
+        val mods = el.node.findChildByType(JuxElementTypes.MODIFIER_LIST)?.text ?: return false
+        return " $mods ".contains(" $kw ")
+    }
+
+    /** True for an `interface` declaration. */
+    fun isInterface(type: JuxTypeDeclaration): Boolean =
+        type.node.elementType === JuxElementTypes.INTERFACE_DECLARATION
+
+    /** True for a `class` declaration (the only extensible kind, §6.1 / E0423). */
+    fun isClass(type: JuxTypeDeclaration): Boolean =
+        type.node.elementType === JuxElementTypes.CLASS_DECLARATION
+
+    /**
+     * The declaration's kind as the compiler's E0423/E0424 wording names it —
+     * "an interface" / "a record" / "an enum" / "a type alias" / "a class".
+     */
+    fun kindWord(type: JuxTypeDeclaration): String = when (type.node.elementType) {
+        JuxElementTypes.INTERFACE_DECLARATION -> "an interface"
+        JuxElementTypes.RECORD_DECLARATION -> "a record"
+        JuxElementTypes.ENUM_DECLARATION -> "an enum"
+        JuxElementTypes.TYPE_ALIAS_DECLARATION -> "a type alias"
+        JuxElementTypes.STRUCT_DECLARATION -> "a struct"
+        JuxElementTypes.ANNOTATION_DECLARATION -> "an annotation"
+        else -> "a class"
+    }
+
+    /**
+     * True when the type never needs to implement inherited abstract methods
+     * itself: interfaces always, classes declared `abstract`.
+     */
+    fun isAbstractType(type: JuxTypeDeclaration): Boolean =
+        isInterface(type) || hasModifier(type, "abstract")
+
+    /**
+     * True for a body-less method — an interface method without a `default`
+     * body, or an `abstract` class method. Same CODE_BLOCK rule the
+     * override/implement gutter classifier uses.
+     */
+    fun isAbstractMethod(m: PsiElement): Boolean = !hasBody(m)
+
+    /**
+     * The method's declared return type text, or null when unreadable. The
+     * return type is the first TYPE_REFERENCE direct child (it precedes the
+     * name; parameter types are nested inside PARAMETER_LIST). `void` parses
+     * as a TYPE_REFERENCE holding just the keyword.
+     */
+    fun returnTypeText(m: PsiElement): String? =
+        m.node.findChildByType(JuxElementTypes.TYPE_REFERENCE)?.text?.trim()
+
+    /** The method's parameter names, in declaration order. */
+    fun parameterNames(m: PsiElement): List<String> {
+        val list = m.node.findChildByType(JuxElementTypes.PARAMETER_LIST)?.psi ?: return emptyList()
+        return list.children
+            .filter { it.elementType === JuxElementTypes.PARAMETER }
+            .mapNotNull { (it as? JuxNamedElement)?.name }
     }
 
     /** Direct children of `type`'s body with the given element type. */

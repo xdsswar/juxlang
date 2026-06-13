@@ -18,11 +18,15 @@ import java.io.File
 import java.nio.charset.StandardCharsets
 
 /**
- * A run configuration that executes `juxc <file> --run` (`--run` implies build
- * + execute and forwards the program's stdout/stderr and exit code).
+ * A run configuration with two modes:
  *
- * The `juxc` executable is resolved through [JuxToolchain] (explicit override
- * → `$JUX_HOME` → `PATH`), so the common setup needs no per-config tweaking.
+ *  - **run** (default): `juxc <file> --run` — build + execute, forwarding the
+ *    program's stdout/stderr and exit code.
+ *  - **test** (§TS.2): `jux test [pattern] [--release]` from the project's
+ *    manifest root, with the SM test-tree console ([JuxTestCommandLineState]).
+ *
+ * The executables resolve through [JuxToolchain] (explicit override →
+ * `$JUX_HOME` → `PATH`), so the common setup needs no per-config tweaking.
  */
 class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name: String) :
     RunConfigurationBase<JuxRunConfigurationOptions>(project, factory, name) {
@@ -30,7 +34,7 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
     public override fun getOptions(): JuxRunConfigurationOptions =
         super.getOptions() as JuxRunConfigurationOptions
 
-    /** Absolute path to the `.jux` file to run. */
+    /** Absolute path to the `.jux` file to run (test mode: any file/dir in the project). */
     var filePath: String
         get() = options.filePath
         set(value) {
@@ -44,6 +48,30 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
             options.juxcPath = value
         }
 
+    /** `"run"` or `"test"` — selects the command line and console kind. */
+    var mode: String
+        get() = options.mode
+        set(value) {
+            options.mode = value
+        }
+
+    /** `jux test <pattern>` substring filter (§TS.8); blank runs all tests. */
+    var testPattern: String
+        get() = options.testPattern
+        set(value) {
+            options.testPattern = value
+        }
+
+    /** Build the test runner optimized (`jux test --release`). */
+    var release: Boolean
+        get() = options.release
+        set(value) {
+            options.release = value
+        }
+
+    /** True when this configuration runs `jux test` rather than `juxc --run`. */
+    fun isTestMode(): Boolean = mode == MODE_TEST
+
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> = JuxSettingsEditor()
 
     /**
@@ -53,6 +81,16 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
      */
     @Throws(RuntimeConfigurationError::class)
     override fun checkConfiguration() {
+        if (isTestMode()) {
+            // Test mode points at any file/dir used only to locate the
+            // manifest; what must exist is the jux.toml `jux test` requires.
+            if (manifestRoot() == null) {
+                throw RuntimeConfigurationError(
+                    "No jux.toml found above '${filePath.ifBlank { "<project>" }}' — `jux test` needs a Jux project",
+                )
+            }
+            return
+        }
         if (filePath.isBlank()) {
             throw RuntimeConfigurationError("No Jux file specified")
         }
@@ -63,6 +101,7 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
     }
 
     override fun getState(executor: Executor, environment: ExecutionEnvironment): CommandLineState {
+        if (isTestMode()) return JuxTestCommandLineState(this, environment)
         return object : CommandLineState(environment) {
             @Throws(ExecutionException::class)
             override fun startProcess(): ProcessHandler {
@@ -105,7 +144,11 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
         }
     }
 
-    private companion object {
-        val PACKAGE_RE = Regex("""(?m)^\s*package\s+([A-Za-z_][\w.]*)\s*;""")
+    companion object {
+        private val PACKAGE_RE = Regex("""(?m)^\s*package\s+([A-Za-z_][\w.]*)\s*;""")
+
+        /** [mode] values. */
+        const val MODE_RUN = "run"
+        const val MODE_TEST = "test"
     }
 }

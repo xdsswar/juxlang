@@ -98,10 +98,27 @@ class JuxCompletionContributor : CompletionContributor() {
                         return
                     }
 
+                    // After `@` — only the builtin annotations exist in Phase 1
+                    // (`@override` + the §TS.1 test/hook five), so nothing else
+                    // belongs in the list.
+                    if (isAfterAt(parameters)) {
+                        addBuiltinAnnotations(result)
+                        return
+                    }
+
                     // Tier 3: only the keywords the grammar accepts here.
-                    for (kw in JuxKeywordContext.keywordsFor(parameters.position)) {
+                    val keywords = JuxKeywordContext.keywordsFor(parameters.position)
+                    for (kw in keywords) {
                         result.addElement(
                             ranked(LookupElementBuilder.create(kw).bold(), P_KEYWORD),
+                        )
+                    }
+                    // `for await (…)` (§18.6) — a two-word statement opener, so
+                    // it can't ride the curated single-word sets (same reason
+                    // OBSERVER joins them as a raw extra in JuxKeywordContext).
+                    if (keywords === JuxKeywordContext.STATEMENT) {
+                        result.addElement(
+                            ranked(LookupElementBuilder.create("for await").bold(), P_KEYWORD),
                         )
                     }
 
@@ -260,6 +277,27 @@ class JuxCompletionContributor : CompletionContributor() {
         }
     }
 
+    /**
+     * The builtin annotation set, canonical casing: `override` (lowercase, the
+     * spelling the missing-override quick-fix inserts) plus the five §TS.1
+     * test/hook names (single-sourced from [dev.jux.intellij.run.JuxTestDetector]).
+     * No import is ever needed for these (§TS.1); annotation lookups are
+     * case-insensitive compiler-side.
+     */
+    private fun addBuiltinAnnotations(result: CompletionResultSet) {
+        val names = listOf("override") + dev.jux.intellij.run.JuxTestDetector.TEST_HOOKS.values
+        for (name in names) {
+            result.addElement(
+                ranked(
+                    LookupElementBuilder.create(name)
+                        .withIcon(AllIcons.Nodes.Annotationtype)
+                        .withTypeText("builtin", true),
+                    P_KEYWORD,
+                ),
+            )
+        }
+    }
+
     /** The identifier word immediately before the `.` the caret follows, or null. */
     private fun wordBeforeDot(parameters: CompletionParameters): String? {
         val text = parameters.editor.document.charsSequence
@@ -304,6 +342,18 @@ class JuxCompletionContributor : CompletionContributor() {
         while (i >= 0 && (text[i].isLetterOrDigit() || text[i] == '_')) i--
         while (i >= 0 && text[i].isWhitespace()) i--
         return i >= 0 && text[i] == '.'
+    }
+
+    /**
+     * True when the caret sits in an annotation-name position — the (possibly
+     * partial) word being completed directly follows an `@` (no whitespace:
+     * `@ Test` is not annotation syntax).
+     */
+    private fun isAfterAt(parameters: CompletionParameters): Boolean {
+        val text = parameters.editor.document.charsSequence
+        var i = parameters.offset - 1
+        while (i >= 0 && (text[i].isLetterOrDigit() || text[i] == '_')) i--
+        return i >= 0 && text[i] == '@'
     }
 
     /**

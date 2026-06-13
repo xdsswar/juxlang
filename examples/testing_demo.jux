@@ -1,0 +1,58 @@
+// Testing framework (spec sec. TS) — annotations, lifecycle hooks, and the
+// jux.std.testing assertion surface. `jux test` discovers the @Test functions
+// below and runs them with the per-file BeforeAll/BeforeEach/AfterEach/AfterAll
+// ordering of sec. TS.5.
+package demo.testing;
+
+import jux.std.testing.*;
+
+int counter = 0;
+
+int divide(int a, int b) {
+    return a / b;
+}
+
+@BeforeAll
+void openFixture() {
+    counter = 0;
+}
+
+@BeforeEach
+void setup() {
+    counter = counter + 1;
+}
+
+@AfterEach
+void teardown() {
+    print("ran test #" + counter);
+}
+
+@AfterAll
+void closeFixture() {
+    print("done");
+}
+
+@Test
+void numbersAddUp() {
+    assertEqual(4, 2 + 2);
+    assertNotEqual(5, 2 + 2);
+    assertTrue(counter > 0, "BeforeEach must have run");
+    assertFalse(counter < 0);
+    assertNear(0.3, 0.1 + 0.2, 1e-9);
+}
+
+@Test
+void nullsAreDetected() {
+    String? present = "x";
+    String? absent = null;
+    assertNotNull(present);
+    assertNull(absent);
+}
+
+// Annotations are case-insensitive (@test == @Test), and a test may be async
+// (sec. TS.6) — the runner drives it to completion.
+@test
+async void divisionThrows() {
+    var e = assertThrows(() -> divide(10, 0));
+    assertNotNull(e);
+}

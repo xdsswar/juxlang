@@ -5,19 +5,14 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.command.WriteCommandAction
-import com.intellij.openapi.editor.Editor
 import com.intellij.psi.PsiDocumentManager
-import com.intellij.psi.PsiElement
-import com.intellij.psi.PsiFile
 import com.intellij.psi.util.PsiTreeUtil
-import com.intellij.psi.util.elementType
 import dev.jux.intellij.JuxLanguage
-import dev.jux.intellij.highlight.JuxTokenTypes
+import dev.jux.intellij.codeInsight.JuxOverrideMembers
 import dev.jux.intellij.psi.JuxElementTypes
 import dev.jux.intellij.psi.JuxFieldDeclaration
 import dev.jux.intellij.psi.JuxTypeDeclaration
 import dev.jux.intellij.resolve.JuxHierarchy
-import dev.jux.intellij.resolve.JuxTypeIndex
 
 /** One instance field: its declared type text and its name. */
 data class JuxField(val type: String, val name: String)
@@ -76,7 +71,7 @@ abstract class JuxGenerateAction : AnAction() {
         for (field in PsiTreeUtil.findChildrenOfType(type, JuxFieldDeclaration::class.java)) {
             // Skip nested-type fields and statics.
             if (PsiTreeUtil.getParentOfType(field, JuxTypeDeclaration::class.java) != type) continue
-            if (hasKeyword(field, "static")) continue
+            if (JuxHierarchy.hasModifier(field, "static")) continue
             if (!includeProperties && field is dev.jux.intellij.psi.JuxPropertyDeclaration) continue
             val name = field.name ?: continue
             val typeRef = field.node.findChildByType(JuxElementTypes.TYPE_REFERENCE)
@@ -84,16 +79,6 @@ abstract class JuxGenerateAction : AnAction() {
             out.add(JuxField(typeText, name))
         }
         return out
-    }
-
-    /**
-     * Does the declaration carry modifier [kw]? Modifiers are always wrapped
-     * in a MODIFIER_LIST composite (never direct keyword children), so the
-     * check reads that list's text — same approach as `JuxHierarchy`.
-     */
-    private fun hasKeyword(el: PsiElement, kw: String): Boolean {
-        val mods = el.node.findChildByType(JuxElementTypes.MODIFIER_LIST)?.text ?: return false
-        return " $mods ".contains(" $kw ")
     }
 }
 
@@ -137,10 +122,9 @@ private fun setterName(field: String) = "set${capitalize(field)}"
 
 /**
  * Generate `@override` stubs for the methods inherited from the type's
- * supertypes (its `extends` / `implements` clauses, resolved project-wide via
- * [dev.jux.intellij.resolve.JuxTypeIndex]) that the class does not yet declare.
- * The body throws `UnsupportedOperationException` — valid for any return type —
- * so the result compiles and the user fills it in.
+ * supertypes that the class does not yet declare — both kinds at once
+ * (implement abstract + override concrete), through the shared
+ * [JuxOverrideMembers] engine that also backs Ctrl+I / Ctrl+O.
  */
 class JuxOverrideMethodsAction : AnAction() {
     override fun getActionUpdateThread() = ActionUpdateThread.BGT
@@ -153,40 +137,11 @@ class JuxOverrideMethodsAction : AnAction() {
         val project = e.project ?: return
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
         val type = enclosingType(e) ?: return
-
-        val ownMethods = JuxHierarchy.directChildren(type, JuxElementTypes.METHOD_DECLARATION)
-            .mapNotNull { (it as? dev.jux.intellij.psi.JuxNamedElement)?.name }
-            .toMutableSet()
-        val sb = StringBuilder()
-        val seen = HashSet<String>()
-        // Walk the supertype chain, breadth-ish, with a cycle/visited guard.
-        val queue = ArrayDeque(JuxHierarchy.superTypeNames(type))
-        val visitedTypes = HashSet<String>()
-        while (queue.isNotEmpty()) {
-            val superName = queue.removeFirst()
-            if (!visitedTypes.add(superName)) continue
-            val superDecl = JuxTypeIndex.findType(project, superName) ?: continue
-            for (m in JuxHierarchy.directChildren(superDecl, JuxElementTypes.METHOD_DECLARATION)) {
-                val name = (m as? dev.jux.intellij.psi.JuxNamedElement)?.name ?: continue
-                if (name in ownMethods || !seen.add(name)) continue
-                if (!JuxHierarchy.isOverridable(m)) continue
-                val sig = JuxHierarchy.methodSignature(m) ?: continue
-                sb.append("\n    @override\n    public ").append(sig)
-                    .append(" {\n        throw new UnsupportedOperationException(\"TODO: ")
-                    .append(name).append("\");\n    }\n")
-            }
-            // Climb further up this supertype's own hierarchy.
-            queue.addAll(JuxHierarchy.superTypeNames(superDecl))
-        }
-        if (sb.isEmpty()) return
-        val text = sb.toString()
-        WriteCommandAction.runWriteCommandAction(project, "Override Methods", null, {
-            val doc = editor.document
-            val offset = editor.caretModel.offset
-            doc.insertString(offset, text)
-            editor.caretModel.moveToOffset(offset + text.length)
-            PsiDocumentManager.getInstance(project).commitDocument(doc)
-        })
+        JuxOverrideMembers.chooseAndInsert(
+            project, editor, type,
+            setOf(JuxOverrideMembers.Kind.IMPLEMENT, JuxOverrideMembers.Kind.OVERRIDE),
+            "Select Methods to Override/Implement",
+        )
     }
 
     private fun enclosingType(e: AnActionEvent): JuxTypeDeclaration? {

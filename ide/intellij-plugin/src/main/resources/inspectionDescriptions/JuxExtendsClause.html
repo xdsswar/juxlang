@@ -1,0 +1,14 @@
+<html>
+<body>
+Validates the <code>extends</code> clause against Jux's single-inheritance
+model: a class extends exactly <b>one</b> other class — never an interface,
+record, or enum (<b>E0423</b>), never a <code>final</code> class
+(<b>E0420</b>), and never a <code>sealed</code> class that doesn't permit it
+(<b>E0422</b>). Interfaces may extend only interfaces.
+<p>
+Supertypes resolve project-wide; unresolved (library) names are never flagged.
+The quick-fix moves an interface from <code>extends</code> to
+<code>implements</code>.
+</p>
+</body>
+</html>
