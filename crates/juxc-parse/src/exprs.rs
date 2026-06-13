@@ -1013,7 +1013,10 @@ impl<'a> Parser<'a> {
                 // segment list. For each `${…}` it recursively lex+parses
                 // the contained expression as an ordinary Jux expression.
                 self.advance();
-                let segments = self.parse_interp_segments(&raw, true);
+                // `span.start` is the interp token's absolute offset; hole
+                // expressions rebase against it so their spans stay unique
+                // (collision-free `expr_types` keys).
+                let segments = self.parse_interp_segments(&raw, true, span.start as usize);
                 Some(Expr::InterpString(InterpStringExpr {
                     segments,
                     span,
@@ -1031,7 +1034,7 @@ impl<'a> Parser<'a> {
             // stay literal (decode_escapes = false).
             TokenKind::InterpRawStr(raw) => {
                 self.advance();
-                let segments = self.parse_interp_segments(&raw, false);
+                let segments = self.parse_interp_segments(&raw, false, span.start as usize);
                 Some(Expr::InterpString(InterpStringExpr {
                     segments,
                     span,

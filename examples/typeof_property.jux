@@ -22,4 +22,8 @@ public void main() {
     print(typeof(r));        // String  (inferred through `var`)
     print(typeof(b.Name));   // String  (direct property read)
     print(typeof(b.Count));  // int
+    // Regression: `typeof` INSIDE a `$"…"` interpolation hole. Hole
+    // expressions used to reparse with segment-local spans that collided
+    // in `expr_types`, so `typeof(b.Name)` wrongly reported `int`.
+    print($"interp: ${typeof(b.Name)} ${typeof(b.Count)}");  // interp: String int
 }
