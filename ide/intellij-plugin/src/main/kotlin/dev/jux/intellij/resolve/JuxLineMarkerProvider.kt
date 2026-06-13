@@ -20,8 +20,8 @@ import javax.swing.Icon
  * - super is **abstract** (interface method / no body) → implementing
  *   (↑ hollow arrow).
  *
- * Down-arrows ("overridden by") need a reverse index over the whole project
- * per method and are deferred until a stub index lands (plugin-gap.md B4).
+ * Down-arrows ("overridden by" / "subclassed by") are provided by
+ * [JuxSubtypeLineMarkerProvider] (a project-wide slow pass over [JuxTypeIndex]).
  */
 class JuxLineMarkerProvider : LineMarkerProviderDescriptor() {
     override fun getName(): String = "Overriding / implementing method"
