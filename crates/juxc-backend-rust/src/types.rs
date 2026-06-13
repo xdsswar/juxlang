@@ -87,6 +87,37 @@ impl RustEmitter {
             }
             let mut inner = ty.clone();
             inner.ptr_depth = 0;
+            // A pointer to a CLASS points at the inner data struct, not the
+            // `Rc`-handle newtype (§L.6.5): a class lowers to
+            // `C(Rc<RefCell<C_Inner>>)`, and `&obj` / FFI want the address of
+            // the `C_Inner` payload. So `C*` → `*mut C_Inner` (matching
+            // `&obj` → `obj.0.as_ptr()`), keeping the pointer opaque on the
+            // Jux side and laid out like the data a foreign function expects.
+            // Records (value types) and primitives keep the plain pointee.
+            if inner.array_shape.is_none()
+                && inner.fn_shape.is_none()
+                && !inner.nullable
+                && inner.name.segments.len() == 1
+            {
+                let bare = &inner.name.segments[0].text;
+                if self.symbols.classes.contains_key(bare) {
+                    self.w.push_str(bare);
+                    self.w.push_str("_Inner");
+                    if !inner.generic_args.is_empty() {
+                        self.w.push('<');
+                        for (i, arg) in inner.generic_args.iter().enumerate() {
+                            if i > 0 {
+                                self.w.push_str(", ");
+                            }
+                            if let Some(t) = arg.as_type() {
+                                self.emit_type_as_rust(t);
+                            }
+                        }
+                        self.w.push('>');
+                    }
+                    return;
+                }
+            }
             self.emit_type_as_rust(&inner);
             return;
         }

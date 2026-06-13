@@ -1920,6 +1920,19 @@ impl RustEmitter {
     /// We emit Rust without a type annotation and let the Rust compiler
     /// infer it. Once tycheck carries a real type for each `VarDecl`, we
     /// can emit explicit annotations here.
+    /// Reset `pointer_locals` for a new function/method/constructor body and
+    /// seed it with the raw-pointer parameters (declared `T*`). Called at each
+    /// per-body reset site alongside the `nullable_locals` / `ref_locals`
+    /// resets, so pointer-ness of params drives the `p == null` peephole too.
+    pub(crate) fn seed_pointer_params(&mut self, params: &[juxc_ast::Param]) {
+        self.pointer_locals.clear();
+        for p in params {
+            if p.ty.ptr_depth > 0 {
+                self.pointer_locals.insert(p.name.text.clone());
+            }
+        }
+    }
+
     pub(crate) fn emit_var_decl(&mut self, var: &VarDecl) {
         // `ref` local (§M.13): the slot is an `Rc<RefCell<T>>` shared
         // reference. Initializing from another `ref` binding shares
@@ -1979,6 +1992,13 @@ impl RustEmitter {
             if let Some(scope) = self.local_types.last_mut() {
                 scope.insert(var.name.text.clone(), ty);
             }
+            // Raw-pointer local (`int* p`, `Point* ptr`): remember the name so
+            // a later `p == null` lowers to the `*mut T` `is_null()` test
+            // rather than `Option::is_none()` (the lowered `Ty` drops
+            // `ptr_depth`, so this set is the only signal left). §L.6.
+            if ty_ref.ptr_depth > 0 {
+                self.pointer_locals.insert(var.name.text.clone());
+            }
         } else if let Some(init) = &var.init {
             // `var x = init;` carries no written type — recover one from
             // the initializer's inferred type so name-keyed receiver
@@ -2023,7 +2043,13 @@ impl RustEmitter {
             .init
             .as_ref()
             .map_or(false, |e| self.expression_is_already_nullable(e));
-        if declared_nullable || init_is_nullable {
+        // A raw-pointer local (`T* p`) is NOT a nullable `Option` slot, even
+        // when initialized from `null` (which reads as "already nullable").
+        // Misclassifying it would make a later `p = &x` wrap in `Some(...)`
+        // against a `*mut T` slot. Pointer-ness is tracked separately in
+        // `pointer_locals` (§L.6).
+        let is_ptr_local = var.ty.as_ref().is_some_and(|t| t.ptr_depth > 0);
+        if !is_ptr_local && (declared_nullable || init_is_nullable) {
             self.nullable_locals.insert(var.name.text.clone());
         }
         if let Some(ty) = &var.ty {
@@ -2034,6 +2060,15 @@ impl RustEmitter {
         }
         if let Some(init) = &var.init {
             self.w.push_str(" = ");
+            // A `null` initializer in a raw-pointer slot (`T* p = null;`,
+            // `RawHandle* h = null;`) lowers to Rust's null pointer, not
+            // `Option::None` (§L.6.1: `null` is the sole `T*` literal). The
+            // general null lowering below would emit `None`, the wrong type
+            // for a `*mut T`.
+            if var.ty.as_ref().is_some_and(|t| t.ptr_depth > 0) && is_null_literal(init) {
+                self.w.push_str("std::ptr::null_mut();\n");
+                return;
+            }
             // When the declared type is nullable (`T?` → `Option<T>`)
             // and the init isn't a `null` literal, wrap in `Some(...)`
             // so the assignment type-checks. A `null` init already

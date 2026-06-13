@@ -2270,7 +2270,19 @@ impl<'a> Checker<'a> {
                 });
                 let final_ty = match (&declared, &inferred) {
                     (Some(d), Some(i)) => {
-                        if !compatible(d, i, self.symbols) {
+                        // A raw-pointer slot (`T*`) accepts the `null` literal —
+                        // `null` is the sole `T*` literal for any `T` (§L.6.1).
+                        // The erased `Ty` drops `ptr_depth`, so `compatible`
+                        // would otherwise compare `int` against `<unknown>?` and
+                        // wrongly reject `int* p = null;` / `RawHandle* h = null;`.
+                        let ptr_null_ok = v.ty.as_ref().is_some_and(|t| t.ptr_depth > 0)
+                            && matches!(
+                                v.init.as_ref(),
+                                Some(Expr::Literal(juxc_ast::Literal::Null))
+                            );
+                        if ptr_null_ok {
+                            // Accepted as a null pointer; no mismatch to report.
+                        } else if !compatible(d, i, self.symbols) {
                             self.diagnostics.push(
                                 Diagnostic::error(
                                     code::Code::E0410_TypeMismatch,

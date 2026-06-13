@@ -428,7 +428,17 @@ impl RustEmitter {
         // receiver, so we wrap composite expressions in parens via
         // the receiver-paren helper.
         if let Some((target, is_eq)) = match_null_comparison(b) {
+            // Raw pointer vs `null` (§L.6): a `*mut T` has no `is_none`/`is_some`
+            // (those are `Option`'s). Use the pointer's own `is_null()` test:
+            // `p == null` → `p.is_null()`, `p != null` → `!p.is_null()`. We
+            // recognize a raw-pointer target by name (`pointer_locals`) because
+            // the lowered `Ty` erases `ptr_depth`. Address-of `&obj` / `&x` is
+            // intrinsically a pointer too, and never null.
+            let target_is_ptr = self.expr_is_raw_pointer(target);
             let needs_parens = receiver_needs_parens(target);
+            if target_is_ptr && !is_eq {
+                self.w.push('!');
+            }
             if needs_parens {
                 self.w.push('(');
             }
@@ -436,7 +446,11 @@ impl RustEmitter {
             if needs_parens {
                 self.w.push(')');
             }
-            self.w.push_str(if is_eq { ".is_none()" } else { ".is_some()" });
+            if target_is_ptr {
+                self.w.push_str(".is_null()");
+            } else {
+                self.w.push_str(if is_eq { ".is_none()" } else { ".is_some()" });
+            }
             return;
         }
         // Operator-overload clone-injection: when the LHS is a user
@@ -622,6 +636,54 @@ impl RustEmitter {
             }
         }
         false
+    }
+
+    /// True when `e`'s static type is a **class** instance (not a record,
+    /// not a primitive). Used by `emit_unary` to give `&obj` its §L.6.5
+    /// inner-value lowering: a class lowers to `Rc<RefCell<C>>`, so `&obj`
+    /// must reach *through* the handle to the value (`obj.as_ptr()`), unlike
+    /// a value-typed `&local` which takes the place pointer directly.
+    ///
+    /// Mirrors `expr_declares_operator`'s type lookup: span-keyed
+    /// `expr_types` first, then the name-keyed `local_types` fallback for
+    /// bare locals the checker didn't span-annotate. Records are explicitly
+    /// excluded (they are value types with no handle).
+    pub(crate) fn expr_is_class_instance(&self, e: &juxc_ast::Expr) -> bool {
+        let ty = self.expr_types.get(&expr_span_of(e)).cloned().or_else(|| {
+            if let juxc_ast::Expr::Path(qn) = e {
+                if qn.segments.len() == 1 {
+                    return self
+                        .local_types
+                        .iter()
+                        .rev()
+                        .find_map(|s| s.get(&qn.segments[0].text).cloned());
+                }
+            }
+            None
+        });
+        let Some(Ty::User { name, .. }) = ty else {
+            return false;
+        };
+        self.symbols.classes.contains_key(&name)
+    }
+
+    /// True when `e` is statically a **raw pointer** (`T*`). The lowered `Ty`
+    /// drops `ptr_depth`, so we recover pointer-ness from the names tracked in
+    /// `pointer_locals` (raw-pointer locals/params, §L.6) plus the syntactic
+    /// forms that are intrinsically pointers: address-of (`&x` / `&obj`) and a
+    /// chain of raw-pointer derefs/indexes off a pointer. Drives the
+    /// `p == null` peephole to pick the `is_null()` lowering.
+    pub(crate) fn expr_is_raw_pointer(&self, e: &juxc_ast::Expr) -> bool {
+        match e {
+            // `&x` / `&obj` always produce a `*mut T`.
+            juxc_ast::Expr::Unary(u) => matches!(u.op, juxc_ast::UnaryOp::AddrOf),
+            // A bare local/param recorded as a raw pointer.
+            juxc_ast::Expr::Path(qn) => {
+                qn.segments.len() == 1
+                    && self.pointer_locals.contains(qn.segments[0].text.as_str())
+            }
+            _ => false,
+        }
     }
 
     /// If `b`'s LHS is a known user class that defines the matching

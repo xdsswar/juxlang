@@ -328,6 +328,9 @@ impl RustEmitter {
                     self.weak_params.insert(p.name.text.clone(), cls.to_string());
                 }
             }
+            // Raw-pointer params (§L.6): reset + seed so `p == null` lowers to
+            // the `*mut T` `is_null()` test.
+            self.seed_pointer_params(&fn_decl.params);
             // Register each parameter's type in `local_types` so name-keyed
             // receiver resolution works on params too — wrapper-class field
             // access (`s.field`), stdlib-dispatch, and enum-switch scrutinee

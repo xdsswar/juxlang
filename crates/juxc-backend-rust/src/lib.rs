@@ -653,6 +653,14 @@ struct RustEmitter {
     /// to a `ref` parameter shares the handle (`x.clone()`). Reset
     /// per function alongside `nullable_locals`.
     pub(crate) ref_locals: HashSet<String>,
+    /// Names of in-scope **raw-pointer** locals/params (declared type has
+    /// `ptr_depth > 0`, e.g. `int* p`, `Point* ptr`). The lowered `Ty` erases
+    /// `ptr_depth`, so this set is how the emitter recovers pointer-ness at a
+    /// use site. Drives the `p == null` / `p != null` peephole to emit the
+    /// raw-pointer `is_null()` test instead of the `Option::is_none()` form
+    /// (a `*mut T` has no `is_none`). Reset per function alongside
+    /// `nullable_locals`.
+    pub(crate) pointer_locals: HashSet<String>,
     /// In-scope `weak` parameters (§M.14.3) → the bare name of the target
     /// class. The slot is a `Weak<RefCell<Class_Inner>>`; `param.get()` lowers
     /// to `param.upgrade().map(Class)` (→ `Option<Class>` = `Class?`), and a
@@ -3180,6 +3188,7 @@ impl RustEmitter {
             emitting_nullable_target: false,
             nullable_locals: HashSet::new(),
             ref_locals: HashSet::new(),
+            pointer_locals: HashSet::new(),
             weak_params: std::collections::HashMap::new(),
             emitting_ref_handle: false,
             current_return_type: None,

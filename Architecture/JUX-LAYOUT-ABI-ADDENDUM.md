@@ -477,6 +477,40 @@ unsafe {
 
 Closures with captured state cannot be converted to function pointers; the compiler rejects this at compile time (`E0830`). The recommended pattern for C callbacks that need user data is the `(callback, void* userdata)` C convention, marshalling via `unsafe`.
 
+### L.6.5. Address-of a Class Object (`&obj`)
+
+A class instance in Jux is a **shared, reference-counted handle** (per JUX-LANG-V1 §7 and the class-reference-semantics rule: an instance lowers to `Rc<RefCell<C>>`, so several variables can name the very same mutable object, exactly like Java). Because the handle and the object it owns live at *two different addresses*, `&obj` inside `unsafe` would be ambiguous unless the language pins down which one it means. Jux pins it down:
+
+> **`&obj`, where `obj : C` for a class type `C`, produces a `C*` that points at the inner object value (the live `C` payload), not at the reference-counted handle that owns it.**
+
+This is the natural analogue of `&local` for value types: in both cases `&` yields a `T*` aimed at *the value itself*. The only twist for classes is that the value sits behind a handle, and `&obj` transparently reaches **through** the handle to the value.
+
+Precise properties of the resulting `C*`:
+
+- **Points at the payload, not the bookkeeping.** The pointer skips the `Rc`/`RefCell` machinery and aims straight at the live `C` instance. This is the address C/C++ interop expects: it is what you hand to a foreign function declared to take a `C*` / `struct C*`.
+- **Borrowing and non-owning.** Taking `&obj` does **not** increment the reference count and does **not** keep the object alive. The pointer is valid only while at least one live handle to the object still exists (normally `obj` itself, for the rest of its scope). Dereferencing it after the last handle drops is undefined behavior, which is exactly the hazard `unsafe` exists to flag.
+- **Bypasses `RefCell` borrow tracking.** Reads and writes through the `C*` are *not* checked against Jux's normal aliasing rules. The programmer must ensure no conflicting Jux-side access to the same object is live while the raw pointer is in use. This freedom, and the responsibility it carries, is the whole reason the operation is `unsafe`.
+
+#### What `&obj` deliberately does **not** mean
+
+- It is **not** a pointer to the `Rc<RefCell<C>>` handle. If you need handle *identity* (the "is this the very same instance?" question), use `===` (§2) -- the safe identity operator, which needs no `unsafe` and no numeric address.
+- It does **not** participate in reference counting. Storing a `C*` somewhere does not extend the object's lifetime; only holding a normal reference does.
+
+#### Lowering
+
+For a value-typed operand, `&local` lowers to `core::ptr::addr_of_mut!(local)` (a `*mut T` aimed at the local). For a **class-typed** operand, `&obj` instead lowers to the inner-cell pointer of the handle:
+
+```rust
+// obj : Rc<RefCell<C>>      =>     &obj : *mut C
+obj.as_ptr()                  // RefCell::as_ptr through Rc's Deref -> *mut C
+```
+
+`RefCell::as_ptr` hands back the `*mut C` to the cell's contents **without taking a runtime borrow**, which is precisely the "reach through to the value, don't touch the refcount, don't engage borrow tracking" semantics described above. The compiler selects this form whenever the operand's static type is a class; every other operand keeps the `addr_of_mut!` form.
+
+#### Fields (`&obj.field`) remain out of scope
+
+Per §L.6.2, classes do not support field-level borrows, so `&obj.field` on a class field stays rejected. To reach a field, take `&obj` and work within `unsafe`, or expose a typed accessor that returns the field pointer (the `dataPtr()` pattern in §L.6.3).
+
 ---
 
 ## §L.7 — FFI Through `unsafe`
@@ -533,6 +567,15 @@ public final class Database {
 ```
 
 Users of `Database` write entirely safe code. The `unsafe` boundary is contained to the wrapper.
+
+### L.7.3. Freeing Memory: No `delete` Keyword
+
+Jux has **no `delete` (and no `free`) keyword**, by deliberate design. Memory and other foreign resources are released by **calling the foreign deallocator** (C `free`, a C++ `delete` wrapper, `sqlite3_close`, ...) inside an `unsafe` block, idiomatically from the owning class's **`drop { }`** destructor so cleanup is deterministic and automatic (see the `Database.drop` above and §L.8.1's `RawBuffer.drop`). This keeps deallocation symmetric with allocation: both are ordinary foreign-function calls, both are `unsafe`, and both live next to each other in the wrapper that owns the resource. There is no special-cased language operator that "knows" how to free a pointer, because Jux does not know how a foreign pointer was allocated.
+
+Because C++/Java/JavaScript programmers reach for `delete` reflexively, the compiler treats a `delete <expr>;` statement as a **guided error rather than a silent misparse**:
+
+- The shape `delete <operand>` (where a second operand follows the word -- `delete p;`, `delete this.buf;`, `delete *p;`) is intercepted in the parser and reported as **`E0507`** ("`delete` is not a keyword in Jux"), with a message that points the author straight at the `drop { }` + foreign-`free` model. Without this intercept the statement would match the typed-local declaration shape (`Ident Ident ;`), read `delete` as a *type*, and surface a baffling "cannot find type `delete`".
+- `delete` remains a perfectly legal **identifier**. A call `delete(x)`, an assignment `delete = v`, or a member access `delete.run()` never trips `E0507`, because none of those place two operands in a row -- the diagnostic fires only on the C++-style `delete <thing>;` statement shape.
 
 ### L.7.3. Inline Assembly
 
