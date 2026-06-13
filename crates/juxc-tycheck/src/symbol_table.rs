@@ -814,6 +814,12 @@ pub struct ParamSig {
     /// argument aliases the caller's object. Distinct from
     /// [`Self::is_ref`] (the bindgen foreign-borrow marker).
     pub is_shared_ref: bool,
+    /// `final`/`const` binding mode (§M.14.2) — the parameter is an
+    /// immutable binding and cannot be reassigned inside the body
+    /// (reassignment is `E0464`). Reading it, and mutating the fields of a
+    /// `final` class parameter, stay legal. Drives the backend's `mut`
+    /// suppression. Orthogonal to [`Self::is_shared_ref`] / `is_weak`.
+    pub is_final: bool,
 }
 
 /// Signature of a top-level record declaration.
@@ -3502,6 +3508,7 @@ fn param_sig(p: &juxc_ast::Param) -> ParamSig {
         is_varargs: p.is_varargs,
         is_out: p.is_out,
         is_shared_ref: p.is_shared_ref,
+        is_final: p.is_final,
     }
 }
 
