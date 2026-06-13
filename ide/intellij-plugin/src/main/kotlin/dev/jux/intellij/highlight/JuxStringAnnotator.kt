@@ -130,11 +130,15 @@ class JuxStringAnnotator : Annotator {
             if (text[i] != '$') { i++; continue }
             val next = text[i + 1]
 
-            // `$name` shorthand (§3.4): the `$` and the identifier interpolate.
+            // `$name` shorthand (§3.4): the `$` is the interpolation marker, the
+            // identifier is a variable read — so they get distinct colours (`$`
+            // as a delimiter, `name` as an interpolated variable) the same way a
+            // `${name}` hole does.
             if (next.isLetter() || next == '_') {
                 var j = i + 1
                 while (j < text.length && (text[j].isLetterOrDigit() || text[j] == '_')) j++
-                mark(holder, TextRange(base + i, base + j), JuxSyntaxHighlighter.INTERPOLATION)
+                mark(holder, TextRange(base + i, base + i + 1), JuxSyntaxHighlighter.INTERPOLATION)
+                mark(holder, TextRange(base + i + 1, base + j), JuxSyntaxHighlighter.INTERPOLATED_VARIABLE)
                 i = j
                 continue
             }
@@ -162,23 +166,42 @@ class JuxStringAnnotator : Annotator {
         }
     }
 
-    /** Re-lexes [fragment] and applies the lexer-level colour map per token. */
+    /**
+     * Re-lexes [fragment] and applies the lexer-level colour map per token, with
+     * one Jux-specific twist: a bare identifier read inside the hole (`${name}`,
+     * `${a.b}`) is a *variable*, so it gets [JuxSyntaxHighlighter.INTERPOLATED_VARIABLE]
+     * instead of the plain identifier colour — matching the way Java paints
+     * fields. The single exception is a call NAME (`${fmt(x)}` → `fmt`): an
+     * identifier whose next non-whitespace char is `(` keeps the normal mapping,
+     * since it names a function, not a value. Keywords / numbers / nested strings
+     * / operators are coloured exactly as top-level code.
+     */
     private fun highlightFragment(fragment: String, baseOffset: Int, holder: AnnotationHolder) {
         if (fragment.isBlank()) return
         val lexer = JuxLexer()
         lexer.start(fragment, 0, fragment.length, 0)
         while (true) {
             val type = lexer.tokenType ?: break
-            val keys = HIGHLIGHTER.getTokenHighlights(type)
-            if (keys.isNotEmpty()) {
-                mark(
-                    holder,
-                    TextRange(baseOffset + lexer.tokenStart, baseOffset + lexer.tokenEnd),
-                    keys[0],
-                )
+            val start = lexer.tokenStart
+            val end = lexer.tokenEnd
+            val key: TextAttributesKey? =
+                if (type == JuxTokenTypes.IDENTIFIER && !isCallName(fragment, end)) {
+                    JuxSyntaxHighlighter.INTERPOLATED_VARIABLE
+                } else {
+                    HIGHLIGHTER.getTokenHighlights(type).firstOrNull()
+                }
+            if (key != null) {
+                mark(holder, TextRange(baseOffset + start, baseOffset + end), key)
             }
             lexer.advance()
         }
+    }
+
+    /** True when the next non-whitespace char after [end] is `(` — i.e. a call name. */
+    private fun isCallName(fragment: String, end: Int): Boolean {
+        var k = end
+        while (k < fragment.length && fragment[k].isWhitespace()) k++
+        return k < fragment.length && fragment[k] == '('
     }
 
     private fun mark(holder: AnnotationHolder, range: TextRange, key: TextAttributesKey) {

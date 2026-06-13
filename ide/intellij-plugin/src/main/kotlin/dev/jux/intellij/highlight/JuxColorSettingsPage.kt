@@ -38,6 +38,7 @@ class JuxColorSettingsPage : ColorSettingsPage {
             "enumConst" to JuxSyntaxHighlighter.ENUM_CONSTANT,
             "annotation" to JuxSyntaxHighlighter.ANNOTATION,
             "interp" to JuxSyntaxHighlighter.INTERPOLATION,
+            "interpVar" to JuxSyntaxHighlighter.INTERPOLATED_VARIABLE,
             "escape" to JuxSyntaxHighlighter.VALID_ESCAPE,
             "badEscape" to JuxSyntaxHighlighter.INVALID_ESCAPE,
             "nativeOp" to JuxSyntaxHighlighter.NATIVE_OPERATION,
@@ -56,6 +57,7 @@ class JuxColorSettingsPage : ColorSettingsPage {
             AttributesDescriptor("References//Enum constant", JuxSyntaxHighlighter.ENUM_CONSTANT),
             AttributesDescriptor("Property//Native operation (attach, bind, …)", JuxSyntaxHighlighter.NATIVE_OPERATION),
             AttributesDescriptor("String//Interpolation delimiter", JuxSyntaxHighlighter.INTERPOLATION),
+            AttributesDescriptor("String//Interpolated variable", JuxSyntaxHighlighter.INTERPOLATED_VARIABLE),
             AttributesDescriptor("String//Valid escape sequence", JuxSyntaxHighlighter.VALID_ESCAPE),
             AttributesDescriptor("String//Invalid escape sequence", JuxSyntaxHighlighter.INVALID_ESCAPE),
             AttributesDescriptor("Constant", JuxSyntaxHighlighter.CONSTANT),
@@ -90,7 +92,7 @@ class JuxColorSettingsPage : ColorSettingsPage {
 
                 public <type>String</type> <method>greet</method>(ref <type>String</type> <param>who</param>) throws <decl>Error</decl> {
                     var <local>msg</local> = "Hello, <escape>\n</escape><badEscape>\q</badEscape>" + <param>who</param> + '!';
-                    var <local>tagged</local> = ${'$'}"greeting = <interp>${'$'}{</interp><local>msg</local><interp>}</interp>";
+                    var <local>tagged</local> = ${'$'}"greeting = <interp>${'$'}{</interp><interpVar>msg</interpVar><interp>}</interp> for <interp>${'$'}</interp><interpVar>who</interpVar>";
                     var <local>kind</local> = typeof(<param>who</param>);   // compile-time type name
                     if (<param>who</param> != null && <field>MAX</field> > 0) {
                         return <call>format</call>(<local>tagged</local>);

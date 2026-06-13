@@ -60,6 +60,19 @@ class JuxSyntaxHighlighter : SyntaxHighlighterBase() {
         // String-interior colours ([JuxStringAnnotator]): `${…}` delimiters
         // and escape sequences (valid vs malformed).
         val INTERPOLATION = key("JUX_INTERPOLATION", D.KEYWORD)
+        // Variable reads inside an interpolation hole (`${name}`) and the
+        // `$name` shorthand. A muted PURPLE ITALIC is hardcoded as the default
+        // (the same "show on every scheme" trick as TYPE_PARAMETER) so the
+        // interpolated names pop the way Java instance fields do — even on
+        // custom color schemes that don't bundle a Jux mapping. JBColor adapts:
+        // a deep mauve on light backgrounds, the familiar Darcula field purple
+        // on dark ones. Recolor under Color Scheme | Jux | String | Interpolated
+        // variable. (Call NAMES inside a hole stay code-colored — see
+        // JuxStringAnnotator.highlightFragment.)
+        val INTERPOLATED_VARIABLE = createTextAttributesKey(
+            "JUX_INTERPOLATED_VARIABLE",
+            TextAttributes(JBColor(0x876885, 0x9876AA), null, null, null, Font.ITALIC),
+        )
         val VALID_ESCAPE = key("JUX_VALID_ESCAPE", D.VALID_STRING_ESCAPE)
         val INVALID_ESCAPE = key("JUX_INVALID_ESCAPE", D.INVALID_STRING_ESCAPE)
         val CONSTANT = key("JUX_CONSTANT", D.KEYWORD)
