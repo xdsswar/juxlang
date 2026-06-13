@@ -1549,7 +1549,12 @@ impl RustEmitter {
             // same `RefCell` (mutation through the param is observed
             // by the caller). Skipped under nullable/upcast wraps,
             // which never carry a bare wrapped place.
-            if !nullable && self.wrapper_value_needs_clone(arg) {
+            if !nullable
+                && (self.wrapper_value_needs_clone(arg) || self.record_place_needs_clone(arg))
+            {
+                // Wrapper place → shared-handle refcount bump; record place →
+                // value-copy (§7.6). Both keep the caller's binding live and
+                // avoid moving a place that is also the call receiver.
                 self.w.push_str(".clone()");
             }
         }

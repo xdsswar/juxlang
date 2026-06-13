@@ -1007,6 +1007,30 @@ impl RustEmitter {
     /// The callers append the `.clone()` AFTER emitting `expr`; this
     /// helper makes no decision about borrow-context flags (those callers
     /// are already in a move position by definition).
+    /// True when `expr` is a **place** (variable / field / index) whose static
+    /// type is a user **record** — a value type that copies on pass (§7.6). A
+    /// record place handed to a by-value parameter must `.clone()` so the caller
+    /// keeps its copy (value semantics) and a self-referential call like
+    /// `r.plus(r)` doesn't MOVE the receiver out from under its own `&self`
+    /// borrow (rustc E0505 / E0382). Records derive `Clone`, so this is sound.
+    pub(crate) fn record_place_needs_clone(&self, expr: &Expr) -> bool {
+        if !matches!(expr, Expr::Path(_) | Expr::Field(_) | Expr::Index(_)) {
+            return false;
+        }
+        if let Some(juxc_tycheck::Ty::User { name, .. }) =
+            self.expr_types.get(&expr_span_of(expr))
+        {
+            let bare = name.rsplit('.').next().unwrap_or(name);
+            return self.symbols.records.contains_key(name)
+                || self.symbols.records.contains_key(bare)
+                || self
+                    .symbols
+                    .find_fqn_by_bare(bare)
+                    .map_or(false, |fqn| self.symbols.records.contains_key(&fqn));
+        }
+        false
+    }
+
     pub(crate) fn wrapper_value_needs_clone(&self, expr: &Expr) -> bool {
         match expr {
             // Bare local/param reference of wrapped-class type.
