@@ -1383,6 +1383,15 @@ impl RustEmitter {
                     return;
                 }
             }
+            // A `ref` FIELD argument aliases through its handle.
+            if let Expr::Field(ff) = arg {
+                if self.field_decl_is_ref(&ff.object, &ff.field.text) {
+                    let prev = std::mem::replace(&mut self.emitting_ref_handle, true);
+                    self.emit_expr(arg);
+                    self.emitting_ref_handle = prev;
+                    return;
+                }
+            }
             self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
             let prev = std::mem::take(&mut self.emitting_format_arg);
             self.emit_expr(arg);

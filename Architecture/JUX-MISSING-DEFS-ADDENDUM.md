@@ -1152,11 +1152,10 @@ keyword table (§3.2 / grammar §A.1.3). Nesting (`ref ref T`), `ref` array
 ELEMENTS (`ref T[]`), and `ref` generic arguments (`List<ref T>`) are
 rejected in Phase 1.
 
-> **Phase-1 implementation status (2026-06-12):** locals and parameters
-> are fully implemented (`probes/probe_ref_bindings.jux`); `ref` FIELDS
-> parse and carry the flag but their lowering (storage wrap, read/write
-> routing through the owner) is the in-progress next step — tracked in
-> `jux-gaps.md`.
+> **Phase-1 implementation status (2026-06-12):** fully implemented —
+> locals, parameters, AND fields (`examples/ref_bindings.jux` +
+> `examples/ref_fields.jux`, `ref_bindings` e2e). Passing a `ref`
+> FIELD into a `ref` parameter aliases the field's object.
 
 ---
 

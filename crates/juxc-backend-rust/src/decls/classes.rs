@@ -257,6 +257,13 @@ impl RustEmitter {
                 self.w.push_str(",\n");
                 continue;
             }
+            // `ref` field (§M.13): the slot is a SHARED reference cell.
+            if field.is_ref {
+                self.w.push_str("std::rc::Rc<std::cell::RefCell<");
+                self.emit_field_type_as_rust(&fty);
+                self.w.push_str(">>,\n");
+                continue;
+            }
             // Field-position type mapping (String → owned `String`).
             self.emit_field_type_as_rust(&fty);
             self.w.push_str(",\n");
@@ -799,6 +806,11 @@ impl RustEmitter {
                 self.w.push_str("std::rc::Weak<std::cell::RefCell<");
                 self.w.push_str(target);
                 self.w.push_str("_Inner>>");
+            } else if field.is_ref {
+                // `ref` field (§M.13): a SHARED reference cell.
+                self.w.push_str("std::rc::Rc<std::cell::RefCell<");
+                self.emit_field_type_as_rust(&fty);
+                self.w.push_str(">>");
             } else {
                 self.emit_field_type_as_rust(&fty);
             }

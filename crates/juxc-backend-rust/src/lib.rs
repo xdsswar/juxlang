@@ -586,6 +586,11 @@ struct RustEmitter {
     /// to a `ref` parameter shares the handle (`x.clone()`). Reset
     /// per function alongside `nullable_locals`.
     pub(crate) ref_locals: HashSet<String>,
+    /// When set, a `ref` field read emits the HANDLE (`….x.clone()`,
+    /// an aliasing share) instead of the value clone-out
+    /// (`….x.borrow().clone()`) — used when the read flows into a
+    /// `ref` parameter slot (§M.13 aliasing pass).
+    pub(crate) emitting_ref_handle: bool,
     /// Declared return type of the function / method / operator body
     /// currently being emitted. `None` outside any function body and
     /// inside constructor bodies (constructors return `Self`).
@@ -3058,6 +3063,7 @@ impl RustEmitter {
             emitting_nullable_target: false,
             nullable_locals: HashSet::new(),
             ref_locals: HashSet::new(),
+            emitting_ref_handle: false,
             current_return_type: None,
             source: None,
             symbols: symbols.clone(),
