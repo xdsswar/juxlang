@@ -1,0 +1,69 @@
+/*
+ * §M.14 — Parameters: comprehensive demo.
+ *
+ * Exercises every parameter feature end-to-end and the legal combinations:
+ *   - default parameters (`= expr`), omitted and supplied
+ *   - varargs (`T...`)
+ *   - `final` parameters (immutable binding; read only)
+ *   - `ref` parameters (§M.13, shared write-through)
+ *   - `weak` parameters (§M.14.3, read via `.get()` → `T?`)
+ *   - combinations: `final` + default, `final` + varargs, `final ref`
+ */
+package params.demo;
+
+public class Counter {
+    public int value;
+    public Counter(int v) { this.value = v; }
+    public int read() { return this.value; }
+}
+
+// default parameter + `final` (the binding is read, never reassigned).
+public String greet(final String name, String greeting = "Hello") {
+    return $"${greeting}, ${name}!";
+}
+
+// varargs after a `final` fixed parameter.
+public int total(final int base, int... rest) {
+    var sum = base;
+    for (var r : rest) {
+        sum = sum + r;
+    }
+    return sum;
+}
+
+// `final ref` — an immutable binding to a shared object; `n = …` stores
+// through to the caller's object (NOT a rebinding), so `final` is fine here.
+public void bump(final ref int n) {
+    n = n + 100;
+}
+
+// `weak` parameter — does not keep the referent alive; read via `.get()`.
+public void inspect(weak Counter c) {
+    var s = c.get();
+    if (s != null) {
+        print($"counter = ${s.read()}");
+    } else {
+        print("counter gone");
+    }
+}
+
+public static void main() {
+    // default omitted, then supplied
+    print(greet("Jux"));
+    print(greet("Jux", "Hi"));
+
+    // varargs: zero trailing args, then several
+    print($"total0 = ${total(10)}");
+    print($"totalN = ${total(1, 2, 3, 4)}");
+
+    // ref write-through
+    ref int x = 5;
+    bump(x);
+    print($"x = ${x}");
+
+    // weak: referent alive
+    var c = new Counter(7);
+    inspect(c);
+
+    print("done");
+}
