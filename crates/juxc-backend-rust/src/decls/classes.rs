@@ -3157,9 +3157,15 @@ impl RustEmitter {
             // `ref` bindings (§M.13): reset per method, seeded from
             // `ref` params.
             self.ref_locals.clear();
+            // `weak` params (§M.14.3): reset per method, mapped to target class.
+            self.weak_params.clear();
             for p in &method.params {
                 if p.is_shared_ref {
                     self.ref_locals.insert(p.name.text.clone());
+                }
+                if p.is_weak {
+                    let cls = p.ty.name.segments.last().map_or("", |s| s.text.as_str());
+                    self.weak_params.insert(p.name.text.clone(), cls.to_string());
                 }
             }
             // Record this method's parameter names so the implicit-`this`
@@ -3663,6 +3669,7 @@ fn substitute_fn_signature(
             is_varargs: p.is_varargs,
             is_out: p.is_out,
             is_shared_ref: p.is_shared_ref,
+            is_weak: p.is_weak,
             span: p.span,
         })
         .collect();

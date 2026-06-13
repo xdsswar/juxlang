@@ -603,6 +603,12 @@ struct RustEmitter {
     /// to a `ref` parameter shares the handle (`x.clone()`). Reset
     /// per function alongside `nullable_locals`.
     pub(crate) ref_locals: HashSet<String>,
+    /// In-scope `weak` parameters (§M.14.3) → the bare name of the target
+    /// class. The slot is a `Weak<RefCell<Class_Inner>>`; `param.get()` lowers
+    /// to `param.upgrade().map(Class)` (→ `Option<Class>` = `Class?`), and a
+    /// class argument passed to a `weak` parameter is downgraded. Reset and
+    /// seeded per body alongside `ref_locals`.
+    pub(crate) weak_params: std::collections::HashMap<String, String>,
     /// When set, a `ref` field read emits the HANDLE (`….x.clone()`,
     /// an aliasing share) instead of the value clone-out
     /// (`….x.borrow().clone()`) — used when the read flows into a
@@ -3093,6 +3099,7 @@ impl RustEmitter {
             emitting_nullable_target: false,
             nullable_locals: HashSet::new(),
             ref_locals: HashSet::new(),
+            weak_params: std::collections::HashMap::new(),
             emitting_ref_handle: false,
             current_return_type: None,
             source: None,

@@ -945,6 +945,7 @@ impl RustEmitter {
                             is_varargs: false,
                             is_out: false,
                             is_shared_ref: false,
+                            is_weak: false,
                             span: m.span,
                         })
                         .collect()

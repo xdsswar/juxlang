@@ -2266,34 +2266,61 @@ impl<'a> Parser<'a> {
                 .with_span(final_span),
             );
         }
-        // Optional `ref` binding mode (§M.13) — the parameter receives a
-        // SHARED reference to a value-typed object; a `ref` argument
-        // aliases the caller's object.
-        let is_shared_ref = self.eat_kw(Keyword::Ref);
+        // Optional binding-mode prefix on the type: `ref` (§M.13, a SHARED
+        // reference to a value-typed object — a `ref` argument aliases the
+        // caller's object) or `weak` (§M.14.3, a WEAK reference to a class).
+        // They are mutually exclusive (E0466 below); the loop eats them in
+        // either written order so `ref weak` / `weak ref` are both recognized
+        // (and then rejected as a combo).
+        let mut is_shared_ref = false;
+        let mut is_weak = false;
+        loop {
+            if !is_shared_ref && self.eat_kw(Keyword::Ref) {
+                is_shared_ref = true;
+            } else if !is_weak && self.eat_kw(Keyword::Weak) {
+                is_weak = true;
+            } else {
+                break;
+            }
+        }
         // Optional `out` mode (§M.4) — the contextual keyword `out` immediately
-        // before a type. A parameter literally NAMED `out` (`int out`) keeps
-        // working because there `out` isn't the leading token. `out` is the mode
-        // only when it's followed by something that begins a type (an
-        // identifier or `(` for a function type).
+        // before a type (or a trailing binding mode). A parameter literally
+        // NAMED `out` (`int out`) keeps working because there `out` isn't the
+        // leading token. `out` is the mode only when it's followed by something
+        // that begins a type or another mode.
         let out_span = self.peek_span();
         let is_out = matches!(self.peek(), TokenKind::Ident(s) if s == "out")
             && matches!(
                 self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                // A type-start (identifier / `(` function type) — or a `final`
-                // / `const` binding mode, so `out final T x` is recognized as
-                // the `out` mode and rejected by E0944 (not mis-parsed as a
-                // parameter typed `out`). `final out T x` is handled by the
-                // `final`-first eat above.
+                // A type-start (identifier / `(` function type) — or any binding
+                // mode (`final`/`const`/`ref`/`weak`), so `out final T x`,
+                // `out ref T x`, etc. are recognized as the `out` mode and
+                // rejected by E0944, not mis-parsed as a parameter typed `out`.
                 Some(TokenKind::Ident(_))
                     | Some(TokenKind::LParen)
                     | Some(TokenKind::Kw(Keyword::Final))
                     | Some(TokenKind::Kw(Keyword::Const))
+                    | Some(TokenKind::Kw(Keyword::Ref))
+                    | Some(TokenKind::Kw(Keyword::Weak))
             );
-        // `out final` / `out const` — `out` then a trailing binding mode. Fold
-        // it into `is_final` so the E0944 check below fires in either order.
+        // `out final` / `out ref` / `out weak` — `out` then a trailing mode.
+        // Fold each into its flag so the misuse checks below fire regardless of
+        // the order the modes were written in.
         let is_final = if is_out {
             self.advance(); // `out`
-            is_final || self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const)
+            let mut f = is_final;
+            loop {
+                if self.eat_kw(Keyword::Final) || self.eat_kw(Keyword::Const) {
+                    f = true;
+                } else if self.eat_kw(Keyword::Ref) {
+                    is_shared_ref = true;
+                } else if self.eat_kw(Keyword::Weak) {
+                    is_weak = true;
+                } else {
+                    break;
+                }
+            }
+            f
         } else {
             is_final
         };
@@ -2331,6 +2358,10 @@ impl<'a> Parser<'a> {
         if is_out {
             let bad = if is_final {
                 Some("an `out` parameter can't also be `final`")
+            } else if is_shared_ref {
+                Some("an `out` parameter can't also be `ref`")
+            } else if is_weak {
+                Some("an `out` parameter can't also be `weak`")
             } else if is_varargs {
                 Some("a varargs parameter can't be `out`")
             } else if default.is_some() {
@@ -2347,6 +2378,27 @@ impl<'a> Parser<'a> {
                 );
             }
         }
+        // Invalid binding-mode combinations (§M.14.5, E0466): `ref` and `weak`
+        // are mutually exclusive; neither may apply to a varargs parameter (it
+        // binds a `T[]` array — a `ref`/`weak` array element is barred, §M.13.4
+        // / §M.14.3); and a `weak` parameter may not carry a default value.
+        let combo = if is_shared_ref && is_weak {
+            Some("a parameter can't be both `ref` and `weak`")
+        } else if is_shared_ref && is_varargs {
+            Some("a `ref` parameter can't be varargs")
+        } else if is_weak && is_varargs {
+            Some("a `weak` parameter can't be varargs")
+        } else if is_weak && default.is_some() {
+            Some("a `weak` parameter can't have a default value")
+        } else {
+            None
+        };
+        if let Some(msg) = combo {
+            self.diagnostics.push(
+                Diagnostic::error(code::Code::E0466_InvalidParamBindingCombo, msg)
+                    .with_span(start.join(end)),
+            );
+        }
         Some(Param {
             name,
             ty,
@@ -2356,6 +2408,7 @@ impl<'a> Parser<'a> {
             is_varargs,
             is_out,
             is_shared_ref,
+            is_weak,
             span: start.join(end),
         })
     }

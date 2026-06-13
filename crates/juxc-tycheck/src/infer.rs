@@ -781,6 +781,16 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                         return Ty::nullable(target);
                     }
                 }
+                // Weak-PARAMETER promotion (§M.14.3): `weakParam.get()` → `T?`.
+                // A weak param's `lookup` type is its class `T`; `.get()` is the
+                // weak→strong promotion, nullable because the referent may be dead.
+                if let Expr::Path(qn) = field.object.as_ref() {
+                    if qn.segments.len() == 1 && env.weak_names.contains(&qn.segments[0].text) {
+                        if let Some(target) = env.lookup(&qn.segments[0].text) {
+                            return Ty::nullable(target.clone());
+                        }
+                    }
+                }
             }
             let receiver_ty = infer_expr(&field.object, env, symbols);
             // Channel<T> (§18.3) — async-runtime builtin: `receive()`
