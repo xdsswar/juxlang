@@ -185,8 +185,25 @@ pub fn lower_workspace(
     expr_types: &HashMap<Span, Ty>,
     sources: &[SourceFile],
 ) -> RustCrate {
+    lower_workspace_with_entry(units, symbols, expr_types, sources, None)
+}
+
+/// Binary-crate lowering with an explicit entry-point package preference.
+///
+/// Identical to [`lower_workspace`] except the emitted `fn main()` shim
+/// targets the `main` declared in `entry_package` (the package segments of a
+/// `[[bin]] main = "xss.it.Main"` manifest key) rather than the first `main`
+/// encountered. `None` reproduces [`lower_workspace`] exactly.
+pub fn lower_workspace_with_entry(
+    units: &[CompilationUnit],
+    symbols: &SymbolTable,
+    expr_types: &HashMap<Span, Ty>,
+    sources: &[SourceFile],
+    entry_package: Option<Vec<String>>,
+) -> RustCrate {
     let mut e = RustEmitter::new(symbols, expr_types.clone());
     e.workspace_mode = true;
+    e.entry_package = entry_package;
     // Union the per-unit `user_mut_methods` sets so the `&mut self`
     // promotion analysis sees mutating methods declared in OTHER
     // files. Without this, `var c = new Cart(); c.add(item);` in
@@ -646,6 +663,12 @@ struct RustEmitter {
     /// (`lower_with_source`, `lower`, etc.) leave this `false` so
     /// existing behavior is preserved unchanged.
     workspace_mode: bool,
+    /// Preferred entry-point package for the `fn main()` shim — the package
+    /// segments of a `[[bin]] main = "xss.it.Main"` manifest key (`["xss",
+    /// "it"]`). When `Some`, [`Self::emit_workspace_main_shim`] selects the
+    /// `main` declared in that package over any other; `None` keeps the
+    /// legacy "first `main` found" behavior.
+    entry_package: Option<Vec<String>>,
     /// `use` statements already emitted in the current `pub mod`
     /// block. Two units that live in the same package can carry
     /// the same `import` clause without realizing it (e.g. both
@@ -3076,6 +3099,7 @@ impl RustEmitter {
             symbols: symbols.clone(),
             expr_types,
             workspace_mode: false,
+            entry_package: None,
             emitted_uses_in_module: std::collections::HashSet::new(),
             local_types: vec![std::collections::HashMap::new()],
             ctor_live_after: std::collections::HashSet::new(),
@@ -3498,7 +3522,29 @@ impl RustEmitter {
     ///   for the first occurrence anyway so partially-erroring
     ///   builds still produce SOMETHING valid.
     pub(crate) fn emit_workspace_main_shim(&mut self, units: &[CompilationUnit]) {
-        for unit in units {
+        // Every unit that declares a free `main`. For a clean compile there's
+        // exactly one (a second is E0400); a `[[bin]] main = "…"` key lets a
+        // multi-`main` project pick which one is THE entry.
+        let has_main = |u: &&CompilationUnit| {
+            u.items.iter().any(|item| {
+                matches!(item, TopLevelDecl::Function(f) if f.name.text == "main")
+            })
+        };
+        let unit_pkg = |u: &CompilationUnit| -> Vec<String> {
+            u.package
+                .as_ref()
+                .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
+                .unwrap_or_default()
+        };
+        // Prefer the unit whose package matches the manifest's entry package;
+        // otherwise the first `main`-bearing unit (legacy behavior).
+        let chosen = self
+            .entry_package
+            .as_ref()
+            .and_then(|want| units.iter().filter(has_main).find(|u| &unit_pkg(u) == want))
+            .or_else(|| units.iter().find(has_main));
+        let Some(unit) = chosen else { return };
+        {
             // Locate the user's `main` and remember its async-ness —
             // async mains are emitted under `__jux_async_main` and
             // need `futures::executor::block_on(...)` to drive.
@@ -3506,7 +3552,7 @@ impl RustEmitter {
                 TopLevelDecl::Function(fn_decl) if fn_decl.name.text == "main" => Some(fn_decl),
                 _ => None,
             });
-            let Some(main_fn) = main_fn else { continue };
+            let Some(main_fn) = main_fn else { return };
             let is_async_main =
                 matches!(main_fn.return_type, juxc_ast::ReturnType::AsyncType(_));
             // Param-taking main (`String[]` / `String...`, §E.1.2) —
