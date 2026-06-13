@@ -1,0 +1,41 @@
+// Inherited interface DEFAULT method called on a concrete class
+// (§7.4.3). Regression for the E0599 codegen gap where a `default`
+// interface method lowered to a Rust trait-default body only — so
+// `obj.label()` on the concrete type failed to resolve inherent-first
+// ("no method named `label` … trait `Holder` is implemented but not in
+// scope"). The backend now emits a fully-qualified forwarding inherent
+// method (`<Self as Holder<Object>>::label(self)`) so the call resolves
+// like an overridden method while reusing the trait's default body.
+//
+// `Box<T>` carries state, so it lowers to a WRAPPER class (an
+// `Rc<RefCell<…>>` handle) — the shape that exhibited the bug. It
+// implements `Holder<int>`, overrides only `put`, and inherits the
+// `label()` default. `main` calls the default directly on the concrete
+// type, proving inherent-first resolution.
+
+public interface Holder<T> {
+    void put(T value);
+
+    default String label() {
+        return "Holder.default";
+    }
+}
+
+public class Box implements Holder<int> {
+    public static int lastPut = 0;
+
+    @override
+    public void put(int value) {
+        lastPut = value;
+    }
+}
+
+public void main() {
+    var b = new Box();
+    b.put(42);
+    // Inherited interface default, called on the concrete wrapper class —
+    // this is the line that used to fail to compile (E0599).
+    print($"label=${b.label()}");
+    print($"lastPut=${Box.lastPut}");
+    print($"== done ==");
+}
