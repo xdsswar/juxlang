@@ -60,7 +60,11 @@ object JuxSubtypes {
         val out = ArrayList<JuxMethodDeclaration>()
         for (sub in transitiveSubtypes(ownerName, index)) {
             for (m in JuxHierarchy.directChildren(sub, E.METHOD_DECLARATION)) {
-                if (m is JuxMethodDeclaration && m.name == name && JuxHierarchy.arity(m) == arity) {
+                // Same name + arity, and an actual override candidate: a static
+                // method that merely shares the signature is not an override.
+                if (m is JuxMethodDeclaration && m.name == name &&
+                    JuxHierarchy.arity(m) == arity && !JuxHierarchy.hasModifier(m, "static")
+                ) {
                     out.add(m)
                 }
             }

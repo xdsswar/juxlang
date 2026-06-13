@@ -48,8 +48,11 @@ class JuxRedundantSemicolonInspection : LocalInspectionTool() {
             val stmt = descriptor.psiElement ?: return
             val next = stmt.nextSibling
             stmt.delete()
-            // Drop a leftover blank line so removal leaves no gap.
-            if (next is PsiWhiteSpace && next.isValid && next.text.startsWith("\n")) {
+            // Drop a leftover blank line so removal leaves no gap (handle both
+            // LF and CRLF line endings).
+            if (next is PsiWhiteSpace && next.isValid &&
+                (next.text.startsWith("\n") || next.text.startsWith("\r"))
+            ) {
                 next.delete()
             }
         }
