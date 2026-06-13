@@ -1,0 +1,17 @@
+<html>
+<body>
+Reports a class member that reuses a <b>supertype's type-parameter name</b>
+(for example <code>T</code> from <code>implements Holder&lt;Object&gt;</code>)
+where that parameter is not declared in the current scope.
+<p>
+The compiler does not bind such a name — it must be written as the concrete
+bound type. The quick-fix replaces the bare parameter (e.g. <code>T</code>)
+with the type the supertype clause binds it to (e.g. <code>Object</code>).
+</p>
+<p>
+A class that actually declares the parameter
+(<code>class Box&lt;T&gt; implements Holder&lt;T&gt;</code>) or a generic
+method (<code>&lt;T&gt; …</code>) is never flagged.
+</p>
+</body>
+</html>

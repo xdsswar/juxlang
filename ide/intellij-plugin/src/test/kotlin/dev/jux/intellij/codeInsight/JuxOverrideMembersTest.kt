@@ -135,10 +135,10 @@ class JuxOverrideMembersTest : BasePlatformTestCase() {
         assertTrue(text.indexOf("greet(String who) {", text.indexOf("class Impl")) > text.indexOf("own()"))
     }
 
-    fun testGenericInterfaceStubKeepsTheTypeParameterLetter() {
-        // Jux ruling: implementing `Holder<Object>` may REUSE the interface's
-        // parameter name `T` (it resolves to the bound argument). The generator
-        // emits the letter — never substitutes it to the concrete class.
+    fun testGenericInterfaceStubSubstitutesToConcreteBound() {
+        // A non-generic class pins the parameter: `implements Holder<Object>`
+        // has no `T` in scope, so the generated stub must use the CONCRETE
+        // bound `Object` (a bare `T` would be a compile error).
         myFixture.configureByText(
             "a.jux",
             """
@@ -155,9 +155,9 @@ class JuxOverrideMembersTest : BasePlatformTestCase() {
         val type = typeNamed("HolderName")
         JuxOverrideMembers.insertStubs(project, type, JuxOverrideMembers.candidates(type))
         val stubs = myFixture.file.text.substringAfter("implements Holder<Object> {")
-        assertTrue("keeps T param", stubs.contains("public void test(T t)"))
-        assertTrue("keeps T return", stubs.contains("public T getIt()"))
-        assertFalse("not substituted to the concrete class", stubs.contains("Object t"))
+        assertTrue("test(Object t)", stubs.contains("public void test(Object t)"))
+        assertTrue("Object getIt()", stubs.contains("public Object getIt()"))
+        assertFalse("no undeclared T in stubs", Regex("""\bT\b""").containsMatchIn(stubs))
         // Non-generic method is unaffected.
         assertTrue("write(String name)", stubs.contains("public void write(String name)"))
     }

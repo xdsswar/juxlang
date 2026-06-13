@@ -91,17 +91,19 @@ object JuxHierarchy {
     }
 
     /**
-     * The supertype type-parameter names bound by `type`'s direct
-     * extends/implements clauses — the names that are legal inside `type`'s
-     * body under Jux's inherited-type-param ruling (`implements Holder<Animal>`
-     * makes `Holder`'s `T` usable here, resolving to `Animal`). Only positions
-     * with a corresponding type argument bind; the class's OWN params (which
-     * shadow) are NOT included. Used to color an inherited `T` as a type
-     * parameter rather than an unresolved type.
+     * Type-parameter name → bound concrete-argument text, from `type`'s DIRECT
+     * extends/implements clauses. `class C implements Holder<Animal>` (Holder
+     * is `Holder<T>`) yields `{T -> "Animal"}`. Only positions with a matching
+     * argument bind; the class's OWN params (which shadow) are excluded; a name
+     * a clause binds two different ways is dropped (ambiguous). This is the map
+     * the override generator substitutes with, and the
+     * [dev.jux.intellij.inspections.JuxInheritedTypeParamInspection] uses to say
+     * "use `Animal`" when the user writes the bare `T`.
      */
-    fun inheritedTypeParameterNames(type: JuxTypeDeclaration): Set<String> {
+    fun inheritedTypeParameterBindings(type: JuxTypeDeclaration): Map<String, String> {
         val own = typeParameterNames(type).toHashSet()
-        val out = HashSet<String>()
+        val out = HashMap<String, String>()
+        val conflict = HashSet<String>()
         for ((ref, _) in supertypeReferences(type)) {
             val args = typeArguments(ref)
             if (args.isEmpty()) continue
@@ -109,10 +111,67 @@ object JuxHierarchy {
             val params = typeParameterNames(superDecl)
             val bound = minOf(params.size, args.size)
             for (i in 0 until bound) {
-                if (params[i] !in own) out.add(params[i])
+                val name = params[i]
+                if (name in own) continue
+                val arg = args[i]
+                val existing = out[name]
+                if (existing != null && existing != arg) conflict.add(name) else out[name] = arg
             }
         }
+        for (c in conflict) out.remove(c)
         return out
+    }
+
+    /**
+     * Substitute whole-word type-parameter names in a signature/type string
+     * with their bound arguments — `void test(T t)` + `{T=Object}` →
+     * `void test(Object t)`. Single pass over identifier tokens (no
+     * double-substitution); formal parameter NAMES and unrelated identifiers
+     * pass through unchanged (case-sensitive).
+     */
+    fun substituteTypeParams(text: String, subst: Map<String, String>): String {
+        if (subst.isEmpty()) return text
+        return IDENT.replace(text) { m -> subst[m.value] ?: m.value }
+    }
+
+    private val IDENT = Regex("""[A-Za-z_]\w*""")
+
+    /**
+     * True when [name] is a type parameter DECLARED by an enclosing method or
+     * type (`class Box<T>` / `<R> R f()`) — i.e. genuinely in scope, not merely
+     * inherited. Shared by the annotator and the inherited-param inspection.
+     */
+    fun isDeclaredTypeParameter(at: PsiElement, name: String): Boolean {
+        var scope: PsiElement? = at.parent
+        while (scope != null) {
+            when (scope.elementType) {
+                JuxElementTypes.CLASS_DECLARATION, JuxElementTypes.INTERFACE_DECLARATION,
+                JuxElementTypes.ENUM_DECLARATION, JuxElementTypes.RECORD_DECLARATION,
+                JuxElementTypes.STRUCT_DECLARATION, JuxElementTypes.METHOD_DECLARATION,
+                JuxElementTypes.TYPE_ALIAS_DECLARATION,
+                -> {
+                    val params = scope.node.findChildByType(JuxElementTypes.TYPE_PARAMETER_LIST)?.psi
+                    if (params != null) {
+                        var p: PsiElement? = params.firstChild
+                        while (p != null) {
+                            if (p.elementType === JuxElementTypes.TYPE_PARAMETER) {
+                                var c: PsiElement? = p.firstChild
+                                while (c != null) {
+                                    if (c.node.elementType === dev.jux.intellij.highlight.JuxTokenTypes.IDENTIFIER) {
+                                        if (c.text == name) return true
+                                        break
+                                    }
+                                    c = c.nextSibling
+                                }
+                            }
+                            p = p.nextSibling
+                        }
+                    }
+                }
+            }
+            scope = scope.parent
+        }
+        return false
     }
 
     /**

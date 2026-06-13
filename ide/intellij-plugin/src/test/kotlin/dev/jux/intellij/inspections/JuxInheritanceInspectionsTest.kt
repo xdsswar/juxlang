@@ -16,6 +16,7 @@ class JuxInheritanceInspectionsTest : BasePlatformTestCase() {
             JuxAbstractNotImplementedInspection(),
             JuxExtendsClauseInspection(),
             JuxImplementsClauseInspection(),
+            JuxInheritedTypeParamInspection(),
         )
     }
 
@@ -207,6 +208,41 @@ class JuxInheritanceInspectionsTest : BasePlatformTestCase() {
         )
         assertFalse("type argument Object must not be flagged (E0424)", d.any { it.contains("E0424") })
         assertFalse("Holder is implemented, nothing missing (E0429)", d.any { it.contains("E0429") })
+    }
+
+    fun testInheritedTypeParamWarnedAndFixedToBound() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            public interface Holder<T> {
+                void test(T t);
+            }
+            public class HolderName implements Holder<Object> {
+                public void test(T<caret> t) {}
+            }
+            """.trimIndent(),
+        )
+        val d = myFixture.doHighlighting().mapNotNull { it.description }
+        assertTrue("warns T not declared, use Object", d.any { it.contains("'T'") && it.contains("'Object'") })
+
+        val fix = myFixture.findSingleIntention("Replace with 'Object'")
+        myFixture.launchAction(fix)
+        val body = myFixture.file.text.substringAfter("implements Holder<Object> {")
+        assertTrue("T replaced with Object", body.contains("public void test(Object t)"))
+    }
+
+    fun testDeclaredTypeParamNotWarned() {
+        // Box DECLARES T, so forwarding it via `implements Holder<T>` is fine —
+        // no inherited-param warning.
+        val d = highlightDescriptions(
+            """
+            public interface Holder<T> { void test(T t); }
+            public class Box<T> implements Holder<T> {
+                public void test(T t) {}
+            }
+            """.trimIndent(),
+        )
+        assertFalse("declared T must not warn", d.any { it.contains("not declared here") })
     }
 
     fun testImplementsOnInterfaceFlagged() {

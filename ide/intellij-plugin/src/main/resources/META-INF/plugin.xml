@@ -357,6 +357,14 @@
         enabledByDefault="true"
         level="ERROR"
         implementationClass="dev.jux.intellij.inspections.JuxImplementsClauseInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxInheritedTypeParam"
+        displayName="Inherited type parameter used instead of its bound type"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxInheritedTypeParamInspection"/>
 
     <!-- Java-style Implement Methods (Ctrl+I) / Override Methods (Ctrl+O),
          backed by the same engine as Alt+Insert -> Override/Implement. These
