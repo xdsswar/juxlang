@@ -37,7 +37,6 @@ try { var t = localStorage.getItem('jux-docs-theme');
     <a href="JUX-LAYOUT-ABI-ADDENDUM.html">Layout / ABI / unsafe</a>
     <a href="JUX-EXCEPTIONS-ADDENDUM.html">Exceptions & Result Lowering</a>
     <a href="JUX-MISSING-DEFS-ADDENDUM.html">Missing Definitions</a>
-    <a href="JUX-COLLECTIONS-ADDENDUM.html">Collections & Reference Semantics</a>
     <a href="JUX-OBSERVABLE-PROPERTIES-ADDENDUM.html">Observable Properties</a>
     <a href="JUX-ANNOTATIONS-ADDENDUM.html">Annotation System</a>
     <a href="JUX-ENTRY-POINTS-ADDENDUM.html">Entry Points</a>
@@ -510,7 +509,6 @@ Clean. Indented. Idiomatic Rust. Spec-compliant (note `Number(isize)` — `int` 
 | 3 | `#![allow(...)]` header | High | ✅ done | No spurious Rust warnings reach the user (corpus emits zero `warning:` lines) |
 | 4 | `Display` includes payloads | Medium | ✅ done | Spec compliance (§7.7.2); `print($"$enum")` shows `Variant(field: v, …)` |
 | 5 | `$"stop"` → `"stop".to_string()` | Low | ✅ done | Minor polish, removes Clippy noise; reuses Fix 1's helper |
-| 6 | Inherited interface `default` callable on concrete class (§7.4.3) | High | ✅ done | `obj.defaultMethod()` resolves inherent-first via a forwarding `<Self as Trait<args>>::m(self)` stub; fixes E0599 "trait not in scope" |
 
 **All five fixes are landed and verified** (suite green; sweep of diverse examples
 shows zero warnings and rustfmt-idempotent output). None were architectural changes —
@@ -539,67 +537,6 @@ If `juxc` is currently emitting Rust by concatenating strings, each of these fix
 The `syn` and `quote` crates do exactly this and could be used directly. Procedural macros use them constantly to generate Rust code; the patterns are well-established.
 
 Not necessary now. But if codegen complexity grows, the IR approach pays off. Worth noting in the gaps roadmap for a future pass.
-
----
-
-## Fix 6 — inherited interface `default` methods callable on the concrete class (§7.4.3)
-
-**Symptom.** A `default` method on an interface was not callable as an
-inherent method on an implementing class that did **not** override it.
-Given `interface Holder<T> { default String label() { … } }` and
-`class HolderName implements Holder<Object>` (no `label` override),
-`holder.label()` (holder: `HolderName`) produced emitted Rust that
-failed to compile:
-
-```text
-error[E0599]: no method named `label` found for struct `HolderName`
-  help: trait `Holder` which provides `label` is implemented but not in scope
-```
-
-**Root cause.** A Jux interface lowers to a Rust *trait*, and a `default`
-method lowers to a Rust *trait default body* — emitted on `trait Holder`,
-not into `impl Holder for HolderName`. Rust resolves `holder.label()`
-inherent-methods-FIRST; the class's inherent `impl` carried only the
-overridden methods, so `label` missed and rustc demanded the trait be in
-scope at the call site — which it wasn't (no `use Holder`). In a
-multi-file project the trait lives in a *different module* from the class,
-so the call never built. (Single-file programs where the trait happened to
-be in the same module masked the bug — `examples/interface_static.jux`
-worked only by that accident.)
-
-**Fix.** The backend now emits an **inherent forwarding method** on each
-implementing class for every interface `default` method it does not
-override, calling the trait default through a *fully-qualified* path so no
-`use` is needed:
-
-```text
-pub fn label(&self) -> String {
-    <Self as crate::xss::it::some::Holder<crate::xss::it::some::Object>>::label(self)
-}
-```
-
-This makes `holder.label()` resolve inherent-first (exactly like an
-overridden method) while reusing the trait's default body. The
-fully-qualified `<Self as Trait<args>>::method(self, …)` form is what
-removes the `use` requirement; the trait path + its generic args are
-spelled by the same emitter the `impl Trait for Class` header uses
-(`emit_type_as_rust(interface_ty)`), so it always renders the
-crate-qualified path.
-
-**Where.** `crates/juxc-backend-rust/src/decls/classes.rs`,
-`emit_inherited_default_methods` (modeled on `emit_class_trait_impls`):
-rolls up `implements` through the `extends` chain, builds the per-interface
-`T → arg` substitution (so a `Holder<Object>` default returning `T`
-forwards as `Object`), and skips any default the class overrides or that a
-concrete ancestor already inlined as an inherent (those resolve
-inherent-first already via `emit_inherited_wrapper_methods`). Static and
-abstract interface methods are skipped (no trait-default body to forward
-to). Wired into both the wrapper class path and the legacy non-wrapper
-class path, beside each inherent-impl close.
-
-Regression: `examples/interface_default_inherit.jux` +
-`bin/jux/tests/interface_default_inherit.rs`. Behavior already specified
-in §7.4.3 — this was a pure codegen gap, no spec change.
 
 *End of codegen fixes addendum.*
 
