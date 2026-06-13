@@ -16,8 +16,10 @@
 //!    - `import foo.Bar;` → registers `Bar`
 //!    - `import foo.Bar as B;` → registers `B`
 //!    - `import foo.{ A, B as B2 };` → registers `A` and `B2`
-//!    - `import foo.*;` → registers **nothing** (we'd need a module → public-
-//!      names table to expand the wildcard, which doesn't exist yet).
+//!    - `import foo.*;` → registers every top-level name package `foo`
+//!      declares, looked up in the workspace [`PackageExports`] table the
+//!      driver builds from all units (user sources + stdlib + stubs).
+//!      On the table-less [`resolve`] path it registers nothing.
 //! 3. The set of **built-in** names provided by the compiler — currently
 //!    just `print`. This stand-in stays until `import std.io.print;`
 //!    becomes meaningful (i.e., when stdlib lands).
@@ -33,9 +35,10 @@
 //!   `import com.example.Foo;` doesn't open `com/example/Foo.jux` — it
 //!   just adds `Foo` to the local known-names set so downstream phases
 //!   (and the backend's `use` emission, when wired) can find it.
-//! - **No wildcard expansion.** Wildcards parse and round-trip in the
-//!   AST, but the resolver ignores them. With no module table, we don't
-//!   know what names would be brought in.
+//! - **No per-name wildcard validation.** A wildcard expands to whatever
+//!   the named package actually declares ([`PackageExports`]); a wildcard
+//!   over an unknown package silently contributes nothing (tycheck's
+//!   import validation covers misspelled packages).
 //! - **No visibility enforcement.** `private`/`internal`/`public` modifiers
 //!   are recorded by the parser but the resolver doesn't yet reject
 //!   cross-module access. That lands when the build system pinpoints
@@ -61,13 +64,85 @@ pub struct ResolveResult {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// The workspace's package → top-level-names table — what a wildcard
+/// import (`import a.b.*;`) expands against. Built once per compile
+/// from EVERY unit the driver knows (user sources, the embedded
+/// stdlib, and the bindgen `.jux.d` stubs), then shared by each
+/// per-unit [`resolve_with_exports`] call.
+///
+/// Visibility is intentionally NOT filtered here: the resolver only
+/// answers "does this name exist?", and tycheck owns the real
+/// visibility enforcement — mirroring how same-package siblings and
+/// explicit imports already behave.
+#[derive(Default)]
+pub struct PackageExports {
+    /// Dot-joined package FQN → set of top-level declared names in it.
+    by_package: std::collections::HashMap<String, HashSet<String>>,
+}
+
+impl PackageExports {
+    /// An empty table — wildcard imports expand to nothing (the
+    /// pre-table behavior, kept for single-unit callers and tests).
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Build the table from every unit of the workspace.
+    pub fn collect(units: &[CompilationUnit]) -> Self {
+        let mut by_package: std::collections::HashMap<String, HashSet<String>> =
+            std::collections::HashMap::new();
+        for unit in units {
+            let pkg = unit
+                .package
+                .as_ref()
+                .map(|p| {
+                    p.name
+                        .segments
+                        .iter()
+                        .map(|s| s.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".")
+                })
+                .unwrap_or_default();
+            let names = by_package.entry(pkg).or_default();
+            for item in &unit.items {
+                match item {
+                    TopLevelDecl::Function(d) => names.insert(d.name.text.clone()),
+                    TopLevelDecl::Class(d) => names.insert(d.name.text.clone()),
+                    TopLevelDecl::Enum(d) => names.insert(d.name.text.clone()),
+                    TopLevelDecl::Record(d) => names.insert(d.name.text.clone()),
+                    TopLevelDecl::Interface(d) => names.insert(d.name.text.clone()),
+                    TopLevelDecl::TypeAlias(d) => names.insert(d.name.text.clone()),
+                    TopLevelDecl::Const(d) => names.insert(d.name.text.clone()),
+                };
+            }
+        }
+        Self { by_package }
+    }
+
+    /// The top-level names declared in `package` (dot-joined), if any.
+    fn names_in(&self, package: &str) -> Option<&HashSet<String>> {
+        self.by_package.get(package)
+    }
+}
+
 /// Walk a compilation unit and resolve every name reference. Always
 /// returns a [`ResolveResult`]; never panics on user input.
+///
+/// Wildcard imports expand to nothing on this path (no workspace
+/// table) — workspace callers use [`resolve_with_exports`].
 pub fn resolve(unit: &CompilationUnit) -> ResolveResult {
+    resolve_with_exports(unit, &PackageExports::empty())
+}
+
+/// [`resolve`] with a workspace [`PackageExports`] table so wildcard
+/// imports (`import jux.std.testing.*;`, §TS.3) bring the package's
+/// top-level names — free functions included — into scope.
+pub fn resolve_with_exports(unit: &CompilationUnit, exports: &PackageExports) -> ResolveResult {
     let mut r = Resolver::new();
     // Imports first — they introduce names that top-level decls and
     // body expressions may both reference.
-    r.collect_imports(unit);
+    r.collect_imports(unit, exports);
     r.collect_top_level(unit);
     r.visit_compilation_unit(unit);
     ResolveResult { diagnostics: r.diagnostics }
@@ -86,8 +161,8 @@ pub fn resolve(unit: &CompilationUnit) -> ResolveResult {
 /// 2. The **top-level scope** populated by [`Resolver::collect_top_level`]
 ///    — every function/type declared at file scope.
 /// 3. The **imported scope** populated by [`Resolver::collect_imports`]
-///    — the local-bind name of every `import …;` declaration. See the
-///    module doc for which imports contribute (wildcards don't, yet).
+///    — the local-bind name of every `import …;` declaration, with
+///    wildcards expanded against the workspace [`PackageExports`] table.
 /// 4. The **built-in scope** — compiler-provided names like `print`.
 ///
 /// Lookup short-circuits on the first hit. Shadowing is therefore implicit:
@@ -102,10 +177,9 @@ struct Resolver {
     /// Top-level user-declared names in this compilation unit.
     user_names: HashSet<String>,
     /// Local-bind names introduced by `import …;` declarations. See
-    /// [`Self::collect_imports`] for the mapping rules. Wildcards
-    /// contribute nothing here — they parse into the AST but the
-    /// resolver doesn't yet have a module → public-names table to
-    /// expand them against.
+    /// [`Self::collect_imports`] for the mapping rules. Wildcard
+    /// imports expand against the caller-supplied [`PackageExports`]
+    /// table (empty on the single-unit [`resolve`] path).
     imported_names: HashSet<String>,
     /// Stack of lexical scopes. The top of the stack is the current scope.
     /// Each entry is the set of names declared at that level.
@@ -331,24 +405,34 @@ impl Resolver {
     /// - `ImportSpec::Path { name, wildcard: false, alias: None }` →
     ///   `name.segments.last().text` (the last path segment is the
     ///   imported symbol's local name).
-    /// - `ImportSpec::Path { wildcard: true, .. }` → **skipped**. A
-    ///   wildcard would need a module → public-names table to expand
-    ///   against; until that exists, any name a wildcard would have
-    ///   brought in still fires `E0301_NameNotFound`.
+    /// - `ImportSpec::Path { wildcard: true, .. }` → expanded against
+    ///   the workspace [`PackageExports`] table: every top-level name of
+    ///   the named package joins the imported set (§TS.3's
+    ///   `import jux.std.testing.*;` brings the assert functions in).
+    ///   With an empty table (single-unit [`resolve`] path) the wildcard
+    ///   contributes nothing, as before.
     /// - `ImportSpec::Items { items, .. }` → for each item, the alias if
     ///   present else the item's name.
     ///
     /// Defensive against parser-recovery shapes: an empty path (zero
     /// segments) is silently skipped, since the parser already emitted
     /// the relevant `E0200` and we have no local name to register.
-    fn collect_imports(&mut self, unit: &CompilationUnit) {
+    fn collect_imports(&mut self, unit: &CompilationUnit, exports: &PackageExports) {
         for import in &unit.imports {
             match &import.spec {
                 ImportSpec::Path { name, wildcard, alias } => {
                     if *wildcard {
-                        // Wildcards parse but don't contribute names —
-                        // see the comment in the module doc. When a
-                        // module table lands, this branch expands.
+                        // `import a.b.*;` — pull in every top-level name
+                        // the workspace declares under package `a.b`.
+                        let pkg = name
+                            .segments
+                            .iter()
+                            .map(|s| s.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join(".");
+                        if let Some(names) = exports.names_in(&pkg) {
+                            self.imported_names.extend(names.iter().cloned());
+                        }
                         continue;
                     }
                     let local = if let Some(a) = alias {

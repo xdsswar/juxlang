@@ -97,6 +97,46 @@ pub struct CompileResult {
 ///
 /// `sources` must be non-empty. Passing exactly one source produces
 /// the same result as the legacy [`compile`] entry point.
+/// Phases 1–3 for a whole workspace: lex + parse every source, then
+/// resolve each unit against the [`juxc_resolve::PackageExports`] table
+/// built from ALL parsed units (user sources, the embedded stdlib, and
+/// the `rust.std.*` stubs). Building the table first is what lets a
+/// wildcard import — `import jux.std.testing.*;` (§TS.3) — bring a
+/// package's free functions into scope; per-unit resolution alone can't
+/// see across files.
+///
+/// Diagnostics are tagged with their source's index (the same
+/// length-delta idiom the former inline loops used) so consumers map
+/// each one back to the file that produced it. Shared by the compile,
+/// test, and check/LSP pipelines.
+fn lex_parse_resolve(
+    sources: &[SourceFile],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<juxc_ast::CompilationUnit> {
+    let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
+    for (idx, source) in sources.iter().enumerate() {
+        let before = diagnostics.len();
+        let lex_result = juxc_lex::lex(source);
+        diagnostics.extend(lex_result.diagnostics);
+        let parsed = juxc_parse::parse(&lex_result.tokens);
+        diagnostics.extend(parsed.diagnostics);
+        for d in &mut diagnostics[before..] {
+            d.file = Some(idx);
+        }
+        units.push(parsed.ast);
+    }
+    let exports = juxc_resolve::PackageExports::collect(&units);
+    for (idx, unit) in units.iter().enumerate() {
+        let before = diagnostics.len();
+        let resolved = juxc_resolve::resolve_with_exports(unit, &exports);
+        diagnostics.extend(resolved.diagnostics);
+        for d in &mut diagnostics[before..] {
+            d.file = Some(idx);
+        }
+    }
+    units
+}
+
 pub fn compile_workspace(sources: Vec<SourceFile>) -> Result<CompileResult> {
     compile_workspace_as(sources, juxc_backend_rust::lower_workspace, juxc_tycheck::Profile::Full)
 }
@@ -153,26 +193,9 @@ where
     all_sources.extend(sources);
     let sources = all_sources;
 
-    // Phase 1+2 per source — lex and parse independently. Each source's
-    // diagnostics are tagged with that source's index (a length-delta:
-    // record `len()` before, set `.file` on everything appended after) so
-    // consumers can map a diagnostic back to the file that produced it.
-    let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
-    for (idx, source) in sources.iter().enumerate() {
-        let before = diagnostics.len();
-        let lex_result = juxc_lex::lex(source);
-        diagnostics.extend(lex_result.diagnostics);
-        let parsed = juxc_parse::parse(&lex_result.tokens);
-        diagnostics.extend(parsed.diagnostics);
-        // Resolver runs per-unit; cross-file name resolution happens
-        // through the merged symbol table during tycheck.
-        let resolved = juxc_resolve::resolve(&parsed.ast);
-        diagnostics.extend(resolved.diagnostics);
-        for d in &mut diagnostics[before..] {
-            d.file = Some(idx);
-        }
-        units.push(parsed.ast);
-    }
+    // Phase 1+2 per source, then phase 3 against the workspace's wildcard
+    // export table — see [`lex_parse_resolve`].
+    let mut units = lex_parse_resolve(&sources, &mut diagnostics);
     // Flag `.jux.d` units external (§G.9.1) so the lowering step skips them.
     stubs::mark_external_units(&mut units, &sources);
 
@@ -239,20 +262,7 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
     all_sources.extend(stubs::load_std_stub_sources());
     all_sources.extend(sources);
     let sources = all_sources;
-    let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
-    for (idx, source) in sources.iter().enumerate() {
-        let before = diagnostics.len();
-        let lex_result = juxc_lex::lex(source);
-        diagnostics.extend(lex_result.diagnostics);
-        let parsed = juxc_parse::parse(&lex_result.tokens);
-        diagnostics.extend(parsed.diagnostics);
-        let resolved = juxc_resolve::resolve(&parsed.ast);
-        diagnostics.extend(resolved.diagnostics);
-        for d in &mut diagnostics[before..] {
-            d.file = Some(idx);
-        }
-        units.push(parsed.ast);
-    }
+    let mut units = lex_parse_resolve(&sources, &mut diagnostics);
     stubs::mark_external_units(&mut units, &sources);
     // Source-layout rule (§B.1), same as the main compile path.
     diagnostics.extend(package_check::check_package_paths(&units, &sources));
@@ -355,24 +365,10 @@ pub fn check_workspace_with(sources: Vec<SourceFile>, profile: juxc_tycheck::Pro
     all_sources.extend(sources);
     let sources = all_sources;
 
-    // Lex + parse + resolve each unit independently. Cross-file name
-    // resolution happens through the merged symbol table in tycheck.
-    // Each source's diagnostics are tagged with its index (length-delta)
-    // so the LSP can publish per-file diagnostics against the right Url.
-    let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
-    for (idx, source) in sources.iter().enumerate() {
-        let before = diagnostics.len();
-        let lex_result = juxc_lex::lex(source);
-        diagnostics.extend(lex_result.diagnostics);
-        let parsed = juxc_parse::parse(&lex_result.tokens);
-        diagnostics.extend(parsed.diagnostics);
-        let resolved = juxc_resolve::resolve(&parsed.ast);
-        diagnostics.extend(resolved.diagnostics);
-        for d in &mut diagnostics[before..] {
-            d.file = Some(idx);
-        }
-        units.push(parsed.ast);
-    }
+    // Lex + parse each unit, then resolve against the workspace export
+    // table — see [`lex_parse_resolve`]. Each source's diagnostics are
+    // tagged with its index so the LSP publishes against the right Url.
+    let mut units = lex_parse_resolve(&sources, &mut diagnostics);
     stubs::mark_external_units(&mut units, &sources);
 
     // Source-layout rule (§B.1): surface a package/path mismatch as a precise

@@ -11,6 +11,22 @@ use crate::analysis::collect_mutated_names;
 use crate::stmts::stmt_span;
 use crate::RustEmitter;
 
+/// True when the function carries one of the §TS.1 testing-framework
+/// annotations (`@Test` / `@BeforeAll` / `@BeforeEach` / `@AfterEach` /
+/// `@AfterAll`, case-insensitive like every built-in annotation). Same
+/// matching rule as the test-runner discovery in `lower_workspace_test`.
+fn has_ts_annotation(fn_decl: &FnDecl) -> bool {
+    const TS_ANNOTATIONS: [&str; 5] =
+        ["test", "beforeall", "beforeeach", "aftereach", "afterall"];
+    fn_decl.annotations.iter().any(|a| {
+        a.name.segments.last().is_some_and(|seg| {
+            TS_ANNOTATIONS
+                .iter()
+                .any(|ts| seg.text.eq_ignore_ascii_case(ts))
+        })
+    })
+}
+
 impl RustEmitter {
     /// Emit a Rust `fn` for a Jux function declaration.
     ///
@@ -84,7 +100,19 @@ impl RustEmitter {
         // "drop visibility, emit a private `fn`" behavior so the
         // existing test corpus stays green.
         if !self.symbols.package.is_empty() {
-            self.emit_visibility(fn_decl.visibility);
+            // §TS.1 tests/hooks are ordinary functions with NO visibility
+            // requirement, but the synthesized test runner is `fn main()`
+            // at the CRATE ROOT calling `pkg::path::test_fn()` — a
+            // default-visibility (Rust-private) emission would be
+            // unreachable from there (rustc E0603). Widen every
+            // test/hook function to `pub(crate)` in test mode; Jux-side
+            // visibility was already enforced by tycheck, so this only
+            // affects the generated crate's internals.
+            if self.test_mode && has_ts_annotation(fn_decl) {
+                self.w.push_str("pub(crate) ");
+            } else {
+                self.emit_visibility(fn_decl.visibility);
+            }
         }
         // `async T` return type in Jux maps to a Rust `async fn`
         // returning `T`. The keyword sits BEFORE `fn` per Rust
