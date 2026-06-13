@@ -188,6 +188,15 @@
     <codeInsight.lineMarkerProvider
         language="Jux"
         implementationClass="dev.jux.intellij.resolve.JuxLineMarkerProvider"/>
+    <!-- Reverse (down-arrow) markers: is-subclassed-by / is-implemented-by /
+         is-overridden-in, with a popup of the subtypes. Project-wide slow pass. -->
+    <codeInsight.lineMarkerProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.resolve.JuxSubtypeLineMarkerProvider"/>
+    <!-- Go To Implementation(s) (Ctrl+Alt+B): class -> subclasses,
+         method -> overriding methods. Self-guards on Jux elements. -->
+    <definitionsSearch
+        implementation="dev.jux.intellij.resolve.JuxImplementationSearch"/>
     <!-- sec. P.7.8: observed / bound / plain gutter trio on properties. -->
     <codeInsight.lineMarkerProvider
         language="Jux"
