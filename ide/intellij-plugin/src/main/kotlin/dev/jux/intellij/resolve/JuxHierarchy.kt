@@ -38,7 +38,12 @@ object JuxHierarchy {
             JuxElementTypes.IMPLEMENTS_CLAUSE to false,
         )) {
             val clause = type.node.findChildByType(clauseType)?.psi ?: continue
-            for (ref in PsiTreeUtil.findChildrenOfType(clause, PsiElement::class.java)) {
+            // DIRECT children only — a supertype is a top-level TYPE_REFERENCE
+            // in the clause. A recursive walk would also pick up the type
+            // ARGUMENTS nested inside a generic supertype (`implements
+            // Holder<Object>` → the `Object` arg), wrongly flagging them as
+            // separately-implemented types (false E0424).
+            for (ref in clause.children) {
                 if (ref.node.elementType == JuxElementTypes.TYPE_REFERENCE) {
                     out.add(ref to isExtends)
                 }
