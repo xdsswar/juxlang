@@ -40,15 +40,15 @@ class JuxSyntaxHighlighter : SyntaxHighlighterBase() {
         val METHOD_CALL = key("JUX_METHOD_CALL", D.FUNCTION_CALL)
         val PARAMETER = key("JUX_PARAMETER", D.PARAMETER)
         val LOCAL_VARIABLE = key("JUX_LOCAL_VARIABLE", D.LOCAL_VARIABLE)
-        // Generic type parameters (`T`, `R`, …) — a DARK BLUE hardcoded as the
-        // key's default so it shows on EVERY color scheme (the per-scheme
+        // Generic type parameters (`T`, `R`, …) — a DARKER GREEN hardcoded as
+        // the key's default so it shows on EVERY color scheme (the per-scheme
         // bundled defaults only cover named schemes; custom themes fell back to
-        // the plain parameter color). JBColor adapts: a deep navy on light
-        // backgrounds, a darker-but-readable blue on dark ones. Users can still
-        // recolor it under Color Scheme | Jux | References | Type parameter.
+        // the plain parameter color). JBColor adapts: a deep green on light
+        // backgrounds, a darker-but-readable green on dark ones. Users can
+        // still recolor it under Color Scheme | Jux | References | Type parameter.
         val TYPE_PARAMETER = createTextAttributesKey(
             "JUX_TYPE_PARAMETER",
-            TextAttributes(JBColor(0x000080, 0x2D55A8), null, null, null, Font.PLAIN),
+            TextAttributes(JBColor(0x1E6B1E, 0x4C8A4C), null, null, null, Font.PLAIN),
         )
         val ENUM_CONSTANT = key("JUX_ENUM_CONSTANT", D.STATIC_FIELD)
         // §P.5 native coloring (annotator-driven, property context only): the
