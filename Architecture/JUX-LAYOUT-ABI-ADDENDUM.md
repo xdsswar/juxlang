@@ -541,6 +541,7 @@ Jux has **no `CString` type**. A `String` is the everyday FFI string, and the co
 |-----------|-----------|----------------|
 | Jux → C (argument) | `String` | a `CString` temp is built and kept alive for the call; its `const char*` is passed |
 | C → Jux (return)   | `String` | the C `const char*` is scanned to its NUL, **copied** into an owned Jux `String`, and the C buffer is **never freed** |
+| either direction   | `char`   | a Jux `char` (a 4-byte Unicode scalar) maps to a C `char` (`core::ffi::c_char`, 1 byte); the compiler converts at the call site (truncate out, widen in) |
 | manage it yourself | `byte*`  | a raw pointer you read and free explicitly inside `unsafe` (the escape hatch) |
 
 Defined rules:

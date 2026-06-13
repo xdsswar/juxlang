@@ -493,6 +493,13 @@ impl RustEmitter {
                 self.emit_expr_coerced_to_iface(fty, init);
                 return;
             }
+            // A `null` initializer for a raw-pointer field (`byte* ptr;` →
+            // `this.ptr = null;`) lowers to Rust's null pointer, not `None`
+            // (§L.6.1: `null` is the sole `T*` literal).
+            if fty.ptr_depth > 0 && crate::stmts::is_null_literal(init) {
+                self.w.push_str("std::ptr::null_mut()");
+                return;
+            }
             if fty.nullable
                 && !crate::stmts::is_null_literal(init)
                 && !self.expression_is_already_nullable(init)

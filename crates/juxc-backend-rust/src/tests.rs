@@ -4478,6 +4478,30 @@ fn pointer_null_init_lowers_to_null_mut() {
     );
 }
 
+/// A raw-pointer FIELD round-trips `null` correctly (the FFI-wrapper idiom):
+/// constructor init and a later assignment lower to `std::ptr::null_mut()`
+/// (not `None`), and `ptr == null` lowers to `.is_null()` (not `.is_none()`).
+#[test]
+fn pointer_field_null_round_trips() {
+    let rust = emit(
+        "public class Buf { public byte* ptr; \
+            public Buf() { this.ptr = null; } \
+            public void reset() { this.ptr = null; } \
+            public bool isNull() { unsafe { return ptr == null; } } } \
+         public void main() {}",
+    );
+    assert!(
+        rust.contains("std::ptr::null_mut()"),
+        "null into a pointer field should be null_mut(): {rust}"
+    );
+    assert!(rust.contains(".is_null()"), "field == null should be is_null(): {rust}");
+    assert!(!rust.contains(".is_none()"), "pointer field must not use is_none(): {rust}");
+    assert!(
+        !rust.contains("ptr: None") && !rust.contains("ptr = None"),
+        "pointer field must never be None: {rust}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // §L.7 — C FFI: `unsafe native` blocks → `extern "C"` + String marshalling
 // ---------------------------------------------------------------------------
@@ -4547,6 +4571,25 @@ fn extern_string_return_copies_out() {
         "expected null → empty String: {rust}"
     );
     assert!(!rust.contains("free("), "must NOT free the C buffer: {rust}");
+}
+
+/// A `char` parameter maps to a C `char` (`core::ffi::c_char`) in the signature
+/// and converts at the call site (`(arg) as core::ffi::c_char`) — Jux `char` is
+/// a 4-byte Unicode scalar, C `char` is 1 byte.
+#[test]
+fn extern_char_arg_maps_to_c_char() {
+    let rust = emit(
+        "@extern(lib = \"c\") unsafe native { i32 putchar(char c); } \
+         public void main() { unsafe { i32 r = putchar('H'); } }",
+    );
+    assert!(
+        rust.contains("pub fn putchar(c: core::ffi::c_char)"),
+        "char param should be c_char in the signature: {rust}"
+    );
+    assert!(
+        rust.contains(") as core::ffi::c_char"),
+        "char arg should convert at the call site: {rust}"
+    );
 }
 
 /// A numeric/pointer-only foreign call is NOT block-wrapped — it lowers to a

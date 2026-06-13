@@ -677,10 +677,42 @@ impl RustEmitter {
         match e {
             // `&x` / `&obj` always produce a `*mut T`.
             juxc_ast::Expr::Unary(u) => matches!(u.op, juxc_ast::UnaryOp::AddrOf),
-            // A bare local/param recorded as a raw pointer.
-            juxc_ast::Expr::Path(qn) => {
-                qn.segments.len() == 1
-                    && self.pointer_locals.contains(qn.segments[0].text.as_str())
+            // A bare name that is a raw pointer: either a local/param (tracked
+            // in `pointer_locals`) or, failing that, an implicit-`this`
+            // reference to a `T*` FIELD of the enclosing class (`ptr == null`
+            // inside a method). A local/param of the same name shadows the field.
+            juxc_ast::Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = qn.segments[0].text.as_str();
+                if self.pointer_locals.contains(name) {
+                    return true;
+                }
+                let shadowed = self.local_types.iter().any(|s| s.contains_key(name))
+                    || self.current_fn_params.contains(name);
+                if !shadowed {
+                    if let Some(cls) = self.enclosing_class.as_ref() {
+                        if let Some(class) = self.symbols.classes.get(cls) {
+                            if let Some(field) = class.fields.get(name) {
+                                return field.ty.ptr_depth > 0;
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            // A field declared `T*` (`this.ptr`, `obj.ptr`) — resolve the
+            // receiver's class and read the field's declared `ptr_depth` (the
+            // erased `Ty` drops it). Lets `ptr == null` lower to `is_null()`.
+            juxc_ast::Expr::Field(f) => {
+                if let Some(juxc_tycheck::Ty::User { name, .. }) =
+                    self.expr_types.get(&crate::exprs::expr_span_of(&f.object))
+                {
+                    if let Some(class) = self.symbols.classes.get(name) {
+                        if let Some(field) = class.fields.get(&f.field.text) {
+                            return field.ty.ptr_depth > 0;
+                        }
+                    }
+                }
+                false
             }
             _ => false,
         }
