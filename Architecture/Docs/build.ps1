@@ -19,6 +19,7 @@ $docs = @(
   @{ md='JUX-LAYOUT-ABI-ADDENDUM.md';           title='Layout / ABI / unsafe';                   section='Core' },
   @{ md='JUX-EXCEPTIONS-ADDENDUM.md';           title='Exceptions & Result Lowering';            section='Core' },
   @{ md='JUX-MISSING-DEFS-ADDENDUM.md';         title='Missing Definitions';                     section='Core' },
+  @{ md='JUX-COLLECTIONS-ADDENDUM.md';          title='Collections & Reference Semantics';       section='Core' },
   @{ md='JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md'; title='Observable Properties';                  section='Core' },
   @{ md='JUX-ANNOTATIONS-ADDENDUM.md';          title='Annotation System';                       section='Core' },
   @{ md='JUX-ENTRY-POINTS-ADDENDUM.md';         title='Entry Points';                            section='Core' },
