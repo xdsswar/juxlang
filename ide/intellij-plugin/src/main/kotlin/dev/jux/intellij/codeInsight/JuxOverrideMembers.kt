@@ -71,32 +71,62 @@ object JuxOverrideMembers {
             seen.add("$name/${JuxHierarchy.arity(m)}")
         }
 
-        // Walk the supertype chain, emitting each inherited method's signature
-        // VERBATIM — type-parameter letters preserved. Jux's inherited
-        // type-param ruling (juxc-ast `substitute_inherited_type_params`) makes
-        // a supertype's `T` valid in the implementing class (it resolves to the
-        // bound argument), so `implements Holder<Animal>` generates
-        // `void test(T t)` — the interface's own letter — not a concrete
-        // `Animal`. This matches the spec's "the override may reuse the
-        // interface's parameter name".
-        val queue = ArrayDeque(JuxHierarchy.superTypeNames(type))
+        // Walk the supertype chain as (declaration, type-param → concrete-arg)
+        // frames, emitting each inherited method's signature with the
+        // supertype's type parameters substituted to the CONCRETE bound. So
+        // `implements Holder<Animal>` generates `void test(Animal t)` — never
+        // the bare `T` (which isn't a declared parameter of the implementing
+        // class and would be a compile error). A generic class that FORWARDS
+        // its parameter keeps the letter: `Box<T> implements Holder<T>` →
+        // `void test(T t)`, because `T` is excluded from the binding map (it's
+        // Box's own param). Substitutions compose down the chain.
+        val queue = ArrayDeque<Pair<JuxTypeDeclaration, Map<String, String>>>()
+        seedSupertypes(type, emptyMap(), project, queue)
         val visitedTypes = HashSet<String>()
         while (queue.isNotEmpty()) {
-            val superName = queue.removeFirst()
-            if (!visitedTypes.add(superName)) continue
-            val superDecl = JuxTypeIndex.findType(project, superName) ?: continue
-            for (m in JuxHierarchy.directChildren(superDecl, JuxElementTypes.METHOD_DECLARATION)) {
+            val (decl, subst) = queue.removeFirst()
+            val ownerName = decl.name ?: continue
+            if (!visitedTypes.add(ownerName)) continue
+            for (m in JuxHierarchy.directChildren(decl, JuxElementTypes.METHOD_DECLARATION)) {
                 val method = m as? JuxMethodDeclaration ?: continue
                 val name = method.name ?: continue
                 if (!seen.add("$name/${JuxHierarchy.arity(method)}")) continue
                 if (!JuxHierarchy.isOverridable(method)) continue
-                val sig = JuxHierarchy.methodSignature(method) ?: continue
+                val rawSig = JuxHierarchy.methodSignature(method) ?: continue
+                val sig = JuxHierarchy.substituteTypeParams(rawSig, subst)
                 val kind = if (JuxHierarchy.hasBody(method)) Kind.OVERRIDE else Kind.IMPLEMENT
-                out.add(Candidate(method, superName, sig, kind))
+                out.add(Candidate(method, ownerName, sig, kind))
             }
-            queue.addAll(JuxHierarchy.superTypeNames(superDecl))
+            seedSupertypes(decl, subst, project, queue)
         }
         return out
+    }
+
+    /**
+     * Enqueue [type]'s direct supertypes, each with the param→arg map from its
+     * reference's type arguments composed through [outerSubst] (so an argument
+     * that is itself an outer type parameter resolves further down the chain).
+     */
+    private fun seedSupertypes(
+        type: JuxTypeDeclaration,
+        outerSubst: Map<String, String>,
+        project: com.intellij.openapi.project.Project,
+        queue: ArrayDeque<Pair<JuxTypeDeclaration, Map<String, String>>>,
+    ) {
+        val own = JuxHierarchy.typeParameterNames(type).toHashSet()
+        for ((ref, _) in JuxHierarchy.supertypeReferences(type)) {
+            val decl = JuxTypeIndex.findType(project, JuxHierarchy.bareTypeName(ref)) ?: continue
+            val args = JuxHierarchy.typeArguments(ref)
+                .map { JuxHierarchy.substituteTypeParams(it, outerSubst) }
+            val params = JuxHierarchy.typeParameterNames(decl)
+            val subst = HashMap<String, String>()
+            for (i in 0 until minOf(params.size, args.size)) {
+                // A param the SUBCLASS itself declares (forwards) keeps its
+                // letter — don't substitute it away.
+                if (params[i] !in own) subst[params[i]] = args[i]
+            }
+            queue.add(decl to subst)
+        }
     }
 
     /**

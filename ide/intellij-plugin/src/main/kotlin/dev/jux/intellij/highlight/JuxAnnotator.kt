@@ -265,43 +265,18 @@ class JuxAnnotator : Annotator {
     }
 
     /**
-     * True when [name] matches a type parameter declared by an enclosing
-     * method or type declaration (`class Box<T>` / `<T> T id(T x)`).
+     * True when [name] should color as a type parameter — either DECLARED by an
+     * enclosing method/type (`class Box<T>` / `<T> T id(T x)`), or INHERITED:
+     * a direct-supertype parameter name reused in the class body (`T` in
+     * `class C implements Holder<Animal>`). The inherited case is colored for
+     * readability; a separate inspection ([dev.jux.intellij.inspections
+     * .JuxInheritedTypeParamInspection]) warns that the concrete bound should
+     * be written instead.
      */
     private fun isEnclosingTypeParameter(at: PsiElement, name: String): Boolean {
-        var scope: PsiElement? = at.parent
-        while (scope != null) {
-            val t = scope.elementType
-            if (t === E.CLASS_DECLARATION || t === E.INTERFACE_DECLARATION ||
-                t === E.ENUM_DECLARATION || t === E.RECORD_DECLARATION ||
-                t === E.STRUCT_DECLARATION || t === E.METHOD_DECLARATION ||
-                t === E.TYPE_ALIAS_DECLARATION
-            ) {
-                val params = scope.node.findChildByType(E.TYPE_PARAMETER_LIST)?.psi
-                if (params != null) {
-                    var p: PsiElement? = params.firstChild
-                    while (p != null) {
-                        if (p.elementType === E.TYPE_PARAMETER &&
-                            p.firstIdentifierText() == name
-                        ) return true
-                        p = p.nextSibling
-                    }
-                }
-                // Jux inherited-type-param ruling: a class implementing/extending
-                // `I<Concrete>` may use `I`'s parameter names in its body (they
-                // resolve to the bound arguments — see juxc-ast
-                // `substitute_inherited_type_params`). Color those as type
-                // parameters too, so a hand-written or generated `void test(T t)`
-                // in `class C implements Holder<Animal>` shows `T` green, not as
-                // an unresolved type.
-                val typeDecl = scope as? JuxTypeDeclaration
-                if (typeDecl != null &&
-                    name in JuxHierarchy.inheritedTypeParameterNames(typeDecl)
-                ) return true
-            }
-            scope = scope.parent
-        }
-        return false
+        if (JuxHierarchy.isDeclaredTypeParameter(at, name)) return true
+        val owner = com.intellij.psi.util.PsiTreeUtil.getParentOfType(at, JuxTypeDeclaration::class.java)
+        return owner != null && JuxHierarchy.inheritedTypeParameterBindings(owner).containsKey(name)
     }
 
     private fun PsiElement.firstIdentifierText(): String? {
