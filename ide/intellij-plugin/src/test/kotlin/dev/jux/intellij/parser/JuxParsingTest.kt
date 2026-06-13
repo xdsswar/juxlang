@@ -77,6 +77,61 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
     }
 
     /**
+     * §L.7 C-FFI: an `@extern(lib=…) unsafe native { … }` block parses without
+     * errors and its foreign functions surface as named method declarations
+     * (so completion / Find Usages / resolve see them).
+     */
+    fun testNativeExternBlockParses() {
+        val psi = createPsiFile(
+            "ffi.jux",
+            """
+            package demo;
+            @extern(lib = "kernel32")
+            unsafe native {
+                i32 lstrlenA(String s);
+                String GetCommandLineA();
+                u32 GetCurrentProcessId();
+            }
+            public void main() {
+                unsafe { i32 n = lstrlenA("hi"); }
+            }
+            """.trimIndent(),
+        )
+        assertEmpty(
+            "native block should parse without errors",
+            PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java).map { it.errorDescription },
+        )
+        val fns = PsiTreeUtil.collectElementsOfType(psi, JuxMethodDeclaration::class.java).map { it.name }
+        assertTrue(
+            "native fns surface as method declarations: $fns",
+            fns.containsAll(listOf("lstrlenA", "GetCommandLineA", "GetCurrentProcessId")),
+        )
+    }
+
+    /** A native block in a package-less file with header + in-block comments and
+     *  blank lines still parses cleanly (the shape examples/ffi_strings.jux uses). */
+    fun testNativeExternBlockReproNoPackageWithComments() {
+        val psi = createPsiFile(
+            "ffi2.jux",
+            "// header comment one\n" +
+                "// header comment two\n" +
+                "\n" +
+                "@extern(lib = \"kernel32\")\n" +
+                "unsafe native {\n" +
+                "    // inner comment\n" +
+                "    i32 lstrlenA(String s);\n" +
+                "\n" +
+                "    // another\n" +
+                "    String GetCommandLineA();\n" +
+                "}\n",
+        )
+        assertEmpty(
+            "repro should parse without errors",
+            PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java).map { it.errorDescription },
+        )
+    }
+
+    /**
      * Error recovery: a stray run of tokens in a class body becomes ONE
      * "Member declaration expected" error (no per-token cascade), and the
      * valid member after it still parses.

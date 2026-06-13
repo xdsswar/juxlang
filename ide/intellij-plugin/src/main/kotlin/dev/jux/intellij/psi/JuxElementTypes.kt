@@ -70,6 +70,14 @@ object JuxElementTypes {
     val STATIC_BLOCK = JuxElementType("STATIC_BLOCK")
     val DROP_BLOCK = JuxElementType("DROP_BLOCK")
 
+    /**
+     * A C-FFI foreign-function block — `@extern(lib = "…") unsafe native { … }`
+     * (Layout-ABI §L.7). Its body is bodyless [METHOD_DECLARATION]s, one per
+     * declared C function, so they surface as named members (Structure View,
+     * Find Usages, completion, resolve) like any other declaration.
+     */
+    val EXTERN_BLOCK = JuxElementType("EXTERN_BLOCK")
+
     val PARAMETER_LIST = JuxElementType("PARAMETER_LIST")
     val PARAMETER = JuxElementType("PARAMETER")
     val THROWS_CLAUSE = JuxElementType("THROWS_CLAUSE")
