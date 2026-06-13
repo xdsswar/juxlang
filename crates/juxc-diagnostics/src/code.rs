@@ -37,6 +37,14 @@ pub enum Code {
     /// shadowing (a new scope re-using a name) is still allowed —
     /// only same-scope collisions fire this code.
     E0304_DuplicateLocalDeclaration,
+    /// E0303 — **Multiple resolution candidates for a name** — in practice, two
+    /// `import` declarations in the same file bind the same simple name to
+    /// DIFFERENT fully-qualified types (`import a.Foo; import b.Foo;`). Each
+    /// package may declare its own `Foo`, but a bare `Foo` would then be
+    /// ambiguous, so the second import silently shadowing the first is
+    /// forbidden — give one an `as` alias (`import b.Foo as BFoo;`) or refer to
+    /// it by its fully-qualified name.
+    E0303_ConflictingImport,
     /// E0320 — Entry file has both top-level statements and a `main` function.
     E0320_AmbiguousEntryPoint,
     /// E0326 — A class member named `main` with an entry-shaped signature is
@@ -651,6 +659,7 @@ impl Code {
             Code::E0211_MissingSuperCall         => "E0211",
             Code::E0301_NameNotFound             => "E0301",
             Code::E0304_DuplicateLocalDeclaration => "E0304",
+            Code::E0303_ConflictingImport        => "E0303",
             Code::E0320_AmbiguousEntryPoint      => "E0320",
             Code::E0323_MainSignatureMismatch    => "E0323",
             Code::E0326_ClassMainNotStatic       => "E0326",

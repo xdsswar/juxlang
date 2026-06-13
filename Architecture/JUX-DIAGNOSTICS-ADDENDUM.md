@@ -275,7 +275,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 |----------|-----------------------------------------------------|-------------------------------|
 | `E0301`  | Name not found in scope                              | Build system §B.4.1           |
 | `E0302`  | Cyclic module import *(reserved)*                    | Build system §B.4.6           |
-| `E0303`  | Multiple resolution candidates for name *(reserved)* | Build system §B.4.1           |
+| `E0303`  | Multiple resolution candidates for a name — two imports bind the same simple name to different packages' types (`import a.Foo; import b.Foo;`); alias one (`as`) or use the FQN | Build system §B.4.1 |
 | `E0304`  | Duplicate local declaration in the same scope        | JUX-LANG-V1 §6.1 / Semantics §S.1.4 |
 | `E0307`  | Duplicate annotation name (case-insensitive collision) *(reserved)* | JUX-LANG-V1 §3.6 / Annotations §A.13 |
 | `E0320`  | Entry file has both top-level statements and a `main` function | Entry Points §E.6     |

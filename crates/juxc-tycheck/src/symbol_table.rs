@@ -1261,14 +1261,50 @@ fn check_imports_resolve(
         );
     };
     for unit in units {
+        // **Conflicting-import detection (E0307).** Two imports in one file
+        // that bind the SAME simple name to DIFFERENT fully-qualified types
+        // (`import a.Foo; import b.Foo;`) would make a bare `Foo` ambiguous;
+        // the resolver's bare→FQN map is last-wins, so without this check the
+        // second import silently shadows the first and a later use mis-resolves
+        // (e.g. a confusing arg-type error against the wrong `Foo`). Java
+        // forbids it; require an `as` alias or a fully-qualified reference. The
+        // binding name is the alias when present, else the imported leaf.
+        let mut bound: HashMap<String, String> = HashMap::new();
+        let mut note_binding =
+            |bind: String, fqn: String, span: Span, diagnostics: &mut Vec<Diagnostic>| {
+                match bound.get(&bind) {
+                    Some(prev) if *prev != fqn => {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0303_ConflictingImport,
+                                format!(
+                                    "conflicting imports: the name `{bind}` is imported from \
+                                     both `{prev}` and `{fqn}` — give one an `as` alias \
+                                     (`import {fqn} as {bind}2;`) or use a fully-qualified name",
+                                ),
+                            )
+                            .with_span(span),
+                        );
+                    }
+                    _ => {
+                        bound.insert(bind, fqn);
+                    }
+                }
+            };
         for import in &unit.imports {
             match &import.spec {
-                ImportSpec::Path { name, wildcard, .. } => {
+                ImportSpec::Path { name, wildcard, alias } => {
                     if *wildcard || name.segments.is_empty() {
                         continue;
                     }
                     let fqn = name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
-                    report(fqn, import.span, diagnostics);
+                    report(fqn.clone(), import.span, diagnostics);
+                    // Binding name = alias, else the imported leaf segment.
+                    let bind = alias
+                        .as_ref()
+                        .map(|a| a.text.clone())
+                        .unwrap_or_else(|| name.segments.last().map(|s| s.text.clone()).unwrap_or_default());
+                    note_binding(bind, fqn, import.span, diagnostics);
                 }
                 ImportSpec::Items { prefix, items } => {
                     let pfx = prefix.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
@@ -1278,7 +1314,9 @@ fn check_imports_resolve(
                         } else {
                             format!("{pfx}.{}", it.name.text)
                         };
-                        report(fqn, import.span, diagnostics);
+                        report(fqn.clone(), import.span, diagnostics);
+                        let bind = it.alias.as_ref().map(|a| a.text.clone()).unwrap_or_else(|| it.name.text.clone());
+                        note_binding(bind, fqn, import.span, diagnostics);
                     }
                 }
             }
@@ -3891,6 +3929,35 @@ mod tests {
         // A bare `Foo` binds to the referrer's package.
         assert_eq!(table.find_fqn_by_bare_in("Foo", "a").as_deref(), Some("a.Foo"));
         assert_eq!(table.find_fqn_by_bare_in("Foo", "b").as_deref(), Some("b.Foo"));
+    }
+
+    /// E0307: two unaliased imports binding the same simple name to different
+    /// packages' types are a conflict (a bare `Foo` would be ambiguous).
+    #[test]
+    fn conflicting_unaliased_imports_emit_e0307() {
+        let a = parse_unit("package a; public class Foo { public int x; }");
+        let b = parse_unit("package b; public class Foo { public int y; }");
+        let app = parse_unit("package app; import a.Foo; import b.Foo; public void main() {}");
+        let mut diags = Vec::new();
+        let _ = build_workspace(&[a, b, app], &mut diags);
+        assert!(
+            diags.iter().any(|d| d.code == code::Code::E0303_ConflictingImport),
+            "expected E0307, got {diags:?}",
+        );
+    }
+
+    /// Aliasing one of the two same-name imports resolves the conflict — no E0307.
+    #[test]
+    fn aliased_same_name_imports_no_e0307() {
+        let a = parse_unit("package a; public class Foo { public int x; }");
+        let b = parse_unit("package b; public class Foo { public int y; }");
+        let app = parse_unit("package app; import a.Foo; import b.Foo as BFoo; public void main() {}");
+        let mut diags = Vec::new();
+        let _ = build_workspace(&[a, b, app], &mut diags);
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0303_ConflictingImport),
+            "unexpected E0307: {diags:?}",
+        );
     }
 
     /// W0457: a strong self-referential field forms a leaking `Rc` cycle.
