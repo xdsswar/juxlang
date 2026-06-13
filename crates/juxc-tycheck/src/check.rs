@@ -7321,6 +7321,30 @@ mod tests {
         assert!(!has(&d, code::Code::E0467_DefaultParamOrdering), "{d:?}");
     }
 
+    /// §7.6 — an interface method with no explicit visibility is implicitly
+    /// public, so calling it (through the interface type) is NOT E0416.
+    #[test]
+    fn interface_method_is_public_by_default() {
+        let d = run(
+            "public interface I { String label(); } \
+             public class C implements I { @override public String label() { return \"x\"; } } \
+             public void main() { I x = new C(); var s = x.label(); }",
+        );
+        assert!(!has(&d, code::Code::E0416_PackagePrivateAccess), "{d:?}");
+    }
+
+    /// A `default` interface method (no visibility) is likewise public — calling
+    /// the inherited default from outside is not E0416.
+    #[test]
+    fn interface_default_method_is_public() {
+        let d = run(
+            "public interface I { default String label() { return \"x\"; } } \
+             public class C implements I { } \
+             public void main() { var c = new C(); var s = c.label(); }",
+        );
+        assert!(!has(&d, code::Code::E0416_PackagePrivateAccess), "{d:?}");
+    }
+
     /// Bare `return;` in a void function is fine.
     #[test]
     fn void_return_in_void_function_is_ok() {
