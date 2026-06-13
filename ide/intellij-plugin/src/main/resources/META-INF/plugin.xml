@@ -476,6 +476,9 @@
     <!-- One-time "AS IS / no liability" agreement, shown on first project open
          until accepted (application-wide, see JuxLicense). -->
     <postStartupActivity implementation="dev.jux.intellij.license.JuxLicenseStartup"/>
+    <!-- Auto-create a Run config for each binary module's main entry point
+         (from jux.toml [[bin]] / src/main.jux), so "Run" is always available. -->
+    <postStartupActivity implementation="dev.jux.intellij.run.JuxRunConfigStartup"/>
   </extensions>
 
   <actions>
