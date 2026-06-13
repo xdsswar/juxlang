@@ -277,6 +277,107 @@ async void pipeline() {
 public void main() { block_on(pipeline()); }
 ```
 
+### Real threads: workers and atomics
+
+When you want genuine multi-core parallelism (not just cooperative tasks),
+`Worker.spawn` runs a closure on a real OS thread and hands you back a `Task` you
+can `await`. Shared state goes through atomics like `AtomicInt`, which are safe to
+hand to several workers at once.
+
+```java
+import jux.std.concurrent.AtomicInt;
+
+public int crunch(String tag, int iters) {
+    var acc = 0;
+    for (var i : 0..iters) { acc = (acc + i) * 7 % 9973; }
+    print($"  [worker $tag] acc=$acc");
+    return acc;
+}
+
+public async void main() {
+    // Fan CPU-bound work out across real threads, then gather the results.
+    final var a = Worker.spawn(() -> crunch("A", 1_000_000));
+    final var b = Worker.spawn(() -> crunch("B", 1_000_000));
+
+    // One shared, thread-safe counter that every worker bumps.
+    var hits = new AtomicInt(0);
+    final var c = Worker.spawn(() -> {
+        for (var i : 0..1000) { hits.fetchAdd(1); }   // atomic increment
+        return 0;
+    });
+
+    final int ra = await a;
+    final int rb = await b;
+    await c;
+
+    print($"results: A=$ra B=$rb");
+    print($"hits = ${hits.load()}");      // 1000
+}
+```
+
+`Worker.spawn` is true preemptive parallelism backed by OS threads; `AtomicInt`
+(and friends, with explicit `MemoryOrder`) lower to `Arc<Atomic*>`, so the handle
+the workers share really is one counter.
+
+### Memory: `drop`, `weak`, and `ref`
+
+Jux has no tracing garbage collector. Class instances are reference-counted (that
+`Rc<RefCell>` lowering from earlier), and three constructs give you direct control
+over lifetime and sharing.
+
+**`drop { }` is a deterministic destructor.** It runs at scope exit for a local,
+and for a class instance exactly once, when the last strong reference is released.
+No finalizer queue, no nondeterminism.
+
+```java
+public class Resource {
+    public String name;
+    public Resource(String name) { this.name = name; print("open " + name); }
+    drop { print("close " + name); }      // `this` is in scope here
+}
+
+public void main() {
+    var a = new Resource("a");
+    var b = a;                  // a SECOND handle to the same resource
+    print("using " + b.name);
+}   // "close a" prints once here, when the last handle dies
+```
+
+**`weak` breaks reference cycles.** A `weak` reference doesn't bump the refcount,
+so it never keeps its target alive. Promote it to a strong reference with `.get()`,
+which returns `T?` (null if the target is gone). This is how a `Parent <-> Child`
+back-reference avoids leaking without a GC.
+
+```java
+public class Child {
+    private weak Parent parent;             // no refcount contribution
+    public void attach(Parent p) { this.parent = p; }
+    public void callUp() {
+        var p = this.parent.get();          // Parent?  promote weak -> strong
+        if (p != null) { p.greet(); } else { print("(no parent)"); }
+    }
+}
+```
+
+**`ref` gives you a shared, writable handle to a value type.** Normally primitives
+and value types copy; a `ref` binding (or `ref` parameter) aliases the *same* cell,
+so a write is visible through every handle, including the caller's.
+
+```java
+void bump(ref int n) { n += 5; }            // mutates the CALLER's variable
+
+public void main() {
+    ref int n = 10;
+    ref int m = n;                           // m aliases n's cell
+    bump(n);
+    print(m);                                // 15 (same cell throughout)
+}
+```
+
+> Not yet: `unsafe { }` blocks and raw pointers (`int*`, `(byte*) buf`) are
+> specced but still placeholder, and parked behind the C/C++ FFI work. Don't reach
+> for them yet.
+
 ---
 
 ## What works today
@@ -302,6 +403,11 @@ runs. That currently includes:
 - **String interpolation:** `$"hello ${name}"`.
 - **Observable properties:** `observer<T>`, binding, bidirectional binding.
 - **Async/streams, a testing framework, exceptions** (`try`/`catch`/`finally`).
+- **Concurrency:** `async`/`await`, `spawn` tasks, `Channel<T>`, real-thread
+  `Worker.spawn`, and atomics (`AtomicInt`/`AtomicLong` with `MemoryOrder`).
+- **Memory control:** `drop { }` deterministic destructors, `weak` references
+  (cycle-breaking, `.get()` to promote), and `ref` bindings/params (shared,
+  writable handles to value types). No tracing GC.
 - **Multi-file workspaces:** cross-file `import`s, package-private visibility,
   and `jux.toml`-driven multi-module project builds with per-module binary
   metadata (version, author, icon).
