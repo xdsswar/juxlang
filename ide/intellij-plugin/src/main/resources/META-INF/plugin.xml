@@ -180,6 +180,10 @@
     <lang.namesValidator
         language="Jux"
         implementationClass="dev.jux.intellij.resolve.JuxNamesValidator"/>
+    <!-- Rename: in-file usages follow automatically (they resolve through the
+         reference contributor); this adds same-scope name-collision conflicts. -->
+    <renamePsiElementProcessor
+        implementation="dev.jux.intellij.resolve.JuxRenamePsiElementProcessor"/>
     <completion.contributor
         language="Jux"
         implementationClass="dev.jux.intellij.completion.JuxCompletionContributor"/>
@@ -320,6 +324,14 @@
         enabledByDefault="true"
         level="WARNING"
         implementationClass="dev.jux.intellij.inspections.JuxUnusedLocalSymbolInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxUnresolvedReference"
+        displayName="Unresolved reference"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxUnresolvedReferenceInspection"/>
     <localInspection
         language="Jux"
         shortName="JuxMissingOverride"
