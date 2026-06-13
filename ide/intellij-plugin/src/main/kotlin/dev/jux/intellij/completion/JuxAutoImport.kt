@@ -3,6 +3,8 @@ package dev.jux.intellij.completion
 import com.intellij.codeInsight.completion.InsertHandler
 import com.intellij.codeInsight.completion.InsertionContext
 import com.intellij.codeInsight.lookup.LookupElement
+import com.intellij.openapi.editor.Document
+import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
@@ -41,14 +43,28 @@ object JuxAutoImport {
 
     private fun insertImport(context: InsertionContext, fqn: String, simpleName: String) {
         val file = context.file as? JuxFile ?: return
+        addImport(context.project, context.document, file, fqn, simpleName)
+    }
+
+    /**
+     * Insert `import <fqn>;` into [file] at the canonical spot (after the last
+     * import, else after `package …;`, else file start), unless [simpleName] is
+     * already imported. Shared by the completion insert handler and the
+     * "Import type" quick-fix. The caller must hold a write action.
+     */
+    fun addImport(project: Project, document: Document, file: JuxFile, fqn: String, simpleName: String) {
         if (importAlreadyPresent(file, fqn, simpleName)) return
         val offset = importInsertOffset(file)
         val nl = if (offset == 0) "" else "\n"
         // A blank line after the package block reads better when we're the
         // first import; otherwise just append on its own line.
-        context.document.insertString(offset, "${nl}import $fqn;")
-        PsiDocumentManager.getInstance(context.project).commitDocument(context.document)
+        document.insertString(offset, "${nl}import $fqn;")
+        PsiDocumentManager.getInstance(project).commitDocument(document)
     }
+
+    /** True when [simpleName] (from [fqn]) is already imported by [file]. */
+    fun isImported(file: JuxFile, fqn: String, simpleName: String): Boolean =
+        importAlreadyPresent(file, fqn, simpleName)
 
     /** True when [simpleName] is already brought in by some import in [file]. */
     private fun importAlreadyPresent(file: JuxFile, fqn: String, simpleName: String): Boolean {
