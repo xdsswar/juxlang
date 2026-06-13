@@ -1,0 +1,17 @@
+<html>
+<body>
+Reports a bare value reference whose name is not bound anywhere reachable — a typo,
+or a usage left dangling after the declaration it pointed at was renamed.
+<p>
+Tuned for zero false positives: a name is reported only when it is lowercase and is
+not a keyword, primitive, built-in global, an <code>import</code>, a binding anywhere
+in the file (local, parameter, <code>for</code> / <code>catch</code> / lambda variable,
+destructuring or pattern), nor any type / method / field declared elsewhere in the
+project. Files with a wildcard <code>import</code> are skipped entirely.
+</p>
+<p>
+Member accesses (<code>obj.member</code>) and capitalized type references are left to
+the language server, which sees the standard library and cross-file members.
+</p>
+</body>
+</html>
