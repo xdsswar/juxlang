@@ -437,10 +437,16 @@ runs. That currently includes:
 - `jux new` / `jux test` CLI subcommands are still stubs.
 - `rust.std` compile coverage is partial: construction and method calls work;
   free functions, traits/operators, and the full type mapping are being filled in.
-- **C/C++ FFI** is specced and is a priority, but deferred for now.
-- Raw-pointer basics work (`T*`, `&local`, `*p` inside `unsafe`). There is no
-  `delete` keyword by design (`delete p;` is guided to the `drop { }` +
-  foreign-`free` model); `&obj` and the full FFI binding layer are still to come.
+- **C FFI** works for the common case: declare C functions in an
+  `@extern(lib = "…") unsafe native { … }` block, call them inside `unsafe`, and
+  the library links via `#[link]`. Strings cross as ordinary `String` (the
+  compiler marshals to/from C `const char*` automatically; there is no
+  `CString`). See [`examples/ffi_strings.jux`](examples/ffi_strings.jux). Still
+  to come: `out` parameters, `@layout(c)` C structs, `@export` (Jux to C),
+  `[ffi.*]`-configured linking for custom libraries, header `bindgen`, and C++.
+- Raw-pointer basics work (`T*`, `void*`, `&local`, `&obj`, `*p` inside `unsafe`).
+  There is no `delete` keyword by design (`delete p;` is guided to the `drop { }` +
+  foreign-`free` model).
 - Tuple syntax is still placeholder.
 - Expect bugs. This is experimental, one person is building it, and corners of the
   language will break, change, or get rewritten without warning. File issues.

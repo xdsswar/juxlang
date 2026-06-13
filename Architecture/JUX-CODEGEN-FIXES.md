@@ -72,9 +72,9 @@ public String describe(int code) {
 
 Should compile and run with no manual coercion.
 
-**Future option.** If a `&str` is ever needed for FFI or hot paths, expose it as a separate type (`CString` already covers the FFI case). The default stays `String`.
+**Future option.** If a `&str` is ever needed for FFI or hot paths, expose it as a separate type. The FFI case is already handled: a Jux `String` crosses the C boundary as `const char*`, and the compiler marshals it automatically. The default stays `String`.
 
-**Knock-on effect — lock this in now.** Once every string literal is owned `String`, the rest of the codegen MUST commit to the same choice: function parameters typed `String` in Jux lower to Rust `String` (owned), **never `&str`**. The string-interop row in `JUX-LANG-V1.md` (~line 2848 — `String, &str → String`) already endorses this; the fix just makes the codegen consistent with the spec. Future `extern` / FFI work needs a separate `CString`-ish path; do NOT smuggle `&str` back in by overloading `String`.
+**Knock-on effect — lock this in now.** Once every string literal is owned `String`, the rest of the codegen MUST commit to the same choice: function parameters typed `String` in Jux lower to Rust `String` (owned), **never `&str`**. The string-interop row in `JUX-LANG-V1.md` (~line 2848 — `String, &str → String`) already endorses this; the fix just makes the codegen consistent with the spec. Future `extern` / FFI work marshals a Jux `String` to/from C `const char*` automatically at the boundary; do NOT smuggle `&str` back in by overloading `String`.
 
 **Acceptance criteria.**
 

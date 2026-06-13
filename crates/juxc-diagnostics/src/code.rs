@@ -597,6 +597,15 @@ pub enum Code {
     /// in the parser and point them at the spec-correct drop-block model.
     E0507_NoDeleteKeyword,
 
+    /// E0508 — A foreign-function (`unsafe native`) signature uses a type that
+    /// is not allowed at the C FFI boundary (Layout-ABI §L.7 / JUX-LANG-V1 §8).
+    /// Permitted: primitives, raw pointers (`T*`, `void*`), `String` (the
+    /// compiler marshals it to/from C `const char*`), and `void` (return only).
+    /// Rejected: classes, generics, arrays, collections, and `throws` — they
+    /// have no stable C representation. The diagnostic names the offending type
+    /// and points at the allowed set.
+    E0508_FfiTypeNotAllowed,
+
     // ---- Operators / Auto-derivation (E0900–E0999) ----
     /// E0930 — Conflicting operator declarations. Per
     /// `JUX-OPERATORS-ADDENDUM.md` §O.2.1, defining BOTH `operator<=>`
@@ -752,6 +761,7 @@ impl Code {
             Code::E0720_UnreachableCatch         => "E0720",
             Code::E0506_UnsafeOpOutsideUnsafe    => "E0506",
             Code::E0507_NoDeleteKeyword          => "E0507",
+            Code::E0508_FfiTypeNotAllowed        => "E0508",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",

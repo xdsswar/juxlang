@@ -4154,6 +4154,7 @@ impl RustEmitter {
             TopLevelDecl::Interface(d) => d.span,
             TopLevelDecl::TypeAlias(d) => d.span,
             TopLevelDecl::Const(d) => d.span,
+            TopLevelDecl::ExternBlock(d) => d.span,
         };
         self.emit_source_marker(span);
         // Pre-decl Rust attribute emission for built-in
@@ -4167,6 +4168,7 @@ impl RustEmitter {
             TopLevelDecl::Interface(d) => &d.annotations,
             TopLevelDecl::TypeAlias(d) => &d.annotations,
             TopLevelDecl::Const(d) => &d.annotations,
+            TopLevelDecl::ExternBlock(d) => &d.annotations,
         };
         let anns_owned: Vec<juxc_ast::Annotation> = anns.to_vec();
         self.emit_annotation_attrs(&anns_owned);
@@ -4180,6 +4182,7 @@ impl RustEmitter {
             }
             TopLevelDecl::TypeAlias(alias) => self.emit_type_alias_decl(alias),
             TopLevelDecl::Const(c) => self.emit_const_decl(c),
+            TopLevelDecl::ExternBlock(block) => self.emit_extern_block(block),
         }
     }
 

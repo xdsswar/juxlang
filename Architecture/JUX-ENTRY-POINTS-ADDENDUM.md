@@ -99,7 +99,7 @@ When the platform requires a non-default entry symbol or calling convention, use
 
 ```java
 @entry
-public int my_program_start(int argc, CString[] argv) {
+public int my_program_start(int argc, String[] argv) {
     return 0;
 }
 ```

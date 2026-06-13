@@ -4477,3 +4477,86 @@ fn pointer_null_init_lowers_to_null_mut() {
         "expected `let p: *mut isize = std::ptr::null_mut();`, got: {rust}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// §L.7 — C FFI: `unsafe native` blocks → `extern "C"` + String marshalling
+// ---------------------------------------------------------------------------
+
+/// An `@extern(lib="…") unsafe native { … }` block lowers to a Rust
+/// `#[link(name="…")] extern "C" { pub fn …; }`, with the FFI type mapping
+/// (`String` → `*const core::ffi::c_char`, `void*` → `*mut core::ffi::c_void`,
+/// `void` return omitted, `ulong` → `u64`).
+#[test]
+fn extern_block_lowers_to_link_and_extern_c() {
+    let rust = emit(
+        "@extern(lib = \"c\") unsafe native { \
+            void* malloc(ulong size); void free(void* p); i32 puts(String s); \
+         } public void main() {}",
+    );
+    assert!(rust.contains("#[link(name = \"c\")]"), "missing #[link]: {rust}");
+    assert!(rust.contains("extern \"C\" {"), "missing extern C: {rust}");
+    assert!(
+        rust.contains("pub fn malloc(size: u64) -> *mut core::ffi::c_void"),
+        "malloc signature wrong: {rust}"
+    );
+    assert!(
+        rust.contains("pub fn free(p: *mut core::ffi::c_void)") && !rust.contains("free(p: *mut core::ffi::c_void) ->"),
+        "free should return nothing: {rust}"
+    );
+    assert!(
+        rust.contains("pub fn puts(s: *const core::ffi::c_char) -> i32"),
+        "String param should be *const c_char: {rust}"
+    );
+}
+
+/// A `String` ARGUMENT to a foreign function marshals through a `CString` temp:
+/// `CString::new(arg).expect(...)` + `.as_ptr() as *const core::ffi::c_char`.
+#[test]
+fn extern_string_arg_marshals_via_cstring() {
+    let rust = emit(
+        "@extern(lib = \"c\") unsafe native { i32 puts(String s); } \
+         public void main() { unsafe { i32 n = puts(\"hi\"); } }",
+    );
+    assert!(
+        rust.contains("::std::ffi::CString::new("),
+        "expected CString::new marshalling: {rust}"
+    );
+    assert!(
+        rust.contains(".as_ptr() as *const core::ffi::c_char"),
+        "expected .as_ptr() cast: {rust}"
+    );
+    assert!(rust.contains(".expect("), "expected interior-NUL guard: {rust}");
+}
+
+/// A `String` RETURN from a foreign function copies out of the C buffer
+/// (`CStr::from_ptr(...).to_string_lossy().into_owned()`) with a null guard,
+/// and never frees the C memory.
+#[test]
+fn extern_string_return_copies_out() {
+    let rust = emit(
+        "@extern(lib = \"kernel32\") unsafe native { String GetCommandLineA(); } \
+         public void main() { unsafe { String s = GetCommandLineA(); } }",
+    );
+    assert!(
+        rust.contains("::std::ffi::CStr::from_ptr(__ret as *const core::ffi::c_char)"),
+        "expected CStr::from_ptr copy-out: {rust}"
+    );
+    assert!(rust.contains(".to_string_lossy().into_owned()"), "expected lossy copy: {rust}");
+    assert!(
+        rust.contains("if __ret.is_null() { String::new() }"),
+        "expected null → empty String: {rust}"
+    );
+    assert!(!rust.contains("free("), "must NOT free the C buffer: {rust}");
+}
+
+/// A numeric/pointer-only foreign call is NOT block-wrapped — it lowers to a
+/// bare `name(args)` (the generic call path), no `CString`/`CStr` machinery.
+#[test]
+fn extern_numeric_call_is_bare() {
+    let rust = emit(
+        "@extern(lib = \"kernel32\") unsafe native { u32 GetCurrentProcessId(); } \
+         public void main() { unsafe { u32 p = GetCurrentProcessId(); } }",
+    );
+    assert!(rust.contains("GetCurrentProcessId()"), "expected bare call: {rust}");
+    assert!(!rust.contains("CString::new"), "no marshalling for numeric call: {rust}");
+}

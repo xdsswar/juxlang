@@ -28,6 +28,70 @@ fn has_ts_annotation(fn_decl: &FnDecl) -> bool {
 }
 
 impl RustEmitter {
+    /// Emit a Jux `@extern(lib = "…") unsafe native { … }` block as a Rust
+    /// `#[link(name = "…")] extern "C" { … }` (Layout-ABI §L.7 / pipeline
+    /// §C.9.2). Each foreign function becomes a bodyless `pub fn`. Argument and
+    /// return marshalling (`String` ↔ C `const char*`) happens at the CALL site
+    /// (`emit_call`); here we emit the raw C signature, so a `String` parameter
+    /// is declared `*const core::ffi::c_char`.
+    pub(crate) fn emit_extern_block(&mut self, block: &juxc_ast::ExternBlockDecl) {
+        self.w.emit_indent();
+        self.w.push_str("#[link(name = \"");
+        self.w.push_str(&block.lib);
+        self.w.push_str("\")]\n");
+        self.w.emit_indent();
+        self.w.push_str("extern \"C\" {\n");
+        self.w.indent_inc();
+        for f in &block.fns {
+            self.w.emit_indent();
+            self.w.push_str("pub fn ");
+            self.w.push_str(&f.name.text);
+            self.w.push('(');
+            for (i, p) in f.params.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str(&p.name.text);
+                self.w.push_str(": ");
+                self.emit_ffi_type(&p.ty);
+            }
+            self.w.push(')');
+            // `void` return → no `-> …`; otherwise the FFI return type.
+            if let ReturnType::Type(t) = &f.return_type {
+                self.w.push_str(" -> ");
+                self.emit_ffi_type(t);
+            }
+            self.w.push_str(";\n");
+        }
+        self.w.indent_dec();
+        self.w.emit_indent();
+        self.w.push_str("}\n");
+    }
+
+    /// Emit a type as it appears in a C FFI signature (Layout-ABI §L.7). Differs
+    /// from the normal value-type mapping in two spots: `String` is the C
+    /// `const char*` (`*const core::ffi::c_char`), and a `void*` pointee is
+    /// `core::ffi::c_void`. Everything else (primitives, non-`void` pointers)
+    /// flows through the regular `emit_value_type_as_rust` mapping
+    /// (`int`→`isize`, `ulong`→`u64`, `byte*`→`*mut i8`, …).
+    pub(crate) fn emit_ffi_type(&mut self, t: &juxc_ast::TypeRef) {
+        let last = t.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+        // `String` / `String?` at the boundary is a C `const char*`.
+        if t.ptr_depth == 0 && t.array_shape.is_none() && last == "String" {
+            self.w.push_str("*const core::ffi::c_char");
+            return;
+        }
+        // `void*` / `void**` → raw pointer(s) to C `void`.
+        if t.ptr_depth > 0 && last == "void" {
+            for _ in 0..t.ptr_depth {
+                self.w.push_str("*mut ");
+            }
+            self.w.push_str("core::ffi::c_void");
+            return;
+        }
+        self.emit_value_type_as_rust(t);
+    }
+
     /// Emit a Rust `fn` for a Jux function declaration.
     ///
     /// Visibility is intentionally dropped — every emitted function is

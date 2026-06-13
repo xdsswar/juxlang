@@ -1801,6 +1801,112 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse an `@extern(lib = "…") unsafe native { … }` foreign-function block
+    /// (Layout-ABI §L.7). `annotations` was already consumed by the caller and
+    /// includes the `@extern` annotation we read the `lib` name from. Each inner
+    /// declaration is a bodyless signature `return-type name ( params ) ;`, forced
+    /// `unsafe` (every foreign call is unsafe). The `unsafe`/`native` keywords and
+    /// the opening `{` are at the cursor.
+    pub(crate) fn parse_extern_native_block(
+        &mut self,
+        annotations: Vec<juxc_ast::Annotation>,
+    ) -> Option<juxc_ast::ExternBlockDecl> {
+        let start = self.peek_span();
+
+        // Resolve the library name from `@extern(lib = "…")`. A missing/blank
+        // name is diagnosed; we continue with an empty string so the rest of the
+        // block still parses (recovery-friendly).
+        let lib = annotations
+            .iter()
+            .find(|a| {
+                a.name
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.text.eq_ignore_ascii_case("extern"))
+            })
+            .and_then(|a| {
+                a.args.iter().find_map(|arg| match arg {
+                    juxc_ast::AnnotationArg::Named { name, value }
+                        if name.text.eq_ignore_ascii_case("lib") =>
+                    {
+                        match value {
+                            juxc_ast::Expr::Literal(juxc_ast::Literal::String(s)) => {
+                                Some(s.clone())
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+            })
+            .unwrap_or_default();
+        if lib.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "`@extern` on a `native` block needs a library name — `@extern(lib = \"name\")`",
+                )
+                .with_span(start),
+            );
+        }
+
+        // `unsafe` is required (every foreign call is unsafe); a bare `native {`
+        // is tolerated with a diagnostic so the block still parses.
+        if !self.eat_kw(Keyword::Unsafe) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "a `native` foreign-function block must be `unsafe` — `unsafe native { … }`",
+                )
+                .with_span(self.peek_span()),
+            );
+        }
+        self.expect_kw(Keyword::Native, "`native` to open the foreign-function block");
+        self.expect(&TokenKind::LBrace, "'{' to open the `native` block");
+
+        let mut fns = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+            match self.parse_extern_fn_sig() {
+                Some(f) => fns.push(f),
+                // Skip to the next `;`/`}` so one malformed signature doesn't
+                // abort the whole block.
+                None => self.recover_to_stmt_boundary(),
+            }
+        }
+        self.expect(&TokenKind::RBrace, "'}' to close the `native` block");
+        let end = self.last_consumed_span();
+        Some(juxc_ast::ExternBlockDecl { lib, annotations, fns, span: start.join(end) })
+    }
+
+    /// Parse ONE bodyless foreign-function signature inside a `native` block:
+    /// `return-type identifier '(' param-list? ')' ';'`. Produces a [`FnDecl`]
+    /// with `body: None` and a forced [`FnModifier::Unsafe`]. No generics / throws
+    /// / where-clauses are accepted here.
+    fn parse_extern_fn_sig(&mut self) -> Option<FnDecl> {
+        let start = self.peek_span();
+        let return_type = self.parse_return_type()?;
+        let name = self.parse_ident()?;
+        self.expect(&TokenKind::LParen, "'(' to start foreign parameter list");
+        let params = self.parse_param_list();
+        self.expect(&TokenKind::RParen, "')' to close foreign parameter list");
+        self.expect(&TokenKind::Semicolon, "';' after a foreign function signature");
+        let end = self.last_consumed_span();
+        Some(FnDecl {
+            annotations: Vec::new(),
+            visibility: Visibility::Public,
+            modifiers: vec![FnModifier::Unsafe],
+            return_type,
+            name,
+            generic_params: Vec::new(),
+            params,
+            throws: Vec::new(),
+            wheres: Vec::new(),
+            body: None,
+            is_property: false,
+            span: start.join(end),
+        })
+    }
+
     /// Consume a balanced `< … >` token run starting at the current `<`,
     /// tolerating nesting (`Map<K, Vec<V>>`). The cursor must be on the opening
     /// `Lt`; on return it sits just past the matching `Gt`. Used where a
@@ -2160,7 +2266,18 @@ impl<'a> Parser<'a> {
     /// separately today, we synthesize a sentinel `TypeRef { name: "void" }`
     /// that the backend's return-type emitter recognizes.
     pub(crate) fn parse_return_type(&mut self) -> Option<ReturnType> {
-        if self.eat_kw(Keyword::Void) {
+        if self.at_kw(Keyword::Void) {
+            // `void*` is a pointer-to-void RETURN type (an FFI region pointer,
+            // e.g. `void* malloc(...)`), NOT a no-value return — route it
+            // through `parse_type_ref`, which handles the `void` pointee.
+            if matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Star),
+            ) {
+                let ty = self.parse_type_ref()?;
+                return Some(ReturnType::Type(ty));
+            }
+            self.advance(); // 'void'
             return Some(ReturnType::Void);
         }
         if self.eat_kw(Keyword::Async) {

@@ -368,6 +368,9 @@ impl TypeChecker {
                 // in `check::Checker::check_unit` (it has the
                 // expression-inference machinery).
                 TopLevelDecl::Const(_) => {}
+                // Foreign-function blocks declare no entry point; their
+                // FFI-compat validation lives in `check::Checker::check_unit`.
+                TopLevelDecl::ExternBlock(_) => {}
             }
         }
     }

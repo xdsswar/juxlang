@@ -192,6 +192,42 @@ fn delete_as_identifier_is_not_e0507() {
 }
 
 // ---------------------------------------------------------------------------
+// §L.7 — C FFI `unsafe native` blocks
+// ---------------------------------------------------------------------------
+
+/// `@extern(lib="…") unsafe native { … }` parses to a `TopLevelDecl::ExternBlock`
+/// carrying the lib name and one bodyless, implicitly-`unsafe` fn per signature.
+#[test]
+fn extern_native_block_parses() {
+    use juxc_ast::{FnModifier, TopLevelDecl};
+    let ast = parse_clean(
+        "@extern(lib = \"c\") unsafe native { \
+            void* malloc(ulong size); void free(void* p); i32 puts(String s); \
+         }",
+    );
+    let TopLevelDecl::ExternBlock(b) = &ast.items[0] else {
+        panic!("expected ExternBlock, got {:?}", ast.items[0]);
+    };
+    assert_eq!(b.lib, "c");
+    assert_eq!(b.fns.len(), 3);
+    assert!(b.fns.iter().all(|f| f.body.is_none()), "foreign fns are bodyless");
+    assert!(
+        b.fns.iter().all(|f| f.modifiers.contains(&FnModifier::Unsafe)),
+        "every foreign fn is implicitly unsafe"
+    );
+}
+
+/// A `native` block missing its `@extern(lib=…)` name, or missing `unsafe`,
+/// is a diagnostic (but still parses for recovery).
+#[test]
+fn extern_block_missing_lib_or_unsafe_diagnoses() {
+    let (_, n1) = parse_with_errors("@extern unsafe native { void f(); }");
+    assert!(n1 >= 1, "missing lib name should diagnose");
+    let (_, n2) = parse_with_errors("@extern(lib = \"c\") native { void f(); }");
+    assert!(n2 >= 1, "missing `unsafe` should diagnose");
+}
+
+// ---------------------------------------------------------------------------
 // Triviality
 // ---------------------------------------------------------------------------
 

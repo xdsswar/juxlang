@@ -699,6 +699,22 @@ fn top_level_document_symbol(item: &juxc_ast::TopLevelDecl, rope: &Rope) -> Opti
         T::TypeAlias(a) => {
             Some(sym(&a.name.text, SymbolKind::TYPE_PARAMETER, a.span, a.name.span, Vec::new()))
         }
+        // A `@extern unsafe native { … }` block shows as a module-shaped node
+        // named after the library, with each foreign function as a child.
+        T::ExternBlock(b) => {
+            let kids = b
+                .fns
+                .iter()
+                .map(|f| sym(&f.name.text, SymbolKind::FUNCTION, f.span, f.name.span, Vec::new()))
+                .collect();
+            Some(sym(
+                &format!("extern \"{}\"", b.lib),
+                SymbolKind::MODULE,
+                b.span,
+                b.span,
+                kids,
+            ))
+        }
     }
 }
 

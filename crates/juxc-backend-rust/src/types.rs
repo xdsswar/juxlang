@@ -1029,6 +1029,11 @@ pub(crate) fn jux_primitive_to_rust(t: &juxc_ast::TypeRef) -> Option<&'static st
         "float"  => "f32",
         "double" => "f64",
         "char"   => "char",
+        // `void` is only meaningful as a pointee (`void*`, §L.7) — an untyped C
+        // region. The pointer wrapper makes `void*` → `*mut core::ffi::c_void`.
+        // A bare `void` value type never reaches here (it is a return-only
+        // keyword), so this only ever fires under a `*mut`/`*const`.
+        "void"   => "core::ffi::c_void",
         // Per JUX-CODEGEN-FIXES.md Fix 1: Jux `String` always lowers
         // to owned Rust `String` — never `&str`. Parameters, locals,
         // fields, returns, and string literals all share the same

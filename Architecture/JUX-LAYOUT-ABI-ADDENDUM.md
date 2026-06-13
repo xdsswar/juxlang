@@ -235,7 +235,7 @@ The mangling is **not stable across compiler versions**. Programs that depend on
 
 `@export` on a free function (or static method) gives it C linkage with the unmangled name (or the explicit `name = "..."` override). Export is permitted only on functions whose signatures are FFI-compatible:
 
-- Parameter and return types must be primitive, `@layout(c)` aggregate, raw pointer, function pointer, or `CString`.
+- Parameter and return types must be primitive, `@layout(c)` aggregate, raw pointer, function pointer, or `String` (the compiler marshals `String` to/from a C `const char*` automatically; there is no `CString` type).
 - The function may not be generic (monomorphized exports require name disambiguation that defeats the whole point of `@export`).
 - The function may not throw; exceptions cannot cross the FFI boundary safely. Use `Result<T, E>` returned by value, or out-parameters for error info.
 
@@ -270,11 +270,11 @@ Calling a C variadic function (`int printf(const char* fmt, ...)`) requires the 
 ```jux
 @extern(lib = "c")
 unsafe native {
-    int printf(CString fmt, ...);
+    int printf(String fmt, ...);
 }
 
 unsafe {
-    printf("hello %s\n", "world".toCString());
+    printf("hello %s\n", "world");   // String args marshal to const char* automatically
 }
 ```
 
@@ -524,12 +524,46 @@ A `native` block (per JUX-LANG-V1 §8.1) declaring foreign functions must be mar
 ```jux
 @extern(lib = "sqlite3")
 unsafe native {
-    int sqlite3_open(CString path, out RawHandle* db);
+    int sqlite3_open(String path, out RawHandle* db);
     int sqlite3_close(RawHandle* db);
 }
 ```
 
 Each function declared in an `unsafe native` block is implicitly an `unsafe` function. Calling it requires an `unsafe { }` context. This is the change to JUX-LANG-V1 §8: the safe wrapper class is now mandatory for any FFI library that wants to expose a normal Jux API.
+
+**Lowering (implemented).** A block lowers to a Rust `#[link(name = "<lib>")] extern "C" { … }`, one bodyless `pub fn` per signature. The `#[link]` attribute pins the library, resolved on the platform's default search path (so system libraries, `kernel32`/`user32` on Windows, `c`/`m` on Linux/macOS, link with no extra setup). Calling a custom library that needs a search path or static linkage is configured by the `[ffi.*]` table (§B.14), which emits the `build.rs` link directives. FFI type mapping reuses the normal primitive lowering (`int`→`isize`, `ulong`→`u64`, `byte*`→`*mut i8`, …) with two FFI-specific cases: a `void*` pointee is `core::ffi::c_void`, and `String` is a C `const char*` (see below). A non-FFI type in a foreign signature (a class, a generic, an array, a collection, or a `throws` clause) is rejected with **E0508**.
+
+### L.7.1a. Strings cross the boundary as `String` (no `CString`)
+
+Jux has **no `CString` type**. A `String` is the everyday FFI string, and the compiler inserts the C marshalling under the hood, in both directions:
+
+| Direction | You write | Under the hood |
+|-----------|-----------|----------------|
+| Jux → C (argument) | `String` | a `CString` temp is built and kept alive for the call; its `const char*` is passed |
+| C → Jux (return)   | `String` | the C `const char*` is scanned to its NUL, **copied** into an owned Jux `String`, and the C buffer is **never freed** |
+| manage it yourself | `byte*`  | a raw pointer you read and free explicitly inside `unsafe` (the escape hatch) |
+
+Defined rules:
+
+- **Inbound is copy-out, never free.** The returned Jux `String` is an independent copy, so there is no use-after-free and no double-free. If a C API *transfers ownership* of the buffer to you (you are expected to `free` it, like `strdup`), declare the return type **`byte*`** instead of `String` and manage the buffer yourself; a `String` return leaks such a buffer (leaking is safe, but it is a leak).
+- **UTF-8 decoding is lossy.** Invalid bytes from C become `U+FFFD` rather than panicking on hostile or non-UTF-8 input.
+- **Null** maps to an empty `String` for a `String` return, or to Jux `null` for a `String?` return.
+- **Interior NUL on outbound** is a programming error: a Jux `String` may contain `\0`, but a C string cannot. The conversion fails fast with a clear message rather than silently truncating.
+
+Emitted Rust, for illustration:
+
+```text
+// Jux:  i32 puts(String s);  String getenv(String name);
+// puts(msg):
+{ let __c0 = ::std::ffi::CString::new(msg).expect("…interior NUL…");
+  puts(__c0.as_ptr() as *const core::ffi::c_char) }
+// getenv(key):
+{ let __c0 = ::std::ffi::CString::new(key).expect("…");
+  let __ret = getenv(__c0.as_ptr() as *const core::ffi::c_char);
+  if __ret.is_null() { String::new() }
+  else { unsafe { ::std::ffi::CStr::from_ptr(__ret as *const core::ffi::c_char) }
+             .to_string_lossy().into_owned() } }
+```
 
 ### L.7.2. Safe Wrappers
 
@@ -542,7 +576,7 @@ public final class Database {
     public Database(String path) throws DbError {
         RawHandle* h = null;
         var rc = unsafe {
-            sqlite3_open(path.toCString(), out h)
+            sqlite3_open(path, out h)
         };
         if (rc != 0) {
             throw new DbError("Failed to open: " + path);
@@ -552,7 +586,7 @@ public final class Database {
 
     public void execute(String sql) throws DbError {
         var rc = unsafe {
-            sqlite3_exec(handle, sql.toCString(), null, null, out null)
+            sqlite3_exec(handle, sql, null, null, out null)
         };
         if (rc != 0) throw new DbError("SQL error");
     }
