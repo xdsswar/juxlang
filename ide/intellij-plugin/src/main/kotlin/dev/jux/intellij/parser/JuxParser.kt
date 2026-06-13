@@ -113,8 +113,12 @@ class JuxParser : PsiParser {
     private fun parseDeclaration(b: PsiBuilder) {
         val decl = b.mark()
         parseAnnotations(b)
-        val sawStatic = parseModifierList(b)
+        val mods = parseModifierList(b)
         when {
+            // C-FFI block: `@extern(lib="…") unsafe native { … }` (§L.7). The
+            // `native` modifier followed by `{` opens a foreign-function block
+            // rather than a static/init block.
+            mods.sawNative && b.at(T.LBRACE) -> parseExternBlock(b, decl)
             b.atAny(JUX_TYPE_DECL_KEYWORDS) -> parseTypeDeclaration(b, decl)
             b.at(T.TYPE_KW) -> parseTypeAlias(b, decl)
             b.at(T.NEW_KW) -> parseConstructor(b, decl)
@@ -125,11 +129,43 @@ class JuxParser : PsiParser {
             // `static` it's an instance init block.
             b.at(T.LBRACE) -> {
                 parseCodeBlock(b)
-                decl.done(if (sawStatic) E.STATIC_BLOCK else E.INIT_BLOCK)
+                decl.done(if (mods.sawStatic) E.STATIC_BLOCK else E.INIT_BLOCK)
             }
             b.at(T.DROP_KW) -> { b.advanceLexer(); parseCodeBlock(b); decl.done(E.DROP_BLOCK) }
             else -> parseMethodOrField(b, decl)
         }
+    }
+
+    /**
+     * A C-FFI foreign-function block body: `{ (returnType name(params);)* }`
+     * (§L.7). Each declared function is bodyless — parsed as a
+     * [E.METHOD_DECLARATION] so it surfaces as a named, resolvable member — and
+     * the whole block is wrapped as [E.EXTERN_BLOCK]. The `@extern` annotation
+     * and `unsafe native` modifiers have already been consumed into `decl`.
+     */
+    private fun parseExternBlock(b: PsiBuilder, decl: PsiBuilder.Marker) {
+        b.expectOrError(T.LBRACE, "'{' to open native block")
+        while (!b.at(T.RBRACE) && !b.eof()) {
+            if (!parseNativeFn(b)) b.advanceLexer() // resync on a malformed line
+        }
+        b.expectOrError(T.RBRACE, "'}' to close native block")
+        decl.done(E.EXTERN_BLOCK)
+    }
+
+    /** One bodyless foreign function: `returnType name(params);`. */
+    private fun parseNativeFn(b: PsiBuilder): Boolean {
+        val m = b.mark()
+        parseAnnotations(b)
+        parseModifierList(b) // tolerate stray per-fn modifiers
+        if (b.at(T.LT)) parseTypeParameters(b)
+        parseType(b)
+        if (!b.at(T.IDENTIFIER)) { m.drop(); return false }
+        b.advanceLexer() // function name
+        if (b.at(T.LPAREN)) parseParameterList(b)
+        parseThrows(b)
+        parseBodyOrSemicolon(b)
+        m.done(E.METHOD_DECLARATION)
+        return true
     }
 
     private fun parseAnnotations(b: PsiBuilder) {
@@ -142,19 +178,23 @@ class JuxParser : PsiParser {
         }
     }
 
-    /** Consume the modifier run; reports whether `static` was among them (the
-     * bare-`{}` member arm needs it to tell a static initializer from an
-     * instance init block). */
-    private fun parseModifierList(b: PsiBuilder): Boolean {
-        if (!b.atAny(JUX_MODIFIERS)) return false
+    /** Which marker keywords appeared in a modifier run — `static` (static vs
+     * instance init block) and `native` (a §L.7 foreign-function block). */
+    private data class ModifierRun(val sawStatic: Boolean, val sawNative: Boolean)
+
+    /** Consume the modifier run; reports the markers later branches need. */
+    private fun parseModifierList(b: PsiBuilder): ModifierRun {
+        if (!b.atAny(JUX_MODIFIERS)) return ModifierRun(sawStatic = false, sawNative = false)
         var sawStatic = false
+        var sawNative = false
         val m = b.mark()
         while (b.atAny(JUX_MODIFIERS)) {
             if (b.at(T.STATIC_KW)) sawStatic = true
+            if (b.at(T.NATIVE_KW)) sawNative = true
             b.advanceLexer()
         }
         m.done(E.MODIFIER_LIST)
-        return sawStatic
+        return ModifierRun(sawStatic, sawNative)
     }
 
     private fun parseTypeDeclaration(b: PsiBuilder, decl: PsiBuilder.Marker) {
