@@ -88,9 +88,12 @@ class JuxColorSettingsPage : ColorSettingsPage {
                 private const <type>int</type> <field>MAX</field> = 10;   // a constant
                 private <type>String</type> <field>name</field>;
 
-                public <type>String</type> <method>greet</method>(<type>String</type> <param>who</param>) throws <decl>Error</decl> {
+                public ref <type>String</type> <field>shared</field>;   // a ref field (§M.13)
+
+                public <type>String</type> <method>greet</method>(ref <type>String</type> <param>who</param>) throws <decl>Error</decl> {
                     var <local>msg</local> = "Hello, <escape>\n</escape><badEscape>\q</badEscape>" + <param>who</param> + '!';
                     var <local>tagged</local> = ${'$'}"greeting = <interp>${'$'}{</interp><local>msg</local><interp>}</interp>";
+                    var <local>kind</local> = typeof(<param>who</param>);   // compile-time type name
                     if (<param>who</param> != null && <field>MAX</field> > 0) {
                         return <call>format</call>(<local>tagged</local>);
                     }
