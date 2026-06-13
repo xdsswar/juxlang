@@ -1,3 +1,0 @@
-// D1: self-extending class.
-public class A extends A {}
-public void main() {}
