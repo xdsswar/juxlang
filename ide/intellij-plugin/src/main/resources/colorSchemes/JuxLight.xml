@@ -1,0 +1,11 @@
+<scheme name="Light" version="142" parent_scheme="Light">
+  <!-- New-UI "Light" editor scheme: dark-blue (navy) type parameters,
+       readable on a light background. -->
+  <attributes>
+    <option name="JUX_TYPE_PARAMETER">
+      <value>
+        <option name="FOREGROUND" value="000080"/>
+      </value>
+    </option>
+  </attributes>
+</scheme>

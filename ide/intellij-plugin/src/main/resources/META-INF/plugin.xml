@@ -218,6 +218,10 @@
          can still recolor it under Color Scheme | Jux. -->
     <additionalTextAttributes scheme="Default" file="colorSchemes/JuxDefault.xml"/>
     <additionalTextAttributes scheme="Darcula" file="colorSchemes/JuxDarcula.xml"/>
+    <!-- New-UI editor schemes use distinct names ("Light"/"Dark"); register
+         them too or the default never applies there. -->
+    <additionalTextAttributes scheme="Light" file="colorSchemes/JuxLight.xml"/>
+    <additionalTextAttributes scheme="Dark" file="colorSchemes/JuxDark.xml"/>
 
     <!-- Editor behaviour: auto-close quotes, match/auto-close brackets, and
          Java-like Enter/auto-indent. -->
