@@ -2528,6 +2528,9 @@ impl<'a> Checker<'a> {
         let _ = self.infer_and_record(expr);
         match expr {
             Expr::Literal(_) => {}
+            // `typeof(expr)` (§5.9.10) — the operand is type-checked
+            // (undefined names etc. still report) but never evaluated.
+            Expr::TypeOf(inner, _) => self.check_expr(inner),
             // `out <place>` (§M.4) — recurse into the place so an undefined
             // variable etc. is still reported. The place/agreement rules are in
             // `check_call_args`; a bare `out` outside a call is meaningless but
@@ -6173,6 +6176,7 @@ fn expr_span(e: &Expr) -> Span {
         Expr::TryExpr(t) => t.span,
         Expr::ErrorProp(_, s) => *s,
         Expr::Out(_, s) => *s,
+        Expr::TypeOf(_, s) => *s,
         Expr::Path(qn) => qn.span,
         Expr::Call(c) => c.span,
         Expr::Binary(b) => b.span,

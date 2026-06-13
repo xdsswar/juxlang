@@ -1,0 +1,15 @@
+// §5.7 type aliases — transparent synonyms.
+package talias;
+
+public type UserId = long;
+public type Callback = (int) -> void;
+
+long twice(UserId id) { return id * 2; }
+
+public void main() {
+    UserId u = 21;
+    print("twice: " + twice(u));
+    Callback cb = (n) -> { print("cb " + n); };
+    cb(7);
+    print("done");
+}

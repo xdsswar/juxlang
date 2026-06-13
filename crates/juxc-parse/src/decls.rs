@@ -700,9 +700,11 @@ impl<'a> Parser<'a> {
         let mut methods = Vec::new();
         let mut fields = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
-            // Interface methods don't yet take their own annotations
-            // in the Phase-1 cut — leave empty.
-            let member_annotations = Vec::new();
+            // Interface members carry annotations like class members
+            // (grammar §A.2.4) — bindgen stubs also emit machine
+            // markers here (`@MutSelf` on trait methods with a
+            // `&mut self` receiver).
+            let member_annotations = self.parse_annotations();
             let member_vis = self.parse_visibility();
             // Field-vs-method lookahead. Per `classes-rules.md` §3.3
             // any field in an interface is implicitly `public static
@@ -1872,10 +1874,21 @@ impl<'a> Parser<'a> {
                 i += 1;
             }
         }
-        // Interleaved `?` / `[…]` suffixes.
+        // Dotted name segments (`a.b.C`) — a fully-qualified return
+        // type is one nominal type.
+        while matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Dot))
+            && matches!(
+                self.tokens.get(i + 1).map(|t| &t.kind),
+                Some(TokenKind::Ident(_))
+            )
+        {
+            i += 2;
+        }
+        // Interleaved `?` / `[…]` / `*` suffixes (`*` is the FFI raw
+        // pointer marker, §G — bindgen stubs surface `T*` returns).
         loop {
             match self.tokens.get(i).map(|t| &t.kind) {
-                Some(TokenKind::Question) => i += 1,
+                Some(TokenKind::Question) | Some(TokenKind::Star) => i += 1,
                 Some(TokenKind::LBracket) => {
                     i += 1;
                     let mut depth: u32 = 1;

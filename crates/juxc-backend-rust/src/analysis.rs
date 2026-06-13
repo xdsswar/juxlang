@@ -352,6 +352,8 @@ pub(crate) fn collect_mutated_names_in_stmt(
 /// Sub-expressions are walked recursively so nested calls are caught.
 pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_mut: &HashSet<String>) {
     match e {
+        // `typeof(expr)` (§5.9.10) never evaluates its operand.
+        Expr::TypeOf(..) => {}
         // `out <place>` (§M.4) passes the place by `&mut`, so its base binding
         // is mutated → it must be `let mut`.
         Expr::Out(inner, _) => {
@@ -554,6 +556,8 @@ fn if_contains_await(i: &juxc_ast::IfStmt) -> bool {
 fn expr_contains_await(e: &Expr) -> bool {
     match e {
         Expr::Await(_, _) => true,
+        // `typeof` never evaluates its operand — no await runs.
+        Expr::TypeOf(..) => false,
         Expr::Out(inner, _) => expr_contains_await(inner),
         Expr::TupleLit(elems, _) => elems.iter().any(expr_contains_await),
         Expr::ErrorProp(inner, _) => expr_contains_await(inner),

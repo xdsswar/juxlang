@@ -196,6 +196,8 @@ fn walk_block_deps(b: &juxc_ast::Block, settable: &[&str], out: &mut Vec<String>
 /// every expression-carrying variant.
 fn walk_expr_deps(e: &Expr, settable: &[&str], out: &mut Vec<String>) {
     match e {
+        // `typeof` never evaluates — its operand reads nothing.
+        Expr::TypeOf(..) => {}
         Expr::Path(q) => {
             if q.segments.len() == 1 {
                 note_dep(&q.segments[0].text, settable, out);
@@ -337,14 +339,75 @@ impl RustEmitter {
     /// observable (drives the `.observers` / `bind` routing).
     /// Computed properties count (§P.1.5 — they can be observed and
     /// can be a binding SOURCE; binding INTO one is rejected upstream
-    /// since there is no setter).
+    /// since there is no setter). INHERITED observable properties
+    /// count too (Java semantics — a `B extends A` object observes
+    /// `A`'s properties through its own handle); the subclass wrapper
+    /// carries depth-aware helper methods reaching the ancestor's
+    /// storage slice, so emission is uniform either way.
     pub(crate) fn class_has_observable_prop(&self, bare: &str, prop: &str) -> bool {
-        self.class_ast_by_bare(bare)
-            .map(|cd| {
-                observable_props(cd).iter().any(|p| p.name.text == prop)
-                    || computed_observable_props(cd).iter().any(|p| p.name.text == prop)
-            })
-            .unwrap_or(false)
+        let mut cursor = self.class_ast_by_bare(bare);
+        let mut depth = 0usize;
+        while let Some(cd) = cursor {
+            if depth > 64 {
+                return false;
+            }
+            if observable_props(cd).iter().any(|p| p.name.text == prop)
+                || computed_observable_props(cd).iter().any(|p| p.name.text == prop)
+            {
+                return true;
+            }
+            cursor = cd
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.first())
+                .and_then(|seg| self.class_ast_by_bare(&seg.text));
+            depth += 1;
+        }
+        false
+    }
+
+    /// The observable properties a subclass INHERITS from its
+    /// `extends` chain — `(prop, settable, depth)` where `depth` is
+    /// the number of `__parent` hops from the subclass's inner struct
+    /// to the slice that owns the storage. Properties shadowed by a
+    /// closer declaration (own or nearer ancestor) are skipped.
+    pub(crate) fn inherited_observable_props(
+        &self,
+        class_decl: &ClassDecl,
+    ) -> Vec<(PropertyDecl, bool, usize)> {
+        let mut out = Vec::new();
+        let mut seen: std::collections::HashSet<String> = class_decl
+            .properties
+            .iter()
+            .map(|p| p.name.text.clone())
+            .collect();
+        let mut depth = 1usize;
+        let mut cursor = class_decl
+            .extends
+            .as_ref()
+            .and_then(|t| t.name.segments.first().map(|s| s.text.clone()));
+        while let Some(bare) = cursor {
+            if depth > 64 {
+                break;
+            }
+            let Some(parent) = self.class_ast_by_bare(&bare) else { break };
+            for p in observable_props(parent) {
+                if seen.insert(p.name.text.clone()) {
+                    out.push((p.clone(), true, depth));
+                }
+            }
+            for p in computed_observable_props(parent) {
+                if seen.insert(p.name.text.clone()) {
+                    out.push((p.clone(), false, depth));
+                }
+            }
+            cursor = parent
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.first().map(|s| s.text.clone()));
+            depth += 1;
+        }
+        out
     }
 
     /// True when `bare` names a class with a STATIC observable
@@ -507,8 +570,10 @@ impl RustEmitter {
         // closure (capturing the wrapper strongly would cycle), and
         // `__jux_from_inner` rebuilds a wrapper from the upgraded
         // handle inside the closure.
+        let inherited = self.inherited_observable_props(class_decl);
         if !observable_props(class_decl).is_empty()
             || !computed_observable_props(class_decl).is_empty()
+            || !inherited.is_empty()
         {
             let name = class_decl.name.text.clone();
             // Thread the class's generic args onto the inner type
@@ -530,17 +595,24 @@ impl RustEmitter {
         }
         // Settable props get the full helper set; computed props
         // (§P.1.5) get everything EXCEPT the bind keep-alive store.
-        let props: Vec<(&PropertyDecl, bool)> = observable_props(class_decl)
+        // INHERITED observable props (Java semantics) get the same
+        // helpers with `__parent` hops to the ancestor's storage
+        // slice — `depth` counts the hops (0 = own storage).
+        let props: Vec<(PropertyDecl, bool, usize)> = observable_props(class_decl)
             .into_iter()
-            .map(|p| (p, true))
+            .map(|p| (p.clone(), true, 0usize))
             .chain(
                 computed_observable_props(class_decl)
                     .into_iter()
-                    .map(|p| (p, false)),
+                    .map(|p| (p.clone(), false, 0usize)),
             )
+            .chain(inherited)
             .collect();
-        for (prop, settable) in props {
+        for (prop, settable, depth) in props {
             let x = prop.name.text.clone();
+            // `__parent` hop prefix from this wrapper's inner struct to
+            // the slice that owns the storage fields.
+            let h = "__parent.".repeat(depth);
             // Render the property's Rust type once for reuse in the
             // signatures below.
             let t = self.render_type_to_string(&prop.ty);
@@ -552,7 +624,7 @@ impl RustEmitter {
                 .line(&format!("pub fn __obs_{x}_attach_full(&self, o: crate::JuxObserver<dyn Fn({t}, {t})>) {{"));
             self.w.indent_inc();
             self.w.line(&format!(
-                "self.0.borrow_mut().__obs_{x}_full.get_or_insert_with(Vec::new).push(o);"
+                "self.0.borrow_mut().{h}__obs_{x}_full.get_or_insert_with(Vec::new).push(o);"
             ));
             self.w.indent_dec();
             self.w.line("}");
@@ -560,7 +632,7 @@ impl RustEmitter {
                 .line(&format!("pub fn __obs_{x}_attach_inv(&self, o: crate::JuxObserver<dyn Fn()>) {{"));
             self.w.indent_inc();
             self.w.line(&format!(
-                "self.0.borrow_mut().__obs_{x}_inv.get_or_insert_with(Vec::new).push(o);"
+                "self.0.borrow_mut().{h}__obs_{x}_inv.get_or_insert_with(Vec::new).push(o);"
             ));
             self.w.indent_dec();
             self.w.line("}");
@@ -571,7 +643,7 @@ impl RustEmitter {
             ));
             self.w.indent_inc();
             self.w.line(&format!(
-                "if let Some(v) = self.0.borrow_mut().__obs_{x}_full.as_mut() {{ v.retain(|o| !o.is_for(t)); }}"
+                "if let Some(v) = self.0.borrow_mut().{h}__obs_{x}_full.as_mut() {{ v.retain(|o| !o.is_for(t)); }}"
             ));
             self.w.indent_dec();
             self.w.line("}");
@@ -580,7 +652,7 @@ impl RustEmitter {
             ));
             self.w.indent_inc();
             self.w.line(&format!(
-                "if let Some(v) = self.0.borrow_mut().__obs_{x}_inv.as_mut() {{ v.retain(|o| !o.is_for(t)); }}"
+                "if let Some(v) = self.0.borrow_mut().{h}__obs_{x}_inv.as_mut() {{ v.retain(|o| !o.is_for(t)); }}"
             ));
             self.w.indent_dec();
             self.w.line("}");
@@ -591,18 +663,18 @@ impl RustEmitter {
             self.w.line(&format!("pub fn __obs_{x}_clear(&self) {{"));
             self.w.indent_inc();
             self.w.line("let mut s = self.0.borrow_mut();");
-            self.w.line(&format!("s.__obs_{x}_full = None;"));
-            self.w.line(&format!("s.__obs_{x}_inv = None;"));
+            self.w.line(&format!("s.{h}__obs_{x}_full = None;"));
+            self.w.line(&format!("s.{h}__obs_{x}_inv = None;"));
             self.w.indent_dec();
             self.w.line("}");
             self.w.line(&format!("pub fn __obs_{x}_size(&self) -> isize {{"));
             self.w.indent_inc();
             self.w.line("let s = self.0.borrow();");
             self.w.line(&format!(
-                "let full = s.__obs_{x}_full.as_ref().map(|v| v.iter().filter(|o| o.upgrade().is_some()).count()).unwrap_or(0);"
+                "let full = s.{h}__obs_{x}_full.as_ref().map(|v| v.iter().filter(|o| o.upgrade().is_some()).count()).unwrap_or(0);"
             ));
             self.w.line(&format!(
-                "let inv = s.__obs_{x}_inv.as_ref().map(|v| v.iter().filter(|o| o.upgrade().is_some()).count()).unwrap_or(0);"
+                "let inv = s.{h}__obs_{x}_inv.as_ref().map(|v| v.iter().filter(|o| o.upgrade().is_some()).count()).unwrap_or(0);"
             ));
             self.w.line("(full + inv) as isize");
             self.w.indent_dec();
@@ -622,7 +694,7 @@ impl RustEmitter {
                 ));
                 self.w.indent_inc();
                 self.w.line(&format!(
-                    "let __jux_old = std::mem::replace(&mut self.0.borrow_mut().__bind_{x}, f);"
+                    "let __jux_old = std::mem::replace(&mut self.0.borrow_mut().{h}__bind_{x}, f);"
                 ));
                 self.w
                     .line("if let Some((_, __jux_a, _)) = __jux_old { __jux_a.set(false); }");
@@ -641,7 +713,7 @@ impl RustEmitter {
                 "pub fn __obs_{x}_fire(&self, old: &{t}, now: &{t}) {{"
             ));
             self.w.indent_inc();
-            self.w.line(&format!("let inv = self.0.borrow_mut().__obs_{x}_inv.take();"));
+            self.w.line(&format!("let inv = self.0.borrow_mut().{h}__obs_{x}_inv.take();"));
             self.w.line("if let Some(mut v) = inv {");
             self.w.indent_inc();
             self.w.line(
@@ -649,12 +721,12 @@ impl RustEmitter {
             );
             self.w.line("let mut s = self.0.borrow_mut();");
             self.w.line(&format!(
-                "if let Some(cur) = s.__obs_{x}_inv.take() {{ v.extend(cur); }}"
+                "if let Some(cur) = s.{h}__obs_{x}_inv.take() {{ v.extend(cur); }}"
             ));
-            self.w.line(&format!("s.__obs_{x}_inv = Some(v);"));
+            self.w.line(&format!("s.{h}__obs_{x}_inv = Some(v);"));
             self.w.indent_dec();
             self.w.line("}");
-            self.w.line(&format!("let full = self.0.borrow_mut().__obs_{x}_full.take();"));
+            self.w.line(&format!("let full = self.0.borrow_mut().{h}__obs_{x}_full.take();"));
             self.w.line("if let Some(mut v) = full {");
             self.w.indent_inc();
             self.w.line(
@@ -662,9 +734,9 @@ impl RustEmitter {
             );
             self.w.line("let mut s = self.0.borrow_mut();");
             self.w.line(&format!(
-                "if let Some(cur) = s.__obs_{x}_full.take() {{ v.extend(cur); }}"
+                "if let Some(cur) = s.{h}__obs_{x}_full.take() {{ v.extend(cur); }}"
             ));
-            self.w.line(&format!("s.__obs_{x}_full = Some(v);"));
+            self.w.line(&format!("s.{h}__obs_{x}_full = Some(v);"));
             self.w.indent_dec();
             self.w.line("}");
             self.w.indent_dec();
@@ -954,16 +1026,22 @@ impl RustEmitter {
     }
 
     /// The declared Jux type of class `class`'s property `prop`,
-    /// rendered as a Rust type string.
+    /// rendered as a Rust type string. Walks the `extends` chain so
+    /// inherited properties resolve (Java semantics).
     fn prop_rust_ty(&mut self, class: &str, prop: &str) -> Option<String> {
-        let ty = self
-            .class_ast_by_bare(class)?
-            .properties
-            .iter()
-            .find(|p| p.name.text == prop)?
-            .ty
-            .clone();
-        Some(self.render_type_to_string(&ty))
+        let mut bare = class.to_string();
+        for _ in 0..64 {
+            let cd = self.class_ast_by_bare(&bare)?;
+            if let Some(p) = cd.properties.iter().find(|p| p.name.text == prop) {
+                let ty = p.ty.clone();
+                return Some(self.render_type_to_string(&ty));
+            }
+            bare = cd
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.first().map(|s| s.text.clone()))?;
+        }
+        None
     }
 
     /// Emit `target.X.bind(source.Y)` (§P.4.2) / `bindBidirectional`
@@ -1273,6 +1351,98 @@ impl RustEmitter {
             self.w.push_str(&format!("{path}::__obs_{prop}_clear()"));
         } else {
             self.w.push_str(&format!("{path}::__obs_{prop}_size()"));
+        }
+    }
+
+    /// Non-rendering check: does `class_bare`'s Kind trait carry
+    /// observer-helper signatures? (Wrapper class with own observable
+    /// or computed props.)
+    pub(crate) fn class_has_kind_observer_props(&self, class_bare: &str) -> bool {
+        self.wrapper_classes.contains(class_bare)
+            && self
+                .class_ast_by_bare(class_bare)
+                .map(|cd| {
+                    !observable_props(cd).is_empty()
+                        || !computed_observable_props(cd).is_empty()
+                })
+                .unwrap_or(false)
+    }
+
+    /// The observable props (settable + computed) of `class_bare`'s
+    /// OWN declaration, as `(name, rust_ty)` — the set surfaced on the
+    /// class's `Kind` trait so observer operations dispatch through a
+    /// base-typed (`Rc<dyn …Kind>`) reference (Java semantics).
+    /// Inherited props ride the supertrait chain, so only own props
+    /// appear here. Empty for non-wrapper classes (no helper targets).
+    fn kind_trait_observer_props(&mut self, class_bare: &str) -> Vec<(String, String)> {
+        if !self.wrapper_classes.contains(class_bare) {
+            return Vec::new();
+        }
+        let raw: Vec<(String, juxc_ast::TypeRef)> = match self.class_ast_by_bare(class_bare) {
+            Some(cd) => observable_props(cd)
+                .into_iter()
+                .chain(computed_observable_props(cd))
+                .map(|p| (p.name.text.clone(), p.ty.clone()))
+                .collect(),
+            None => Vec::new(),
+        };
+        raw.into_iter()
+            .map(|(n, ty)| {
+                let t = self.render_type_to_string(&ty);
+                (n, t)
+            })
+            .collect()
+    }
+
+    /// Emit the observer-helper SIGNATURES into a polymorphic base's
+    /// `Kind` trait body, so `A a = new B(); a.p.observers.attach(…)`
+    /// dispatches through the trait object.
+    pub(crate) fn emit_observer_trait_sigs(&mut self, class_bare: &str) {
+        for (x, t) in self.kind_trait_observer_props(class_bare) {
+            self.w.line(&format!(
+                "fn __obs_{x}_attach_full(&self, o: crate::JuxObserver<dyn Fn({t}, {t})>);"
+            ));
+            self.w.line(&format!(
+                "fn __obs_{x}_attach_inv(&self, o: crate::JuxObserver<dyn Fn()>);"
+            ));
+            self.w.line(&format!(
+                "fn __obs_{x}_detach_full(&self, t: &std::rc::Rc<dyn Fn({t}, {t})>);"
+            ));
+            self.w.line(&format!(
+                "fn __obs_{x}_detach_inv(&self, t: &std::rc::Rc<dyn Fn()>);"
+            ));
+            self.w.line(&format!("fn __obs_{x}_clear(&self);"));
+            self.w.line(&format!("fn __obs_{x}_size(&self) -> isize;"));
+        }
+    }
+
+    /// Emit the delegating observer-helper BODIES into an
+    /// `impl <owner>Kind for <implementor>` block. The implementor's
+    /// inherent helpers (depth-aware for inherited props) do the work.
+    pub(crate) fn emit_observer_impl_methods(
+        &mut self,
+        owner_bare: &str,
+        implementor_bare: &str,
+    ) {
+        for (x, t) in self.kind_trait_observer_props(owner_bare) {
+            self.w.line(&format!(
+                "fn __obs_{x}_attach_full(&self, o: crate::JuxObserver<dyn Fn({t}, {t})>) {{ {implementor_bare}::__obs_{x}_attach_full(self, o) }}"
+            ));
+            self.w.line(&format!(
+                "fn __obs_{x}_attach_inv(&self, o: crate::JuxObserver<dyn Fn()>) {{ {implementor_bare}::__obs_{x}_attach_inv(self, o) }}"
+            ));
+            self.w.line(&format!(
+                "fn __obs_{x}_detach_full(&self, t: &std::rc::Rc<dyn Fn({t}, {t})>) {{ {implementor_bare}::__obs_{x}_detach_full(self, t) }}"
+            ));
+            self.w.line(&format!(
+                "fn __obs_{x}_detach_inv(&self, t: &std::rc::Rc<dyn Fn()>) {{ {implementor_bare}::__obs_{x}_detach_inv(self, t) }}"
+            ));
+            self.w.line(&format!(
+                "fn __obs_{x}_clear(&self) {{ {implementor_bare}::__obs_{x}_clear(self) }}"
+            ));
+            self.w.line(&format!(
+                "fn __obs_{x}_size(&self) -> isize {{ {implementor_bare}::__obs_{x}_size(self) }}"
+            ));
         }
     }
 }

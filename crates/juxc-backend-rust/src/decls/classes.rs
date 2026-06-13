@@ -459,6 +459,7 @@ impl RustEmitter {
                         crate::decls::observers::property_ty_is_comparable(&prop.ty),
                         Vec::new(),
                         true,
+                        0,
                     ));
                 }
             }
@@ -929,6 +930,7 @@ impl RustEmitter {
                         crate::decls::observers::property_ty_is_comparable(&prop.ty),
                         dependents,
                         false,
+                        0,
                     ));
                 } else if let Some(prop) =
                     crate::decls::observers::static_observable_props(class_decl)
@@ -943,6 +945,7 @@ impl RustEmitter {
                         crate::decls::observers::property_ty_is_comparable(&prop.ty),
                         Vec::new(),
                         true,
+                        0,
                     ));
                 }
             }
@@ -1167,6 +1170,10 @@ impl RustEmitter {
         // Container<U>`) maps `T → U`, which stays in scope on `Wrap`.
         let mut subst: std::collections::HashMap<String, juxc_ast::TypeRef> =
             std::collections::HashMap::new();
+        // `__parent` hop distance of the ancestor being copied from —
+        // 1 for the direct parent, +1 per level. Drives the §P fire
+        // bracket on copied property setters.
+        let mut depth = 1usize;
         while let Some(parent_ref) = cursor {
             let Some(seg) = parent_ref.name.segments.first() else { break };
             let bare = seg.text.as_str();
@@ -1214,6 +1221,44 @@ impl RustEmitter {
                     continue; // statics aren't instance methods
                 }
                 own_method_names.insert(m.name.text.clone());
+                // §P + inheritance (Java semantics): a copied
+                // `__set_<X>` of an ANCESTOR's observable property
+                // gets the same fire bracket the ancestor's own
+                // emission gets — the storage lives `depth` `__parent`
+                // hops up, and this class's depth-aware
+                // `__obs_<X>_fire` helpers (see
+                // `emit_observer_helper_methods`) reach it.
+                if let Some(prop_name) = m.name.text.strip_prefix("__set_") {
+                    if let Some(prop) = crate::decls::observers::observable_props(&parent)
+                        .into_iter()
+                        .find(|p| p.name.text == prop_name)
+                    {
+                        let dependents: Vec<(String, bool)> =
+                            crate::decls::observers::computed_observable_props(&parent)
+                                .into_iter()
+                                .filter(|c| {
+                                    crate::decls::observers::computed_prop_deps(&parent, c)
+                                        .iter()
+                                        .any(|d| d == prop_name)
+                                })
+                                .map(|c| {
+                                    (
+                                        c.name.text.clone(),
+                                        crate::decls::observers::property_ty_is_comparable(
+                                            &c.ty,
+                                        ),
+                                    )
+                                })
+                                .collect();
+                        self.pending_setter_observer = Some((
+                            prop_name.to_string(),
+                            crate::decls::observers::property_ty_is_comparable(&prop.ty),
+                            dependents,
+                            false,
+                            depth,
+                        ));
+                    }
+                }
                 // Apply the accumulated parent-param → concrete-type
                 // substitution to the copied method's signature so its
                 // return / param types read in the child's scope. No-op
@@ -1226,6 +1271,7 @@ impl RustEmitter {
                 }
             }
             cursor = parent_extends;
+            depth += 1;
         }
     }
 
@@ -2018,7 +2064,15 @@ impl RustEmitter {
         } else {
             Vec::new()
         };
-        if own_methods.is_empty() && hook_targets.is_empty() && accessor_fields.is_empty() {
+        // §P + inheritance: a polymorphic base's observable props get
+        // observer-helper signatures on the trait, so `.observers`
+        // operations dispatch through a base-typed reference too.
+        let has_observer_sigs = c_is_poly && self.class_has_kind_observer_props(&class_bare);
+        if own_methods.is_empty()
+            && hook_targets.is_empty()
+            && accessor_fields.is_empty()
+            && !has_observer_sigs
+        {
             self.w.push_str(" {}\n");
         } else {
             self.w.push_str(" {\n");
@@ -2031,6 +2085,9 @@ impl RustEmitter {
             }
             if !accessor_fields.is_empty() {
                 self.emit_accessor_trait_sigs(&class_bare);
+            }
+            if has_observer_sigs {
+                self.emit_observer_trait_sigs(&class_bare);
             }
             self.w.indent_dec();
             self.w.emit_indent();
@@ -2064,7 +2121,11 @@ impl RustEmitter {
                 .filter(|t| self.class_is_a(&class_bare, t))
                 .cloned()
                 .collect();
-            if own_methods.is_empty() && self_hooks.is_empty() && accessor_fields.is_empty() {
+            if own_methods.is_empty()
+                && self_hooks.is_empty()
+                && accessor_fields.is_empty()
+                && !has_observer_sigs
+            {
                 self.w.push_str(" {}\n");
             } else {
                 self.w.push_str(" {\n");
@@ -2077,6 +2138,9 @@ impl RustEmitter {
                 }
                 if !accessor_fields.is_empty() {
                     self.emit_accessor_impl_methods(&class_bare, &class_bare);
+                }
+                if has_observer_sigs {
+                    self.emit_observer_impl_methods(&class_bare, &class_bare);
                 }
                 self.w.indent_dec();
                 self.w.emit_indent();
@@ -2137,7 +2201,13 @@ impl RustEmitter {
                 } else {
                     Vec::new()
                 };
-                if anc_methods.is_empty() && anc_hooks.is_empty() && anc_accessor_fields.is_empty() {
+                let anc_observer_sigs = self.poly_base_classes.contains(&ancestor_bare)
+                    && self.class_has_kind_observer_props(&ancestor_bare);
+                if anc_methods.is_empty()
+                    && anc_hooks.is_empty()
+                    && anc_accessor_fields.is_empty()
+                    && !anc_observer_sigs
+                {
                     self.w.push_str(" {}\n");
                 } else {
                     self.w.push_str(" {\n");
@@ -2150,6 +2220,9 @@ impl RustEmitter {
                     }
                     if !anc_accessor_fields.is_empty() {
                         self.emit_accessor_impl_methods(&ancestor_bare, &class_bare);
+                    }
+                    if anc_observer_sigs {
+                        self.emit_observer_impl_methods(&ancestor_bare, &class_bare);
                     }
                     self.w.indent_dec();
                     self.w.emit_indent();
@@ -2938,7 +3011,7 @@ impl RustEmitter {
         // other modules call it; Jux-level access stays enforced by
         // tycheck E0972), and a thin public `__set_X` gate wrapper is
         // appended after the method (E0973 bound-assignment guard).
-        let p2_setter = matches!(&self.pending_setter_observer, Some((_, _, _, false)))
+        let p2_setter = matches!(&self.pending_setter_observer, Some((_, _, _, false, _)))
             && method.name.text.starts_with("__set_");
         if p2_setter {
             self.w.push_str("pub ");
@@ -3029,7 +3102,7 @@ impl RustEmitter {
         // emitted after the body below. An early `return` in a custom
         // setter body skips the fire (W0973 semantics).
         let setter_observer = self.pending_setter_observer.take();
-        if let Some((prop, _, dependents, observer_static)) = &setter_observer {
+        if let Some((prop, _, dependents, observer_static, _)) = &setter_observer {
             // Static setters read through the associated getter; the
             // class-scoped storage has no `self`.
             let recv = if *observer_static { "Self::" } else { "self." };
@@ -3103,7 +3176,7 @@ impl RustEmitter {
             // close. Comparable property types fire only on an actual
             // value change; user-class types (no `PartialEq` on the
             // wrapper) fire on every completed set.
-            if let Some((prop, comparable, dependents, observer_static)) = &setter_observer {
+            if let Some((prop, comparable, dependents, observer_static, _)) = &setter_observer {
                 let recv = if *observer_static { "Self::" } else { "self." };
                 self.w.line(&format!("let __jux_now = {recv}{prop}();"));
                 if *comparable {
@@ -3173,11 +3246,14 @@ impl RustEmitter {
         // assignment while a binding drives the property — an
         // `IllegalStateException` in debug builds (E0973). The binding
         // machinery writes through `__set_X_raw` above.
-        if let Some((prop, _, _, false)) = &setter_observer {
+        if let Some((prop, _, _, false, depth)) = &setter_observer {
             if let Some(p0) = method.params.first() {
                 let mark = self.w.len();
                 self.emit_value_type_as_rust(&p0.ty);
                 let vt = self.w.split_off_from(mark);
+                // The bind slot lives on the DECLARING class's slice —
+                // `depth` `__parent` hops up for an inherited setter copy.
+                let h = "__parent.".repeat(*depth);
                 self.w
                     .line(&format!("pub fn __set_{prop}(&self, value: {vt}) {{"));
                 self.w.indent_inc();
@@ -3185,7 +3261,7 @@ impl RustEmitter {
                 // sides of a bidirectional binding stay settable
                 // (JavaFX semantics; the third slot flag records it).
                 self.w.line(&format!(
-                    "if cfg!(debug_assertions) && matches!(&self.0.borrow().__bind_{prop}, Some((_, _, false))) {{"
+                    "if cfg!(debug_assertions) && matches!(&self.0.borrow().{h}__bind_{prop}, Some((_, _, false))) {{"
                 ));
                 self.w.indent_inc();
                 self.w.line(&format!(

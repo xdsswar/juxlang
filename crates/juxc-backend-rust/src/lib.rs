@@ -504,6 +504,13 @@ struct RustEmitter {
     /// receiver type — a same-named method on a different class would
     /// also tag the receiver — but the worst case is a redundant `mut`.
     user_mut_methods: HashSet<String>,
+    /// Names of EXTERNAL (stub) methods whose real Rust receiver is
+    /// `&mut self`, DISCOVERED from the bindgen `@MutSelf` markers in
+    /// the symbol table (no hardcoded method-name lists — the set
+    /// tracks the library surface automatically). Computed once in
+    /// [`Self::new`]; re-unioned into `user_mut_methods` after every
+    /// per-unit recompute so `let mut` promotion sees stub mutators.
+    extern_mut_methods: HashSet<String>,
     /// True while we're emitting the LHS of an assignment statement —
     /// suppresses the `.clone()` insertion in `emit_field` so we don't
     /// produce nonsense like `self.name.clone() = "x";`.
@@ -837,8 +844,12 @@ struct RustEmitter {
     /// `true` for a STATIC property setter (P7): the bracket then
     /// reads through `Self::<X>()` and fires the class-scoped
     /// `Self::__obs_<X>_fire`, and no P2 gate wrapper is emitted
-    /// (statics have no binding machinery to guard).
-    pub(crate) pending_setter_observer: Option<(String, bool, Vec<(String, bool)>, bool)>,
+    /// (statics have no binding machinery to guard). The fifth slot
+    /// is the `__parent` hop DEPTH to the property's storage slice —
+    /// 0 for a class's own property, n for an INHERITED setter copy
+    /// (Java semantics: a subclass setter fires the ancestor-slice
+    /// observers; the P2 gate reads `__bind_<X>` through the hops).
+    pub(crate) pending_setter_observer: Option<(String, bool, Vec<(String, bool)>, bool, usize)>,
     /// P6 (§P.9): `bind()` calls on a property of `this` inside a
     /// constructor body. While the body runs, `this` is the bare
     /// inner struct (`__self`) — no wrapper handle exists for the
@@ -1259,6 +1270,8 @@ pub(crate) fn compute_aliased_classes(
         mark: &mut dyn FnMut(&Expr, &mut HashSet<String>),
     ) {
         match e {
+            // `typeof` never evaluates its operand — nothing aliases.
+            Expr::TypeOf(..) => {}
             // `out <place>` — passed by `&mut`, not aliased into a value. Recurse
             // into the place to catch nested calls.
             Expr::Out(inner, _) => walk_expr(inner, aliased, mark),
@@ -2300,6 +2313,7 @@ fn cast_targets_else(b: Option<&juxc_ast::ElseBranch>, out: &mut HashSet<String>
 fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
     use juxc_ast::Expr;
     match e {
+        Expr::TypeOf(..) => {}
         Expr::Out(inner, _) => cast_targets_expr(inner, out),
         Expr::TupleLit(elems, _) => {
             for el in elems {
@@ -2996,6 +3010,29 @@ impl RustEmitter {
             "    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)\n",
         );
         w.push_str("}\n\n");
+        // Receiver-mutability discovery: every external (stub) method
+        // carrying the bindgen `@MutSelf` marker mutates its receiver
+        // (the real Rust signature is `&mut self`). Seeding the
+        // mutation analysis from the symbol table keeps `let mut`
+        // promotion correct as the library surface evolves — no
+        // hardcoded method-name lists.
+        let extern_mut_methods: HashSet<String> = symbols
+            .classes
+            .values()
+            .filter(|c| c.is_external)
+            .flat_map(|c| {
+                c.methods.iter().filter_map(|(name, m)| {
+                    if m.annotations
+                        .iter()
+                        .any(crate::exprs::field::annotation_is_mut_self)
+                    {
+                        Some(name.clone())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
         Self {
             w,
             mutated_in_fn: HashSet::new(),
@@ -3003,7 +3040,8 @@ impl RustEmitter {
             enclosing_class: None,
             current_fn_params: std::collections::HashSet::new(),
             enclosing_interface: None,
-            user_mut_methods: HashSet::new(),
+            user_mut_methods: extern_mut_methods.clone(),
+            extern_mut_methods,
             emitting_lvalue: false,
             emitting_out_place: false,
             collection_args_prehoisted: false,
@@ -3095,6 +3133,8 @@ impl RustEmitter {
         // Mutation analysis in `main` (and elsewhere) consults this set
         // so that calling `p.shift(…)` correctly promotes `p` to `let mut`.
         self.user_mut_methods = collect_user_mut_methods(unit);
+        self.user_mut_methods
+            .extend(self.extern_mut_methods.iter().cloned());
         // Pre-pass: stash this unit's class ASTs by FQN so
         // `emit_class_decl` can walk parents and copy inherited
         // concrete method bodies. Workspace mode does the same
@@ -3336,6 +3376,8 @@ impl RustEmitter {
             self.w.push_str("#[allow(unused_imports)]\nuse super::*;\n\n");
             if !self.workspace_mode {
                 self.user_mut_methods = collect_user_mut_methods(unit);
+                self.user_mut_methods
+                    .extend(self.extern_mut_methods.iter().cloned());
             }
             let prev_unit = self.current_unit_idx.take();
             self.current_unit_idx = Some(idx);
@@ -3386,6 +3428,8 @@ impl RustEmitter {
             // through this code path) keeps the per-unit recompute.
             if !self.workspace_mode {
                 self.user_mut_methods = collect_user_mut_methods(unit);
+                self.user_mut_methods
+                    .extend(self.extern_mut_methods.iter().cloned());
             }
             // Track which unit we're emitting so import-alias
             // aware bare-name lookups (e.g. `Catalog.describe()`

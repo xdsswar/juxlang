@@ -175,7 +175,33 @@ impl RustEmitter {
                     .unwrap_or(false)
             };
             if external {
+                // When this Field is a method-call CALLEE, its object
+                // is the method's RECEIVER — a place, not a value:
+                //  - suppress the collection-field auto-`.clone()`
+                //    (cloning the receiver would mutate a throwaway
+                //    copy — `this.slots.push(10)` silently lost the
+                //    push);
+                //  - for MUTATING methods (discovered from the stub's
+                //    `@MutSelf` marker — the real Rust `&mut self`
+                //    signature), read a wrapper field through
+                //    `borrow_mut()` so the mutation lands in the real
+                //    cell (rustc E0596 otherwise).
+                let mutates = is_call_callee
+                    && self.external_method_mutates_receiver(&name, &f.field.text);
+                let prev_recv = self.emitting_method_receiver;
+                let prev_out = self.emitting_out_place;
+                let prev_lv = self.emitting_lvalue;
+                if is_call_callee {
+                    self.emitting_method_receiver = true;
+                    if mutates {
+                        self.emitting_out_place = true;
+                        self.emitting_lvalue = true;
+                    }
+                }
                 self.emit_expr(&f.object);
+                self.emitting_method_receiver = prev_recv;
+                self.emitting_out_place = prev_out;
+                self.emitting_lvalue = prev_lv;
                 self.w.push('.');
                 self.w.push_str(&camel_to_snake(&f.field.text));
                 return;
@@ -196,10 +222,23 @@ impl RustEmitter {
         {
             if let juxc_tycheck::Ty::User { name, .. } = &recv_ty {
                 let bare = name.rsplit('.').next().unwrap_or(name);
-                let is_property = self
-                    .lookup_class_by_bare_or_fqn(bare)
-                    .and_then(|c| c.methods.get(f.field.text.as_str()).cloned())
-                    .map(|m| m.is_property)
+                // Walk the `extends` chain (`symbols.lookup_method`),
+                // not just the receiver's own class — `this.Score`
+                // inside a SUBCLASS override must still route to the
+                // getter when `Score` is a property of a base class.
+                // `lookup_method` wants the symbol-table key, which may
+                // be the FQN; resolve the bare name first.
+                let class_key = if self.symbols.classes.contains_key(bare) {
+                    Some(bare.to_string())
+                } else {
+                    self.symbols.find_fqn_by_bare(bare)
+                };
+                let is_property = class_key
+                    .and_then(|k| {
+                        self.symbols
+                            .lookup_method(&k, f.field.text.as_str())
+                            .map(|(m, _)| m.is_property)
+                    })
                     .unwrap_or(false);
                 if is_property {
                     self.emit_expr(&f.object);
@@ -1095,8 +1134,22 @@ impl RustEmitter {
                 }
             }
         }
-        let class = self.receiver_class_ast(recv)?;
-        class.properties.iter().find(|p| p.name.text == prop_name)
+        // Walk the `extends` chain (Java semantics): a property of an
+        // ancestor is a property of the receiver — its setter/getter
+        // copies live on the receiver's wrapper via inherited-method
+        // inlining, so the write/read routing works identically.
+        let mut class = self.receiver_class_ast(recv)?;
+        for _ in 0..64 {
+            if let Some(p) = class.properties.iter().find(|p| p.name.text == prop_name) {
+                return Some(p);
+            }
+            let parent_bare = class
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.first().map(|s| s.text.clone()))?;
+            class = self.class_ast_by_bare(&parent_bare)?;
+        }
+        None
     }
 
     pub(crate) fn emit_safe_field(&mut self, f: &FieldExpr) {
@@ -1469,6 +1522,85 @@ fn strip_nullable(ty: Ty) -> Ty {
 /// `snake_case` Rust spelling (the inverse of bindgen's §G.4 `snake→camel`):
 /// `asPath` → `as_path`, `isEmpty` → `is_empty`, `withCapacity` → `with_capacity`.
 /// Used only for members on external (`rust.std` / crate) receivers (§G.9.2).
+impl RustEmitter {
+    /// Does calling `method` on a value of the external class
+    /// `type_name` MUTATE the receiver? DISCOVERED from the stub's
+    /// `@MutSelf` annotation — bindgen records the real Rust
+    /// `&mut self` receiver on every generated `.jux.d` method, so
+    /// this stays correct when the library surface changes. The
+    /// hardcoded name list below is only the fallback for stub caches
+    /// generated before the marker existed.
+    pub(crate) fn external_method_mutates_receiver(
+        &self,
+        type_name: &str,
+        method: &str,
+    ) -> bool {
+        let class = self.symbols.classes.get(type_name).or_else(|| {
+            self.lookup_class_by_bare_or_fqn(
+                type_name.rsplit('.').next().unwrap_or(type_name),
+            )
+        });
+        if let Some(m) = class.and_then(|c| c.methods.get(method)) {
+            if m.annotations.iter().any(annotation_is_mut_self) {
+                return true;
+            }
+            // The signature exists but carries no marker — either a
+            // genuinely read-only method or a pre-marker stub cache;
+            // the name fallback covers the latter.
+        }
+        rust_std_container_method_mutates(method)
+    }
+}
+
+/// True when an annotation names the bindgen `@MutSelf` marker
+/// (annotations are case-insensitive per the Jux rules).
+pub(crate) fn annotation_is_mut_self(a: &juxc_ast::Annotation) -> bool {
+    a.name.segments.len() == 1
+        && a.name.segments[0].text.eq_ignore_ascii_case("mutself")
+}
+
+/// FALLBACK ONLY (see [`RustEmitter::external_method_mutates_receiver`]):
+/// known mutating methods of the Rust-std containers, used when a stub
+/// predates the `@MutSelf` marker. New/renamed library methods are
+/// covered by the marker, not this list.
+fn rust_std_container_method_mutates(method: &str) -> bool {
+    matches!(
+        method,
+        "push"
+            | "pop"
+            | "insert"
+            | "remove"
+            | "clear"
+            | "truncate"
+            | "retain"
+            | "dedup"
+            | "sort"
+            | "sortBy"
+            | "sortByKey"
+            | "sortUnstable"
+            | "sortUnstableBy"
+            | "reverse"
+            | "extend"
+            | "append"
+            | "resize"
+            | "fill"
+            | "swap"
+            | "swapRemove"
+            | "drain"
+            | "splitOff"
+            | "pushBack"
+            | "pushFront"
+            | "popBack"
+            | "popFront"
+            | "rotateLeft"
+            | "rotateRight"
+            | "makeContiguous"
+            | "pushStr"
+            | "shrinkToFit"
+            | "reserve"
+    )
+}
+
 fn camel_to_snake(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
     for (i, ch) in s.char_indices() {

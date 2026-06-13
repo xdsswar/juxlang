@@ -806,6 +806,13 @@ public class LoginForm extends VBox {
 
 ### P.10.1. Phase-1 Implementation Notes
 
+- **Inherited properties are fully observable (Java semantics).** A
+  `B extends A` object attaches/detaches/binds `A`'s properties through its
+  own handle exactly like its own; setters fire the ancestor-slice observers
+  whether the set goes through a `B`-typed or an `A`-typed (base) reference;
+  chains of any depth work. The one open edge: CREATING a binding
+  (`bind`/`bindBidirectional`) through a base-typed *reference* — bind via
+  the concrete-typed variable for now.
 - **Static observable properties** fire observers **on the thread that set
   them**, and only observers attached on that same thread see the change.
   Observers are task-local closures (`Rc`-backed, not `Send`), so their storage
