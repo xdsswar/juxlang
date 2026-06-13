@@ -113,6 +113,28 @@ class JuxAnnotatorTest : BasePlatformTestCase() {
         }
     """.trimIndent()
 
+    private val inheritedGenericsDemo = """
+        package demo;
+        public interface Holder<T> {
+            void test(T t);
+            T getIt();
+        }
+        public class HolderName implements Holder<Object> {
+            public void test(T t) {}
+            public T getIt() { return null; }
+        }
+    """.trimIndent()
+
+    fun testInheritedTypeParameterIsColoredAsTypeParameter() {
+        // Jux ruling: `T` (Holder's parameter) is usable in HolderName because
+        // it implements `Holder<Object>` — so it must color as a TYPE PARAMETER
+        // (green), not an unresolved type. Capital-`T` occurrences in order:
+        // 1 `Holder<T>`, 2 interface `test(T t)`, 3 interface `T getIt`,
+        // 4 class `test(T t)`, 5 class `T getIt` — assert the class ones (4, 5).
+        assertContainsElements(keysAt(inheritedGenericsDemo, "T", 4), "JUX_TYPE_PARAMETER")
+        assertContainsElements(keysAt(inheritedGenericsDemo, "T", 5), "JUX_TYPE_PARAMETER")
+    }
+
     fun testObserverTypeIsPrimitiveColored() {
         assertContainsElements(keysAt(propsDemo, "observer", 1), "JUX_TYPE")
     }

@@ -135,7 +135,10 @@ class JuxOverrideMembersTest : BasePlatformTestCase() {
         assertTrue(text.indexOf("greet(String who) {", text.indexOf("class Impl")) > text.indexOf("own()"))
     }
 
-    fun testGenericInterfaceArgsSubstitutedInStub() {
+    fun testGenericInterfaceStubKeepsTheTypeParameterLetter() {
+        // Jux ruling: implementing `Holder<Object>` may REUSE the interface's
+        // parameter name `T` (it resolves to the bound argument). The generator
+        // emits the letter — never substitutes it to the concrete class.
         myFixture.configureByText(
             "a.jux",
             """
@@ -151,20 +154,15 @@ class JuxOverrideMembersTest : BasePlatformTestCase() {
         )
         val type = typeNamed("HolderName")
         JuxOverrideMembers.insertStubs(project, type, JuxOverrideMembers.candidates(type))
-        // Inspect only the GENERATED stubs (the class body), not the interface
-        // source above it (which legitimately still reads `test(T t)`).
         val stubs = myFixture.file.text.substringAfter("implements Holder<Object> {")
-        // T is substituted to the concrete argument Object in the stub.
-        assertTrue("test(Object t)", stubs.contains("public void test(Object t)"))
-        assertTrue("Object getIt()", stubs.contains("public Object getIt()"))
-        assertFalse("no undefined T in stubs", Regex("""\bT\b""").containsMatchIn(stubs))
+        assertTrue("keeps T param", stubs.contains("public void test(T t)"))
+        assertTrue("keeps T return", stubs.contains("public T getIt()"))
+        assertFalse("not substituted to the concrete class", stubs.contains("Object t"))
         // Non-generic method is unaffected.
         assertTrue("write(String name)", stubs.contains("public void write(String name)"))
     }
 
-    fun testGenericClassForwardsItsOwnTypeParameterLetter() {
-        // A generic class that forwards its parameter keeps the LETTER (there's
-        // a real `T` in scope) — `class Box<T> implements Holder<T>` → `T t`.
+    fun testGenericClassForwardsItsTypeParameterLetter() {
         myFixture.configureByText(
             "a.jux",
             """
@@ -179,41 +177,6 @@ class JuxOverrideMembersTest : BasePlatformTestCase() {
         val stubs = myFixture.file.text.substringAfter("implements Holder<T> {")
         assertTrue("keeps T param", stubs.contains("public void test(T t)"))
         assertTrue("keeps T return", stubs.contains("public T getIt()"))
-    }
-
-    fun testGenericClassMapsToItsOwnLetter() {
-        // The implementing class uses a DIFFERENT letter — the stub adopts the
-        // class's letter (Holder's `T` → Box's `E`), since that's what's in scope.
-        myFixture.configureByText(
-            "a.jux",
-            """
-            public interface Holder<T> { void test(T t); }
-            public class Box<E> implements Holder<E> {
-                <caret>
-            }
-            """.trimIndent(),
-        )
-        val type = typeNamed("Box")
-        JuxOverrideMembers.insertStubs(project, type, JuxOverrideMembers.candidates(type))
-        val stubs = myFixture.file.text.substringAfter("implements Holder<E> {")
-        assertTrue("adopts the class's letter E", stubs.contains("public void test(E t)"))
-    }
-
-    fun testComposedGenericSubstitutionThroughChain() {
-        myFixture.configureByText(
-            "a.jux",
-            """
-            public interface Base<X> { void take(X x); }
-            public interface Mid<Y> extends Base<Y> {}
-            public class Impl implements Mid<Object> {
-                <caret>
-            }
-            """.trimIndent(),
-        )
-        val type = typeNamed("Impl")
-        JuxOverrideMembers.insertStubs(project, type, JuxOverrideMembers.candidates(type))
-        // Mid<Object> → Base<Object> → take(Object x).
-        assertTrue(myFixture.file.text.contains("void take(Object x)"))
     }
 
     fun testMethodLevelGenericsPreservedInOverride() {
