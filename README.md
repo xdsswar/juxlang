@@ -1,285 +1,585 @@
-# Jux — Language, Compiler, and Project Tool
+# Jux
 
-This repository holds both the **Jux programming language specification** and
-its **reference implementation**. The spec is the contract; the implementation
-is what we're building against it.
+**A Java/C#-flavored language that transpiles to Rust.** No VM, no garbage collector at runtime. Your code compiles down to a native machine-code binary through `rustc`, and you get Rust's optimizer and safety guarantees for free.
 
-- **Specification:** [`Architecture/`](Architecture/) —
-  [`JUX-LANG-V1.md`](Architecture/JUX-LANG-V1.md) plus 20+ normative addenda
-  covering grammar, semantics, type system, ABI, diagnostics, build system,
-  async, exceptions, annotations, class representation, and more.
-- **Implementation:** this directory — a Cargo workspace producing the `juxc`
-  compiler binary and the `jux` project tool.
+> ⚠️ **This is experimental. It is a hobby, a personal project, a work in progress.**
+> It will have bugs. The docs will sometimes contradict each other because there's
+> a *lot* of them and I'm one person. Things will break, change, and get rewritten.
+> If that scares you, come back in a year. If it sounds fun, keep reading.
 
-## Status
+---
 
-**Working compiler + project builds + editor tooling.** The pipeline runs
-end-to-end: lex → parse → resolve → typecheck → lower-to-Rust → `cargo build` →
-run. `jux run examples/hello.jux` prints `Hello, world!`, and
-`juxc <project-dir> --run` builds a whole multi-package source tree. The Phase 1
-strategy ([`JUX-LANG-V1.md`](Architecture/JUX-LANG-V1.md) §2.2) is in place:
-`juxc` transpiles `.jux` source to idiomatic, human-readable Rust, then invokes
-`cargo`/`rustc` to produce the native binary.
+## Where this came from
 
-### Rust-std / crate interop (the std is Rust's std)
+I started sketching this idea back in **2019**, right when COVID hit and the days
+stuck at home got long and boring. I wanted a language that *felt* like the ones I
+already knew, Java and C#, but that didn't drag a virtual machine around with it.
 
-Jux uses the **Rust standard library (and any Rust crate) as its own std**,
-surfaced in Jux syntax:
+I've tried to build it more than once. First in **Java**. Then in **Dart**. Both
+times I learned a lot and both times I hit a wall. This is the **third attempt**,
+and this time I went with **Rust** as the foundation, because honestly it's one of
+the best tools out there right now for this kind of work. It compiles to fast
+native code, the borrow checker catches a whole category of bugs before they ship,
+and the crate ecosystem is enormous.
 
-- **Autocomplete / hover / goto-definition** over Rust `std` and project crates,
-  rendered in Jux syntax — generated on demand from the installed toolchain's
-  rustdoc JSON (`juxc-bindgen`), never hand-curated. The editor reaches *into*
-  the generated declaration stubs.
-- **Compile against it.** `import rust.std.PathBuf; var p = new PathBuf();
-  p.reserve(16);` lowers to the real `std::path::PathBuf` — real-path imports,
-  `new X()` → `X::new()`, camelCase → snake_case methods, `&mut self`-aware
-  bindings (`JUX-BINDGEN-ADDENDUM.md` §G.9.2, in progress).
-- A hand-written std (Java-shaped `List`/`Map`/`String`/exceptions) is still the
-  default std today — now **embedded in the compiler** (the loose `jux.std/`
-  folder was removed; the compiler is self-contained). `rust.std` is the future
-  replacement it's being migrated toward.
+So instead of fighting Rust, Jux **stands on top of it**. Jux code is translated to
+readable Rust source, and then `rustc` does the heavy lifting. That means Jux gets
+the good parts of Rust under the hood while wearing a syntax that someone coming
+from Java, C#, or even Rust itself can pick up without much friction.
 
-### Editor tooling
+**A few things I want to be straight about:**
 
-- **`juxc-lsp`** — a language server (the single semantic source of truth):
-  workspace-wide diagnostics, hover signatures + docs, receiver-aware
-  completion, auto-import code actions, goto-definition, and document symbols.
-- **IntelliJ plugin** (`ide/intellij-plugin/`) — a native Java-style PSI plugin;
-  `./gradlew buildPlugin` produces an installable `.zip`.
+- I'm **not an expert**. I'm a developer who's been at this a while and decided to
+  stop wishing this language existed and actually build it.
+- This is built by a **solo dev** (me) with help from **AI**. To be clear: the AI
+  helps with research and grinding through steps, but it does **not** make the
+  decisions. Every direction, every design call, every "no, do it this way" is
+  mine. I drive; it assists.
+- I'm **not trying to replace Rust** or compete with anything. This is a hobby that
+  *might* turn into something useful for other people too. That's the whole ambition.
+- It's made with love and a stupid amount of dedication, and even if it sucks right
+  now, I'm genuinely happy it's at the stage it's at.
 
-### Implemented today
+---
 
-Roughly, anything you find in [`examples/`](examples/) compiles and runs.
-That includes:
+## The pitch, in one breath
 
-- **Free functions** with primitive types, control flow, arithmetic, bitops,
-  ranges, casts (`abs.jux`, `arithmetic.jux`, `bitops.jux`, `casts.jux`,
-  `loop_range.jux`).
-- **Classes** — fields, constructors, methods, `static`/`final`,
-  visibility, **bare instance-field access** (`f` ≡ `this.f`), `final`/`const`
-  method parameters, and C#-style **properties** (`{ get; set; }`,
-  expression-bodied with `->`) (`encapsulation.jux`, `point.jux`, `vector3.jux`).
-- **`struct`** declarations and **generic enums** (`enum Cow<B>`); **nested
-  generics** (`List<List<int>>`), function types, and tuple/pointer placeholders.
-- **Inheritance** — `extends`, `super(...)`, overrides, abstract classes,
-  `sealed`/`non-sealed` (`animals.jux`, `shapes.jux`, `sealed_shapes.jux`).
-- **Interfaces** — default methods, static methods, constants
-  (`interface_constants.jux`, `interface_static.jux`).
-- **Enums and `match`** with exhaustiveness checking and payload binding
-  (`colors_enum.jux`, `colors_match.jux`, `match_payload.jux`,
-  `op_enum.jux`).
-- **Generics** — `class A<T>`, bounded type parameters, wildcards
-  (`box_generic.jux`, `bounded_generic.jux`, `extends_generic.jux`,
-  `wildcards.jux`).
-- **Records** with auto-derived display/methods (`record_display.jux`,
-  `record_methods.jux`).
-- **Lambdas and method references** (`lambdas.jux`, `method_ref.jux`,
-  `higher_order.jux`).
-- **Operator overloading** (`op_overload.jux`, `op_arithmetic.jux`,
-  `op_cmp.jux`).
-- **Annotations** — built-in lookups are case-insensitive
-  (`annotations.jux`).
-- **String interpolation** — `$"hello ${name}"` syntax (`greet.jux`,
-  `names.jux`).
-- **Multi-file workspaces** — cross-file `import`s, package-private
-  visibility (`examples/multifile/`, `examples/showcase/`).
+Write in a familiar, Java-shaped language. Get a native binary. Use Rust's standard
+library as your standard library. Pull in any crate on crates.io and call it with
+Jux syntax. Pull in other Jux libraries straight from GitHub as dependencies. Build
+real frameworks with annotations. Talk to C and C++ through FFI. And let `rustc`
+optimize all of it to the metal.
 
-### Stubbed / not yet implemented
+That's the goal. Some of it works today, some of it is half-built, some of it is
+still on paper. I'll be honest below about which is which.
 
-- **Project mode works**: `juxc <dir> --run` builds a multi-package source
-  tree, and `jux.toml` (`[package]`/`[lib]`/`[[bin]]`/`[dependencies]`/
-  `[workspace]`) drives multi-module builds with per-module binary metadata
-  (version/author/icon). `jux new` / `jux test` remain stubs.
-- **`rust.std` compile coverage is partial** — construction + method calls work;
-  generics-on-construction, free functions, traits/operators, and the full
-  type-mapping are in progress (§G.9.2). Real `tuple-type`/`pointer-type` syntax
-  is surfaced as `Tuple<…>`/`Ptr<…>` placeholders pending the unsafe/C-interop
-  work.
-- `native` and `synchronized` method modifiers are intentionally out of
-  scope (Jux is not Java — JNI bridging and intrinsic monitors will be
-  redesigned for the Rust backend).
+---
 
-## Layout
+## A taste of Jux
 
-```
-juxlang/
-├── Architecture/                # the language specification
-│   ├── JUX-LANG-V1.md           # consolidated dossier
-│   ├── JUX-*-ADDENDUM.md        # 20+ normative addenda
-│   ├── JUX-GAPS-ROADMAP.md
-│   └── Docs/                    # rendered HTML view of the spec (build.ps1)
-│
-├── Cargo.toml                   # Cargo workspace root
-├── rust-toolchain.toml          # stable rustc
-├── examples/                    # .jux programs (every one compiles & runs)
-│   ├── hello.jux                # the milestone-1 target
-│   ├── animals.jux              # inheritance + abstract methods
-│   ├── colors_match.jux         # enums + match exhaustiveness
-│   ├── box_generic.jux          # generics
-│   ├── multifile/               # cross-file imports + package visibility
-│   └── showcase/                # multi-module sample
-├── crates/
-│   ├── juxc-source/             # source files, spans, positions (shared)
-│   ├── juxc-diagnostics/        # diagnostic types, E-codes, JSON output
-│   ├── juxc-lex/                # Phase 1: lexer (pipeline §C.2.1)
-│   ├── juxc-ast/                # Phase 3: AST types (grammar §A.2)
-│   ├── juxc-parse/              # Phase 2: parser (pipeline §C.2.2)
-│   ├── juxc-resolve/            # Phase 4: name resolution (pipeline §C.2.4)
-│   ├── juxc-tycheck/            # Phases 6–9: type checking (pipeline §C.3)
-│   ├── juxc-backend-rust/       # Phase 19: lowering to Rust (pipeline §C.9)
-│   ├── juxc-bindgen/            # rustdoc JSON → Jux-syntax .jux.d stubs (§G)
-│   ├── juxc-lsp/                # language server (LSP; §L)
-│   └── juxc-driver/             # phase orchestration + project/workspace builds
-├── ide/
-│   └── intellij-plugin/         # IntelliJ plugin (Java-style PSI; ./gradlew buildPlugin)
-└── bin/
-    ├── juxc/                    # the compiler binary
-    └── jux/                     # the project tool (cargo-equivalent)
+If you've written Java or C#, none of this needs a tutorial:
+
+```java
+public abstract class Animal {
+    public String name;
+    public Animal(String name) { this.name = name; }
+    public abstract String sound();
+}
+
+public interface Tagged { String tag(); }
+
+public class Dog extends Animal {
+    public Dog(String name) { super(name); }
+    public String sound() { return "Woof"; }
+    public String fetch() { return "fetched"; }
+}
+
+public class Cat extends Animal implements Tagged {
+    public Cat(String name) { super(name); }
+    public String sound() { return "Meow"; }
+    public String tag()    { return "cat-tag"; }
+}
+
+public void main() {
+    Animal a = new Dog("Rex");
+    a.name = "Max";                 // field access through a base reference
+    print(a.sound());               // virtual dispatch, prints "Woof"
+
+    Dog d = a as Dog;               // explicit downcast
+    print(d.fetch());
+
+    Animal b = new Cat("Felix");
+    if (b => Cat) {                 // `=>` is the instanceof / type-test operator
+        Cat c = b as Cat;
+        print($"${c.name} says ${c.sound()} / ${c.tag()}");
+    }
+}
 ```
 
-Crate names match the modules called out in the **Compiler Pipeline
-Addendum** §C.1.2. Future phases (MIR build, borrow inference, monomorph,
-DCE, …) get their own crate under the same naming scheme.
+Familiar shape, but the semantics are Jux's own, and all of it compiles straight to
+native code through Rust. (This is a real example;
+see [`examples/downcast_typetest.jux`](examples/downcast_typetest.jux).)
+
+---
+
+## More of the language
+
+A tour of the stuff that makes Jux fun to write. Everything below is real,
+compiling syntax (most of it lifted straight out of [`examples/`](examples/)).
+
+### Structs and generics
+
+```java
+public struct Vec2 {
+    public double x = 0.0;        // fields need a default or constructor assignment
+    public double y = 0.0;
+    public double lengthSquared() { return x * x + y * y; }
+}
+
+// A generic container, instantiated with a turbofish or by inference.
+public class Box<T> {
+    private T value;
+    public Box(T value) { this.value = value; }
+    public T get() { return this.value; }
+}
+
+// Bounded type parameter: T must be an Animal AND implement Speaks.
+public class Holder<T extends Animal & Speaks> {
+    public T pet;
+    public Holder(T pet) { this.pet = pet; }
+    public String describe() { return this.pet.voice(); }
+}
+
+var b = new Box<int>(42);        // explicit type argument
+var v = new Vec2();              // v.x = 3.0; v.y = 4.0; ...
+```
+
+### Operator overloading
+
+Overload arithmetic, equality, hashing, and the string conversion. `operator==`
+must be paired with `operator hash` (the compiler enforces it with `E0931`).
+
+```java
+public class Money {
+    public int cents;
+    public Money(int cents) { this.cents = cents; }
+
+    public Money  operator+(Money other) { return new Money(this.cents + other.cents); }
+    public Money  operator-(Money other) { return new Money(this.cents - other.cents); }
+    public bool   operator==(Money other) { return this.cents == other.cents; }
+    public int    operator hash()         { return this.cents; }
+    public String operator string()       { return $"$${this.cents}"; }
+}
+
+var total = new Money(150) + new Money(50);   // both operands stay usable afterward
+print($"total=$total");                       // total=$200
+```
+
+### Type aliases, `sizeof`, `typeof`
+
+```java
+public type UserId = long;             // transparent alias
+public type Predicate = (int) -> bool; // function-type alias
+
+public void main() {
+    UserId id = 42;
+    print(sizeof(UserId));             // 8   (compile-time size query)
+    print(typeof(id));                 // long
+
+    Predicate even = (n) -> n % 2 == 0;
+    print(even(10));                   // true
+}
+```
+
+### Grouped imports
+
+Pull several names from one package with brace syntax, just like the frameworks
+Jux is built to host:
+
+```java
+import rust.std.{HashMap, HashSet};
+import juxweb.{Server, Controller, Route, PathParam};
+```
+
+### Properties, with observers
+
+Properties read and write like fields, but they can be computed, bound to one
+another, and observed. This is one of Jux's signature features.
+
+```java
+public class Person {
+    public String First { get; set; } = "";
+    public String Last  { get; set; } = "";
+    // Computed property: re-fires whenever First or Last changes.
+    public String FullName { get -> First + "/" + Last; };
+}
+
+public class Source { public int Value { get; set; } = 10; }
+public class Mirror {
+    public int Shown { get; set; } = 0;
+    public Mirror(Source s) { this.Shown.bind(s.Value); }   // one-way binding
+}
+
+var p = new Person();
+p.FullName.observers.attach((old, now) -> print($"name: $old -> $now"));
+p.First = "Ada";                  // fires the observer
+p.Last  = "Lovelace";             // fires again
+
+var s = new Source();
+var m = new Mirror(s);            // m.Shown starts synced to s.Value
+s.Value = 42;                     // m.Shown now follows to 42
+
+a.Value.bindBidirectional(b.Value);   // two-way; either side updates the other
+a.Value.unbind();                     // break the binding
+```
+
+### Async, channels, and spawned tasks
+
+`async`/`await` lower to real Rust futures; `spawn` launches a concurrent task and
+`Channel<T>` gives you a bounded producer/consumer pipe.
+
+```java
+async void pipeline() {
+    var ch = new Channel<int>(4);
+    spawn(async () -> {
+        for (var i : 1..=5) { await ch.send(i * 10); }
+        ch.close();
+    });
+
+    var total = 0;
+    while (true) {
+        var item = await ch.receive();    // null once closed and drained
+        if (item == null) { break; }
+        total = total + item!!;           // `!!` unwraps a nullable
+    }
+    print(total);                         // 150
+}
+
+public void main() { block_on(pipeline()); }
+```
+
+---
+
+## What works today
+
+The pipeline runs end to end: **lex, parse, resolve, typecheck, lower-to-Rust,
+`cargo build`, run.** Roughly anything in [`examples/`](examples/) compiles and
+runs. That currently includes:
+
+- **Classes:** fields, constructors, methods, `static`/`final`, visibility,
+  bare field access (`f` is `this.f`), and C#-style **properties**
+  (`{ get; set; }`, expression-bodied with `->`).
+- **Inheritance & polymorphism:** `extends`, `super(...)`, overrides, abstract
+  classes, `sealed`/`non-sealed`, virtual dispatch, downcasts (`as` / `(T)`), and
+  the `=>` instanceof / type-test operator. Classes are **shared references**
+  (Java semantics), not values.
+- **Interfaces:** default methods, static methods, constants. Single-class,
+  multi-interface inheritance, like Java.
+- **Generics:** `class A<T>`, bounded type params, wildcards (`? extends`,
+  `? super`), const generics (`<int N>`), explicit type arguments.
+- **Enums + `match`** with exhaustiveness checking and payload binding.
+- **Records**, **lambdas & method references**, **operator overloading**.
+- **Annotations** (case-insensitive built-in lookups).
+- **String interpolation:** `$"hello ${name}"`.
+- **Observable properties:** `observer<T>`, binding, bidirectional binding.
+- **Async/streams, a testing framework, exceptions** (`try`/`catch`/`finally`).
+- **Multi-file workspaces:** cross-file `import`s, package-private visibility,
+  and `jux.toml`-driven multi-module project builds with per-module binary
+  metadata (version, author, icon).
+
+## What's stubbed or in progress
+
+- `jux new` / `jux test` CLI subcommands are still stubs.
+- `rust.std` compile coverage is partial: construction and method calls work;
+  free functions, traits/operators, and the full type mapping are being filled in.
+- **C/C++ FFI** is specced and is a priority, but deferred for now.
+- Real tuple/pointer/unsafe interop syntax is still placeholder.
+
+---
+
+## How Jux uses Rust (the part I'm proud of)
+
+### The standard library is Rust's standard library
+
+There's no separate "Jux runtime library" to reinvent. **Rust's `std` is the Jux
+`std`**, and any Rust crate is fair game, surfaced in Jux syntax.
+
+```java
+import rust.std.PathBuf;
+
+var p = new PathBuf();   // lowers to std::path::PathBuf::new()
+p.reserve(16);           // camelCase method maps to the real snake_case one
+```
+
+Hover, autocomplete, and go-to-definition over `std` and your project's crates are
+generated **on demand** from the installed toolchain's rustdoc JSON
+(`juxc-bindgen`): nothing is hand-curated, so it tracks whatever Rust version you
+actually have. Collections are Rust's collections under their real names: `Vec`,
+`HashMap`, `HashSet`, `VecDeque`.
+
+### Dependencies: crates *and* Jux libraries
+
+- **Rust crates** from crates.io, consumed and called with Jux syntax.
+- **Jux libraries straight from GitHub.** Point at a repo (with branch / tag /
+  rev, or a bare-URL shorthand), and `jux` resolves and caches it under `~/.jux`.
+  Cross-compilation via `--target <triple>` is supported.
+
+### Annotations for frameworks
+
+Annotations are first-class and the plan is to lean on them hard, so people can
+build clean, declarative frameworks on top of Jux the way Spring or ASP.NET did
+for their ecosystems.
+
+### C / C++ FFI
+
+Full C/C++ interop is on the roadmap and matters a lot to me. The path is known
+(link via `build.rs`, bind via bindgen/autocxx). It's deferred behind other work
+right now, but it's coming.
+
+---
+
+## How the "borrow checker" works, and how we lower to Rust
+
+This is the question I get most, so here's the honest mechanical answer.
+
+**Jux does not ask you to write lifetimes, `&`, `&mut`, or `.clone()` by hand.**
+You write Java-shaped code. The compiler's job is to translate that into Rust that
+**passes `rustc`'s borrow checker on the first try**, without you ever thinking
+about ownership. So the "borrow checker" in Jux is really a **lowering strategy**:
+an ownership analysis in the backend that decides, for every value, how it should
+be represented and shared in the emitted Rust so that the program both *means* what
+you wrote and *compiles* under Rust's rules.
+
+The core decisions it makes:
+
+- **Class instances are shared, mutable references**, exactly like objects in Java
+  or C#. They lower to `Rc<RefCell<...>>`. When you pass an object around or store
+  it in two places, the backend inserts an `Rc::clone` (a cheap refcount bump, what
+  I call a *share-clone*) so both sides hold the same live object, not a copy.
+  Mutation goes through `RefCell`, so two references see each other's changes. Java
+  semantics, achieved with safe Rust.
+- **Value types stay values.** Primitives, small structs, and records lower to
+  plain Rust values and move/copy the way Rust naturally wants. No `Rc` overhead
+  where it isn't needed.
+- **`ref` bindings** (shared references to value-typed locals, params, and fields)
+  also lower to `Rc<RefCell<...>>` when you explicitly ask for shared mutation.
+- **The backend hoists and reshapes** the emitted code to keep `rustc` happy:
+  receiver-mutation calls get hoisted so a `&mut` borrow doesn't overlap an
+  argument evaluation; lambda captures are share-cloned; `!Send` statics become
+  `thread_local!`; recursive class shapes get wrapped; container and nullable
+  fields share-clone on read. These are the kinds of borrow conflicts you'd
+  normally hit by hand in Rust, and Jux resolves them for you at lowering time.
+
+The result is **human-readable Rust**: it's meant to look like something a person
+would have written, with sensible parentheses, no needless `let mut` or type
+suffixes, rustfmt-style braces. You can open the emitted crate and follow it.
+
+And because the final artifact is just Rust, **you get the entire Rust optimization
+pipeline** (LLVM, inlining, monomorphization, dead-code elimination, release-mode
+codegen) applied to your Jux program. Jux doesn't try to be a fast
+compiler-of-fast-code on its own; it hands a clean Rust crate to the best
+optimizing backend already out there and gets out of the way.
+
+```
+  your.jux  ->  juxc  ->  readable .rs crate  ->  cargo / rustc  ->  native binary
+                  |                                     |
+           ownership lowering                   LLVM optimizes
+        (share-clones, RefCell,                  everything
+         hoists; no borrow errors)
+```
+
+---
+
+## Getting started
+
+### 0. You need Rust
+
+**A working Rust toolchain is required.** Jux compiles *through* `rustc`, so
+`cargo` and `rustc` must be on your `PATH`. Install from <https://rustup.rs>. The
+repo pins a stable toolchain (`rust-toolchain.toml`), which `rustup` honors
+automatically.
+
+```sh
+rustc --version
+cargo --version
+```
+
+### 1. Build the toolchain
+
+```sh
+git clone https://github.com/xdsswar/juxlang
+cd juxlang
+cargo build --release -p juxc -p jux -p juxc-lsp
+```
+
+You get three binaries in `target/release/`:
+
+| Component  | What it is                                                 |
+|------------|------------------------------------------------------------|
+| `juxc`     | The compiler (file-level: compile / build / run)           |
+| `jux`      | The project tool (reads `jux.toml`, resolves deps)         |
+| `juxc-lsp` | The language server (IDE diagnostics / hover / completion) |
+
+### 2. Put the binaries in a folder and set `JUX_HOME`
+
+The tools and the IntelliJ plugin look for `juxc` / `juxc-lsp` in this order:
+an explicitly configured path, then **`$JUX_HOME/bin/`**, then your `PATH`. The
+recommended setup is to drop the binaries into one folder and point `JUX_HOME` at it.
+
+**Windows (PowerShell):**
+
+```powershell
+$JuxHome = "C:\Tools\jux"
+New-Item -ItemType Directory -Force -Path "$JuxHome\bin" | Out-Null
+Copy-Item target\release\juxc.exe,target\release\jux.exe,target\release\juxc-lsp.exe "$JuxHome\bin"
+
+setx JUX_HOME $JuxHome
+setx PATH "$env:PATH;$JuxHome\bin"
+```
+
+**macOS / Linux (bash/zsh):**
+
+```sh
+JUX_HOME="$HOME/.jux"
+mkdir -p "$JUX_HOME/bin"
+cp target/release/juxc target/release/jux target/release/juxc-lsp "$JUX_HOME/bin/"
+
+echo 'export JUX_HOME="$HOME/.jux"'      >> ~/.zshrc
+echo 'export PATH="$JUX_HOME/bin:$PATH"' >> ~/.zshrc
+```
+
+Open a **new** terminal afterward so the variables take effect (and restart
+IntelliJ so it inherits `JUX_HOME`).
+
+### 3. Write and run your first program
+
+```java
+public void main() {
+    print("Hello, world!");
+}
+```
+
+```sh
+juxc hello.jux --run      # lowers to Rust, cargo-builds, runs, forwards exit code
+```
+
+The first run compiles a small Rust crate under the hood; later runs reuse the
+cached build.
+
+### 4. Install the IntelliJ plugin
+
+The IDE plugin is a thin client: all the smart features come from `juxc-lsp`, so
+install the binaries first.
+
+```sh
+cd ide/intellij-plugin
+./gradlew buildPlugin        # Windows: .\gradlew.bat buildPlugin
+```
+
+The first build downloads the IntelliJ Platform and a JDK 21 toolchain
+automatically. The result is `build/distributions/jux-intellij-0.0.1.zip`. Then in
+your IDE:
+
+**Settings/Preferences > Plugins > gear icon > Install Plugin from Disk...**, pick
+the zip, then **restart**.
+
+You'll get syntax highlighting, **New > Jux File** templates (Class, Interface,
+Enum, Struct, Record, Annotation), diagnostics, hover types, completion, and a Run
+button for any file with a `main`.
+
+> On **IntelliJ Community**, the native LSP client is inert, so install **LSP4IJ**
+> from the Marketplace and register `juxc-lsp` for the Jux file type. On
+> **Ultimate / paid IDEs** it's automatic.
+
+📖 **Full step-by-step install (with troubleshooting): [`INSTALL.md`](INSTALL.md).**
+
+---
+
+## Project config: `jux.toml`
+
+`jux` is the cargo-equivalent project tool, and `jux.toml` is its manifest. It names
+your binary, carries the metadata that gets baked into the executable (version,
+author, company, icon, copyright), and lists dependencies, whether they're other
+Jux packages, GitHub repos, or Rust crates.
+
+```toml
+[package]
+name    = "it.xss.myapp"                 # reverse-DNS package name
+version = "0.1.0"
+edition = "2026"
+description = "A little Jux app."
+authors = ["XDSSWAR <you@example.com>"]
+license = "Apache-2.0"
+
+# Baked into the produced executable's resource block (Windows version-info, icon).
+icon      = "assets/app.ico"
+company   = "XTREME SOFTWARE SOLUTIONS"
+copyright = "© 2026 XSS"
+
+[[bin]]
+name = "myapp"                           # the output binary name -> myapp.exe
+main = "it.xss.Main"                     # entry file by dotted path: src/it/xss/Main.jux
+
+[dependencies]
+# Another Jux package, straight from GitHub (tracks the default branch):
+"it.xss.toolkit" = "https://github.com/xdsswar/toolkit"
+# ...or pinned to a tag / branch / rev:
+"com.acme.json"  = { git = "https://github.com/acme/json", tag = "v1.4.2" }
+# A Rust crate from crates.io, used with Jux syntax:
+"rust.serde_json" = "1.0"
+# A C library (FFI), once that lands:
+"c.sqlite3"       = { lib = "sqlite3", header = "sqlite3.h" }
+```
+
+Then `jux run` builds the whole thing and produces `myapp.exe` with your icon and
+version metadata embedded.
+
+---
 
 ## The two binaries
 
-Per the **Build System Addendum** §B.11:
-
-- **`juxc`** is the compiler. Operates on individual files or directories.
-  Doesn't read `jux.toml` or resolve dependencies.
-- **`jux`** is the project tool. Reads `jux.toml`, resolves dependencies,
-  and dispatches `juxc` invocations. The `jux build` / `jux run` /
-  `jux test` / `jux new` commands live here.
-
-Day-to-day use is `jux`. `juxc` is invoked by `jux`, by the language
-server, and by foreign build systems (Bazel, Buck, etc.).
-
-## Step 1 — Build the compiler
-
-This is a Rust workspace, so the compiler itself is built with `cargo`.
-You only do this once (or after changing compiler code).
+- **`juxc`** is the compiler. Works on individual files or directories. Doesn't read
+  `jux.toml` or resolve dependencies. Exposes `--run`, `--build`, `--name`,
+  `--release`, `--emit-dir`.
+- **`jux`** is the project tool (the cargo-equivalent). Reads `jux.toml`, resolves
+  dependencies, and dispatches `juxc`. This is what you use day to day; `juxc` is
+  invoked by `jux`, by the language server, and by foreign build systems.
 
 ```sh
-cargo check                  # verify the workspace compiles clean
-cargo build                  # build everything (debug → target/debug/)
-cargo build --release        # optimized juxc + jux → target/release/
+juxc examples/hello.jux                 # lower to Rust only
+juxc examples/hello.jux --run           # compile + build + run
+juxc examples/multifile --run           # compile a whole directory as one workspace
+jux  run examples/hello.jux             # via the project tool
+jux  run --release examples/hello.jux   # optimized emitted program
 ```
 
-After `cargo build --release` you get two binaries:
+---
 
-- `target/release/juxc.exe` — the file-level compiler
-- `target/release/jux.exe`  — the project tool
+## Repository layout
 
-Copy them to the repo root (or anywhere on your `PATH`) so you can invoke
-them as `./juxc.exe` / `./jux.exe` in Step 2:
-
-```sh
-copy target\release\juxc.exe .
-copy target\release\jux.exe  .
-
-./juxc.exe --help
-./jux.exe  --help
+```
+juxlang/
+├── Architecture/                # the language specification (the contract)
+│   ├── JUX-LANG-V1.md           # consolidated dossier
+│   └── JUX-*-ADDENDUM.md        # 20+ normative addenda
+├── examples/                    # .jux programs; every one compiles & runs
+├── crates/
+│   ├── juxc-source/             # source files, spans, positions
+│   ├── juxc-diagnostics/        # diagnostic types, E-codes, JSON output
+│   ├── juxc-lex/                # lexer
+│   ├── juxc-ast/                # AST types
+│   ├── juxc-parse/              # parser
+│   ├── juxc-resolve/            # name resolution
+│   ├── juxc-tycheck/            # type checking
+│   ├── juxc-backend-rust/       # lowering to Rust (the ownership analysis lives here)
+│   ├── juxc-bindgen/            # rustdoc JSON to Jux-syntax stubs
+│   ├── juxc-lsp/                # language server
+│   └── juxc-driver/             # phase orchestration + project/workspace builds
+├── ide/intellij-plugin/         # IntelliJ plugin (Java-style PSI)
+└── bin/{juxc,jux}/              # the two binary entry points
 ```
 
-## Step 2 — Build and run a Jux program
+---
 
-This step uses the binaries produced by Step 1 — **no `cargo` involved
-on the command line**. (Internally `juxc` does invoke `cargo build` on
-the Rust crate it emits, but that's an implementation detail.)
+## A note on the spec
 
-There are **two independent profiles** to keep in mind:
+There's a full specification under [`Architecture/`](Architecture/): `JUX-LANG-V1.md`
+plus 20+ addenda covering grammar, the type system, the ABI, diagnostics, the build
+system, async, exceptions, annotations, class representation, and more. The spec is
+**authoritative**: behavior should trace to a clause. If something isn't decided
+yet, the spec gets updated before the code does. Because there's so much of it, you
+*will* find inconsistencies here and there. That's the cost of one person
+maintaining a large design surface, and I clean them up as I find them.
 
-1. **The compiler's own profile** — set in Step 1 (`cargo build` vs
-   `cargo build --release` decides whether `juxc` itself is optimized).
-2. **The emitted program's profile** — set here with the `--release`
-   flag on `juxc` / `jux`. Without it, the emitted program lands in
-   `<emit-dir>/target/debug/<Name>.exe`. With it,
-   `<emit-dir>/target/release/<Name>.exe`. `--emit-dir` overrides the
-   default emit location.
+---
 
-### Using `juxc` (the compiler)
+## License & ownership
 
-`juxc` operates on individual files or directories. It exposes
-`--name` (override the produced binary's name) and `--release`
-(build the emitted program optimized).
+The code is **free and open for everyone**: open source, use it, learn from it,
+build on it. That said, **I am the sole owner of the Jux language** itself (the
+design, the name, the direction). Distributed under **Apache-2.0**.
 
-```sh
-# Lower to Rust only — no cargo build, no execute.
-./juxc.exe examples/hello.jux
+---
 
-# Compile + cargo build + execute. Produces hello.exe (file-stem default).
-./juxc.exe --run examples/hello.jux
-
-# Custom binary name — produces Hello.exe instead of hello.exe.
-./juxc.exe --name Hello --run examples/hello.jux
-
-# Build only (no execute), custom name.
-./juxc.exe --name Hello --build examples/hello.jux
-
-# Release-mode emitted program. Lands in target/.rust-build/target/release/.
-./juxc.exe --name Hello --release --run examples/hello.jux
-```
-
-`--name` defaults to the input's file-stem (single file) or directory
-name (folder input). The name flows into the emitted `Cargo.toml`'s
-`[[bin]]` entry and drives the lookup of the resulting executable.
-
-### Using `jux` (the project tool)
-
-`jux` is the cargo-equivalent project tool. It currently does **not**
-expose `--name` — per spec, the package name will come from `jux.toml`
-once project mode lands. It does forward `--release` to the inner
-`cargo build`.
-
-```sh
-# Compile + cargo build + execute. Forwards stdout/stderr and exit code.
-./jux.exe run examples/hello.jux
-
-# Compile + cargo build, but don't run.
-./jux.exe build examples/hello.jux
-
-# Type-check only (no Rust emission, no cargo invocation).
-./jux.exe check examples/hello.jux
-
-# Release-mode emitted program.
-./jux.exe run --release examples/hello.jux
-./jux.exe build --release examples/hello.jux --emit-dir /tmp/hello
-```
-
-### Compiling a multi-file project
-
-Point either binary at a directory; every `.jux` file inside is compiled
-together as a single workspace (cross-file `import`s resolve,
-package-private visibility is enforced across the unit boundary):
-
-```sh
-# via juxc directly (workspace mode)
-./juxc.exe --run examples/multifile
-
-# or list specific files
-./juxc.exe --run examples/showcase/app.jux examples/showcase/math.jux examples/showcase/shapes.jux
-```
-
-### What `jux run` does under the hood
-
-1. **Driver** (`juxc-driver`) runs lex → parse → resolve → typecheck.
-2. **Backend** (`juxc-backend-rust`) lowers the AST to an idiomatic Rust
-   crate written to `<input-parent>/target/.rust-build/` (override with
-   `--emit-dir`).
-3. **`cargo build`** is invoked on that emitted crate.
-4. The produced binary is executed with inherited stdio; its exit code is
-   forwarded.
-
-If any phase produces an error-severity diagnostic, the pipeline stops and
-`jux` exits 1.
-
-## Implementation discipline
-
-The spec is **authoritative**. Every behavior — keywords, error codes,
-operator precedence, file layouts, default values — must trace to a clause
-in `Architecture/JUX-LANG-V1.md` or an addendum. If a question doesn't have
-a spec answer, update the spec **before** implementing.
-
-## License
-
-Apache-2.0.
+*Built solo, with love, by [XDSSWAR](https://github.com/xdsswar), XTREME SOFTWARE
+SOLUTIONS. Third time's the charm.* 🚀
