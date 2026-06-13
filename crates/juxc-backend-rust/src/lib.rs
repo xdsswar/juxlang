@@ -579,6 +579,13 @@ struct RustEmitter {
     /// one function doesn't leak into another's emission. Cleared
     /// in tandem with [`Self::mutated_in_fn`].
     pub(crate) nullable_locals: HashSet<String>,
+    /// Names of in-scope `ref` bindings (§M.13) — locals and params
+    /// whose slot is an `Rc<RefCell<T>>` shared reference to a
+    /// value-typed object. Reads clone out (`x.borrow().clone()`),
+    /// assignments store through (`*x.borrow_mut() = v`), and passing
+    /// to a `ref` parameter shares the handle (`x.clone()`). Reset
+    /// per function alongside `nullable_locals`.
+    pub(crate) ref_locals: HashSet<String>,
     /// Declared return type of the function / method / operator body
     /// currently being emitted. `None` outside any function body and
     /// inside constructor bodies (constructors return `Self`).
@@ -3050,6 +3057,7 @@ impl RustEmitter {
             emitting_comparison_operand: false,
             emitting_nullable_target: false,
             nullable_locals: HashSet::new(),
+            ref_locals: HashSet::new(),
             current_return_type: None,
             source: None,
             symbols: symbols.clone(),

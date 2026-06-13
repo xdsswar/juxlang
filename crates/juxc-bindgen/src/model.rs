@@ -78,6 +78,12 @@ pub struct StubType {
     /// the Jux-facing package (`rust.std`) is flat for autocomplete and does not
     /// reflect the real module path. `None` when unavailable.
     pub rust_path: Option<String>,
+    /// The type implements `Index<&K>` — MAP-style indexing with a
+    /// borrowed key (discovered from the rustdoc `Index` trait impls,
+    /// never from a name list). Rendered as the `@RustIndexRef` class
+    /// annotation so the backend lowers `xs[k]` to `xs[&(k)]` instead
+    /// of the sequence form `xs[(k) as usize]`.
+    pub index_ref: bool,
 }
 
 impl StubType {
@@ -93,6 +99,7 @@ impl StubType {
             variants: Vec::new(),
             doc: None,
             rust_path: None,
+            index_ref: false,
         }
     }
 }

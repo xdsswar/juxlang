@@ -1369,6 +1369,33 @@ impl RustEmitter {
             self.emit_expr(arg);
             return;
         }
+        // `ref` parameter slot (§M.13): a `ref` argument ALIASES the
+        // caller's object (handle clone); a plain value wraps into a
+        // fresh shared object (the callee's writes then stay local —
+        // pass a `ref` binding for write-through).
+        if self.callee_param_is_shared_ref(&call.callee, i) {
+            if let Expr::Path(qn) = arg {
+                if qn.segments.len() == 1
+                    && self.ref_locals.contains(&qn.segments[0].text)
+                {
+                    self.w.push_str(&qn.segments[0].text);
+                    self.w.push_str(".clone()");
+                    return;
+                }
+            }
+            self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+            let prev = std::mem::take(&mut self.emitting_format_arg);
+            self.emit_expr(arg);
+            self.emitting_format_arg = prev;
+            // A PLACE argument keeps its value in the caller (the
+            // fresh shared object holds a copy) — clone instead of
+            // moving out of the local/field.
+            if matches!(arg, Expr::Path(_) | Expr::Field(_) | Expr::Index(_)) {
+                self.w.push_str(".clone()");
+            }
+            self.w.push_str("))");
+            return;
+        }
         // Interface-typed param slot: wrap a class value in `Rc<dyn
         // Trait>` / clone a dyn handle, before the sealed/nullable
         // paths (which never apply to an interface value slot).
@@ -1513,6 +1540,13 @@ impl RustEmitter {
     /// field read triggers the (harmless) hoist, aliasing or not.
     fn expr_reads_wrapper_field(&self, e: &Expr) -> bool {
         match e {
+            // A `ref` binding read (§M.13) clones out of its cell via a
+            // borrow guard — same call-expression-temporary hazard as a
+            // wrapper field read.
+            Expr::Path(qn) => {
+                qn.segments.len() == 1
+                    && self.ref_locals.contains(&qn.segments[0].text)
+            }
             Expr::Field(f) => {
                 if let Some(c) = self.receiver_class_bare(&f.object) {
                     if self.wrapper_classes.contains(&c) {

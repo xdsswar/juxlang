@@ -691,6 +691,11 @@ pub struct FieldDecl {
     /// definite-assignment (§S.4.5). Only valid on (non-generic, in Phase 1)
     /// class-typed fields — see `E0455`.
     pub is_weak: bool,
+    /// `ref` binding mode (§M.13) — the field holds a SHARED reference
+    /// to a value-typed object (`Rc<RefCell<T>>`): aliases see each
+    /// other's writes, assignment stores through. Meaningless (and
+    /// tolerated) on class types, which are already references.
+    pub is_ref: bool,
     /// Declared type, or `None` when the type is **inferred** from the
     /// initializer (`const I = 2;` → `int`). Inference requires an
     /// initializer; a type-less field with no initializer is an error.
@@ -839,6 +844,13 @@ pub struct Param {
     /// rejected on varargs / defaulted / constructor parameters (E0944). The
     /// callee must assign it on every normal-exit path (E0940).
     pub is_out: bool,
+    /// `ref` binding mode (§M.13) — the parameter receives a SHARED
+    /// reference to a value-typed object (`Rc<RefCell<T>>`): a `ref`
+    /// argument aliases the caller's object (writes are visible to the
+    /// caller), a plain-value argument wraps into a fresh object.
+    /// Distinct from [`Self::is_ref`], which is the bindgen foreign
+    /// `&T`-borrow marker.
+    pub is_shared_ref: bool,
     /// Span of the entire parameter.
     pub span: Span,
 }

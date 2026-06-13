@@ -71,6 +71,15 @@ impl<'a> Parser<'a> {
             // `final`/`const` keyword.
             return self.parse_typed_local_with(true).map(Stmt::VarDecl);
         }
+        // `ref` local declaration (§M.13): `ref Type name = init;` — a
+        // SHARED reference to a value-typed object. `ref var` is not a
+        // form: the shared object's type must be explicit.
+        if self.at_kw(Keyword::Ref) {
+            self.advance(); // 'ref'
+            let mut vd = self.parse_typed_local_with(false)?;
+            vd.is_ref = true;
+            return Some(Stmt::VarDecl(vd));
+        }
         // **Labeled loop** (§A.2.8): `name: while/do/for …`. Two-token
         // lookahead — a bare identifier followed by `:` followed by a
         // loop keyword. Anything else (e.g. `Type name = …;` locals,
@@ -649,6 +658,7 @@ impl<'a> Parser<'a> {
                 ty: None,
                 init: Some(elem_init),
                 is_final: false,
+                is_ref: false,
                 span: binder.span,
             }));
         }
@@ -657,6 +667,7 @@ impl<'a> Parser<'a> {
             ty: None,
             init,
             is_final: false,
+            is_ref: false,
             span,
         }))
     }
@@ -680,6 +691,7 @@ impl<'a> Parser<'a> {
             ty: None,
             init,
             is_final,
+            is_ref: false,
             span: start.join(end),
         })
     }
@@ -792,7 +804,7 @@ impl<'a> Parser<'a> {
         };
         self.expect(&TokenKind::Semicolon, "';' after typed local declaration");
         let end = self.last_consumed_span();
-        Some(VarDecl { name, ty: Some(ty), init, is_final, span: ty_start.join(end) })
+        Some(VarDecl { name, ty: Some(ty), init, is_final, is_ref: false, span: ty_start.join(end) })
     }
 
     /// Parse a bare `{a, b, c}` array initializer in typed-local RHS

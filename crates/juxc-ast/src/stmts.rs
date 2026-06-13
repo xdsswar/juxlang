@@ -183,6 +183,10 @@ pub struct VarDecl {
     /// parses identically to `final` — the compile-time-constant
     /// distinction is deferred until we need it.
     pub is_final: bool,
+    /// `ref` binding mode (§M.13) — the local holds a SHARED reference
+    /// to a value-typed object (`Rc<RefCell<T>>`): aliases see each
+    /// other's writes, assignment stores through.
+    pub is_ref: bool,
     /// Span covering `[modifier] (type | 'var') name [= init] ;`.
     pub span: Span,
 }

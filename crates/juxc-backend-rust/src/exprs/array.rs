@@ -6,6 +6,23 @@ use juxc_ast::{Expr, IndexExpr, Literal, NewArrayExpr, NewArrayLitExpr};
 use crate::RustEmitter;
 
 impl RustEmitter {
+    /// Does `bare` name a class whose Rust `Index` impl takes a
+    /// BORROWED key (`Index<&K>`, map-style)? Reads the bindgen
+    /// `@RustIndexRef` marker off the class AST — discovered from the
+    /// library's real trait impls, never a name list.
+    pub(crate) fn class_indexes_by_ref(&self, bare: &str) -> bool {
+        self.class_ast_by_bare(bare)
+            .map(|cd| {
+                cd.annotations.iter().any(|a| {
+                    a.name.segments.len() == 1
+                        && a.name.segments[0]
+                            .text
+                            .eq_ignore_ascii_case("rustindexref")
+                })
+            })
+            .unwrap_or(false)
+    }
+
     /// Lower `arr[index]` to Rust `arr[index_as_usize]`.
     ///
     /// Rust requires `usize` for array/slice/Vec indexing. Jux's
@@ -37,6 +54,20 @@ impl RustEmitter {
             return;
         }
         let emitting_lvalue = self.emitting_lvalue;
+        // MAP indexing (`scores["alice"]`): a container whose real
+        // Rust `Index` impl takes a BORROWED key (`Index<&K>`) gets
+        // `map[&key]`, not the sequence cast. DISCOVERED from the
+        // stub's `@RustIndexRef` marker (bindgen reads the type's
+        // actual trait impls); the name fallback only covers stub
+        // caches generated before the marker existed.
+        let map_index = match self.expr_types.get(&crate::exprs::expr_span_of(&i.array)) {
+            Some(juxc_tycheck::Ty::User { name, .. }) => {
+                let bare = name.rsplit('.').next().unwrap_or(name);
+                self.class_indexes_by_ref(bare)
+                    || matches!(bare, "HashMap" | "BTreeMap")
+            }
+            _ => false,
+        };
         // The indexed array is a borrowed PLACE — `xs[i]` never owns
         // `xs`. Mark it like a method receiver so a collection-typed
         // field read (`this.items[0]`) doesn't take the value-position
@@ -45,7 +76,14 @@ impl RustEmitter {
         self.emit_expr(&i.array);
         self.emitting_method_receiver = false;
         self.w.push('[');
-        if matches!(&*i.index, Expr::Literal(Literal::Int(_))) {
+        if map_index {
+            self.w.push_str("&(");
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            self.emit_expr(&i.index);
+            self.emitting_format_arg = prev;
+            self.w.push(')');
+        } else if matches!(&*i.index, Expr::Literal(Literal::Int(_))) {
             self.emit_expr(&i.index);
         } else {
             self.w.push('(');

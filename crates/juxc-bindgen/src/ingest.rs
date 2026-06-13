@@ -228,6 +228,7 @@ fn build_struct(krate: &Crate, name: &str, s: &Struct, item: &Item) -> StubType 
     st.methods = methods;
     st.doc = first_doc_line(item);
     st.rust_path = real_rust_path(krate, item);
+    st.index_ref = has_ref_index_impl(krate, &s.impls);
     st
 }
 
@@ -422,6 +423,32 @@ fn param_name(n: &str) -> String {
 
 fn has_self_receiver(f: &Function) -> bool {
     f.sig.inputs.iter().any(|(n, _)| n == "self")
+}
+
+/// Does this type implement `Index<&K>` — map-style indexing with a
+/// BORROWED key (`HashMap`/`BTreeMap`)? DISCOVERED from the type's
+/// real `Index` trait impls in the rustdoc JSON, so the Jux `xs[k]`
+/// lowering (`xs[&(k)]` vs the sequence form `xs[(k) as usize]`)
+/// tracks the library instead of a name list. Rendered as the
+/// `@RustIndexRef` class annotation on the stub.
+fn has_ref_index_impl(krate: &Crate, impls: &[rustdoc_types::Id]) -> bool {
+    impls.iter().any(|id| {
+        let Some(item) = krate.index.get(id) else { return false };
+        let ItemEnum::Impl(im) = &item.inner else { return false };
+        let Some(tr) = &im.trait_ else { return false };
+        if last_segment(&tr.path) != "Index" {
+            return false;
+        }
+        // `Index<Idx>` — map-style impls take `Idx = &K`/`&Q`.
+        matches!(
+            tr.args.as_deref(),
+            Some(GenericArgs::AngleBracketed { args, .. })
+                if matches!(
+                    args.first(),
+                    Some(GenericArg::Type(Type::BorrowedRef { .. }))
+                )
+        )
+    })
 }
 
 /// True when the function's receiver is `&mut self` — the method mutates
