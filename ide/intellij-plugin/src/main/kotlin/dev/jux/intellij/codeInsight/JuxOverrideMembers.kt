@@ -71,24 +71,53 @@ object JuxOverrideMembers {
             seen.add("$name/${JuxHierarchy.arity(m)}")
         }
 
-        val queue = ArrayDeque(JuxHierarchy.superTypeNames(type))
+        // BFS over (supertype declaration, type-parameter → concrete-argument
+        // substitution). The substitution is what turns an inherited generic
+        // signature into a concrete stub: implementing `Holder<Object>` maps
+        // the interface's `T` to `Object`, so `void test(T t)` is generated as
+        // `void test(Object t)` (not the undefined `T`). Substitutions compose
+        // down the chain (`Sub extends Mid<Object>`, `Mid<X> extends Base<X>`
+        // → `Base`'s param resolves to `Object`).
+        val queue = ArrayDeque<Pair<JuxTypeDeclaration, Map<String, String>>>()
+        seedSupertypes(type, emptyMap(), project, queue)
         val visitedTypes = HashSet<String>()
         while (queue.isNotEmpty()) {
-            val superName = queue.removeFirst()
-            if (!visitedTypes.add(superName)) continue
-            val superDecl = JuxTypeIndex.findType(project, superName) ?: continue
-            for (m in JuxHierarchy.directChildren(superDecl, JuxElementTypes.METHOD_DECLARATION)) {
+            val (decl, subst) = queue.removeFirst()
+            val ownerName = decl.name ?: continue
+            if (!visitedTypes.add(ownerName)) continue
+            for (m in JuxHierarchy.directChildren(decl, JuxElementTypes.METHOD_DECLARATION)) {
                 val method = m as? JuxMethodDeclaration ?: continue
                 val name = method.name ?: continue
                 if (!seen.add("$name/${JuxHierarchy.arity(method)}")) continue
                 if (!JuxHierarchy.isOverridable(method)) continue
-                val sig = JuxHierarchy.methodSignature(method) ?: continue
+                val rawSig = JuxHierarchy.methodSignature(method) ?: continue
+                val sig = JuxHierarchy.substituteTypeParams(rawSig, subst)
                 val kind = if (JuxHierarchy.hasBody(method)) Kind.OVERRIDE else Kind.IMPLEMENT
-                out.add(Candidate(method, superName, sig, kind))
+                out.add(Candidate(method, ownerName, sig, kind))
             }
-            queue.addAll(JuxHierarchy.superTypeNames(superDecl))
+            seedSupertypes(decl, subst, project, queue)
         }
         return out
+    }
+
+    /**
+     * Enqueue [type]'s direct supertypes, each with the param→arg map built
+     * from its reference's type arguments (composed through [outerSubst], so a
+     * type argument that is itself an outer type parameter resolves further).
+     */
+    private fun seedSupertypes(
+        type: JuxTypeDeclaration,
+        outerSubst: Map<String, String>,
+        project: com.intellij.openapi.project.Project,
+        queue: ArrayDeque<Pair<JuxTypeDeclaration, Map<String, String>>>,
+    ) {
+        for ((ref, _) in JuxHierarchy.supertypeReferences(type)) {
+            val decl = JuxTypeIndex.findType(project, JuxHierarchy.bareTypeName(ref)) ?: continue
+            val args = JuxHierarchy.typeArguments(ref)
+                .map { JuxHierarchy.substituteTypeParams(it, outerSubst) }
+            val params = JuxHierarchy.typeParameterNames(decl)
+            queue.add(decl to params.zip(args).toMap())
+        }
     }
 
     /**

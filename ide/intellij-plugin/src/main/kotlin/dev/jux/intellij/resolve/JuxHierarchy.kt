@@ -57,6 +57,54 @@ object JuxHierarchy {
         ref.text.trim().substringAfterLast('.').substringBefore('<').trim()
 
     /**
+     * The depth-1 type arguments of a generic supertype reference, in order —
+     * `Holder<Object>` → `["Object"]`, `Map<K, V>` → `["K", "V"]`. Each is the
+     * argument's source text (trimmed); wildcards come through verbatim.
+     * Empty for a non-generic reference.
+     */
+    fun typeArguments(ref: PsiElement): List<String> {
+        val args = ref.node.findChildByType(JuxElementTypes.TYPE_ARGUMENT_LIST)?.psi ?: return emptyList()
+        return args.children
+            .filter {
+                it.node.elementType === JuxElementTypes.TYPE_REFERENCE ||
+                    it.node.elementType === JuxElementTypes.WILDCARD_TYPE
+            }
+            .map { it.text.trim() }
+    }
+
+    /**
+     * The declared type-parameter names of a type — `class Box<T>` → `["T"]`,
+     * `Map<K, V>` → `["K", "V"]`. Empty for a non-generic type.
+     */
+    fun typeParameterNames(type: JuxTypeDeclaration): List<String> {
+        val list = type.node.findChildByType(JuxElementTypes.TYPE_PARAMETER_LIST)?.psi ?: return emptyList()
+        return list.children
+            .filter { it.node.elementType === JuxElementTypes.TYPE_PARAMETER }
+            .mapNotNull { p ->
+                var c: PsiElement? = p.firstChild
+                while (c != null) {
+                    if (c.node.elementType === dev.jux.intellij.highlight.JuxTokenTypes.IDENTIFIER) return@mapNotNull c.text
+                    c = c.nextSibling
+                }
+                null
+            }
+    }
+
+    /**
+     * Substitute whole-word type-parameter names in a signature/type string
+     * with their concrete arguments — `void test(T t)` + `{T=Object}` →
+     * `void test(Object t)`. A single pass over identifier tokens, so it never
+     * double-substitutes; formal parameter NAMES and unrelated identifiers
+     * (not in [subst]) pass through unchanged (case-sensitive).
+     */
+    fun substituteTypeParams(text: String, subst: Map<String, String>): String {
+        if (subst.isEmpty()) return text
+        return IDENT.replace(text) { m -> subst[m.value] ?: m.value }
+    }
+
+    private val IDENT = Regex("""[A-Za-z_]\w*""")
+
+    /**
      * Does the declaration carry modifier [kw]? Modifiers are always wrapped
      * in a MODIFIER_LIST composite (never direct keyword children), so the
      * check reads that list's text. Shared by the Generate actions, the
