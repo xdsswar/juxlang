@@ -54,6 +54,8 @@ class JuxTestCommandLineState(
             handler,
             JuxTestConsoleProperties(config, executor),
         )
+        // Clickable `path:line:col` links in compile output the test run prints.
+        console.addMessageFilter(JuxConsoleFilter(config.project))
         return DefaultExecutionResult(console, handler, *createActions(console, handler, executor))
     }
 }
