@@ -253,6 +253,13 @@
     <langCodeStyleSettingsProvider
         implementation="dev.jux.intellij.format.JuxLanguageCodeStyleSettingsProvider"/>
 
+    <!-- Alt+Enter intentions. -->
+    <intentionAction>
+        <language>Jux</language>
+        <className>dev.jux.intellij.intentions.JuxImportTypeIntention</className>
+        <category>Jux</category>
+    </intentionAction>
+
     <!-- Native inspections (IDE-side, no LSP needed) with quick-fixes. -->
     <localInspection
         language="Jux"
