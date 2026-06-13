@@ -162,6 +162,43 @@ class JuxOverrideMembersTest : BasePlatformTestCase() {
         assertTrue("write(String name)", stubs.contains("public void write(String name)"))
     }
 
+    fun testGenericClassForwardsItsOwnTypeParameterLetter() {
+        // A generic class that forwards its parameter keeps the LETTER (there's
+        // a real `T` in scope) — `class Box<T> implements Holder<T>` → `T t`.
+        myFixture.configureByText(
+            "a.jux",
+            """
+            public interface Holder<T> { void test(T t); T getIt(); }
+            public class Box<T> implements Holder<T> {
+                <caret>
+            }
+            """.trimIndent(),
+        )
+        val type = typeNamed("Box")
+        JuxOverrideMembers.insertStubs(project, type, JuxOverrideMembers.candidates(type))
+        val stubs = myFixture.file.text.substringAfter("implements Holder<T> {")
+        assertTrue("keeps T param", stubs.contains("public void test(T t)"))
+        assertTrue("keeps T return", stubs.contains("public T getIt()"))
+    }
+
+    fun testGenericClassMapsToItsOwnLetter() {
+        // The implementing class uses a DIFFERENT letter — the stub adopts the
+        // class's letter (Holder's `T` → Box's `E`), since that's what's in scope.
+        myFixture.configureByText(
+            "a.jux",
+            """
+            public interface Holder<T> { void test(T t); }
+            public class Box<E> implements Holder<E> {
+                <caret>
+            }
+            """.trimIndent(),
+        )
+        val type = typeNamed("Box")
+        JuxOverrideMembers.insertStubs(project, type, JuxOverrideMembers.candidates(type))
+        val stubs = myFixture.file.text.substringAfter("implements Holder<E> {")
+        assertTrue("adopts the class's letter E", stubs.contains("public void test(E t)"))
+    }
+
     fun testComposedGenericSubstitutionThroughChain() {
         myFixture.configureByText(
             "a.jux",

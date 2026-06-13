@@ -1,0 +1,12 @@
+<scheme name="Darcula" version="142" parent_scheme="Darcula">
+  <!-- Generic type parameters (`T`, `R`, `E`, …) default to green on dark
+       themes too — bright enough to read on Darcula, distinct from the
+       string/comment olive. Customizable under Color Scheme | Jux. -->
+  <attributes>
+    <option name="JUX_TYPE_PARAMETER">
+      <value>
+        <option name="FOREGROUND" value="6aab73"/>
+      </value>
+    </option>
+  </attributes>
+</scheme>
