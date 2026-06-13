@@ -104,6 +104,85 @@ class JuxResolveAndNavTest : BasePlatformTestCase() {
         )
     }
 
+    // ---- member Go-to (resolve through the receiver's type) -----------------
+
+    fun testMethodAccessResolvesThroughParamType() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class Engine { public void start() {} }
+            public class Car {
+                public void go(Engine e) {
+                    e.start();
+                }
+            }
+            """.trimIndent(),
+        )
+        // The call site `e.start();` (the declaration is `start() {}`, no `;`).
+        val offset = myFixture.file.text.indexOf("start();")
+        val resolved = myFixture.file.findReferenceAt(offset)?.resolve()
+        assertNotNull("e.start() should resolve to Engine.start", resolved)
+        assertEquals("start", (resolved as dev.jux.intellij.psi.JuxNamedElement).name)
+    }
+
+    fun testFieldAccessResolvesThroughNewLocalType() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class Point { public int x; public int y; }
+            public class App {
+                public void go() {
+                    var p = new Point();
+                    var z = p.x;
+                }
+            }
+            """.trimIndent(),
+        )
+        val offset = myFixture.file.text.indexOf("p.x") + 2 // land on `x`
+        val resolved = myFixture.file.findReferenceAt(offset)?.resolve()
+        assertNotNull("p.x should resolve to Point.x", resolved)
+        assertEquals("x", (resolved as dev.jux.intellij.psi.JuxNamedElement).name)
+    }
+
+    fun testThisMemberResolvesToEnclosingMember() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class Widget {
+                private int width;
+                public void resize() { var w = this.width; }
+            }
+            """.trimIndent(),
+        )
+        val offset = myFixture.file.text.indexOf("this.width") + 5 // land on `width`
+        val resolved = myFixture.file.findReferenceAt(offset)?.resolve()
+        assertNotNull("this.width should resolve to the field", resolved)
+        assertEquals("width", (resolved as dev.jux.intellij.psi.JuxNamedElement).name)
+    }
+
+    fun testInheritedMemberAccessResolves() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class Base { public void shared() {} }
+            public class Derived extends Base {}
+            public class App {
+                public void go(Derived d) {
+                    d.shared();
+                }
+            }
+            """.trimIndent(),
+        )
+        val offset = myFixture.file.text.indexOf("shared();")
+        val resolved = myFixture.file.findReferenceAt(offset)?.resolve()
+        assertNotNull("d.shared() should resolve to inherited Base.shared", resolved)
+        assertEquals("shared", (resolved as dev.jux.intellij.psi.JuxNamedElement).name)
+    }
+
     // ---- §P.7.8 property gutter trio ----------------------------------------
 
     fun testPropertyGutterTrioStatuses() {

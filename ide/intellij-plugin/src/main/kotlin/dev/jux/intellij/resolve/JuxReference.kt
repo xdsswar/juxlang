@@ -30,7 +30,55 @@ class JuxReference(element: PsiElement, range: TextRange) :
      */
     override fun isSoft(): Boolean = true
 
-    override fun resolve(): PsiElement? = resolveLocally() ?: resolveCrossFile()
+    override fun resolve(): PsiElement? {
+        // Member access (`recv.field` / `recv.method`): resolve through the
+        // receiver's type FIRST, so Go-to lands on the right member even when an
+        // unrelated enclosing-class member shares the name. Falls back to the
+        // by-name walk when the receiver type can't be inferred in-file (stdlib
+        // / chained receivers stay with the LSP).
+        val t = element.elementType
+        if (t === E.FIELD_ACCESS_EXPRESSION || t === E.METHOD_REF_EXPRESSION) {
+            resolveMember()?.let { return it }
+        }
+        return resolveLocally() ?: resolveCrossFile()
+    }
+
+    /**
+     * Resolve a `recv.name` member to its declaration: infer the receiver's type
+     * with [JuxTypeInference] (this/super, a typed local/param/field, or a type
+     * name for statics) and find the member named [value] among the type's
+     * declared + inherited members ([JuxHierarchy.allMembers]). Only the common
+     * single-identifier receiver is handled — a chained `a.b.name` would need
+     * `b`'s type, which is the LSP's job — so it returns null there and the
+     * caller falls back.
+     */
+    private fun resolveMember(): PsiElement? {
+        val name = value
+        val receiverWord = receiverWord() ?: return null
+        val target = JuxTypeInference.resolveReceiver(receiverWord, element) ?: return null
+        return JuxHierarchy.allMembers(target.type).firstOrNull {
+            (it as? JuxNamedElement)?.name == name
+        }
+    }
+
+    /**
+     * The receiver identifier immediately left of the `.` before the member
+     * name (the name leaf sits at [rangeInElement]). Returns null when there is
+     * no qualifying `.` (a bare reference, not a member access) or the qualifier
+     * isn't a single identifier.
+     */
+    private fun receiverWord(): String? {
+        val text = element.text
+        var i = rangeInElement.startOffset - 1
+        while (i >= 0 && text[i].isWhitespace()) i--
+        if (i < 0 || text[i] != '.') return null
+        i--
+        while (i >= 0 && text[i].isWhitespace()) i--
+        val end = i + 1
+        while (i >= 0 && (text[i].isLetterOrDigit() || text[i] == '_')) i--
+        val start = i + 1
+        return if (end > start) text.substring(start, end) else null
+    }
 
     /**
      * In-file resolution only — cheap (no index access), which is what the
