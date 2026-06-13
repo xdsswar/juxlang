@@ -53,11 +53,16 @@ object JuxKeywordContext {
      * is pre-wired: [curated] drops it until the compiler reserves the keyword
      * and `jux-tokens.json` regenerates, at which point it appears here with
      * zero plugin edits (the parser's name-lookup wiring lights up the same way).
+     *
+     * `true`/`false`/`null` are literal CONSTANTS, not keywords — they lex as
+     * BOOL_LITERAL/NULL_LITERAL and live in the generated
+     * [JuxKeywords.CONSTANTS] set, so they join as a raw union AFTER curation
+     * (listing them inside [curated] would silently drop them).
      */
     val EXPRESSION: Set<String> = curated(
-        "new", "this", "super", "true", "false", "null", "switch", "move",
+        "new", "this", "super", "switch", "move",
         "await", "async", "sizeof", "typeof",
-    )
+    ) + JuxKeywords.CONSTANTS
 
     /** Inside a code block: statement keywords + locals + expression starters. */
     val STATEMENT: Set<String> = curated(
