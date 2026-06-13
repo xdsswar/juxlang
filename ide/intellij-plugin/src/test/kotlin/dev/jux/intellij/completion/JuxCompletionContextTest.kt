@@ -150,7 +150,7 @@ class JuxCompletionContextTest : BasePlatformTestCase() {
         assertDoesntContain(items, "if", "return")
     }
 
-    fun testAfterNonPropertyDotOffersNothing() {
+    fun testAfterDotOnInFileTypeOffersItsMembers() {
         val items = completionsAt(
             """
             public class A {
@@ -161,7 +161,23 @@ class JuxCompletionContextTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        // Member completion is juxc-lsp territory — the fallback stays empty.
+        // `other` is an `A` → the fallback now infers the type in-file and
+        // offers A's members (was LSP-only / empty before the inference pass).
+        assertContainsElements(items, "plain", "go")
+    }
+
+    fun testAfterDotOnUnresolvableReceiverStaysEmpty() {
+        val items = completionsAt(
+            """
+            public class A {
+                public void go(SomeStdType other) {
+                    other.<caret>
+                }
+            }
+            """.trimIndent(),
+        )
+        // SomeStdType isn't a project type — member completion can't infer it,
+        // so the fallback stays empty (the LSP owns std/crate members).
         assertEmpty(items)
     }
 
@@ -274,6 +290,140 @@ class JuxCompletionContextTest : BasePlatformTestCase() {
             """.trimIndent(),
         )
         assertContainsElements(items, "for", "for await")
+    }
+
+    // ---- member completion after a dot (in-file type inference) ---------------
+
+    fun testInstanceMembersAfterDotOnNewLocal() {
+        // `var p = new Point();` → p is a Point → its instance members complete.
+        val items = completionsAt(
+            """
+            package demo;
+            public class Point {
+                public int x;
+                public int y;
+                public int manhattan() { return this.x + this.y; }
+                public static Point origin() { return new Point(); }
+            }
+            public class App {
+                public void go() {
+                    var p = new Point();
+                    p.<caret>
+                }
+            }
+            """.trimIndent(),
+        )
+        assertContainsElements(items, "x", "y", "manhattan")
+        // Static members are NOT offered on an instance receiver.
+        assertDoesntContain(items, "origin")
+    }
+
+    fun testInstanceMembersFromDeclaredType() {
+        val items = completionsAt(
+            """
+            package demo;
+            public class Engine { public void start() {} public int rpm; }
+            public class Car {
+                public void drive(Engine e) {
+                    e.<caret>
+                }
+            }
+            """.trimIndent(),
+        )
+        assertContainsElements(items, "start", "rpm")
+    }
+
+    fun testStaticMembersAndEnumConstantsAfterDotOnType() {
+        val items = completionsAt(
+            """
+            package demo;
+            public enum Color { Red, Green, Blue }
+            public class App {
+                public void go() {
+                    Color.<caret>
+                }
+            }
+            """.trimIndent(),
+        )
+        assertContainsElements(items, "Red", "Green", "Blue")
+    }
+
+    fun testThisOffersEnclosingMembers() {
+        val items = completionsAt(
+            """
+            package demo;
+            public class Widget {
+                private int width;
+                public void resize() {}
+                public void run() {
+                    this.<caret>
+                }
+            }
+            """.trimIndent(),
+        )
+        assertContainsElements(items, "width", "resize")
+    }
+
+    fun testInheritedMembersAfterDot() {
+        val items = completionsAt(
+            """
+            package demo;
+            public class Base { public void shared() {} }
+            public class Derived extends Base { public void own() {} }
+            public class App {
+                public void go(Derived d) {
+                    d.<caret>
+                }
+            }
+            """.trimIndent(),
+        )
+        assertContainsElements(items, "own", "shared")
+    }
+
+    // ---- cross-file type discovery + auto-import ------------------------------
+
+    fun testCrossFileTypeIsDiscoverableAndAutoImports() {
+        myFixture.addFileToProject(
+            "lib/Widget.jux",
+            """
+            package lib;
+            public class Widget { public void render() {} }
+            """.trimIndent(),
+        )
+        myFixture.configureByText(
+            "App.jux",
+            """
+            package app;
+            public class App {
+                public void go() {
+                    var w = new Wid<caret>
+                }
+            }
+            """.trimIndent(),
+        )
+        val items = myFixture.completeBasic()
+        // Either the lookup auto-inserted (single match) or Widget is listed.
+        val strings = myFixture.lookupElementStrings
+        if (strings != null) {
+            assertTrue("cross-file Widget discoverable", strings.contains("Widget"))
+        }
+        // After accepting Widget, the import lands.
+        if (strings == null || strings.size == 1) {
+            assertTrue("auto-import inserted", myFixture.file.text.contains("import lib.Widget;"))
+        }
+    }
+
+    fun testLiteralConstantsCompleteInExpressionPosition() {
+        val items = completionsAt(
+            """
+            public class A {
+                public void go() {
+                    var x = <caret>
+                }
+            }
+            """.trimIndent(),
+        )
+        assertContainsElements(items, "null", "true", "false")
     }
 
     fun testTypeofOfferedExactlyWhenReserved() {

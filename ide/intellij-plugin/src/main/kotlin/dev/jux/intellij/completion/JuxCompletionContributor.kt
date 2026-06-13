@@ -87,13 +87,19 @@ class JuxCompletionContributor : CompletionContributor() {
                     result: CompletionResultSet,
                 ) {
                     // An active LSP session supplies smarter versions of
-                    // everything this contributor offers — stand down.
+                    // everything this contributor offers — stand down. (The
+                    // probe only reports "active" when juxc-lsp can ACTUALLY
+                    // serve — toolchain resolvable + session up — so a missing
+                    // or broken toolchain never silences the fallback.)
                     if (lspProvidesCompletion(parameters)) return
 
-                    // After a `.` (member access) the receiver's members come
-                    // from `juxc-lsp` — except the §P property surface, which
-                    // is structural and plugin-owned.
+                    // After a `.` (member access): offer the receiver's real
+                    // members (methods/fields/properties/enum constants of an
+                    // in-file-resolvable type — see JuxTypeInference) plus the
+                    // §P property surface. Without the LSP this is the only
+                    // member completion the user gets, so it must be solid.
                     if (isAfterDot(parameters)) {
+                        addMemberCompletion(parameters, result)
                         addPropertySurface(parameters, result)
                         return
                     }
@@ -195,13 +201,38 @@ class JuxCompletionContributor : CompletionContributor() {
             scope = scope.parent
         }
 
-        // Tier 4: file-level type names (`Model m = new Model();`).
+        // Tier 4: file-level type names (`Model m = new Model();`) — no import.
         val file = parameters.originalFile
         for (decl in file.children) {
             val named = decl as? JuxNamedElement ?: continue
             val name = named.name ?: continue
             if (decl.elementType in TYPE_DECLS) {
                 add(declaration(named, name, AllIcons.Nodes.Class, P_TYPE), name)
+            }
+        }
+
+        // Tier 4b: project-wide types from OTHER files — discoverable here with
+        // auto-import on accept. This is what lets cross-file types show up
+        // without the LSP; the slightly-lower priority keeps in-file names on
+        // top. (Rust std / crate types come from the LSP's stub index.)
+        val project = parameters.position.project
+        val curPkg = dev.jux.intellij.completion.JuxAutoImport.packageOfFile(file)
+        dev.jux.intellij.resolve.JuxTypeIndex.forEachType(
+            project,
+            com.intellij.psi.search.GlobalSearchScope.allScope(project),
+        ) { type ->
+            val name = type.name
+            if (name != null && name !in seen) {
+                val pkg = dev.jux.intellij.completion.JuxAutoImport.packageOf(type)
+                var b = LookupElementBuilder.create(name).withIcon(AllIcons.Nodes.Class)
+                if (pkg.isNotEmpty()) b = b.withTailText("  ($pkg)", true)
+                // Import only when it lives in a different, named package.
+                if (pkg.isNotEmpty() && pkg != curPkg) {
+                    b = b.withInsertHandler(
+                        dev.jux.intellij.completion.JuxAutoImport.handler("$pkg.$name", name),
+                    )
+                }
+                add(ranked(b, P_TYPE - 5.0), name)
             }
         }
     }
@@ -224,6 +255,52 @@ class JuxCompletionContributor : CompletionContributor() {
             .withInsertHandler(ParenthesesInsertHandler.getInstance(params != "()"))
         if (returnType != null) builder = builder.withTypeText(returnType, true)
         return ranked(builder, P_MEMBER)
+    }
+
+    // ---- object members after `.` (in-file type inference) ---------------------
+
+    /**
+     * Member completion for `recv.<caret>`: resolve the receiver to an
+     * in-file/project type ([dev.jux.intellij.resolve.JuxTypeInference]) and
+     * offer its members — methods, fields, properties, enum constants —
+     * including inherited ones (via [dev.jux.intellij.resolve.JuxHierarchy]),
+     * filtered by static vs instance access. This is the IDE-side stand-in for
+     * the LSP's type-aware member list; it covers user-defined project types.
+     * Rust std / crate members still need the LSP (its stub index), which is
+     * why the fallback never claims to be exhaustive after a dot.
+     */
+    private fun addMemberCompletion(parameters: CompletionParameters, result: CompletionResultSet) {
+        val word = wordBeforeDot(parameters) ?: return
+        val target = dev.jux.intellij.resolve.JuxTypeInference
+            .resolveReceiver(word, parameters.position) ?: return
+        val seen = HashSet<String>()
+        for (m in dev.jux.intellij.resolve.JuxHierarchy.allMembers(target.type)) {
+            val named = m as? JuxNamedElement ?: continue
+            val name = named.name ?: continue
+            val isEnumConst = m.elementType === E.ENUM_CONSTANT
+            val isStatic = isEnumConst ||
+                dev.jux.intellij.resolve.JuxHierarchy.hasModifier(m, "static")
+            // Static receiver (`Type.`) → statics + enum constants; instance
+            // receiver (`obj.`) → instance members only.
+            if (target.isStatic != isStatic) continue
+            if (!seen.add(name)) continue
+            when (m.elementType) {
+                E.METHOD_DECLARATION -> result.addElement(method(named, name))
+                E.FIELD_DECLARATION ->
+                    result.addElement(declaration(m, name, AllIcons.Nodes.Field, P_MEMBER))
+                E.PROPERTY_DECLARATION ->
+                    result.addElement(declaration(m, name, AllIcons.Nodes.Property, P_MEMBER))
+                E.ENUM_CONSTANT ->
+                    result.addElement(
+                        ranked(
+                            LookupElementBuilder.create(name)
+                                .withIcon(AllIcons.Nodes.Enum)
+                                .withTypeText(target.type.name, true),
+                            P_MEMBER,
+                        ),
+                    )
+            }
+        }
     }
 
     // ---- §P property surface after `.` ----------------------------------------

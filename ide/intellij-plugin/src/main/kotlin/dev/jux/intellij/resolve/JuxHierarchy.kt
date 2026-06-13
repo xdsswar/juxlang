@@ -179,4 +179,44 @@ object JuxHierarchy {
     /** The enclosing type declaration of a PSI element, or `null` at top level. */
     fun enclosingType(element: PsiElement): JuxTypeDeclaration? =
         PsiTreeUtil.getParentOfType(element, JuxTypeDeclaration::class.java)
+
+    /**
+     * Every member declaration of [type] and its supertypes — methods, fields,
+     * properties, and enum constants — nearest-declaration first, deduped so an
+     * override / shadow appears once (key: name for fields/properties/enum
+     * constants, name+arity for methods, so overloads stay distinct). Powers
+     * member completion (`recv.<caret>`). Cross-file supertypes resolve via
+     * [JuxTypeIndex]; the walk is breadth-first and cycle-guarded.
+     */
+    fun allMembers(type: JuxTypeDeclaration): List<PsiElement> {
+        val out = ArrayList<PsiElement>()
+        val seen = HashSet<String>()
+        val queue = ArrayDeque<JuxTypeDeclaration>()
+        queue.add(type)
+        val visitedTypes = HashSet<String>()
+        while (queue.isNotEmpty()) {
+            val t = queue.removeFirst()
+            val tn = t.name ?: continue
+            if (!visitedTypes.add(tn)) continue
+            for (et in MEMBER_KINDS) {
+                for (m in directChildren(t, et)) {
+                    val name = (m as? JuxNamedElement)?.name ?: continue
+                    val key = if (et === JuxElementTypes.METHOD_DECLARATION) "$name/${arity(m)}()" else name
+                    if (seen.add(key)) out.add(m)
+                }
+            }
+            for (sn in superTypeNames(t)) {
+                JuxTypeIndex.findType(t.project, sn)?.let { queue.add(it) }
+            }
+        }
+        return out
+    }
+
+    /** Member element types enumerated by [allMembers], in offer order. */
+    private val MEMBER_KINDS = listOf(
+        JuxElementTypes.METHOD_DECLARATION,
+        JuxElementTypes.PROPERTY_DECLARATION,
+        JuxElementTypes.FIELD_DECLARATION,
+        JuxElementTypes.ENUM_CONSTANT,
+    )
 }

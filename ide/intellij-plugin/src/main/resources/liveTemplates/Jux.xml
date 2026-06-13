@@ -121,6 +121,11 @@
     <variable name="OTHER" expression="" defaultValue="&quot;Other&quot;" alwaysStopAt="true"/>
     <context><option name="JUX" value="true"/></context>
   </template>
+  <template name="fori" value="for (var $I$ = 0; $I$ &lt; $N$; $I$++) {&#10;    $END$&#10;}" description="C-style indexed for loop" toReformat="true" toShortenFQNames="false">
+    <variable name="I" expression="" defaultValue="&quot;i&quot;" alwaysStopAt="true"/>
+    <variable name="N" expression="" defaultValue="&quot;count&quot;" alwaysStopAt="true"/>
+    <context><option name="JUX" value="true"/></context>
+  </template>
   <template name="fawe" value="for await (var $ITEM$ : $STREAM$) {&#10;    $END$&#10;}" description="for-await loop over a Stream (§18.6)" toReformat="true" toShortenFQNames="false">
     <variable name="ITEM" expression="" defaultValue="&quot;item&quot;" alwaysStopAt="true"/>
     <variable name="STREAM" expression="" defaultValue="&quot;stream&quot;" alwaysStopAt="true"/>
