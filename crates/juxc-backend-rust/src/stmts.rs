@@ -2648,6 +2648,42 @@ impl RustEmitter {
                 }
             }
         }
+        // `ref` FIELD store-through (§M.13): `obj.x = v` where `x` is
+        // a `ref` field writes INTO the shared cell. The owner is read
+        // with a SHARED borrow (the handle itself never changes); the
+        // RHS evaluates into a temp first, like every store-through.
+        if let Expr::Field(tf) = &a.target {
+            if self.field_decl_is_ref(&tf.object, &tf.field.text) {
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                self.w.push_str("{ let __jux_v = ");
+                self.emit_assign_rhs(&a.value);
+                self.w.push_str("; *");
+                let depth = if self.receiver_is_wrapper_class(&tf.object) {
+                    self.wrapper_field_parent_depth(&tf.object, &tf.field.text)
+                } else {
+                    None
+                };
+                self.emitting_method_receiver = true;
+                self.emit_expr(&tf.object);
+                self.emitting_method_receiver = false;
+                if let Some(d) = depth {
+                    self.w.push_str(".0.borrow()");
+                    for _ in 0..d {
+                        self.w.push_str(".__parent");
+                    }
+                }
+                self.w.push('.');
+                self.w.push_str(&tf.field.text);
+                self.w.push_str(".borrow_mut() ");
+                if let Some(op) = a.op {
+                    self.w.push_str(op.as_rust_str());
+                }
+                self.w.push_str("= __jux_v; }\n");
+                self.emitting_format_arg = prev;
+                return;
+            }
+        }
         // `ref` binding store-through (§M.13): `x = v` on a `ref`
         // local/param writes INTO the shared cell, so every alias
         // observes it. The RHS evaluates into a temp first — it may

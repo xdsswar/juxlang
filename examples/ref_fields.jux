@@ -1,0 +1,55 @@
+// §M.13 ref FIELDS — `public ref String x` points at a shared object.
+package reff;
+
+void retag(ref String tag) {
+    tag = "shared-tag";
+}
+
+public class Doc {
+    public ref String title;
+    public ref int views;
+    public String plain;
+
+    public Doc(String title) {
+        this.title = title;
+        this.views = 0;
+        this.plain = title;
+    }
+}
+
+public class Pair {
+    public ref int score = 100;
+}
+
+void share(Doc d) {
+    d.views += 1;
+}
+
+public void main() {
+    var d = new Doc("hello");
+    var d2 = d;                  // class handle share (already refs)
+    d2.title = "renamed";
+    print("title: " + d.title);
+
+    // ref int field arithmetic store-through.
+    d.views = 5;
+    share(d);
+    share(d);
+    print("views: " + d.views);
+
+    // Pass the ref FIELD itself into a ref param — aliases the field.
+    retag(d.title);
+    print("retag: " + d2.title);
+
+    // ref local aliasing a ref field's object.
+    ref String t = "tmp";
+    t = d.title;                 // store-through: t's cell gets the VALUE
+    print("t: " + t);
+
+    // Default-initialized ref field.
+    var p = new Pair();
+    p.score += 1;
+    print("score: " + p.score);
+
+    print("done");
+}

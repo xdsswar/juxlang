@@ -398,10 +398,18 @@ impl RustEmitter {
             self.w.emit_indent();
             self.w.push_str(&field.name.text);
             self.w.push_str(": ");
+            // `ref` field (§M.13): seed a fresh shared cell around the
+            // default value — ctor-body assignments store through it.
+            if field.is_ref {
+                self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+            }
             if let Some(default) = &field.default {
                 self.emit_expr(default);
             } else {
                 self.emit_field_storage_default(field);
+            }
+            if field.is_ref {
+                self.w.push_str("))");
             }
             self.w.push_str(",\n");
         }
@@ -603,6 +611,28 @@ impl RustEmitter {
                 continue;
             }
             self.w.emit_indent();
+            // `ref` field (§M.13): every init shape wraps into a fresh
+            // shared cell — the same-name shorthand can't apply (the
+            // param is the VALUE, the field is the cell).
+            if field.is_ref {
+                self.w.push_str(&field.name.text);
+                self.w.push_str(": std::rc::Rc::new(std::cell::RefCell::new(");
+                if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
+                    self.emit_ctor_field_init(field.ty.as_ref(), init_expr);
+                    // A place init (ctor param / field) may be used by
+                    // a LATER field init too — the cell takes a copy.
+                    if matches!(init_expr, Expr::Path(_) | Expr::Field(_)) {
+                        self.w.push_str(".clone()");
+                    }
+                } else if let Some(default) = &field.default {
+                    self.emit_ctor_field_init(field.ty.as_ref(), default);
+                } else {
+                    self.emit_field_storage_default(field);
+                }
+                self.w.push_str(")),
+");
+                continue;
+            }
             // Rust struct field shorthand: when the init is just an
             // identifier with the same name as the field
             // (`Self { x: x, … }`), emit `Self { x, … }` instead.
@@ -951,10 +981,17 @@ impl RustEmitter {
                 self.w.emit_indent();
                 self.w.push_str(&field.name.text);
                 self.w.push_str(": ");
+                // `ref` field (§M.13): seed a fresh shared cell.
+                if field.is_ref {
+                    self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                }
                 if let Some(default) = &field.default {
                     self.emit_expr(default);
                 } else {
                     self.emit_field_storage_default(field);
+                }
+                if field.is_ref {
+                    self.w.push_str("))");
                 }
                 self.w.push_str(",\n");
             }
@@ -1081,6 +1118,25 @@ impl RustEmitter {
                 self.w.push_str(", ");
             }
             first = false;
+            // `ref` field (§M.13): wrap into a fresh shared cell.
+            if field.is_ref {
+                self.w.push_str(&field.name.text);
+                self.w.push_str(": std::rc::Rc::new(std::cell::RefCell::new(");
+                if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
+                    self.emit_ctor_field_init(field.ty.as_ref(), init_expr);
+                    // A place init (ctor param / field) may be used by
+                    // a LATER field init too — the cell takes a copy.
+                    if matches!(init_expr, Expr::Path(_) | Expr::Field(_)) {
+                        self.w.push_str(".clone()");
+                    }
+                } else if let Some(default) = &field.default {
+                    self.emit_ctor_field_init(field.ty.as_ref(), default);
+                } else {
+                    self.emit_field_storage_default(field);
+                }
+                self.w.push_str("))");
+                continue;
+            }
             if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
                 if init_is_same_named_ident(init_expr, &field.name.text) {
                     self.w.push_str(&field.name.text);
@@ -1165,10 +1221,18 @@ impl RustEmitter {
             first = false;
             self.w.push_str(&field.name.text);
             self.w.push_str(": ");
+            // `ref` field (§M.13): seed a fresh shared cell around the
+            // default value — ctor-body assignments store through it.
+            if field.is_ref {
+                self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+            }
             if let Some(default) = &field.default {
                 self.emit_expr(default);
             } else {
                 self.emit_field_storage_default(field);
+            }
+            if field.is_ref {
+                self.w.push_str("))");
             }
         }
         // §P observer storage starts unallocated.
@@ -1271,10 +1335,18 @@ impl RustEmitter {
             self.w.emit_indent();
             self.w.push_str(&field.name.text);
             self.w.push_str(": ");
+            // `ref` field (§M.13): seed a fresh shared cell around the
+            // default value — ctor-body assignments store through it.
+            if field.is_ref {
+                self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+            }
             if let Some(default) = &field.default {
                 self.emit_expr(default);
             } else {
                 self.emit_field_storage_default(field);
+            }
+            if field.is_ref {
+                self.w.push_str("))");
             }
             self.w.push_str(",\n");
         }

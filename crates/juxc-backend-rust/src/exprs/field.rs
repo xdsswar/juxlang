@@ -548,6 +548,23 @@ impl RustEmitter {
         self.w.push('.');
         self.w.push_str(&f.field.text);
                         if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
+        // `ref` field READ (§M.13): the slot is a shared cell — a
+        // value-position read clones the VALUE out (statement-scoped
+        // borrow). Writes never reach here (`emit_assign`'s
+        // store-through arm intercepts the whole statement).
+        if !is_call_callee
+            && !self.emitting_lvalue
+            && self.field_decl_is_ref(&f.object, &f.field.text)
+        {
+            if self.emitting_ref_handle {
+                // Aliasing pass into a `ref` parameter — share the
+                // HANDLE, not the value.
+                self.w.push_str(".clone()");
+            } else {
+                self.w.push_str(".borrow().clone()");
+            }
+            return;
+        }
         // Auto-`.clone()` on field reads in two cases:
         //   1. String-field reads — so `return this.name;` and similar
         //      don't move out of `&self`.
@@ -1523,6 +1540,39 @@ fn strip_nullable(ty: Ty) -> Ty {
 /// `asPath` → `as_path`, `isEmpty` → `is_empty`, `withCapacity` → `with_capacity`.
 /// Used only for members on external (`rust.std` / crate) receivers (§G.9.2).
 impl RustEmitter {
+    /// Is `field_name` of the class `object_expr` evaluates to a `ref`
+    /// field (§M.13 — an `Rc<RefCell<T>>` shared-reference cell)?
+    /// Walks the `extends` chain; `this`/ctor-inner receivers resolve
+    /// through the enclosing class.
+    pub(crate) fn field_decl_is_ref(
+        &self,
+        object_expr: &Expr,
+        field_name: &str,
+    ) -> bool {
+        let bare = if matches!(object_expr, Expr::This(_)) {
+            self.enclosing_class.clone()
+        } else {
+            self.receiver_class_bare(object_expr)
+                .or_else(|| self.enclosing_class.clone())
+        };
+        let Some(mut bare) = bare else { return false };
+        for _ in 0..64 {
+            let Some(cd) = self.class_ast_by_bare(&bare) else { return false };
+            if let Some(f) = cd.fields.iter().find(|f| f.name.text == field_name) {
+                return f.is_ref;
+            }
+            match cd
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.first().map(|s| s.text.clone()))
+            {
+                Some(parent) => bare = parent,
+                None => return false,
+            }
+        }
+        false
+    }
+
     /// Does calling `method` on a value of the external class
     /// `type_name` MUTATE the receiver? DISCOVERED from the stub's
     /// `@MutSelf` annotation — bindgen records the real Rust
