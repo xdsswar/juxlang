@@ -403,29 +403,30 @@ You get three binaries in `target/release/`:
 ### 2. Put the binaries in a folder and set `JUX_HOME`
 
 The tools and the IntelliJ plugin look for `juxc` / `juxc-lsp` in this order:
-an explicitly configured path, then **`$JUX_HOME/bin/`**, then your `PATH`. The
-recommended setup is to drop the binaries into one folder and point `JUX_HOME` at it.
+an explicitly configured path, then **`$JUX_HOME`**, then your `PATH`. The
+recommended setup is to drop the executables straight into one folder and point
+`JUX_HOME` at it (no `bin/` subfolder; the binaries sit directly in `JUX_HOME`).
 
 **Windows (PowerShell):**
 
 ```powershell
 $JuxHome = "C:\Tools\jux"
-New-Item -ItemType Directory -Force -Path "$JuxHome\bin" | Out-Null
-Copy-Item target\release\juxc.exe,target\release\jux.exe,target\release\juxc-lsp.exe "$JuxHome\bin"
+New-Item -ItemType Directory -Force -Path "$JuxHome" | Out-Null
+Copy-Item target\release\juxc.exe,target\release\jux.exe,target\release\juxc-lsp.exe "$JuxHome"
 
 setx JUX_HOME $JuxHome
-setx PATH "$env:PATH;$JuxHome\bin"
+setx PATH "$env:PATH;$JuxHome"
 ```
 
 **macOS / Linux (bash/zsh):**
 
 ```sh
 JUX_HOME="$HOME/.jux"
-mkdir -p "$JUX_HOME/bin"
-cp target/release/juxc target/release/jux target/release/juxc-lsp "$JUX_HOME/bin/"
+mkdir -p "$JUX_HOME"
+cp target/release/juxc target/release/jux target/release/juxc-lsp "$JUX_HOME/"
 
-echo 'export JUX_HOME="$HOME/.jux"'      >> ~/.zshrc
-echo 'export PATH="$JUX_HOME/bin:$PATH"' >> ~/.zshrc
+echo 'export JUX_HOME="$HOME/.jux"'  >> ~/.zshrc
+echo 'export PATH="$JUX_HOME:$PATH"' >> ~/.zshrc
 ```
 
 Open a **new** terminal afterward so the variables take effect (and restart
