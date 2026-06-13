@@ -56,7 +56,7 @@ pub use desugar::{
 };
 pub use exprs::{
     AnonymousBody, BinaryExpr, BinaryOp, CallExpr, CastExpr, ElvisExpr, Expr, FieldExpr,
-    IndexExpr, InterpSegment, InterpStringExpr, LambdaBody, LambdaExpr, LambdaParam,
+    IncDecExpr, IndexExpr, InterpSegment, InterpStringExpr, LambdaBody, LambdaExpr, LambdaParam,
     MethodRefExpr, NewArrayExpr, NewArrayLitExpr, NewObjectExpr, RangeExpr, SizeOfExpr,
     TernaryExpr, TypeTestExpr, UnaryExpr, UnaryOp,
 };

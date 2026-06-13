@@ -502,6 +502,16 @@ pub(crate) fn collect_mutating_calls(e: &Expr, out: &mut HashSet<String>, user_m
         Expr::Await(inner, _) => {
             collect_mutating_calls(inner, out, user_mut);
         }
+        // `++place` / `place++` (§A `incdec`, value form) STORES into the
+        // place, so its base binding must be `let mut` — mark it, then
+        // walk the target for any nested mutating calls (e.g. the index
+        // in `arr[push(v)]++`, contrived but possible).
+        Expr::IncDec(i) => {
+            if let Some(name) = lvalue_base_name(&i.target) {
+                out.insert(name);
+            }
+            collect_mutating_calls(&i.target, out, user_mut);
+        }
     }
 }
 
@@ -580,6 +590,7 @@ fn expr_contains_await(e: &Expr) -> bool {
         Expr::TypeTest(t) => expr_contains_await(&t.value),
         Expr::Range(r) => expr_contains_await(&r.start) || expr_contains_await(&r.end),
         Expr::Field(f) => expr_contains_await(&f.object),
+        Expr::IncDec(i) => expr_contains_await(&i.target),
         Expr::Index(i) => expr_contains_await(&i.array) || expr_contains_await(&i.index),
         Expr::NewArray(n) => {
             expr_contains_await(&n.size) || n.inner_sizes.iter().any(|s| expr_contains_await(s))

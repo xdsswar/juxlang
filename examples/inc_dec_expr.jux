@@ -1,0 +1,42 @@
+// Expression-position ++/-- (§A `incdec`, value form).
+//
+// Unlike the statement forms in `increment_decrement.jux`, every
+// inc/dec here is *consumed* — passed to a function, used as an
+// initializer, or used as an array index. Post yields the OLD value;
+// pre yields the NEW value; the place is evaluated exactly once.
+public void main() {
+    // --- Postfix yields OLD, prefix yields NEW (names) ---
+    int x = 5;
+    print("post-inc value: " + (x++)); // prints 5, x is now 6
+    print("x after post-inc: " + x);   // 6
+    print("pre-inc value: " + (++x));  // prints 7, x is now 7
+    print("x after pre-inc: " + x);    // 7
+
+    int y = 5;
+    print("post-dec value: " + (y--)); // prints 5, y is now 4
+    print("pre-dec value: " + (--y));  // prints 3, y is now 3
+
+    // --- As an initializer (var inference takes the operand type) ---
+    int n = 10;
+    var a = n++; // a = 10 (old), n = 11
+    var b = ++n; // n = 12, b = 12 (new)
+    print("a: " + a + " b: " + b + " n: " + n); // a: 10 b: 12 n: 12
+
+    // --- As an array index, single-eval of the index ---
+    var arr = new int[]{10, 20, 30};
+    int i = 0;
+    // `arr[i++]` reads arr[0] (=10) and steps i to 1, exactly once.
+    print("arr[i++]: " + arr[i++]); // 10
+    print("i now: " + i);           // 1
+    print("arr[i]: " + arr[i]);     // 20 (i==1)
+
+    // --- Incrementing an array element, value consumed ---
+    var counts = new int[]{0, 0};
+    int slot = 1;
+    int got = counts[slot]++; // got = 0 (old), counts[1] = 1
+    print("got: " + got + " counts1: " + counts[slot]); // got: 0 counts1: 1
+    int pre = ++counts[slot]; // counts[1] = 2, pre = 2
+    print("pre: " + pre + " counts1: " + counts[slot]); // pre: 2 counts1: 2
+
+    print("done");
+}

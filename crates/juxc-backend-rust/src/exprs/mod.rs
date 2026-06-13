@@ -304,6 +304,7 @@ impl RustEmitter {
                 }
             }
             Expr::Binary(b) => self.emit_binary(b),
+            Expr::IncDec(i) => self.emit_incdec_value(i),
             Expr::Unary(u) => self.emit_unary(u),
             Expr::Range(r) => self.emit_range(r),
             Expr::Cast(c) => self.emit_cast(c),
@@ -1701,6 +1702,7 @@ pub(crate) fn expr_span_of(e: &Expr) -> juxc_source::Span {
         Expr::MethodRef(m) => m.span,
         Expr::Ternary(t) => t.span,
         Expr::Await(_, s) => *s,
+        Expr::IncDec(i) => i.span,
     }
 }
 

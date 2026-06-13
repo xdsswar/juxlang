@@ -268,6 +268,13 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             Ty::Nullable(t) => *t,
             other => other,
         },
+        // `++place` / `place++` (§A `incdec`, value form). The result
+        // is the operand's own (numeric) type — `var y = x++;` gives `y`
+        // the type of `x`, and prefix/postfix don't change that (only
+        // WHICH value, old vs new, is yielded). The numeric/assignable
+        // validation lives in `check_expr`; inference just forwards the
+        // place's type so downstream var-decl inference works.
+        Expr::IncDec(i) => infer_expr(&i.target, env, symbols),
     }
 }
 

@@ -252,6 +252,9 @@ fn walk_expr_deps(e: &Expr, settable: &[&str], out: &mut Vec<String>) {
             walk_expr_deps(&i.array, settable, out);
             walk_expr_deps(&i.index, settable, out);
         }
+        // `++place` / `place++` reads (and writes) the place — walk it
+        // so a settable property stepped via `++` is noted as a dep.
+        Expr::IncDec(i) => walk_expr_deps(&i.target, settable, out),
         Expr::InterpString(s) => {
             for seg in &s.segments {
                 if let juxc_ast::InterpSegment::Expr(inner) = seg {

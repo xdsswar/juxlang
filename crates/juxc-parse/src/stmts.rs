@@ -304,14 +304,24 @@ impl<'a> Parser<'a> {
         if let Some(op) = compound_assign_op(self.peek()) {
             return self.parse_assignment_tail(expr, Some(op));
         }
-        // **Postfix `x++` / `x--`** — same desugaring. The expression
-        // we just parsed is the lvalue.
-        if matches!(self.peek(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
-            let is_inc = matches!(self.peek(), TokenKind::PlusPlus);
-            self.advance();
-            let stmt = self.make_incdec(expr, is_inc)?;
-            self.expect(&TokenKind::Semicolon, "';' after `++`/`--` statement");
-            return Some(stmt);
+        // **Postfix `x++` / `x--` as a whole STATEMENT** — desugar to the
+        // value-less `x += 1` / `x -= 1` (the historical statement form;
+        // §A `incdec`). Since the expression grammar now also parses a
+        // trailing postfix `++`/`--` into an `Expr::IncDec` (value form,
+        // §A `incdec` N3), `parse_expr` above has already consumed the
+        // operator and handed us that node. When such a node is the
+        // ENTIRE statement, its value is discarded — so we unwrap it back
+        // into the plain compound-assign statement, keeping the emitted
+        // Rust a clean `x += 1` with no temp/value block. (A nested
+        // inc/dec inside a larger expression never reaches here — it sits
+        // under a Call/Index/etc. and stays an `Expr::IncDec`.)
+        if let Expr::IncDec(incdec) = &expr {
+            if !incdec.is_prefix {
+                let target = (*incdec.target).clone();
+                let stmt = self.make_incdec(target, incdec.is_inc)?;
+                self.expect(&TokenKind::Semicolon, "';' after `++`/`--` statement");
+                return Some(stmt);
+            }
         }
         self.expect(&TokenKind::Semicolon, "';' after expression statement");
         Some(Stmt::Expr(expr))
@@ -521,11 +531,18 @@ impl<'a> Parser<'a> {
                 self.parse_assignment_tail_no_semi(expr, None)?
             } else if let Some(op) = compound_assign_op(self.peek()) {
                 self.parse_assignment_tail_no_semi(expr, Some(op))?
-            } else if matches!(self.peek(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
+            } else if let Expr::IncDec(incdec) = &expr {
                 // Postfix `i++` / `i--` — the common C-style for-update.
-                let is_inc = matches!(self.peek(), TokenKind::PlusPlus);
-                self.advance();
-                self.make_incdec(expr, is_inc)?
+                // `parse_expr` already parsed the trailing operator into
+                // an `Expr::IncDec` (value form); since the update clause
+                // discards the value, unwrap it back to the value-less
+                // `i += 1` / `i -= 1` statement (clean Rust output).
+                if !incdec.is_prefix {
+                    let target = (*incdec.target).clone();
+                    self.make_incdec(target, incdec.is_inc)?
+                } else {
+                    Stmt::Expr(expr)
+                }
             } else {
                 Stmt::Expr(expr)
             };

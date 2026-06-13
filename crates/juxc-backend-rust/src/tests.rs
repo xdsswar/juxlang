@@ -4338,3 +4338,74 @@ fn no_downcast_no_hooks() {
     );
     assert!(!rust.contains("__jux_as_"), "no hooks expected: {rust}");
 }
+
+// ---------------------------------------------------------------------------
+// §A `incdec` — expression-position ++/-- (value form, N3)
+// ---------------------------------------------------------------------------
+
+/// Postfix `x++` as a VALUE lowers to a block that caches the OLD value
+/// (`let __jux_t = x`), then steps the place (`x += 1`), then yields the
+/// cache — so the expression's value is the pre-increment `x`.
+#[test]
+fn postfix_incr_value_yields_old() {
+    let rust = emit("public void main() { int x = 5; print(x++); }");
+    // Block caches old value before the step.
+    assert!(rust.contains("let __jux_t = x"), "expected old-value cache: {rust}");
+    assert!(rust.contains("x += 1"), "expected the `+= 1` step: {rust}");
+    // The block trails with the cached old value.
+    assert!(
+        rust.contains("__jux_t") && rust.contains("x += 1"),
+        "postfix block should yield the cached old value: {rust}",
+    );
+}
+
+/// Prefix `++x` as a VALUE lowers to a block that steps the place FIRST
+/// (`x += 1`) then yields the place (`x`) — the post-step (new) value.
+/// There is NO old-value cache for the prefix form.
+#[test]
+fn prefix_incr_value_yields_new() {
+    let rust = emit("public void main() { int x = 5; var y = ++x; }");
+    assert!(rust.contains("x += 1"), "expected the `+= 1` step: {rust}");
+    // Prefix mutates first, then reads the place — it never caches an
+    // OLD value, so no `__jux_t` temp is emitted for this program.
+    assert!(
+        !rust.contains("__jux_t"),
+        "prefix form must not cache an old value: {rust}",
+    );
+}
+
+/// Decrement uses `- 1`: postfix `x--` caches the old value then steps
+/// `x -= 1`.
+#[test]
+fn postfix_decr_uses_minus_one() {
+    let rust = emit("public void main() { int x = 5; print(x--); }");
+    assert!(rust.contains("let __jux_t = x"), "expected old-value cache: {rust}");
+    assert!(rust.contains("x -= 1"), "expected the `-= 1` step: {rust}");
+}
+
+/// `arr[i++]` single-evaluates the index: the index `i++` block is
+/// itself the postfix block, and the OUTER read indexes once. The point
+/// is that no `i` step is duplicated — exactly one `i += 1` is emitted.
+#[test]
+fn array_index_incr_single_evaluates() {
+    let rust = emit(
+        "public void main() { var arr = new int[]{0}; int i = 0; print(arr[i++]); }",
+    );
+    assert_eq!(
+        rust.matches("i += 1").count(),
+        1,
+        "the index step must run exactly once (single-eval): {rust}",
+    );
+}
+
+/// Incrementing an array ELEMENT as a value (`counts[s]++`) hoists the
+/// index into `__jux_i` so the element place is evaluated once for the
+/// load and once for the store WITHOUT re-running the index expression.
+#[test]
+fn array_element_incr_hoists_index() {
+    let rust = emit(
+        "public void main() { var counts = new int[]{0}; int s = 0; var got = counts[s]++; }",
+    );
+    assert!(rust.contains("let __jux_i = s"), "index should hoist to __jux_i: {rust}");
+    assert!(rust.contains("let __jux_t ="), "old value should be cached: {rust}");
+}

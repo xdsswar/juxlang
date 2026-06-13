@@ -397,6 +397,24 @@ impl<'a> Parser<'a> {
             let span = start_span.join(self.last_consumed_span());
             return Some(Expr::Await(Box::new(operand), span));
         }
+        // **Prefix `++x` / `--x` in EXPRESSION position** (§A `incdec`,
+        // value form). This branch is only reached when the inc/dec is
+        // nested inside a larger expression — a *statement*-leading
+        // `++x;` is intercepted earlier by `parse_stmt` and desugared to
+        // `x += 1` with no value (see `stmts.rs`). Here we build the
+        // value-yielding [`Expr::IncDec`] node instead. The operand is
+        // parsed at unary precedence so `++a.b`, `++arr[i]`, and chains
+        // bind correctly; lvalue validation (name/index/field, else
+        // E0200) is shared with the statement path via
+        // [`Self::make_incdec_expr`].
+        if matches!(self.peek(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
+            let start_span = self.peek_span();
+            let is_inc = matches!(self.peek(), TokenKind::PlusPlus);
+            self.advance(); // '++' / '--'
+            let operand = self.parse_unary()?;
+            let span = start_span.join(self.last_consumed_span());
+            return self.make_incdec_expr(operand, is_inc, /*is_prefix=*/ true, span);
+        }
         let start_span = self.peek_span();
         let op = match self.peek() {
             TokenKind::Minus => Some(UnaryOp::Neg),
@@ -893,10 +911,72 @@ impl<'a> Parser<'a> {
                         span,
                     });
                 }
+                // **Postfix `x++` / `x--` in EXPRESSION position** (§A
+                // `incdec`, value form). Reached only when the inc/dec is
+                // nested in a larger expression: a *statement* `x++;` is
+                // handled earlier by `parse_stmt` (desugared to `x += 1`,
+                // no value). Wrap whatever postfix chain we just parsed
+                // (`x`, `a.b`, `arr[i]`) as the value-yielding
+                // [`Expr::IncDec`]. We then `break` — `x++ ++` is not a
+                // place, so a second inc/dec would be rejected by the
+                // lvalue check anyway, and stopping here keeps the error
+                // crisp. `?` returns `None` on a bad place.
+                TokenKind::PlusPlus | TokenKind::MinusMinus => {
+                    let is_inc = matches!(self.peek(), TokenKind::PlusPlus);
+                    let end = self.peek_span();
+                    self.advance(); // '++' / '--'
+                    let span = expr_span(&expr).join(end);
+                    expr = self.make_incdec_expr(expr, is_inc, /*is_prefix=*/ false, span)?;
+                    break;
+                }
                 _ => break,
             }
         }
         Some(expr)
+    }
+
+    /// Build the value-yielding [`Expr::IncDec`] for an expression-
+    /// position `++`/`--` (§A `incdec`, value form).
+    ///
+    /// The `target` must be an assignable place — a single-segment name,
+    /// an array element (`arr[i]`), or a field (`obj.f`). This is the
+    /// SAME lvalue rule [`Self::make_incdec`] enforces for the statement
+    /// form; anything else is reported as `E0200` and the method returns
+    /// `None` (so `?` propagates the parse failure).
+    ///
+    /// `is_inc` selects `++` vs `--`; `is_prefix` selects the prefix
+    /// (`++x`, yields the NEW value) vs postfix (`x++`, yields the OLD
+    /// value) form. `span` covers the whole operator+operand source.
+    pub(crate) fn make_incdec_expr(
+        &mut self,
+        target: Expr,
+        is_inc: bool,
+        is_prefix: bool,
+        span: Span,
+    ) -> Option<Expr> {
+        // Shared lvalue gate: a bare name, an index, or a field. The
+        // single-segment restriction matches `make_incdec` — a dotted
+        // path (`a.b.c`) reaches us as `Expr::Field`, not `Expr::Path`,
+        // so a multi-segment `Path` here would be a namespaced read,
+        // which is not an assignable place.
+        let is_lvalue = matches!(&target, Expr::Path(qn) if qn.segments.len() == 1)
+            || matches!(&target, Expr::Index(_) | Expr::Field(_));
+        if !is_lvalue {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0200_UnexpectedToken,
+                    "`++`/`--` requires an assignable place (a name, array element, or field)",
+                )
+                .with_span(span),
+            );
+            return None;
+        }
+        Some(Expr::IncDec(juxc_ast::IncDecExpr {
+            target: Box::new(target),
+            is_inc,
+            is_prefix,
+            span,
+        }))
     }
 
     /// `primary = literal | identifier | 'this' | 'super' | …` per §A.2.9.
@@ -1562,6 +1642,7 @@ pub(crate) fn expr_span(e: &Expr) -> Span {
         Expr::Ternary(t) => t.span,
         Expr::Await(_, s) => *s,
         Expr::NotNullAssert(_, s) => *s,
+        Expr::IncDec(i) => i.span,
     }
 }
 

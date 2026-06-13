@@ -135,6 +135,20 @@ pub enum Expr {
     /// (`a.peer!!.id`). The boxed `Expr` is the asserted operand; the
     /// `Span` covers `expr!!`.
     NotNullAssert(Box<Expr>, Span),
+    /// `++place` / `--place` / `place++` / `place--` — **expression-
+    /// position increment/decrement** (§A `incdec`, value form). Unlike
+    /// the *statement* form (which the statement parser intercepts and
+    /// desugars to a plain `place += 1` with no value), this variant is
+    /// produced ONLY when the inc/dec sits inside a larger expression
+    /// and its value is consumed — `print(x++)`, `var y = ++x;`,
+    /// `arr[i++]`, `return n--;`.
+    ///
+    /// Value semantics mirror C/Java: the **prefix** form yields the
+    /// NEW value (after the step); the **postfix** form yields the OLD
+    /// value (before the step). The operand must be an assignable
+    /// numeric place (name / index / field); anything else is `E0200`.
+    /// See [`IncDecExpr`].
+    IncDec(IncDecExpr),
 }
 
 impl Expr {
@@ -175,8 +189,40 @@ impl Expr {
             Expr::Ternary(t) => t.span,
             Expr::Await(_, s) => *s,
             Expr::NotNullAssert(_, s) => *s,
+            Expr::IncDec(i) => i.span,
         }
     }
+}
+
+/// Expression-position increment/decrement: `++place`, `--place`,
+/// `place++`, `place--` (§A `incdec`, value form).
+///
+/// The four shapes are encoded by two booleans:
+///
+/// | source    | `is_inc` | `is_prefix` | value yielded |
+/// |-----------|----------|-------------|---------------|
+/// | `++x`     | `true`   | `true`      | NEW (`x + 1`) |
+/// | `x++`     | `true`   | `false`     | OLD (`x`)     |
+/// | `--x`     | `false`  | `true`      | NEW (`x - 1`) |
+/// | `x--`     | `false`  | `false`     | OLD (`x`)     |
+///
+/// The operand (`target`) is the place being stepped. The backend
+/// lowers this to a value-returning Rust block that evaluates the
+/// place EXACTLY ONCE (hoisting any side-effecting index/receiver into
+/// a temp first) so `arr[i++]` runs `i++` a single time.
+#[derive(Debug, Clone)]
+pub struct IncDecExpr {
+    /// The assignable place being incremented/decremented (a name,
+    /// array element, or field — validated by the parser/tycheck).
+    pub target: Box<Expr>,
+    /// `true` for `++` (increment), `false` for `--` (decrement).
+    pub is_inc: bool,
+    /// `true` for the prefix form (`++x` / `--x`, yields the NEW
+    /// value), `false` for the postfix form (`x++` / `x--`, yields the
+    /// OLD value).
+    pub is_prefix: bool,
+    /// Span covering the whole `++place` / `place++` form.
+    pub span: Span,
 }
 
 /// Ternary expression: `condition ? then_branch : else_branch`.
