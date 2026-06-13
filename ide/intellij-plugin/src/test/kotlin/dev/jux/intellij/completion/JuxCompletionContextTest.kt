@@ -442,4 +442,71 @@ class JuxCompletionContextTest : BasePlatformTestCase() {
         val reserved = "typeof" in dev.jux.intellij.highlight.JuxKeywords.KEYWORDS
         assertEquals("typeof offered iff reserved (got $items)", reserved, "typeof" in items)
     }
+
+    // ---- completion inside `${…}` interpolation holes -------------------------
+
+    private val D = '$' // keeps Kotlin string interpolation out of the snippets
+
+    fun testInterpolationHoleOffersVisibleDeclarations() {
+        val items = completionsAt(
+            """
+            package demo;
+            public class A {
+                private int width;
+                public void go(int param) {
+                    var local = 1;
+                    var s = ${D}"x=${D}{ <caret> }";
+                }
+            }
+            """.trimIndent(),
+        )
+        // An expression hole sees locals, params and enclosing members…
+        assertContainsElements(items, "local", "param", "width")
+        // …but not statement keywords (it's an expression, not a statement).
+        assertDoesntContain(items, "return", "class", "while")
+    }
+
+    fun testInterpolationHoleMemberAccess() {
+        val items = completionsAt(
+            """
+            package demo;
+            public class Point { public int x; public int y; }
+            public class A {
+                public void go() {
+                    var p = new Point();
+                    var s = ${D}"v=${D}{ p.<caret> }";
+                }
+            }
+            """.trimIndent(),
+        )
+        assertContainsElements(items, "x", "y")
+    }
+
+    fun testInterpolationPlainTextOffersNothing() {
+        // Caret in the literal text of an interpolation string — outside any
+        // hole — must NOT trigger code completion (that would be noise).
+        val items = completionsAt(
+            """
+            public class A {
+                public void go(int param) {
+                    var s = ${D}"hello <caret>";
+                }
+            }
+            """.trimIndent(),
+        )
+        assertDoesntContain(items, "param")
+    }
+
+    fun testPlainStringTextOffersNothing() {
+        val items = completionsAt(
+            """
+            public class A {
+                public void go(int param) {
+                    var s = "hello <caret>";
+                }
+            }
+            """.trimIndent(),
+        )
+        assertDoesntContain(items, "param", "go")
+    }
 }

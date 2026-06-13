@@ -86,6 +86,13 @@ class JuxCompletionContributor : CompletionContributor() {
                     context: ProcessingContext,
                     result: CompletionResultSet,
                 ) {
+                    // Inside a `$"…${ ⟨caret⟩ }…"` interpolation hole the LSP is
+                    // blind — the whole literal is one opaque string token to it,
+                    // so it never completes there. The plugin therefore OWNS hole
+                    // completion and runs it even when the LSP is serving the rest
+                    // of the file. Must come before the LSP early-return below.
+                    if (addInterpHoleCompletion(parameters, result)) return
+
                     // An active LSP session supplies smarter versions of
                     // everything this contributor offers — stand down. (The
                     // probe only reports "active" when juxc-lsp can ACTUALLY
@@ -373,6 +380,113 @@ class JuxCompletionContributor : CompletionContributor() {
                 ),
             )
         }
+    }
+
+    // ---- completion inside `${…}` interpolation holes --------------------------
+
+    /**
+     * The plugin OWNS completion inside string literals: returns true (so the
+     * caller stops) for any caret inside a string/char token. Within an active
+     * `${ … }` interpolation hole it offers the same ranked, scope-filtered
+     * suggestions an expression position would get — locals/params/members/
+     * types, or a receiver's members after a `.`. Everywhere else inside a
+     * string (plain text, char literals) it adds NOTHING — code completion
+     * there is just noise. Returns false only when the caret isn't in a string
+     * at all, letting normal code completion proceed.
+     *
+     * The literal is a single lexer token, so the platform's default prefix is
+     * unreliable here; we recompute the prefix matcher from the identifier run
+     * immediately left of the caret so "whatever I type" filters correctly.
+     */
+    private fun addInterpHoleCompletion(
+        parameters: CompletionParameters,
+        result: CompletionResultSet,
+    ): Boolean {
+        if (!isInsideStringLiteral(parameters.position)) return false
+        if (inInterpHole(parameters)) {
+            val text = parameters.editor.document.charsSequence
+            // ALWAYS install our own prefix matcher (even an empty one): the
+            // platform's default prefix for a caret inside a string token is the
+            // leading literal text (e.g. `v=${ p.`), which matches nothing, so
+            // member/declaration items would be filtered out entirely.
+            val res = result.withPrefixMatcher(identifierPrefix(text, parameters.offset))
+            if (isAfterDot(parameters)) {
+                addMemberCompletion(parameters, res)
+                addPropertySurface(parameters, res)
+            } else {
+                addVisibleDeclarations(parameters, res)
+            }
+        }
+        return true
+    }
+
+    /** The element (or a near ancestor) at the caret is a string/char literal. */
+    private fun isInsideStringLiteral(position: PsiElement): Boolean {
+        var e: PsiElement? = position
+        var hops = 0
+        while (e != null && hops < 3) {
+            val t = e.elementType
+            if (t != null &&
+                (dev.jux.intellij.highlight.JuxTokenTypes.STRING_LITERALS.contains(t) ||
+                    t === dev.jux.intellij.highlight.JuxTokenTypes.CHAR_LITERAL)
+            ) {
+                return true
+            }
+            e = e.parent
+            hops++
+        }
+        return false
+    }
+
+    /**
+     * True when the caret is inside an open `${ … }` hole of an interpolation
+     * literal. Gate: the caret element is (within a couple of hops) an
+     * interpolation string token; then a brace-aware backward scan from the
+     * caret must reach an unmatched `{` whose preceding char is `$` before it
+     * hits the string boundary (`"`) or a newline. A nested string inside the
+     * hole short-circuits the scan (no completion there) — an accepted v1 gap.
+     */
+    private fun inInterpHole(parameters: CompletionParameters): Boolean {
+        if (!isInsideInterpString(parameters.position)) return false
+        val text = parameters.editor.document.charsSequence
+        var i = parameters.offset - 1
+        var depth = 0
+        while (i >= 0) {
+            when (text[i]) {
+                '}' -> depth++
+                '{' -> {
+                    if (depth == 0) return i > 0 && text[i - 1] == '$'
+                    depth--
+                }
+                '"', '\n' -> return false
+            }
+            i--
+        }
+        return false
+    }
+
+    /** The element (or a near ancestor) at the caret is an interpolation literal. */
+    private fun isInsideInterpString(position: PsiElement): Boolean {
+        var e: PsiElement? = position
+        var hops = 0
+        while (e != null && hops < 3) {
+            val t = e.elementType
+            if (t === dev.jux.intellij.highlight.JuxTokenTypes.INTERP_STRING_LITERAL ||
+                t === dev.jux.intellij.highlight.JuxTokenTypes.INTERP_RAW_STRING_LITERAL
+            ) {
+                return true
+            }
+            e = e.parent
+            hops++
+        }
+        return false
+    }
+
+    /** The run of identifier chars (`[A-Za-z0-9_]`) immediately left of [offset]. */
+    private fun identifierPrefix(text: CharSequence, offset: Int): String {
+        var i = offset
+        while (i > 0 && (text[i - 1].isLetterOrDigit() || text[i - 1] == '_')) i--
+        return text.subSequence(i, offset).toString()
     }
 
     /** The identifier word immediately before the `.` the caret follows, or null. */
