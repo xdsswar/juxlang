@@ -7,11 +7,12 @@
 // On other platforms, point a `@layout(c)` struct at any C function that takes
 // or returns a small struct.
 
+// No constructor needed: a `@layout(c)` struct gets an implicit positional
+// constructor from its fields, so `new POINT(x, y)` just works.
 @layout(c)
 struct POINT {
     i32 x;
     i32 y;
-    public POINT(i32 x, i32 y) { this.x = x; this.y = y; }
 }
 
 @extern(lib = "user32")

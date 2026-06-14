@@ -7548,6 +7548,20 @@ mod tests {
         assert!(!has(&d, code::Code::E0508_FfiTypeNotAllowed), "{d:?}");
     }
 
+    /// A `@layout(c)` struct with bare fields and no constructor gets an
+    /// implicit positional constructor (synthesized in the desugar pass), so
+    /// `new P(x, y)` is clean - no E0600 (definite assignment) and no E0411
+    /// (arg count).
+    #[test]
+    fn layout_c_struct_implicit_ctor_is_clean() {
+        let d = run(
+            "@layout(c) struct P { i32 x; i32 y; } \
+             public void main() { P p = new P(1, 2); i32 a = p.x; }",
+        );
+        assert!(!has(&d, code::Code::E0600_FieldNotDefinitelyAssigned), "{d:?}");
+        assert!(!has(&d, code::Code::E0411_WrongArgCount), "{d:?}");
+    }
+
     // --- §M.14.2 `final` parameter / local reassignment (E0464) ---
 
     /// Reassigning a `final` parameter is E0464.
