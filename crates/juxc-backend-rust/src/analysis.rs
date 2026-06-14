@@ -2523,6 +2523,29 @@ impl crate::RustEmitter {
         let Some(src_ty) = self.expr_types.get(&crate::exprs::expr_span_of(expr)) else {
             return IfaceCoercion::None;
         };
+        // A **generic-param** source (`T occ` returned into an `Animal` slot,
+        // where `T extends Animal`) is a concrete value at runtime that must be
+        // wrapped into the trait object exactly like a concrete subtype:
+        // `Rc::new(occ.clone()) as Rc<dyn Animal>`. The coercion is valid iff `T`'s
+        // declared bound names the target interface / polymorphic base, which we
+        // read from the in-scope `type_param_bounds`.
+        if let juxc_tycheck::Ty::Param(pname) = src_ty {
+            let bounded_by_target = self
+                .type_param_bounds
+                .get(pname)
+                .map(|bounds| {
+                    bounds.iter().any(|b| {
+                        b.name.segments.last().map(|s| s.text.as_str()) == Some(target_bare)
+                    })
+                })
+                .unwrap_or(false);
+            if bounded_by_target {
+                return IfaceCoercion::WrapClass {
+                    clone_first: self.wrapper_value_needs_clone(expr),
+                };
+            }
+            return IfaceCoercion::None;
+        }
         let juxc_tycheck::Ty::User { name, .. } = src_ty else {
             return IfaceCoercion::None;
         };

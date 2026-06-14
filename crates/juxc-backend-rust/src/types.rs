@@ -873,7 +873,12 @@ impl RustEmitter {
             // generic containers (and their marker impls) sound —
             // including storage-position wildcards that erase a
             // generic arg to `Box<dyn …Kind>`.
-            self.w.push_str("Clone + std::fmt::Debug");
+            //
+            // `+ 'static`: every Jux type is owned (no borrowed/lifetime
+            // type args), so this always holds, and it lets a bounded
+            // param coerce into a trait object — `Rc::new(t) as Rc<dyn
+            // Iface>` requires `T: 'static` (rustc E0310).
+            self.w.push_str("Clone + std::fmt::Debug + 'static");
         }
         self.w.push('>');
     }
@@ -912,7 +917,10 @@ impl RustEmitter {
                 self.emit_bound_type(bound);
                 self.w.push_str(" + ");
             }
-            self.w.push_str("Clone + std::fmt::Debug");
+            // `+ 'static` mirrors `emit_generic_params_with_clone_bound` so the
+            // struct decl and this inherent impl agree on the param bounds (and
+            // a bounded param can coerce into a trait object).
+            self.w.push_str("Clone + std::fmt::Debug + 'static");
             if display_params.contains(&p.name.text) {
                 self.w.push_str(" + std::fmt::Display");
             }
