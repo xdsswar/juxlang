@@ -211,12 +211,25 @@ impl RustEmitter {
                 if let Some((_, sig)) = self.symbols.lookup_function(bare) {
                     return sig.is_foreign_result;
                 }
-                self.symbols
-                    .functions
-                    .iter()
-                    .find(|(k, _)| k.rsplit('.').next() == Some(bare))
-                    .map(|(_, s)| s.is_foreign_result)
-                    .unwrap_or(false)
+                // Fallback: match by last segment. A USER (non-foreign) function
+                // SHADOWS an auto-loaded foreign one of the same bare name — an
+                // unqualified `rename(...)` must bind to the user's `rename`, not
+                // `std::fs::rename` (which would spuriously unwrap a `Result`).
+                // So prefer a non-`rust.`/`c.`/`cpp.` key; fall back to a foreign
+                // match only when no user function shares the name.
+                let is_foreign_key =
+                    |k: &str| k.starts_with("rust.") || k.starts_with("c.") || k.starts_with("cpp.");
+                let mut foreign_hit: Option<bool> = None;
+                for (k, s) in &self.symbols.functions {
+                    if k.rsplit('.').next() == Some(bare) {
+                        if is_foreign_key(k) {
+                            foreign_hit = Some(s.is_foreign_result);
+                        } else {
+                            return s.is_foreign_result; // user fn wins
+                        }
+                    }
+                }
+                foreign_hit.unwrap_or(false)
             }
             // Method call `recv.method(args)` — two shapes:
             //  - Static `ClassName.method(...)`: the receiver is a type name.
