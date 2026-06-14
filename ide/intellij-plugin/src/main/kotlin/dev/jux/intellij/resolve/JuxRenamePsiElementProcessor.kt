@@ -44,9 +44,15 @@ class JuxRenamePsiElementProcessor : RenamePsiElementProcessor() {
      * inspected — an outer-scope match is not a conflict.
      */
     private fun siblingNamed(element: JuxNamedElement, newName: String): JuxNamedElement? {
+        // Methods / constructors / operators are overloadable (§T.3 type-based
+        // overloading), so a same-name sibling is a legal overload, not a clash —
+        // never report a conflict for or against those. Locals, parameters,
+        // fields, types and enum constants are unique within their scope.
+        if (element.elementType in OVERLOADABLE) return null
         val container = element.parent ?: return null
         return container.children.firstOrNull { sib ->
-            sib !== element && sib is JuxNamedElement && sib.name == newName
+            sib !== element && sib is JuxNamedElement &&
+                sib.elementType !in OVERLOADABLE && sib.name == newName
         } as? JuxNamedElement
     }
 
@@ -63,5 +69,12 @@ class JuxRenamePsiElementProcessor : RenamePsiElementProcessor() {
         E.PARAMETER -> "parameter"
         E.LOCAL_VARIABLE -> "variable"
         else -> "declaration"
+    }
+
+    private companion object {
+        /** Member kinds that may legally share a name (overloads). */
+        val OVERLOADABLE = setOf(
+            E.METHOD_DECLARATION, E.CONSTRUCTOR_DECLARATION, E.OPERATOR_DECLARATION,
+        )
     }
 }

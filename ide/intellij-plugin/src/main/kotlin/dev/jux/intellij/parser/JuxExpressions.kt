@@ -296,12 +296,25 @@ private fun PsiBuilder.parseBraceInitializer(): PsiBuilder.Marker {
     return m
 }
 
-/** `sizeof(Type)` (or `sizeof(expr)`) — §A.4 unary level. */
+/**
+ * `sizeof '(' (type | expression) ')'` (§5.9). The operand may be a type
+ * (`sizeof(int)`, `sizeof(int[])`, `sizeof(List<int>)`) OR a value expression
+ * (`sizeof(a + b)`) — the compiler disambiguates at lowering. We probe a type
+ * first and accept it only when a `)` immediately follows; otherwise we roll
+ * back and parse an expression, so a value operand no longer red-squiggles.
+ */
 private fun PsiBuilder.parseSizeof(): PsiBuilder.Marker {
     val m = mark()
     advanceLexer() // `sizeof`
     if (expect(T.LPAREN)) {
+        val probe = mark()
         parseType()
+        if (at(T.RPAREN)) {
+            probe.drop()
+        } else {
+            probe.rollbackTo()
+            parseExpression()
+        }
         expectOrError(T.RPAREN, "')' expected")
     } else {
         parseUnary()

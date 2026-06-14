@@ -24,7 +24,7 @@ class JuxIconProvider : IconProvider() {
         val file = element as? JuxFile ?: return null
         val types = file.children.filter { it.elementType in TYPE_ICONS }
         if (types.isEmpty()) return null
-        val base = file.name.removeSuffix(".jux")
+        val base = file.name.substringBeforeLast('.', file.name) // strip extension, any case
         val primary = types.firstOrNull { (it as? JuxNamedElement)?.name == base } ?: types.first()
         return TYPE_ICONS[primary.elementType]
     }

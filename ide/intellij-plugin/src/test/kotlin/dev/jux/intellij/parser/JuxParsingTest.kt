@@ -157,6 +157,26 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         )
     }
 
+    /** §5.9 `sizeof` accepts a type AND a value expression operand (no red on the latter). */
+    fun testSizeofAcceptsTypeAndExpression() {
+        val psi = createPsiFile(
+            "s.jux",
+            """
+            package demo;
+            public class A {
+                public void go(int a, int b) {
+                    var t = sizeof(int);
+                    var u = sizeof(a + b);
+                }
+            }
+            """.trimIndent(),
+        )
+        assertEmpty(
+            "sizeof of a type and of an expression must both parse",
+            PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java).map { it.errorDescription },
+        )
+    }
+
     /** §L.4.2 C variadic: a bare trailing `...` in a foreign signature parses. */
     fun testCVariadicNativeFnParses() {
         val psi = createPsiFile(
