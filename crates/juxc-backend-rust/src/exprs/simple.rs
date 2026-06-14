@@ -130,8 +130,15 @@ impl RustEmitter {
                 return;
             }
         }
-        // Numeric / primitive cast — Rust `value as type`.
-        let needs_paren = matches!(&*c.value, Expr::Binary(_) | Expr::Range(_));
+        // Numeric / primitive cast — Rust `value as type`. The operand must be
+        // parenthesized when it isn't a simple atom: a binary/range expression,
+        // or a method call that hoists into a `{ … }` block (a bare block before
+        // `as` is a parse error — see `call_emits_block`).
+        let needs_paren = match &*c.value {
+            Expr::Binary(_) | Expr::Range(_) => true,
+            Expr::Call(call) => self.call_emits_block(call),
+            _ => false,
+        };
         if needs_paren {
             self.w.push('(');
         }

@@ -1,0 +1,27 @@
+// Regression: a `(int)` cast of a method call that lowers to a hoisted `{ … }`
+// block (here `this.d.len()` read through a wrapper-class `.0.borrow()` guard on
+// a GENERIC field, which clone-hoists into a block) must parenthesize the block
+// before `as` — `({ … }) as isize`, not `{ … } as isize` (a Rust parse error).
+// `L` is returned (escapes) and mutated, so it lowers to the Rc<RefCell> rep.
+package gcb;
+
+import rust.std.Vec;
+
+public class L<T> {
+    private Vec<T> d;
+    public L() { this.d = new Vec<T>(); }
+    public void add(T v) { this.d.push(v); }
+    public int size() { return (int) this.d.len(); }
+}
+
+public L<int> make() {
+    var r = new L<int>();
+    r.add(1);
+    r.add(2);
+    return r;
+}
+
+public void main() {
+    var s = make();
+    print($"size=${s.size()}");
+}
