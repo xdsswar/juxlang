@@ -20,8 +20,12 @@ import java.nio.charset.StandardCharsets
 /**
  * A run configuration with two modes:
  *
- *  - **run** (default): `juxc <file> --run` — build + execute, forwarding the
- *    program's stdout/stderr and exit code.
+ *  - **run** (default): for a Jux PROJECT (a `jux.toml` above the file) runs
+ *    `jux run` from the manifest root, so `rust.<crate>` / Jux dependencies are
+ *    resolved and LINKED; for a standalone file with no manifest, `juxc <file>
+ *    --run`. Both build + execute and forward the program's stdout/stderr and
+ *    exit code. (`juxc` is the bare compiler — it can't read `jux.toml` or link
+ *    dependencies, so a project must go through `jux`.)
  *  - **test** (§TS.2): `jux test [pattern] [--release]` from the project's
  *    manifest root, with the SM test-tree console ([JuxTestCommandLineState]).
  *
@@ -111,19 +115,33 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
 
             @Throws(ExecutionException::class)
             override fun startProcess(): ProcessHandler {
-                val file = File(filePath)
-                // Compile the whole source tree the file belongs to (juxc walks
-                // a directory recursively), so cross-file `import`s resolve.
-                // Passing just the one file would leave its imported types
-                // uncompiled → "could not find module" errors.
-                val target = compileTarget(file)
-                val exe = JuxToolchain.resolveJuxc(juxcPath)
-                val cmd = GeneralCommandLine()
-                    .withExePath(exe)
-                    .withParameters(target.absolutePath, "--run")
-                    .withCharset(StandardCharsets.UTF_8)
-                val workDir = if (target.isDirectory) target else target.parentFile
-                workDir?.let { if (it.isDirectory) cmd.withWorkDirectory(it) }
+                // A Jux PROJECT (a `jux.toml` above the file) is built by the
+                // `jux` project tool: it reads the manifest and resolves + LINKS
+                // `rust.<crate>` / Jux dependencies. The bare `juxc` compiler
+                // can't do that — `juxc --run` on a project with deps fails to
+                // resolve/link them. So only a standalone, manifest-less file
+                // falls back to `juxc <file> --run`.
+                val manifest = manifestRoot()
+                val cmd = if (manifest != null) {
+                    GeneralCommandLine()
+                        .withExePath(JuxToolchain.resolveJux())
+                        .withParameters("run")
+                        .withWorkDirectory(manifest)
+                        .withCharset(StandardCharsets.UTF_8)
+                } else {
+                    // No manifest: compile the whole source tree the file belongs
+                    // to (juxc walks a directory recursively) so cross-file
+                    // `import`s resolve; passing just the one file would leave its
+                    // imported types uncompiled.
+                    val target = compileTarget(File(filePath))
+                    val c = GeneralCommandLine()
+                        .withExePath(JuxToolchain.resolveJuxc(juxcPath))
+                        .withParameters(target.absolutePath, "--run")
+                        .withCharset(StandardCharsets.UTF_8)
+                    val workDir = if (target.isDirectory) target else target.parentFile
+                    workDir?.let { if (it.isDirectory) c.withWorkDirectory(it) }
+                    c
+                }
                 val handler = OSProcessHandler(cmd)
                 ProcessTerminatedListener.attach(handler)
                 return handler
