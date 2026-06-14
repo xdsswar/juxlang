@@ -44,6 +44,24 @@ class JuxFormatterTest : BasePlatformTestCase() {
         """.trimMargin(),
     )
 
+    /** §L.7 native block: foreign-fn declarations indent one level (4 spaces). */
+    fun testNativeBlockIndents() = doTest(
+        """
+        |@extern(lib = "c")
+        |unsafe native {
+        |int puts(String s);
+        |String getenv(String name);
+        |}
+        """.trimMargin(),
+        """
+        |@extern(lib = "c")
+        |unsafe native {
+        |    int puts(String s);
+        |    String getenv(String name);
+        |}
+        """.trimMargin(),
+    )
+
     fun testNestedIfIndent() = doTest(
         """
         |public void go(int a) {

@@ -72,7 +72,7 @@ class JuxFoldingBuilder : FoldingBuilderEx(), DumbAware {
 
     private companion object {
         val FOLDABLE = setOf(
-            E.CLASS_BODY, E.CODE_BLOCK, E.PROPERTY_ACCESSOR_LIST,
+            E.CLASS_BODY, E.CODE_BLOCK, E.PROPERTY_ACCESSOR_LIST, E.EXTERN_BLOCK,
             T.BLOCK_COMMENT, T.DOC_COMMENT,
         )
         val SWITCHES = setOf(E.SWITCH_STATEMENT, E.SWITCH_EXPRESSION)

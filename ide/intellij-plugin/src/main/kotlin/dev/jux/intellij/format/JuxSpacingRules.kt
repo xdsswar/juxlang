@@ -75,6 +75,12 @@ object JuxSpacingRules {
             .beforeInside(T.RBRACE, E.CLASS_BODY).spaces(1)
             .afterInside(T.LBRACE, E.CODE_BLOCK).spaces(1)
             .beforeInside(T.RBRACE, E.CODE_BLOCK).spaces(1)
+            // §L.7 native block (`unsafe native { … }`) and §P accessor list
+            // (`name { get; set; }`) — same K&R one-space brace policy.
+            .beforeInside(T.LBRACE, E.EXTERN_BLOCK).spaces(1)
+            .afterInside(T.LBRACE, E.EXTERN_BLOCK).spaces(1)
+            .beforeInside(T.RBRACE, E.EXTERN_BLOCK).spaces(1)
+            .before(E.PROPERTY_ACCESSOR_LIST).spaces(1)
             // ⑨ binary / assignment operators — spaced, scoped to expression
             //    nodes so the overloaded tokens can't leak into other shapes.
             .around(ASSIGN_OPS).spaceIf(common.SPACE_AROUND_ASSIGNMENT_OPERATORS)
