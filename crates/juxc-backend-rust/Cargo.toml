@@ -11,7 +11,7 @@ juxc-source      = { workspace = true }
 juxc-diagnostics = { workspace = true }
 juxc-ast         = { workspace = true }
 juxc-tycheck     = { workspace = true }
+juxc-lex         = { workspace = true }
 
 [dev-dependencies]
-juxc-lex   = { workspace = true }
 juxc-parse = { workspace = true }

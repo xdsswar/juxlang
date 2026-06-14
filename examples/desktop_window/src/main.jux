@@ -8,7 +8,8 @@
 //   - `new Window("…", w, h, opts)` — the Jux String is borrowed to the `&str`
 //     parameter, and `Window::new`'s `Result` is unwrapped automatically (it
 //     panics on failure, recoverable by a Jux try/catch).
-//   - method calls (`isOpen()`, `update()`) map to the real snake_case methods.
+//   - method calls (`is_open()`, `update()`) use the real Rust method names
+//     verbatim — Jux surfaces foreign Rust members exactly as named (§G.4).
 
 import rust.minifb.Window;
 import rust.minifb.WindowOptions;
@@ -18,7 +19,7 @@ public void main() {
     var window = new Window("Jux on minifb", 480, 320, opts);
 
     // Pump the window until the user closes it.
-    while (window.isOpen()) {
+    while (window.is_open()) {
         window.update();
     }
 }

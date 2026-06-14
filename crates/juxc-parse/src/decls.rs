@@ -968,7 +968,7 @@ impl<'a> Parser<'a> {
                 Some(TokenKind::Eq) | Some(TokenKind::Semicolon)
             );
         let ty = if no_type { None } else { Some(self.parse_type_ref()?) };
-        let name = self.parse_ident()?;
+        let name = self.parse_decl_name()?;
         // C#-style property bodies (`{ get; set; }` / `=> expr`) are
         // routed to `parse_property_decl` by the class-member
         // dispatcher *before* reaching here, so a plain field never
@@ -1366,7 +1366,7 @@ impl<'a> Parser<'a> {
             loop {
                 let comp_start = self.peek_span();
                 let ty = self.parse_type_ref()?;
-                let comp_name = self.parse_ident()?;
+                let comp_name = self.parse_decl_name()?;
                 let comp_end = self.last_consumed_span();
                 components.push(RecordComponent {
                     ty,
@@ -1716,7 +1716,7 @@ impl<'a> Parser<'a> {
         // we also still accept the trailing form `T identity<T>(...)` below.
         let leading_generics = self.parse_generic_params();
         let return_type = self.parse_return_type()?;
-        let name = self.parse_ident()?;
+        let name = self.parse_decl_name()?;
         // Optional trailing generic parameters `<T>` between name and `(`.
         // Turn-1 limitation: no bounds, no defaults.
         let trailing_generics = self.parse_generic_params();
@@ -1895,7 +1895,7 @@ impl<'a> Parser<'a> {
     fn parse_extern_fn_sig(&mut self) -> Option<FnDecl> {
         let start = self.peek_span();
         let return_type = self.parse_return_type()?;
-        let name = self.parse_ident()?;
+        let name = self.parse_decl_name()?;
         self.expect(&TokenKind::LParen, "'(' to start foreign parameter list");
         // Foreign parameter list, with optional trailing `...` marking a
         // C-variadic function (`int printf(String fmt, ...)`, Layout-ABI §L.4.2).
@@ -2505,7 +2505,7 @@ impl<'a> Parser<'a> {
                 ty.array_shape = Some(juxc_ast::ArrayShape::single(juxc_ast::ArrayDim::Dynamic));
             }
         }
-        let name = self.parse_ident()?;
+        let name = self.parse_decl_name()?;
         // Optional default value — `int port = 80` (spec 7.2). Evaluated
         // at the call site when the argument is omitted (S.1.3); the
         // expansion pass clones it into each such call.

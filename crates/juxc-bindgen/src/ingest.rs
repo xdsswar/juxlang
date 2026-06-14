@@ -16,7 +16,7 @@ use crate::model::{
     StubConst, StubCtor, StubField, StubFile, StubFn, StubItem, StubParam, StubType, StubVariant,
     TypeKind, Vis,
 };
-use crate::naming::{escape_keyword, method_name, snake_to_camel};
+use crate::naming::method_name;
 use crate::ty::JuxType;
 
 /// Parse a rustdoc-JSON string and generate stubs for `package`.
@@ -118,8 +118,8 @@ fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
             }
             ItemEnum::Function(f) if is_public(&item.visibility) && !member_ids.contains(&item.id.0) => {
                 // Free function (§G.5.5). Record its real Rust path so the
-                // backend can alias the snake_case Rust name to the camelCase
-                // Jux stub name on import.
+                // backend can `use` the fully-qualified Rust path under the
+                // (verbatim, snake_case) Jux stub name on import.
                 let mut sf = map_function(name, f);
                 sf.is_static = false;
                 sf.rust_path = real_rust_path(krate, item);
@@ -129,7 +129,7 @@ fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
                 collected.push((
                     name.clone(),
                     StubItem::Const(StubConst {
-                        name: escape_keyword(name),
+                        name: name.clone(),
                         ty: map_type(type_),
                         // The rustdoc value/expr is a *Rust* expression
                         // (`crate::sys::path::SEPARATORS`, `'\\'`, a const fn
@@ -146,7 +146,7 @@ fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
                 collected.push((
                     name.clone(),
                     StubItem::Const(StubConst {
-                        name: escape_keyword(name),
+                        name: name.clone(),
                         ty: map_type(&s.type_),
                         // See the `Constant` arm: the Rust initializer has no Jux
                         // spelling and a stub never lowers it.
@@ -423,10 +423,13 @@ fn map_return(output: &Option<Type>) -> (JuxType, Option<JuxType>) {
 }
 
 fn param_name(n: &str) -> String {
+    // Parameter names are surfaced verbatim (§G.4); only non-identifier names
+    // (rare in rustdoc — e.g. destructured patterns) fall back to `arg`. Keyword
+    // spellings are kept and handled at the parser (foreign mode) and backend.
     if n.is_empty() || !n.chars().all(|c| c.is_alphanumeric() || c == '_') {
         "arg".to_string()
     } else {
-        escape_keyword(&snake_to_camel(n))
+        n.to_string()
     }
 }
 

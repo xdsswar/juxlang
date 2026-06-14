@@ -22,7 +22,7 @@ public void main() {
     var ages = new HashMap();
     ages.insert("ada", 36);
     ages.insert("alan", 41);
-    var hasAda = ages.containsKey("ada");
+    var hasAda = ages.contains_key("ada");
     print($"map: len=${ages.len()} has ada=${hasAda}");
 
     // HashSet: insert (deduped), len, contains (&-borrowed value).

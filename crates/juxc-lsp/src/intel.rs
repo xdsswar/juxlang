@@ -161,6 +161,44 @@ pub fn resolve_member<'a>(
     None
 }
 
+/// Resolve the **owner key** of `ident` on a receiver of type `recv` — the
+/// symbol-table key of the type that actually declares the member (an ancestor
+/// for an inherited class method, else the receiver's own type). Mirrors
+/// [`resolve_member`]'s lookup order; used by go-to-definition to pair with
+/// [`SymbolTable::decl_unit`] and locate the declaration's file + span.
+pub fn member_owner(symbols: &SymbolTable, recv: &Ty, ident: &str) -> Option<String> {
+    let type_name = user_type_name(recv)?;
+
+    // Class chain: a method/field may be declared on an ancestor — `lookup_*`
+    // returns the declaring owner key, which is what `decl_unit` is keyed on.
+    if let Some(key) = class_key_for(symbols, type_name) {
+        if let Some((_m, owner)) = symbols.lookup_method(&key, ident) {
+            return Some(owner.to_string());
+        }
+        if let Some((_f, owner)) = symbols.lookup_field(&key, ident) {
+            return Some(owner.to_string());
+        }
+    }
+
+    // Interface / record / enum members live directly on the named type.
+    if let Some((k, iface)) = lookup_by_bare(&symbols.interfaces, type_name) {
+        if iface.methods.contains_key(ident) || iface.fields.contains_key(ident) {
+            return Some(k.clone());
+        }
+    }
+    if let Some((k, rec)) = lookup_by_bare(&symbols.records, type_name) {
+        if rec.methods.contains_key(ident) {
+            return Some(k.clone());
+        }
+    }
+    if let Some((k, en)) = lookup_by_bare(&symbols.enums, type_name) {
+        if en.methods.contains_key(ident) || en.variants.contains_key(ident) {
+            return Some(k.clone());
+        }
+    }
+    None
+}
+
 /// What kind of declaration a completion [`Member`] candidate is — drives the
 /// item's icon (LSP `CompletionItemKind`) and its insert shape (methods get a
 /// parameter snippet, properties / fields / unit variants insert bare).

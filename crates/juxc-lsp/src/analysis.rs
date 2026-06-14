@@ -609,7 +609,8 @@ mod tests {
             &crate::intel::AccessCtx::default(),
         );
         let names: Vec<&str> = members.iter().map(|m| m.name.as_str()).collect();
-        for expected in ["insert", "get", "len", "containsKey"] {
+        // Rust names are surfaced verbatim (snake_case), not camelCased.
+        for expected in ["insert", "get", "len", "contains_key"] {
             assert!(
                 names.contains(&expected),
                 "rust.std.HashMap should list `{expected}` in Jux syntax, got {names:?}"

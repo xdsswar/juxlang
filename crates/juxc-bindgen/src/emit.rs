@@ -33,8 +33,8 @@ pub fn render(file: &StubFile) -> String {
             StubItem::Type(t) => render_type(&mut out, t),
             StubItem::Function(f) => {
                 // `@rust("real::path")` records a free function's true Rust path
-                // so the backend imports it as `use real::path as juxName;`,
-                // bridging snake_case Rust to the camelCase Jux stub name.
+                // so the backend imports it as `use real::path;` (the Jux stub
+                // name is the verbatim snake_case Rust name).
                 if let Some(path) = &f.rust_path {
                     let _ = writeln!(out, "@rust(\"{path}\")");
                 }

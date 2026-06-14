@@ -146,7 +146,29 @@ pub fn resolve(unit: &CompilationUnit) -> ResolveResult {
 /// imports (`import jux.std.testing.*;`, §TS.3) bring the package's
 /// top-level names — free functions included — into scope.
 pub fn resolve_with_exports(unit: &CompilationUnit, exports: &PackageExports) -> ResolveResult {
+    resolve_with_exports_opts(unit, exports, /*foreign=*/ false)
+}
+
+/// [`resolve_with_exports`] with an explicit `foreign` flag. A `foreign` unit is
+/// a bindgen `.jux.d` declaration stub: it surfaces a real Rust API verbatim, so
+/// the Rust-keyword reservation (`E0305_RustKeywordIdentifier`) is **not** run
+/// over it — a Rust member named `match`/`default` is legal there. User `.jux`
+/// sources are resolved with `foreign == false` and get the keyword check. The
+/// driver picks the flag from `juxc_driver::stubs::is_stub_path`.
+pub fn resolve_with_exports_opts(
+    unit: &CompilationUnit,
+    exports: &PackageExports,
+    foreign: bool,
+) -> ResolveResult {
     let mut r = Resolver::new();
+    r.foreign = foreign;
+    // Reserve Rust keywords against user declaration names (§G.4) before the
+    // ordinary walk, so a name like `fn`/`let`/`loop` is reported once at its
+    // declaration rather than as a cascade of downstream errors. Skipped for
+    // foreign stubs.
+    if !foreign {
+        r.check_rust_keyword_item_names(unit);
+    }
     // Imports first — they introduce names that top-level decls and
     // body expressions may both reference.
     r.collect_imports(unit, exports);
@@ -206,6 +228,11 @@ struct Resolver {
     class_parents: std::collections::HashMap<String, String>,
     /// Diagnostics accumulated as we walk.
     diagnostics: Vec<Diagnostic>,
+    /// True when resolving a foreign declaration stub (`.jux.d`). Stubs surface
+    /// a real Rust API verbatim, so the Rust-keyword reservation
+    /// (`E0305_RustKeywordIdentifier`) is **not** applied to them — a Rust member
+    /// named `match`/`default` is legal there (the backend `r#`-escapes it).
+    foreign: bool,
 }
 
 impl Resolver {
@@ -319,6 +346,7 @@ impl Resolver {
             class_members: std::collections::HashMap::new(),
             class_parents: std::collections::HashMap::new(),
             diagnostics: Vec::new(),
+            foreign: false,
         }
     }
 
@@ -353,6 +381,11 @@ impl Resolver {
     /// the diagnostic on a re-declaration. Use this when the
     /// caller has a `Span` handy (e.g. the offending `Ident`'s).
     fn declare_at(&mut self, name: &str, span: Span) {
+        // Reserve Rust keywords against scope-bound names — parameters, locals,
+        // generic params, foreach/lambda/pattern binders — for the same reason as
+        // item names (a lowered Rust `let r#loop` collision). Report once; still
+        // bind the name below so later uses don't cascade into E0301.
+        self.reject_rust_keyword(name, span);
         if let Some(top) = self.scopes.last_mut() {
             if top.contains(name) {
                 self.diagnostics.push(
@@ -399,6 +432,96 @@ impl Resolver {
                 // a binding scoped to the arm's body.
                 self.declare(&binder.text);
             }
+        }
+    }
+
+    /// Emit `E0305_RustKeywordIdentifier` when a user-declared `name` is a Rust
+    /// reserved word (see [`juxc_lex::is_rust_keyword`]). No-op in a foreign
+    /// stub. The keyword list is shared with the backend's `r#` escaping, so the
+    /// two can never disagree about what needs reserving.
+    fn reject_rust_keyword(&mut self, name: &str, span: Span) {
+        if self.foreign || !juxc_lex::is_rust_keyword(name) {
+            return;
+        }
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0305_RustKeywordIdentifier,
+                format!(
+                    "`{name}` is a Rust reserved word and can't be used as a Jux \
+                     name (Jux lowers to Rust); rename it",
+                ),
+            )
+            .with_span(span),
+        );
+    }
+
+    /// Reserve Rust keywords against **item-level** declaration names: top-level
+    /// types/functions/consts, and a type's members (fields, methods, enum
+    /// variants, properties, operator/constructor names are positionless). These
+    /// names become Rust items and don't flow through [`Self::declare_at`], so
+    /// they're checked here. Scope-bound names (params, locals, generics, …) are
+    /// covered by [`Self::declare_at`]. Skipped for foreign stubs by the caller.
+    fn check_rust_keyword_item_names(&mut self, unit: &CompilationUnit) {
+        for item in &unit.items {
+            self.check_top_level_keyword(item);
+        }
+    }
+
+    /// Check one top-level (or nested) declaration's item-level names.
+    fn check_top_level_keyword(&mut self, item: &TopLevelDecl) {
+        match item {
+            TopLevelDecl::Function(d) => self.check_fn_item_name(d),
+            TopLevelDecl::Const(d) => self.reject_rust_keyword(&d.name.text, d.name.span),
+            TopLevelDecl::TypeAlias(d) => self.reject_rust_keyword(&d.name.text, d.name.span),
+            TopLevelDecl::Class(d) => self.check_class_item_names(d),
+            TopLevelDecl::Record(d) => {
+                self.reject_rust_keyword(&d.name.text, d.name.span);
+                for c in &d.components {
+                    self.reject_rust_keyword(&c.name.text, c.name.span);
+                }
+            }
+            TopLevelDecl::Enum(d) => {
+                self.reject_rust_keyword(&d.name.text, d.name.span);
+                for v in &d.variants {
+                    self.reject_rust_keyword(&v.name.text, v.name.span);
+                }
+            }
+            TopLevelDecl::Interface(d) => {
+                self.reject_rust_keyword(&d.name.text, d.name.span);
+                for m in &d.methods {
+                    self.check_fn_item_name(m);
+                }
+            }
+            TopLevelDecl::ExternBlock(b) => {
+                for f in &b.fns {
+                    self.check_fn_item_name(f);
+                }
+            }
+        }
+    }
+
+    /// Check a function/method declaration's own name (its parameters and
+    /// generic params are scope-bound and handled by [`Self::declare_at`]).
+    fn check_fn_item_name(&mut self, d: &FnDecl) {
+        self.reject_rust_keyword(&d.name.text, d.name.span);
+    }
+
+    /// Check a class's name, fields, methods, and properties. Nested types are
+    /// reached through their own top-level pass, so only this level is walked.
+    fn check_class_item_names(&mut self, d: &juxc_ast::ClassDecl) {
+        self.reject_rust_keyword(&d.name.text, d.name.span);
+        for f in &d.fields {
+            self.reject_rust_keyword(&f.name.text, f.name.span);
+        }
+        for m in &d.methods {
+            self.check_fn_item_name(m);
+        }
+        for p in &d.properties {
+            self.reject_rust_keyword(&p.name.text, p.name.span);
+        }
+        // Static nested types (`static class Inner { … }`) get the same check.
+        for nt in &d.nested_types {
+            self.check_top_level_keyword(nt);
         }
     }
 
@@ -1414,6 +1537,46 @@ mod tests {
                 .iter()
                 .any(|d| d.code == code::Code::E0304_DuplicateLocalDeclaration),
             "no E0304 for nested-scope shadowing: {diags:?}",
+        );
+    }
+
+    /// A user declaration named after a **Rust** keyword (here a free function
+    /// `impl`, and a local `match`) is rejected with `E0305` — the lowered Rust
+    /// would collide. Both names are plain identifiers in Jux (Jux has no `impl`
+    /// / `match` keyword), so they parse cleanly and the resolver is what flags
+    /// them.
+    #[test]
+    fn rust_keyword_user_name_emits_e0305() {
+        let src = r#"
+            public void impl() {
+                var match = 1;
+                print(match);
+            }
+        "#;
+        let diags = resolve(&parse_clean(src)).diagnostics;
+        let hits = diags
+            .iter()
+            .filter(|d| d.code == code::Code::E0305_RustKeywordIdentifier)
+            .count();
+        assert!(hits >= 2, "expected E0305 for `impl` and `match`, got: {diags:?}");
+    }
+
+    /// A name that is NOT a Rust keyword (an ordinary `camelCase` Jux method /
+    /// local) never trips the Rust-keyword reservation.
+    #[test]
+    fn ordinary_name_is_not_rust_keyword() {
+        let src = r#"
+            public void windowLoop() {
+                var counter = 0;
+                print(counter);
+            }
+        "#;
+        let diags = resolve(&parse_clean(src)).diagnostics;
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0305_RustKeywordIdentifier),
+            "no E0305 for ordinary names: {diags:?}",
         );
     }
 
