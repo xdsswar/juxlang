@@ -410,7 +410,12 @@ fn map_return(output: &Option<Type>) -> (JuxType, Option<JuxType>) {
         Some(Type::ResolvedPath(p)) if last_segment(&p.path) == "Result" => {
             let args = collect_type_args(&p.args);
             let ok = args.first().cloned().unwrap_or(JuxType::Void);
-            let err = args.get(1).cloned();
+            // A 2-arg `Result<T, E>` carries the real error type. A 1-arg crate
+            // alias `Result<T>` (= `Result<T, CrateError>`, e.g. `minifb::Result`)
+            // hides it but is still fallible, so record an opaque `Error` — the
+            // call site unwraps either way (the backend ignores the error type;
+            // only its presence drives the `throws` / unwrap, §G.5.4).
+            let err = args.get(1).cloned().or_else(|| Some(JuxType::user("Error")));
             (ok, err)
         }
         Some(t) => (map_type(t), None),
