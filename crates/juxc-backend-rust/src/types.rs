@@ -719,17 +719,47 @@ impl RustEmitter {
     /// Class membership comes from tycheck's [`SymbolTable`] —
     /// `self.symbols.classes` is the catalog of every top-level class
     /// in the unit, populated once during tycheck.
+    /// If `bound` is a bare single-segment name of an in-scope generic type
+    /// param (e.g. the `K` in a method's `<R extends K>`, where K is the
+    /// enclosing class's param), return that param's own bounds to emit in its
+    /// place — Rust has no `R: K` "param-as-bound" form. Returns `None` for
+    /// ordinary bounds (interfaces, classes, generic types); `Some(vec![])` when
+    /// the named param is unbounded (caller then emits only the Clone/Debug tail).
+    pub(crate) fn type_param_bound_expansion(
+        &self,
+        bound: &juxc_ast::TypeRef,
+    ) -> Option<Vec<juxc_ast::TypeRef>> {
+        if bound.array_shape.is_some()
+            || !bound.generic_args.is_empty()
+            || bound.name.segments.len() != 1
+        {
+            return None;
+        }
+        self.type_param_bounds
+            .get(bound.name.segments[0].text.as_str())
+            .cloned()
+    }
+
     pub(crate) fn emit_bound_type(&mut self, ty: &juxc_ast::TypeRef) {
-        // Only single-segment, no-generic-args, no-array-shape bounds
-        // get rewritten — those that look like a class-name lookup.
-        // Anything more complex (`pkg.MyTrait`, `Foo<int>`) flows
-        // through `emit_type_as_rust` unchanged.
-        let is_simple_class = ty.array_shape.is_none()
-            && ty.generic_args.is_empty()
-            && ty.name.segments.len() == 1
-            && self.symbols.classes.contains_key(ty.name.segments[0].text.as_str());
-        if is_simple_class {
-            self.w.push_str(&ty.name.segments[0].text);
+        // A bound whose HEAD names a Jux **class** lowers to that class's
+        // marker trait `<Name>Kind` — a struct can't itself be a trait bound.
+        // This now also covers a *generic* class bound (`Container<? extends K>`
+        // → `ContainerKind`): the marker trait is element-erased, so the
+        // generic args are dropped here. (The element-typed surface a bound like
+        // this needs at use sites — e.g. `backing.peek()` returning `K` — is
+        // provided by the generic marker-trait synthesis, §CR/generics Step 7.)
+        //
+        // INTERFACES flow through `emit_type_as_rust` unchanged — an interface
+        // is already a Rust trait whether or not it carries generic args
+        // (`Id`, `Comparable<K>`, `Entity<E>`). So do in-scope type-param bounds
+        // (handled/expanded by the method-generic emitter before reaching here).
+        let head = ty.name.segments.last().map(|s| s.text.as_str());
+        let is_class_bound = ty.array_shape.is_none()
+            && head
+                .map(|h| self.lookup_class_by_bare_or_fqn(h).is_some())
+                .unwrap_or(false);
+        if is_class_bound {
+            self.w.push_str(head.unwrap());
             self.w.push_str("Kind");
             return;
         }
@@ -785,8 +815,19 @@ impl RustEmitter {
             // `self`).
             let user_bounds: Vec<juxc_ast::TypeRef> = p.bounds.clone();
             for bound in &user_bounds {
-                self.emit_bound_type(bound);
-                self.w.push_str(" + ");
+                // A bound that NAMES another in-scope type param (`<R extends K>`)
+                // has no Rust `R: K` form — expand it to that param's own bounds
+                // (`R: Id + Named + Comparable<K> + …`). Unbounded named param ⇒
+                // empty expansion (just the Clone/Debug tail).
+                if let Some(expanded) = self.type_param_bound_expansion(bound) {
+                    for b in &expanded {
+                        self.emit_bound_type(b);
+                        self.w.push_str(" + ");
+                    }
+                } else {
+                    self.emit_bound_type(bound);
+                    self.w.push_str(" + ");
+                }
             }
             // `Clone` for the auto-`.clone()` on generic field reads,
             // plus `std::fmt::Debug` so generic structs whose marker
