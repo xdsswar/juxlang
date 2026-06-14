@@ -743,8 +743,18 @@ impl RustEmitter {
         self.w.indent_inc();
         self.emit_static_init_trigger();
         self.w.emit_indent();
+        // §CR.4.1: wrap in `Rc::new(RefCell::new(..))` for the interior-mutable
+        // rep, or just `Rc::new(..)` for the read-only-shared `Rc` rep.
+        let refcell = self.refcell_classes.contains(&class_decl.name.text);
+        let (wrap_open, wrap_close): (&str, &str) = if refcell {
+            ("std::rc::Rc::new(std::cell::RefCell::new(", "))")
+        } else {
+            ("std::rc::Rc::new(", ")")
+        };
         if ctor_binds.is_empty() {
-            self.w.push_str("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner");
+            self.w.push_str("Self(");
+            self.w.push_str(wrap_open);
+            self.w.push_str("Self::new_inner");
             self.w.push_str(&suffix);
             self.w.push('(');
             for (i, param) in ctor.params.iter().enumerate() {
@@ -753,15 +763,17 @@ impl RustEmitter {
                 }
                 self.w.push_str(&param.name.text);
             }
-            self.w.push_str("))))\n");
+            self.w.push_str(")");
+            self.w.push_str(wrap_close);
+            self.w.push_str(")\n");
         } else {
             // Bind the wrapped instance to a local so the deferred
             // binds can hold it; params are CLONED into `new_inner`
             // (cheap `Rc` bumps / value copies) because a bind's
             // source receiver may name one of them.
-            self.w.push_str(
-                "let __jux_self = Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner",
-            );
+            self.w.push_str("let __jux_self = Self(");
+            self.w.push_str(wrap_open);
+            self.w.push_str("Self::new_inner");
             self.w.push_str(&suffix);
             self.w.push('(');
             for (i, param) in ctor.params.iter().enumerate() {
@@ -771,7 +783,9 @@ impl RustEmitter {
                 self.w.push_str(&param.name.text);
                 self.w.push_str(".clone()");
             }
-            self.w.push_str("))));\n");
+            self.w.push_str(")");
+            self.w.push_str(wrap_close);
+            self.w.push_str(");\n");
             // Replay each deferred bind with `this` resolved to the
             // fresh wrapper handle.
             let prev_alias = self.this_alias.replace("__jux_self".to_string());
@@ -1286,12 +1300,17 @@ impl RustEmitter {
         self.w.newline();
         self.w.indent_dec();
 
-        // Thin public `new()` → wrap `new_inner()`.
+        // Thin public `new()` → wrap `new_inner()`. §CR.4.1: `RefCell` only for
+        // the interior-mutable rep; the read-only-shared `Rc` rep drops it.
         self.w.indent_inc();
         self.w.line("pub fn new() -> Self {");
         self.w.indent_inc();
         self.emit_static_init_trigger();
-        self.w.line("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner())))");
+        if self.refcell_classes.contains(&class_decl.name.text) {
+            self.w.line("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner())))");
+        } else {
+            self.w.line("Self(std::rc::Rc::new(Self::new_inner()))");
+        }
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();
