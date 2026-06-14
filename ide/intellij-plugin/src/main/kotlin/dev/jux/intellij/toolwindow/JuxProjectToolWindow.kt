@@ -11,30 +11,36 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
+import com.intellij.ui.PopupHandler
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.content.ContentFactory
 import com.intellij.ui.treeStructure.Tree
+import dev.jux.intellij.settings.JuxSettings
 import java.awt.BorderLayout
 import java.io.File
-import javax.swing.JComponent
+import javax.swing.Icon
 import javax.swing.JPanel
-import javax.swing.event.TreeSelectionListener
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
 import javax.swing.tree.TreePath
 
 /**
- * The **Jux** tool window (anchored right, like Cargo / Gradle): a tree of the
- * project's modules read from `jux.toml`. For a workspace it lists every
- * member package; for a single-module project it shows the one package. Each
- * module expands to its version, declared dependencies, and source roots.
- * Double-clicking a module opens its `jux.toml`.
+ * The **Jux Project** tool window (anchored right, modelled on RustRover's Cargo
+ * panel): a tree of the workspace's modules read from `jux.toml`, each expanding
+ * to a **targets** group (its `[[bin]]` / `[lib]` artifacts), its edition and its
+ * dependencies. Unlike a plain outline it is *action-driven* — the toolbar and a
+ * right-click menu **build / run / test / check** whichever module or target is
+ * selected, streaming into the shared [JuxConsoleService] console (the bottom
+ * "Jux Build" window). A "Target" action picks the cross-compile triple.
  *
- * The build/run **console** lives in the separate bottom tool window
- * ([JuxToolWindowFactory]); this panel is purely the project structure.
+ * Because today's `jux` CLI resolves only the cwd's `jux.toml` (no `-p` / `--bin`
+ * selector), per-module actions run with the working directory set to the
+ * module's own directory, and per-binary Run notes when it can only launch the
+ * default binary. The exact CLI gaps are catalogued in `cli-support-request.md`.
  */
 class JuxProjectToolWindowFactory : ToolWindowFactory, DumbAware {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
@@ -44,37 +50,203 @@ class JuxProjectToolWindowFactory : ToolWindowFactory, DumbAware {
     }
 }
 
+/** What a selected tree node lets you build/run, and where. */
+private enum class Ctx { WORKSPACE, MODULE, BIN, LIB }
+
+/**
+ * The build context carried by an actionable node: the working directory the
+ * `jux` command runs in, the kind of thing it is, whether it can be *run* (a
+ * library cannot), and whether its module declares multiple binaries (so Run can
+ * warn that only the default one launches).
+ */
+private data class BuildContext(
+    val workDir: File,
+    val kind: Ctx,
+    val runnable: Boolean = true,
+    val multiBin: Boolean = false,
+)
+
+/**
+ * A tree node payload: primary [label], optional grayed [tail] (version / crate
+ * type / source detail), [icon], an optional [file] to open on double-click, and
+ * an optional [build] context that makes the node a build/run target.
+ */
+private data class JuxNode(
+    val label: String,
+    val icon: Icon,
+    val tail: String? = null,
+    val file: File? = null,
+    val build: BuildContext? = null,
+)
+
 private class JuxProjectPanel(private val project: Project) {
     val root: JPanel = JPanel(BorderLayout())
-    private val treeRoot = DefaultMutableTreeNode("Jux")
+    private val treeRoot = DefaultMutableTreeNode(JuxNode("Jux", AllIcons.Nodes.ModuleGroup))
     private val model = DefaultTreeModel(treeRoot)
     private val tree = Tree(model)
+
+    /** Last computed workspace root, used as the fallback build context. */
+    private var workspaceRoot: File? = null
 
     init {
         tree.isRootVisible = true
         tree.showsRootHandles = true
         tree.cellRenderer = JuxModuleCellRenderer()
-        tree.addTreeSelectionListener(openManifestOnActivate())
-        // Double-click a node tagged with a file → open it.
         tree.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mousePressed(e: java.awt.event.MouseEvent) {
+                // Right-click selects the node under the cursor so the context
+                // menu (installed below) acts on what was clicked.
+                if (e.isPopupTrigger) selectRowAt(e)
+            }
+
+            override fun mouseReleased(e: java.awt.event.MouseEvent) {
+                if (e.isPopupTrigger) selectRowAt(e)
+            }
+
             override fun mouseClicked(e: java.awt.event.MouseEvent) {
-                if (e.clickCount == 2) openSelectedFile()
+                if (e.clickCount == 2) onDoubleClick()
             }
         })
 
-        val group = DefaultActionGroup().apply {
-            add(object : AnAction("Refresh", "Reload modules from jux.toml", AllIcons.Actions.Refresh) {
-                override fun getActionUpdateThread() = ActionUpdateThread.EDT
-                override fun actionPerformed(e: AnActionEvent) = reload()
-            })
-        }
+        val actions = buildActionGroup()
         val toolbar: ActionToolbar =
-            ActionManager.getInstance().createActionToolbar("JuxProject", group, false)
+            ActionManager.getInstance().createActionToolbar("JuxProject", actions, true)
         toolbar.targetComponent = root
-        root.add(toolbar.component, BorderLayout.WEST)
+        // Same actions as a right-click context menu, scoped to the clicked node.
+        PopupHandler.installPopupMenu(tree, actions, "JuxProjectPopup")
+
+        root.add(toolbar.component, BorderLayout.NORTH)
         root.add(JBScrollPane(tree), BorderLayout.CENTER)
         reload()
     }
+
+    // ---- Actions -----------------------------------------------------------
+
+    /** The shared toolbar / context-menu action set. */
+    private fun buildActionGroup(): DefaultActionGroup = DefaultActionGroup().apply {
+        add(buildAction("Build", "Compile the selected module / target", AllIcons.Actions.Compile, "build"))
+        add(buildAction("Run", "Build and run the selection", AllIcons.Actions.Execute, "run", runOnly = true))
+        add(buildAction("Build Release", "Optimized release build", AllIcons.Actions.RealIntentionBulb, "build", release = true))
+        add(buildAction("Test", "Run the selection's tests", AllIcons.RunConfigurations.TestState.Run, "test"))
+        add(buildAction("Check", "Type-check without building", AllIcons.Actions.CheckOut, "check"))
+        addSeparator()
+        add(CrossTargetAction())
+        addSeparator()
+        add(object : AnAction("Refresh", "Reload modules from jux.toml", AllIcons.Actions.Refresh) {
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+            override fun actionPerformed(e: AnActionEvent) = reload()
+        })
+    }
+
+    /**
+     * One context-aware action. [verb] is the `jux` subcommand; [release] adds
+     * `--release`; [runOnly] actions (Run) are disabled for non-runnable nodes
+     * (libraries). Enablement and the command both follow the current selection.
+     */
+    private fun buildAction(
+        text: String,
+        desc: String,
+        icon: Icon,
+        verb: String,
+        release: Boolean = false,
+        runOnly: Boolean = false,
+    ): AnAction = object : AnAction(text, desc, icon) {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        override fun update(e: AnActionEvent) {
+            val ctx = currentContext()
+            e.presentation.isEnabled = ctx != null && (!runOnly || ctx.runnable)
+        }
+        override fun actionPerformed(e: AnActionEvent) {
+            currentContext()?.let { execute(verb, release, it) }
+        }
+    }
+
+    /** The "Build for <triple>" action — edits the persisted cross-compile target. */
+    private inner class CrossTargetAction : AnAction() {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        override fun update(e: AnActionEvent) {
+            val triple = crossTarget()
+            e.presentation.icon = AllIcons.General.Settings
+            e.presentation.text = "Target: " + (triple ?: "host")
+            e.presentation.description = "Set the cross-compile target triple for builds"
+        }
+        override fun actionPerformed(e: AnActionEvent) {
+            val current = JuxSettings.getInstance().crossTarget
+            val input = Messages.showInputDialog(
+                project,
+                "Rust target triple for `jux build --target` (blank = host):\n" +
+                    "e.g. x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu, aarch64-apple-darwin",
+                "Jux Build Target",
+                AllIcons.General.Settings,
+                current,
+                null,
+            ) ?: return
+            JuxSettings.getInstance().crossTarget = input.trim()
+        }
+    }
+
+    /**
+     * Build the command line and stream it through the shared console. `build`
+     * carries the cross-compile triple (`jux build` is the only verb the CLI
+     * accepts `--target` on); Run on a multi-binary module notes that only the
+     * default binary launches (no `--bin` selector yet).
+     */
+    private fun execute(verb: String, release: Boolean, ctx: BuildContext) {
+        val args = ArrayList<String>()
+        args.add(verb)
+        if (release) args.add("--release")
+        if (verb == "build") crossTarget()?.let { args.add("--target"); args.add(it) }
+        val notice = if (verb == "run" && ctx.multiBin) {
+            "this module declares multiple [[bin]] targets; `jux run` builds all and launches the " +
+                "default (first) one — selecting a specific binary needs CLI `--bin` support."
+        } else {
+            null
+        }
+        JuxConsoleService.getInstance(project).run("jux", args, ctx.workDir, notice)
+    }
+
+    /**
+     * The effective build context: the selected node's own context, or — when a
+     * non-actionable node (or nothing) is selected — the whole workspace, so the
+     * toolbar can always build the project.
+     */
+    private fun currentContext(): BuildContext? {
+        val node = (tree.lastSelectedPathComponent as? DefaultMutableTreeNode)?.userObject as? JuxNode
+        node?.build?.let { return it }
+        return workspaceRoot?.let { BuildContext(it, Ctx.WORKSPACE) }
+    }
+
+    /** The cross-compile triple: settings override, else the root `[build] target`. */
+    private fun crossTarget(): String? {
+        JuxSettings.getInstance().crossTarget.takeIf { it.isNotBlank() }?.let { return it }
+        val base = workspaceRoot ?: return null
+        return JuxToml.buildTarget(readFileOrEmpty(File(base, "jux.toml")))
+    }
+
+    private fun selectRowAt(e: java.awt.event.MouseEvent) {
+        val row = tree.getClosestRowForLocation(e.x, e.y)
+        if (row >= 0) tree.setSelectionRow(row)
+    }
+
+    /** Double-click: open a node's file, else run its default action. */
+    private fun onDoubleClick() {
+        val node = (tree.lastSelectedPathComponent as? DefaultMutableTreeNode)?.userObject as? JuxNode ?: return
+        if (node.file != null) {
+            openFile(node.file)
+            return
+        }
+        val ctx = node.build ?: return
+        val verb = if (ctx.runnable && (ctx.kind == Ctx.BIN || ctx.kind == Ctx.MODULE)) "run" else "build"
+        execute(verb, false, ctx)
+    }
+
+    private fun openFile(file: File) {
+        val vf = LocalFileSystem.getInstance().findFileByIoFile(file) ?: return
+        if (vf.isDirectory) return
+        FileEditorManager.getInstance(project).openFile(vf, true)
+    }
+
+    // ---- Model construction (off the EDT) ----------------------------------
 
     /**
      * Rebuild the module tree from the project's `jux.toml` files. The manifest
@@ -87,11 +259,12 @@ private class JuxProjectPanel(private val project: Project) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val (rootLabel, children) = computeModel(base)
             ApplicationManager.getApplication().invokeLater {
+                workspaceRoot = base?.takeIf { it.isDirectory }
                 treeRoot.userObject = rootLabel
                 treeRoot.removeAllChildren()
                 for (c in children) treeRoot.add(c)
                 model.reload()
-                expandTopLevel()
+                expandModules()
             }
         }
     }
@@ -99,13 +272,17 @@ private class JuxProjectPanel(private val project: Project) {
     /** Pure (off-EDT) computation of the root label + module nodes from disk. */
     private fun computeModel(base: File?): Pair<JuxNode, List<DefaultMutableTreeNode>> {
         if (base == null || !base.isDirectory) {
-            return JuxNode("No project", AllIcons.General.Information, null) to emptyList()
+            return JuxNode("No project", AllIcons.General.Information) to emptyList()
         }
         val rootManifest = File(base, "jux.toml")
-        val rootLabel = JuxNode(base.name, AllIcons.Nodes.ModuleGroup, null)
+        val rootLabel = JuxNode(
+            base.name,
+            AllIcons.Nodes.ModuleGroup,
+            build = BuildContext(base, Ctx.WORKSPACE),
+        )
         val moduleDirs = discoverModules(base, rootManifest)
         val children = if (moduleDirs.isEmpty()) {
-            listOf(DefaultMutableTreeNode(JuxNode("No jux.toml found", AllIcons.General.Information, null)))
+            listOf(DefaultMutableTreeNode(JuxNode("No jux.toml found", AllIcons.General.Information)))
         } else {
             moduleDirs.map { buildModuleNode(it) }
         }
@@ -141,43 +318,68 @@ private class JuxProjectPanel(private val project: Project) {
     }
 
     /**
-     * One module's subtree — its *structure* from `jux.toml`, not its files:
-     * the build kind (executable / library + crate-type), edition, any named
-     * `[[bin]]` targets, and its dependencies with each one's source
-     * (version / path / git). A library module gets the library icon.
+     * One module's subtree — its *structure* from `jux.toml`, not its files: the
+     * module node (carrying its dir as the build cwd), a **targets** group of its
+     * `[[bin]]` / `[lib]` artifacts, the edition, and its dependencies with each
+     * one's source (version / path / git). A library module gets the lib icon.
      */
     private fun buildModuleNode(dir: File): DefaultMutableTreeNode {
         val manifest = File(dir, "jux.toml")
         val text = readFileOrEmpty(manifest)
         val name = JuxToml.packageName(text) ?: dir.name
         val isLib = JuxToml.hasLib(text)
+        val bins = JuxToml.bins(text)
+        // A plain executable with no explicit [[bin]] still has one synthesized
+        // binary (named after the package) when a main entry file is present.
+        val effectiveBins = when {
+            bins.isNotEmpty() -> bins
+            !isLib -> listOf(name)
+            else -> emptyList()
+        }
+        val multiBin = effectiveBins.size > 1
+        val runnable = effectiveBins.isNotEmpty()
+
         val node = DefaultMutableTreeNode(
             JuxNode(
                 name,
                 if (isLib) AllIcons.Nodes.PpLibFolder else AllIcons.Nodes.Module,
-                manifest.takeIf { it.isFile },
                 tail = JuxToml.packageVersion(text),
+                file = manifest.takeIf { it.isFile },
+                build = BuildContext(dir, Ctx.MODULE, runnable = runnable, multiBin = multiBin),
             ),
         )
 
-        // Build kind.
-        if (isLib) {
-            val cts = JuxToml.libCrateTypes(text)
-            node.add(leaf("Library", AllIcons.Nodes.PpLib, tail = cts.joinToString(", ").ifEmpty { "lib" }))
-        } else {
-            node.add(leaf("Executable", AllIcons.Actions.Execute))
+        // The "targets" group — bins first, then the library artifact.
+        val targets = group("targets", AllIcons.Nodes.ModuleGroup)
+        for (b in effectiveBins) {
+            targets.add(
+                DefaultMutableTreeNode(
+                    JuxNode(
+                        b,
+                        AllIcons.Actions.Execute,
+                        tail = "bin",
+                        build = BuildContext(dir, Ctx.BIN, runnable = true, multiBin = multiBin),
+                    ),
+                ),
+            )
         }
+        if (isLib) {
+            val cts = JuxToml.libCrateTypes(text).joinToString(", ").ifEmpty { "lib" }
+            targets.add(
+                DefaultMutableTreeNode(
+                    JuxNode(
+                        JuxToml.libName(text) ?: name,
+                        AllIcons.Nodes.PpLib,
+                        tail = cts,
+                        build = BuildContext(dir, Ctx.LIB, runnable = false),
+                    ),
+                ),
+            )
+        }
+        node.add(targets)
 
         // Edition.
         JuxToml.edition(text)?.let { node.add(leaf("Edition", AllIcons.Nodes.Tag, tail = it)) }
-
-        // Named binary targets ([[bin]]).
-        val bins = JuxToml.bins(text)
-        if (bins.isNotEmpty()) {
-            val g = group("Binaries", AllIcons.Nodes.ModuleGroup)
-            for (b in bins) g.add(leaf(b, AllIcons.Actions.Execute))
-            node.add(g)
-        }
 
         // Dependencies with each one's source detail.
         val deps = JuxToml.dependencyDetails(text)
@@ -191,44 +393,30 @@ private class JuxProjectPanel(private val project: Project) {
         return node
     }
 
-    private fun leaf(label: String, icon: javax.swing.Icon, tail: String? = null) =
-        DefaultMutableTreeNode(JuxNode(label, icon, null, tail))
+    private fun leaf(label: String, icon: Icon, tail: String? = null) =
+        DefaultMutableTreeNode(JuxNode(label, icon, tail))
 
-    private fun group(label: String, icon: javax.swing.Icon) =
-        DefaultMutableTreeNode(JuxNode(label, icon, null))
+    private fun group(label: String, icon: Icon) =
+        DefaultMutableTreeNode(JuxNode(label, icon))
 
-    private fun expandTopLevel() {
+    /** Expand the root, each module, and each module's `targets` group. */
+    private fun expandModules() {
         tree.expandPath(TreePath(treeRoot.path))
         for (i in 0 until treeRoot.childCount) {
-            val child = treeRoot.getChildAt(i) as DefaultMutableTreeNode
-            tree.expandPath(TreePath(child.path))
+            val module = treeRoot.getChildAt(i) as DefaultMutableTreeNode
+            tree.expandPath(TreePath(module.path))
+            for (j in 0 until module.childCount) {
+                val child = module.getChildAt(j) as DefaultMutableTreeNode
+                if ((child.userObject as? JuxNode)?.label == "targets") {
+                    tree.expandPath(TreePath(child.path))
+                }
+            }
         }
-    }
-
-    private fun openManifestOnActivate(): TreeSelectionListener = TreeSelectionListener { /* open on double-click only */ }
-
-    private fun openSelectedFile() {
-        val node = tree.lastSelectedPathComponent as? DefaultMutableTreeNode ?: return
-        val file = (node.userObject as? JuxNode)?.file ?: return
-        val vf = LocalFileSystem.getInstance().findFileByIoFile(file) ?: return
-        if (vf.isDirectory) return
-        FileEditorManager.getInstance(project).openFile(vf, true)
     }
 
     private fun readFileOrEmpty(f: File): String =
         try { if (f.isFile) f.readText() else "" } catch (_: Exception) { "" }
 }
-
-/**
- * A tree node payload: primary label, optional grayed [tail] (version / source
- * detail), icon, and an optional file to open on double-click.
- */
-private data class JuxNode(
-    val label: String,
-    val icon: javax.swing.Icon,
-    val file: File?,
-    val tail: String? = null,
-)
 
 private class JuxModuleCellRenderer : com.intellij.ui.ColoredTreeCellRenderer() {
     override fun customizeCellRenderer(
@@ -253,17 +441,23 @@ private class JuxModuleCellRenderer : com.intellij.ui.ColoredTreeCellRenderer() 
 
 /**
  * Minimal `jux.toml` reader — just enough for the module tree (no TOML
- * dependency). Section-aware line scan: `[package]` name/version,
- * `[dependencies]` keys, `[workspace]` members. Tolerant of comments,
- * quotes, and whitespace; never throws.
+ * dependency). Section-aware line scan: `[package]` name/version/edition,
+ * `[lib]`, `[[bin]]`, `[dependencies]`, `[workspace]` members, `[build]` target.
+ * Tolerant of comments, quotes, and whitespace; never throws.
  */
 internal object JuxToml {
     fun packageName(text: String): String? = stringValueIn(text, "package", "name")
     fun packageVersion(text: String): String? = stringValueIn(text, "package", "version")
     fun edition(text: String): String? = stringValueIn(text, "package", "edition")
 
+    /** Default cross-compile triple from `[build] target`, if declared. */
+    fun buildTarget(text: String): String? = stringValueIn(text, "build", "target")
+
     /** True when the module declares a `[lib]` target (produces a library). */
     fun hasLib(text: String): Boolean = sectionBody(text, "lib") != null
+
+    /** The `[lib] name`, if the manifest sets one explicitly. */
+    fun libName(text: String): String? = stringValueIn(text, "lib", "name")
 
     /** `[lib] crate-type = [...]` (e.g. `lib`, `cdylib`); empty if unspecified. */
     fun libCrateTypes(text: String): List<String> {

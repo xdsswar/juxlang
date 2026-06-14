@@ -1,9 +1,11 @@
 package dev.jux.intellij
 
+import com.intellij.icons.AllIcons
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import javax.swing.Icon
 
-/** Per-content file icons: a `.jux` file shows its primary type's glyph. */
+/** Per-content icons: a `.jux` file shows its primary type's glyph, and a folder
+ *  holding a `jux.toml` is marked as a module. */
 class JuxIconProviderTest : BasePlatformTestCase() {
 
     private fun iconFor(name: String, code: String): Icon? {
@@ -34,5 +36,15 @@ class JuxIconProviderTest : BasePlatformTestCase() {
         assertNull(
             iconFor("ffi.jux", "package demo;\n@extern(lib = \"c\")\nunsafe native { i32 puts(String s); }\n"),
         )
+    }
+
+    /** A directory containing a `jux.toml` is a module; others keep the folder icon. */
+    fun testModuleDirectoryGetsModuleIcon() {
+        val manifest = myFixture.addFileToProject("modA/jux.toml", "[package]\nname = \"a\"\n")
+        val moduleDir = manifest.containingDirectory!!
+        assertSame(AllIcons.Nodes.Module, JuxIconProvider().getIcon(moduleDir, 0))
+
+        val plain = myFixture.addFileToProject("plain/notes.txt", "hi")
+        assertNull(JuxIconProvider().getIcon(plain.containingDirectory!!, 0))
     }
 }

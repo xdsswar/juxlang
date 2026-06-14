@@ -91,4 +91,25 @@ class JuxTomlTest : TestCase() {
         """.trimIndent()
         assertEquals(listOf("core", "apps/*"), JuxToml.workspaceMembers(ws))
     }
+
+    /** `[lib] name` is surfaced for the targets group; null when unset. */
+    fun testLibName() {
+        val named = """
+            [lib]
+            name = "mylib"
+        """.trimIndent()
+        assertEquals("mylib", JuxToml.libName(named))
+        assertNull(JuxToml.libName(lib))
+        assertNull(JuxToml.libName(exe))
+    }
+
+    /** `[build] target` drives the tool window's default cross-compile triple. */
+    fun testBuildTarget() {
+        val t = """
+            [build]
+            target = "x86_64-unknown-linux-gnu"
+        """.trimIndent()
+        assertEquals("x86_64-unknown-linux-gnu", JuxToml.buildTarget(t))
+        assertNull(JuxToml.buildTarget(exe))
+    }
 }
