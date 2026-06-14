@@ -859,27 +859,28 @@ impl RustEmitter {
         // bounded here — it flows through `Rc<RefCell<C_Inner<T>>>: Debug`
         // whenever `C_Inner<T>: Debug`, which holds when `T: Debug`; the
         // derive emits the right `where` clause for us.
-        // The interior-mutable rep wraps the inner in a `RefCell`; the read-only
-        // shared (`Rc`) rep drops it (`C(Rc<C_Inner>)`) — §CR.4.1.
+        // Handle shape by rep (§CR.3.3 / §CR.4.1): `RcRefCell` wraps the inner in
+        // `Rc<RefCell<..>>`; bare `Rc` (read-only share) drops the cell; `Box`
+        // (escapes-but-unaliased, unique owner) is `Box<..>`.
+        let is_box = self.box_classes.contains(&class_decl.name.text);
         let refcell = self.refcell_classes.contains(&class_decl.name.text);
+        let (open, close): (&str, &str) = if is_box {
+            ("(std::boxed::Box<", ">);\n")
+        } else if refcell {
+            ("(std::rc::Rc<std::cell::RefCell<", ">>);\n")
+        } else {
+            ("(std::rc::Rc<", ">);\n")
+        };
         self.w.line("#[derive(Clone, Debug)]");
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("struct ");
         self.w.push_str(name);
         self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
-        if refcell {
-            self.w.push_str("(std::rc::Rc<std::cell::RefCell<");
-        } else {
-            self.w.push_str("(std::rc::Rc<");
-        }
+        self.w.push_str(open);
         self.w.push_str(&inner);
         self.emit_generic_params_as_args(&class_decl.generic_params);
-        if refcell {
-            self.w.push_str(">>);\n");
-        } else {
-            self.w.push_str(">);\n");
-        }
+        self.w.push_str(close);
         self.w.newline();
 
         // ---- impl[<T: Clone>] C<T> { … } ----

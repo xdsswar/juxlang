@@ -338,6 +338,17 @@ impl RustEmitter {
             if !is_eq {
                 self.w.push('!');
             }
+            // The `Box` rep is a unique owner whose `.0` is a `Box`, not an `Rc`,
+            // so identity compares the boxed addresses with `std::ptr::eq`
+            // instead of `Rc::ptr_eq`.
+            if self.receiver_is_box_class(&b.left) || self.receiver_is_box_class(&b.right) {
+                self.w.push_str("std::ptr::eq(&*");
+                self.emit_expr(&b.left);
+                self.w.push_str(".0, &*");
+                self.emit_expr(&b.right);
+                self.w.push_str(".0)");
+                return;
+            }
             let left_wrapper = self.receiver_is_wrapper_class(&b.left);
             let right_wrapper = self.receiver_is_wrapper_class(&b.right);
             self.w.push_str("std::rc::Rc::ptr_eq(&");

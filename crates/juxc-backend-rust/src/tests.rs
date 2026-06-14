@@ -2115,6 +2115,35 @@ fn aliased_immutable_class_lowers_to_bare_rc_no_refcell() {
     assert!(rust.contains("q = p.clone()"), "alias rebind via Rc clone: {rust}");
 }
 
+/// §CR.3.3 Box demotion: a class that ESCAPES (returned from a function) but is
+/// never aliased and never mutated lowers to `C(Box<C_Inner>)` — a unique owner
+/// on the heap, no refcount and no cell.
+#[test]
+fn escaping_unaliased_immutable_class_lowers_to_box() {
+    let rust = emit(
+        r#"
+        public class Token {
+            public int id;
+            public Token(int id) { this.id = id; }
+            public int getId() { return this.id; }
+        }
+        Token make(int n) { return new Token(n); }
+        public void main() {
+            print(make(5).getId());
+        }
+        "#,
+    );
+    assert!(
+        rust.contains("pub struct Token(std::boxed::Box<Token_Inner>);"),
+        "expected Box newtype: {rust}",
+    );
+    assert!(
+        rust.contains("std::boxed::Box::new(Self::new_inner"),
+        "ctor wraps in Box::new: {rust}",
+    );
+    assert!(!rust.contains("RefCell<Token_Inner>"), "Box Token has no RefCell: {rust}");
+}
+
 /// Explicit construction `new Box<int>(7)` lowers to the Rust
 /// turbofish `Box::<isize>::new(7)`. Implicit `new Box(7)` keeps
 /// the bare `Box::new(7)` form (Rust infers).
