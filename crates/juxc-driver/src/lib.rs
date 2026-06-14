@@ -517,6 +517,14 @@ pub fn build_with_manifest(
         }
     }
 
+    // Libraries configured in `[ffi.*]` are linked entirely by the generated
+    // build.rs, so drop the matching `@extern` block's `#[link(name = "…")]`
+    // attribute from the emitted Rust (avoids double-linking / a dylib-vs-static
+    // kind conflict). Unconfigured libs keep their `#[link]` (system libs).
+    let ffi_libs: Vec<&str> = manifest
+        .map(|m| m.ffi.iter().map(|b| b.lib.as_str()).collect())
+        .unwrap_or_default();
+
     // Write each source file. The backend uses `src/main.rs` for the
     // single binary right now; future emissions may add library crates
     // and tests, so we handle arbitrary nested paths.
@@ -527,7 +535,12 @@ pub fn build_with_manifest(
             fs::create_dir_all(parent)
                 .with_context(|| format!("creating parent dir for {}", full.display()))?;
         }
-        fs::write(&full, content)
+        let to_write = if rel_path.ends_with(".rs") && !ffi_libs.is_empty() {
+            strip_extern_link_attrs(content, &ffi_libs)
+        } else {
+            content.clone()
+        };
+        fs::write(&full, &to_write)
             .with_context(|| format!("writing source file {}", full.display()))?;
         if rel_path.ends_with(".rs") {
             written_rs.push(full);
@@ -684,6 +697,12 @@ pub fn build_emitted_crate(
         }
     }
 
+    // Libraries configured in `[ffi.*]` are linked by the generated build.rs,
+    // so drop the matching `@extern` block's `#[link(name = "…")]` (§B.14).
+    let ffi_libs: Vec<&str> = manifest
+        .map(|m| m.ffi.iter().map(|b| b.lib.as_str()).collect())
+        .unwrap_or_default();
+
     // Write each emitted source file.
     let mut written_rs: Vec<PathBuf> = Vec::with_capacity(crate_.sources.len());
     for (rel_path, content) in &crate_.sources {
@@ -692,7 +711,12 @@ pub fn build_emitted_crate(
             fs::create_dir_all(parent)
                 .with_context(|| format!("creating parent dir for {}", full.display()))?;
         }
-        fs::write(&full, content)
+        let to_write = if rel_path.ends_with(".rs") && !ffi_libs.is_empty() {
+            strip_extern_link_attrs(content, &ffi_libs)
+        } else {
+            content.clone()
+        };
+        fs::write(&full, &to_write)
             .with_context(|| format!("writing source file {}", full.display()))?;
         if rel_path.ends_with(".rs") {
             written_rs.push(full);
@@ -824,6 +848,20 @@ fn copy_icon_into_crate(manifest: &Manifest, crate_dir: &Path) -> Result<Option<
 /// matching the spec's "defaults to authors" note. All interpolated
 /// strings are escaped for a Rust string literal so quotes/backslashes in
 /// metadata can't break the generated source.
+/// Remove the `#[link(name = "<lib>")]` attribute lines for `libs` from emitted
+/// Rust source. Used when a library is configured in `[ffi.*]` (§B.14): the
+/// generated `build.rs` links it, so the `@extern` block's own `#[link]` must be
+/// dropped to avoid a duplicate / conflicting link request. The backend always
+/// emits the attribute in the exact form `#[link(name = "<lib>")]` on its own
+/// top-level line (see `emit_extern_block`), so a line-targeted strip is safe.
+fn strip_extern_link_attrs(src: &str, libs: &[&str]) -> String {
+    let mut out = src.to_string();
+    for lib in libs {
+        out = out.replace(&format!("#[link(name = \"{lib}\")]\n"), "");
+    }
+    out
+}
+
 fn generate_build_rs(
     meta: &juxc_backend_rust::CargoMeta,
     crate_name: &str,
@@ -887,15 +925,47 @@ fn generate_build_rs(
         None => String::new(),
     };
 
+    // FFI native-library linkage (§B.14) — emitted on EVERY platform, before
+    // the Windows-only resource block. For each `[ffi.*]` binding we add the
+    // search directories, link the library (with its explicit kind for
+    // static/framework), and link any transitive `extra_libs`. The matching
+    // `@extern` block's `#[link]` attribute is stripped from the emitted source
+    // (see `strip_extern_link_attrs`), so the build system owns linkage.
+    let mut ffi = String::new();
+    for link in &meta.ffi {
+        for p in &link.search_paths {
+            ffi.push_str(&format!(
+                "    println!(\"cargo:rustc-link-search=native={}\");\n",
+                escape_rs(p)
+            ));
+        }
+        let kind = match link.kind.as_deref() {
+            Some(k) => format!("{k}="),
+            None => String::new(),
+        };
+        ffi.push_str(&format!(
+            "    println!(\"cargo:rustc-link-lib={}{}\");\n",
+            kind,
+            escape_rs(&link.lib)
+        ));
+        for e in &link.extra_libs {
+            ffi.push_str(&format!(
+                "    println!(\"cargo:rustc-link-lib={}\");\n",
+                escape_rs(e)
+            ));
+        }
+    }
+
     // Assemble the full source. Note the doc comment marking this as
     // generated, and the Windows gate.
     format!(
         "// Generated by juxc — do not edit.\n\
          //\n\
          // Embeds Windows version-info + icon resources into the produced\n\
-         // executable from the project's `jux.toml` `[package]` metadata.\n\
-         // No-op on non-Windows targets.\n\
+         // executable from the project's `jux.toml` `[package]` metadata,\n\
+         // and emits `[ffi.*]` native-library link directives (all platforms).\n\
          fn main() {{\n\
+         {ffi}\
          \x20   if std::env::var(\"CARGO_CFG_TARGET_OS\").as_deref() == Ok(\"windows\") {{\n\
          \x20       let mut res = winresource::WindowsResource::new();\n\
          {sets}\

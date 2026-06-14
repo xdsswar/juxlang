@@ -4605,6 +4605,27 @@ pub struct CargoMeta {
     /// defaults apply). The driver does the Jux→Cargo key translation;
     /// the emitter just renders each block verbatim.
     pub profiles: Vec<CargoProfile>,
+    /// Native-library link config from the manifest's `[ffi.*]` tables
+    /// (§B.14), emitted as `cargo:rustc-link-*` directives in the generated
+    /// `build.rs`. Empty → no FFI linking. Drives `needs_build_script` on every
+    /// platform (linking is not Windows-gated like the resource block).
+    pub ffi: Vec<FfiLink>,
+}
+
+/// One native library to link for the C FFI (§B.14), lowered from an
+/// `[ffi.<name>]` manifest table. Rendered into the generated `build.rs` as
+/// `cargo:rustc-link-search` + `cargo:rustc-link-lib` directives.
+#[derive(Debug, Clone, Default)]
+pub struct FfiLink {
+    /// The library name to link (drops any `lib` prefix / extension).
+    pub lib: String,
+    /// Explicit Cargo link kind (`"static"` / `"framework"`) or `None` for the
+    /// default dynamic linkage.
+    pub kind: Option<String>,
+    /// `cargo:rustc-link-search=native=<path>` directories.
+    pub search_paths: Vec<String>,
+    /// Transitive libraries to also link (`cargo:rustc-link-lib=<name>`).
+    pub extra_libs: Vec<String>,
 }
 
 /// One Cargo `[profile.<name>]` table to emit into a generated `Cargo.toml`.
@@ -4637,6 +4658,8 @@ impl CargoMeta {
             || self.copyright.is_some()
             || self.description.is_some()
             || !self.authors.is_empty()
+            // FFI link directives also require a build.rs (on every platform).
+            || !self.ffi.is_empty()
     }
 }
 

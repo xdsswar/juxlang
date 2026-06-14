@@ -148,6 +148,29 @@ pub struct Manifest {
     /// [`juxc_backend_rust::CargoProfile`] by [`Manifest::cargo_profiles`]
     /// and emitted into the generated `Cargo.toml`.
     pub profiles: Vec<ProfileSpec>,
+    /// `[ffi.<name>]` native-library bindings (§B.14) — link config for the C
+    /// FFI declared in `@extern … unsafe native { … }` blocks. Drive the
+    /// generated `build.rs` link directives. Empty when the project declares no
+    /// `[ffi.*]` tables.
+    pub ffi: Vec<FfiBinding>,
+}
+
+/// One resolved `[ffi.<name>]` binding (§B.14). Search paths are resolved to
+/// absolute paths against the project root at load time. A configured library
+/// is linked entirely by the generated `build.rs`; the matching extern block's
+/// `#[link(name = "…")]` is dropped so the build system owns its linkage.
+#[derive(Debug, Clone)]
+pub struct FfiBinding {
+    /// The library to link (`lib = "…"`, or the table name).
+    pub lib: String,
+    /// Linkage kind: `"static"` / `"framework"` (an explicit Cargo link kind),
+    /// or `None` for the default dynamic linkage.
+    pub kind: Option<String>,
+    /// Absolute library search directories (`lib_path` + `lib_paths` +
+    /// `extra_lib_paths`), emitted as `cargo:rustc-link-search=native=…`.
+    pub search_paths: Vec<String>,
+    /// Transitive libraries to also link (`extra_libs`).
+    pub extra_libs: Vec<String>,
 }
 
 /// A `[profile.<name>]` table (§B.9). Fields mirror the spec's profile
@@ -350,6 +373,32 @@ struct RawManifest {
     build: Option<RawBuild>,
     #[serde(default)]
     profile: std::collections::BTreeMap<String, RawProfile>,
+    /// `[ffi.<name>]` tables (§B.14) — native-library linkage for the C FFI
+    /// declared by `@extern(lib = "…") unsafe native { … }` blocks (§L.7).
+    #[serde(default)]
+    ffi: std::collections::BTreeMap<String, RawFfi>,
+}
+
+/// Serde shape for one `[ffi.<name>]` table (§B.14.1). Every field is optional
+/// so partial tables deserialize; unknown keys (bindgen allow/blocklists,
+/// build-from-source) are ignored in Phase 1.
+#[derive(Debug, Default, Deserialize)]
+struct RawFfi {
+    /// `lib = "name"` — the library to link (default: the table name).
+    lib: Option<String>,
+    /// `linkage = "dynamic" | "static" | "framework"` (default dynamic).
+    linkage: Option<String>,
+    /// `lib_path = "dir"` — a single library search directory.
+    lib_path: Option<String>,
+    /// `lib_paths = ["dir", …]` — additional search directories.
+    #[serde(default)]
+    lib_paths: Vec<String>,
+    /// `extra_libs = ["dep", …]` — transitive libraries to also link.
+    #[serde(default)]
+    extra_libs: Vec<String>,
+    /// `extra_lib_paths = ["dir", …]` — search dirs for the extra libs.
+    #[serde(default)]
+    extra_lib_paths: Vec<String>,
 }
 
 impl Manifest {
@@ -578,6 +627,43 @@ impl Manifest {
             }
         }
 
+        // ---- [ffi.*] tables (§B.14) ---------------------------------------
+        // Each `[ffi.<name>]` becomes an `FfiBinding`. Search paths are resolved
+        // absolute against the project root so the generated build.rs is
+        // location-independent. `linkage = "dynamic"` (and absence) leaves
+        // `kind = None` (Cargo's default dylib linkage).
+        let ffi: Vec<FfiBinding> = raw
+            .ffi
+            .into_iter()
+            .map(|(name, rf)| {
+                let mut search_paths: Vec<String> = Vec::new();
+                let mut add = |p: &str| {
+                    search_paths.push(resolve_against(project_root, p).display().to_string());
+                };
+                if let Some(p) = &rf.lib_path {
+                    add(p);
+                }
+                for p in &rf.lib_paths {
+                    add(p);
+                }
+                for p in &rf.extra_lib_paths {
+                    add(p);
+                }
+                let kind = match rf.linkage.as_deref() {
+                    Some("static") => Some("static".to_string()),
+                    Some("framework") => Some("framework".to_string()),
+                    // "dynamic" / "dylib" / absent → Cargo default (None).
+                    _ => None,
+                };
+                FfiBinding {
+                    lib: rf.lib.unwrap_or(name),
+                    kind,
+                    search_paths,
+                    extra_libs: rf.extra_libs,
+                }
+            })
+            .collect();
+
         Some(Manifest {
             project_root: project_root.to_path_buf(),
             package,
@@ -589,6 +675,7 @@ impl Manifest {
             optimization,
             build_target,
             profiles,
+            ffi,
         })
     }
 
@@ -792,6 +879,9 @@ impl PackageMetadata {
             // package-only projection carries none. Use
             // [`Manifest::to_cargo_meta`] to include them.
             profiles: Vec::new(),
+            // `[ffi.*]` likewise lives on the [`Manifest`]; the package-only
+            // projection carries none.
+            ffi: Vec::new(),
         }
     }
 }
@@ -805,6 +895,16 @@ impl Manifest {
     pub fn to_cargo_meta(&self) -> juxc_backend_rust::CargoMeta {
         let mut meta = self.package.to_cargo_meta();
         meta.profiles = self.cargo_profiles();
+        meta.ffi = self
+            .ffi
+            .iter()
+            .map(|b| juxc_backend_rust::FfiLink {
+                lib: b.lib.clone(),
+                kind: b.kind.clone(),
+                search_paths: b.search_paths.clone(),
+                extra_libs: b.extra_libs.clone(),
+            })
+            .collect();
         meta
     }
 }
@@ -869,6 +969,37 @@ mod git_dep_tests {
             m.dependencies[0].git_ref,
             Some(GitRef::Rev("abc".to_string())),
         );
+    }
+
+    /// `[ffi.<name>]` (§B.14) parses into an `FfiBinding`: lib name, linkage
+    /// kind, resolved search paths, and transitive libs.
+    #[test]
+    fn ffi_table_parses() {
+        let m = load_from(
+            "[package]\nname = \"x\"\n\n[ffi.sqlite3]\nlib = \"sqlite3\"\n\
+             linkage = \"static\"\nlib_path = \"vendor/lib\"\nextra_libs = [\"pthread\"]\n",
+        );
+        assert_eq!(m.ffi.len(), 1);
+        let b = &m.ffi[0];
+        assert_eq!(b.lib, "sqlite3");
+        assert_eq!(b.kind.as_deref(), Some("static"));
+        assert_eq!(b.extra_libs, vec!["pthread".to_string()]);
+        assert!(
+            b.search_paths.iter().any(|p| p.replace('\\', "/").ends_with("vendor/lib")),
+            "search paths: {:?}",
+            b.search_paths
+        );
+    }
+
+    /// The library name defaults to the table name; dynamic linkage leaves
+    /// `kind = None`; and any `[ffi.*]` forces a build script (the link
+    /// directives need one, on every platform).
+    #[test]
+    fn ffi_defaults_and_build_script() {
+        let m = load_from("[package]\nname = \"x\"\n\n[ffi.foo]\n");
+        assert_eq!(m.ffi[0].lib, "foo");
+        assert!(m.ffi[0].kind.is_none());
+        assert!(m.to_cargo_meta().needs_build_script());
     }
 }
 

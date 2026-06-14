@@ -438,12 +438,14 @@ runs. That currently includes:
 - `rust.std` compile coverage is partial: construction and method calls work;
   free functions, traits/operators, and the full type mapping are being filled in.
 - **C FFI** works for the common case: declare C functions in an
-  `@extern(lib = "…") unsafe native { … }` block, call them inside `unsafe`, and
-  the library links via `#[link]`. Strings cross as ordinary `String` (the
-  compiler marshals to/from C `const char*` automatically; there is no
-  `CString`). See [`examples/ffi_strings.jux`](examples/ffi_strings.jux). Still
-  to come: `out` parameters, `@layout(c)` C structs, `@export` (Jux to C),
-  `[ffi.*]`-configured linking for custom libraries, header `bindgen`, and C++.
+  `@extern(lib = "…") unsafe native { … }` block and call them inside `unsafe`.
+  System libraries link via `#[link]`; custom libraries are configured with an
+  `[ffi.<name>]` table in `jux.toml` (`lib_path`, `linkage`, `extra_libs`),
+  which drives the generated `build.rs` link step. Strings cross as ordinary
+  `String` (the compiler marshals to/from C `const char*` automatically; there
+  is no `CString`). See [`examples/ffi_strings.jux`](examples/ffi_strings.jux).
+  Still to come: `out` parameters, `@layout(c)` C structs, `@export` (Jux to C),
+  header `bindgen`, and C++.
 - Raw-pointer basics work (`T*`, `void*`, `&local`, `&obj`, `*p` inside `unsafe`).
   There is no `delete` keyword by design (`delete p;` is guided to the `drop { }` +
   foreign-`free` model).
