@@ -27,6 +27,15 @@ class JuxSettings : PersistentStateComponent<JuxSettings.State> {
          */
         @JvmField
         var toolchainHome: String = ""
+
+        /**
+         * Default cross-compile target triple passed to `jux build --target`
+         * from the Jux Project tool window. Empty = build for the host. Set via
+         * the tool window's "Target" toolbar action; overrides any `[build]
+         * target` declared in the project's `jux.toml`.
+         */
+        @JvmField
+        var crossTarget: String = ""
     }
 
     private var state = State()
@@ -38,6 +47,13 @@ class JuxSettings : PersistentStateComponent<JuxSettings.State> {
         get() = state.toolchainHome
         set(value) {
             state.toolchainHome = value.trim()
+        }
+
+    /** Default `--target` triple for tool-window builds; blank = host. */
+    var crossTarget: String
+        get() = state.crossTarget
+        set(value) {
+            state.crossTarget = value.trim()
         }
 
     companion object {
