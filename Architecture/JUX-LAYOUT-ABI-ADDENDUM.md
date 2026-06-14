@@ -295,6 +295,29 @@ The mangling is **not stable across compiler versions**. Programs that depend on
 - The function may not be generic (monomorphized exports require name disambiguation that defeats the whole point of `@export`).
 - The function may not throw; exceptions cannot cross the FFI boundary safely. Use `Result<T, E>` returned by value, or out-parameters for error info.
 
+**Lowering (implemented).** A purely-primitive / pointer / `@layout(c)` export is
+emitted inline as `#[no_mangle] pub extern "C" fn <symbol>(…)`. An export whose
+signature mentions `String` is emitted as the ordinary Jux function (its Jux name,
+normal `String` types, still callable from Jux) **plus** a thin C-ABI wrapper:
+
+```rust
+#[no_mangle]
+pub extern "C" fn greet(name: *const c_char, times: isize) -> *const c_char {
+    let name = if name.is_null() { String::new() }
+               else { unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned() };
+    let __r = greet_impl(name, times);                 // the real Jux fn
+    match CString::new(__r) { Ok(s) => s.into_raw() as *const c_char,
+                              Err(_) => core::ptr::null() }
+}
+```
+
+Inbound, each `String` parameter is copied out of the C `const char*` (a null
+pointer becomes the empty string). Outbound, a returned `String` is handed back
+via `CString::into_raw`, which **leaks** the buffer: the C caller owns it and it
+is never reclaimed on the Jux side (the mirror of the inbound "never freed" rule
+on the `@extern` side). An interior NUL in the result yields a null pointer.
+Example: `examples/ffi_export.jux`.
+
 A non-`@export` function is **not** part of any stable ABI. Other Jux modules link to it through the mangled name; that link is rebuilt every compile.
 
 ### L.3.3. Static and Const Visibility

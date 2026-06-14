@@ -53,6 +53,33 @@ fn export_symbol_name(fn_decl: &FnDecl) -> Option<String> {
     Some(fn_decl.name.text.clone())
 }
 
+/// True when `t` is a plain Jux `String` (no pointer / array / generic shape) —
+/// the value that maps to a C `const char*` at the FFI boundary.
+fn type_ref_is_string(t: &juxc_ast::TypeRef) -> bool {
+    t.ptr_depth == 0
+        && t.array_shape.is_none()
+        && t.fn_shape.is_none()
+        && t.generic_args.is_empty()
+        && t.name.segments.len() == 1
+        && t.name.segments[0].text == "String"
+}
+
+/// True when an `@export`ed function has a `String` parameter or `String` return
+/// type. Such a function is emitted as an ordinary Rust fn (its Jux name, normal
+/// `String` types) PLUS a thin `extern "C"` marshalling wrapper (Layout-ABI
+/// §L.3.2) — rather than the inline `#[no_mangle] extern "C"` treatment used for
+/// a purely-primitive export, because `String` cannot cross the C ABI directly.
+fn export_needs_string_wrapper(fn_decl: &FnDecl) -> bool {
+    if export_symbol_name(fn_decl).is_none() {
+        return false;
+    }
+    let ret_is_string = matches!(
+        &fn_decl.return_type,
+        ReturnType::Type(t) if type_ref_is_string(t)
+    );
+    ret_is_string || fn_decl.params.iter().any(|p| type_ref_is_string(&p.ty))
+}
+
 impl RustEmitter {
     /// Emit a Jux `@extern(lib = "…") unsafe native { … }` block as a Rust
     /// `#[link(name = "…")] extern "C" { … }` (Layout-ABI §L.7 / pipeline
@@ -214,12 +241,20 @@ impl RustEmitter {
         // for plain `@export` (Jux name == C symbol), or `#[export_name = "…"]`
         // for `@export(name = "…")`.
         let export_name = export_symbol_name(fn_decl);
-        if let Some(sym) = &export_name {
-            self.w.emit_indent();
-            if sym == &fn_decl.name.text {
-                self.w.push_str("#[no_mangle]\n");
-            } else {
-                self.w.push_str(&format!("#[export_name = \"{sym}\"]\n"));
+        // An `@export` whose signature mentions `String` can't take the inline
+        // `#[no_mangle] extern "C"` treatment (String isn't C-ABI): it is emitted
+        // as a normal Rust fn (its Jux name) plus a marshalling wrapper appended
+        // after the body. `inline_export` is the pure-C-ABI export path.
+        let needs_string_wrapper = export_needs_string_wrapper(fn_decl);
+        let inline_export = export_name.is_some() && !needs_string_wrapper;
+        if inline_export {
+            if let Some(sym) = &export_name {
+                self.w.emit_indent();
+                if sym == &fn_decl.name.text {
+                    self.w.push_str("#[no_mangle]\n");
+                } else {
+                    self.w.push_str(&format!("#[export_name = \"{sym}\"]\n"));
+                }
             }
         }
 
@@ -231,10 +266,15 @@ impl RustEmitter {
         // At crate root (no package) we keep the historical
         // "drop visibility, emit a private `fn`" behavior so the
         // existing test corpus stays green.
-        if export_name.is_some() {
+        if inline_export {
             // C linkage: public + `extern "C"`. (Tycheck rejects `async` /
             // `unsafe` / generic exports, so no keyword-ordering conflict.)
             self.w.push_str("pub extern \"C\" ");
+        } else if needs_string_wrapper {
+            // The real fn keeps its Jux name and stays callable from both Jux
+            // and the appended wrapper; make it `pub` so the wrapper (and other
+            // units) reach it regardless of module nesting.
+            self.w.push_str("pub ");
         } else if !self.symbols.package.is_empty() {
             // §TS.1 tests/hooks are ordinary functions with NO visibility
             // requirement, but the synthesized test runner is `fn main()`
@@ -263,7 +303,7 @@ impl RustEmitter {
         // `unsafe` and `extern "C"` can't both precede `fn` in an arbitrary
         // order; an `@export` already emitted `extern "C"` above, and tycheck
         // forbids an `unsafe`/`async` export, so suppress the keyword here.
-        if export_name.is_none()
+        if !inline_export
             && fn_decl.modifiers.contains(&juxc_ast::FnModifier::Unsafe)
         {
             self.w.push_str("unsafe ");
@@ -606,6 +646,108 @@ impl RustEmitter {
             self.w.line("}");
             self.w.newline();
         }
+        // `@export` with a `String` in its signature: append the C-ABI
+        // marshalling wrapper now that the real fn has been emitted (§L.3.2).
+        if needs_string_wrapper {
+            if let Some(sym) = &export_name {
+                self.emit_export_string_wrapper(fn_decl, sym);
+            }
+        }
+    }
+
+    /// Emit the C-ABI marshalling wrapper for an `@export`ed function whose
+    /// signature mentions `String` (Layout-ABI §L.3.2). The real Jux function was
+    /// already emitted under its Jux name with ordinary `String` types; this
+    /// wrapper gives C a `#[no_mangle] pub extern "C"` entry point that converts
+    /// at the boundary:
+    ///
+    /// - **Inbound** — each `String` parameter arrives as `*const c_char` and is
+    ///   copied into an owned Jux `String` (`CStr::from_ptr(...).to_string_lossy`;
+    ///   a null pointer becomes the empty string). Non-`String` params pass
+    ///   through unchanged.
+    /// - **Outbound** — a `String` return is handed back as `*const c_char` via
+    ///   `CString::into_raw`, which **leaks** the buffer: the C caller owns it and
+    ///   it is never reclaimed (mirroring the inbound "never freed" rule on the
+    ///   `@extern` side). An interior NUL makes the result a null pointer.
+    fn emit_export_string_wrapper(&mut self, fn_decl: &FnDecl, sym: &str) {
+        let ret_is_string = matches!(
+            &fn_decl.return_type,
+            ReturnType::Type(t) if type_ref_is_string(t)
+        );
+        // Header: #[no_mangle] (or #[export_name]) pub extern "C" fn <sym>(...).
+        self.w.emit_indent();
+        if sym == fn_decl.name.text {
+            self.w.push_str("#[no_mangle]\n");
+        } else {
+            self.w.push_str(&format!("#[export_name = \"{sym}\"]\n"));
+        }
+        self.w.emit_indent();
+        // The wrapper's Rust fn name is the Jux name with a `__jux_cabi_` prefix
+        // (the C symbol itself is set by the attribute above), so it never
+        // collides with the real fn that keeps the Jux name.
+        self.w
+            .push_str(&format!("pub extern \"C\" fn __jux_cabi_{}(", fn_decl.name.text));
+        for (i, p) in fn_decl.params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(&p.name.text);
+            self.w.push_str(": ");
+            if type_ref_is_string(&p.ty) {
+                self.w.push_str("*const core::ffi::c_char");
+            } else {
+                self.emit_ffi_type(&p.ty);
+            }
+        }
+        self.w.push(')');
+        if ret_is_string {
+            self.w.push_str(" -> *const core::ffi::c_char");
+        } else if let ReturnType::Type(t) = &fn_decl.return_type {
+            self.w.push_str(" -> ");
+            self.emit_ffi_type(t);
+        }
+        self.w.push_str(" {\n");
+        self.w.indent_inc();
+        // Inbound: each String param → owned Jux String (null → empty).
+        for p in &fn_decl.params {
+            if type_ref_is_string(&p.ty) {
+                let n = &p.name.text;
+                self.w.emit_indent();
+                self.w.push_str(&format!(
+                    "let {n} = if {n}.is_null() {{ String::new() }} else {{ \
+                     unsafe {{ ::std::ffi::CStr::from_ptr({n}) }}.to_string_lossy().into_owned() }};\n",
+                ));
+            }
+        }
+        // Call the real Jux fn by name, forwarding every parameter.
+        self.w.emit_indent();
+        if matches!(fn_decl.return_type, ReturnType::Void) {
+            self.w.push_str(&fn_decl.name.text);
+        } else {
+            self.w.push_str(&format!("let __r = {}", fn_decl.name.text));
+        }
+        self.w.push('(');
+        for (i, p) in fn_decl.params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(&p.name.text);
+        }
+        self.w.push_str(");\n");
+        // Outbound: String return → leaked `*const c_char`; otherwise pass `__r`.
+        if ret_is_string {
+            self.w.emit_indent();
+            self.w.push_str(
+                "match ::std::ffi::CString::new(__r) { \
+                 Ok(__s) => __s.into_raw() as *const core::ffi::c_char, \
+                 Err(_) => ::core::ptr::null() }\n",
+            );
+        } else if !matches!(fn_decl.return_type, ReturnType::Void) {
+            self.w.line("__r");
+        }
+        self.w.indent_dec();
+        self.w.line("}");
+        self.w.newline();
     }
 
     /// Emit a function's body block with **trailing-return elision** —

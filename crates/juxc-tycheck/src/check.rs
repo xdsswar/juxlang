@@ -720,11 +720,11 @@ impl<'a> Checker<'a> {
     }
 
     /// Validate an `@export` (§8.4) free function. It becomes a `pub extern "C"
-    /// fn`, so its signature must be plain and C-compatible: each parameter and
-    /// the return is a primitive, a raw pointer, or a `@layout(c)` value struct
-    /// (NOT `String` — exported-side string marshalling is a later slice), and
-    /// the function may not be generic, `async`, `unsafe`, or `throws`.
-    /// Violations are **E0508**.
+    /// fn` (or, when its signature mentions `String`, a normal fn plus a C-ABI
+    /// marshalling wrapper), so its signature must be C-compatible: each parameter
+    /// and the return is a primitive, a raw pointer, a `@layout(c)` value struct /
+    /// C enum, or `String` (marshalled to/from `const char*`), and the function
+    /// may not be generic, `async`, `unsafe`, or `throws`. Violations are **E0508**.
     fn check_export_signature(&mut self, fn_decl: &FnDecl) {
         if !crate::symbol_table::has_annotation(&fn_decl.annotations, "export") {
             return;
@@ -767,14 +767,14 @@ impl<'a> Checker<'a> {
             );
         }
         for p in &fn_decl.params {
-            if !self.ffi_struct_field_ok(&p.ty) {
+            if !self.ffi_type_ok(&p.ty) {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0508_FfiTypeNotAllowed,
                         format!(
                             "parameter `{}` of `@export` function `{name}` has type `{}`, which is \
-                             not C-compatible — use a primitive, a raw pointer (`T*`), or a \
-                             `@layout(c)` struct",
+                             not C-compatible — use a primitive, a raw pointer (`T*`), a \
+                             `@layout(c)` struct, or `String`",
                             p.name.text,
                             type_ref_display(&p.ty),
                         ),
@@ -784,13 +784,14 @@ impl<'a> Checker<'a> {
             }
         }
         if let juxc_ast::ReturnType::Type(t) = &fn_decl.return_type {
-            if !self.ffi_struct_field_ok(t) {
+            if !self.ffi_type_ok(t) {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0508_FfiTypeNotAllowed,
                         format!(
                             "return type `{}` of `@export` function `{name}` is not C-compatible — \
-                             use a primitive, a raw pointer (`T*`), a `@layout(c)` struct, or `void`",
+                             use a primitive, a raw pointer (`T*`), a `@layout(c)` struct, \
+                             `String`, or `void`",
                             type_ref_display(t),
                         ),
                     )
@@ -7825,11 +7826,21 @@ mod tests {
         assert!(!has(&d, code::Code::E0508_FfiTypeNotAllowed), "{d:?}");
     }
 
-    /// A non-C-compatible `@export` parameter (`String`) is E0508.
+    /// A `String` parameter / return on an `@export` function is now allowed
+    /// (it is marshalled to/from C `const char*` by the wrapper, §L.3.2) — no
+    /// E0508. A genuinely non-C type (a class) is still rejected.
     #[test]
-    fn export_string_param_is_e0508() {
-        let d = run("@export public int bad(String s) { return 0; } public void main() {}");
-        assert!(has(&d, code::Code::E0508_FfiTypeNotAllowed), "{d:?}");
+    fn export_string_signature_ok() {
+        let ok = run(
+            "@export String greet(String name) { return name; } public void main() {}",
+        );
+        assert!(!has(&ok, code::Code::E0508_FfiTypeNotAllowed), "{ok:?}");
+
+        let bad = run(
+            "class Box { public int v; public Box(int v) { this.v = v; } } \
+             @export public int bad(Box b) { return 0; } public void main() {}",
+        );
+        assert!(has(&bad, code::Code::E0508_FfiTypeNotAllowed), "{bad:?}");
     }
 
     // --- §M.14.2 `final` parameter / local reassignment (E0464) ---
