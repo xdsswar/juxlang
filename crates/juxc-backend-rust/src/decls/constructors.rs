@@ -415,6 +415,8 @@ impl RustEmitter {
             }
             self.w.push_str(",\n");
         }
+        // PhantomData inits for type params carried only as phantom fields.
+        self.emit_phantom_field_inits(class_decl);
         self.w.indent_dec();
         self.w.line("};");
 
@@ -511,6 +513,22 @@ impl RustEmitter {
             }
         }
         self.emit_expr(init);
+    }
+
+    /// Emit `__phantom_<name>: std::marker::PhantomData,` init lines for
+    /// every type param of `class_decl` that the struct carries only as a
+    /// phantom field (see [`crate::unused_class_type_params`]). Called from
+    /// every `Self { … }` / `<Name>_Inner { … }` literal path so the
+    /// synthesized phantom field is always initialized. Emits nothing when
+    /// the class has no phantom params. Each line is written at the current
+    /// indent via `emit_indent`, matching the surrounding field inits.
+    pub(crate) fn emit_phantom_field_inits(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        for phantom in crate::unused_class_type_params(class_decl) {
+            self.w.emit_indent();
+            self.w.push_str("__phantom_");
+            self.w.push_str(&phantom);
+            self.w.push_str(": std::marker::PhantomData,\n");
+        }
     }
 
     /// Emit the direct `Self { field: expr, … }` body for a simple
@@ -672,6 +690,8 @@ impl RustEmitter {
             }
             self.w.push_str(",\n");
         }
+        // PhantomData inits for type params carried only as phantom fields.
+        self.emit_phantom_field_inits(class_decl);
         self.w.indent_dec();
         if bind_to_self {
             self.w.line("};");
@@ -1027,6 +1047,8 @@ impl RustEmitter {
             }
             // §P observer storage starts unallocated.
             self.emit_observer_field_inits_lines(class_decl);
+            // PhantomData inits for phantom type params (block-literal form).
+            self.emit_phantom_field_inits(class_decl);
             self.w.indent_dec();
             self.w.line("};");
 
@@ -1189,6 +1211,18 @@ impl RustEmitter {
         }
         // §P observer storage starts unallocated.
         self.emit_observer_field_inits_inline(class_decl, &mut first);
+        // PhantomData inits (inline form) for phantom type params.
+        for phantom in crate::unused_class_type_params(class_decl) {
+            if first {
+                self.w.push(' ');
+            } else {
+                self.w.push_str(", ");
+            }
+            first = false;
+            self.w.push_str("__phantom_");
+            self.w.push_str(&phantom);
+            self.w.push_str(": std::marker::PhantomData");
+        }
         if first {
             // No instance fields — emit `C_Inner {}`.
             self.w.push_str("}");
@@ -1269,6 +1303,18 @@ impl RustEmitter {
         }
         // §P observer storage starts unallocated.
         self.emit_observer_field_inits_inline(class_decl, &mut first);
+        // PhantomData inits (inline form) for phantom type params.
+        for phantom in crate::unused_class_type_params(class_decl) {
+            if first {
+                self.w.push(' ');
+            } else {
+                self.w.push_str(", ");
+            }
+            first = false;
+            self.w.push_str("__phantom_");
+            self.w.push_str(&phantom);
+            self.w.push_str(": std::marker::PhantomData");
+        }
         if first {
             self.w.push_str("}");
         } else {
@@ -1389,6 +1435,8 @@ impl RustEmitter {
             }
             self.w.push_str(",\n");
         }
+        // PhantomData inits for type params carried only as phantom fields.
+        self.emit_phantom_field_inits(class_decl);
         self.w.indent_dec();
         if has_init {
             self.w.line("};");

@@ -44,6 +44,18 @@ impl RustEmitter {
         // sealed lowerings all carry `#[derive(…, Debug)]`), so the bound is
         // always satisfiable.
         self.w.push_str(": std::fmt::Debug");
+        // **Interface `extends` → Rust supertrait bounds.** Jux's
+        // `interface Entity<E> extends Id, Named, Comparable<E>` becomes
+        // `trait Entity<E>: std::fmt::Debug + Id + Named + Comparable<E>`.
+        // This is what makes a generic bound `E: Entity<E>` imply
+        // `E: Comparable<E>` (so `x.compareTo(...)` resolves inside a
+        // `<E extends Entity<E>>` method) and lets a `dyn Entity` value reach
+        // the inherited methods. Each parent flows through `emit_type_as_rust`
+        // (interfaces are already Rust traits, generic args preserved).
+        for parent in &interface.extends {
+            self.w.push_str(" + ");
+            self.emit_type_as_rust(parent);
+        }
         self.w.push_str(" {\n");
         self.w.indent_inc();
         for method in &interface.methods {

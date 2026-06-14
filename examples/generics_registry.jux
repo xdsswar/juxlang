@@ -1,0 +1,141 @@
+// Full Java-style generics acceptance program (planned feature work).
+//
+// Exercises, in one place:
+//   - F-bounded / self-referential interfaces:  Entity<E extends Entity<E>>
+//   - recursive multi-bounds on a class param:   K extends Id & Named & Comparable<K>
+//   - a nested generic bound carrying a wildcard: V extends Container<? extends K>
+//   - a const generic mixed with type params:     int N
+//   - a fresh method type-param bounded by a CLASS param:  <R extends K>
+//   - static generic methods with multi-bounds and nested generic returns
+//   - F-bounded static generic:                   <E extends Entity<E>> E maxById(...)
+//   - PECS wildcards at use sites (producer read / consumer write)
+//   - nested generic construction:                new Box<Pair<K, R>>(new Pair<K, R>(...))
+package gen;
+
+import rust.std.Vec;
+
+public interface Id { long id(); }
+public interface Named { String name(); }
+public interface Comparable<T> { int compareTo(T other); }
+
+// A self-referential (F-bounded) interface: an Entity is comparable to itself.
+public interface Entity<E extends Entity<E>> extends Id, Named, Comparable<E> {}
+
+public class Registry<K extends Id & Named & Comparable<K>, V extends Container<? extends K>, int N> {
+    private V backing;
+    private static long instances = 0;
+
+    public Registry(V backing) {
+        this.backing = backing;
+        Registry.instances = Registry.instances + 1;
+    }
+
+    public int capacity() { return N; }              // const generic read as a value
+    public V backing() { return this.backing; }
+
+    // Fresh type-param R bounded by the enclosing class param K; nested generic return.
+    public <R extends K> Box<Pair<K, R>> pairWith(R other) {
+        K key = this.backing.peek();                 // ? extends K  =>  read as K
+        return new Box<Pair<K, R>>(new Pair<K, R>(key, other));
+    }
+
+    // Static generic, multiple bounds, nested generic return, nested-generic param.
+    public static <E extends Id & Named> Box<MyList<E>> wrapAll(MyList<? extends E> items) {
+        var out = new MyList<E>();
+        // Index-based iteration: MyList exposes get(int)/size(), the
+        // value-class iteration contract Phase 1 supports for user types.
+        for (int i = 0; i < items.size(); i = i + 1) {
+            out.add(items.get(i));                   // ? extends E  =>  readable as E
+        }
+        return new Box<MyList<E>>(out);
+    }
+
+    // Static generic with a self-referential (F-bounded) param.
+    public static <E extends Entity<E>> E maxById(MyList<? extends E> xs) {
+        E best = xs.get(0);
+        for (int i = 1; i < xs.size(); i = i + 1) {
+            E x = xs.get(i);
+            if (x.compareTo(best) > 0) { best = x; }
+        }
+        return best;
+    }
+
+    // Consumer-position wildcard: sink accepts K or any supertype of K.
+    public void drainInto(Sink<? super K> sink) {
+        sink.accept(this.backing.peek());            // ? super K  =>  write as K
+    }
+
+    public static long instanceCount() { return Registry.instances; }
+}
+
+// Supporting generic shapes ------------------------------------------------
+
+public class Box<T> {
+    private T inner;
+    public Box(T inner) { this.inner = inner; }
+    public T unwrap() { return this.inner; }
+}
+
+public class Pair<A, B> {
+    public A first;
+    public B second;
+    public Pair(A first, B second) { this.first = first; this.second = second; }
+}
+
+public class Container<T> {
+    private T held;
+    public Container(T held) { this.held = held; }
+    public T peek() { return this.held; }
+}
+
+public interface Sink<T> { void accept(T value); }
+
+public class MyList<T> {
+    private Vec<T> data;                             // rust.std backing
+    public MyList() { this.data = new Vec<T>(); }
+    public void add(T v) { this.data.push(v); }
+    public T get(int i) { return this.data[i]; }
+    public int size() {                                  // backing Vec length (uint -> int)
+        var n = this.data.len();
+        return (int) n;
+    }
+}
+
+// ---- Concrete types + driver (acceptance run) ----------------------------
+
+// A concrete F-bounded entity: User is comparable to User.
+public class User implements Entity<User> {
+    private long uid;
+    private String uname;
+    public User(long uid, String uname) { this.uid = uid; this.uname = uname; }
+    public long id() { return this.uid; }
+    public String name() { return this.uname; }
+    public int compareTo(User other) {
+        if (this.uid < other.id()) { return -1; }
+        if (this.uid > other.id()) { return 1; }
+        return 0;
+    }
+}
+
+// A concrete consumer for the `? super K` drain.
+public class PrintSink implements Sink<User> {
+    public void accept(User value) { print($"drained: ${value.name()}"); }
+}
+
+public void main() {
+    var c = new Container<User>(new User(1, "ada"));
+    var reg = new Registry<User, Container<User>, 16>(c);
+    print($"capacity=${reg.capacity()}");                 // 16
+
+    var pr = reg.pairWith(new User(2, "alan"));          // Box<Pair<User, User>>
+    print($"pair.first.id=${pr.unwrap().first.id()}");    // 1
+
+    var users = new MyList<User>();
+    users.add(new User(3, "grace"));
+    users.add(new User(1, "ada"));
+    var mx = Registry.maxById(users);                    // User (max by id)
+    print($"max.id=${mx.id()}");                          // 3
+
+    reg.drainInto(new PrintSink());                      // drained: ada
+    print($"instances=${Registry.instanceCount()}");
+}

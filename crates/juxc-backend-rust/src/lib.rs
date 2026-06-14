@@ -213,7 +213,11 @@ pub fn lower_workspace_with_entry(
     // union, so workspace-mode skips that reset (see the gate
     // there).
     for unit in units {
-        let unit_set = collect_user_mut_methods(unit);
+        // Seed each unit's fixed-point with the extern `@MutSelf` set so a
+        // method that calls a discovered `&mut self` extern method on a
+        // `this`-rooted receiver is itself flagged (and its cross-file callers
+        // promote their receiver to `let mut`).
+        let unit_set = analysis::collect_user_mut_methods_seeded(unit, &e.extern_mut_methods);
         e.user_mut_methods.extend(unit_set);
     }
     // C6 pre-pass: with the full cross-file `user_mut_methods` set in
@@ -266,6 +270,7 @@ pub fn lower_workspace_with_entry(
         .intersection(&e.wrapper_classes)
         .cloned()
         .collect();
+    e.bound_position_classes = compute_bound_position_classes(units);
     e.downcast_targets = compute_downcast_targets(units);
     for unit in units {
         // Stub units carry no real class bodies to copy down parent chains.
@@ -389,7 +394,11 @@ pub fn lower_workspace_test(
     e.workspace_mode = true;
     e.test_mode = true;
     for unit in units {
-        let unit_set = collect_user_mut_methods(unit);
+        // Seed each unit's fixed-point with the extern `@MutSelf` set so a
+        // method that calls a discovered `&mut self` extern method on a
+        // `this`-rooted receiver is itself flagged (and its cross-file callers
+        // promote their receiver to `let mut`).
+        let unit_set = analysis::collect_user_mut_methods_seeded(unit, &e.extern_mut_methods);
         e.user_mut_methods.extend(unit_set);
     }
     // C6 pre-pass (see lower_workspace_with_entry).
@@ -427,6 +436,7 @@ pub fn lower_workspace_test(
         .intersection(&e.wrapper_classes)
         .cloned()
         .collect();
+    e.bound_position_classes = compute_bound_position_classes(units);
     e.downcast_targets = compute_downcast_targets(units);
     for unit in units {
         // Stub units carry no real class bodies to copy down parent chains.
@@ -900,6 +910,16 @@ struct RustEmitter {
     /// upcast wraps instead of slicing. Empty until the Stage-2 emit paths
     /// consult it; populated alongside [`Self::wrapper_classes`].
     pub(crate) poly_base_classes: std::collections::HashSet<String>,
+    /// Bare names of every **class that appears as the head of a generic
+    /// bound** anywhere in the unit (`<V extends Container<? extends K>>` →
+    /// `Container`). These classes get a *method-carrying* generic marker
+    /// trait (`trait ContainerKind<T>: Debug { fn peek(&self) -> T; }`)
+    /// instead of the empty `trait XKind: Debug {}` marker, so a bounded
+    /// type param `V: ContainerKind<K>` can call the class's public instance
+    /// methods (`this.backing.peek()`). Computed once via
+    /// [`compute_bound_position_classes`]; consulted by
+    /// `emit_class_marker_trait` and `emit_bound_type`.
+    pub(crate) bound_position_classes: std::collections::HashSet<String>,
     /// Names of **`int`-typed const-generic parameters** in scope —
     /// the `N` of an enclosing `class RingBuffer<T, int N>` or
     /// `fn cap<int N>()`. A bare read of such a name in *value*
@@ -2913,6 +2933,126 @@ pub(crate) fn collect_type_param_bounds(
         .collect()
 }
 
+/// Recursively collect every identifier that appears in a [`TypeRef`] —
+/// its dotted name segments plus the names inside each generic argument
+/// (recursing through nested generics and wildcard bounds). Used to decide
+/// which class type params are actually *referenced* by a field type.
+pub(crate) fn collect_typeref_names(ty: &juxc_ast::TypeRef, out: &mut HashSet<String>) {
+    for seg in &ty.name.segments {
+        out.insert(seg.text.clone());
+    }
+    for arg in &ty.generic_args {
+        match arg {
+            // A concrete type argument — recurse into it.
+            juxc_ast::GenericArg::Type(t) => collect_typeref_names(t, out),
+            // A wildcard (`?`, `? extends T`, `? super T`) — its bound (if any)
+            // can still name a param, so recurse into the bound type.
+            juxc_ast::GenericArg::Wildcard(w) => match &w.bound {
+                Some(juxc_ast::WildcardBound::Extends(t))
+                | Some(juxc_ast::WildcardBound::Super(t)) => collect_typeref_names(t, out),
+                None => {}
+            },
+        }
+    }
+}
+
+/// Names of a class's declared **type parameters that are NOT referenced by
+/// any instance field** (gap: rustc E0392 "type parameter never used").
+///
+/// Rust requires every declared generic param to appear in the struct body;
+/// a Jux param used only in a method bound (`Registry<K, V, N>` where `K`
+/// only constrains `V` and method type params) leaves `K` "phantom". For
+/// each such param the backend emits a `__phantom_<name>:
+/// std::marker::PhantomData<<name>>` field and initializes it in every
+/// constructor path. **Const generics are excluded** — `const N: usize`
+/// is a value param, doesn't need PhantomData, and `PhantomData<N>` would
+/// be ill-formed.
+///
+/// "Referenced" means the param name appears anywhere in an instance field's
+/// type (including nested generic args / wildcard bounds — see
+/// [`collect_typeref_names`]). Static fields don't count: they're not part
+/// of the struct layout.
+pub(crate) fn unused_class_type_params(class_decl: &juxc_ast::ClassDecl) -> Vec<String> {
+    if class_decl.generic_params.is_empty() {
+        return Vec::new();
+    }
+    // Every name mentioned by any instance field's type.
+    let mut used: HashSet<String> = HashSet::new();
+    for field in &class_decl.fields {
+        if field.is_static {
+            continue;
+        }
+        let fty = juxc_tycheck::resolved_field_type(field);
+        collect_typeref_names(&fty, &mut used);
+    }
+    // The parent slice (`extends Parent<T>`) also carries type params into
+    // the struct via the `__parent` field — count those as used too.
+    if let Some(parent) = &class_decl.extends {
+        collect_typeref_names(parent, &mut used);
+    }
+    class_decl
+        .generic_params
+        .iter()
+        .filter(|p| !p.is_const() && !used.contains(p.name.text.as_str()))
+        .map(|p| p.name.text.clone())
+        .collect()
+}
+
+/// Bare names of every **class that appears as the head of a generic bound**
+/// across the whole program — `<V extends Container<? extends K>>` contributes
+/// `Container`. Scans every generic-param list reachable in the units: class /
+/// interface / function decls, and each class/interface method's own type
+/// params (a method like `<R extends K>` only names params, never a class, but
+/// scanning them is cheap and future-proof).
+///
+/// These classes get a method-carrying generic marker trait (see
+/// [`RustEmitter::bound_position_classes`] and `emit_class_marker_trait`):
+/// a bounded param `V: ContainerKind<K>` must be able to call the class's
+/// public instance methods, which an empty marker can't express.
+pub(crate) fn compute_bound_position_classes(
+    units: &[juxc_ast::CompilationUnit],
+) -> HashSet<String> {
+    let mut out: HashSet<String> = HashSet::new();
+    // Record the head class name of every bound in a param list.
+    fn scan_params(params: &[juxc_ast::TypeParam], out: &mut HashSet<String>) {
+        for p in params {
+            for bound in &p.bounds {
+                // The bound's head segment, when it has generic args, can only
+                // be a class (interfaces flow through unchanged; bare param
+                // names carry no args). We record EVERY non-trivial head and
+                // let the marker-synthesis side filter to actual classes — the
+                // set is a superset hint, never authoritative on its own.
+                if let Some(seg) = bound.name.segments.last() {
+                    out.insert(seg.text.clone());
+                }
+            }
+        }
+    }
+    for unit in units {
+        for item in &unit.items {
+            match item {
+                juxc_ast::TopLevelDecl::Class(cd) => {
+                    scan_params(&cd.generic_params, &mut out);
+                    for m in &cd.methods {
+                        scan_params(&m.generic_params, &mut out);
+                    }
+                }
+                juxc_ast::TopLevelDecl::Interface(id) => {
+                    scan_params(&id.generic_params, &mut out);
+                    for m in &id.methods {
+                        scan_params(&m.generic_params, &mut out);
+                    }
+                }
+                juxc_ast::TopLevelDecl::Function(f) => {
+                    scan_params(&f.generic_params, &mut out);
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// Bare names of every **polymorphic base class** — a class that is extended
 /// by ≥1 other class and is itself non-sealed, non-final, and non-generic.
 ///
@@ -3919,6 +4059,7 @@ impl RustEmitter {
             refcell_classes: std::collections::HashSet::new(),
             box_classes: std::collections::HashSet::new(),
             poly_base_classes: std::collections::HashSet::new(),
+            bound_position_classes: std::collections::HashSet::new(),
             const_int_params: std::collections::HashSet::new(),
             out_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),
@@ -3984,9 +4125,14 @@ impl RustEmitter {
         // Pre-pass: collect names of user methods that need `&mut self`.
         // Mutation analysis in `main` (and elsewhere) consults this set
         // so that calling `p.shift(…)` correctly promotes `p` to `let mut`.
-        self.user_mut_methods = collect_user_mut_methods(unit);
-        self.user_mut_methods
-            .extend(self.extern_mut_methods.iter().cloned());
+        // Seed the fixed-point with the extern `@MutSelf` set so transitive
+        // callers (`pairWith` → `self.backing.peek()`) are folded in too —
+        // otherwise the method emits `&mut self` while the call site fails to
+        // promote its receiver to `let mut` (E0596).
+        self.user_mut_methods = crate::analysis::collect_user_mut_methods_seeded(
+            unit,
+            &self.extern_mut_methods,
+        );
         // Pre-pass (C6): record by-`&mut` foreign-collection params for
         // this unit. In workspace mode the entry point already populated
         // the map from EVERY unit (so cross-file calls resolve); this
@@ -4243,9 +4389,10 @@ impl RustEmitter {
             // (so a Jux `Iterator` wins over `std::iter::Iterator`).
             self.w.push_str("#[allow(unused_imports)]\nuse super::*;\n\n");
             if !self.workspace_mode {
-                self.user_mut_methods = collect_user_mut_methods(unit);
-                self.user_mut_methods
-                    .extend(self.extern_mut_methods.iter().cloned());
+                self.user_mut_methods = crate::analysis::collect_user_mut_methods_seeded(
+                    unit,
+                    &self.extern_mut_methods,
+                );
             }
             let prev_unit = self.current_unit_idx.take();
             self.current_unit_idx = Some(idx);
@@ -4295,9 +4442,10 @@ impl RustEmitter {
             // legacy `lower_with_*` entry points that flip back
             // through this code path) keeps the per-unit recompute.
             if !self.workspace_mode {
-                self.user_mut_methods = collect_user_mut_methods(unit);
-                self.user_mut_methods
-                    .extend(self.extern_mut_methods.iter().cloned());
+                self.user_mut_methods = crate::analysis::collect_user_mut_methods_seeded(
+                    unit,
+                    &self.extern_mut_methods,
+                );
             }
             // Track which unit we're emitting so import-alias
             // aware bare-name lookups (e.g. `Catalog.describe()`

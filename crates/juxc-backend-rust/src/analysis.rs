@@ -12,6 +12,123 @@ use juxc_ast::{
 };
 use juxc_source::Span;
 
+/// Convert an inferred [`juxc_tycheck::Ty`] back into a syntactic
+/// [`TypeRef`], for the common cases that can appear as a class's concrete
+/// generic argument: user types (with nested args), `String`, primitives,
+/// in-scope params, and nullables. Returns `None` for shapes that have no
+/// faithful single-`TypeRef` form (arrays, fn types, wildcards, unknown) —
+/// callers fall back to leaving the original type-param in place.
+///
+/// Used by [`crate::RustEmitter::callee_param_type`] to substitute a
+/// receiver's concrete type args (`Registry<User, …>` → `K = User`) into a
+/// method's declared param type so wildcards over class params lower with
+/// the real element type instead of a dangling `dyn K` (gap 5).
+fn ty_to_type_ref(ty: &juxc_tycheck::Ty) -> Option<TypeRef> {
+    use juxc_tycheck::ty::Primitive;
+    use juxc_tycheck::Ty;
+    // Build a single-segment `TypeRef` from a bare name + optional args.
+    fn make(name: &str, args: Vec<GenericArg>) -> TypeRef {
+        TypeRef {
+            name: QualifiedName {
+                segments: vec![Ident {
+                    text: name.to_string(),
+                    span: Span::DUMMY,
+                }],
+                span: Span::DUMMY,
+            },
+            generic_args: args,
+            nullable: false,
+            array_shape: None,
+            fn_shape: None,
+            ptr_depth: 0,
+            span: Span::DUMMY,
+        }
+    }
+    match ty {
+        Ty::String => Some(make("String", Vec::new())),
+        Ty::Primitive(p) => {
+            // Jux source spelling of each primitive (matches the parser).
+            let name = match p {
+                Primitive::Int => "int",
+                Primitive::Uint => "uint",
+                Primitive::Byte => "byte",
+                Primitive::Ubyte => "ubyte",
+                Primitive::Short => "short",
+                Primitive::Ushort => "ushort",
+                Primitive::Long => "long",
+                Primitive::Ulong => "ulong",
+                Primitive::Float => "float",
+                Primitive::Double => "double",
+                Primitive::Bool => "bool",
+                Primitive::Char => "char",
+                Primitive::I8 => "i8",
+                Primitive::U8 => "u8",
+                Primitive::I16 => "i16",
+                Primitive::U16 => "u16",
+                Primitive::I32 => "i32",
+                Primitive::U32 => "u32",
+                Primitive::I64 => "i64",
+                Primitive::U64 => "u64",
+                Primitive::F32 => "f32",
+                Primitive::F64 => "f64",
+            };
+            Some(make(name, Vec::new()))
+        }
+        Ty::Param(name) => Some(make(name, Vec::new())),
+        Ty::User { name, generic_args } => {
+            // Use the bare (last) segment — emission re-roots to `crate::…`.
+            let bare = name.rsplit('.').next().unwrap_or(name.as_str());
+            let mut args: Vec<GenericArg> = Vec::with_capacity(generic_args.len());
+            for a in generic_args {
+                args.push(GenericArg::Type(ty_to_type_ref(a)?));
+            }
+            Some(make(bare, args))
+        }
+        Ty::Nullable(inner) => {
+            let mut t = ty_to_type_ref(inner)?;
+            t.nullable = true;
+            Some(t)
+        }
+        _ => None,
+    }
+}
+
+/// Collapse every **bounded wildcard** generic arg in `ty` (recursively) to
+/// its bound type — `Sink<? super User>` → `Sink<User>`,
+/// `List<? extends Animal>` → `List<Animal>`. Unbounded `?` is left as-is
+/// (it has no element to collapse to).
+///
+/// This mirrors the method body's WildcardLifter, which reads/writes a
+/// `? extends K` / `? super K` slot as the bare element `K`. A call-site
+/// argument coercion must target that same concrete element shape, so after
+/// the receiver's type args are substituted in we collapse the wildcards so
+/// the cast type matches the callee's lowered parameter type exactly.
+fn collapse_concrete_wildcards(ty: &TypeRef) -> TypeRef {
+    let generic_args: Vec<GenericArg> = ty
+        .generic_args
+        .iter()
+        .map(|a| match a {
+            GenericArg::Type(t) => GenericArg::Type(collapse_concrete_wildcards(t)),
+            GenericArg::Wildcard(w) => match &w.bound {
+                Some(WildcardBound::Extends(t)) | Some(WildcardBound::Super(t)) => {
+                    GenericArg::Type(collapse_concrete_wildcards(t))
+                }
+                // Bare `?` — no element to substitute; keep the wildcard.
+                None => a.clone(),
+            },
+        })
+        .collect();
+    TypeRef {
+        name: ty.name.clone(),
+        generic_args,
+        nullable: ty.nullable,
+        array_shape: ty.array_shape.clone(),
+        fn_shape: ty.fn_shape.clone(),
+        ptr_depth: ty.ptr_depth,
+        span: ty.span,
+    }
+}
+
 /// How a value must be adapted to fit an interface-typed (`Rc<dyn Trait>`)
 /// value slot in stage-1 interface dispatch. Produced by
 /// [`crate::RustEmitter::iface_coercion_to`].
@@ -843,11 +960,30 @@ pub(crate) fn extract_simple_ctor_inits(ctor: &juxc_ast::ConstructorDecl) -> Opt
             Stmt::Assign(a) => {
                 // `this.field = expr;` → field init.
                 if let Expr::Field(f) = &a.target {
-                    if !matches!(&*f.object, Expr::This(_)) {
-                        return None;
+                    if matches!(&*f.object, Expr::This(_)) {
+                        inits.push((f.field.text.clone(), a.value.clone()));
+                        continue;
                     }
-                    inits.push((f.field.text.clone(), a.value.clone()));
-                    continue;
+                    // A `Field` target whose object is a bare single-segment
+                    // path (NOT `this`) is a **static field** write —
+                    // `Registry.instances = Registry.instances + 1;` parses
+                    // as a field access on the class-name path `Registry`. It
+                    // touches no instance slot, so it's a pure side effect:
+                    // run it before the struct literal, exactly like a
+                    // bare-name static write. Keeping it on the simple path
+                    // matters for generic-typed fields — the fallback
+                    // `__self`-builder would `Default::default()`-init the
+                    // generic field and demand `V: Default` (E0277). Side
+                    // effects emit via the normal statement path, which
+                    // already lowers a static-field write to its
+                    // `LazyLock<Mutex<…>>` form. Anything more complex
+                    // (`obj.a.b = …`, an indexed object) stays on the slow
+                    // path — we can't prove it's instance-state-independent.
+                    if matches!(&*f.object, Expr::Path(p) if p.segments.len() == 1) {
+                        side_effects.push(stmt.clone());
+                        continue;
+                    }
+                    return None;
                 }
                 // `staticField = expr;` (bare-name Path target) →
                 // side effect. The simple path can run these
@@ -889,12 +1025,28 @@ pub(crate) fn pattern_has_parens(p: &juxc_ast::Pattern) -> bool {
 /// unnecessary `mut`. Once tycheck carries receiver types we can do
 /// the precise per-class lookup instead.
 pub(crate) fn collect_user_mut_methods(unit: &CompilationUnit) -> HashSet<String> {
+    collect_user_mut_methods_seeded(unit, &HashSet::new())
+}
+
+/// Like [`collect_user_mut_methods`] but with an additional `extra_seed` of
+/// method names already known to need `&mut self` (e.g. external `@MutSelf`
+/// stub methods). Seeding them BEFORE the fixed-point matters: a user method
+/// that calls such a method on a `this`-rooted receiver (`self.backing.peek()`
+/// where `peek` is a discovered `&mut self`) must itself become `&mut self`,
+/// AND its callers must promote their receiver to `let mut`. Folding the extern
+/// set in only AFTER the closure (the old behavior) left those transitive
+/// callers out, so the method emitted `&mut self` while the call site failed to
+/// promote the local (rustc E0596).
+pub(crate) fn collect_user_mut_methods_seeded(
+    unit: &CompilationUnit,
+    extra_seed: &HashSet<String>,
+) -> HashSet<String> {
     // Seed: methods that directly write to `this.field`, plus every
     // method declared on an interface (interface trait methods all
     // emit as `&mut self`, so any call to one on a `this.field`
     // receiver propagates the `&mut self` requirement up the call
-    // chain).
-    let mut out = HashSet::new();
+    // chain), plus the caller-supplied `extra_seed`.
+    let mut out: HashSet<String> = extra_seed.clone();
     for item in &unit.items {
         match item {
             TopLevelDecl::Class(class) => {
@@ -2145,10 +2297,18 @@ impl crate::RustEmitter {
             // type drives a sealed-upcast `.into()` wrap on the arg.
             // This is the path that fixes passing a permitted subclass
             // value (`Red`) into a sealed-parent param (`Light`).
-            if let Some(juxc_tycheck::Ty::User { name, .. }) =
+            if let Some(juxc_tycheck::Ty::User { name, generic_args }) =
                 self.expr_types.get(&crate::exprs::expr_span_of(&f.object))
             {
                 let bare = name.rsplit('.').next().unwrap_or(name.as_str());
+                // Receiver's concrete type args (`reg: Registry<User,
+                // Container<User>, 16>` → [User, Container<User>, 16]). Used to
+                // substitute the class's type params out of the resolved param
+                // type so a `Sink<? super K>` slot lowers with `K = User`, not
+                // a dangling `dyn K` (gap 5). Cloned up front because the
+                // `lookup_class_by_bare_or_fqn` borrow below also touches
+                // `self`.
+                let recv_args: Vec<juxc_tycheck::Ty> = generic_args.clone();
                 let mut cursor: Option<String> = Some(bare.to_string());
                 let mut depth = 0usize;
                 while let Some(cname) = cursor {
@@ -2159,7 +2319,45 @@ impl crate::RustEmitter {
                         break;
                     };
                     if let Some(m) = class.methods.get(f.field.text.as_str()) {
-                        return m.params.get(arg_idx).map(|p| p.ty.clone());
+                        let pty = m.params.get(arg_idx).map(|p| p.ty.clone());
+                        // Build param-name → concrete-arg substitution from the
+                        // class's declared generic params zipped with the
+                        // receiver's inferred args, and apply it. Only matters
+                        // on the FIRST hierarchy level (the receiver's own
+                        // class — the recv_args belong to it); ancestor levels
+                        // would need their own arg mapping, which Phase 1
+                        // doesn't track, so we substitute only at depth 0.
+                        if depth == 0 {
+                            if let Some(pty) = pty {
+                                let mut subst: std::collections::HashMap<
+                                    String,
+                                    juxc_ast::TypeRef,
+                                > = std::collections::HashMap::new();
+                                for (param, arg) in
+                                    class.generic_params.iter().zip(recv_args.iter())
+                                {
+                                    if let Some(arg_ref) = ty_to_type_ref(arg) {
+                                        subst.insert(param.name.text.clone(), arg_ref);
+                                    }
+                                }
+                                if subst.is_empty() {
+                                    return Some(pty);
+                                }
+                                let substituted =
+                                    crate::decls::classes::substitute_type_ref(&pty, &subst);
+                                // Collapse wildcards over the now-concrete element
+                                // (`Sink<? super User>` → `Sink<User>`). The method
+                                // body lifts `? super K` / `? extends K` to the bare
+                                // element `K` (WildcardLifter), so its signature param
+                                // lowers to `Rc<dyn Sink<K>>`; the call-site arg must
+                                // coerce to the SAME shape with `K = User`. Leaving the
+                                // wildcard in place would lower it to `Rc<dyn UserKind>`
+                                // and mismatch the method's `Sink<User>` (gap 5).
+                                return Some(collapse_concrete_wildcards(&substituted));
+                            }
+                            return None;
+                        }
+                        return pty;
                     }
                     cursor = class
                         .extends
