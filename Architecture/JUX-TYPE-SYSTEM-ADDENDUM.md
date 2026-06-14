@@ -282,6 +282,89 @@ var f = identity<long>(42);       // explicit
 
 The grammar allows this via `expr<TypeArgs>(args)` (per `JUX-GRAMMAR-ADDENDUM.md` §A.2.9, postfix).
 
+### T.4.6. Type-Parameter Bounds (full Java surface)
+
+A type parameter may carry one or more bounds after `extends`. Jux accepts the
+full Java bound vocabulary:
+
+```jux
+// Multiple (intersection) bounds: T satisfies EVERY listed interface/class.
+class Cage<T extends Animal & CanFly> { ... }
+
+// A bound may itself be generic, and may reference OTHER params in scope.
+class Registry<K extends Id & Named & Comparable<K>,
+               V extends Container<? extends K>,
+               int N> { ... }
+
+// F-bounded (self-referential) type: only types comparable to themselves.
+interface Entity<E extends Entity<E>> extends Id, Named, Comparable<E> {}
+static <E extends Entity<E>> E maxById(List<? extends E> xs) { ... }
+
+// A method type-param bounded by an ENCLOSING CLASS param (R must be a K).
+class Registry<K extends ..., V extends ..., int N> {
+    <R extends K> Box<Pair<K, R>> pairWith(R other) { ... }
+}
+```
+
+Rules:
+
+1. **Multiple bounds** are an intersection: the argument type must satisfy all of
+   them. Order is not significant.
+2. **Generic bounds** (`Comparable<K>`, `Container<? extends K>`) may mention any
+   type parameter in scope (the same param, a sibling class param, or an
+   enclosing class param from a method).
+3. **F-bounded / self-referential bounds** (`E extends Entity<E>`,
+   `K extends Comparable<K>`) are legal. During bound enforcement the param's
+   appearance inside its own bound is treated as *satisfied by assumption*, so
+   checking terminates (a recursion-depth cap backs this up).
+4. **A method type-param bound may name an enclosing class type-param**
+   (`<R extends K>`), with the meaning `R <: K`: every `R` is usable wherever a
+   `K` is expected.
+5. **Const generics** (`int N`) compose freely with type params and bounds in the
+   same `<...>` list; a const param takes no `extends` clause and is read as a
+   value (`return N;`).
+
+### T.4.7. Structural Inference Through Nested Generics
+
+§T.4.2 inference unifies a declared parameter type against an argument type
+**structurally**, recursing through generic arguments and peeling wildcard
+bounds. So `E` is inferred from a nested generic parameter, not only a bare one:
+
+```jux
+static <E extends Id & Named> Box<List<E>> wrapAll(List<? extends E> items) { ... }
+wrapAll(someListOfDogs);     // infers E = Dog  (List<? extends E> vs List<Dog>)
+```
+
+Unification binds a bare param name to the matching argument component; on a head
+or arity mismatch it simply learns nothing (lenient); only a genuine **conflict**
+(the same param forced to two different types, e.g. `Pair<T, T>` against
+`Pair<int, String>`) gives up and falls back to explicit annotation (§T.4.5).
+Phase 1 performs no least-upper-bound widening.
+
+### T.4.8. Lowering to Rust (informative)
+
+The generics surface lowers to Rust generics. The mapping is the identity where
+Rust allows it, with three rewrites where it does not:
+
+- **Bounds.** An interface bound emits as a Rust trait bound verbatim, generic or
+  not (`K: Id + Named + Comparable<K>`). A **class** bound emits as that class's
+  marker trait `<Name>Kind`; when the bounded value's members are used, the marker
+  trait is **generic and carries those methods** so they resolve
+  (`V: ContainerKind<K>` where `trait ContainerKind<T> { fn peek(&self) -> T; }`).
+  A bound that names an in-scope type param (`<R extends K>`) expands to that
+  param's own bounds, since Rust has no `R: K` form.
+- **PECS wildcards** are use-site only. In parameter position a `? extends B`
+  producer and a `? super B` consumer lift to a fresh generic, except a wildcard
+  whose bound names an in-scope type param substitutes that param directly
+  (`List<? extends E>` becomes `List<E>`, `Sink<? super K>` becomes `Sink<K>`).
+- **Erasure helpers.** A type param used only in method signatures (never a field)
+  gets a `PhantomData` field so Rust's "unused parameter" rule is satisfied. A
+  class that `implements` an interface also receives the impls of every interface
+  that interface transitively `extends`, so a bound on the ancestor is satisfied.
+
+These keep the user-visible semantics Java-shaped while the emitted Rust stays
+valid and (mostly) readable.
+
 ---
 
 ## §T.5 — Pattern Exhaustiveness
