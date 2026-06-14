@@ -116,12 +116,18 @@
   <depends optional="true" config-file="lsp4ij.xml">com.redhat.devtools.lsp4ij</depends>
 
   <extensions defaultExtensionNs="com.intellij">
+    <!-- `extensions="jux"` matches user sources; `patterns="*.jux.d"` matches
+         generated foreign declaration stubs (`.jux-stubs/**/<crate>.jux.d`),
+         whose last extension is `d`. Indexing the stubs as Jux files lets
+         JuxTypeIndex (and the unresolved-reference inspection that reads it) see
+         Rust-crate types/members, and lets Go-to-Class/Symbol jump into them. -->
     <fileType
         name="Jux File"
         implementationClass="dev.jux.intellij.JuxFileType"
         fieldName="INSTANCE"
         language="Jux"
-        extensions="jux"/>
+        extensions="jux"
+        patterns="*.jux.d"/>
     <!-- Per-content file icons: a `.jux` file shows its primary type's glyph
          (class / interface / enum / record / struct / annotation) instead of
          the uniform file-type icon. -->

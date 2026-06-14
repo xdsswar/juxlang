@@ -4,7 +4,10 @@ import com.intellij.openapi.fileTypes.LanguageFileType
 import javax.swing.Icon
 
 /**
- * Registers `.jux` as a first-class file type with its own icon.
+ * Registers `.jux` (user sources) and `*.jux.d` (generated foreign declaration
+ * stubs) as a first-class file type with its own icon. The `*.jux.d` pattern is
+ * wired in plugin.xml so the stub files land in `FileTypeIndex` and their
+ * Rust-crate types/members become resolvable project-wide.
  *
  * Backed by [JuxLanguage], which has no parser in Phase 1 — highlighting is
  * delegated to the bundled TextMate grammar and semantics to `juxc-lsp`.
