@@ -57,6 +57,33 @@ class JuxTomlTest : TestCase() {
         assertTrue(JuxToml.dependencyDetails(lib).isEmpty())
     }
 
+    /** `[dependencies.NAME]` sub-tables must appear alongside inline entries. */
+    fun testDependencySubTables() {
+        val text = """
+            [package]
+            name = "com.example.app"
+
+            [dependencies]
+            greeter = { path = "../greeter" }
+            "rust.serde_json" = "1.0"
+
+            [dependencies.serde]
+            version = "1.0"
+            features = ["derive"]
+
+            [dependencies.local]
+            path = "../local"
+        """.trimIndent()
+        val names = JuxToml.dependencies(text)
+        assertTrue("inline + sub-table names", names.containsAll(
+            listOf("greeter", "rust.serde_json", "serde", "local")))
+        val d = JuxToml.dependencyDetails(text).toMap()
+        assertEquals("path: ../greeter", d["greeter"])
+        assertEquals("1.0", d["rust.serde_json"])
+        assertEquals("1.0", d["serde"])
+        assertEquals("path: ../local", d["local"])
+    }
+
     fun testWorkspaceMembers() {
         val ws = """
             [workspace]
