@@ -50,6 +50,40 @@ fn layout_c_enum_repr(annotations: &[juxc_ast::Annotation]) -> Option<String> {
         .unwrap_or_else(|| "i32".to_string());
     Some(repr)
 }
+
+/// True when an enum variant payload slot is **self-referential** — its head
+/// type is the very enum being declared, e.g. `Branch(Tree, Tree)` inside
+/// `enum Tree`, or `Branch(Tree<T>, Tree<T>)` inside `enum Tree<T>`. Such a slot
+/// embeds the enum by value, so the emitted Rust enum is infinitely sized
+/// (rustc E0072) unless the WHOLE slot is `Box`ed.
+///
+/// We box only when the enum is the slot's *direct head* and the value is
+/// otherwise unindirected:
+/// - generic args are allowed (`Tree<T>` is still by-value recursion → box);
+/// - an array (`Tree[]` → `Vec<Tree>`), pointer (`Tree*`), or function-typed
+///   slot is already sized/indirected, so it is NOT boxed;
+/// - a slot whose head is a *different* generic carrying the enum (`Vec<Tree>`)
+///   has head `Vec`, not `Tree`, so the name check already excludes it.
+///
+/// A trailing `?` (nullable self-reference → `Option<Tree>`, also infinite) is
+/// left unboxed here: correctly fixing it needs boxing the inner type
+/// (`Option<Box<Tree>>`), a different emission shape; the idiomatic Jux linked
+/// structure uses a class (`Rc`) reference instead.
+///
+/// Construction (`Box::new(arg)`) and pattern binders (`*binder` on use) mirror
+/// exactly this predicate so the three sites stay type-consistent.
+pub(crate) fn is_recursive_enum_slot(slot_ty: &juxc_ast::TypeRef, enum_name: &str) -> bool {
+    slot_ty.array_shape.is_none()
+        && !slot_ty.nullable
+        && slot_ty.ptr_depth == 0
+        && slot_ty.fn_shape.is_none()
+        && slot_ty
+            .name
+            .segments
+            .last()
+            .map(|s| s.text.as_str())
+            == Some(enum_name)
+}
 use crate::RustEmitter;
 
 impl RustEmitter {
@@ -106,9 +140,20 @@ impl RustEmitter {
                     if i > 0 {
                         self.w.push_str(", ");
                     }
-                    // Payload slots act like class fields — owned
-                    // values, so reuse the field-type mapping.
+                    // Payload slots act like class fields — owned values, so
+                    // reuse the field-type mapping. A **self-referential** slot
+                    // (the payload type is this same enum — `Branch(Tree, Tree)`)
+                    // must be `Box`ed, or the Rust enum is infinitely sized
+                    // (E0072). Construction (`Box::new`) and match (deref binder)
+                    // mirror this.
+                    let boxed = is_recursive_enum_slot(&slot.ty, &enum_decl.name.text);
+                    if boxed {
+                        self.w.push_str("std::boxed::Box<");
+                    }
                     self.emit_field_type_as_rust(&slot.ty);
+                    if boxed {
+                        self.w.push('>');
+                    }
                 }
                 self.w.push(')');
             }

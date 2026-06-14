@@ -66,6 +66,10 @@ impl RustEmitter {
                 self.emit_expr(guard);
             }
             self.w.push_str(" => ");
+            // Recursive-enum binders bound to a boxed slot need a one-time
+            // unbox (`let l = *l;`) so the arm body sees a plain enum value
+            // (the decl boxed the self-referential slot to avoid E0072).
+            let rebinds = self.boxed_recursive_binders(&arm.pattern);
             match &arm.body {
                 juxc_ast::SwitchBody::Expr(e) => {
                     // Per-arm nullable wrap: skip when the value
@@ -76,6 +80,14 @@ impl RustEmitter {
                     let wrap = wrap_each_arm
                         && !matches!(&**e, juxc_ast::Expr::Literal(juxc_ast::Literal::Null))
                         && !self.expression_is_already_nullable(e);
+                    // An expression-bodied arm with boxed binders becomes a
+                    // block so the unbox `let`s can precede the value.
+                    if !rebinds.is_empty() {
+                        self.w.push_str("{ ");
+                        for b in &rebinds {
+                            self.w.push_str(&format!("let {b} = *{b}; "));
+                        }
+                    }
                     if wrap {
                         self.w.push_str("Some(");
                     }
@@ -83,9 +95,15 @@ impl RustEmitter {
                     if wrap {
                         self.w.push(')');
                     }
+                    if !rebinds.is_empty() {
+                        self.w.push_str(" }");
+                    }
                 }
                 juxc_ast::SwitchBody::Block(b) => {
                     self.w.push_str("{\n");
+                    for bind in &rebinds {
+                        self.w.push_str(&format!("        let {bind} = *{bind};\n"));
+                    }
                     // Statements inside a block-bodied arm sit at the
                     // arm-depth + 1 (two levels of 4-space prefix from
                     // the surrounding `match`). We emit the indent
@@ -196,6 +214,56 @@ impl RustEmitter {
                 k.as_str() == enum_bare || k.rsplit('.').next() == Some(enum_bare.as_str())
             })
             .is_some_and(|(_, sig)| sig.variants.contains_key(name))
+    }
+
+    /// For a match arm whose pattern destructures a recursive enum variant,
+    /// return the binder names bound to **boxed** self-referential payload slots
+    /// (`case Tree.Branch(var l, var r)` over `Branch(Box<Tree>, Box<Tree>)` →
+    /// `["l", "r"]`). The enum decl boxes such slots (E0072 avoidance), so the
+    /// binder's Rust type is `Box<Enum>`; the arm body must unbox it once via a
+    /// leading `let l = *l;` so every use sees a plain `Enum` value. Only `var`
+    /// binders (`Pattern::Bind`) at boxed positions are returned — a `_` wildcard
+    /// binds nothing, and a nested destructure isn't a plain binder.
+    pub(crate) fn boxed_recursive_binders(&self, pattern: &juxc_ast::Pattern) -> Vec<String> {
+        let juxc_ast::Pattern::EnumVariant { path, args, .. } = pattern else {
+            return Vec::new();
+        };
+        // Variant name is the last path segment; the enum is the segment before
+        // it, or the switch's enum for a bare `case Variant(...)`.
+        let variant_name = path.segments.last().map(|s| s.text.as_str());
+        let Some(variant_name) = variant_name else {
+            return Vec::new();
+        };
+        let enum_bare: Option<String> = if path.segments.len() >= 2 {
+            Some(path.segments[path.segments.len() - 2].text.clone())
+        } else {
+            self.current_switch_enum.clone()
+        };
+        let Some(enum_bare) = enum_bare else {
+            return Vec::new();
+        };
+        // Resolve the enum signature (by FQN or bare last-segment).
+        let Some((fqn, sig)) = self.symbols.enums.iter().find(|(k, _)| {
+            k.as_str() == enum_bare.as_str()
+                || k.rsplit('.').next() == Some(enum_bare.as_str())
+        }) else {
+            return Vec::new();
+        };
+        let Some(variant) = sig.variants.get(variant_name) else {
+            return Vec::new();
+        };
+        let enum_name = fqn.rsplit('.').next().unwrap_or(fqn.as_str());
+        let mut out = Vec::new();
+        for (i, slot) in variant.payload.iter().enumerate() {
+            if !crate::decls::enums::is_recursive_enum_slot(slot, enum_name) {
+                continue;
+            }
+            // Only a plain `var x` binder needs unboxing on use.
+            if let Some(juxc_ast::Pattern::Bind(name)) = args.get(i) {
+                out.push(name.text.clone());
+            }
+        }
+        out
     }
 
     /// Emit a single pattern in Rust source. Recursive for variant

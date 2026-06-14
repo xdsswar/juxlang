@@ -1607,6 +1607,42 @@ fn payload_enum_variant_construction_and_display() {
     assert!(rust.contains("let t = Token::Number(7);"), "got: {rust}");
 }
 
+/// A recursive enum (a self-referential payload slot `Branch(Tree, Tree)`)
+/// must box those slots in the declaration (`Box<Tree>`) — else rustc rejects
+/// the type as infinitely sized (E0072) — wrap each construction argument
+/// `Box::new(...)`, and unbox the match binders once per arm (`let l = *l;`).
+#[test]
+fn recursive_enum_boxes_self_referential_slots() {
+    let rust = emit(
+        r#"
+        public enum Tree { Leaf(int), Branch(Tree, Tree) }
+        public int count(Tree t) {
+            switch (t) {
+                case Tree.Leaf(var v) -> { return 1; }
+                case Tree.Branch(var l, var r) -> { return count(l) + count(r); }
+            }
+        }
+        public void main() { var t = Tree.Branch(Tree.Leaf(1), Tree.Leaf(2)); print(count(t)); }
+        "#,
+    );
+    // Decl: the self-referential slots are boxed, the `int` slot is not.
+    assert!(
+        rust.contains("Branch(std::boxed::Box<Tree>, std::boxed::Box<Tree>)")
+            && rust.contains("Leaf(isize),"),
+        "decl box: {rust}",
+    );
+    // Construction: each boxed argument is wrapped `Box::new(...)`.
+    assert!(
+        rust.contains("Tree::Branch(std::boxed::Box::new("),
+        "ctor box: {rust}",
+    );
+    // Match arm: each boxed binder is unboxed once before use.
+    assert!(
+        rust.contains("let l = *l;") && rust.contains("let r = *r;"),
+        "binder unbox: {rust}",
+    );
+}
+
 // ----------------------------------------------------------------------
 // Bounded type params (Turn 2) — `<T extends I & C>` lowering
 // ----------------------------------------------------------------------
