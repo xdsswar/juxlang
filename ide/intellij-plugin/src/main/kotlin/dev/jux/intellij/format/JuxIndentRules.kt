@@ -29,6 +29,14 @@ object JuxIndentRules {
             // ---- brace bodies: members / statements / enum constants -------
             E.CLASS_BODY, E.CODE_BLOCK, E.PROPERTY_ACCESSOR_LIST -> Indent.getNormalIndent()
 
+            // §L.7 native block: unlike CLASS_BODY this node also holds the
+            // header (`@extern` annotation + `unsafe native` modifiers), which
+            // must stay at the block's own column — only the foreign-fn
+            // declarations between the braces indent one level.
+            E.EXTERN_BLOCK ->
+                if (c === E.METHOD_DECLARATION || c in COMMENTS) Indent.getNormalIndent()
+                else Indent.getNoneIndent()
+
             // `case …` arms sit one level inside `switch {`.
             E.SWITCH_STATEMENT, E.SWITCH_EXPRESSION ->
                 if (c === E.SWITCH_CASE || c in COMMENTS) Indent.getNormalIndent()
@@ -75,7 +83,7 @@ object JuxIndentRules {
 
     /** Indent for a NEW child typed on Enter — `getChildAttributes` mirror. */
     fun newChildIndent(parent: ASTNode): Indent = when (parent.elementType) {
-        E.CLASS_BODY, E.CODE_BLOCK, E.PROPERTY_ACCESSOR_LIST,
+        E.CLASS_BODY, E.CODE_BLOCK, E.PROPERTY_ACCESSOR_LIST, E.EXTERN_BLOCK,
         E.SWITCH_STATEMENT, E.SWITCH_EXPRESSION -> Indent.getNormalIndent()
         E.PARAMETER_LIST, E.ARGUMENT_LIST, E.TYPE_PARAMETER_LIST,
         E.TYPE_ARGUMENT_LIST, E.ANNOTATION_ARGUMENT_LIST,
