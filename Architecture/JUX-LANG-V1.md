@@ -2156,7 +2156,7 @@ var tree = Expr.Mul(Expr.Add(Expr.Num(2), Expr.Num(3)), Expr.Num(4));
 print(eval(tree));
 ```
 
-Generic recursive enums (`enum Tree<T> { Leaf(T), Branch(Tree<T>, Tree<T>) }`) work the same way. A self-referential slot is automatically heap-indirected so the value has a finite, known size; the recursion is invisible at the source level — construct with `Expr.Add(a, b)` and destructure with `case Expr.Add(var a, var b)` exactly as for any other variant. (A slot that reaches the enum through a collection — `Expr[]`, a `List<Expr>` field — is already heap-backed, so it carries no extra cost.)
+Generic recursive enums (`enum Tree<T> { Leaf(T), Branch(Tree<T>, Tree<T>) }`) work the same way. A self-referential slot is automatically heap-indirected so the value has a finite, known size; the recursion is invisible at the source level. You construct with `Expr.Add(a, b)` and destructure with `case Expr.Add(var a, var b)` exactly as for any other variant. (A slot that reaches the enum through a collection, such as `Expr[]` or a `List<Expr>` field, is already heap-backed, so it carries no extra cost.)
 
 #### 7.7.6. Sealed by Default
 
