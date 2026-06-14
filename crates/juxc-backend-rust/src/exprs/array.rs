@@ -104,6 +104,12 @@ impl RustEmitter {
             {
                 let needs = match &elem_ty {
                     juxc_tycheck::Ty::String | juxc_tycheck::Ty::Array { .. } => true,
+                    // A generic type parameter (`T` of `Vec<T>` inside a
+                    // generic class) is non-`Copy` in the general case, so an
+                    // rvalue index read must clone out of the Vec — otherwise
+                    // `self.data[i]` moves out of a borrowed `Vec<T>` (E0507).
+                    // The enclosing impl already bounds the param `T: Clone`.
+                    juxc_tycheck::Ty::Param(_) => true,
                     juxc_tycheck::Ty::User { name, .. } => {
                         let bare = name.rsplit('.').next().unwrap_or(name);
                         // Wrapper classes share-clone at use sites; tuple

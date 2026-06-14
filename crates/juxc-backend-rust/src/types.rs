@@ -759,8 +759,43 @@ impl RustEmitter {
                 .map(|h| self.lookup_class_by_bare_or_fqn(h).is_some())
                 .unwrap_or(false);
         if is_class_bound {
-            self.w.push_str(head.unwrap());
+            let head = head.unwrap();
+            self.w.push_str(head);
             self.w.push_str("Kind");
+            // **Method-carrying generic marker** (gap 1): when the bound names
+            // a class with a generic, method-carrying marker trait
+            // (`ContainerKind<T>`), supply its type args so the bound is
+            // `V: ContainerKind<K>` and `v.peek()` returns `K`. The class's
+            // declared element comes from the bound's own generic args, with a
+            // producer wildcard (`? extends K`) erased to its element `K` (we
+            // only ever READ through the bound, so the producer element is the
+            // right surface). A consumer wildcard or a bare `?` has no usable
+            // element, so we fall back to the empty (argless) marker form.
+            if self.bound_position_classes.contains(head) && !ty.generic_args.is_empty() {
+                let elems: Vec<&juxc_ast::TypeRef> = ty
+                    .generic_args
+                    .iter()
+                    .filter_map(|a| match a {
+                        juxc_ast::GenericArg::Type(t) => Some(t),
+                        juxc_ast::GenericArg::Wildcard(w) => match &w.bound {
+                            // `? extends K` → producer element `K`.
+                            Some(juxc_ast::WildcardBound::Extends(t)) => Some(t),
+                            // `? super K` / bare `?` — no readable element.
+                            _ => None,
+                        },
+                    })
+                    .collect();
+                if elems.len() == ty.generic_args.len() {
+                    self.w.push('<');
+                    for (i, e) in elems.iter().enumerate() {
+                        if i > 0 {
+                            self.w.push_str(", ");
+                        }
+                        self.emit_type_as_rust(e);
+                    }
+                    self.w.push('>');
+                }
+            }
             return;
         }
         self.emit_type_as_rust(ty);

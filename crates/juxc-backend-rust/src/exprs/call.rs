@@ -1280,6 +1280,20 @@ impl RustEmitter {
                         .map(|m| m.is_static)
                         .unwrap_or(false);
                     if is_static_method {
+                        // **Generic-class static method** → free function
+                        // `<Class>_<method>` (the backend lifts it out of the
+                        // parameterized impl so the call doesn't need the
+                        // class's K/V/N inferred — E0284). Plain statics only;
+                        // synthesized `__…` helpers stay associated. The class
+                        // path is emitted then joined with `_`, not `::`.
+                        let class_is_generic = self
+                            .symbols
+                            .classes
+                            .get(&class_fqn)
+                            .map(|c| !c.generic_params.is_empty())
+                            .unwrap_or(false);
+                        let lift_to_free_fn =
+                            class_is_generic && !f.field.text.starts_with("__");
                         // §G.9.2: a static call on a foreign stub class
                         // (`Url.parse(...)`) lowers through its REAL Rust path
                         // (`url::Url::parse(...)`) from the `@rust` annotation,
@@ -1295,7 +1309,8 @@ impl RustEmitter {
                         } else {
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                         }
-                        self.w.push_str("::");
+                        // Free-fn form joins with `_`; associated form with `::`.
+                        self.w.push_str(if lift_to_free_fn { "_" } else { "::" });
                         self.w.push_str(&f.field.text);
                         if let Some(sfx) = self.pending_method_suffix.take() {
                             self.w.push_str(&sfx);
@@ -3081,6 +3096,29 @@ impl RustEmitter {
         if let juxc_tycheck::Ty::Primitive(prim) = &recv_ty {
             return self.emit_numeric_stdlib_method(call, method, *prim);
         }
+        // **Raw `rust.std.Vec<T>` mutating call on a wrapper field.** A bare
+        // Vec has no facade table (its methods passthrough to Rust via the
+        // generic call path), so it isn't covered by the is_array/is_map/…
+        // gate below. But when the receiver is a Vec FIELD of a shared-
+        // reference class and the method mutates, the generic path's clone-
+        // hoist would push onto a discarded copy (and need a `mut` binding).
+        // Route those through the borrow_mut() collection path instead;
+        // everything else (a plain local Vec) falls through to the generic
+        // call, where the direct `vec.push(v)` already works.
+        let is_vec = matches!(
+            &recv_ty,
+            juxc_tycheck::Ty::User { name, .. }
+                if name.rsplit('.').next().unwrap_or(name) == "Vec"
+        );
+        if is_vec {
+            if self.collection_method_mutates(&recv_ty, method)
+                && self.callee_receiver_reads_through_borrow(&call.callee).is_some()
+            {
+                return self.emit_mut_collection_method(call, method, &recv_ty);
+            }
+            // Non-mutating or non-wrapper Vec call → generic passthrough.
+            return false;
+        }
         if !is_array && !is_string && !is_map && !is_set && !is_deque {
             return false;
         }
@@ -3111,6 +3149,29 @@ impl RustEmitter {
             return self.emit_deque_stdlib_method(call, method);
         }
         false
+    }
+
+    /// Emit a **raw mutating method on a `rust.std.Vec<T>` receiver** —
+    /// `this.data.push(v)` where `data` is a `Vec<T>` field of a wrapper
+    /// class. Unlike the Jux collection facades (Deque/HashMap/…), a raw Vec
+    /// has no name-translation table — its methods (`push`, `pop`, `insert`,
+    /// …) are passed straight through to Rust. The point of this path is the
+    /// **receiver**: it's emitted with `emitting_out_place`/`emitting_lvalue`
+    /// set (by the caller), so a wrapper field reads through
+    /// `self.0.borrow_mut().data` and the mutation lands in the real cell —
+    /// not a clone-hoisted copy (which would also need a `mut` binding and
+    /// silently drop the write). Args are pre-hoisted by the caller.
+    fn emit_vec_raw_mut_method(&mut self, call: &CallExpr, method: &str) -> bool {
+        let Expr::Field(f) = &*call.callee else {
+            return false;
+        };
+        self.emit_stdlib_receiver(&f.object);
+        self.w.push('.');
+        self.w.push_str(method);
+        self.w.push('(');
+        self.emit_call_args(call);
+        self.w.push(')');
+        true
     }
 
     /// Emit the Rust equivalent of a Jux `Deque<T>` method call —
@@ -3337,6 +3398,29 @@ impl RustEmitter {
                         method,
                         "addFirst" | "addLast" | "removeFirst" | "removeLast" | "clear"
                     ),
+                    // Raw `rust.std.Vec<T>` — its mutating Rust methods are
+                    // emitted as direct passthrough calls (no builtin table),
+                    // so a wrapper-field receiver must read through
+                    // `borrow_mut()` rather than the clone-hoist (which would
+                    // push onto a discarded copy + need a `mut` binding).
+                    "Vec" => matches!(
+                        method,
+                        "push"
+                            | "pop"
+                            | "clear"
+                            | "insert"
+                            | "remove"
+                            | "truncate"
+                            | "retain"
+                            | "extend"
+                            | "append"
+                            | "swap"
+                            | "swap_remove"
+                            | "sort"
+                            | "reverse"
+                            | "dedup"
+                            | "resize"
+                    ),
                     _ => false,
                 }
             }
@@ -3378,6 +3462,10 @@ impl RustEmitter {
                         "HashMap" => this.emit_map_stdlib_method(c, method),
                         "HashSet" => this.emit_set_stdlib_method(c, method),
                         "Deque" => this.emit_deque_stdlib_method(c, method),
+                        // Raw Vec mutating method — passthrough call on the
+                        // `borrow_mut()` receiver (flags already set by the
+                        // surrounding dispatch closure).
+                        "Vec" => this.emit_vec_raw_mut_method(c, method),
                         _ => false,
                     }
                 }
