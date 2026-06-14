@@ -99,7 +99,13 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
     // Resolve the input list into a flat set of `.jux` file paths.
     // A single directory expands into every `.jux` inside it
     // (recursive), so users can point `juxc` at a project root.
-    let files = collect_input_files(&cli.inputs)?;
+    // `--check` (no-emit) additionally loads the project's `.jux-stubs/` foreign
+    // declarations so `import rust.<crate>.*` resolves for editor tooling. Emit
+    // modes (`--build`/`--run`) do NOT: `juxc` can't generate the dependency
+    // manifest or link the crate (that's `jux`'s job), so a bare `juxc --build`
+    // on a project with `rust.*` deps fails cleanly at the import rather than
+    // emitting Rust that won't link.
+    let files = collect_input_files(&cli.inputs, cli.check)?;
     if files.is_empty() {
         anyhow::bail!("no `.jux` source files found in the given inputs");
     }
@@ -234,7 +240,7 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
 ///
 /// Sort order is path-lexicographic, which keeps diagnostic and
 /// emission ordering reproducible across runs.
-fn collect_input_files(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+fn collect_input_files(inputs: &[PathBuf], include_stubs: bool) -> Result<Vec<PathBuf>> {
     let mut out: Vec<PathBuf> = Vec::new();
     for path in inputs {
         if path.is_file() {
@@ -242,7 +248,7 @@ fn collect_input_files(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
             continue;
         }
         if path.is_dir() {
-            walk_dir_for_jux(path, &mut out)?;
+            walk_dir_for_jux(path, &mut out, include_stubs)?;
             continue;
         }
         anyhow::bail!("input `{}` is not a file or directory", path.display());
@@ -255,7 +261,7 @@ fn collect_input_files(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
 /// Recursive directory walk used by [`collect_input_files`]. Visits
 /// every entry in `dir`; descends into subdirectories whose names
 /// don't start with `.` (skipping `target`, `.git`, etc.).
-fn walk_dir_for_jux(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn walk_dir_for_jux(dir: &Path, out: &mut Vec<PathBuf>, include_stubs: bool) -> Result<()> {
     for entry in std::fs::read_dir(dir)
         .with_context(|| format!("reading directory {}", dir.display()))?
     {
@@ -266,12 +272,28 @@ fn walk_dir_for_jux(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
             .with_context(|| format!("file type for {}", path.display()))?;
         if file_type.is_dir() {
             let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if name.starts_with('.') || name == "target" {
+            // Skip hidden / build dirs (`.git`, `.idea`, `target`). In
+            // stub-loading mode (`--check`), DO descend into `.jux-stubs/`, the
+            // generated foreign-declaration tree (`rust.<crate>` / Jux-dep
+            // stubs) that makes `import rust.<crate>.*` resolve.
+            let is_stub_dir = name == ".jux-stubs";
+            if (name.starts_with('.') && !(include_stubs && is_stub_dir))
+                || name == "target"
+            {
                 continue;
             }
-            walk_dir_for_jux(&path, out)?;
+            walk_dir_for_jux(&path, out, include_stubs)?;
         } else if file_type.is_file() {
-            if path.extension().and_then(|s| s.to_str()) == Some("jux") {
+            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            // Always collect `.jux` source. In stub-loading mode also collect
+            // `.jux.d` declaration stubs (extension is `d`, so the plain `.jux`
+            // test misses them); these carry the extern decls for foreign crates
+            // so a bare `juxc --check <projectDir>` (the IntelliJ always-on
+            // semantic check) resolves `rust.<crate>` imports — the same decls
+            // `jux build` passes explicitly. NOT loaded for emit modes: `juxc`
+            // can't link the crate, so a build would emit Rust that fails to
+            // compile; failing earlier at the unresolved import is clearer.
+            if name.ends_with(".jux") || (include_stubs && name.ends_with(".jux.d")) {
                 out.push(path);
             }
         }
