@@ -505,11 +505,22 @@ class JuxParser : PsiParser {
         val m = b.mark()
         b.expectOrError(T.LPAREN, "'(' expected")
         if (!b.at(T.RPAREN)) {
-            parseParameter(b)
-            while (b.at(T.COMMA)) { b.advanceLexer(); parseParameter(b) }
+            parseParameterOrVariadic(b)
+            while (b.at(T.COMMA)) { b.advanceLexer(); parseParameterOrVariadic(b) }
         }
         b.expectOrError(T.RPAREN, "')' expected")
         m.done(E.PARAMETER_LIST)
+    }
+
+    /**
+     * A parameter, or a bare `...` C-variadic marker (§L.4.2) — the trailing
+     * `...` in a foreign `int printf(String fmt, ...)` has no type or name, so it
+     * is consumed as a loose token rather than a named PARAMETER. (Jux varargs
+     * `T... name` still flow through [parseParameter].)
+     */
+    private fun parseParameterOrVariadic(b: PsiBuilder) {
+        if (b.at(T.ELLIPSIS)) { b.advanceLexer(); return }
+        parseParameter(b)
     }
 
     /** `annotation* (final|const|ref|weak|out)* type '...'? name (= expr)?` */

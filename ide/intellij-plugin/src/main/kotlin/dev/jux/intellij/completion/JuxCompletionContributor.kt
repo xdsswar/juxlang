@@ -357,13 +357,15 @@ class JuxCompletionContributor : CompletionContributor() {
 
     /**
      * The builtin annotation set, canonical casing: `override` (lowercase, the
-     * spelling the missing-override quick-fix inserts) plus the five §TS.1
-     * test/hook names (single-sourced from [dev.jux.intellij.run.JuxTestDetector]).
-     * No import is ever needed for these (§TS.1); annotation lookups are
-     * case-insensitive compiler-side.
+     * spelling the missing-override quick-fix inserts), the five §TS.1 test/hook
+     * names (single-sourced from [dev.jux.intellij.run.JuxTestDetector]), and the
+     * C-FFI annotations (§L): `extern` (native blocks), `export` (C linkage),
+     * `layout` (C-compatible structs/enums). No import is ever needed for these;
+     * annotation lookups are case-insensitive compiler-side.
      */
     private fun addBuiltinAnnotations(result: CompletionResultSet) {
-        val names = listOf("override") + dev.jux.intellij.run.JuxTestDetector.TEST_HOOKS.values
+        val names = listOf("override", "extern", "export", "layout") +
+            dev.jux.intellij.run.JuxTestDetector.TEST_HOOKS.values
         for (name in names) {
             result.addElement(
                 ranked(
