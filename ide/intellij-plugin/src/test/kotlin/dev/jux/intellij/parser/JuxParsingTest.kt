@@ -157,6 +157,24 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         )
     }
 
+    /** §L.4.2 C variadic: a bare trailing `...` in a foreign signature parses. */
+    fun testCVariadicNativeFnParses() {
+        val psi = createPsiFile(
+            "v.jux",
+            """
+            package demo;
+            @extern(lib = "c")
+            unsafe native {
+                int printf(String fmt, ...);
+            }
+            """.trimIndent(),
+        )
+        assertEmpty(
+            "C-variadic native fn must parse without errors",
+            PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java).map { it.errorDescription },
+        )
+    }
+
     /**
      * Error recovery: a stray run of tokens in a class body becomes ONE
      * "Member declaration expected" error (no per-token cascade), and the
