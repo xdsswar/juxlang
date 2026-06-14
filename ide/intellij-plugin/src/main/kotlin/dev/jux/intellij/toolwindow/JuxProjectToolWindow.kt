@@ -293,23 +293,37 @@ internal object JuxToml {
         return out
     }
 
-    /** Dependency names = the keys under `[dependencies]`. */
-    fun dependencies(text: String): List<String> = keysIn(text, "dependencies")
+    /**
+     * Dependency names: the inline keys under `[dependencies]` plus any
+     * `[dependencies.NAME]` sub-tables (the dotted-table form for a dependency
+     * with its own options).
+     */
+    fun dependencies(text: String): List<String> =
+        (keysIn(text, "dependencies") + subTables(text, "dependencies").map { it.first }).distinct()
 
     /**
      * Each `[dependencies]` entry as `(name, sourceDetail)` — the detail is the
      * bare version (`"1.0"` → `1.0`), or `path: …` / `git: … (branch)` for
-     * table specs, so the tree shows where each dependency comes from.
+     * table specs, so the tree shows where each dependency comes from. Covers
+     * both inline entries and `[dependencies.NAME]` sub-tables.
      */
     fun dependencyDetails(text: String): List<Pair<String, String>> {
-        val body = sectionBody(text, "dependencies") ?: return emptyList()
         val out = ArrayList<Pair<String, String>>()
-        for (raw in body.lineSequence()) {
-            val line = raw.substringBefore('#').trim()
-            if (line.isEmpty() || line.startsWith("[") || '=' !in line) continue
-            val key = line.substringBefore('=').trim().trim('"')
-            if (key.isEmpty()) continue
-            out.add(key to depDetail(line.substringAfter('=').trim()))
+        sectionBody(text, "dependencies")?.let { body ->
+            for (raw in body.lineSequence()) {
+                val line = raw.substringBefore('#').trim()
+                if (line.isEmpty() || line.startsWith("[") || '=' !in line) continue
+                val key = line.substringBefore('=').trim().trim('"')
+                if (key.isEmpty()) continue
+                out.add(key to depDetail(line.substringAfter('=').trim()))
+            }
+        }
+        // `[dependencies.NAME]` sub-tables: the detail comes from the version /
+        // path / git keys inside the sub-table body, normalized to an inline
+        // table so `depDetail` reads it the same way as an inline entry.
+        for ((name, body) in subTables(text, "dependencies")) {
+            val inline = "{" + body.replace(Regex("[\r\n]+"), " ").trim() + "}"
+            out.add(name to depDetail(inline))
         }
         return out
     }
@@ -349,6 +363,32 @@ internal object JuxToml {
             if (line.isEmpty() || line.startsWith("[")) continue
             val key = line.substringBefore('=').trim().trim('"')
             if (key.isNotEmpty()) out.add(key)
+        }
+        return out
+    }
+
+    /**
+     * Every `[section.NAME]` sub-table as `(NAME, body)`. TOML lets a dependency
+     * carry its own options via a dotted header (`[dependencies.serde]`); the
+     * plain [sectionBody] scan stops at the next `[`, so these would otherwise be
+     * invisible to the tree. Each body runs to the next `[` header (or EOF).
+     */
+    private fun subTables(text: String, section: String): List<Pair<String, String>> {
+        val lines = text.lines()
+        val header = Regex("""^\s*\[\s*${Regex.escape(section)}\.([^\]]+?)\s*]\s*$""")
+        val out = ArrayList<Pair<String, String>>()
+        var i = 0
+        while (i < lines.size) {
+            val m = header.find(lines[i].substringBefore('#'))
+            if (m == null) { i++; continue }
+            val name = m.groupValues[1].trim().trim('"')
+            val sb = StringBuilder()
+            var j = i + 1
+            while (j < lines.size && !lines[j].substringBefore('#').trim().startsWith("[")) {
+                sb.appendLine(lines[j]); j++
+            }
+            if (name.isNotEmpty()) out.add(name to sb.toString())
+            i = j
         }
         return out
     }

@@ -132,12 +132,18 @@ class JuxRunConfiguration(project: Project, factory: ConfigurationFactory, name:
     }
 
     /**
-     * The compile target for `file`: the **source root** of its package tree,
-     * so the whole project compiles together. The source root is the file's
-     * directory with its package path (`package a.b.c;` → 3 levels) stripped
-     * off. A file with no package compiles on its own.
+     * The compile target for `file`: the directory juxc should walk so the whole
+     * project builds together and cross-file `import`s resolve.
+     *
+     * Prefer the **manifest root** (the nearest ancestor with a `jux.toml`): juxc
+     * reads the manifest and compiles the declared package, so dependencies and
+     * `[[bin]]` targets resolve too. Jux does not require the directory layout to
+     * mirror the package path, so the package-strip below is only a fallback for
+     * manifest-less files: strip the file's `package a.b.c;` depth off its
+     * directory to find the source root. A file with no package compiles alone.
      */
     private fun compileTarget(file: File): File {
+        manifestRoot()?.let { return it }
         return try {
             val pkg = PACKAGE_RE.find(file.readText())?.groupValues?.get(1)?.trim().orEmpty()
             if (pkg.isEmpty()) return file
