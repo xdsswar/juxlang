@@ -743,14 +743,17 @@ impl RustEmitter {
         self.w.indent_inc();
         self.emit_static_init_trigger();
         self.w.emit_indent();
-        // §CR.4.1: wrap in `Rc::new(RefCell::new(..))` for the interior-mutable
-        // rep, or just `Rc::new(..)` for the read-only-shared `Rc` rep.
-        let refcell = self.refcell_classes.contains(&class_decl.name.text);
-        let (wrap_open, wrap_close): (&str, &str) = if refcell {
-            ("std::rc::Rc::new(std::cell::RefCell::new(", "))")
-        } else {
-            ("std::rc::Rc::new(", ")")
-        };
+        // Wrap by rep (§CR.3.3 / §CR.4.1): `Rc::new(RefCell::new(..))` for the
+        // interior-mutable rep, plain `Rc::new(..)` for read-only-shared `Rc`, or
+        // `Box::new(..)` for the unique-owner `Box` rep.
+        let (wrap_open, wrap_close): (&str, &str) =
+            if self.box_classes.contains(&class_decl.name.text) {
+                ("std::boxed::Box::new(", ")")
+            } else if self.refcell_classes.contains(&class_decl.name.text) {
+                ("std::rc::Rc::new(std::cell::RefCell::new(", "))")
+            } else {
+                ("std::rc::Rc::new(", ")")
+            };
         if ctor_binds.is_empty() {
             self.w.push_str("Self(");
             self.w.push_str(wrap_open);
@@ -1306,7 +1309,9 @@ impl RustEmitter {
         self.w.line("pub fn new() -> Self {");
         self.w.indent_inc();
         self.emit_static_init_trigger();
-        if self.refcell_classes.contains(&class_decl.name.text) {
+        if self.box_classes.contains(&class_decl.name.text) {
+            self.w.line("Self(std::boxed::Box::new(Self::new_inner()))");
+        } else if self.refcell_classes.contains(&class_decl.name.text) {
             self.w.line("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner())))");
         } else {
             self.w.line("Self(std::rc::Rc::new(Self::new_inner()))");

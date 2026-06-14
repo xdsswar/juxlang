@@ -836,6 +836,23 @@ impl RustEmitter {
             .unwrap_or(false)
     }
 
+    /// True when `recv`'s class is the `Box` rep (unique owner, `C(Box<C_Inner>)`).
+    /// Such a receiver's `.0` is a `Box`, not an `Rc`, so identity (`===`) must
+    /// use `std::ptr::eq` rather than `Rc::ptr_eq`.
+    pub(crate) fn receiver_is_box_class(&self, recv: &Expr) -> bool {
+        if matches!(recv, Expr::This(_)) {
+            return self.emitting_wrapper_class
+                && self
+                    .enclosing_class
+                    .as_deref()
+                    .map(|c| self.box_classes.contains(c))
+                    .unwrap_or(false);
+        }
+        self.receiver_class_bare(recv)
+            .map(|bare| self.box_classes.contains(&bare))
+            .unwrap_or(false)
+    }
+
     /// Resolve the bare class name a non-`this` receiver evaluates to.
     ///
     /// **Span-collision robustness.** For a bare-`Path` receiver (a
@@ -1248,26 +1265,23 @@ impl RustEmitter {
             ".as_ref().map(|__t| "
         };
         self.w.push_str(combinator);
-        // A wrapped (Rc<RefCell>) class keeps its fields inside the flattened
-        // `_Inner` behind `.0.borrow()`; a bare `__t.field` would hit the tuple
-        // wrapper and fail (`no field … available field is: 0`). Inline classes
-        // and records access the field directly.
-        if self.safe_field_receiver_is_wrapper(f) {
+        // Reach the field by rep (§CR.4.1): the interior-mutable `RcRefCell` rep
+        // reads through a `.0.borrow()` guard; the bare-`Rc` / `Box` reps keep
+        // the `.0` newtype but deref straight to the fields (no borrow); Inline
+        // classes and records access the field directly. (A bare `__t.field` on
+        // a newtype would hit the tuple wrapper — `available field is: 0`.)
+        let bare = self.safe_nav_member_class_bare(&f.object);
+        let is_newtype = bare.as_deref().map(|b| self.wrapper_classes.contains(b)).unwrap_or(false);
+        let is_refcell = bare.as_deref().map(|b| self.refcell_classes.contains(b)).unwrap_or(false);
+        if is_refcell {
             self.w.push_str("__t.0.borrow().");
+        } else if is_newtype {
+            self.w.push_str("__t.0.");
         } else {
             self.w.push_str("__t.");
         }
         self.w.push_str(&f.field.text);
         self.w.push_str(".clone())");
-    }
-
-    /// True iff the receiver class of a `?.`-projected field uses the wrapper
-    /// (`Rc<RefCell>`) representation — so [`Self::emit_safe_field`] reads the
-    /// field through `.0.borrow()`.
-    fn safe_field_receiver_is_wrapper(&self, f: &FieldExpr) -> bool {
-        self.safe_nav_member_class_bare(&f.object)
-            .map(|bare| self.wrapper_classes.contains(&bare))
-            .unwrap_or(false)
     }
 
     /// Resolve the bare class name that an expression used as a `?.` receiver
