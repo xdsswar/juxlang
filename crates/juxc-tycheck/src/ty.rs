@@ -955,6 +955,95 @@ mod tests {
         assert_eq!(substitute(&Ty::Void, &params, &args), Ty::Void);
         assert_eq!(substitute(&Ty::Unknown, &params, &args), Ty::Unknown);
     }
+
+    // ---- structural nested-generic inference (§T.4.7) ----
+
+    fn qn(name: &str) -> juxc_ast::QualifiedName {
+        juxc_ast::QualifiedName {
+            segments: vec![Ident { text: name.to_string(), span: Span::DUMMY }],
+            span: Span::DUMMY,
+        }
+    }
+    fn tr(name: &str) -> TypeRef {
+        TypeRef {
+            name: qn(name),
+            generic_args: Vec::new(),
+            nullable: false,
+            array_shape: None,
+            fn_shape: None,
+            ptr_depth: 0,
+            span: Span::DUMMY,
+        }
+    }
+    fn tr_g(name: &str, args: Vec<juxc_ast::GenericArg>) -> TypeRef {
+        TypeRef { generic_args: args, ..tr(name) }
+    }
+    fn arg_t(t: TypeRef) -> juxc_ast::GenericArg {
+        juxc_ast::GenericArg::Type(t)
+    }
+    fn arg_ext(t: TypeRef) -> juxc_ast::GenericArg {
+        juxc_ast::GenericArg::Wildcard(juxc_ast::WildcardArg {
+            bound: Some(juxc_ast::WildcardBound::Extends(t)),
+            span: Span::DUMMY,
+        })
+    }
+    fn user(name: &str, args: Vec<Ty>) -> Ty {
+        Ty::User { name: name.to_string(), generic_args: args }
+    }
+
+    /// A bare param still binds (regression of the old behaviour).
+    #[test]
+    fn infer_bare_param() {
+        let m = infer_generic_args(
+            &[type_param("T")],
+            &[&tr("T")],
+            &[Ty::Primitive(Primitive::Int)],
+        );
+        assert_eq!(m.get("T"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// `MyList<T>` vs `MyList<int>` ⇒ `T = int` (was unsolved before §T.4.7).
+    #[test]
+    fn infer_through_generic_arg() {
+        let declared = tr_g("MyList", vec![arg_t(tr("T"))]);
+        let arg = user("MyList", vec![Ty::Primitive(Primitive::Int)]);
+        let m = infer_generic_args(&[type_param("T")], &[&declared], &[arg]);
+        assert_eq!(m.get("T"), Some(&Ty::Primitive(Primitive::Int)));
+    }
+
+    /// `MyList<? extends E>` vs `MyList<Dog>` ⇒ `E = Dog` (peels the wildcard).
+    #[test]
+    fn infer_through_extends_wildcard() {
+        let declared = tr_g("MyList", vec![arg_ext(tr("E"))]);
+        let arg = user("MyList", vec![user("Dog", vec![])]);
+        let m = infer_generic_args(&[type_param("E")], &[&declared], &[arg]);
+        assert_eq!(m.get("E"), Some(&user("Dog", vec![])));
+    }
+
+    /// `Box<Pair<K, R>>` vs `Box<Pair<Dog, Cat>>` ⇒ `K=Dog, R=Cat` (deep recursion).
+    #[test]
+    fn infer_through_nested_generic() {
+        let declared = tr_g(
+            "Box",
+            vec![arg_t(tr_g("Pair", vec![arg_t(tr("K")), arg_t(tr("R"))]))],
+        );
+        let arg = user(
+            "Box",
+            vec![user("Pair", vec![user("Dog", vec![]), user("Cat", vec![])])],
+        );
+        let m = infer_generic_args(&[type_param("K"), type_param("R")], &[&declared], &[arg]);
+        assert_eq!(m.get("K"), Some(&user("Dog", vec![])));
+        assert_eq!(m.get("R"), Some(&user("Cat", vec![])));
+    }
+
+    /// `Pair<T, T>` vs `Pair<int, String>` ⇒ conflict ⇒ empty (give up).
+    #[test]
+    fn infer_conflict_gives_up() {
+        let declared = tr_g("Pair", vec![arg_t(tr("T")), arg_t(tr("T"))]);
+        let arg = user("Pair", vec![Ty::Primitive(Primitive::Int), Ty::String]);
+        let m = infer_generic_args(&[type_param("T")], &[&declared], &[arg]);
+        assert!(m.is_empty(), "conflict should give up: {m:?}");
+    }
 }
 
 // ============================================================================
@@ -977,11 +1066,13 @@ mod tests {
 ///    unsolved generics today, which is "leave `Ty::Param("T")` in
 ///    place and let the wildcard rule keep things quiet").
 ///
-/// **NOT yet handled** (spec describes these but they need real
-/// constraint solving):
+/// **Nested generic patterns ARE handled** (§T.4.7): the per-pair work is the
+/// structural [`unify_declared_against_arg`], which recurses through generic
+/// args and wildcard bounds, so `T` is inferred from a `List<int>` argument to
+/// a `List<T>` / `List<? extends T>` parameter.
 ///
-/// - Nested generic patterns: `T list(List<T> xs)` doesn't infer `T`
-///   from a `List<int>` argument. Today this leaves `T` unsolved.
+/// **NOT yet handled** (need real constraint solving):
+///
 /// - Return-type-driven inference: `T identity(T x); long y =
 ///   identity(42)` doesn't push `long` back through `T`.
 /// - Bound-driven inference: `<T extends Animal>` constraints don't
@@ -1009,35 +1100,113 @@ pub fn infer_generic_args(
         .map(|p| p.name.text.as_str())
         .collect();
     for (declared, arg) in param_tys.iter().zip(arg_tys.iter()) {
-        // Only the bare-name shape: `T x` where the declared type is
-        // a single-segment path naming a generic param.
-        if declared.array_shape.is_some()
-            || declared.nullable
-            || !declared.generic_args.is_empty()
-            || declared.name.segments.len() != 1
-        {
-            continue;
-        }
-        let name = declared.name.segments[0].text.as_str();
-        if !param_names.contains(name) {
-            continue;
-        }
-        // Skip `Unknown` arguments — they tell us nothing about T.
-        // Leaving T unresolved is better than locking it to Unknown.
-        if arg.is_unknown() {
-            continue;
-        }
-        if let Some(existing) = inferred.get(name) {
-            if existing != arg {
-                // Conflict — multiple args want different types for
-                // the same T. Give up entirely.
-                return std::collections::HashMap::new();
-            }
-        } else {
-            inferred.insert(name.to_string(), arg.clone());
+        // Structurally unify each declared param type against its argument,
+        // recording bindings. A genuine conflict gives up entirely (empty map →
+        // caller falls back to the unsubstituted signature, §T.4.5).
+        if unify_declared_against_arg(declared, arg, &param_names, &mut inferred).is_err() {
+            return std::collections::HashMap::new();
         }
     }
     inferred
+}
+
+/// Structurally unify a DECLARED parameter type ([`TypeRef`]) against an
+/// ARGUMENT type ([`Ty`]), recording generic-param bindings into `out`
+/// (§T.4.2 / §T.4.7).
+///
+/// Recurses through generic args, peeling a declared `? extends`/`? super`
+/// wildcard bound and an arg-side [`Ty::Wildcard`] to their element type, and
+/// through nullable wrappers. A bare single-segment name in `param_names` binds
+/// to the matching argument component (so `E` is inferred from
+/// `MyList<? extends E>` vs `MyList<Dog>`). A head/arity mismatch with nothing to
+/// bind learns nothing (lenient). The ONLY hard failure (`Err`) is a CONFLICT —
+/// the same param forced to two different types (`Pair<T, T>` vs
+/// `Pair<int, String>`) — which makes the caller abandon inference. No
+/// least-upper-bound widening (Phase 1).
+fn unify_declared_against_arg(
+    declared: &TypeRef,
+    arg: &Ty,
+    param_names: &std::collections::HashSet<&str>,
+    out: &mut std::collections::HashMap<String, Ty>,
+) -> Result<(), ()> {
+    // Peel an arg-side wildcard to its bound element (producer/consumer); a bare
+    // `?` carries no element, so it yields nothing.
+    let arg = match arg {
+        Ty::Wildcard(Wildcard::Extends(b)) | Ty::Wildcard(Wildcard::Super(b)) => b.as_ref(),
+        Ty::Wildcard(Wildcard::Unbounded) => return Ok(()),
+        other => other,
+    };
+    // An `Unknown` argument tells us nothing — leave the param unresolved.
+    if arg.is_unknown() {
+        return Ok(());
+    }
+    // Bare single-segment name that IS a generic param → bind it.
+    if declared.array_shape.is_none()
+        && !declared.nullable
+        && declared.generic_args.is_empty()
+        && declared.name.segments.len() == 1
+        && param_names.contains(declared.name.segments[0].text.as_str())
+    {
+        let name = declared.name.segments[0].text.as_str();
+        match out.get(name) {
+            Some(existing) if existing != arg => return Err(()),
+            Some(_) => {}
+            None => {
+                out.insert(name.to_string(), arg.clone());
+            }
+        }
+        return Ok(());
+    }
+    // Nullable declared (`T?`) → recurse on the inner, peeling an arg-side
+    // `Ty::Nullable` too.
+    if declared.nullable {
+        let mut inner = declared.clone();
+        inner.nullable = false;
+        let inner_arg = match arg {
+            Ty::Nullable(b) => b.as_ref(),
+            other => other,
+        };
+        return unify_declared_against_arg(&inner, inner_arg, param_names, out);
+    }
+    // Generic head (`MyList<…>`) vs a `Ty::User` of the same bare head and arity
+    // → recurse pairwise over the type arguments.
+    if !declared.generic_args.is_empty() {
+        if let Ty::User { name, generic_args } = arg {
+            let dhead = declared.name.segments.last().map(|s| s.text.as_str());
+            let ahead = name.rsplit('.').next();
+            if dhead == ahead && declared.generic_args.len() == generic_args.len() {
+                for (darg, aarg) in declared.generic_args.iter().zip(generic_args.iter()) {
+                    match darg {
+                        juxc_ast::GenericArg::Type(inner) => {
+                            unify_declared_against_arg(inner, aarg, param_names, out)?;
+                        }
+                        // `? extends X` / `? super X`: unify the bound `X`
+                        // against the arg component (the wildcard erases to its
+                        // bound element for inference).
+                        juxc_ast::GenericArg::Wildcard(w) => {
+                            if let Some(bound) = wildcard_bound_typeref(w) {
+                                unify_declared_against_arg(bound, aarg, param_names, out)?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+    // A bare concrete name, array shape, fn type, etc. — nothing to learn.
+    Ok(())
+}
+
+/// The bound [`TypeRef`] of an AST wildcard arg (`? extends T` / `? super T`),
+/// or `None` for an unbounded `?`.
+fn wildcard_bound_typeref(w: &juxc_ast::WildcardArg) -> Option<&TypeRef> {
+    match &w.bound {
+        Some(juxc_ast::WildcardBound::Extends(t)) | Some(juxc_ast::WildcardBound::Super(t)) => {
+            Some(t)
+        }
+        None => None,
+    }
 }
 
 /// Convenience wrapper around [`substitute`] that takes the
