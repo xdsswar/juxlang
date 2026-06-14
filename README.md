@@ -134,6 +134,69 @@ var b = new Box<int>(42);        // explicit type argument
 var v = new Vec2();              // v.x = 3.0; v.y = 4.0; ...
 ```
 
+### Enums and pattern matching
+
+One `enum` keyword covers three jobs: a C-style set of named constants, a
+Java-style enum with methods and fields, and a Rust-style sum type whose variants
+carry payloads. You destructure them with `switch` and exhaustiveness is checked,
+so a forgotten variant is a compile error, not a runtime surprise.
+
+```java
+public enum Shape {
+    Circle(double),               // payload-carrying variants
+    Rect(double, double)
+}
+
+public double area(Shape s) {
+    switch (s) {
+        case Shape.Circle(var r)     -> { return 3.14159 * r * r; }
+        case Shape.Rect(var w, var h) -> { return w * h; }
+    }
+}
+```
+
+Variants may name the enum itself, so the classic recursive trees (expressions,
+JSON, parse trees) just work. The self-referential slot is heap-indirected for
+you; there is no special syntax and no manual boxing:
+
+```java
+public enum Expr {
+    Num(int),
+    Add(Expr, Expr),              // self-referential payload
+    Mul(Expr, Expr)
+}
+
+public int eval(Expr e) {
+    switch (e) {
+        case Expr.Num(var n)        -> { return n; }
+        case Expr.Add(var a, var b) -> { return eval(a) + eval(b); }
+        case Expr.Mul(var a, var b) -> { return eval(a) * eval(b); }
+    }
+}
+
+// (2 + 3) * 4 == 20
+var tree = Expr.Mul(Expr.Add(Expr.Num(2), Expr.Num(3)), Expr.Num(4));
+print(eval(tree));
+```
+
+How Jux enums stack up against C and Java:
+
+| Feature                              | C enum | Java enum | Jux enum         |
+|--------------------------------------|--------|-----------|------------------|
+| Named variants                       | ✓      | ✓         | ✓                |
+| Methods                              | ✗      | ✓         | ✓                |
+| Payloads on variants                 | ✗      | ✗         | ✓                |
+| Recursive variants (trees)           | ✗      | ✗         | ✓                |
+| Pattern matching with destructuring  | ✗      | partial   | ✓                |
+| Exhaustiveness check                 | ✗      | ✓         | ✓                |
+| `name()`, `ordinal()`, `values()`    | ✗      | ✓         | ✓                |
+| FFI bit-compatible                   | native | ✗         | via `@layout(c)` |
+| Auto-derived `==`, hash, string      | n/a    | identity  | ✓ structural     |
+| Sealed (closed set of variants)      | ✓      | ✓         | ✓                |
+
+Same keyword does it all: you pick the pattern that fits the case, and the
+compiler picks the representation that fits the pattern.
+
 ### Operator overloading
 
 Overload arithmetic, equality, hashing, and the string conversion. `operator==`
@@ -417,7 +480,8 @@ runs. That currently includes:
   multi-interface inheritance, like Java.
 - **Generics:** `class A<T>`, bounded type params, wildcards (`? extends`,
   `? super`), const generics (`<int N>`), explicit type arguments.
-- **Enums + `match`** with exhaustiveness checking and payload binding.
+- **Enums + `match`** with exhaustiveness checking, payload binding, and
+  recursive variants (`Add(Expr, Expr)` self-referential trees, auto-boxed).
 - **Records**, **lambdas & method references**, **operator overloading**.
 - **Annotations** (case-insensitive built-in lookups).
 - **String interpolation:** `$"hello ${name}"`.
