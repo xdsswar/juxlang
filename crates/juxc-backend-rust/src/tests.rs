@@ -4747,6 +4747,45 @@ fn export_fn_gets_c_linkage() {
     );
 }
 
+/// An `@export` whose signature mentions `String` emits the real fn under its
+/// Jux name (normal `String` types) PLUS a `#[no_mangle] extern "C"` marshalling
+/// wrapper: each `String` param arrives as `*const c_char` (copied in via
+/// `CStr`), and a `String` return is handed back via `CString::into_raw`
+/// (§L.3.2). Non-String params pass through.
+#[test]
+fn export_string_emits_marshalling_wrapper() {
+    let rust = emit(
+        "@export String greet(String name, int n) { return name; } \
+         public void main() {}",
+    );
+    // Real fn keeps Jux name + normal String types (internal callers use it).
+    assert!(
+        rust.contains("pub fn greet(name: String, n: isize) -> String"),
+        "real fn keeps Jux String signature: {rust}"
+    );
+    // Wrapper: no_mangle extern "C", C-string params/return.
+    assert!(rust.contains("#[no_mangle]"), "wrapper is #[no_mangle]: {rust}");
+    assert!(
+        rust.contains("pub extern \"C\" fn __jux_cabi_greet(name: *const core::ffi::c_char, n: isize) -> *const core::ffi::c_char"),
+        "wrapper C-ABI signature: {rust}"
+    );
+    assert!(rust.contains("::std::ffi::CStr::from_ptr(name)"), "inbound CStr copy: {rust}");
+    assert!(rust.contains("let __r = greet(name, n);"), "wrapper calls real fn: {rust}");
+    assert!(rust.contains(".into_raw() as *const core::ffi::c_char"), "outbound into_raw: {rust}");
+}
+
+/// A pure-primitive `@export` keeps the INLINE `#[no_mangle] extern "C"` form
+/// (no wrapper, no marshalling) — the wrapper is only for `String` signatures.
+#[test]
+fn export_primitive_has_no_wrapper() {
+    let rust = emit("@export int add(int a, int b) { return a + b; } public void main() {}");
+    assert!(
+        rust.contains("pub extern \"C\" fn add(a: isize, b: isize) -> isize"),
+        "inline C ABI: {rust}"
+    );
+    assert!(!rust.contains("__jux_cabi_add"), "no wrapper for a primitive export: {rust}");
+}
+
 /// A numeric/pointer-only foreign call is NOT block-wrapped — it lowers to a
 /// bare `name(args)` (the generic call path), no `CString`/`CStr` machinery.
 #[test]

@@ -4,8 +4,8 @@
 // with `crate-type = ["cdylib"]` / `["staticlib"]` to produce a .dll / .so / .a
 // that exposes these symbols.)
 //
-// The signature must be C-compatible: primitives, raw pointers, or `@layout(c)`
-// structs (no `String` / class / generic / throws) - validated as E0508.
+// The signature must be C-compatible: primitives, raw pointers, `@layout(c)`
+// structs, or `String` (no class / generic / throws) - validated as E0508.
 
 @export
 public int jux_add(int a, int b) {
@@ -17,7 +17,18 @@ public int square(int n) {
     return n * n;
 }
 
+// A `String` parameter / return is marshalled automatically (§L.3.2): C passes a
+// `const char*` (copied into a Jux String on the way in), and the returned String
+// is handed back as a `const char*` via `into_raw` - the C caller owns that
+// buffer (it is never freed on the Jux side). The compiler emits a thin C-ABI
+// wrapper for this; the function below is still an ordinary Jux function too.
+@export(name = "jux_greet")
+public String greet(String name, int times) {
+    return $"Hello $name (x$times)";
+}
+
 public void main() {
     // The exported functions are ordinary Jux functions too - callable here.
     print($"add=${jux_add(2, 3)} square=${square(5)}");
+    print(greet("world", 3));
 }

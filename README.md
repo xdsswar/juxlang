@@ -447,9 +447,11 @@ runs. That currently includes:
   writes the place), and `@layout(c)` **C-compatible value structs** pass by
   value or get filled through a pointer (Win32 `GetCursorPos(out POINT)` works).
   The reverse direction works too: `@export` gives a Jux function C linkage
-  (`#[no_mangle] extern "C"`) so C can call it. `@layout(c, repr = "i32")` **C
-  enums** lower to a `#[repr(i32)]` integer enum with explicit discriminants
-  (`Ok = 200`) for status-code style C APIs. **C variadics** work too
+  (`#[no_mangle] extern "C"`) so C can call it, including `String` params/returns
+  (marshalled to/from `const char*` by a generated wrapper).
+  `@layout(c, repr = "i32")` **C enums** lower to a `#[repr(i32)]` integer enum
+  with explicit discriminants (`Ok = 200`) for status-code style C APIs. **C
+  variadics** work too
   (`int printf(String fmt, ...)` calls, with String literals marshalled to
   `const char*`). See
   [`examples/ffi_strings.jux`](examples/ffi_strings.jux),
