@@ -18,6 +18,9 @@ enum FfiArg {
     Str,
     /// A Jux `char` (4-byte) truncated to a C `char` (`core::ffi::c_char`).
     Char,
+    /// An `out <place>` argument (§M.4): the C callee writes through it, so we
+    /// pass `addr_of_mut!(place)` (a `*mut T`) instead of the value.
+    Out,
 }
 
 /// How a foreign-call RETURN crosses the C boundary (§L.7).
@@ -1639,7 +1642,11 @@ impl RustEmitter {
                     .find(|(k, v)| v.is_extern_c && k.rsplit('.').next() == Some(name))
                     .map(|(_, v)| v)
             })?;
-        let args = sig.params.iter().map(|p| ffi_arg_kind(&p.ty)).collect();
+        let args = sig
+            .params
+            .iter()
+            .map(|p| if p.is_out { FfiArg::Out } else { ffi_arg_kind(&p.ty) })
+            .collect();
         let ret = match &sig.return_type {
             juxc_ast::ReturnType::Type(t) if type_ref_is_string(t) => {
                 FfiRet::Str { nullable: t.nullable }
@@ -1702,6 +1709,16 @@ impl RustEmitter {
                     self.w.push('(');
                     self.emit_expr(arg);
                     self.w.push_str(") as core::ffi::c_char");
+                }
+                // `out <place>` arg: a `*mut T` aimed at the place, so the C
+                // callee writes through it. `Expr::Out(inner)` carries the place.
+                Some(FfiArg::Out) => {
+                    self.w.push_str("::core::ptr::addr_of_mut!(");
+                    match arg {
+                        Expr::Out(inner, _) => self.emit_expr(inner),
+                        other => self.emit_expr(other),
+                    }
+                    self.w.push(')');
                 }
                 _ => self.emit_expr(arg),
             }

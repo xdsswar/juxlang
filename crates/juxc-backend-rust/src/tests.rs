@@ -4592,6 +4592,39 @@ fn extern_char_arg_maps_to_c_char() {
     );
 }
 
+/// An `out T` foreign parameter (§M.4) becomes `*mut <T>` in the extern
+/// signature, and the call passes `addr_of_mut!(place)` so the C callee writes
+/// through it.
+#[test]
+fn extern_out_param_passes_addr_of_mut() {
+    let rust = emit(
+        "@extern(lib = \"c\") unsafe native { i32 f(out long count); } \
+         public void main() { unsafe { long c = 0; i32 r = f(out c); } }",
+    );
+    assert!(
+        rust.contains("pub fn f(count: *mut i64)"),
+        "out param should be *mut i64: {rust}"
+    );
+    assert!(
+        rust.contains("::core::ptr::addr_of_mut!(c)"),
+        "out arg should be addr_of_mut!: {rust}"
+    );
+}
+
+/// The sqlite-style combination: a `String` argument AND an `out` argument in
+/// one call marshal together (CString temp + `addr_of_mut!`).
+#[test]
+fn extern_string_and_out_combine() {
+    let rust = emit(
+        "@extern(lib = \"c\") unsafe native { i32 open(String path, out long handle); } \
+         public void main() { unsafe { long h = 0; i32 rc = open(\"db\", out h); } }",
+    );
+    assert!(rust.contains("path: *const core::ffi::c_char"), "String param: {rust}");
+    assert!(rust.contains("handle: *mut i64"), "out param: {rust}");
+    assert!(rust.contains("::std::ffi::CString::new("), "String marshalling: {rust}");
+    assert!(rust.contains("::core::ptr::addr_of_mut!(h)"), "out arg: {rust}");
+}
+
 /// A numeric/pointer-only foreign call is NOT block-wrapped — it lowers to a
 /// bare `name(args)` (the generic call path), no `CString`/`CStr` machinery.
 #[test]
