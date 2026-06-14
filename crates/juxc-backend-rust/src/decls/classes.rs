@@ -145,6 +145,10 @@ impl RustEmitter {
         self.const_int_params = crate::collect_const_int_params(&class_decl.generic_params);
         let prev_type_params = std::mem::take(&mut self.current_type_params);
         self.current_type_params = crate::collect_type_param_names(&class_decl.generic_params);
+        // Track the class params' BOUNDS too, so `<R extends K>` method generics
+        // can expand `K` to its bounds when emitting (`R: Id + Named + …`).
+        let prev_type_param_bounds = std::mem::take(&mut self.type_param_bounds);
+        self.type_param_bounds = crate::collect_type_param_bounds(&class_decl.generic_params);
         // **Wrapper-shape branch (Phase A, §CR.4.1 / §CR.5.1 / §CR.6).**
         // Classes in `wrapper_classes` lower to the shared-mutation,
         // interior-mutable wrapper shape so Jux gets Java reference
@@ -163,6 +167,7 @@ impl RustEmitter {
             self.emitting_class_has_static_init = prev_has_static_init;
             self.const_int_params = prev_const_ints;
             self.current_type_params = prev_type_params;
+            self.type_param_bounds = prev_type_param_bounds;
             return;
         }
         // Derive Clone unconditionally. Debug is also derived, EXCEPT
@@ -675,6 +680,7 @@ impl RustEmitter {
         self.emitting_class_has_static_init = prev_has_static_init;
         self.const_int_params = prev_const_ints;
         self.current_type_params = prev_type_params;
+        self.type_param_bounds = prev_type_param_bounds;
     }
 
     /// Emit a **simple** class in the shared-mutation wrapper shape
@@ -3267,8 +3273,12 @@ impl RustEmitter {
         // Wildcard-lift pre-pass (same rule as `emit_fn_decl`):
         // promote each `? extends T` / `? super T` / `?` in a param
         // type to a synthetic `__Wn` generic on this method with the
-        // matching bound.
-        let mut lifter = crate::analysis::WildcardLifter::new();
+        // matching bound. In-scope params = the enclosing class's
+        // (`current_type_params`) plus this method's own — so a wildcard
+        // bounded by one (`MyList<? extends E>`) substitutes it directly.
+        let mut in_scope = self.current_type_params.clone();
+        in_scope.extend(crate::collect_type_param_names(&method.generic_params));
+        let mut lifter = crate::analysis::WildcardLifter::new(in_scope);
         let lifted_param_tys: Vec<juxc_ast::TypeRef> = method
             .params
             .iter()

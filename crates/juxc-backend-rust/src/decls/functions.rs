@@ -216,7 +216,11 @@ impl RustEmitter {
         let is_args_main = fn_decl.name.text == "main"
             && !is_async_main
             && !fn_decl.params.is_empty();
-        let mut lifter = crate::analysis::WildcardLifter::new();
+        // In-scope params for wildcard substitution = this function's own
+        // generics plus any enclosing (`current_type_params`).
+        let mut in_scope = self.current_type_params.clone();
+        in_scope.extend(crate::collect_type_param_names(&fn_decl.generic_params));
+        let mut lifter = crate::analysis::WildcardLifter::new(in_scope);
         let lifted_param_tys: Vec<juxc_ast::TypeRef> = fn_decl
             .params
             .iter()

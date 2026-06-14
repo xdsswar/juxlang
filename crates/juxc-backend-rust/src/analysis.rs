@@ -2611,13 +2611,21 @@ pub(crate) struct WildcardLifter {
     /// Counter for the next `__Wn` name. Bumped on each fresh
     /// wildcard regardless of bound shape.
     next: usize,
+    /// Names of generic type params in scope at the rewrite site (the
+    /// enclosing class's params plus the method/function's own). When a
+    /// wildcard's bound NAMES one of these (`MyList<? extends E>`,
+    /// `Sink<? super K>`), the param is substituted directly instead of
+    /// minting a synthetic `__Wn: E` — a type param isn't a Rust trait, so
+    /// the synthetic-bound form wouldn't compile.
+    in_scope_params: std::collections::HashSet<String>,
 }
 
 impl WildcardLifter {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(in_scope_params: std::collections::HashSet<String>) -> Self {
         Self {
             new_params: Vec::new(),
             next: 0,
+            in_scope_params,
         }
     }
 
@@ -2665,6 +2673,23 @@ impl WildcardLifter {
     /// Tycheck still enforces the variance distinction via PECS in
     /// `compatible`, so the relaxation here doesn't widen what type-checks.
     fn synthesize(&mut self, bound: &Option<WildcardBound>) -> TypeRef {
+        // Substitute an IN-SCOPE type param named by the wildcard's bound
+        // directly: `MyList<? extends E>` ⇒ `MyList<E>` (producer read as E),
+        // `Sink<? super K>` ⇒ `Sink<K>` (consumer write as K). No synthetic
+        // param — `__W: E`/`__W: K` is invalid Rust (params aren't traits).
+        let inner: Option<&TypeRef> = match bound {
+            Some(WildcardBound::Extends(b)) | Some(WildcardBound::Super(b)) => Some(b),
+            None => None,
+        };
+        if let Some(b) = inner {
+            if b.array_shape.is_none()
+                && b.generic_args.is_empty()
+                && b.name.segments.len() == 1
+                && self.in_scope_params.contains(b.name.segments[0].text.as_str())
+            {
+                return b.clone();
+            }
+        }
         let name = format!("__W{}", self.next);
         self.next += 1;
         let bounds: Vec<TypeRef> = match bound {

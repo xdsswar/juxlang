@@ -924,6 +924,15 @@ struct RustEmitter {
     /// require `T: Copy`, which Jux generics don't carry. Set/restored
     /// alongside [`Self::const_int_params`].
     pub(crate) current_type_params: std::collections::HashSet<String>,
+    /// In-scope generic type-param **bounds**, keyed by param name — the
+    /// enclosing class's params (and, while emitting a method, that method's
+    /// params too). Lets `emit_generic_params_with_clone_bound` expand a bound
+    /// that names another in-scope type-param (`<R extends K>`) into that
+    /// param's own bounds (`R: Id + Named + Comparable<K> + …`), since Rust has
+    /// no `R: K` "param-as-bound" form. Set/restored alongside
+    /// [`Self::current_type_params`].
+    pub(crate) type_param_bounds:
+        std::collections::HashMap<String, Vec<juxc_ast::TypeRef>>,
     /// True while emitting the size expression of a fixed array
     /// (`[T; «here»]`, types.rs `ArrayShape::Fixed`). Suppresses the
     /// `(N as isize)` value-cast for const params — the size slot
@@ -2891,6 +2900,19 @@ pub(crate) fn collect_type_param_names(
         .collect()
 }
 
+/// Map each non-const type param to its declared bounds — feeds
+/// [`RustEmitter::type_param_bounds`] so a bound naming another in-scope param
+/// (`<R extends K>`) can be expanded to that param's own bounds at emission.
+pub(crate) fn collect_type_param_bounds(
+    params: &[juxc_ast::TypeParam],
+) -> HashMap<String, Vec<juxc_ast::TypeRef>> {
+    params
+        .iter()
+        .filter(|p| !p.is_const())
+        .map(|p| (p.name.text.clone(), p.bounds.clone()))
+        .collect()
+}
+
 /// Bare names of every **polymorphic base class** — a class that is extended
 /// by ≥1 other class and is itself non-sealed, non-final, and non-generic.
 ///
@@ -3900,6 +3922,7 @@ impl RustEmitter {
             const_int_params: std::collections::HashSet::new(),
             out_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),
+            type_param_bounds: std::collections::HashMap::new(),
             in_array_size_position: false,
             dynamic_array_target: false,
             target_array_shape: None,
