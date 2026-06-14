@@ -28,6 +28,8 @@ Cargo.lock.bak
 */target
 /*/target
 /examples/*/target/
+# Generated foreign-crate stub cache (`rust.<crate>` deps) — regenerated on build.
+.jux-stubs/
 /ide/intellij-plugin/gradle/wrapper/gradle-wrapper.properties
 /ide/intellij-plugin/gradle/
 /ref-only/

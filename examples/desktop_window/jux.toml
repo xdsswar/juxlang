@@ -1,0 +1,9 @@
+[package]
+name = "demo.desktop_window"
+version = "0.1.0"
+
+# A real crates.io desktop-UI crate, consumed and called in Jux syntax. The
+# `rust.<crate>` form generates a `.jux.d` stub from the crate's rustdoc JSON
+# (type-checking) and links the crate into the emitted binary.
+[dependencies]
+"rust.minifb" = "0.27"
