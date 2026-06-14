@@ -895,6 +895,10 @@ pub struct EnumSig {
     /// same shape as [`ClassSig::methods`] so call-site inference
     /// reuses the method machinery.
     pub methods: HashMap<String, MethodSig>,
+    /// `true` when the enum is annotated `@layout(c [, repr = "…"])` — a
+    /// C-compatible integer enum (§L.1.3) that lowers to a `#[repr(…)]` Rust
+    /// enum and is therefore allowed to cross the FFI boundary by value.
+    pub is_layout_c: bool,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -3310,6 +3314,7 @@ fn insert_enum(
                 .iter()
                 .map(|m| (m.name.text.clone(), method_sig(m, false)))
                 .collect(),
+            is_layout_c: is_layout_c_annotation(&enum_decl.annotations),
             span: enum_decl.span,
         },
     );
