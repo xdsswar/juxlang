@@ -146,7 +146,12 @@ class JuxParser : PsiParser {
     private fun parseExternBlock(b: PsiBuilder, decl: PsiBuilder.Marker) {
         b.expectOrError(T.LBRACE, "'{' to open native block")
         while (!b.at(T.RBRACE) && !b.eof()) {
-            if (!parseNativeFn(b)) b.advanceLexer() // resync on a malformed line
+            val before = b.currentOffset
+            parseNativeFn(b)
+            // Only skip a token when no progress was made — never advance past a
+            // `}` the loop condition already excludes (a fn that consumed tokens
+            // then bailed must not let us eat the closing brace).
+            if (b.currentOffset == before) b.advanceLexer()
         }
         b.expectOrError(T.RBRACE, "'}' to close native block")
         decl.done(E.EXTERN_BLOCK)

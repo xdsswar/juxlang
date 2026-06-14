@@ -6,6 +6,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.containers.MultiMap
 import dev.jux.intellij.psi.JuxFieldDeclaration
 import dev.jux.intellij.psi.JuxLocalVariable
+import dev.jux.intellij.psi.JuxMethodDeclaration
 import dev.jux.intellij.psi.JuxNamedElement
 
 /**
@@ -71,6 +72,24 @@ class JuxRenameTest : BasePlatformTestCase() {
         val conflicts = MultiMap<PsiElement, String>()
         JuxRenamePsiElementProcessor().findExistingNameConflicts(count, "other", conflicts)
         assertFalse("renaming 'count' onto sibling 'other' must conflict", conflicts.isEmpty)
+    }
+
+    fun testRenamingMethodOntoOverloadIsNotAConflict() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class A {
+                public void foo(int x) { print(x); }
+                public void bar(String s) { print(s); }
+            }
+            """.trimIndent(),
+        )
+        val foo = PsiTreeUtil.findChildrenOfType(myFixture.file, JuxMethodDeclaration::class.java)
+            .first { it.name == "foo" }
+        val conflicts = MultiMap<PsiElement, String>()
+        JuxRenamePsiElementProcessor().findExistingNameConflicts(foo, "bar", conflicts)
+        assertTrue("renaming a method onto a same-named overload is legal, not a conflict", conflicts.isEmpty)
     }
 
     fun testNonCollidingRenameHasNoConflict() {

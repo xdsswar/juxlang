@@ -193,15 +193,28 @@ class JuxCompletionContributor : CompletionContributor() {
 
         // Tier 4: file-level type names (`Model m = new Model();`) — no import.
         val file = parameters.originalFile
+        // A native fn is only callable inside an `unsafe` block (E0506 elsewhere),
+        // so only offer them when the caret is within one — otherwise they'd be
+        // wrong-scope noise ranked above the user's own types.
+        val insideUnsafe = run {
+            var p: PsiElement? = parameters.position
+            while (p != null && p !is JuxFile) {
+                if (p.elementType === E.UNSAFE_STATEMENT) return@run true
+                p = p.parent
+            }
+            false
+        }
         for (decl in file.children) {
             // §L.7 C-FFI: surface a `native { … }` block's foreign functions as
-            // file-level callables (they resolve unqualified inside `unsafe`).
+            // file-level callables, but only inside `unsafe` (see above).
             if (decl.elementType === E.EXTERN_BLOCK) {
-                for (fn in decl.children) {
-                    if (fn.elementType !== E.METHOD_DECLARATION) continue
-                    val named = fn as? JuxNamedElement ?: continue
-                    val name = named.name ?: continue
-                    add(method(named, name), name)
+                if (insideUnsafe) {
+                    for (fn in decl.children) {
+                        if (fn.elementType !== E.METHOD_DECLARATION) continue
+                        val named = fn as? JuxNamedElement ?: continue
+                        val name = named.name ?: continue
+                        add(method(named, name), name)
+                    }
                 }
                 continue
             }
@@ -217,6 +230,11 @@ class JuxCompletionContributor : CompletionContributor() {
         // without the LSP; the slightly-lower priority keeps in-file names on
         // top. (Rust std / crate types come from the LSP's stub index.)
         val project = parameters.position.project
+        // The project type index reads FileTypeIndex, which throws
+        // IndexNotReadyException during indexing (dumb mode). Completion can fire
+        // then (e.g. right after open / a big VCS update), so skip the cross-file
+        // walk rather than abort the whole popup; in-file names above still show.
+        if (com.intellij.openapi.project.DumbService.isDumb(project)) return
         val curPkg = dev.jux.intellij.completion.JuxAutoImport.packageOfFile(file)
         dev.jux.intellij.resolve.JuxTypeIndex.forEachType(
             project,
