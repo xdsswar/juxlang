@@ -4503,6 +4503,39 @@ fn pointer_field_null_round_trips() {
 }
 
 // ---------------------------------------------------------------------------
+// §L.1.2 — `@layout(c)` C-compatible value structs
+// ---------------------------------------------------------------------------
+
+/// A `@layout(c) struct` lowers to a flat `#[repr(C)]` `Copy` VALUE struct, not
+/// the `Rc<RefCell<…>>` class handle: fields in declaration order, plain field
+/// access (no `.0.borrow()`), and `S*` is `*mut S` (not `*mut S_Inner`).
+#[test]
+fn layout_c_struct_lowers_to_repr_c_value() {
+    let rust = emit(
+        "@layout(c) struct P { int x; int y; \
+            public P(int x, int y) { this.x = x; this.y = y; } } \
+         public void main() { P p = new P(1, 2); int a = p.x; unsafe { P* q = &p; } }",
+    );
+    assert!(rust.contains("#[repr(C)]"), "missing #[repr(C)]: {rust}");
+    assert!(
+        rust.contains("#[derive(Clone, Copy, Debug)]"),
+        "value struct should derive Copy: {rust}"
+    );
+    assert!(rust.contains("struct P {"), "expected a plain struct P: {rust}");
+    assert!(!rust.contains("P_Inner"), "value struct has no _Inner: {rust}");
+    assert!(
+        !rust.contains("Rc<std::cell::RefCell<P"),
+        "value struct is not Rc<RefCell>: {rust}"
+    );
+    // Plain field access, no wrapper borrow.
+    assert!(rust.contains("p.x"), "field access: {rust}");
+    assert!(!rust.contains("p.0.borrow()"), "no wrapper borrow on a value struct: {rust}");
+    // `P*` is `*mut P`, not `*mut P_Inner`; `&p` is the place pointer.
+    assert!(rust.contains("*mut P"), "P* should be *mut P: {rust}");
+    assert!(rust.contains("addr_of_mut!(p)"), "&valueStruct is addr_of_mut!: {rust}");
+}
+
+// ---------------------------------------------------------------------------
 // §L.7 — C FFI: `unsafe native` blocks → `extern "C"` + String marshalling
 // ---------------------------------------------------------------------------
 

@@ -100,7 +100,14 @@ impl RustEmitter {
                 && inner.name.segments.len() == 1
             {
                 let bare = &inner.name.segments[0].text;
-                if self.symbols.classes.contains_key(bare) {
+                // …but a `@layout(c)` value struct is ALREADY a flat `#[repr(C)]`
+                // struct (no `_Inner` handle), so `S*` is just `*mut S`.
+                if self
+                    .symbols
+                    .classes
+                    .get(bare)
+                    .is_some_and(|c| !c.is_layout_c)
+                {
                     self.w.push_str(bare);
                     self.w.push_str("_Inner");
                     if !inner.generic_args.is_empty() {

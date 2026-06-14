@@ -605,7 +605,7 @@ impl<'a> Checker<'a> {
                 );
             }
             for p in &f.params {
-                if !ffi_type_ok(&p.ty) {
+                if !self.ffi_type_ok(&p.ty) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0508_FfiTypeNotAllowed,
@@ -622,7 +622,7 @@ impl<'a> Checker<'a> {
             }
             // Return type: `void` is fine; otherwise the same rule as a param.
             if let juxc_ast::ReturnType::Type(t) = &f.return_type {
-                if !ffi_type_ok(t) {
+                if !self.ffi_type_ok(t) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0508_FfiTypeNotAllowed,
@@ -638,6 +638,62 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+    }
+
+    /// True when `t` is a valid FIELD type of a `@layout(c)` value struct: a
+    /// numeric/bool/char primitive, a raw pointer, or another `@layout(c)`
+    /// struct. Stricter than [`Self::ffi_type_ok`] - `String` is allowed as a
+    /// marshalled *parameter* but NOT as a `#[repr(C)]` `Copy` struct field
+    /// (it is a non-`Copy` fat pointer with no C field representation).
+    fn ffi_struct_field_ok(&self, t: &juxc_ast::TypeRef) -> bool {
+        if t.array_shape.is_some() || t.fn_shape.is_some() || !t.generic_args.is_empty() {
+            return false;
+        }
+        if t.ptr_depth > 0 {
+            return true; // a raw pointer field is fine (a `*mut T`)
+        }
+        if t.nullable {
+            return false;
+        }
+        let name = t.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+        if name == "String" {
+            return false;
+        }
+        if crate::ty::primitive_from_name(name).is_some() {
+            return true;
+        }
+        // A nested `@layout(c)` value struct.
+        matches!(
+            ty_from_ref(t, &self.env, self.symbols),
+            Ty::User { name, .. } if self.symbols.classes.get(&name).is_some_and(|c| c.is_layout_c)
+        )
+    }
+
+    /// True when `t` is allowed at the C FFI boundary (Layout-ABI §L.7): a
+    /// primitive, a raw pointer, `String`, OR a `@layout(c)` value struct (a C
+    /// aggregate passable by value, §L.1.2). The structural cases are the free
+    /// [`ffi_type_ok`]; the value-struct case needs the symbol table.
+    fn ffi_type_ok(&self, t: &juxc_ast::TypeRef) -> bool {
+        if ffi_type_ok(t) {
+            return true;
+        }
+        // A non-pointer, non-generic user type that resolves to a `@layout(c)`
+        // value struct is a C aggregate.
+        if t.ptr_depth == 0
+            && t.array_shape.is_none()
+            && t.fn_shape.is_none()
+            && t.generic_args.is_empty()
+            && !t.nullable
+        {
+            if let Ty::User { name, .. } = ty_from_ref(t, &self.env, self.symbols) {
+                return self
+                    .symbols
+                    .classes
+                    .get(&name)
+                    .is_some_and(|c| c.is_layout_c);
+            }
+        }
+        false
     }
 
     /// Walk an enum's operator bodies. Same scope shape as records:
@@ -1484,6 +1540,50 @@ impl<'a> Checker<'a> {
     /// binding), run the body checker, then tear it down. Abstract
     /// methods (body = None) are skipped.
     fn check_class(&mut self, class: &ClassDecl) {
+        // `@layout(c)` is permitted only on a value aggregate (`struct`), not a
+        // `class` (Layout-ABI §L.1.2) — a class has an `Rc`/vtable header with no
+        // portable C representation. `@layout(c) struct` field types must also be
+        // C-compatible (so the emitted `#[repr(C)]` `Copy` struct is valid).
+        if crate::symbol_table::is_layout_c_annotation(&class.annotations) {
+            if !class.is_struct {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0509_LayoutCOnNonAggregate,
+                        format!(
+                            "`@layout(c)` is not allowed on class `{}` — only a `struct` can have \
+                             a C-compatible layout (a class is a reference type with no portable C \
+                             representation)",
+                            class.name.text,
+                        ),
+                    )
+                    .with_span(class.span),
+                );
+            } else {
+                for field in &class.fields {
+                    if field.is_static {
+                        continue;
+                    }
+                    if let Some(fty) = &field.ty {
+                        if !self.ffi_struct_field_ok(fty) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0509_LayoutCOnNonAggregate,
+                                    format!(
+                                        "field `{}` of `@layout(c) struct {}` has type `{}`, which \
+                                         is not C-compatible — use a primitive, a raw pointer \
+                                         (`T*`), or another `@layout(c)` struct",
+                                        field.name.text,
+                                        class.name.text,
+                                        type_ref_display(fty),
+                                    ),
+                                )
+                                .with_span(field.span),
+                            );
+                        }
+                    }
+                }
+            }
+        }
         // Class context — FQN'd so the visibility / subtype walks
         // that key on `env.current_class` find the right entry in
         // the symbol table.
@@ -7410,6 +7510,41 @@ mod tests {
                 i32 puts(String s); String getenv(String name); \
              } public void main() {}",
         );
+        assert!(!has(&d, code::Code::E0508_FfiTypeNotAllowed), "{d:?}");
+    }
+
+    // --- §L.1.2 `@layout(c)` value structs ---
+
+    /// `@layout(c)` on a `class` (not a struct) is E0509.
+    #[test]
+    fn layout_c_on_class_is_e0509() {
+        let d = run(
+            "@layout(c) class Bad { public int x; public Bad(int x) { this.x = x; } } \
+             public void main() {}",
+        );
+        assert!(has(&d, code::Code::E0509_LayoutCOnNonAggregate), "{d:?}");
+    }
+
+    /// A non-C-compatible field (`String`) in a `@layout(c)` struct is E0509.
+    #[test]
+    fn layout_c_struct_string_field_is_e0509() {
+        let d = run(
+            "@layout(c) struct Bad { String name; public Bad(String n) { this.name = n; } } \
+             public void main() {}",
+        );
+        assert!(has(&d, code::Code::E0509_LayoutCOnNonAggregate), "{d:?}");
+    }
+
+    /// A clean `@layout(c)` struct (primitive fields) and its use as an FFI
+    /// parameter/`out` parameter are accepted - no E0509, no E0508.
+    #[test]
+    fn layout_c_struct_is_ffi_allowed() {
+        let d = run(
+            "@layout(c) struct P { i32 x; i32 y; public P(i32 x, i32 y) { this.x = x; this.y = y; } } \
+             @extern(lib = \"user32\") unsafe native { i32 GetCursorPos(out P p); } \
+             public void main() {}",
+        );
+        assert!(!has(&d, code::Code::E0509_LayoutCOnNonAggregate), "{d:?}");
         assert!(!has(&d, code::Code::E0508_FfiTypeNotAllowed), "{d:?}");
     }
 

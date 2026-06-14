@@ -71,6 +71,33 @@ Permitted on `struct` and `record`. Not permitted on `class` (classes have a vta
 
 A type marked `@layout(c)` may be passed across the FFI boundary by value or by pointer.
 
+**Lowering (implemented for `struct`).** A `@layout(c) struct S { … }` lowers to a
+flat Rust value struct - **not** the `Rc<RefCell<…>>` handle that an ordinary
+class/struct uses:
+
+```rust
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct S { pub x: isize, pub y: isize }   // fields in declaration order
+impl S { pub fn new(x: isize, y: isize) -> S { S { x, y } } }
+```
+
+- It is `Copy`, giving the "copied on assignment" value semantics (§7.6): `var b
+  = a;` copies, and mutating `a` does not touch `b`. Its fields must therefore be
+  C-compatible *and* `Copy` - a primitive, a raw pointer, or another `@layout(c)`
+  struct. A `String`/class/collection/generic field is **E0509** (it has no
+  `#[repr(C)]` `Copy` representation), and `@layout(c)` on a `class` is **E0509**.
+- Field access is direct (`p.x`, `p.x = v`); there is no `.borrow()`. A pointer
+  to one is `S*` → `*mut S`, and `&s` is the place pointer (`addr_of_mut!(s)`).
+- At the FFI boundary it is allowed by value or as `S*`, and an `out S` parameter
+  passes `addr_of_mut!(place)` so a C function can fill it (e.g. Win32
+  `GetCursorPos(out POINT p)`). See `examples/ffi_struct.jux`.
+
+> Current limitation: a `@layout(c) struct` needs an explicit constructor (or
+> field initializers). An implicit positional constructor (`new POINT(x, y)`
+> synthesized from the fields, like a `record`) and the `(*ptr).field` deref form
+> are follow-ups. `@layout(c)` on `record`/`enum` is also not yet emitted.
+
 ### L.1.3. C-Compatible Enum: `@layout(c, repr = "i32")`
 
 For C enums (which are integer constants under the hood), use a regular Jux enum with no payloads and the `@layout(c, repr = "...")` annotation:
