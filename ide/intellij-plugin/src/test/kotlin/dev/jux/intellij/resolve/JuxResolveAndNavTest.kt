@@ -25,6 +25,23 @@ class JuxResolveAndNavTest : BasePlatformTestCase() {
         assertTrue("the in-file resolver must be soft", ref!!.isSoft)
     }
 
+    fun testKeywordMemberCarriesReference() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            public class A {
+                public void go(Obj o) { o.default(); }
+            }
+            """.trimIndent(),
+        )
+        // A keyword in member position (`o.default()`) is a member name, so it
+        // carries a reference (context-aware) — powering go-to / completion on
+        // Rust crate members whose names collide with Jux keywords.
+        val offset = myFixture.file.text.indexOf("default")
+        assertNotNull("keyword member should carry a reference", myFixture.file.findReferenceAt(offset))
+    }
+
     fun testNativeFnCallResolves() {
         myFixture.configureByText(
             "a.jux",

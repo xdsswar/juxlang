@@ -50,7 +50,12 @@ class JuxReferenceContributor : PsiReferenceContributor() {
         var last: PsiElement? = null
         var c: PsiElement? = element.firstChild
         while (c != null) {
-            if (c.elementType === JuxTokenTypes.IDENTIFIER) last = c
+            // A reserved keyword in member position (`recv.default`, `x.type`) is
+            // the member name — accept it as the name leaf so keyword-named crate
+            // members still get a reference (go-to / completion / highlight).
+            if (c.elementType === JuxTokenTypes.IDENTIFIER ||
+                JuxTokenTypes.KEYWORDS.contains(c.elementType)
+            ) last = c
             c = c.nextSibling
         }
         return last
