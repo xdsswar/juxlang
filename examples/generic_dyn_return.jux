@@ -1,0 +1,21 @@
+// Regression: returning a bounded generic-param value (`T extends Animal`) into
+// an interface (dyn trait object) return slot must coerce `T` into
+// `Rc::new(occ.clone()) as Rc<dyn Animal>` (and the param is bounded `'static`
+// so the unsizing is allowed). Before the fix the body emitted a bare
+// `self.occ.clone()` of type `T` into an `Rc<dyn Animal>` slot (rustc E0308).
+package gdr;
+
+public interface Animal { String sound(); }
+public class Dog implements Animal { public String sound() { return "woof"; } }
+
+public class Pen<T extends Animal> {
+    private T occ;
+    public Pen(T occ) { this.occ = occ; }
+    public Animal asAnimal() { return this.occ; }   // T -> Rc<dyn Animal>
+}
+
+public void main() {
+    var p = new Pen<Dog>(new Dog());
+    Animal a = p.asAnimal();
+    print($"s=${a.sound()}");
+}
