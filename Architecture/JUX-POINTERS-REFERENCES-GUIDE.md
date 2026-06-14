@@ -23,7 +23,7 @@ Jux deliberately separates **safe references** (everyday Jux, no `unsafe`) from
 | Ask "are these the same object?"            | `===` / `!==`                | no   ✅   |
 | The raw memory address of something         | `&x` → `T*`                  | yes  ✅   |
 | Read/write through an address               | `*p`, `p[i]`                 | yes  ✅   |
-| Call a C/C++ function, `malloc`/`free`       | `unsafe native` + `@extern`  | yes  📐   |
+| Call a C function, `malloc`/`free`           | `unsafe native` + `@extern`  | yes  ✅   |
 
 ---
 
@@ -126,13 +126,21 @@ it requires an `unsafe` context.
 
 ---
 
-## 5. C/C++ interop, allocation, and free/delete — §L.7–L.8 📐
+## 5. C/C++ interop, allocation, and free/delete — §L.7–L.8 ✅ (C), 📐 (C++)
 
-This is the **deferred** layer (FFI binding). The *language primitives* it
-builds on (raw pointers, `&`/`*`, `unsafe`) are ✅; the binding that actually
-links and calls foreign functions is 📐 (specified, not yet emitted).
+The C FFI binding layer is **implemented**: you can declare, link, and call C
+functions, marshal `String`/`char`, pass `out` parameters and `@layout(c)`
+structs/enums, call variadic functions, and `@export` Jux functions back to C.
+Every snippet below has a runnable counterpart under `examples/ffi_*.jux`
+(`./juxc.exe --run examples/ffi_strings.jux`). C++ (`autocxx`) and header
+`bindgen` are the remaining 📐 pieces.
 
-### 5.1 Declaring foreign functions
+### 5.1 Declaring and calling foreign functions ✅
+A `@extern(lib = "…") unsafe native { … }` block declares C functions. Each one
+is implicitly `unsafe` to call, so the call must sit in an `unsafe { }` context
+(an unguarded call is **E0506**). FFI-incompatible signatures (a class, generic,
+array, collection, or `throws`) are rejected with **E0508**.
+
 ```jux
 @extern(lib = "c")
 unsafe native {
@@ -140,14 +148,164 @@ unsafe native {
     void  free(void* p);
     void  memset(void* p, int byte, ulong n);
 }
-```
-Every function in an `unsafe native` block is implicitly `unsafe` to call.
 
-### 5.2 free / delete — call the foreign deallocator inside `unsafe`, from `drop`
-Jux has **no `delete`/`free` keyword**. You free memory by calling the
-foreign deallocator (`free` for C, a `delete` wrapper for C++) inside an
-`unsafe` block — idiomatically from the owning class's **`drop { }`**
-destructor, so cleanup is automatic and deterministic:
+public void main() {
+    unsafe {
+        void* p = malloc(64);
+        if (p != null) {
+            memset(p, 0, 64);
+            free(p);
+        }
+    }
+}
+```
+
+The Jux types map straight onto the C ABI (`int` to the target word `isize`,
+`ulong` to `u64`, `byte*` to `*mut i8`, `void*` to `*mut c_void`, a `void`
+return is omitted). See `examples/ffi_strings.jux`.
+
+### 5.2 String and char marshalling ✅
+`String` crosses the boundary as a C `const char*` automatically, in both
+directions. There is **no `CString` type** in Jux. Outbound, the compiler builds
+a NUL-terminated temporary that lives across the call; inbound, it copies the C
+buffer into an owned Jux `String` (lossy UTF-8; the C buffer is read, never
+freed; a null pointer becomes the empty string, or `null` for a `String?`
+return). A `char` maps to a C `char` (one byte), converted at the call site.
+
+```jux
+@extern(lib = "c")
+unsafe native {
+    i32    puts(String s);        // Jux String  -> const char*
+    String getenv(String name);   // const char* -> Jux String
+    i32    toupper(char c);       // Jux char    -> C char
+}
+
+public void main() {
+    unsafe {
+        puts("hello from Jux");
+        String path = getenv("PATH");           // copied out of C
+        print($"PATH has ${path.len()} chars");
+    }
+}
+```
+
+### 5.3 `out` parameters ✅
+An `out T` parameter is a place the C callee writes through. It lowers to
+`*mut T`; the call passes the address of your local automatically, and the
+write is visible after the call. Composes with `String`/`char` marshalling.
+
+```jux
+@extern(lib = "kernel32")
+unsafe native {
+    i32 QueryPerformanceCounter(out long counter);
+}
+
+public void main() {
+    unsafe {
+        long ticks = 0;
+        QueryPerformanceCounter(out ticks);     // C fills `ticks`
+        print($"ticks=$ticks");
+    }
+}
+```
+
+### 5.4 `@layout(c)` value structs ✅
+A `@layout(c) struct` lowers to a flat `#[repr(C)]` value type (declaration-order
+fields, copied on assignment, direct field access), the memory shape a C function
+expects. It can be passed by value or filled through a pointer (`out P` / `P*`).
+A `@layout(c)` struct with no constructor gets an implicit positional one. The
+fields must be C-compatible (primitive, raw pointer, or another `@layout(c)`
+struct); a `String`/class field, or `@layout(c)` on a `class`, is **E0509**.
+
+```jux
+@layout(c)
+struct POINT { i32 x; i32 y; }
+
+@extern(lib = "user32")
+unsafe native {
+    i32 GetCursorPos(out POINT p);
+}
+
+public void main() {
+    unsafe {
+        POINT p = new POINT(0, 0);
+        GetCursorPos(out p);                     // C writes p.x / p.y
+        print($"cursor=(${p.x}, ${p.y})");
+    }
+    POINT a = new POINT(1, 2);
+    POINT b = a;     // value copy
+    a.x = 9;         // does not touch b  (b.x stays 1)
+}
+```
+
+See `examples/ffi_struct.jux`.
+
+### 5.5 `@layout(c, repr = "…")` C enums ✅
+A C enum (an integer constant) is a regular Jux enum with no payloads plus
+`@layout(c, repr = "…")`. It lowers to a flat `#[repr(<repr>)]` integer enum with
+the explicit discriminant on each variant. Cast it to its repr (`s as i32`) to
+hand to or receive from C; it is also accepted directly as a foreign param/return
+type. A payload-carrying variant under `@layout(c)` is **E0509**; an explicit
+discriminant on a *non*-`@layout(c)` enum is **E0510** (it would otherwise be
+silently dropped).
+
+```jux
+@layout(c, repr = "i32")
+enum HttpStatus { Ok = 200, NotFound = 404, ServerError = 500 }
+
+public void main() {
+    HttpStatus s = HttpStatus.NotFound;
+    i32 code = s as i32;                         // 404
+    print($"status=$s code=$code");
+}
+```
+
+See `examples/ffi_enum.jux`.
+
+### 5.6 C variadic functions ✅
+A foreign signature may end with `...` to call a C variadic function. The fixed
+parameters type-check normally; any number of trailing arguments follow. A
+trailing String *literal* is marshalled to `const char*` like a fixed `String`
+parameter; other trailing args (ints, floats, pointers) pass by value. A variadic
+must have at least one fixed parameter (**E0508** otherwise).
+
+```jux
+@extern(lib = "legacy_stdio_definitions")   // on Linux/macOS use lib = "c"
+unsafe native {
+    int printf(String fmt, ...);
+}
+
+public void main() {
+    unsafe {
+        printf("hi %s, %d + %d = %d\n", "world", 2, 3, 5);
+    }
+}
+```
+
+See `examples/ffi_variadic.jux`. (On Windows, `printf` lives in
+`legacy_stdio_definitions`; `msvcrt`'s `printf` is an inline-only stub.)
+
+### 5.7 Linking custom libraries — `[ffi.*]` in `jux.toml` ✅
+System libraries link via the `@extern(lib = "…")` name directly. For a custom
+library, describe it once in `jux.toml` and the generated `build.rs` emits the
+link directives (`cargo:rustc-link-search` / `-link-lib`). The `@extern` block's
+own `#[link]` is then dropped to avoid a double link.
+
+```toml
+[ffi.mylib]
+lib       = "mylib"
+lib_path  = "vendor/mylib/lib"
+linkage   = "static"          # static | dynamic | framework
+extra_libs = ["z"]
+```
+
+See JUX-BUILD-SYSTEM-ADDENDUM §B.14.7.
+
+### 5.8 free / delete — call the foreign deallocator from `drop` ✅
+Jux has **no `delete`/`free` keyword**. You free memory by calling the foreign
+deallocator (`free` for C, a `delete` wrapper for C++) inside `unsafe`,
+idiomatically from the owning class's **`drop { }`** destructor (§6.6 / §S.5), so
+cleanup is automatic and deterministic:
 
 ```jux
 public final class RawBuffer {
@@ -173,19 +331,47 @@ public final class RawBuffer {
 }
 ```
 
-`drop { }` is Jux's destructor (§6.6 / §S.5) and runs deterministically when
-the object dies — the right place to release a foreign resource. ✅ for the
-`drop` block itself; the `free(...)` *call* is 📐 (needs the FFI layer).
-
 Because `delete` is muscle memory for C++/Java/JS programmers, the compiler
-catches a `delete p;` statement and turns it into a *guided* error instead of a
-confusing one. Writing `delete <thing>;` (a second operand after the word, e.g.
-`delete p;`, `delete this.buf;`, `delete *p;`) reports **E0507** with a message
-that points you at the `drop { }` + foreign-`free` model above. `delete` is still
-a usable identifier everywhere else (`delete(x)`, `delete = v`, `delete.run()`
-never trip E0507). ✅
+catches a `delete p;` statement and turns it into a *guided* error: writing
+`delete <thing>;` (a second operand after the word, e.g. `delete p;`,
+`delete this.buf;`, `delete *p;`) reports **E0507** with a message that points
+you at the `drop { }` + foreign-`free` model above. `delete` is still a usable
+identifier everywhere else (`delete(x)`, `delete = v`, `delete.run()` never trip
+E0507). ✅
 
-### 5.3 Other `unsafe`-only tools
+### 5.9 `@export` — calling Jux from C ✅
+`@export` gives a Jux free function C linkage so C (or anything with a C FFI) can
+call it. Plain `@export` uses the Jux name as the C symbol; `@export(name = "…")`
+sets a custom one. The signature must be C-compatible (primitive, raw pointer,
+`@layout(c)` struct/enum, or `String`); it may not be generic, `async`, `unsafe`,
+or `throws` (**E0508**). A `String` parameter/return is marshalled by a generated
+wrapper: inbound C strings are copied into Jux Strings, and a returned String is
+handed back via `into_raw` (the C caller owns that buffer; it is not freed on the
+Jux side, mirroring the inbound rule in §5.2).
+
+```jux
+@export
+public int jux_add(int a, int b) { return a + b; }
+
+@export(name = "jux_greet")
+public String greet(String name, int times) {
+    return $"Hello $name (x$times)";
+}
+```
+
+Build a `[lib]` crate with `crate-type = ["cdylib"]` / `["staticlib"]` to expose
+these symbols as a `.dll` / `.so` / `.a`. See `examples/ffi_export.jux`.
+
+### 5.10 FFI diagnostics quick reference
+| Code  | Fires when…                                                      |
+|-------|------------------------------------------------------------------|
+| E0506 | an `unsafe` op (`&`, `*`, foreign call) is used outside `unsafe`  |
+| E0507 | a `delete <expr>;` statement is written (use `drop`/foreign-free) |
+| E0508 | an `@extern`/`@export` signature uses a non-C-compatible type     |
+| E0509 | `@layout(c)` on a class, a non-C field, or a payload C-enum variant |
+| E0510 | an explicit enum discriminant on a non-`@layout(c)` enum           |
+
+### 5.11 Other `unsafe`-only tools
 - `transmute<A, B>(v)` — bit reinterpret, `sizeof<A>() == sizeof<B>()` (E0840). 📐
 - `asm(...)` — inline assembly, `jux-embedded`/`jux-core` profiles only. 📐
 - `Volatile<T>.atAddress(addr)` — MMIO at a runtime address. 📐
@@ -200,16 +386,21 @@ never trip E0507). ✅
 | `ref` bindings (§M.13)                                | ✅ |
 | `===` / `!==` reference identity                      | ✅ |
 | `T*` raw-pointer type, `null` literal                 | ✅ |
-| `&x` address-of, `*p` deref (unsafe, E0807 otherwise) | ✅ |
+| `&x` address-of, `*p` deref (unsafe, E0506 otherwise) | ✅ |
 | pointer arithmetic, `p[i]`, pointer⇄integer casts     | ✅ |
 | `unsafe { }` blocks, `unsafe` functions               | ✅ |
 | `drop { }` destructors                                | ✅ |
-| `unsafe native` + `@extern` (call C/C++)              | 📐 |
-| foreign `free`/`delete`, `malloc` via FFI             | 📐 |
+| `unsafe native` + `@extern` (declare/link/call C)     | ✅ |
+| `String`/`char` marshalling, `out` params             | ✅ |
+| `@layout(c)` value structs, `@layout(c, repr)` C enums | ✅ |
+| C variadics (`...`), `[ffi.*]` custom-lib linking     | ✅ |
+| `@export` Jux→C (incl. `String` marshalling)          | ✅ |
+| foreign `free`/`delete`, `malloc` via FFI             | ✅ |
+| header `bindgen`, C++ via `autocxx`                   | 📐 |
 | function pointers `fn(...)->R` as C callbacks          | 📐 |
 | `transmute`, inline `asm`, `Volatile.atAddress`       | 📐 |
 
-The 📐 rows are the **FFI binding layer**: the design is fixed (§L.7–L.8), and
-it's the natural next milestone for real C/C++ work. The ✅ rows — including
-everything you need to take an address, dereference, and manage a pointer's
-lifetime in a `drop` block — work today.
+The ✅ rows work today: declaring, linking, and calling C functions with full
+`String`/`char`/`out`/struct/enum/variadic marshalling, and exporting Jux
+functions back to C. The remaining 📐 rows are header `bindgen` and C++
+(`autocxx`), the next FFI milestone (§L.7–L.8, JUX-BINDGEN-ADDENDUM).
