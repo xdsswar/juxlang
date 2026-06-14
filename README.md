@@ -443,9 +443,10 @@ runs. That currently includes:
   `[ffi.<name>]` table in `jux.toml` (`lib_path`, `linkage`, `extra_libs`),
   which drives the generated `build.rs` link step. Strings cross as ordinary
   `String` (the compiler marshals to/from C `const char*` automatically; there
-  is no `CString`). See [`examples/ffi_strings.jux`](examples/ffi_strings.jux).
-  Still to come: `out` parameters, `@layout(c)` C structs, `@export` (Jux to C),
-  header `bindgen`, and C++.
+  is no `CString`). `out` parameters work too (`out long ticks` → the C function
+  writes the place). See [`examples/ffi_strings.jux`](examples/ffi_strings.jux).
+  Still to come: `@layout(c)` C structs, `@export` (Jux to C), header `bindgen`,
+  and C++.
 - Raw-pointer basics work (`T*`, `void*`, `&local`, `&obj`, `*p` inside `unsafe`).
   There is no `delete` keyword by design (`delete p;` is guided to the `drop { }` +
   foreign-`free` model).

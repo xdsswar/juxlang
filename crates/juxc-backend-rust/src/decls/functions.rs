@@ -53,6 +53,13 @@ impl RustEmitter {
                 }
                 self.w.push_str(&p.name.text);
                 self.w.push_str(": ");
+                // An `out T` parameter (§M.4) is a place the C callee writes
+                // through, so it crosses as `*mut <T>` (the call site passes
+                // `addr_of_mut!(place)`). E.g. `out int x` → `*mut isize`,
+                // `out RawHandle* db` → `*mut *mut RawHandle`.
+                if p.is_out {
+                    self.w.push_str("*mut ");
+                }
                 self.emit_ffi_type(&p.ty);
             }
             self.w.push(')');

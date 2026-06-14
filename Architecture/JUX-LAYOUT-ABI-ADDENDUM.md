@@ -566,6 +566,42 @@ Emitted Rust, for illustration:
              .to_string_lossy().into_owned() } }
 ```
 
+### L.7.1b. `out` parameters (the C "fill this in" idiom)
+
+A C function that returns a value through a pointer parameter (`int sqlite3_open(const char* path, sqlite3** db)`) is declared in Jux with an **`out`** parameter (§M.4), so the caller passes a *place* and reads it back after the call:
+
+```jux
+@extern(lib = "kernel32")
+unsafe native {
+    i32 QueryPerformanceCounter(out long count);   // C: BOOL QPC(LARGE_INTEGER*)
+}
+unsafe {
+    long ticks = 0;
+    i32 ok = QueryPerformanceCounter(out ticks);   // `ticks` is written by the call
+}
+```
+
+**Lowering.** An `out T` parameter crosses as `*mut <T>` (a pointer to the
+caller's place), and the call site passes `core::ptr::addr_of_mut!(place)`:
+
+```text
+// Jux:  i32 QueryPerformanceCounter(out long count);
+extern "C" { pub fn QueryPerformanceCounter(count: *mut i64) -> i32; }
+// call `QueryPerformanceCounter(out ticks)`:
+{ QueryPerformanceCounter(::core::ptr::addr_of_mut!(ticks)) }
+```
+
+`out RawHandle* db` (a pointer place) lowers the same way: the parameter becomes
+`*mut *mut RawHandle` and the call passes `addr_of_mut!(db_local)`. `out` composes
+with `String` marshalling in a single call (the sqlite `open(String path, out
+RawHandle* db)` shape): the `String` argument builds its `CString` temp while the
+`out` argument passes its place pointer.
+
+> Note: an opaque foreign handle type used only behind a pointer (`RawHandle` in
+> `RawHandle* db`) needs a declaration the resolver accepts; declaring such
+> opaque C types is part of the bindgen slice. Until then, use a concrete pointee
+> (`long*`, `byte*`, a `@layout(c)` struct pointer) at the boundary.
+
 ### L.7.2. Safe Wrappers
 
 The recommended pattern is unchanged from JUX-LANG-V1 §8.1, but with `unsafe` made explicit:
