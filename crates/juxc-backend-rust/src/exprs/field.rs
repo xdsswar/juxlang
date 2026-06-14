@@ -530,7 +530,17 @@ impl RustEmitter {
         // fields the clone is an `Rc` share anyway).
         self.emitting_method_receiver =
             is_call_callee || (is_method_receiver && wrapper_depth.is_none());
+        // A composite receiver (notably a raw-pointer deref `*q`) must be
+        // parenthesized before `.field`, or `(*q).x` would emit as `*q.x`
+        // (= `*(q.x)`). Atoms (path, `this`, field/call/index chains) don't.
+        let recv_parens = receiver_needs_parens(&f.object);
+        if recv_parens {
+            self.w.push('(');
+        }
         self.emit_expr(&f.object);
+        if recv_parens {
+            self.w.push(')');
+        }
         self.emitting_method_receiver = false;
         if let Some(depth) = wrapper_depth {
             // An `out` field place needs an exclusive `&mut` into the
