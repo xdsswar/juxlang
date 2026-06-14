@@ -1,0 +1,67 @@
+// Second generics stress program: patterns the Registry program does not cover.
+//   - multi-bound class param + `implements` a generic interface with that param
+//     (Cage<T extends Animal & CanFly> implements Swing<T>)
+//   - generic class extends generic class, with a super(...) call
+//   - a class implementing MULTIPLE interfaces (Bird : Animal, CanFly)
+//   - a generic FREE function with a bounded-wildcard producer + inference
+package gen2;
+
+import rust.std.Vec;
+
+public interface Animal { String sound(); }
+public interface CanFly { int altitude(); }
+public interface Swing<T> { T swing(); }
+
+// Multiple (intersection) bounds on T, AND `implements` a generic interface
+// instantiated with the class's own type param.
+public class Cage<T extends Animal & CanFly> implements Swing<T> {
+    private T occupant;
+    public Cage(T occupant) { this.occupant = occupant; }
+    public T swing() { return this.occupant; }
+    public String describe() {
+        return this.occupant.sound() + " @ " + this.occupant.altitude();
+    }
+}
+
+// Generic class extending a generic class (inheritance + super).
+public class Box<T> {
+    protected T value;
+    public Box(T value) { this.value = value; }
+    public T get() { return this.value; }
+}
+public class NamedBox<T> extends Box<T> {
+    private String label;
+    public NamedBox(String label, T value) { super(value); this.label = label; }
+    public String label() { return this.label; }
+}
+
+// A small generic collection plus a generic free function with a producer
+// wildcard; T is inferred from the argument.
+public class MyList<T> {
+    private Vec<T> data;
+    public MyList() { this.data = new Vec<T>(); }
+    public void add(T v) { this.data.push(v); }
+    public T get(int i) { return this.data[i]; }
+}
+public <T> T firstOf(MyList<? extends T> xs) { return xs.get(0); }
+
+// Concrete type implementing two interfaces (satisfies the Cage bound).
+public class Bird implements Animal, CanFly {
+    public String sound() { return "tweet"; }
+    public int altitude() { return 100; }
+}
+
+public void main() {
+    var cage = new Cage<Bird>(new Bird());
+    print($"describe=${cage.describe()}");                  // tweet @ 100
+    var swung = cage.swing();
+    print($"swung=${swung.sound()}");                       // tweet
+
+    var nb = new NamedBox<int>("answer", 42);
+    print($"label=${nb.label()} get=${nb.get()}");          // answer 42
+
+    var birds = new MyList<Bird>();
+    birds.add(new Bird());
+    var f = firstOf(birds);                                 // inference: T = Bird
+    print($"first=${f.sound()}");                           // tweet
+}
