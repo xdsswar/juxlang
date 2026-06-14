@@ -786,7 +786,9 @@ impl<'a> Checker<'a> {
         // integer with one discriminant per variant (Layout-ABI §L.1.3). Such
         // an enum may NOT carry a payload — a C enum is just an integer, it has
         // no associated data — so a variant with a payload is rejected (E0509).
-        if crate::symbol_table::is_layout_c_annotation(&enum_decl.annotations) {
+        let is_c_enum =
+            crate::symbol_table::is_layout_c_annotation(&enum_decl.annotations);
+        if is_c_enum {
             for variant in &enum_decl.variants {
                 if !variant.payload.is_empty() {
                     self.diagnostics.push(
@@ -797,6 +799,29 @@ impl<'a> Checker<'a> {
                                  not C-compatible — a C enum is a plain integer with no associated \
                                  data; drop the payload or remove `@layout(c)`",
                                 variant.name.text,
+                                enum_decl.name.text,
+                            ),
+                        )
+                        .with_span(variant.span),
+                    );
+                }
+            }
+        } else {
+            // An explicit discriminant (`Variant = <const>`) is only meaningful
+            // for a C-compatible integer enum (§L.1.3). On a regular sum-type
+            // enum the value has no representation and would be silently
+            // dropped, so reject it and point at `@layout(c)` (E0510).
+            for variant in &enum_decl.variants {
+                if variant.discriminant.is_some() {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0510_DiscriminantOutsideCEnum,
+                            format!(
+                                "variant `{}` of enum `{}` has an explicit discriminant `= …`, but \
+                                 `{}` is not a C enum — add `@layout(c, repr = \"i32\")` to make it \
+                                 a C-compatible integer enum, or remove the `= …`",
+                                variant.name.text,
+                                enum_decl.name.text,
                                 enum_decl.name.text,
                             ),
                         )
@@ -7674,6 +7699,21 @@ mod tests {
              public void main() {}",
         );
         assert!(has(&d, code::Code::E0509_LayoutCOnNonAggregate), "{d:?}");
+    }
+
+    /// An explicit discriminant on a regular (non-`@layout(c)`) enum is E0510 —
+    /// the value would otherwise be silently dropped.
+    #[test]
+    fn discriminant_on_plain_enum_is_e0510() {
+        let d = run("enum Y { A = 5, B = 9 } public void main() {}");
+        assert!(has(&d, code::Code::E0510_DiscriminantOutsideCEnum), "{d:?}");
+    }
+
+    /// A regular enum with NO discriminants is accepted (no E0510).
+    #[test]
+    fn plain_enum_without_discriminant_ok() {
+        let d = run("enum Y { A, B } public void main() {}");
+        assert!(!has(&d, code::Code::E0510_DiscriminantOutsideCEnum), "{d:?}");
     }
 
     /// A `@layout(c)` struct with bare fields and no constructor gets an

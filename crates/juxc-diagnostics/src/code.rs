@@ -613,6 +613,14 @@ pub enum Code {
     /// `struct` for C-interop data.
     E0509_LayoutCOnNonAggregate,
 
+    /// E0510 — An explicit enum discriminant (`Variant = <const>`) on an enum
+    /// that is not `@layout(c)`. Discriminant values are only meaningful for a
+    /// C-compatible integer enum (Layout-ABI §L.1.3); a regular Jux enum is a
+    /// sum type whose variants have no caller-assignable integer value, so a
+    /// stray `= N` would be silently dropped. Add `@layout(c, repr = "i32")` to
+    /// make it a C enum, or remove the discriminant.
+    E0510_DiscriminantOutsideCEnum,
+
     // ---- Operators / Auto-derivation (E0900–E0999) ----
     /// E0930 — Conflicting operator declarations. Per
     /// `JUX-OPERATORS-ADDENDUM.md` §O.2.1, defining BOTH `operator<=>`
@@ -770,6 +778,7 @@ impl Code {
             Code::E0507_NoDeleteKeyword          => "E0507",
             Code::E0508_FfiTypeNotAllowed        => "E0508",
             Code::E0509_LayoutCOnNonAggregate    => "E0509",
+            Code::E0510_DiscriminantOutsideCEnum => "E0510",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",

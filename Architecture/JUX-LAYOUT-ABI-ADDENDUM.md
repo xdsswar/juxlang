@@ -135,6 +135,8 @@ from) a C function. Cross the boundary by value (it is `Copy`) or by pointer.
 
 Sum-type enums (with payloads) cannot use `@layout(c)`: there is no portable C representation of a tagged union, so a payload-carrying variant under `@layout(c)` is rejected with **E0509**. Cross the boundary via two `@layout(c)` types (a tag struct and a union) marshalled by hand.
 
+An explicit discriminant (`Variant = <const>`) is only meaningful on a C enum: on a regular sum-type enum the value has no representation and would be silently dropped, so a stray `= N` without `@layout(c)` is rejected with **E0510** (add `@layout(c, repr = "...")` or remove the value).
+
 ### L.1.4. Alignment Control: `@align(N)`
 
 The existing `@align(N)` annotation (per JUX-LANG-V1 §3.6) forces a type or field to be aligned to at least `N` bytes. `N` must be a power of two.
