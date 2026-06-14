@@ -664,7 +664,13 @@ impl RustEmitter {
         let Some(Ty::User { name, .. }) = ty else {
             return false;
         };
-        self.symbols.classes.contains_key(&name)
+        // A `@layout(c)` value struct is NOT the `Rc<RefCell>` handle shape, so
+        // `&obj` on it takes the plain place pointer (`addr_of_mut!`), not
+        // `obj.0.as_ptr()`. Excluding it here routes `&valueStruct` correctly.
+        self.symbols
+            .classes
+            .get(&name)
+            .is_some_and(|c| !c.is_layout_c)
     }
 
     /// True when `e` is statically a **raw pointer** (`T*`). The lowered `Ty`

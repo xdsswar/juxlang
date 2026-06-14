@@ -1,0 +1,35 @@
+// C-compatible value structs for FFI (Layout-ABI §L.1.2). A `@layout(c) struct`
+// lowers to a flat `#[repr(C)]` value type (declaration-order fields, copied on
+// assignment, direct field access) - the memory shape a C function expects.
+//
+// This demo links the always-available Windows `user32` library and calls
+// `GetCursorPos(POINT*)`, which fills the struct with the live cursor position.
+// On other platforms, point a `@layout(c)` struct at any C function that takes
+// or returns a small struct.
+
+@layout(c)
+struct POINT {
+    i32 x;
+    i32 y;
+    public POINT(i32 x, i32 y) { this.x = x; this.y = y; }
+}
+
+@extern(lib = "user32")
+unsafe native {
+    // C: BOOL GetCursorPos(LPPOINT lpPoint);  — the `out` param is filled by C.
+    i32 GetCursorPos(out POINT p);
+}
+
+public void main() {
+    unsafe {
+        POINT p = new POINT(0, 0);
+        i32 ok = GetCursorPos(out p);          // C writes p.x / p.y
+        print($"ok=$ok cursor=(${p.x}, ${p.y})");
+    }
+
+    // Value semantics: a struct is copied on assignment (no shared identity).
+    POINT a = new POINT(1, 2);
+    POINT b = a;        // copy
+    a.x = 99;           // mutating `a` does not touch `b`
+    print($"a.x=${a.x} b.x=${b.x}");   // a.x=99 b.x=1
+}

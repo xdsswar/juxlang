@@ -184,7 +184,14 @@ impl RustEmitter {
                     })
                     .unwrap_or(false)
         });
-        if has_fn_field {
+        // A `@layout(c)` value struct (§L.1.2) gets a C-compatible layout and is
+        // `Copy` (its fields are primitives / pointers / other `@layout(c)`
+        // structs), giving Jux's "copied on assignment" value semantics.
+        let is_value_struct = crate::is_layout_c_struct(class_decl);
+        if is_value_struct {
+            self.w.line("#[repr(C)]");
+            self.w.line("#[derive(Clone, Copy, Debug)]");
+        } else if has_fn_field {
             self.w.line("#[derive(Clone)]");
         } else {
             self.w.line("#[derive(Clone, Debug)]");

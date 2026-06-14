@@ -606,6 +606,13 @@ pub enum Code {
     /// and points at the allowed set.
     E0508_FfiTypeNotAllowed,
 
+    /// E0509 — `@layout(c)` applied to a `class`. The C-compatible memory layout
+    /// (Layout-ABI §L.1.2) is permitted only on a value aggregate (`struct`,
+    /// later `record`/`enum`), never a `class` — a class is a reference type
+    /// with an `Rc`/vtable header that has no portable C representation. Use a
+    /// `struct` for C-interop data.
+    E0509_LayoutCOnNonAggregate,
+
     // ---- Operators / Auto-derivation (E0900–E0999) ----
     /// E0930 — Conflicting operator declarations. Per
     /// `JUX-OPERATORS-ADDENDUM.md` §O.2.1, defining BOTH `operator<=>`
@@ -762,6 +769,7 @@ impl Code {
             Code::E0506_UnsafeOpOutsideUnsafe    => "E0506",
             Code::E0507_NoDeleteKeyword          => "E0507",
             Code::E0508_FfiTypeNotAllowed        => "E0508",
+            Code::E0509_LayoutCOnNonAggregate    => "E0509",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
             Code::E0935_DeletedOperator          => "E0935",

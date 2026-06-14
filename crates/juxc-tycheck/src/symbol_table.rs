@@ -588,6 +588,14 @@ pub struct ClassSig {
     /// observable use — construction, a static method call, or a static-field
     /// read/write — so it runs before the class is observed initialized.
     pub has_static_init: bool,
+    /// True for a `@layout(c) struct` — a C-compatible **value** type
+    /// (Layout-ABI §L.1.2). Unlike an ordinary class/struct (which lowers to the
+    /// `Rc<RefCell<…>>` handle), this lowers to a flat `#[repr(C)]` Rust struct
+    /// passed by value, with direct field access. Used across the backend
+    /// (`is_value_struct`) to pick the value-struct emission, skip the
+    /// `.0.borrow()` field rewrite, and lower `T*` to `*mut T` (not `*mut
+    /// T_Inner`). Only `struct` (not `class`) may carry it (E0509).
+    pub is_layout_c: bool,
     /// True when the class is declared `final` — no other class may
     /// extend it. Enforced by `check_final_and_sealed_extends`.
     pub is_final: bool,
@@ -1869,6 +1877,30 @@ pub(crate) fn has_annotation(
     })
 }
 
+/// True when `annotations` includes `@layout(c)` — a `layout` annotation with a
+/// positional `c` argument, marking a C-compatible memory layout (Layout-ABI
+/// §L.1.2). Case-insensitive, like every built-in annotation lookup.
+pub(crate) fn is_layout_c_annotation(annotations: &[juxc_ast::Annotation]) -> bool {
+    use juxc_ast::{AnnotationArg, Expr};
+    annotations.iter().any(|a| {
+        let is_layout = a
+            .name
+            .segments
+            .last()
+            .map(|s| s.text.eq_ignore_ascii_case("layout"))
+            .unwrap_or(false);
+        is_layout
+            && a.args.iter().any(|arg| match arg {
+                AnnotationArg::Positional(Expr::Path(qn)) => qn
+                    .segments
+                    .last()
+                    .map(|s| s.text.eq_ignore_ascii_case("c"))
+                    .unwrap_or(false),
+                _ => false,
+            })
+    })
+}
+
 /// Verify every method annotated with `@Override` actually
 /// overrides a method from an ancestor class. Fires E0426 when
 /// no matching method exists in the extends chain.
@@ -3094,6 +3126,11 @@ fn insert_class(
             is_external,
             rust_path: rust_path_annotation(&class_decl.annotations),
             has_static_init: !class_decl.static_init_blocks.is_empty(),
+            // A `@layout(c) struct` is a C-compatible value type (§L.1.2). The
+            // `class`-misuse case is rejected separately (E0509); we only flag
+            // the valid struct form here so the backend lowers it by value.
+            is_layout_c: class_decl.is_struct
+                && is_layout_c_annotation(&class_decl.annotations),
             is_final: class_decl.is_final,
             is_sealed: class_decl.is_sealed,
             permits: class_decl

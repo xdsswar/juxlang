@@ -1049,6 +1049,32 @@ pub(crate) fn class_decl_uses_wrapper(cd: &juxc_ast::ClassDecl) -> bool {
         && !cd.is_abstract
 }
 
+/// True for a `@layout(c) struct` — a C-compatible **value** type (§L.1.2): a
+/// `struct` carrying a `@layout` annotation with a positional `c` argument.
+/// These lower to a flat `#[repr(C)]` Rust struct (not the `Rc<RefCell>`
+/// handle), so they are excluded from the wrapper set. Pure AST check (runs
+/// before the symbol table is built); mirrors
+/// `juxc_tycheck::symbol_table::is_layout_c_annotation`.
+pub(crate) fn is_layout_c_struct(cd: &juxc_ast::ClassDecl) -> bool {
+    cd.is_struct
+        && cd.annotations.iter().any(|a| {
+            let is_layout = a
+                .name
+                .segments
+                .last()
+                .map(|s| s.text.eq_ignore_ascii_case("layout"))
+                .unwrap_or(false);
+            is_layout
+                && a.args.iter().any(|arg| {
+                    matches!(arg,
+                        juxc_ast::AnnotationArg::Positional(juxc_ast::Expr::Path(qn))
+                            if qn.segments.last()
+                                .map(|s| s.text.eq_ignore_ascii_case("c"))
+                                .unwrap_or(false))
+                })
+        })
+}
+
 /// Compute the **global wrapper-class set** for a workspace.
 ///
 /// Phase A (§CR.4.1 / §CR.5.1) — two families of class take the
@@ -1176,6 +1202,13 @@ pub(crate) fn compute_wrapper_classes(
         };
         decls.iter().all(|(cd, pkg)| {
             if cd.is_sealed || !cd.permits.is_empty() {
+                return false;
+            }
+            // A `@layout(c) struct` is a C-compatible VALUE type (§L.1.2): it
+            // lowers to a flat `#[repr(C)]` struct, never the `Rc<RefCell>`
+            // handle. Keep it off the wrapper path (it then flows through the
+            // plain-struct emission with by-value construction + direct fields).
+            if is_layout_c_struct(cd) {
                 return false;
             }
             // Generic classes ARE wrappable now (Phase A GENERICS pass):
