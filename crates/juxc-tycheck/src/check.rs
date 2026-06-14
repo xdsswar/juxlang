@@ -658,10 +658,12 @@ impl<'a> Checker<'a> {
     }
 
     /// True when `t` is a valid FIELD type of a `@layout(c)` value struct: a
-    /// numeric/bool/char primitive, a raw pointer, or another `@layout(c)`
-    /// struct. Stricter than [`Self::ffi_type_ok`] - `String` is allowed as a
-    /// marshalled *parameter* but NOT as a `#[repr(C)]` `Copy` struct field
-    /// (it is a non-`Copy` fat pointer with no C field representation).
+    /// numeric/bool/char primitive, a raw pointer, another `@layout(c)` struct,
+    /// or a `@layout(c)` C enum (a plain `#[repr(int)]` integer, the canonical C
+    /// "status code in a struct" shape). Stricter than [`Self::ffi_type_ok`] -
+    /// `String` is allowed as a marshalled *parameter* but NOT as a `#[repr(C)]`
+    /// `Copy` struct field (it is a non-`Copy` fat pointer with no C field
+    /// representation).
     fn ffi_struct_field_ok(&self, t: &juxc_ast::TypeRef) -> bool {
         if t.array_shape.is_some() || t.fn_shape.is_some() || !t.generic_args.is_empty() {
             return false;
@@ -679,11 +681,15 @@ impl<'a> Checker<'a> {
         if crate::ty::primitive_from_name(name).is_some() {
             return true;
         }
-        // A nested `@layout(c)` value struct.
-        matches!(
-            ty_from_ref(t, &self.env, self.symbols),
-            Ty::User { name, .. } if self.symbols.classes.get(&name).is_some_and(|c| c.is_layout_c)
-        )
+        // A nested `@layout(c)` value struct or a `@layout(c)` C enum (both are
+        // C-compatible by-value fields with a portable `#[repr]`).
+        match ty_from_ref(t, &self.env, self.symbols) {
+            Ty::User { name, .. } => {
+                self.symbols.classes.get(&name).is_some_and(|c| c.is_layout_c)
+                    || self.symbols.enums.get(&name).is_some_and(|e| e.is_layout_c)
+            }
+            _ => false,
+        }
     }
 
     /// True when `t` is allowed at the C FFI boundary (Layout-ABI §L.7): a
@@ -7799,6 +7805,26 @@ mod tests {
              public void main() {}",
         );
         assert!(has(&bad, code::Code::E0508_FfiTypeNotAllowed), "{bad:?}");
+    }
+
+    /// A `@layout(c)` C enum is a valid FIELD of a `@layout(c)` struct (the
+    /// canonical "status code in a struct" C shape) — no E0509. A plain enum or
+    /// a `String` field is still rejected.
+    #[test]
+    fn c_enum_is_a_valid_layout_c_struct_field() {
+        let ok = run(
+            "@layout(c, repr = \"i32\") enum Kind { A = 1, B = 2 } \
+             @layout(c) struct Tagged { Kind kind; i32 value; } \
+             public void main() {}",
+        );
+        assert!(!has(&ok, code::Code::E0509_LayoutCOnNonAggregate), "{ok:?}");
+
+        let bad = run(
+            "enum Plain { A, B } \
+             @layout(c) struct Bad { Plain kind; } \
+             public void main() {}",
+        );
+        assert!(has(&bad, code::Code::E0509_LayoutCOnNonAggregate), "{bad:?}");
     }
 
     /// A `@layout(c)` struct with bare fields and no constructor gets an
