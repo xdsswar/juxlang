@@ -77,6 +77,32 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
     }
 
     /**
+     * Context-aware keywords in member position: a Rust crate member whose name
+     * is a Jux reserved word (`default`, `type`, `new`, …) parses cleanly after
+     * `.` / `?.` / `::` and carries a reference, so editor support works on it.
+     */
+    fun testKeywordMemberAccessIsContextAware() {
+        val psi = createPsiFile(
+            "a.jux",
+            """
+            package demo;
+            public class A {
+                public void go(Obj o) {
+                    o.default();
+                    var t = o.type;
+                    o?.new();
+                    var r = Obj::default;
+                }
+            }
+            """.trimIndent(),
+        )
+        assertEmpty(
+            "keyword member access must parse without errors",
+            PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java).map { it.errorDescription },
+        )
+    }
+
+    /**
      * §L.7 C-FFI: an `@extern(lib=…) unsafe native { … }` block parses without
      * errors and its foreign functions surface as named method declarations
      * (so completion / Find Usages / resolve see them).

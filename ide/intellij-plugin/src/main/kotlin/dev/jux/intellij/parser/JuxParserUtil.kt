@@ -43,6 +43,21 @@ fun PsiBuilder.semicolon() {
     expectOrError(T.SEMICOLON, "';' expected")
 }
 
+/**
+ * Consume a **member name** — an identifier, or a reserved keyword used
+ * contextually as one. After `.` / `?.` / `::` the grammar is unambiguous, so a
+ * Rust crate member whose name collides with a Jux keyword (`recv.default()`,
+ * `value.type()`) parses cleanly instead of erroring. Reports success.
+ */
+fun PsiBuilder.consumeMemberName(): Boolean {
+    if (at(T.IDENTIFIER) || T.KEYWORDS.contains(tokenType)) {
+        advanceLexer()
+        return true
+    }
+    errorHere("name expected")
+    return false
+}
+
 /** Emit a zero-width error node at the current position without consuming. */
 fun PsiBuilder.errorHere(message: String) {
     val m = mark()

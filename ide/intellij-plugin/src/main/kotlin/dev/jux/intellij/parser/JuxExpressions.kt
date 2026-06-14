@@ -205,21 +205,23 @@ private fun PsiBuilder.parsePostfix(): PsiBuilder.Marker? {
             T.DOT -> {
                 val m = operand.precede()
                 advanceLexer() // `.`
-                if (at(T.INT_LITERAL)) advanceLexer() else expectOrError(T.IDENTIFIER, "name expected")
+                // `.0` tuple access, else a member name (identifier or a keyword
+                // used contextually — `recv.default()`, `value.type`).
+                if (at(T.INT_LITERAL)) advanceLexer() else consumeMemberName()
                 m.done(E.FIELD_ACCESS_EXPRESSION)
                 operand = m
             }
             T.QUESTION_DOT -> {
                 val m = operand.precede()
                 advanceLexer() // `?.`
-                expectOrError(T.IDENTIFIER, "name expected")
+                consumeMemberName()
                 m.done(E.FIELD_ACCESS_EXPRESSION)
                 operand = m
             }
             T.COLON_COLON -> {
                 val m = operand.precede()
                 advanceLexer() // `::`
-                if (!expect(T.NEW_KW)) expectOrError(T.IDENTIFIER, "member name expected")
+                consumeMemberName()
                 m.done(E.METHOD_REF_EXPRESSION)
                 operand = m
             }
