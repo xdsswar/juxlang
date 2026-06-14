@@ -19,6 +19,7 @@ import dev.jux.intellij.psi.JuxFile
 import dev.jux.intellij.psi.JuxLocalVariable
 import dev.jux.intellij.psi.JuxNamedElement
 import dev.jux.intellij.psi.JuxParameter
+import dev.jux.intellij.psi.JuxPropertyDeclaration
 import dev.jux.intellij.resolve.JuxReference
 
 /**
@@ -45,6 +46,11 @@ class JuxUnusedLocalSymbolInspection : LocalInspectionTool() {
             when (e) {
                 is JuxLocalVariable -> candidates.add(e)
                 is JuxParameter -> if (parameterCounts(e)) candidates.add(e)
+                // Observable properties (a JuxFieldDeclaration subclass) have
+                // their own §P inspections (W0971 never-observed/bound) and rich
+                // usage via observers/bind, so don't double-flag them here as
+                // "unused fields" (and never offer the destructive delete on one).
+                is JuxPropertyDeclaration -> {}
                 is JuxFieldDeclaration -> if (isPrivateInstanceField(e)) candidates.add(e)
             }
             true

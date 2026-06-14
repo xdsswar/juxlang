@@ -40,6 +40,12 @@ class JuxReference(element: PsiElement, range: TextRange) :
         if (t === E.FIELD_ACCESS_EXPRESSION || t === E.METHOD_REF_EXPRESSION) {
             resolveMember()?.let { return it }
         }
+        // A qualified type reference (`a.b.C`, `rust.std.PathBuf`) names a member
+        // of a package, not an in-file/project symbol — resolving the bare last
+        // segment would mis-jump to an unrelated top-level `C`. Defer to the LSP.
+        if (t === E.TYPE_REFERENCE && element.text.substringBefore('<').contains('.')) {
+            return null
+        }
         return resolveLocally() ?: resolveCrossFile()
     }
 
