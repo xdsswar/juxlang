@@ -1,0 +1,50 @@
+// Polymorphic-dispatch benchmark: virtual calls over a heterogeneous collection.
+// The receiver type varies per element, so the call is a real vtable dispatch
+// (no static devirtualization). This is the Tier-3 target — devirtualizing
+// final/sealed/monomorphic calls and inlining across the boundary should narrow
+// the gap vs a JIT that devirtualizes at runtime. Re-measure after Tier-3.
+import jux.std.time.Instant;
+
+public abstract class Shape {
+    public abstract int weight();
+}
+public class Circle extends Shape {
+    public int r;
+    public Circle(int r) { this.r = r; }
+    public int weight() { return this.r * 3; }
+}
+public class Square extends Shape {
+    public int s;
+    public Square(int s) { this.s = s; }
+    public int weight() { return this.s * this.s; }
+}
+public class Triangle extends Shape {
+    public int b;
+    public Triangle(int b) { this.b = b; }
+    public int weight() { return this.b + 7; }
+}
+
+public void main() {
+    // A small pool of base-typed instances of distinct concrete types. (A
+    // `List<Shape>` of mixed subtypes is the natural shape, but storing
+    // polymorphic values in a generic container is a current backend gap; see
+    // benchmarks/README.md. Selecting among base-typed locals keeps the call a
+    // genuine vtable dispatch.)
+    Shape a = new Circle(2);
+    Shape b = new Square(3);
+    Shape c = new Triangle(4);
+
+    int n = 200000000;
+    var start = Instant.now();
+    long checksum = 0;
+    for (int i = 0; i < n; i = i + 1) {
+        int k = i % 3;
+        Shape cur = a;
+        if (k == 1) { cur = b; }
+        else if (k == 2) { cur = c; }
+        checksum = checksum + (cur.weight() as long);   // virtual dispatch
+    }
+    long ms = start.elapsedMs();
+    print($"checksum=$checksum");
+    print($"RESULT dispatch_poly=$ms");
+}

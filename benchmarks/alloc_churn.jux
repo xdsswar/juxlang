@@ -1,0 +1,33 @@
+// Allocation-churn benchmark: allocate + drop millions of small objects. Each
+// `new` is an `Rc::new` (a malloc) today; the previous object is carried one
+// iteration so it genuinely ESCAPES (LLVM can't elide the allocation), then
+// drops when overwritten. This is where Java/C#'s bump allocation + GC are
+// competitive on throughput, and where Jux's Tier-1 "don't wrap when not
+// shared" optimization will show its gain. Re-measure after Tier-1.
+import jux.std.time.Instant;
+
+public class Point {
+    public int x;
+    public int y;
+    public Point(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
+public void main() {
+    int n = 20000000;
+    var start = Instant.now();
+
+    int checksum = 0;
+    Point prev = new Point(0, 0);
+    for (int i = 1; i < n; i = i + 1) {
+        Point p = new Point(i, i + 1);   // escapes (held by `prev` next iter)
+        checksum = checksum + p.x - prev.y;
+        prev = p;                        // previous Point drops here
+    }
+
+    long ms = start.elapsedMs();
+    print($"checksum=$checksum");
+    print($"RESULT alloc_churn=$ms");
+}

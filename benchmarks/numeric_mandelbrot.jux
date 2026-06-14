@@ -1,0 +1,34 @@
+// Numeric benchmark: Mandelbrot escape-time over a grid (tight f64 loop, zero
+// allocation). Exercises raw LLVM floating-point throughput — Jux's strong
+// suit (unboxed primitives, native code, no warmup). Prints a parseable
+// `RESULT <name>=<ms>` line the runner collects.
+import jux.std.time.Instant;
+
+public void main() {
+    int width = 1200;
+    int height = 1200;
+    int maxIter = 256;
+    var start = Instant.now();
+
+    long checksum = 0;
+    for (int py = 0; py < height; py = py + 1) {
+        double y0 = (py as double) / (height as double) * 2.0 - 1.0;
+        for (int px = 0; px < width; px = px + 1) {
+            double x0 = (px as double) / (width as double) * 3.0 - 2.0;
+            double x = 0.0;
+            double y = 0.0;
+            int iter = 0;
+            while (iter < maxIter && x * x + y * y <= 4.0) {
+                double xt = x * x - y * y + x0;
+                y = 2.0 * x * y + y0;
+                x = xt;
+                iter = iter + 1;
+            }
+            checksum = checksum + (iter as long);
+        }
+    }
+
+    long ms = start.elapsedMs();
+    print($"checksum=$checksum");
+    print($"RESULT numeric_mandelbrot=$ms");
+}

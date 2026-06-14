@@ -1,0 +1,8 @@
+// Startup benchmark: a minimal program. The interesting number is NOT printed
+// here - the runner times the whole process (build once, then run N times and
+// take the fastest wall-clock). Jux is AOT-native with no VM/JIT warmup, so this
+// is a decisive win vs Java/C# (ms vs tens-to-hundreds of ms). The program just
+// prints a marker so the runner can confirm it ran.
+public void main() {
+    print("RESULT startup=ok");
+}
