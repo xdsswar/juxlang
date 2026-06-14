@@ -236,7 +236,21 @@ pub fn lower_workspace_with_entry(
     // Phase B (§CR.3.3): only wrap classes that are BOTH wrap-eligible
     // AND provably aliased — non-aliased eligible classes demote to the
     // legacy plain-struct ("Inline") shape via `compute_wrapped_set`.
-    e.wrapper_classes = compute_wrapped_set(units, &e.expr_types);
+    e.class_reps = compute_class_reps(units, &e.expr_types);
+    // `wrapper_classes` = every newtype-handle class (bare `Rc` OR `Rc<RefCell>`)
+    // — the `.0` newtype shape. `refcell_classes` is the interior-mutable subset
+    // that the `.0.borrow()` / `RefCell::new` sites gate on.
+    e.wrapper_classes = e
+        .class_reps
+        .keys()
+        .cloned()
+        .collect();
+    e.refcell_classes = e
+        .class_reps
+        .iter()
+        .filter(|(_, r)| **r == ClassRep::RcRefCell)
+        .map(|(n, _)| n.clone())
+        .collect();
     // A polymorphic base must also be a WRAPPER class for `Rc<dyn …Kind>`
     // dispatch (populated Kind trait, accessors, etc.) to be sound — the
     // delegations and accessors assume the interior-mutable `self.0` shape.
@@ -377,7 +391,21 @@ pub fn lower_workspace_test(
     e.mark_self_aliasing_mut_methods(units);
     // Phase B (§CR.3.3): wrap only wrap-eligible AND aliased classes;
     // non-aliased eligible classes demote to the legacy Inline shape.
-    e.wrapper_classes = compute_wrapped_set(units, &e.expr_types);
+    e.class_reps = compute_class_reps(units, &e.expr_types);
+    // `wrapper_classes` = every newtype-handle class (bare `Rc` OR `Rc<RefCell>`)
+    // — the `.0` newtype shape. `refcell_classes` is the interior-mutable subset
+    // that the `.0.borrow()` / `RefCell::new` sites gate on.
+    e.wrapper_classes = e
+        .class_reps
+        .keys()
+        .cloned()
+        .collect();
+    e.refcell_classes = e
+        .class_reps
+        .iter()
+        .filter(|(_, r)| **r == ClassRep::RcRefCell)
+        .map(|(n, _)| n.clone())
+        .collect();
     // A polymorphic base must also be a WRAPPER class for `Rc<dyn …Kind>`
     // dispatch (populated Kind trait, accessors, etc.) to be sound — the
     // delegations and accessors assume the interior-mutable `self.0` shape.
@@ -837,6 +865,16 @@ struct RustEmitter {
     /// positive just adds a `.borrow()` that wouldn't compile, which
     /// surfaces clearly).
     pub(crate) wrapper_classes: std::collections::HashSet<String>,
+    /// Per-class Rust representation (§CR.3.3 + §CR.4.1), keyed by bare class
+    /// name. The source of truth for the four-way object lowering; absent ⇒
+    /// legacy Inline. [`Self::wrapper_classes`] is derived from this as the
+    /// `RcRefCell` slice (the interior-mutability borrow sites read that set).
+    pub(crate) class_reps: std::collections::HashMap<String, ClassRep>,
+    /// The `RcRefCell` slice of [`Self::class_reps`] — classes that need the
+    /// interior-mutability cell. Gates `.borrow()`/`.borrow_mut()`/`RefCell::new`
+    /// emission. A class in [`Self::wrapper_classes`] but NOT here is the bare
+    /// `Rc<C_Inner>` rep (read-only shared): same `.0` newtype, no borrow.
+    pub(crate) refcell_classes: std::collections::HashSet<String>,
     /// Bare names of **polymorphic base classes** (non-sealed, non-final,
     /// non-generic classes extended by ≥1 subclass — see
     /// [`compute_polymorphic_base_classes`]). A value slot of one of these
@@ -2017,6 +2055,500 @@ pub(crate) fn compute_wrapped_set(
         })
         .cloned()
         .collect()
+}
+
+/// The concrete Rust representation chosen for a Jux class
+/// (`Architecture/JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.3.3 + §CR.4.1).
+/// Single-thread reps only; the cross-thread `Arc` / `Arc<Mutex>` rows are
+/// deferred (a class that would need them stays `RcRefCell` today).
+///
+/// A class absent from the [`compute_class_reps`] map is the legacy plain
+/// struct — semantically identical to [`ClassRep::Inline`]; the map only lists
+/// wrap-*eligible* classes, so the emitters treat "absent" as Inline.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ClassRep {
+    /// Plain owned struct — never escapes, never aliased. Zero indirection.
+    Inline,
+    /// `Box<C_Inner>` — escapes (returned / owned) but never aliased: a unique
+    /// owner, so no refcount and no interior-mutability cell.
+    Box,
+    /// `Rc<C_Inner>` — aliased (shared) but never mutated after construction:
+    /// refcount sharing with **no** `RefCell` and therefore no borrow-flag cost.
+    Rc,
+    /// `Rc<RefCell<C_Inner>>` — aliased AND mutated: full Java shared-mutation
+    /// semantics with statement-scoped runtime borrows (§CR.4.1, NORMATIVE).
+    RcRefCell,
+}
+
+impl ClassRep {
+    /// Generality order for the inheritance roll-up (§CR.3.5): a connected
+    /// `extends` component takes the **max-rank** rep of its members, so a child
+    /// can never be tighter than its parent (which would break upcasts).
+    pub(crate) fn rank(self) -> u8 {
+        match self {
+            ClassRep::Inline => 0,
+            ClassRep::Box => 1,
+            ClassRep::Rc => 2,
+            ClassRep::RcRefCell => 3,
+        }
+    }
+}
+
+/// Pick a [`ClassRep`] per wrap-eligible class (§CR.3.3 + §CR.4.1).
+///
+/// Stage 1 of the Phase-B completion: this currently assigns `RcRefCell` to
+/// exactly the set [`compute_wrapped_set`] returns (every class that is
+/// wrap-eligible and aliased / forced) — i.e. emission is byte-for-byte
+/// unchanged. Stages 2 and 3 refine the assignment: aliased-but-immutable
+/// classes demote to [`ClassRep::Rc`] and escaping-but-unaliased classes to
+/// [`ClassRep::Box`]. The emitter consults this map; `wrapper_classes` is the
+/// derived `{ name | rep == RcRefCell }` slice used by the interior-mutability
+/// borrow sites.
+pub(crate) fn compute_class_reps(
+    units: &[juxc_ast::CompilationUnit],
+    expr_types: &HashMap<Span, Ty>,
+) -> HashMap<String, ClassRep> {
+    // The wrapped set (eligible ∩ (aliased ∪ forced)) — the classes that get a
+    // newtype handle. Everything else stays the legacy Inline plain struct.
+    let wrapped = compute_wrapped_set(units, expr_types);
+
+    // Forced-RcRefCell seeds: these need the interior-mutable wrapper for
+    // reasons other than a plain field write (dyn dispatch / interface trait
+    // `&self`, recursive-field cycle break, weak-ref endpoints, generic-parent
+    // upcast). They must NEVER demote to plain `Rc` (§CR.3.3 dyn row / §CR.5).
+    let mut forced: HashSet<String> = HashSet::new();
+    forced.extend(compute_interface_forced_classes(units));
+    forced.extend(compute_polymorphic_forced_classes(units));
+    forced.extend(compute_recursive_field_classes(units));
+    forced.extend(compute_weak_forced_classes(units));
+    // Conservative bare-`Rc` exclusions (Stage 2 scope): the field-READ path is
+    // rep-aware, but a class's accessor-impl, inherited-method, and super-shim
+    // emitters still emit `self.0.borrow()` unconditionally. Until those are
+    // rep-aware too, keep any class that has a property accessor OR participates
+    // in an `extends` relationship (as child or parent) on the `RcRefCell` rep —
+    // the bare-`Rc` demotion then applies only to leaf, property-free classes
+    // (the common immutable-value-object win). "When in doubt, RcRefCell."
+    for unit in units {
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                if !cd.properties.is_empty() {
+                    forced.insert(cd.name.text.clone());
+                }
+                if let Some(parent) = cd
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+                {
+                    forced.insert(cd.name.text.clone()); // child
+                    forced.insert(parent); // parent
+                }
+            }
+        }
+    }
+
+    let mutated = compute_mutated_classes(units, expr_types);
+
+    // §CR.4.1: a wrapped class keeps its `RefCell` only when it is mutated (or
+    // forced); a purely-aliased, never-mutated class demotes to bare `Rc`
+    // (read-only sharing — no borrow-flag cost). (Box — escapes-but-unaliased —
+    // lands in a later stage; today escaping classes are still `aliased`.)
+    let mut reps: HashMap<String, ClassRep> = wrapped
+        .into_iter()
+        .map(|n| {
+            let rep = if forced.contains(&n) || mutated.contains(&n) {
+                ClassRep::RcRefCell
+            } else {
+                ClassRep::Rc
+            };
+            (n, rep)
+        })
+        .collect();
+
+    // §CR.3.5 inheritance roll-up: a connected `extends` component takes the
+    // MAX-rank rep of its members, so a child is never tighter than its parent
+    // (which would break an upcast). The wrapped set already rolled `aliased`
+    // through the chain, but `mutated` is per-class — a mutated parent must pull
+    // an immutable child up to `RcRefCell` (and vice-versa via the max).
+    rollup_class_reps(&mut reps, units);
+    reps
+}
+
+/// Raise every class in a connected `extends` component to the MAX-rank
+/// [`ClassRep`] in that component (§CR.3.5). Fixpoint over the bidirectional
+/// extends graph. Only classes already present in `reps` (wrapped) participate;
+/// an Inline class never gains a rep here.
+fn rollup_class_reps(reps: &mut HashMap<String, ClassRep>, units: &[juxc_ast::CompilationUnit]) {
+    // Bidirectional parent↔child adjacency (bare names).
+    let mut adj: HashMap<String, Vec<String>> = HashMap::new();
+    for unit in units {
+        for item in &unit.items {
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                if let Some(parent) = cd
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+                {
+                    let child = cd.name.text.clone();
+                    adj.entry(child.clone()).or_default().push(parent.clone());
+                    adj.entry(parent).or_default().push(child);
+                }
+            }
+        }
+    }
+    // Fixpoint: keep lifting neighbours until no rep changes.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let names: Vec<String> = reps.keys().cloned().collect();
+        for name in names {
+            let rep = reps[&name];
+            if let Some(neighbors) = adj.get(&name) {
+                for n in neighbors.clone() {
+                    // A neighbour that is wrapped (present) and lower-rank rises.
+                    if let Some(nr) = reps.get(&n).copied() {
+                        if nr.rank() < rep.rank() {
+                            reps.insert(n, rep);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Bare names of classes whose instances are **mutated after construction** —
+/// the `mutated` selector property (§CR.4.1). A class is mutated when an
+/// instance field of one of its instances is written through a binding:
+/// `this.f = …` (internal), an external `obj.f = …`, `++obj.f`, `out obj.f`,
+/// `&obj.f`, or a mutating method call on a field (`obj.coll.push(x)`). The
+/// **owner** whose field is touched is marked (so `a.b.coll.push()` marks
+/// `a.b`'s class, not `a`'s).
+///
+/// SOUNDNESS — this gates the `RcRefCell`→`Rc` demotion. A class wrongly judged
+/// "not mutated" loses its `RefCell`, so a later write emits `obj.0.f = v` on a
+/// `Rc<C_Inner>` and **fails to compile** (rustc E0594) — a LOUD error, never a
+/// silent shared-mutation fork. We therefore OVER-approximate: any uncertainty
+/// keeps the class mutated (→ `RcRefCell`).
+pub(crate) fn compute_mutated_classes(
+    units: &[juxc_ast::CompilationUnit],
+    expr_types: &HashMap<Span, Ty>,
+) -> HashSet<String> {
+    use juxc_ast::{Expr, Stmt};
+
+    let mut mutated: HashSet<String> = HashSet::new();
+    let mut user_mut: HashSet<String> = HashSet::new();
+    for unit in units {
+        user_mut.extend(crate::analysis::collect_user_mut_methods(unit));
+    }
+
+    fn class_bare_of_ty(ty: &Ty) -> Option<String> {
+        match ty {
+            Ty::User { name, .. } => Some(name.rsplit('.').next().unwrap_or(name).to_string()),
+            Ty::Nullable(inner) => class_bare_of_ty(inner),
+            _ => None,
+        }
+    }
+    // Mark the OWNER class of a written place: `obj.f` → obj's class; index /
+    // not-null chains recurse to their base; a bare local marks nothing (a
+    // local reassign isn't field mutation).
+    fn mark_owner(place: &Expr, expr_types: &HashMap<Span, Ty>, out: &mut HashSet<String>) {
+        match place {
+            Expr::Field(f) => {
+                if let Some(c) = expr_types
+                    .get(&exprs::expr_span_of(&f.object))
+                    .and_then(class_bare_of_ty)
+                {
+                    out.insert(c);
+                }
+            }
+            Expr::Index(i) => mark_owner(&i.array, expr_types, out),
+            Expr::NotNullAssert(inner, _) => mark_owner(inner, expr_types, out),
+            _ => {}
+        }
+    }
+
+    fn walk_expr(
+        e: &Expr,
+        et: &HashMap<Span, Ty>,
+        um: &HashSet<String>,
+        out: &mut HashSet<String>,
+    ) {
+        match e {
+            Expr::TypeOf(..) => {}
+            Expr::IncDec(i) => {
+                mark_owner(&i.target, et, out);
+                walk_expr(&i.target, et, um, out);
+            }
+            Expr::Out(inner, _) => {
+                mark_owner(inner, et, out);
+                walk_expr(inner, et, um, out);
+            }
+            Expr::Unary(u) => {
+                if u.op == juxc_ast::UnaryOp::AddrOf {
+                    mark_owner(&u.operand, et, out);
+                }
+                walk_expr(&u.operand, et, um, out);
+            }
+            Expr::Call(c) => {
+                // A mutating method call mutates its receiver's contents; the
+                // owner of the receiver field must allow `&mut` access.
+                if let Expr::Field(f) = &*c.callee {
+                    if crate::analysis::is_mutating_method(&f.field.text)
+                        || um.contains(&f.field.text)
+                    {
+                        mark_owner(&f.object, et, out);
+                    }
+                }
+                walk_expr(&c.callee, et, um, out);
+                for a in &c.args {
+                    walk_expr(a, et, um, out);
+                }
+            }
+            Expr::NewObject(n) => {
+                for a in &n.args {
+                    walk_expr(a, et, um, out);
+                }
+            }
+            Expr::NewArrayLit(n) => {
+                for el in &n.elements {
+                    walk_expr(el, et, um, out);
+                }
+            }
+            Expr::NewArray(n) => {
+                walk_expr(&n.size, et, um, out);
+                for inner in &n.inner_sizes {
+                    walk_expr(inner, et, um, out);
+                }
+            }
+            Expr::TupleLit(elems, _) => {
+                for el in elems {
+                    walk_expr(el, et, um, out);
+                }
+            }
+            Expr::ErrorProp(inner, _) => walk_expr(inner, et, um, out),
+            Expr::TryExpr(t) => {
+                walk_block(&t.body, et, um, out);
+                for c in &t.catches {
+                    walk_block(&c.body, et, um, out);
+                }
+            }
+            Expr::Binary(b) => {
+                walk_expr(&b.left, et, um, out);
+                walk_expr(&b.right, et, um, out);
+            }
+            Expr::Range(r) => {
+                walk_expr(&r.start, et, um, out);
+                walk_expr(&r.end, et, um, out);
+            }
+            Expr::Cast(c) => walk_expr(&c.value, et, um, out),
+            Expr::TypeTest(t) => walk_expr(&t.value, et, um, out),
+            Expr::SizeOf(s) => walk_expr(&s.operand, et, um, out),
+            Expr::Index(i) => {
+                walk_expr(&i.array, et, um, out);
+                walk_expr(&i.index, et, um, out);
+            }
+            Expr::Field(f) => walk_expr(&f.object, et, um, out),
+            Expr::InterpString(s) => {
+                for seg in &s.segments {
+                    if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                        walk_expr(inner, et, um, out);
+                    }
+                }
+            }
+            Expr::Elvis(el) => {
+                walk_expr(&el.value, et, um, out);
+                walk_expr(&el.fallback, et, um, out);
+            }
+            Expr::Ternary(t) => {
+                walk_expr(&t.condition, et, um, out);
+                walk_expr(&t.then_branch, et, um, out);
+                walk_expr(&t.else_branch, et, um, out);
+            }
+            Expr::Await(inner, _) => walk_expr(inner, et, um, out),
+            Expr::NotNullAssert(inner, _) => walk_expr(inner, et, um, out),
+            // A class captured-and-mutated by a lambda is already `aliased`
+            // (lambda-capture rule in `compute_aliased_classes`) → RcRefCell, so
+            // we don't need to recurse lambda bodies for the `mutated` property.
+            _ => {}
+        }
+    }
+
+    fn walk_block(
+        b: &juxc_ast::Block,
+        et: &HashMap<Span, Ty>,
+        um: &HashSet<String>,
+        out: &mut HashSet<String>,
+    ) {
+        for s in &b.statements {
+            walk_stmt(s, et, um, out);
+        }
+    }
+
+    fn walk_stmt(
+        s: &Stmt,
+        et: &HashMap<Span, Ty>,
+        um: &HashSet<String>,
+        out: &mut HashSet<String>,
+    ) {
+        match s {
+            Stmt::Expr(e) => walk_expr(e, et, um, out),
+            Stmt::Return(opt) => {
+                if let Some(e) = opt {
+                    walk_expr(e, et, um, out);
+                }
+            }
+            Stmt::VarDecl(v) => {
+                if let Some(init) = &v.init {
+                    walk_expr(init, et, um, out);
+                }
+            }
+            Stmt::Assign(a) => {
+                // The assignment writes into `a.target`'s owner.
+                mark_owner(&a.target, et, out);
+                walk_expr(&a.value, et, um, out);
+                walk_expr(&a.target, et, um, out);
+            }
+            Stmt::Throw(e, _) => walk_expr(e, et, um, out),
+            Stmt::SuperCall(args, _) => {
+                for a in args {
+                    walk_expr(a, et, um, out);
+                }
+            }
+            Stmt::If(i) => {
+                walk_expr(&i.condition, et, um, out);
+                walk_block(&i.then_block, et, um, out);
+                walk_else(i.else_branch.as_deref(), et, um, out);
+            }
+            Stmt::While(w) => {
+                walk_expr(&w.condition, et, um, out);
+                walk_block(&w.body, et, um, out);
+            }
+            Stmt::DoWhile(d) => {
+                walk_block(&d.body, et, um, out);
+                walk_expr(&d.condition, et, um, out);
+            }
+            Stmt::ForEach(f) => {
+                walk_expr(&f.iter, et, um, out);
+                walk_block(&f.body, et, um, out);
+            }
+            Stmt::ForC(f) => {
+                if let Some(cond) = &f.cond {
+                    walk_expr(cond, et, um, out);
+                }
+                walk_block(&f.body, et, um, out);
+            }
+            Stmt::Try(t) => {
+                walk_block(&t.body, et, um, out);
+                for c in &t.catches {
+                    walk_block(&c.body, et, um, out);
+                }
+                if let Some(fin) = &t.finally {
+                    walk_block(fin, et, um, out);
+                }
+            }
+            Stmt::Unsafe(b) => walk_block(b, et, um, out),
+            Stmt::Break(..) | Stmt::Continue(..) => {}
+            Stmt::Labeled { stmt, .. } => walk_stmt(stmt, et, um, out),
+        }
+    }
+
+    fn walk_else(
+        branch: Option<&juxc_ast::ElseBranch>,
+        et: &HashMap<Span, Ty>,
+        um: &HashSet<String>,
+        out: &mut HashSet<String>,
+    ) {
+        match branch {
+            Some(juxc_ast::ElseBranch::Block(b)) => walk_block(b, et, um, out),
+            Some(juxc_ast::ElseBranch::If(inner)) => {
+                walk_expr(&inner.condition, et, um, out);
+                walk_block(&inner.then_block, et, um, out);
+                walk_else(inner.else_branch.as_deref(), et, um, out);
+            }
+            None => {}
+        }
+    }
+
+    for unit in units {
+        for item in &unit.items {
+            // Internal mutation, decided WITHOUT relying on `this` being typed in
+            // `expr_types`: a class is mutated if any instance method writes
+            // `this.f`, is a known mutating method, or it exposes a writable
+            // property (a setter writes its backing field).
+            if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                let internal = cd.methods.iter().any(|m| {
+                    m.body.as_ref().map(crate::analysis::body_writes_to_this).unwrap_or(false)
+                        || user_mut.contains(&m.name.text)
+                }) || cd
+                    .properties
+                    .iter()
+                    .any(|p| !p.is_static && p.setter.is_some());
+                if internal {
+                    mutated.insert(cd.name.text.clone());
+                }
+            }
+            // External mutation (and a redundant internal pass via `this` typing):
+            // walk every body for writes / mutating calls and mark the owner.
+            for_each_body(item, &mut |b| walk_block(b, expr_types, &user_mut, &mut mutated));
+        }
+    }
+    mutated
+}
+
+/// Invoke `f` on every **post-construction** executable
+/// [`Block`](juxc_ast::Block) of a top-level decl — method / operator /
+/// free-function bodies. **Constructor bodies are deliberately skipped**: a
+/// ctor's `this.f = …` is construction, not mutation (§CR.4.1), so a value
+/// object built once and never written stays `Rc` (not `RcRefCell`). A genuine
+/// post-construction write to that object lives in a method / function / `main`
+/// body and is still seen here.
+fn for_each_body(item: &juxc_ast::TopLevelDecl, f: &mut dyn FnMut(&juxc_ast::Block)) {
+    use juxc_ast::TopLevelDecl;
+    match item {
+        TopLevelDecl::Function(fd) => {
+            if let Some(b) = &fd.body {
+                f(b);
+            }
+        }
+        TopLevelDecl::Class(cd) => {
+            for m in &cd.methods {
+                if let Some(b) = &m.body {
+                    f(b);
+                }
+            }
+            for op in &cd.operators {
+                if let Some(b) = &op.body {
+                    f(b);
+                }
+            }
+            for nt in &cd.nested_types {
+                for_each_body(nt, f);
+            }
+        }
+        TopLevelDecl::Record(rd) => {
+            for m in &rd.methods {
+                if let Some(b) = &m.body {
+                    f(b);
+                }
+            }
+        }
+        TopLevelDecl::Enum(ed) => {
+            for m in &ed.methods {
+                if let Some(b) = &m.body {
+                    f(b);
+                }
+            }
+        }
+        TopLevelDecl::Interface(id) => {
+            for m in &id.methods {
+                if let Some(b) = &m.body {
+                    f(b);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Bare names of every class that must be **force-wrapped because it is an
@@ -3244,6 +3776,8 @@ impl RustEmitter {
             anonymous_class_counter: 0,
             class_asts: std::collections::HashMap::new(),
             wrapper_classes: std::collections::HashSet::new(),
+            class_reps: std::collections::HashMap::new(),
+            refcell_classes: std::collections::HashSet::new(),
             poly_base_classes: std::collections::HashSet::new(),
             const_int_params: std::collections::HashSet::new(),
             out_params: std::collections::HashSet::new(),
@@ -3339,8 +3873,12 @@ impl RustEmitter {
             // several units one at a time). Phase B (§CR.3.3): only the
             // wrap-eligible AND aliased classes wrap — non-aliased
             // eligible classes demote to the legacy Inline shape.
-            for w in compute_wrapped_set(std::slice::from_ref(unit), &self.expr_types) {
-                self.wrapper_classes.insert(w);
+            for (n, rep) in compute_class_reps(std::slice::from_ref(unit), &self.expr_types) {
+                self.wrapper_classes.insert(n.clone());
+                if rep == ClassRep::RcRefCell {
+                    self.refcell_classes.insert(n.clone());
+                }
+                self.class_reps.insert(n, rep);
             }
             for b in compute_polymorphic_base_classes(std::slice::from_ref(unit)) {
                 // Only wrapper poly bases support `Rc<dyn …Kind>` dispatch.

@@ -544,13 +544,21 @@ impl RustEmitter {
         }
         self.emitting_method_receiver = false;
         if let Some(depth) = wrapper_depth {
-            // An `out` field place needs an exclusive `&mut` into the
-            // interior, so take the mutable borrow; the `RefMut` temporary
-            // lives to the end of the call statement (§M.4).
-            if self.emitting_out_place {
-                self.w.push_str(".0.borrow_mut()");
+            // `RcRefCell` rep: reach the interior through a statement-scoped
+            // borrow. The bare-`Rc` rep (read-only shared, never mutated) has no
+            // cell — `Rc<C_Inner>` derefs straight to the fields, so emit `.0`
+            // with no borrow.
+            if self.receiver_is_refcell_class(&f.object) {
+                // An `out` field place needs an exclusive `&mut` into the
+                // interior, so take the mutable borrow; the `RefMut` temporary
+                // lives to the end of the call statement (§M.4).
+                if self.emitting_out_place {
+                    self.w.push_str(".0.borrow_mut()");
+                } else {
+                    self.w.push_str(".0.borrow()");
+                }
             } else {
-                self.w.push_str(".0.borrow()");
+                self.w.push_str(".0");
             }
             for _ in 0..depth {
                 self.w.push_str(".__parent");
@@ -806,6 +814,25 @@ impl RustEmitter {
         }
         self.receiver_class_bare(recv)
             .map(|bare| self.wrapper_classes.contains(&bare))
+            .unwrap_or(false)
+    }
+
+    /// Like [`Self::receiver_is_wrapper_class`] but true only for the
+    /// **interior-mutable** (`Rc<RefCell>`) rep — i.e. the receiver's class
+    /// needs a `.0.borrow()` to reach a field. A bare-`Rc` (read-only shared)
+    /// receiver is a wrapper but NOT refcell: its fields read through plain
+    /// `.0` with no borrow. Gates the borrow rewrite in `emit_field`/`emit_assign`.
+    pub(crate) fn receiver_is_refcell_class(&self, recv: &Expr) -> bool {
+        if matches!(recv, Expr::This(_)) {
+            return self.emitting_wrapper_class
+                && self
+                    .enclosing_class
+                    .as_deref()
+                    .map(|c| self.refcell_classes.contains(c))
+                    .unwrap_or(false);
+        }
+        self.receiver_class_bare(recv)
+            .map(|bare| self.refcell_classes.contains(&bare))
             .unwrap_or(false)
     }
 

@@ -2077,6 +2077,44 @@ fn generic_class_alias_shares_mutation_through_rc_refcell() {
     assert!(rust.contains("borrow_mut()"), "scoped write: {rust}");
 }
 
+/// §CR.4.1 read-only-shared demotion: a class that is ALIASED (a second
+/// binding) but never MUTATED after construction lowers to a bare `Rc<C_Inner>`
+/// — no `RefCell`, no borrow-flag cost. Field reads go through plain `.0`.
+#[test]
+fn aliased_immutable_class_lowers_to_bare_rc_no_refcell() {
+    let rust = emit(
+        r#"
+        public class Point {
+            public int x;
+            public Point(int x) { this.x = x; }
+            public int getX() { return this.x; }
+        }
+        public void main() {
+            var p = new Point(1);
+            var q = p;
+            print(q.getX() + p.getX());
+        }
+        "#,
+    );
+    // Bare `Rc` newtype — the cell is gone (the ctor write is construction, the
+    // getter is a read, so `Point` is never mutated).
+    assert!(
+        rust.contains("pub struct Point(std::rc::Rc<Point_Inner>);"),
+        "expected bare-Rc newtype (no RefCell): {rust}",
+    );
+    assert!(
+        !rust.contains("RefCell<Point_Inner>"),
+        "Point must NOT carry a RefCell: {rust}",
+    );
+    // Constructor wraps in plain `Rc::new`, no `RefCell::new`.
+    assert!(
+        rust.contains("std::rc::Rc::new(Self::new_inner"),
+        "ctor wraps in plain Rc::new: {rust}",
+    );
+    // Aliasing still shares via an `Rc` clone (pointer bump, not deep copy).
+    assert!(rust.contains("q = p.clone()"), "alias rebind via Rc clone: {rust}");
+}
+
 /// Explicit construction `new Box<int>(7)` lowers to the Rust
 /// turbofish `Box::<isize>::new(7)`. Implicit `new Box(7)` keeps
 /// the bare `Box::new(7)` form (Rust infers).
