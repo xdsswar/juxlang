@@ -194,6 +194,17 @@ class JuxCompletionContributor : CompletionContributor() {
         // Tier 4: file-level type names (`Model m = new Model();`) — no import.
         val file = parameters.originalFile
         for (decl in file.children) {
+            // §L.7 C-FFI: surface a `native { … }` block's foreign functions as
+            // file-level callables (they resolve unqualified inside `unsafe`).
+            if (decl.elementType === E.EXTERN_BLOCK) {
+                for (fn in decl.children) {
+                    if (fn.elementType !== E.METHOD_DECLARATION) continue
+                    val named = fn as? JuxNamedElement ?: continue
+                    val name = named.name ?: continue
+                    add(method(named, name), name)
+                }
+                continue
+            }
             val named = decl as? JuxNamedElement ?: continue
             val name = named.name ?: continue
             if (decl.elementType in TYPE_DECLS) {
