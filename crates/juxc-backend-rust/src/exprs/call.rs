@@ -60,6 +60,19 @@ fn type_ref_is_string(t: &juxc_ast::TypeRef) -> bool {
         && t.name.segments[0].text == "String"
 }
 
+/// True when `arg` is a string-valued literal — a plain `"…"` or an interpolated
+/// `$"…"`. Used to marshal a TRAILING argument of a C-variadic call (`printf`)
+/// into a `const char*`, since those args have no declared parameter type to key
+/// the marshalling off (§L.4.2). A non-literal `String` in a variadic slot is not
+/// recognized here (the backend has no inference) and would reach `rustc` as a
+/// non-FFI-safe `String` — pass a literal or cast to a `String*`/`char*`.
+fn expr_is_string_literal(arg: &juxc_ast::Expr) -> bool {
+    matches!(
+        arg,
+        juxc_ast::Expr::Literal(juxc_ast::Literal::String(_)) | juxc_ast::Expr::InterpString(_)
+    )
+}
+
 /// True when `t` is a plain Jux `char` (no pointer / array / generic / nullable
 /// shape) — the value-level `char` that maps to a C `char` at the FFI boundary.
 fn type_ref_is_char(t: &juxc_ast::TypeRef) -> bool {
@@ -1677,9 +1690,15 @@ impl RustEmitter {
         let prev = std::mem::take(&mut self.emitting_format_arg);
         // 1. Marshal each `String` argument into a NUL-terminated `CString` temp
         //    (kept alive until the end of the block, across the call). `char`
-        //    args need no temp — they convert inline below.
+        //    args need no temp — they convert inline below. A C-variadic call
+        //    (`printf(fmt, ...)`) has more args than declared params: a trailing
+        //    string-LITERAL / interpolation arg is marshalled the same way (per
+        //    §L.4.2 "String args marshal to const char* automatically"); other
+        //    trailing args (ints, floats, pointers) pass through directly.
         for (i, arg) in call.args.iter().enumerate() {
-            if matches!(args.get(i), Some(FfiArg::Str)) {
+            let is_str = matches!(args.get(i), Some(FfiArg::Str))
+                || (i >= args.len() && expr_is_string_literal(arg));
+            if is_str {
                 self.w.push_str(&format!("let __c{i} = ::std::ffi::CString::new("));
                 self.emit_expr(arg);
                 self.w.push_str(
@@ -1719,6 +1738,12 @@ impl RustEmitter {
                         other => self.emit_expr(other),
                     }
                     self.w.push(')');
+                }
+                // Trailing variadic string-literal arg: pass the kept-alive
+                // `CString`'s `const char*` (same as a fixed `String` param).
+                None if expr_is_string_literal(arg) => {
+                    self.w
+                        .push_str(&format!("__c{i}.as_ptr() as *const core::ffi::c_char"));
                 }
                 _ => self.emit_expr(arg),
             }

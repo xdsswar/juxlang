@@ -1,0 +1,24 @@
+// Calling a C variadic function (Layout-ABI §L.4.2). A foreign signature whose
+// fixed parameters are followed by `...` is a C variadic: the call may pass any
+// number of trailing arguments after the fixed ones, and the compiler marshals
+// each trailing String LITERAL to a C `const char*` automatically (the same as
+// a fixed `String` parameter). Other trailing args (ints, floats, pointers) pass
+// through by value.
+//
+// On Windows, `printf` lives in `legacy_stdio_definitions` (the C runtime keeps
+// the real symbol there; `msvcrt`'s `printf` is an inline-only stub). On Linux /
+// macOS, link `c` instead (`@extern(lib = "c")`).
+@extern(lib = "legacy_stdio_definitions")
+unsafe native {
+    // C: int printf(const char* fmt, ...);
+    int printf(String fmt, ...);
+}
+
+public void main() {
+    unsafe {
+        // The format string and the trailing "world" both marshal to char*;
+        // the integers pass by value.
+        printf("hi %s, %d + %d = %d\n", "world", 2, 3, 5);
+        printf("no extra args here\n");   // fixed-only call also works
+    }
+}

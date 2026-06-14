@@ -591,6 +591,23 @@ impl<'a> Checker<'a> {
     /// generics, arrays, collections, `throws`) trips **E0508**.
     fn check_extern_block(&mut self, block: &juxc_ast::ExternBlockDecl) {
         for f in &block.fns {
+            // A C-variadic function (`...`) needs at least one fixed parameter
+            // before the `...` — `int f(...)` is illegal in C and Rust rejects a
+            // bare-`...` `extern "C"` signature (§L.4.2).
+            if f.is_c_variadic && f.params.is_empty() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0508_FfiTypeNotAllowed,
+                        format!(
+                            "foreign function `{}` is variadic (`...`) but has no fixed parameter \
+                             before it — a C variadic function needs at least one named parameter \
+                             (e.g. the `printf` format string)",
+                            f.name.text,
+                        ),
+                    )
+                    .with_span(f.span),
+                );
+            }
             if !f.throws.is_empty() {
                 self.diagnostics.push(
                     Diagnostic::error(
@@ -5116,6 +5133,9 @@ impl<'a> Checker<'a> {
                     let params = fn_sig.params.clone();
                     let generic_params = fn_sig.generic_params.clone();
                     let callee_unsafe = fn_sig.is_unsafe;
+                    // A C-variadic foreign fn (`printf(String, ...)`) accepts
+                    // any number of trailing args beyond its fixed params.
+                    let callee_c_variadic = fn_sig.is_c_variadic;
                     let callee_async = matches!(
                         fn_sig.return_type,
                         juxc_ast::ReturnType::AsyncType(_),
@@ -5190,16 +5210,37 @@ impl<'a> Checker<'a> {
                         &format!("function `{name}`"),
                         c.span,
                     );
-                    self.check_call_args(
-                        name,
-                        &params,
-                        &c.args,
-                        &c.arg_names,
-                        c.span,
-                        None,
-                        &subst_params,
-                        &subst_args,
-                    );
+                    if callee_c_variadic && c.args.len() > params.len() {
+                        // C-variadic call with extra args: the fixed prefix gets
+                        // the normal per-slot type checks; each trailing arg (the
+                        // C `...`) is walked for its own errors but is otherwise
+                        // unconstrained (its type is the caller's to get right).
+                        let fixed = params.len();
+                        self.check_call_args(
+                            name,
+                            &params,
+                            &c.args[..fixed],
+                            &c.arg_names[..fixed],
+                            c.span,
+                            None,
+                            &subst_params,
+                            &subst_args,
+                        );
+                        for extra in &c.args[fixed..] {
+                            self.check_expr(extra);
+                        }
+                    } else {
+                        self.check_call_args(
+                            name,
+                            &params,
+                            &c.args,
+                            &c.arg_names,
+                            c.span,
+                            None,
+                            &subst_params,
+                            &subst_args,
+                        );
+                    }
                     return;
                 }
                 // Unknown bare callee — walk args silently. The
@@ -7720,6 +7761,24 @@ mod tests {
     fn plain_enum_without_discriminant_ok() {
         let d = run("enum Y { A, B } public void main() {}");
         assert!(!has(&d, code::Code::E0510_DiscriminantOutsideCEnum), "{d:?}");
+    }
+
+    /// A C-variadic foreign call accepts MORE arguments than its fixed params
+    /// (no E0411); a variadic with NO fixed param is rejected (E0508).
+    #[test]
+    fn c_variadic_call_accepts_extra_args() {
+        let ok = run(
+            "@extern(lib = \"c\") unsafe native { i32 printf(String fmt, ...); } \
+             public void main() { unsafe { printf(\"%d %d\", 1, 2); } }",
+        );
+        assert!(!has(&ok, code::Code::E0411_WrongArgCount), "{ok:?}");
+
+        // A variadic with no fixed parameter is illegal.
+        let bad = run(
+            "@extern(lib = \"c\") unsafe native { i32 bad(...); } \
+             public void main() {}",
+        );
+        assert!(has(&bad, code::Code::E0508_FfiTypeNotAllowed), "{bad:?}");
     }
 
     /// A `@layout(c)` C enum is allowed at the FFI boundary (param and return) —

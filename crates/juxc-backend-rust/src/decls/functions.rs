@@ -88,6 +88,16 @@ impl RustEmitter {
                 }
                 self.emit_ffi_type(&p.ty);
             }
+            // A C-variadic foreign fn (`int printf(String fmt, ...)`) emits a
+            // trailing `...` in the Rust `extern "C"` signature (§L.4.2). Rust
+            // requires at least one fixed parameter before it, which a C
+            // variadic always has.
+            if f.is_c_variadic {
+                if !f.params.is_empty() {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str("...");
+            }
             self.w.push(')');
             // `void` return → no `-> …`; otherwise the FFI return type.
             if let ReturnType::Type(t) = &f.return_type {

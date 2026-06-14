@@ -119,6 +119,7 @@ impl<'a> Parser<'a> {
                 wheres: Vec::new(),
                 body: Some(juxc_ast::Block { statements: script_stmts, span: body_span }),
                 is_property: false,
+                is_c_variadic: false,
                 span: body_span,
             }));
         }

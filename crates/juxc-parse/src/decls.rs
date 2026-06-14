@@ -1806,6 +1806,7 @@ impl<'a> Parser<'a> {
             wheres,
             body,
             is_property: false,
+            is_c_variadic: false,
             span: start.join(end),
         })
     }
@@ -1896,7 +1897,28 @@ impl<'a> Parser<'a> {
         let return_type = self.parse_return_type()?;
         let name = self.parse_ident()?;
         self.expect(&TokenKind::LParen, "'(' to start foreign parameter list");
-        let params = self.parse_param_list();
+        // Foreign parameter list, with optional trailing `...` marking a
+        // C-variadic function (`int printf(String fmt, ...)`, Layout-ABI §L.4.2).
+        // The `...` is not a parameter; it may only appear last, after the fixed
+        // params (and is the whole list only if the function takes no fixed args,
+        // which C forbids — but the type checker, not the parser, enforces that).
+        let mut params = Vec::new();
+        let mut is_c_variadic = false;
+        if !self.at(&TokenKind::RParen) {
+            loop {
+                if self.eat(&TokenKind::Ellipsis) {
+                    is_c_variadic = true;
+                    break;
+                }
+                let Some(param) = self.parse_param(/*allow_final=*/ true) else {
+                    break;
+                };
+                params.push(param);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
         self.expect(&TokenKind::RParen, "')' to close foreign parameter list");
         self.expect(&TokenKind::Semicolon, "';' after a foreign function signature");
         let end = self.last_consumed_span();
@@ -1912,6 +1934,7 @@ impl<'a> Parser<'a> {
             wheres: Vec::new(),
             body: None,
             is_property: false,
+            is_c_variadic,
             span: start.join(end),
         })
     }

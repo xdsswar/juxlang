@@ -336,6 +336,17 @@ unsafe {
 
 Jux functions cannot be variadic in the C sense; the variadic feature in §A.2.4 (`String... messages`) packages arguments into an array, which is a different convention.
 
+**Lowering (implemented).** A trailing `...` in an `@extern` signature emits a
+Rust C-variadic `extern "C"` declaration (`pub fn printf(fmt: *const c_char,
+...) -> isize;`). The call-site arity check accepts any number of trailing
+arguments after the fixed parameters; each trailing String *literal* is marshalled
+to a `const char*` the same way a fixed `String` parameter is, and other trailing
+args (integers, floats, pointers) pass by value. A C variadic must have at least
+one fixed parameter before the `...` (E0508 otherwise), as C and Rust both
+require. A non-literal `String` value in a trailing slot is not auto-marshalled
+(the backend has no per-arg inference there) - pass a literal, or a `String*` /
+`char*`. Example: `examples/ffi_variadic.jux`.
+
 ### L.4.3. Struct Return ABI
 
 Aggregates returned by value follow the platform C ABI: small aggregates may be returned in registers, large ones via a hidden pointer parameter. The compiler chooses based on the platform rules; programmers do not need to be aware.

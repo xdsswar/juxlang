@@ -3971,6 +3971,7 @@ fn substitute_fn_signature(
         wheres: m.wheres.clone(),
         body: m.body.clone(),
         is_property: m.is_property,
+        is_c_variadic: false,
         span: m.span,
     }
 }

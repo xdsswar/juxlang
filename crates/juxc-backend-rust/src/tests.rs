@@ -4668,6 +4668,29 @@ fn extern_out_param_passes_addr_of_mut() {
     );
 }
 
+/// A C-variadic foreign fn (`int printf(String fmt, ...)`) emits a trailing
+/// `...` in the `extern "C"` signature, and a trailing string-literal argument
+/// is marshalled to a `CString` `const char*` like a fixed `String` param
+/// (§L.4.2). Non-string trailing args (ints) pass through directly.
+#[test]
+fn extern_variadic_printf_marshals_trailing_string() {
+    let rust = emit(
+        "@extern(lib = \"c\") unsafe native { i32 printf(String fmt, ...); } \
+         public void main() { unsafe { printf(\"%s=%d\\n\", \"x\", 7); } }",
+    );
+    assert!(
+        rust.contains("pub fn printf(fmt: *const core::ffi::c_char, ...)"),
+        "extern sig should end with `...`: {rust}"
+    );
+    // Both the fmt and the trailing string literal get a CString temp.
+    assert!(rust.contains("let __c0 = ::std::ffi::CString::new("), "fmt CString: {rust}");
+    assert!(rust.contains("let __c1 = ::std::ffi::CString::new("), "trailing str CString: {rust}");
+    assert!(
+        rust.contains("__c1.as_ptr() as *const core::ffi::c_char"),
+        "trailing string passed as const char*: {rust}"
+    );
+}
+
 /// A `@layout(c, repr)` C enum may cross the FFI boundary by value: the foreign
 /// signature emits the plain enum name (it is already `#[repr(i32)]`, so it is
 /// FFI-safe as a bare `i32`). §L.1.3.
