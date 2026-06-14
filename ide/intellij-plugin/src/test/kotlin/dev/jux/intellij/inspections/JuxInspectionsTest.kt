@@ -111,6 +111,24 @@ class JuxInspectionsTest : BasePlatformTestCase() {
         assertFalse("override params are exempt", descriptions.any { it == "Parameter 'a' is never used" })
     }
 
+    /** A private property is owned by the §P never-observed inspection (W0971);
+     *  it must NOT also be flagged as an "unused field" (no double diagnostic). */
+    fun testPrivatePropertyNotFlaggedAsUnusedField() {
+        val descriptions = highlightDescriptions(
+            """
+            package demo;
+            public class A {
+                private String Lonely { get; set; } = "";
+            }
+            """.trimIndent(),
+        )
+        assertFalse(
+            "property must not be flagged as an unused field: $descriptions",
+            descriptions.any { it.contains("is never used") },
+        )
+        assertTrue("property is still covered by W0971", descriptions.any { it.contains("W0971") })
+    }
+
     fun testUnusedPrivateFieldFlaggedPublicSkipped() {
         val descriptions = highlightDescriptions(
             """
