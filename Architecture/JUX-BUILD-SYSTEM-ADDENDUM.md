@@ -1138,6 +1138,60 @@ Specifying `linkage = "dynamic"` under the `core` profile is `E0908` (`dynamic l
 
 The build tool generates appropriate linker flags from the configuration. The user never writes `-L`, `-l`, `-Wl,-Bstatic`, `/LIBPATH:`, or `-framework` directly. Platform differences are handled automatically.
 
+**How it is emitted (implemented).** Each `[ffi.<name>]` table is lowered into the generated `build.rs` as Cargo link directives, on every platform:
+
+- one `cargo:rustc-link-search=native=<dir>` per `lib_path` / `lib_paths` / `extra_lib_paths` (resolved to absolute paths against the project root);
+- one `cargo:rustc-link-lib=<kind>=<lib>` for the library (`<kind>=` is `static=` / `framework=` for those linkages; dynamic emits a plain `cargo:rustc-link-lib=<lib>`, Cargo's default);
+- one `cargo:rustc-link-lib=<dep>` per `extra_libs`.
+
+Because the build script now owns the library's linkage, the matching `@extern(lib = "<name>") unsafe native { … }` block's `#[link(name = "<name>")]` attribute is **dropped** from the emitted Rust (otherwise the library would be requested twice, possibly with a conflicting kind). A library that is **not** configured in any `[ffi.*]` table keeps its `#[link]` and links from the default system search path (the §L.7 slice-1 behavior, e.g. `kernel32` / `c`).
+
+**Worked example.** Project `jux.toml`:
+
+```toml
+[package]
+name = "sqlite_demo"
+
+[ffi.sqlite3]
+lib = "sqlite3"
+linkage = "static"
+lib_path = "vendor/sqlite/lib"
+extra_libs = ["pthread"]
+```
+
+with `src/main.jux`:
+
+```jux
+@extern(lib = "sqlite3")
+unsafe native {
+    int sqlite3_libversion_number();
+}
+public void main() {
+    unsafe { int v = sqlite3_libversion_number(); print($"sqlite $v"); }
+}
+```
+
+generates a `build.rs` containing (paths shown relative for brevity):
+
+```rust
+fn main() {
+    println!("cargo:rustc-link-search=native=<project>/vendor/sqlite/lib");
+    println!("cargo:rustc-link-lib=static=sqlite3");
+    println!("cargo:rustc-link-lib=pthread");
+    // (Windows version-info resource block follows, gated on the OS.)
+}
+```
+
+and the emitted `main.rs` extern block carries **no** `#[link]` attribute (build.rs links it):
+
+```rust
+extern "C" {
+    pub fn sqlite3_libversion_number() -> isize;
+}
+```
+
+**Implemented in this slice:** `lib`, `lib_path` / `lib_paths` / `extra_lib_paths`, `linkage` (`dynamic` / `static` / `framework`), `extra_libs`. **Not yet:** `lib_file`, `build_from_source` / `source_path` / `build_command` / `output_lib`, `{target.os}` / `{target.arch}` placeholders, `[ffi.*.target.<os>]` overrides, profile-default linkage (§B.14.4) and the `core`-profile `E0908` gate, and the `header` / bindgen keys (§B.13, a later slice).
+
 ### B.14.8. Documentation Generation
 
 `jux doc` lists FFI dependencies in the generated documentation under a `## Dependencies` section, e.g.:
