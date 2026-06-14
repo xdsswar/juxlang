@@ -2221,7 +2221,36 @@ public void copyAll(List<? extends Animal> source, List<? super Animal> dest) {
 List<String> names = new List<>();        // type inferred
 ```
 
-Generics are monomorphized — `List<int>` produces a packed array of ints with no boxing. This is invisible at the source level but provides Rust-level performance for generic code.
+#### Bounded type parameters (`extends`)
+
+Beyond `where`-constraints, a type parameter may declare nominal bounds with
+`extends`, in the full Java vocabulary:
+
+```jux
+// Multiple (intersection) bounds.
+public class Cage<T extends Animal & CanFly> implements Swing<T> { ... }
+
+// Generic and cross-referencing bounds, a self-referential (F-bounded) interface,
+// a fresh method param bounded by a class param, and a const generic, together:
+public interface Entity<E extends Entity<E>> extends Id, Named, Comparable<E> {}
+
+public class Registry<K extends Id & Named & Comparable<K>,
+                      V extends Container<? extends K>,
+                      int N> {
+    public <R extends K> Box<Pair<K, R>> pairWith(R other) { ... }
+    public static <E extends Entity<E>> E maxById(MyList<? extends E> xs) { ... }
+    public void drainInto(Sink<? super K> sink) { ... }
+}
+```
+
+Bounds may be multiple (`A & B`, an intersection), generic (`Comparable<K>`),
+self-referential (`E extends Entity<E>`), or reference an enclosing class param
+from a method (`R extends K`, meaning `R <: K`); const params (`int N`) compose
+in the same list. Inference works structurally through nested generics, so `E`
+is inferred from a `MyList<? extends E>` argument. The complete bound, inference,
+and lowering rules are in `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 to §T.4.8.
+
+Generics are monomorphized: `List<int>` produces a packed array of ints with no boxing. This is invisible at the source level but provides Rust-level performance for generic code.
 
 ### 7.9. Lambdas and Function Types
 

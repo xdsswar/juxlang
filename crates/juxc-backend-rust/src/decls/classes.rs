@@ -4432,6 +4432,13 @@ fn substitute_fn_signature(
     }
 }
 
+/// Substitute generic type parameters inside a [`TypeRef`] using `subst`
+/// (param name -> replacement type), recursing through generic args, array,
+/// and nullable shapes. A bare single-segment name present in the table is
+/// replaced wholesale; everything else is rebuilt with its sub-terms
+/// substituted. Used to specialize a generic method/interface signature with a
+/// concrete or inferred instantiation (e.g. `Container<T>::peek -> T` becomes
+/// `peek -> K` when emitting the `ContainerKind<K>` marker-trait impl).
 pub(crate) fn substitute_type_ref(
     ty: &juxc_ast::TypeRef,
     subst: &std::collections::HashMap<String, juxc_ast::TypeRef>,
