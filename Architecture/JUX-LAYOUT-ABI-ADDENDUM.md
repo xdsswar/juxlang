@@ -99,8 +99,7 @@ positional constructor** synthesized from its fields (declaration order), like a
 initializers) opts out of the synthesis. Field access through a pointer
 (`(*ptr).field`) and the by-value path are supported.
 
-> Not yet emitted: `@layout(c)` on `record`/`enum` (the `@layout(c, repr = "…")`
-> C enum form, §L.1.3).
+> Not yet emitted: `@layout(c)` on `record`.
 
 ### L.1.3. C-Compatible Enum: `@layout(c, repr = "i32")`
 
@@ -117,7 +116,24 @@ public enum HttpStatus {
 
 This produces a value that is bit-identical to a C `int` enum. The discriminator type is the named integer type. Without explicit values, the compiler assigns 0, 1, 2, ... in declaration order.
 
-Sum-type enums (with payloads) cannot use `@layout(c)`: there is no portable C representation of a tagged union. Cross the boundary via two `@layout(c)` types (a tag struct and a union) marshalled by hand.
+**Lowering (implemented).** A `@layout(c, repr = "i32")` enum lowers to a flat
+Rust `#[repr(i32)]` enum with the explicit discriminant on each variant:
+
+```rust
+#[repr(i32)]
+pub(crate) enum HttpStatus {
+    Ok = 200,
+    NotFound = 404,
+    ServerError = 500,
+}
+```
+
+The `repr` argument names the backing integer type (`i32`, `u8`, ...); each
+variant's `= <const>` discriminant is emitted verbatim. The enum is then a plain
+integer at the ABI, so `s as i32` reads the discriminant you hand to (or receive
+from) a C function. Cross the boundary by value (it is `Copy`) or by pointer.
+
+Sum-type enums (with payloads) cannot use `@layout(c)`: there is no portable C representation of a tagged union, so a payload-carrying variant under `@layout(c)` is rejected with **E0509**. Cross the boundary via two `@layout(c)` types (a tag struct and a union) marshalled by hand.
 
 ### L.1.4. Alignment Control: `@align(N)`
 
