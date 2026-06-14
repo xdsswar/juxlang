@@ -295,6 +295,8 @@ The mangling is **not stable across compiler versions**. Programs that depend on
 - The function may not be generic (monomorphized exports require name disambiguation that defeats the whole point of `@export`).
 - The function may not throw; exceptions cannot cross the FFI boundary safely. Use `Result<T, E>` returned by value, or out-parameters for error info.
 
+> **Phase-1 limitation.** `@export` is currently implemented on **free functions only**. `@export` on a method (static or instance) is rejected with **E0508** (an instance method has a receiver C cannot express; static-method export is deferred). Move the body to a free function for now.
+
 **Lowering (implemented).** A purely-primitive / pointer / `@layout(c)` export is
 emitted inline as `#[no_mangle] pub extern "C" fn <symbol>(…)`. An export whose
 signature mentions `String` is emitted as the ordinary Jux function (its Jux name,

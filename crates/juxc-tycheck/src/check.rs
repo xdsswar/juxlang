@@ -819,6 +819,30 @@ impl<'a> Checker<'a> {
         let is_c_enum =
             crate::symbol_table::is_layout_c_annotation(&enum_decl.annotations);
         if is_c_enum {
+            // A C enum is a plain integer with one concrete repr, so it cannot
+            // be generic (`@layout(c) enum E<T>`): type parameters have no place
+            // in an integer enum.
+            if !enum_decl.generic_params.is_empty() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0509_LayoutCOnNonAggregate,
+                        format!(
+                            "`@layout(c) enum {}` may not be generic — a C enum is a plain integer \
+                             with one concrete representation; remove the type parameters",
+                            enum_decl.name.text,
+                        ),
+                    )
+                    .with_span(enum_decl.span),
+                );
+            }
+            // A C enum's discriminants become Rust enum discriminants, which
+            // must be compile-time constants. The backend const-folds them; a
+            // discriminant that does NOT reduce to an integer would be silently
+            // dropped (wrong value), so reject it here.
+            let disc_ctx = crate::const_eval::ConstCtx {
+                symbols: self.symbols,
+                generic_param_names: &std::collections::HashSet::new(),
+            };
             for variant in &enum_decl.variants {
                 if !variant.payload.is_empty() {
                     self.diagnostics.push(
@@ -834,6 +858,22 @@ impl<'a> Checker<'a> {
                         )
                         .with_span(variant.span),
                     );
+                }
+                if let Some(disc) = &variant.discriminant {
+                    if crate::const_eval::eval_const_int(disc, &disc_ctx).is_err() {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0509_LayoutCOnNonAggregate,
+                                format!(
+                                    "discriminant of variant `{}` in `@layout(c) enum {}` must be a \
+                                     constant integer — a C enum's values are fixed at compile time",
+                                    variant.name.text,
+                                    enum_decl.name.text,
+                                ),
+                            )
+                            .with_span(variant.span),
+                        );
+                    }
                 }
             }
         } else {
@@ -1719,6 +1759,22 @@ impl<'a> Checker<'a> {
                     .with_span(class.span),
                 );
             } else {
+                // A C-compatible struct has ONE concrete memory layout, so it
+                // cannot be generic (`@layout(c) struct Box<T>`): a type
+                // parameter has no fixed size/repr at the C boundary.
+                if !class.generic_params.is_empty() {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0509_LayoutCOnNonAggregate,
+                            format!(
+                                "`@layout(c) struct {}` may not be generic — a C-compatible type \
+                                 has one concrete layout; remove the type parameters",
+                                class.name.text,
+                            ),
+                        )
+                        .with_span(class.span),
+                    );
+                }
                 for field in &class.fields {
                     if field.is_static {
                         continue;
@@ -1986,6 +2042,24 @@ impl<'a> Checker<'a> {
     /// plus a `this` binding. Abstract methods (body = None) are
     /// skipped.
     fn check_method(&mut self, method: &FnDecl, this_ty: &Ty) {
+        // `@export` (C linkage) is only honored on FREE functions in Phase 1.
+        // On a method it was silently ignored (no C symbol emitted), so flag it:
+        // an instance method has a receiver C can't express, and static-method
+        // export is a deferred spec item (JUX-LANG-V1 §8.4 / Layout-ABI §L.3.2).
+        if crate::symbol_table::has_annotation(&method.annotations, "export") {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0508_FfiTypeNotAllowed,
+                    format!(
+                        "`@export` is not supported on method `{}` in this phase — `@export` gives \
+                         C linkage to a FREE function; move it out of the class (an instance method \
+                         has a receiver C cannot express, and static-method export is deferred)",
+                        method.name.text,
+                    ),
+                )
+                .with_span(method.span),
+            );
+        }
         let Some(body) = &method.body else { return };
         self.check_param_defaults(&method.params);
         let is_static = method
@@ -7825,6 +7899,44 @@ mod tests {
              public void main() {}",
         );
         assert!(has(&bad, code::Code::E0509_LayoutCOnNonAggregate), "{bad:?}");
+    }
+
+    /// A generic `@layout(c)` struct or enum has no fixed C layout → E0509.
+    #[test]
+    fn generic_layout_c_aggregate_is_e0509() {
+        let s = run("@layout(c) struct Box<T> { i32 v; } public void main() {}");
+        assert!(has(&s, code::Code::E0509_LayoutCOnNonAggregate), "{s:?}");
+        let e = run("@layout(c, repr = \"i32\") enum E<T> { A = 1 } public void main() {}");
+        assert!(has(&e, code::Code::E0509_LayoutCOnNonAggregate), "{e:?}");
+    }
+
+    /// A non-const C-enum discriminant (`A = foo()`) → E0509; a constant
+    /// discriminant (literal or const-foldable) is clean.
+    #[test]
+    fn non_const_c_enum_discriminant_is_e0509() {
+        // `g()` does IO, so it is not const-evaluable — the backend would
+        // silently drop the value, so it must be rejected.
+        let bad = run(
+            "i32 g() { print(\"io\"); return 1; } \
+             @layout(c, repr = \"i32\") enum M { A = g(), B } public void main() {}",
+        );
+        assert!(has(&bad, code::Code::E0509_LayoutCOnNonAggregate), "{bad:?}");
+        let ok = run("@layout(c, repr = \"i32\") enum N { A = 200, B = 1 + 1 } public void main() {}");
+        assert!(!has(&ok, code::Code::E0509_LayoutCOnNonAggregate), "{ok:?}");
+    }
+
+    /// `@export` on a method (static or instance) is E0508 in Phase 1 — it is
+    /// only honored on free functions.
+    #[test]
+    fn export_on_method_is_e0508() {
+        let st = run(
+            "class Foo { @export public static int bar(int x) { return x; } } public void main() {}",
+        );
+        assert!(has(&st, code::Code::E0508_FfiTypeNotAllowed), "{st:?}");
+        let inst = run(
+            "class Foo { @export public int baz(int x) { return x; } } public void main() {}",
+        );
+        assert!(has(&inst, code::Code::E0508_FfiTypeNotAllowed), "{inst:?}");
     }
 
     /// A `@layout(c)` struct with bare fields and no constructor gets an
