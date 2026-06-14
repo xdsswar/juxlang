@@ -27,6 +27,32 @@ fn has_ts_annotation(fn_decl: &FnDecl) -> bool {
     })
 }
 
+/// The C symbol name for an `@export`ed free function (JUX-LANG-V1 §8.4 /
+/// Layout-ABI §L.3.2), or `None` when the function is not exported. Plain
+/// `@export` uses the Jux name; `@export(name = "…")` overrides it. The match is
+/// case-insensitive, like every built-in annotation.
+fn export_symbol_name(fn_decl: &FnDecl) -> Option<String> {
+    let ann = fn_decl.annotations.iter().find(|a| {
+        a.name
+            .segments
+            .last()
+            .map(|s| s.text.eq_ignore_ascii_case("export"))
+            .unwrap_or(false)
+    })?;
+    for arg in &ann.args {
+        if let juxc_ast::AnnotationArg::Named { name, value } = arg {
+            if name.text.eq_ignore_ascii_case("name") {
+                if let juxc_ast::Expr::Literal(juxc_ast::Literal::String(s)) = value {
+                    if !s.is_empty() {
+                        return Some(s.clone());
+                    }
+                }
+            }
+        }
+    }
+    Some(fn_decl.name.text.clone())
+}
+
 impl RustEmitter {
     /// Emit a Jux `@extern(lib = "…") unsafe native { … }` block as a Rust
     /// `#[link(name = "…")] extern "C" { … }` (Layout-ABI §L.7 / pipeline
@@ -168,6 +194,25 @@ impl RustEmitter {
         let mut combined_generics = fn_decl.generic_params.clone();
         combined_generics.extend(lifter.new_params.iter().cloned());
 
+        // `@export` (§8.4): a C-callable wrapper. Emit `#[no_mangle] pub extern
+        // "C" fn <symbol>(…)` so the function is reachable from C under its
+        // (overridable) unmangled name. Tycheck restricts an exported function
+        // to a plain, FFI-compatible signature, so the normal primitive /
+        // pointer / `@layout(c)`-struct type emission already produces the C ABI.
+        // The Rust function keeps its Jux name (so internal Jux calls still
+        // resolve); the C symbol name is set by the attribute: `#[no_mangle]`
+        // for plain `@export` (Jux name == C symbol), or `#[export_name = "…"]`
+        // for `@export(name = "…")`.
+        let export_name = export_symbol_name(fn_decl);
+        if let Some(sym) = &export_name {
+            self.w.emit_indent();
+            if sym == &fn_decl.name.text {
+                self.w.push_str("#[no_mangle]\n");
+            } else {
+                self.w.push_str(&format!("#[export_name = \"{sym}\"]\n"));
+            }
+        }
+
         self.w.emit_indent();
         // When the compilation unit is wrapped in `pub mod a::b::…`,
         // user-declared visibility on top-level functions becomes
@@ -176,7 +221,11 @@ impl RustEmitter {
         // At crate root (no package) we keep the historical
         // "drop visibility, emit a private `fn`" behavior so the
         // existing test corpus stays green.
-        if !self.symbols.package.is_empty() {
+        if export_name.is_some() {
+            // C linkage: public + `extern "C"`. (Tycheck rejects `async` /
+            // `unsafe` / generic exports, so no keyword-ordering conflict.)
+            self.w.push_str("pub extern \"C\" ");
+        } else if !self.symbols.package.is_empty() {
             // §TS.1 tests/hooks are ordinary functions with NO visibility
             // requirement, but the synthesized test runner is `fn main()`
             // at the CRATE ROOT calling `pkg::path::test_fn()` — a
@@ -201,11 +250,17 @@ impl RustEmitter {
         // precedes `fn` (after `async`, matching Rust's `async unsafe fn`
         // ordering — though Jux writes `unsafe` first, the emitted Rust
         // tolerates either since `async` is rare on unsafe fns).
-        if fn_decl.modifiers.contains(&juxc_ast::FnModifier::Unsafe) {
+        // `unsafe` and `extern "C"` can't both precede `fn` in an arbitrary
+        // order; an `@export` already emitted `extern "C"` above, and tycheck
+        // forbids an `unsafe`/`async` export, so suppress the keyword here.
+        if export_name.is_none()
+            && fn_decl.modifiers.contains(&juxc_ast::FnModifier::Unsafe)
+        {
             self.w.push_str("unsafe ");
         }
         self.w.push_str("fn ");
-        // Async-main / args-main rename — see comments above.
+        // Async-main / args-main rename — see comments above. An `@export`
+        // function keeps its Jux name (the C symbol is set by the attribute).
         if is_async_main {
             self.w.push_str("__jux_async_main");
         } else if is_args_main {
