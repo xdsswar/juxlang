@@ -4670,6 +4670,31 @@ fn extern_string_and_out_combine() {
     assert!(rust.contains("::core::ptr::addr_of_mut!(h)"), "out arg: {rust}");
 }
 
+/// `@export` gives a free function C linkage: `#[no_mangle] pub extern "C" fn`
+/// for the plain form, and `#[export_name = "…"]` (keeping the Jux name on the
+/// Rust fn, so internal calls still resolve) for `@export(name = "…")`.
+#[test]
+fn export_fn_gets_c_linkage() {
+    let rust = emit(
+        "@export public int add(int a, int b) { return a + b; } \
+         @export(name = \"jux_mul\") public int mul(int a, int b) { return a * b; } \
+         public void main() {}",
+    );
+    assert!(rust.contains("#[no_mangle]"), "plain @export → #[no_mangle]: {rust}");
+    assert!(
+        rust.contains("pub extern \"C\" fn add(a: isize, b: isize) -> isize"),
+        "add C ABI signature: {rust}"
+    );
+    assert!(
+        rust.contains("#[export_name = \"jux_mul\"]"),
+        "named export → #[export_name]: {rust}"
+    );
+    assert!(
+        rust.contains("pub extern \"C\" fn mul("),
+        "mul keeps its Jux name on the Rust fn: {rust}"
+    );
+}
+
 /// A numeric/pointer-only foreign call is NOT block-wrapped — it lowers to a
 /// bare `name(args)` (the generic call path), no `CString`/`CStr` machinery.
 #[test]

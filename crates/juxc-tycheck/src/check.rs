@@ -696,6 +696,87 @@ impl<'a> Checker<'a> {
         false
     }
 
+    /// Validate an `@export` (§8.4) free function. It becomes a `pub extern "C"
+    /// fn`, so its signature must be plain and C-compatible: each parameter and
+    /// the return is a primitive, a raw pointer, or a `@layout(c)` value struct
+    /// (NOT `String` — exported-side string marshalling is a later slice), and
+    /// the function may not be generic, `async`, `unsafe`, or `throws`.
+    /// Violations are **E0508**.
+    fn check_export_signature(&mut self, fn_decl: &FnDecl) {
+        if !crate::symbol_table::has_annotation(&fn_decl.annotations, "export") {
+            return;
+        }
+        let name = &fn_decl.name.text;
+        if !fn_decl.generic_params.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0508_FfiTypeNotAllowed,
+                    format!("`@export` function `{name}` may not be generic — a C entry point has one concrete signature"),
+                )
+                .with_span(fn_decl.span),
+            );
+        }
+        if fn_decl.modifiers.iter().any(|m| matches!(m, juxc_ast::FnModifier::Unsafe)) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0508_FfiTypeNotAllowed,
+                    format!("`@export` function `{name}` may not be `unsafe`"),
+                )
+                .with_span(fn_decl.span),
+            );
+        }
+        if matches!(fn_decl.return_type, juxc_ast::ReturnType::AsyncType(_)) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0508_FfiTypeNotAllowed,
+                    format!("`@export` function `{name}` may not be `async`"),
+                )
+                .with_span(fn_decl.span),
+            );
+        }
+        if !fn_decl.throws.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0508_FfiTypeNotAllowed,
+                    format!("`@export` function `{name}` may not declare `throws` — C has no exceptions"),
+                )
+                .with_span(fn_decl.span),
+            );
+        }
+        for p in &fn_decl.params {
+            if !self.ffi_struct_field_ok(&p.ty) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0508_FfiTypeNotAllowed,
+                        format!(
+                            "parameter `{}` of `@export` function `{name}` has type `{}`, which is \
+                             not C-compatible — use a primitive, a raw pointer (`T*`), or a \
+                             `@layout(c)` struct",
+                            p.name.text,
+                            type_ref_display(&p.ty),
+                        ),
+                    )
+                    .with_span(p.span),
+                );
+            }
+        }
+        if let juxc_ast::ReturnType::Type(t) = &fn_decl.return_type {
+            if !self.ffi_struct_field_ok(t) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0508_FfiTypeNotAllowed,
+                        format!(
+                            "return type `{}` of `@export` function `{name}` is not C-compatible — \
+                             use a primitive, a raw pointer (`T*`), a `@layout(c)` struct, or `void`",
+                            type_ref_display(t),
+                        ),
+                    )
+                    .with_span(fn_decl.span),
+                );
+            }
+        }
+    }
+
     /// Walk an enum's operator bodies. Same scope shape as records:
     /// `this` is the enum's type, operator params are declared into
     /// the body's scope. Deleted operators have no body and are
@@ -1255,6 +1336,7 @@ impl<'a> Checker<'a> {
     }
 
     fn check_function(&mut self, fn_decl: &FnDecl) {
+        self.check_export_signature(fn_decl);
         let Some(body) = &fn_decl.body else { return };
         self.check_param_defaults(&fn_decl.params);
         self.env.push_scope();
@@ -7560,6 +7642,24 @@ mod tests {
         );
         assert!(!has(&d, code::Code::E0600_FieldNotDefinitelyAssigned), "{d:?}");
         assert!(!has(&d, code::Code::E0411_WrongArgCount), "{d:?}");
+    }
+
+    // --- §8.4 `@export` (Jux → C) ---
+
+    /// A clean `@export` signature (primitive params/return) is accepted.
+    #[test]
+    fn export_clean_signature_ok() {
+        let d = run(
+            "@export public int add(int a, int b) { return a + b; } public void main() {}",
+        );
+        assert!(!has(&d, code::Code::E0508_FfiTypeNotAllowed), "{d:?}");
+    }
+
+    /// A non-C-compatible `@export` parameter (`String`) is E0508.
+    #[test]
+    fn export_string_param_is_e0508() {
+        let d = run("@export public int bad(String s) { return 0; } public void main() {}");
+        assert!(has(&d, code::Code::E0508_FfiTypeNotAllowed), "{d:?}");
     }
 
     // --- §M.14.2 `final` parameter / local reassignment (E0464) ---

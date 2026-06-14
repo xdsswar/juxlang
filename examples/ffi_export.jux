@@ -1,0 +1,23 @@
+// @export (JUX-LANG-V1 §8.4): give a Jux function C linkage so C - or any
+// language with a C FFI - can call it. Plain @export uses the Jux name as the C
+// symbol; @export(name = "...") sets a custom symbol. (Build a `[lib]` crate
+// with `crate-type = ["cdylib"]` / `["staticlib"]` to produce a .dll / .so / .a
+// that exposes these symbols.)
+//
+// The signature must be C-compatible: primitives, raw pointers, or `@layout(c)`
+// structs (no `String` / class / generic / throws) - validated as E0508.
+
+@export
+public int jux_add(int a, int b) {
+    return a + b;
+}
+
+@export(name = "jux_square")
+public int square(int n) {
+    return n * n;
+}
+
+public void main() {
+    // The exported functions are ordinary Jux functions too - callable here.
+    print($"add=${jux_add(2, 3)} square=${square(5)}");
+}
