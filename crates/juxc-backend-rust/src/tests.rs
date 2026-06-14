@@ -4708,6 +4708,25 @@ fn extern_c_enum_param_and_return() {
     );
 }
 
+/// A `@layout(c)` C enum may be a FIELD of a `@layout(c)` value struct: the enum
+/// derives `Copy` (no payloads), so the `#[repr(C)] #[derive(.. Copy ..)]` struct
+/// stays valid and the field emits the bare enum type. §L.1.2/§L.1.3.
+#[test]
+fn c_enum_as_value_struct_field() {
+    let rust = emit(
+        "@layout(c, repr = \"i32\") enum Kind { A = 1, B = 2 } \
+         @layout(c) struct Tagged { Kind kind; i32 value; } \
+         public void main() {}",
+    );
+    assert!(rust.contains("#[repr(i32)]"), "enum repr(i32): {rust}");
+    // The struct is the flat repr(C) Copy value struct with the enum field.
+    assert!(rust.contains("#[repr(C)]"), "struct repr(C): {rust}");
+    assert!(
+        rust.contains("kind: Kind") || rust.contains("pub kind: Kind"),
+        "struct carries the bare enum field type: {rust}"
+    );
+}
+
 /// The sqlite-style combination: a `String` argument AND an `out` argument in
 /// one call marshal together (CString temp + `addr_of_mut!`).
 #[test]
