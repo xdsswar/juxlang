@@ -2132,7 +2132,33 @@ print(Planet.Earth.surfaceGravity());    // 9.802...
 
 This is the same shape as Java's enum-with-fields, but with all the extra power of payload-carrying variants.
 
-#### 7.7.5. Sealed by Default
+#### 7.7.5. Recursive Enums
+
+A variant payload may name the enum itself, giving the classic sum-of-products tree (arithmetic expressions, JSON, parse trees). This works directly, with no special syntax:
+
+```java
+public enum Expr {
+    Num(int),
+    Add(Expr, Expr),         // self-referential payload
+    Mul(Expr, Expr)
+}
+
+public int eval(Expr e) {
+    switch (e) {
+        case Expr.Num(var n)    -> { return n; }
+        case Expr.Add(var a, var b) -> { return eval(a) + eval(b); }
+        case Expr.Mul(var a, var b) -> { return eval(a) * eval(b); }
+    }
+}
+
+// (2 + 3) * 4 == 20
+var tree = Expr.Mul(Expr.Add(Expr.Num(2), Expr.Num(3)), Expr.Num(4));
+print(eval(tree));
+```
+
+Generic recursive enums (`enum Tree<T> { Leaf(T), Branch(Tree<T>, Tree<T>) }`) work the same way. A self-referential slot is automatically heap-indirected so the value has a finite, known size; the recursion is invisible at the source level — construct with `Expr.Add(a, b)` and destructure with `case Expr.Add(var a, var b)` exactly as for any other variant. (A slot that reaches the enum through a collection — `Expr[]`, a `List<Expr>` field — is already heap-backed, so it carries no extra cost.)
+
+#### 7.7.6. Sealed by Default
 
 Enums are **sealed** — the compiler knows every variant. This enables:
 
@@ -2142,7 +2168,7 @@ Enums are **sealed** — the compiler knows every variant. This enables:
 
 You cannot extend an enum from outside its declaration. To add new variants, edit the enum source. To allow open extension, use `sealed interface` + `record` implementations instead (V1 §7.5).
 
-#### 7.7.6. Comparison
+#### 7.7.7. Comparison
 
 | Feature                          | C enum | Java enum | Jux enum |
 |----------------------------------|--------|-----------|----------|

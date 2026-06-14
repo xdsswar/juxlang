@@ -1,0 +1,31 @@
+// Regression: a recursive enum — an arithmetic expression tree whose `Add`/`Mul`
+// variants carry the enum itself by value (`Add(Expr, Expr)`). A self-referential
+// payload slot would make the lowered Rust enum infinitely sized (rustc E0072),
+// so the backend boxes exactly those slots in the declaration
+// (`Add(Box<Expr>, Box<Expr>)`), wraps each construction argument `Box::new(...)`,
+// and unboxes the match binders once per arm (`let a = *a;`) so the recursive
+// `eval(a)` sees a plain `Expr`. The three sites must agree or the crate fails to
+// compile. Before the fix this leaked rustc E0072 with no Jux diagnostic.
+package recenum;
+
+public enum Expr {
+    Num(int),
+    Add(Expr, Expr),
+    Mul(Expr, Expr)
+}
+
+// Recursive evaluator: every arm that destructures a self-referential slot
+// recurses on the (unboxed) binder.
+public int eval(Expr e) {
+    switch (e) {
+        case Expr.Num(var n) -> { return n; }
+        case Expr.Add(var a, var b) -> { return eval(a) + eval(b); }
+        case Expr.Mul(var a, var b) -> { return eval(a) * eval(b); }
+    }
+}
+
+public void main() {
+    // (2 + 3) * 4 = 20 — nested construction boxes at each level.
+    var tree = Expr.Mul(Expr.Add(Expr.Num(2), Expr.Num(3)), Expr.Num(4));
+    print($"result=${eval(tree)}");
+}

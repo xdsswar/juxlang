@@ -1534,8 +1534,17 @@ impl RustEmitter {
         // the matching variant.
         let prev = self.emitting_format_arg;
         self.emitting_format_arg = false;
+        // Recursive enum-variant construction: a self-referential payload slot
+        // is boxed in the enum decl (`Branch(Box<Tree>, …)`), so wrap the
+        // matching argument `Box::new(arg)` here. Empty unless this is an enum
+        // ctor with at least one boxed slot.
+        let boxed_slots = self.enum_ctor_boxed_slots(call);
         for (i, arg) in call.args.iter().enumerate() {
             if i > 0 { self.w.push_str(", "); }
+            let box_this = boxed_slots.get(i).copied().unwrap_or(false);
+            if box_this {
+                self.w.push_str("std::boxed::Box::new(");
+            }
             // §G.9.2: a borrowed parameter (`&T`) of an external method gets the
             // call-site `&` back — `m.containsKey("a")` → `m.contains_key(&"a"…)`.
             if self.callee_param_is_ref(&call.callee, i) {
@@ -1549,6 +1558,9 @@ impl RustEmitter {
                 self.emit_byref_arg(arg);
             } else {
                 self.emit_call_arg_value(call, i, arg);
+            }
+            if box_this {
+                self.w.push(')');
             }
         }
         self.emitting_format_arg = prev;
@@ -1609,6 +1621,77 @@ impl RustEmitter {
     /// directly at the call slot.
     pub(crate) fn arg_is_byref(&self, call: &CallExpr, i: usize) -> bool {
         self.callee_byref_param(&call.callee, i)
+    }
+
+    /// For an enum-variant **construction** call (`Tree.Branch(a, b)`), return a
+    /// per-argument flag vector marking which payload slots are self-referential
+    /// recursive slots that the enum decl boxed (`Branch(Box<Tree>, Box<Tree>)`).
+    /// Such args must be wrapped `Box::new(arg)` at the construction site so the
+    /// value matches the boxed slot type. Returns an empty vector when the call
+    /// is not an enum-variant construction (or no slot is boxed) — callers index
+    /// it with `.get(i).copied().unwrap_or(false)`.
+    ///
+    /// Resolution mirrors the enum-variant path in `emit_field`: the callee must
+    /// be `Enum.Variant` (a `Field` whose object is a single-segment path naming
+    /// a known enum), resolved bare → import-alias → cross-package last-segment.
+    pub(crate) fn enum_ctor_boxed_slots(&self, call: &CallExpr) -> Vec<bool> {
+        let Expr::Field(f) = &*call.callee else {
+            return Vec::new();
+        };
+        let Expr::Path(qn) = &*f.object else {
+            return Vec::new();
+        };
+        if qn.segments.len() != 1 {
+            return Vec::new();
+        }
+        let bare = qn.segments[0].text.as_str();
+        // Resolve the enum's FQN key in `symbols.enums`: direct, then via the
+        // current unit's import-alias map, then a cross-package last-segment scan.
+        let fqn_key = if self.symbols.enums.contains_key(bare) {
+            Some(bare.to_string())
+        } else if let Some(idx) = self.current_unit_idx {
+            self.symbols
+                .units
+                .get(idx)
+                .and_then(|ctx| ctx.unqualified.get(bare))
+                .filter(|fqn| self.symbols.enums.contains_key(fqn.as_str()))
+                .cloned()
+                .or_else(|| {
+                    self.symbols
+                        .enums
+                        .keys()
+                        .find(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+                        .cloned()
+                })
+        } else {
+            self.symbols
+                .enums
+                .keys()
+                .find(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+                .cloned()
+        };
+        let Some(fqn_key) = fqn_key else {
+            return Vec::new();
+        };
+        let Some(sig) = self.symbols.enums.get(&fqn_key) else {
+            return Vec::new();
+        };
+        let Some(variant) = sig.variants.get(f.field.text.as_str()) else {
+            return Vec::new();
+        };
+        // The enum's bare name — what a self-referential payload slot's type
+        // names. Use the FQN's last segment so cross-package keys resolve too.
+        let enum_bare = fqn_key.rsplit('.').next().unwrap_or(fqn_key.as_str());
+        let flags: Vec<bool> = variant
+            .payload
+            .iter()
+            .map(|slot| crate::decls::enums::is_recursive_enum_slot(slot, enum_bare))
+            .collect();
+        if flags.iter().any(|b| *b) {
+            flags
+        } else {
+            Vec::new()
+        }
     }
 
     /// True when emitting `call` produces a Rust **block expression** `{ … }`
