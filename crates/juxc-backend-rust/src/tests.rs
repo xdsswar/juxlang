@@ -4303,6 +4303,51 @@ fn cargo_toml_registry_dep_is_linked() {
     assert_eq!(toml.matches("[dependencies]").count(), 1, "{toml}");
 }
 
+/// Tier-0 (`optimizations.md`): a stand-alone crate with no user profiles gets
+/// an optimized default `[profile.release]` (opt-level=3 / lto / codegen-units=1
+/// / strip / overflow-checks). `panic` is NOT auto-set (would break try/catch).
+#[test]
+fn cargo_toml_injects_tier0_release_profile() {
+    let target = CrateTarget::Bin { name: "app".to_string() };
+    let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &[], &[], false);
+    assert!(toml.contains("[profile.release]"), "{toml}");
+    assert!(toml.contains("opt-level = 3"), "{toml}");
+    assert!(toml.contains("lto = \"thin\""), "{toml}");
+    assert!(toml.contains("codegen-units = 1"), "{toml}");
+    assert!(toml.contains("strip = \"symbols\""), "{toml}");
+    assert!(toml.contains("overflow-checks = false"), "{toml}");
+    // panic stays Cargo's default (unwind) — Jux try/catch needs it.
+    assert!(!toml.contains("panic ="), "panic must not be auto-set: {toml}");
+}
+
+/// A workspace MEMBER carries no profiles (the workspace root owns them), so the
+/// Tier-0 injection must be skipped when `in_workspace`.
+#[test]
+fn cargo_toml_workspace_member_has_no_profiles() {
+    let target = CrateTarget::Bin { name: "app".to_string() };
+    let toml = cargo_toml_for_target(&target, true, &CargoMeta::default(), &[], &[], true);
+    assert!(!toml.contains("[profile.release]"), "{toml}");
+}
+
+/// A user-pinned `[profile.release]` key wins; Tier-0 only fills the gaps. A
+/// size build (`opt-level = "z"`) keeps "z" but still gets lto / strip / etc.
+#[test]
+fn tier0_does_not_override_user_profile_keys() {
+    let target = CrateTarget::Bin { name: "app".to_string() };
+    let meta = CargoMeta {
+        profiles: vec![crate::CargoProfile {
+            name: "release".to_string(),
+            entries: vec![("opt-level".to_string(), "\"z\"".to_string())],
+        }],
+        ..CargoMeta::default()
+    };
+    let toml = cargo_toml_for_target(&target, true, &meta, &[], &[], false);
+    assert!(toml.contains("opt-level = \"z\""), "user opt-level kept: {toml}");
+    assert!(!toml.contains("opt-level = 3"), "Tier-0 must not re-add opt-level: {toml}");
+    assert!(toml.contains("lto = \"thin\""), "Tier-0 fills lto: {toml}");
+    assert!(toml.contains("strip = \"symbols\""), "Tier-0 fills strip: {toml}");
+}
+
 /// A class downcast target (`x as Dog`) makes the base's `<Name>Kind` trait
 /// carry a `__jux_as_Dog` runtime-type hook (default `None`), and the concrete
 /// `impl AnimalKind for Dog` overrides it with `Some(self.clone())`.

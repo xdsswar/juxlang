@@ -4973,20 +4973,62 @@ fn escape_toml(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Tier-0 release-profile defaults (`optimizations.md`): the "cheap, immediate,
+/// large" build-speed win. Emitted into every STAND-ALONE crate's
+/// `[profile.release]` for each key the user hasn't pinned, so a `--release`
+/// build is optimized out of the box (debug builds ignore the table).
+///
+/// `panic` is deliberately NOT set here: Jux `try/catch` lowers to
+/// `panic_any` + `catch_unwind`, and `panic = "abort"` would break catch
+/// recovery. A user who wants `abort` opts in via their own `[profile.release]`.
+fn tier0_release_defaults() -> [(&'static str, &'static str); 5] {
+    [
+        ("opt-level", "3"),
+        ("lto", "\"thin\""),
+        ("codegen-units", "1"),
+        ("strip", "\"symbols\""),
+        ("overflow-checks", "false"),
+    ]
+}
+
+/// Ensure `profiles` carries a `release` profile pre-filled with the Tier-0
+/// defaults, WITHOUT overriding any key the user already set (per-key override
+/// wins). Returns the effective profile list to render.
+fn with_tier0_release_defaults(profiles: &[CargoProfile]) -> Vec<CargoProfile> {
+    let mut out = profiles.to_vec();
+    let release = match out.iter_mut().find(|p| p.name == "release") {
+        Some(p) => p,
+        None => {
+            out.push(CargoProfile {
+                name: "release".to_string(),
+                entries: Vec::new(),
+            });
+            out.last_mut().unwrap()
+        }
+    };
+    for (k, v) in tier0_release_defaults() {
+        if !release.entries.iter().any(|(ek, _)| ek == k) {
+            release.entries.push((k.to_string(), v.to_string()));
+        }
+    }
+    out
+}
+
 /// Render the `[profile.<name>]` tables (§B.9) for a generated `Cargo.toml`.
 ///
-/// Each [`CargoProfile`] becomes a `[profile.<name>]` header followed by its
-/// already-rendered `key = value` entries. Returns `""` when there are no
-/// profiles, so callers can splice it unconditionally. A trailing blank line
-/// separates the profile block from whatever follows.
+/// The Tier-0 release defaults are injected first (see
+/// [`with_tier0_release_defaults`]), so a stand-alone crate always gets an
+/// optimized `[profile.release]`. Each [`CargoProfile`] becomes a
+/// `[profile.<name>]` header followed by its already-rendered `key = value`
+/// entries. A trailing blank line separates the profile block from whatever
+/// follows. Only ever called for stand-alone crates — workspace members carry
+/// profiles in the workspace root manifest, so the caller skips this for them.
 fn render_profiles(profiles: &[CargoProfile]) -> String {
-    if profiles.is_empty() {
-        return String::new();
-    }
+    let profiles = with_tier0_release_defaults(profiles);
     // Lead with a blank line so the profile block reads cleanly after the
     // preceding table (`[workspace]` / `[[bin]]`).
     let mut out = String::from("\n");
-    for p in profiles {
+    for p in &profiles {
         out.push_str(&format!("[profile.{}]\n", p.name));
         for (k, v) in &p.entries {
             out.push_str(&format!("{k} = {v}\n"));
