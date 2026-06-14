@@ -1,0 +1,24 @@
+// A minimal desktop window driven entirely from Jux, on the Rust `minifb`
+// crate (declared as `rust.minifb` in jux.toml). Demonstrates the crate-interop
+// chain end to end:
+//
+//   - `new WindowOptions()` — `WindowOptions` has no constructor; Jux gives a
+//     no-ctor foreign type an implicit zero-arg constructor that lowers to
+//     `WindowOptions::default()`.
+//   - `new Window("…", w, h, opts)` — the Jux String is borrowed to the `&str`
+//     parameter, and `Window::new`'s `Result` is unwrapped automatically (it
+//     panics on failure, recoverable by a Jux try/catch).
+//   - method calls (`isOpen()`, `update()`) map to the real snake_case methods.
+
+import rust.minifb.Window;
+import rust.minifb.WindowOptions;
+
+public void main() {
+    var opts = new WindowOptions();
+    var window = new Window("Jux on minifb", 480, 320, opts);
+
+    // Pump the window until the user closes it.
+    while (window.isOpen()) {
+        window.update();
+    }
+}
