@@ -431,6 +431,11 @@ runs. That currently includes:
 - **Multi-file workspaces:** cross-file `import`s, package-private visibility,
   and `jux.toml`-driven multi-module project builds with per-module binary
   metadata (version, author, icon).
+- **Optimized release builds:** `--release` emits a tuned `[profile.release]` by
+  default (`opt-level = 3`, thin LTO, `codegen-units = 1`, `strip`), so
+  `jux build --release` is fully optimized out of the box; any key you set in
+  `jux.toml` overrides the default. A [`benchmarks/`](benchmarks/) harness tracks
+  numeric / allocation / dispatch / object-graph / startup performance.
 
 ## What's stubbed or in progress
 
@@ -463,6 +468,15 @@ runs. That currently includes:
 - Raw-pointer basics work (`T*`, `void*`, `&local`, `&obj`, `*p` inside `unsafe`).
   There is no `delete` keyword by design (`delete p;` is guided to the `drop { }` +
   foreign-`free` model).
+- **Polymorphic values in a generic container** don't compile yet: a
+  `List<Shape>` holding mixed subtypes (`Circle`/`Square`/…) is rejected because
+  the element type doesn't lower to the `dyn` form. Polymorphism through
+  base-typed locals (`Shape s = new Circle(); s.area();`) works fine; only the
+  *generic-collection-of-supertype* case is open.
+- **A nullable class handle (`T?`) moves instead of share-cloning** on
+  assignment, so reusing it in a later loop iteration trips the borrow checker
+  (`use of moved value`). A non-nullable handle shares correctly; the `Option<>`
+  path is the gap.
 - Tuple syntax is still placeholder.
 - Expect bugs. This is experimental, one person is building it, and corners of the
   language will break, change, or get rewritten without warning. File issues.
@@ -504,9 +518,17 @@ for their ecosystems.
 
 ### C / C++ FFI
 
-Full C/C++ interop is on the roadmap and matters a lot to me. The path is known
-(link via `build.rs`, bind via bindgen/autocxx). It's deferred behind other work
-right now, but it's coming.
+**C interop works today.** You can declare, link, and call C functions
+(`@extern unsafe native`), with automatic `String`/`char` marshalling, `out`
+parameters, `@layout(c)` value structs and `repr` C enums (including a C enum as
+a struct field), C variadics (`printf`-style `...`), custom-library linking via
+`[ffi.*]` in `jux.toml`, and `@export` to call Jux *from* C (with `String`
+marshalling). See the `examples/ffi_*.jux` programs and the consolidated FFI
+guide ([`Architecture/JUX-POINTERS-REFERENCES-GUIDE.md`](Architecture/JUX-POINTERS-REFERENCES-GUIDE.md), §5).
+
+Still on the roadmap: header `bindgen` (`juxc bindgen --header`) and **C++** via
+`autocxx`. The path is known and it matters a lot to me; that's the next FFI
+milestone.
 
 ---
 
@@ -700,8 +722,15 @@ main = "it.xss.Main"                     # entry file by dotted path: src/it/xss
 "com.acme.json"  = { git = "https://github.com/acme/json", tag = "v1.4.2" }
 # A Rust crate from crates.io, used with Jux syntax:
 "rust.serde_json" = "1.0"
-# A C library (FFI), once that lands:
-"c.sqlite3"       = { lib = "sqlite3", header = "sqlite3.h" }
+
+# Linking a C library works today via an [ffi.*] table (you declare the
+# functions yourself in an `@extern unsafe native` block):
+[ffi.sqlite3]
+lib      = "sqlite3"
+lib_path = "vendor/sqlite/lib"
+linkage  = "dynamic"
+# Auto-binding from a header (`c.sqlite3 = { header = "sqlite3.h" }`, via bindgen)
+# is the next FFI milestone, not in yet.
 ```
 
 Then `jux run` builds the whole thing and produces `myapp.exe` with your icon and
@@ -736,6 +765,7 @@ juxlang/
 │   ├── JUX-LANG-V1.md           # consolidated dossier
 │   └── JUX-*-ADDENDUM.md        # 20+ normative addenda
 ├── examples/                    # .jux programs; every one compiles & runs
+├── benchmarks/                  # self-timing perf workloads + runner (run.ps1)
 ├── crates/
 │   ├── juxc-source/             # source files, spans, positions
 │   ├── juxc-diagnostics/        # diagnostic types, E-codes, JSON output
