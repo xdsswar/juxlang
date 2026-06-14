@@ -1611,6 +1611,20 @@ impl RustEmitter {
         self.callee_byref_param(&call.callee, i)
     }
 
+    /// True when emitting `call` produces a Rust **block expression** `{ … }`
+    /// rather than a plain expression — i.e. one of the receiver/argument
+    /// hoist lowerings fires (re-entrancy borrow drop, self-aliasing `&mut`
+    /// write-back, or lexical eval-order arg hoisting). Such an operand must be
+    /// parenthesized in any position where a bare block would be misparsed,
+    /// notably before a postfix `as` cast (`{ … } as T` is a parse error;
+    /// `({ … }) as T` is correct). Mirrors the dispatch in [`Self::emit_call`].
+    pub(crate) fn call_emits_block(&self, call: &CallExpr) -> bool {
+        !call.eval_order.is_empty()
+            || self.call_has_self_aliasing_byref_arg(call)
+            || self.call_needs_borrow_hoist(call)
+            || self.callee_receiver_reads_through_borrow(&call.callee).is_some()
+    }
+
     /// C6: true when any `&mut T` foreign-collection argument is a
     /// FIELD place rooted at the call's own receiver
     /// (`this.m(this.data)` / `r.m(r.data)`). Such a call borrows the
