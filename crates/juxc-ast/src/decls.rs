@@ -810,6 +810,13 @@ pub struct FnDecl {
     /// sees Java-style property-read syntax. Plain methods keep
     /// `is_property = false`.
     pub is_property: bool,
+    /// True for a C-variadic foreign function declared with a trailing `...`
+    /// in an `@extern` `unsafe native` block (`int printf(String fmt, ...)`,
+    /// Layout-ABI §L.4.2). The fixed parameters are in `params`; the `...`
+    /// itself is not a parameter. Always `false` for ordinary Jux functions —
+    /// Jux source cannot declare a C-variadic function (§A.2.4 `T...` packs
+    /// into an array, a different convention).
+    pub is_c_variadic: bool,
     /// Span covering the entire declaration.
     pub span: Span,
 }

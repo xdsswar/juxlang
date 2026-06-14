@@ -308,6 +308,7 @@ fn lower_one_property(
             wheres: Vec::new(),
             body: Some(body),
             is_property: true,
+            is_c_variadic: false,
             span,
         });
     }
@@ -370,6 +371,7 @@ fn lower_one_property(
             wheres: Vec::new(),
             body: Some(body),
             is_property: false,
+            is_c_variadic: false,
             span,
         });
     }

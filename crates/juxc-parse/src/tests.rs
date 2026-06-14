@@ -217,6 +217,27 @@ fn extern_native_block_parses() {
     );
 }
 
+/// A foreign signature with a trailing `...` parses to a C-variadic fn:
+/// `is_c_variadic` is set, the fixed params are kept, and the `...` is not a
+/// parameter (§L.4.2). A non-variadic signature keeps `is_c_variadic == false`.
+#[test]
+fn extern_variadic_signature_parses() {
+    use juxc_ast::TopLevelDecl;
+    let ast = parse_clean(
+        "@extern(lib = \"c\") unsafe native { \
+            i32 printf(String fmt, ...); i32 puts(String s); \
+         }",
+    );
+    let TopLevelDecl::ExternBlock(b) = &ast.items[0] else {
+        panic!("expected ExternBlock, got {:?}", ast.items[0]);
+    };
+    let printf = &b.fns[0];
+    assert!(printf.is_c_variadic, "printf should be C-variadic");
+    assert_eq!(printf.params.len(), 1, "the `...` is not a fixed parameter");
+    assert_eq!(printf.params[0].name.text, "fmt");
+    assert!(!b.fns[1].is_c_variadic, "puts is not variadic");
+}
+
 /// A `native` block missing its `@extern(lib=…)` name, or missing `unsafe`,
 /// is a diagnostic (but still parses for recovery).
 #[test]

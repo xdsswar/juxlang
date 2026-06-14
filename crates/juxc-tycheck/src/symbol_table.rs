@@ -970,6 +970,11 @@ pub struct FunctionSig {
     /// block (Layout-ABI §L.7). The backend uses this to marshal `String`
     /// arguments/returns to/from C `const char*` at the call site.
     pub is_extern_c: bool,
+    /// True for a C-variadic foreign function (`int printf(String fmt, ...)`,
+    /// §L.4.2). The call-site arity check accepts MORE arguments than fixed
+    /// parameters (the trailing ones map to the C `...`), and the backend
+    /// marshals each trailing `String` argument like a fixed one.
+    pub is_c_variadic: bool,
     /// The real Rust path of a foreign free function (`humantime::parse_duration`)
     /// recovered from its `@rust("…")` annotation. The backend imports it as
     /// `use <rust_path> as <jux_name>;` so the snake_case Rust name resolves
@@ -3434,6 +3439,7 @@ fn insert_function(
             // `Result` (and re-throw the error) since Jux sees only `T`.
             is_foreign_result: is_external && !fn_decl.throws.is_empty(),
             is_extern_c,
+            is_c_variadic: fn_decl.is_c_variadic,
             // `@rust("real::path")` on a foreign free function records its true
             // Rust path (snake_case name) so the backend can alias it on import.
             rust_path: if is_external {
