@@ -4502,6 +4502,18 @@ fn pointer_field_null_round_trips() {
     );
 }
 
+/// A `@layout(c, repr = "i32")` enum lowers to a `#[repr(i32)]` Rust enum with
+/// explicit per-variant discriminants — bit-identical to a C `int` enum.
+#[test]
+fn layout_c_enum_lowers_to_repr_int() {
+    let rust = emit(
+        "@layout(c, repr = \"i32\") enum S { Ok = 200, NotFound = 404 } public void main() {}",
+    );
+    assert!(rust.contains("#[repr(i32)]"), "missing #[repr(i32)]: {rust}");
+    assert!(rust.contains("Ok = 200"), "missing Ok = 200: {rust}");
+    assert!(rust.contains("NotFound = 404"), "missing NotFound = 404: {rust}");
+}
+
 // ---------------------------------------------------------------------------
 // §L.1.2 — `@layout(c)` C-compatible value structs
 // ---------------------------------------------------------------------------

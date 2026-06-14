@@ -10,6 +10,46 @@ use juxc_ast::OperatorKind;
 
 use crate::analysis::{field_supports_copy, field_supports_eq, field_supports_hash};
 use crate::backend_fqn::to_rust_ident;
+
+/// The C repr type for a `@layout(c, repr = "…")` enum (§L.1.3), or `None` when
+/// the enum is not a C enum. `@layout(c)` with no explicit `repr` defaults to
+/// `i32` (the C `int` width). Mirrors the `@layout(c)` detection used for value
+/// structs (`is_layout_c_struct`).
+fn layout_c_enum_repr(annotations: &[juxc_ast::Annotation]) -> Option<String> {
+    use juxc_ast::{AnnotationArg, Expr, Literal};
+    let ann = annotations.iter().find(|a| {
+        a.name
+            .segments
+            .last()
+            .map(|s| s.text.eq_ignore_ascii_case("layout"))
+            .unwrap_or(false)
+    })?;
+    let has_c = ann.args.iter().any(|arg| {
+        matches!(arg,
+            AnnotationArg::Positional(Expr::Path(qn))
+                if qn.segments.last()
+                    .map(|s| s.text.eq_ignore_ascii_case("c"))
+                    .unwrap_or(false))
+    });
+    if !has_c {
+        return None;
+    }
+    let repr = ann
+        .args
+        .iter()
+        .find_map(|arg| match arg {
+            AnnotationArg::Named { name, value } if name.text.eq_ignore_ascii_case("repr") => {
+                if let Expr::Literal(Literal::String(s)) = value {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| "i32".to_string());
+    Some(repr)
+}
 use crate::RustEmitter;
 
 impl RustEmitter {
@@ -41,6 +81,13 @@ impl RustEmitter {
         // `#[derive(...)] pub enum Name {` — deletion-aware just like
         // records (`record_derive_attribute` shape).
         self.w.line(&enum_derive_attribute(enum_decl));
+        // `@layout(c, repr = "…")` (§L.1.3): a C-compatible integer enum. Emit
+        // `#[repr(<int>)]` so the value is bit-identical to a C `int` enum; the
+        // explicit per-variant discriminants are emitted below.
+        let c_enum_repr = layout_c_enum_repr(&enum_decl.annotations);
+        if let Some(repr) = &c_enum_repr {
+            self.w.line(&format!("#[repr({repr})]"));
+        }
         self.w.emit_indent();
         self.emit_visibility(enum_decl.visibility);
         self.w.push_str("enum ");
@@ -64,6 +111,15 @@ impl RustEmitter {
                     self.emit_field_type_as_rust(&slot.ty);
                 }
                 self.w.push(')');
+            }
+            // C enum discriminant — `Ok = 200` (§L.1.3). Only on a `@layout(c)`
+            // enum, and only for a const-evaluable value.
+            if c_enum_repr.is_some() {
+                if let Some(disc) = &variant.discriminant {
+                    if let Some(v) = self.try_const_int(disc) {
+                        self.w.push_str(&format!(" = {v}"));
+                    }
+                }
             }
             self.w.push_str(",\n");
         }

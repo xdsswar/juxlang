@@ -324,6 +324,11 @@ pub struct EnumVariant {
     pub name: Ident,
     /// Payload slots — empty for unit variants.
     pub payload: Vec<EnumPayload>,
+    /// Explicit discriminant value — `Ok = 200` (Layout-ABI §L.1.3). `None` when
+    /// the variant has no `= …`. Only meaningful on a no-payload `@layout(c,
+    /// repr = "…")` C enum, where it sets the variant's integer value; the
+    /// backend emits it after the variant name (`Ok = 200,`).
+    pub discriminant: Option<Expr>,
     /// Span covering the variant declaration.
     pub span: Span,
 }

@@ -447,11 +447,14 @@ runs. That currently includes:
   writes the place), and `@layout(c)` **C-compatible value structs** pass by
   value or get filled through a pointer (Win32 `GetCursorPos(out POINT)` works).
   The reverse direction works too: `@export` gives a Jux function C linkage
-  (`#[no_mangle] extern "C"`) so C can call it. See
+  (`#[no_mangle] extern "C"`) so C can call it. `@layout(c, repr = "i32")` **C
+  enums** lower to a `#[repr(i32)]` integer enum with explicit discriminants
+  (`Ok = 200`) for status-code style C APIs. See
   [`examples/ffi_strings.jux`](examples/ffi_strings.jux),
-  [`examples/ffi_struct.jux`](examples/ffi_struct.jux), and
+  [`examples/ffi_struct.jux`](examples/ffi_struct.jux),
+  [`examples/ffi_enum.jux`](examples/ffi_enum.jux), and
   [`examples/ffi_export.jux`](examples/ffi_export.jux). Still to come: header
-  `bindgen`, variadics, `@layout(c)` C enums, and C++.
+  `bindgen`, variadics, and C++.
 - Raw-pointer basics work (`T*`, `void*`, `&local`, `&obj`, `*p` inside `unsafe`).
   There is no `delete` keyword by design (`delete p;` is guided to the `drop { }` +
   foreign-`free` model).

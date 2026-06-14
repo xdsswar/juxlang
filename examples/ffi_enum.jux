@@ -1,0 +1,27 @@
+// C-compatible enums for FFI (Layout-ABI §L.1.3). A `@layout(c, repr = "...")`
+// enum lowers to a flat `#[repr(<repr>)]` C enum: a plain integer with one
+// explicit discriminant per variant. This is the shape a C API expects when it
+// returns or accepts an `enum` / status code (e.g. an HTTP status, an error
+// code, a backend selector).
+//
+// Rules:
+//   - `repr` names the integer type the enum is stored as (`i32`, `u8`, ...).
+//   - Each variant may carry an explicit discriminant (`Ok = 200`). Variants
+//     with no value follow C's "previous + 1" rule once auto-numbering lands.
+//   - A `@layout(c)` enum may NOT carry a payload — a C enum is just an integer
+//     (a payload-carrying variant is rejected with E0509).
+@layout(c, repr = "i32")
+enum HttpStatus {
+    Ok = 200,
+    NotFound = 404,
+    ServerError = 500,
+}
+
+public void main() {
+    HttpStatus s = HttpStatus.NotFound;
+
+    // The enum is a plain integer at the ABI: cast it to read the discriminant
+    // you would hand to (or receive from) a C function.
+    i32 code = s as i32;
+    print($"status=$s code=$code");   // status=NotFound code=404
+}

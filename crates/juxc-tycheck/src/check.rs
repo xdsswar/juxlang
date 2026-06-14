@@ -782,6 +782,29 @@ impl<'a> Checker<'a> {
     /// the body's scope. Deleted operators have no body and are
     /// skipped inside `check_operator`.
     fn check_enum(&mut self, enum_decl: &juxc_ast::EnumDecl) {
+        // `@layout(c [, repr = "i32"])` makes a C-compatible enum: a plain
+        // integer with one discriminant per variant (Layout-ABI §L.1.3). Such
+        // an enum may NOT carry a payload — a C enum is just an integer, it has
+        // no associated data — so a variant with a payload is rejected (E0509).
+        if crate::symbol_table::is_layout_c_annotation(&enum_decl.annotations) {
+            for variant in &enum_decl.variants {
+                if !variant.payload.is_empty() {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0509_LayoutCOnNonAggregate,
+                            format!(
+                                "variant `{}` of `@layout(c) enum {}` carries a payload, which is \
+                                 not C-compatible — a C enum is a plain integer with no associated \
+                                 data; drop the payload or remove `@layout(c)`",
+                                variant.name.text,
+                                enum_decl.name.text,
+                            ),
+                        )
+                        .with_span(variant.span),
+                    );
+                }
+            }
+        }
         let name = crate::symbol_table::make_fqn(
             &self.env.current_package,
             &enum_decl.name.text,
@@ -7628,6 +7651,29 @@ mod tests {
         );
         assert!(!has(&d, code::Code::E0509_LayoutCOnNonAggregate), "{d:?}");
         assert!(!has(&d, code::Code::E0508_FfiTypeNotAllowed), "{d:?}");
+    }
+
+    // --- §L.1.3 `@layout(c, repr)` C enums ---
+
+    /// A plain integer `@layout(c)` enum (no payloads) is accepted — no E0509.
+    #[test]
+    fn layout_c_enum_no_payload_ok() {
+        let d = run(
+            "@layout(c, repr = \"i32\") enum HttpStatus { Ok = 200, NotFound = 404 } \
+             public void main() {}",
+        );
+        assert!(!has(&d, code::Code::E0509_LayoutCOnNonAggregate), "{d:?}");
+    }
+
+    /// A `@layout(c)` enum variant carrying a payload is E0509 (a C enum is a
+    /// plain integer with no associated data).
+    #[test]
+    fn layout_c_enum_with_payload_is_e0509() {
+        let d = run(
+            "@layout(c, repr = \"i32\") enum Bad { Ok, Err(i32) } \
+             public void main() {}",
+        );
+        assert!(has(&d, code::Code::E0509_LayoutCOnNonAggregate), "{d:?}");
     }
 
     /// A `@layout(c)` struct with bare fields and no constructor gets an

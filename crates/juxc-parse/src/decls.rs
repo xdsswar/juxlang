@@ -1681,8 +1681,15 @@ impl<'a> Parser<'a> {
         } else {
             Vec::new()
         };
+        // Optional explicit discriminant — `Ok = 200` (§L.1.3, C enums). Any
+        // expression parses; tycheck/backend treat it as a const integer.
+        let discriminant = if self.eat(&TokenKind::Eq) {
+            self.parse_expr()
+        } else {
+            None
+        };
         let end = self.last_consumed_span();
-        Some(EnumVariant { name, payload, span: start.join(end) })
+        Some(EnumVariant { name, payload, discriminant, span: start.join(end) })
     }
 
     // ------------------------------------------------------------------
