@@ -27,9 +27,10 @@
 
 use juxc_source::Span;
 
-use crate::common::{Ident, Visibility};
+use crate::common::{Ident, QualifiedName, Visibility};
 use crate::decls::{
-    AccessorBody, ClassDecl, FieldDecl, FnDecl, Param, PropertyDecl, ReturnType, TopLevelDecl,
+    AccessorBody, Annotation, AnnotationArg, ClassDecl, ConstructorDecl, FieldDecl, FnDecl, Param,
+    PropertyDecl, ReturnType, TopLevelDecl,
 };
 use crate::exprs::{Expr, FieldExpr};
 use crate::stmts::{AssignStmt, Block, Stmt};
@@ -59,8 +60,106 @@ pub fn desugar_properties(unit: &mut CompilationUnit) {
 
 fn desugar_top_level(item: &mut TopLevelDecl) {
     if let TopLevelDecl::Class(class) = item {
+        synth_value_struct_ctor(class);
         desugar_class(class);
     }
+}
+
+/// True when `annotations` carries `@layout(c)` (Layout-ABI §L.1.2) — a `layout`
+/// annotation with a positional `c` argument. Local copy of the same check used
+/// in tycheck/backend (kept here so the AST crate has no dependency on them).
+fn is_layout_c(annotations: &[Annotation]) -> bool {
+    annotations.iter().any(|a| {
+        let is_layout = a
+            .name
+            .segments
+            .last()
+            .map(|s| s.text.eq_ignore_ascii_case("layout"))
+            .unwrap_or(false);
+        is_layout
+            && a.args.iter().any(|arg| {
+                matches!(arg,
+                    AnnotationArg::Positional(Expr::Path(qn))
+                        if qn.segments.last()
+                            .map(|s| s.text.eq_ignore_ascii_case("c"))
+                            .unwrap_or(false))
+            })
+    })
+}
+
+/// Synthesize an implicit positional constructor for a `@layout(c)` value struct
+/// that declares none — mapping its instance fields (in declaration order) to
+/// constructor parameters and assigning each (`new POINT(x, y)`), the C-struct
+/// "make one from its fields" idiom. Matches how a `record` gets its canonical
+/// constructor, so definite-assignment (§S.4.5), `new` resolution, and the
+/// backend all see an ordinary constructor.
+///
+/// Skipped when the struct already declares a constructor, OR any instance field
+/// has an initializer (the author manages construction) or lacks a written type
+/// (no parameter type to form).
+fn synth_value_struct_ctor(class: &mut ClassDecl) {
+    if !class.is_struct || !class.constructors.is_empty() || !is_layout_c(&class.annotations) {
+        return;
+    }
+    // Collect owned (name, type, span) for each instance field. Bail out if any
+    // field is unsuitable, releasing the borrow before we mutate `constructors`.
+    let mut fields: Vec<(Ident, crate::types::TypeRef, Span)> = Vec::new();
+    for f in &class.fields {
+        if f.is_static {
+            continue;
+        }
+        match (&f.ty, f.default.is_some()) {
+            (Some(ty), false) => fields.push((f.name.clone(), ty.clone(), f.span)),
+            _ => return,
+        }
+    }
+    if fields.is_empty() {
+        return;
+    }
+
+    let span = class.span;
+    let mut params = Vec::with_capacity(fields.len());
+    let mut stmts = Vec::with_capacity(fields.len());
+    for (name, ty, fspan) in fields {
+        params.push(Param {
+            name: name.clone(),
+            ty,
+            is_final: false,
+            is_ref: false,
+            default: None,
+            is_varargs: false,
+            is_out: false,
+            is_shared_ref: false,
+            is_weak: false,
+            span: fspan,
+        });
+        // `this.<name> = <name>;`
+        let target = Expr::Field(FieldExpr {
+            object: Box::new(Expr::This(span)),
+            field: name.clone(),
+            safe: false,
+            span,
+        });
+        let value = Expr::Path(QualifiedName {
+            segments: vec![name],
+            span,
+        });
+        stmts.push(Stmt::Assign(AssignStmt {
+            target,
+            op: None,
+            value,
+            span,
+        }));
+    }
+
+    class.constructors.push(ConstructorDecl {
+        annotations: Vec::new(),
+        visibility: Visibility::Public,
+        params,
+        throws: Vec::new(),
+        body: Block { statements: stmts, span },
+        span,
+    });
 }
 
 fn desugar_class(class: &mut ClassDecl) {

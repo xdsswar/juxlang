@@ -93,10 +93,14 @@ impl S { pub fn new(x: isize, y: isize) -> S { S { x, y } } }
   passes `addr_of_mut!(place)` so a C function can fill it (e.g. Win32
   `GetCursorPos(out POINT p)`). See `examples/ffi_struct.jux`.
 
-> Current limitation: a `@layout(c) struct` needs an explicit constructor (or
-> field initializers). An implicit positional constructor (`new POINT(x, y)`
-> synthesized from the fields, like a `record`) and the `(*ptr).field` deref form
-> are follow-ups. `@layout(c)` on `record`/`enum` is also not yet emitted.
+A `@layout(c) struct` with bare fields and no constructor gets an **implicit
+positional constructor** synthesized from its fields (declaration order), like a
+`record`: `new POINT(x, y)` just works. Writing an explicit constructor (or field
+initializers) opts out of the synthesis. Field access through a pointer
+(`(*ptr).field`) and the by-value path are supported.
+
+> Not yet emitted: `@layout(c)` on `record`/`enum` (the `@layout(c, repr = "…")`
+> C enum form, §L.1.3).
 
 ### L.1.3. C-Compatible Enum: `@layout(c, repr = "i32")`
 
