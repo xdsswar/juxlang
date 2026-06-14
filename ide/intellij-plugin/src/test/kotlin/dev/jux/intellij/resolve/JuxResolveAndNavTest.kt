@@ -25,6 +25,27 @@ class JuxResolveAndNavTest : BasePlatformTestCase() {
         assertTrue("the in-file resolver must be soft", ref!!.isSoft)
     }
 
+    fun testNativeFnCallResolves() {
+        myFixture.configureByText(
+            "a.jux",
+            """
+            package demo;
+            @extern(lib = "c")
+            unsafe native {
+                i32 puts(String s);
+            }
+            public void main() {
+                unsafe { puts("hi"); }
+            }
+            """.trimIndent(),
+        )
+        // The call site `puts("hi")` resolves into the native block's foreign fn.
+        val offset = myFixture.file.text.indexOf("puts(\"hi\")")
+        val resolved = myFixture.file.findReferenceAt(offset)?.resolve()
+        assertNotNull("native fn call should resolve into the extern block", resolved)
+        assertEquals("puts", (resolved as dev.jux.intellij.psi.JuxNamedElement).name)
+    }
+
     fun testCrossFileTypeResolution() {
         myFixture.addFileToProject("beast.jux", "package demo;\npublic class Beast {}\n")
         myFixture.configureByText(

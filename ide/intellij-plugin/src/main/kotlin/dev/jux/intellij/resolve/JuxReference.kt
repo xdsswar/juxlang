@@ -145,6 +145,13 @@ class JuxReference(element: PsiElement, range: TextRange) :
         if (scope is JuxFile) {
             for (d in scope.children) {
                 if (d is JuxNamedElement && d.name == name) return d
+                // §L.7 C-FFI: a `native { … }` block's foreign functions are
+                // file-level callables, so a bare `lstrlenA(…)` resolves into it.
+                if (d.elementType === E.EXTERN_BLOCK) {
+                    for (fn in d.children) {
+                        if (fn is JuxNamedElement && fn.name == name) return fn
+                    }
+                }
             }
         }
         return null
