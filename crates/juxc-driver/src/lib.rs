@@ -114,11 +114,19 @@ fn lex_parse_resolve(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<juxc_ast::CompilationUnit> {
     let mut units: Vec<juxc_ast::CompilationUnit> = Vec::with_capacity(sources.len());
+    // A `.jux.d` declaration stub is parsed and resolved in "foreign" mode: it
+    // surfaces a real Rust API verbatim, so keyword-spelled member names are
+    // accepted (parser) and the Rust-keyword reservation is skipped (resolver).
+    let foreign: Vec<bool> = sources.iter().map(|s| stubs::is_stub_path(s.path())).collect();
     for (idx, source) in sources.iter().enumerate() {
         let before = diagnostics.len();
         let lex_result = juxc_lex::lex(source);
         diagnostics.extend(lex_result.diagnostics);
-        let parsed = juxc_parse::parse(&lex_result.tokens);
+        let parsed = if foreign[idx] {
+            juxc_parse::parse_foreign(&lex_result.tokens)
+        } else {
+            juxc_parse::parse(&lex_result.tokens)
+        };
         diagnostics.extend(parsed.diagnostics);
         for d in &mut diagnostics[before..] {
             d.file = Some(idx);
@@ -128,7 +136,7 @@ fn lex_parse_resolve(
     let exports = juxc_resolve::PackageExports::collect(&units);
     for (idx, unit) in units.iter().enumerate() {
         let before = diagnostics.len();
-        let resolved = juxc_resolve::resolve_with_exports(unit, &exports);
+        let resolved = juxc_resolve::resolve_with_exports_opts(unit, &exports, foreign[idx]);
         diagnostics.extend(resolved.diagnostics);
         for d in &mut diagnostics[before..] {
             d.file = Some(idx);

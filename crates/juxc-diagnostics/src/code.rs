@@ -45,6 +45,15 @@ pub enum Code {
     /// forbidden — give one an `as` alias (`import b.Foo as BFoo;`) or refer to
     /// it by its fully-qualified name.
     E0303_ConflictingImport,
+    /// E0305 — A user declaration uses a name that is a **Rust reserved word**.
+    /// Jux lowers to Rust source, so a Jux identifier equal to a Rust keyword
+    /// (`fn`, `impl`, `let`, `loop`, `match`, `mut`, `use`, `where`, …) cannot
+    /// survive lowering without `r#` escaping and would otherwise collide in the
+    /// emitted Rust. Rather than leak a cryptic `rustc` error, Jux rejects the
+    /// name at resolution and asks the user to rename it. (Foreign `.jux.d`
+    /// stubs are exempt — a Rust API member named like a keyword is surfaced
+    /// verbatim and `r#`-escaped by the backend.)
+    E0305_RustKeywordIdentifier,
     /// E0320 — Entry file has both top-level statements and a `main` function.
     E0320_AmbiguousEntryPoint,
     /// E0326 — A class member named `main` with an entry-shaped signature is
@@ -695,6 +704,7 @@ impl Code {
             Code::E0301_NameNotFound             => "E0301",
             Code::E0304_DuplicateLocalDeclaration => "E0304",
             Code::E0303_ConflictingImport        => "E0303",
+            Code::E0305_RustKeywordIdentifier    => "E0305",
             Code::E0320_AmbiguousEntryPoint      => "E0320",
             Code::E0323_MainSignatureMismatch    => "E0323",
             Code::E0326_ClassMainNotStatic       => "E0326",

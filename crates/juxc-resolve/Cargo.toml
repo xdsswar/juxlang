@@ -10,7 +10,7 @@ description = "Phase 4 — name resolution / module linking (per JUX-COMPILER-PI
 juxc-source      = { workspace = true }
 juxc-diagnostics = { workspace = true }
 juxc-ast         = { workspace = true }
+juxc-lex         = { workspace = true }
 
 [dev-dependencies]
-juxc-lex   = { workspace = true }
 juxc-parse = { workspace = true }

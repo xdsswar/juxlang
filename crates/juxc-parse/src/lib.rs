@@ -85,6 +85,19 @@ pub fn parse(tokens: &[Token]) -> ParseResult {
     ParseResult { ast, diagnostics: p.diagnostics }
 }
 
+/// Parse a **foreign declaration stub** (`.jux.d`) token stream. Identical to
+/// [`parse`] except member declaration names may be keyword-spelled (a Rust
+/// `default()`/`match()` method is surfaced verbatim — see [`Parser::parse_decl_name`]).
+/// The driver routes stub sources here (via `juxc_driver::stubs::is_stub_path`)
+/// so user `.jux` files keep rejecting keyword declaration names.
+pub fn parse_foreign(tokens: &[Token]) -> ParseResult {
+    let mut p = Parser::new(tokens);
+    p.foreign_mode = true;
+    let mut ast = p.parse_compilation_unit();
+    juxc_ast::desugar_properties(&mut ast);
+    ParseResult { ast, diagnostics: p.diagnostics }
+}
+
 // ============================================================================
 // Parser state
 // ============================================================================
@@ -123,6 +136,12 @@ pub(crate) struct Parser<'a> {
     /// unique per compilation unit so nested/sibling destructures
     /// never collide.
     pub(crate) tuple_tmp_counter: u32,
+    /// True when parsing a foreign declaration stub (`.jux.d`). In this mode a
+    /// keyword-spelled token is accepted as a member declaration name (so a Rust
+    /// `default()` / `match()` method can be surfaced verbatim) via
+    /// [`Self::parse_decl_name`]. User `.jux` files keep `foreign_mode == false`
+    /// and reject keyword names at parse, as before.
+    pub(crate) foreign_mode: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -135,6 +154,7 @@ impl<'a> Parser<'a> {
             diagnostics: Vec::new(),
             pending_stmts: Vec::new(),
             tuple_tmp_counter: 0,
+            foreign_mode: false,
         }
     }
 
@@ -334,6 +354,22 @@ impl<'a> Parser<'a> {
             let text = kw.as_str().to_string();
             self.advance();
             return Some(Ident { text, span });
+        }
+        self.parse_ident()
+    }
+
+    /// Consume a **declaration name** for a member (method / field / parameter).
+    ///
+    /// In a foreign declaration stub ([`Self::foreign_mode`]) a keyword-spelled
+    /// token is accepted as the name, so a Rust member that collides with a Jux
+    /// keyword (`default()`, `match()`, …) is declared verbatim and resolves
+    /// against the matching keyword-spelled call (see [`Self::parse_member_name`]).
+    /// In ordinary user `.jux` files this delegates to [`Self::parse_ident`], so
+    /// declaring a member named like a keyword stays a parse error — the Rust
+    /// keyword reservation is reported separately by the resolver.
+    pub(crate) fn parse_decl_name(&mut self) -> Option<Ident> {
+        if self.foreign_mode {
+            return self.parse_member_name();
         }
         self.parse_ident()
     }

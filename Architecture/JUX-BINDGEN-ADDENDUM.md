@@ -47,7 +47,7 @@ Three consequences shape the rest of this addendum:
 | 2 | Generate `.jux.d` stubs (plus a Rust FFI shim) from a C header          |
 | 3 | Generate `.jux.d` stubs (plus an `autocxx`-backed shim) from a C++ header |
 | 4 | Apply the §8.2 type-mapping table uniformly and reversibly              |
-| 5 | Apply snake_case → camelCase / PascalCase naming transforms (§3.3)      |
+| 5 | Surface foreign names verbatim (snake_case kept), rewriting only module paths (§3.3) |
 | 6 | Emit stubs the ordinary resolver can ingest with no special parser      |
 | 7 | Enable hover / completion / goto-def on foreign symbols via `juxc-lsp`  |
 
@@ -91,10 +91,10 @@ public class HashMap<K, V> {
 
     public void insert(K key, V value);
     public V? get(K key);                   // Rust get(&K) -> Option<&V>
-    public bool containsKey(K key);
+    public bool contains_key(K key);
     public void remove(K key);
     public int len();
-    public bool isEmpty();
+    public bool is_empty();
     public Iterable<K> keys();
     public Iterable<V> values();
 }
@@ -162,24 +162,26 @@ Both spellings keep the element/pointee types visible in signatures, hover, and 
 
 ## §G.4 — Naming Transforms
 
-`juxc bindgen` rewrites foreign names to Jux conventions (§3.3). The transforms are deterministic and reversible (the shim records the original symbol).
+`juxc bindgen` surfaces foreign names **verbatim** so a Jux call site reads like the real Rust API (and matches rustdoc). Only the module-path separator is rewritten. The transform is the identity (modulo `::` → `.`), so the mapping is trivially reversible.
 
-| Foreign convention            | Jux convention      | Transform                                  |
-|-------------------------------|---------------------|--------------------------------------------|
-| Rust `snake_case` fn/method   | `camelCase`         | `with_capacity` → `withCapacity`           |
-| Rust `PascalCase` type        | `PascalCase`        | unchanged (`HashMap` → `HashMap`)          |
-| Rust `SCREAMING_SNAKE` const  | `SCREAMING_SNAKE`   | unchanged                                  |
-| Rust module path `a::b::c`    | package `a.b.c`     | `::` → `.` (§4.2)                          |
-| C `Lib_function` prefix       | `lib.function`      | prefix stripped, namespaced under class (§G.7) |
-| C `STRUCT_FIELD`              | `field`             | lower-cased, de-prefixed                   |
+| Foreign convention            | Jux convention        | Transform                                  |
+|-------------------------------|-----------------------|--------------------------------------------|
+| Rust `snake_case` fn/method   | `snake_case` (kept)   | unchanged (`with_capacity` → `with_capacity`) |
+| Rust `PascalCase` type        | `PascalCase`          | unchanged (`HashMap` → `HashMap`)          |
+| Rust `SCREAMING_SNAKE` const  | `SCREAMING_SNAKE`     | unchanged                                  |
+| Rust module path `a::b::c`    | package `a.b.c`       | `::` → `.` (§4.2)                          |
+| C `Lib_function` prefix       | `lib.function`        | prefix stripped, namespaced under class (§G.7) |
+| C `STRUCT_FIELD`              | `field`               | lower-cased, de-prefixed                   |
+
+Keeping Rust names verbatim means a Jux call into a Rust crate is the same identifier the crate's own docs use — `window.is_open()`, `vec.with_capacity(8)` — instead of a camelCased alias. (The Jux **standard library** facade, `List`/`Map`/`String`/etc., keeps its Java-style `camelCase` API; that is a hand-written Jux surface, not a bindgen transform.)
 
 ### G.4.1. Collisions
 
-If two foreign symbols transform to the same Jux name (e.g. Rust `to_string` and `toString` both → `toString`), `bindgen` keeps the first in declaration order and emits the second with a numeric suffix plus a `W`-class warning (§G.12). The user may pin an explicit Jux name in the `bindgen` config (§G.11).
+Because names are kept verbatim, distinct Rust names stay distinct (the identity transform can't introduce a collision). Where one crate genuinely re-exports the same name from two paths, `bindgen` keeps the first in declaration order (§G.12). The user may pin an explicit Jux name in the `bindgen` config (§G.11).
 
-### G.4.2. Reserved-Word Escaping
+### G.4.2. Keyword-Named Members
 
-A foreign name that transforms to a Jux reserved keyword (§3.2) is suffixed with an underscore: a Rust method `type()` becomes Jux `type_()`. The shim maps it back.
+A Rust member whose name is a Jux reserved keyword (`default`, `match`, `type`, …) is surfaced **as-is**: the parser accepts a keyword spelling both in foreign stub declarations and at the call site (`opts.default()`), and the backend re-escapes any Rust keyword with `r#` when it lowers. A Jux *user* declaration, by contrast, may not be named after a Rust keyword — that is `E0305` (the lowered Rust would collide). The two rules are complementary: foreign members keep their real name, user code stays clear of Rust's reserved words.
 
 ---
 

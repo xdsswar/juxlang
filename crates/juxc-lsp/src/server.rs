@@ -1530,6 +1530,24 @@ impl Backend {
                 .log_message(MessageType::WARNING, format!("jux: {w}"))
                 .await;
         }
+        // A stub that failed to generate means that crate's types/members won't
+        // autocomplete and will surface as "unresolved" — surface it visibly
+        // (not just in the log) so the cause (missing nightly / `rust-docs-json` /
+        // network) is discoverable rather than mysterious.
+        if !report.warnings.is_empty() {
+            self.client
+                .show_message(
+                    MessageType::WARNING,
+                    format!(
+                        "jux: {} crate stub(s) couldn't be generated — those crates \
+                         won't autocomplete. See the output log for details \
+                         (a nightly toolchain with the `rust-docs-json` component \
+                         and network access is required).",
+                        report.warnings.len()
+                    ),
+                )
+                .await;
+        }
         if !report.resolved.is_empty() {
             self.client
                 .log_message(
@@ -1753,10 +1771,23 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        // Saving a file may add/rename types or members anywhere — refresh the
+        // Saving `jux.toml` may add/remove a `rust.*` dependency, so regenerate
+        // the project's crate stubs before re-indexing — a freshly added crate
+        // then autocompletes without restarting the server. (`ensure_crate_stubs`
+        // is cache-keyed, so an unchanged manifest is a cheap no-op.)
+        let is_manifest = params
+            .text_document
+            .uri
+            .to_file_path()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n == "jux.toml"))
+            .unwrap_or(false);
+        if is_manifest {
+            self.ensure_crate_stubs().await;
+        }
+        // Saving any file may add/rename types or members anywhere — refresh the
         // cross-module index. (Per-keystroke changes don't trigger this; the
         // open buffer's own names come from its live single-file analysis.)
-        let _ = params;
         self.reindex().await;
     }
 
@@ -1866,14 +1897,28 @@ impl LanguageServer for Backend {
         let offset = position_to_offset(&doc.rope, pos);
         let text = doc.rope.to_string();
 
-        // Resolve a plain identifier — a type / function / const / alias name —
-        // to its declaration. (Member-level goto, `recv.member`, needs per-member
-        // source spans that aren't tracked yet; the receiver's type still
-        // resolves through hover/completion.)
         let Some(word) = word_at(&text, offset) else {
             return Ok(None);
         };
-        let Some((unit_idx, span)) = doc.symbols.definition_of(&word.text) else {
+
+        // Member-level goto: when the cursor is on `recv.member`, resolve `recv`'s
+        // type, find the member's declaring type (`member_owner`) and the member's
+        // span. This lands inside the generated `.jux.d` stub for a Rust-crate
+        // member (`window.is_open()` → the stub's `is_open` line), since stub units
+        // carry real `.jux.d` paths in `source_paths`. Falls back to a plain
+        // identifier (a type / function / const / alias name) otherwise.
+        let member_target = match receiver_dot_before(&text, word.start) {
+            Some(recv_end) => doc.type_ending_at(recv_end).and_then(|ty| {
+                let owner = intel::member_owner(&doc.symbols, ty, &word.text)?;
+                let span = member_decl_span(&doc.symbols, &owner, &word.text)?;
+                let unit = *doc.symbols.decl_unit.get(&owner)?;
+                Some((unit, span))
+            }),
+            None => None,
+        };
+        let Some((unit_idx, span)) =
+            member_target.or_else(|| doc.symbols.definition_of(&word.text))
+        else {
             return Ok(None);
         };
         let Some(path) = doc.source_paths.get(unit_idx) else {

@@ -58,7 +58,30 @@ const STD_MERGE_CRATES: &[&str] = &["alloc", "std"];
 /// Bump to invalidate previously-cached generated `rust.std` stubs when the
 /// bindgen surface or the merge set changes. Embedded in the cache header and
 /// checked on load.
-const STD_STUB_CACHE_VERSION: u32 = 9;
+const STD_STUB_CACHE_VERSION: u32 = 10;
+
+/// Bump to invalidate previously-cached generated per-crate (`rust.<crate>`)
+/// stubs when the bindgen surface / naming changes. Stamped as the first line of
+/// each generated `.jux-stubs/rust/<crate>.jux.d` and checked on load so a stale
+/// stub (e.g. a pre-snake_case cache) is regenerated rather than trusted. Started
+/// at 1 alongside the snake_case-verbatim naming switch.
+const CRATE_STUB_CACHE_VERSION: u32 = 1;
+
+/// First-line marker a generated crate stub must carry to be trusted fresh.
+fn crate_cache_header() -> String {
+    format!("// juxc crate stub cache-version {CRATE_STUB_CACHE_VERSION}\n")
+}
+
+/// True when a generated `rust.*` crate stub on disk carries the current cache
+/// version marker. A stub written by an older toolchain (or hand-vendored
+/// without the marker) is treated as stale so it regenerates against the current
+/// bindgen rules.
+fn crate_stub_cache_is_fresh(path: &Path) -> bool {
+    match std::fs::read_to_string(path) {
+        Ok(text) => text.starts_with(crate_cache_header().trim_end()),
+        Err(_) => false,
+    }
+}
 
 /// Does `path` name a `.jux.d` declaration stub?
 ///
@@ -396,7 +419,13 @@ pub fn resolve_crate_stub(
 ) -> anyhow::Result<PathBuf> {
     let cache = crate_stub_cache_path(project_root, kind, crate_name);
     if cache.is_file() {
-        return Ok(cache);
+        // Vendored c/cpp stubs are authored by hand and carry no version marker,
+        // so trust them as-is. A generated `rust.*` stub is trusted only when its
+        // cache-version marker matches; a stale one (pre-snake_case naming) falls
+        // through to regeneration.
+        if kind != "rust" || crate_stub_cache_is_fresh(&cache) {
+            return Ok(cache);
+        }
     }
     if kind != "rust" {
         anyhow::bail!(
@@ -408,8 +437,11 @@ pub fn resolve_crate_stub(
 
     let json = run_cargo_rustdoc_json(crate_name, version)?;
     let package = format!("rust.{crate_name}");
-    let stub = generate_stub_from_rustdoc_json(&json, &package)
+    let body = generate_stub_from_rustdoc_json(&json, &package)
         .map_err(|e| anyhow::anyhow!("bindgen failed to ingest rustdoc JSON for `{crate_name}`: {e}"))?;
+    // Prepend the cache-version marker so a future toolchain can detect a stale
+    // stub (the leading `//` line is an ordinary Jux comment the parser ignores).
+    let stub = format!("{}{body}", crate_cache_header());
 
     if let Some(parent) = cache.parent() {
         std::fs::create_dir_all(parent)?;

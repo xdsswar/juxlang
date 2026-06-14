@@ -155,12 +155,13 @@ impl RustEmitter {
             }
         }
         // §G.9.2: a member access on an **external** (`rust.std` / crate)
-        // receiver uses the foreign symbol's REAL Rust name, which is
-        // `snake_case` — bindgen camelCased it for the Jux surface (§G.4). So
-        // `p.asPath()` → `p.as_path()`, `s.isEmpty()` → `s.is_empty()`. The call
-        // path appends `(args)` after this returns; a plain field access is
-        // complete here. External types are plain Rust values (not the Rc/RefCell
-        // wrapper representation), so none of the `.0.borrow()` rewrites apply.
+        // receiver uses the foreign symbol's REAL Rust name. Bindgen surfaces
+        // Rust names verbatim (§G.4), so the Jux spelling already IS the Rust
+        // spelling — the only transform needed is `r#`-escaping a name that is a
+        // Rust keyword (`p.r#match()`). The call path appends `(args)` after this
+        // returns; a plain field access is complete here. External types are
+        // plain Rust values (not the Rc/RefCell wrapper representation), so none
+        // of the `.0.borrow()` rewrites apply.
         if let Some(Ty::User { name, .. }) = self
             .expr_types
             .get(&expr_span_of(&f.object))
@@ -203,7 +204,7 @@ impl RustEmitter {
                 self.emitting_out_place = prev_out;
                 self.emitting_lvalue = prev_lv;
                 self.w.push('.');
-                self.w.push_str(&camel_to_snake(&f.field.text));
+                self.w.push_str(&crate::backend_fqn::to_rust_ident(&f.field.text));
                 return;
             }
         }
@@ -1569,10 +1570,6 @@ fn strip_nullable(ty: Ty) -> Ty {
     }
 }
 
-/// Convert a Jux `camelBack` member name back to the foreign symbol's real
-/// `snake_case` Rust spelling (the inverse of bindgen's §G.4 `snake→camel`):
-/// `asPath` → `as_path`, `isEmpty` → `is_empty`, `withCapacity` → `with_capacity`.
-/// Used only for members on external (`rust.std` / crate) receivers (§G.9.2).
 impl RustEmitter {
     /// Is `field_name` of the class `object_expr` evaluates to a `ref`
     /// field (§M.13 — an `Rc<RefCell<T>>` shared-reference cell)?
@@ -1659,45 +1656,30 @@ fn rust_std_container_method_mutates(method: &str) -> bool {
             | "retain"
             | "dedup"
             | "sort"
-            | "sortBy"
-            | "sortByKey"
-            | "sortUnstable"
-            | "sortUnstableBy"
+            | "sort_by"
+            | "sort_by_key"
+            | "sort_unstable"
+            | "sort_unstable_by"
             | "reverse"
             | "extend"
             | "append"
             | "resize"
             | "fill"
             | "swap"
-            | "swapRemove"
+            | "swap_remove"
             | "drain"
-            | "splitOff"
-            | "pushBack"
-            | "pushFront"
-            | "popBack"
-            | "popFront"
-            | "rotateLeft"
-            | "rotateRight"
-            | "makeContiguous"
-            | "pushStr"
-            | "shrinkToFit"
+            | "split_off"
+            | "push_back"
+            | "push_front"
+            | "pop_back"
+            | "pop_front"
+            | "rotate_left"
+            | "rotate_right"
+            | "make_contiguous"
+            | "push_str"
+            | "shrink_to_fit"
             | "reserve"
     )
-}
-
-fn camel_to_snake(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 4);
-    for (i, ch) in s.char_indices() {
-        if ch.is_ascii_uppercase() {
-            if i > 0 {
-                out.push('_');
-            }
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push(ch);
-        }
-    }
-    out
 }
 
 /// Maps a `<primitive-type-name>.<CONSTANT>` access (§K.11) to the Rust
