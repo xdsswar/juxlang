@@ -678,7 +678,8 @@ impl<'a> Checker<'a> {
             return true;
         }
         // A non-pointer, non-generic user type that resolves to a `@layout(c)`
-        // value struct is a C aggregate.
+        // value struct or a `@layout(c)` C enum is a C aggregate / C integer
+        // enum, both representable at the boundary by value.
         if t.ptr_depth == 0
             && t.array_shape.is_none()
             && t.fn_shape.is_none()
@@ -690,7 +691,12 @@ impl<'a> Checker<'a> {
                     .symbols
                     .classes
                     .get(&name)
-                    .is_some_and(|c| c.is_layout_c);
+                    .is_some_and(|c| c.is_layout_c)
+                    || self
+                        .symbols
+                        .enums
+                        .get(&name)
+                        .is_some_and(|e| e.is_layout_c);
             }
         }
         false
@@ -7714,6 +7720,25 @@ mod tests {
     fn plain_enum_without_discriminant_ok() {
         let d = run("enum Y { A, B } public void main() {}");
         assert!(!has(&d, code::Code::E0510_DiscriminantOutsideCEnum), "{d:?}");
+    }
+
+    /// A `@layout(c)` C enum is allowed at the FFI boundary (param and return) —
+    /// no E0508; a plain (non-C) enum at the boundary is still E0508.
+    #[test]
+    fn c_enum_is_ffi_allowed_plain_enum_is_not() {
+        let ok = run(
+            "@layout(c, repr = \"i32\") enum Status { Ok = 0, Err = 1 } \
+             @extern(lib = \"c\") unsafe native { Status flip(Status s); } \
+             public void main() {}",
+        );
+        assert!(!has(&ok, code::Code::E0508_FfiTypeNotAllowed), "{ok:?}");
+
+        let bad = run(
+            "enum Plain { A, B } \
+             @extern(lib = \"c\") unsafe native { Plain flip(Plain s); } \
+             public void main() {}",
+        );
+        assert!(has(&bad, code::Code::E0508_FfiTypeNotAllowed), "{bad:?}");
     }
 
     /// A `@layout(c)` struct with bare fields and no constructor gets an

@@ -129,9 +129,16 @@ pub(crate) enum HttpStatus {
 ```
 
 The `repr` argument names the backing integer type (`i32`, `u8`, ...); each
-variant's `= <const>` discriminant is emitted verbatim. The enum is then a plain
-integer at the ABI, so `s as i32` reads the discriminant you hand to (or receive
-from) a C function. Cross the boundary by value (it is `Copy`) or by pointer.
+variant's `= <const>` discriminant is emitted verbatim. (When `@layout(c)` is
+written with no `repr`, the backing type defaults to `i32`, a C `int`.) The enum
+is then a plain integer at the ABI, so `s as i32` reads the discriminant you hand
+to (or receive from) a C function. Cross the boundary by value (it is `Copy`) or
+by pointer.
+
+A `@layout(c)` enum is accepted as a foreign-function parameter or return type
+(it passes the E0508 FFI-type check): the foreign signature emits the bare enum
+name, which is FFI-safe because the enum is `#[repr(i32)]`. A plain (non-C) enum
+at the boundary remains E0508.
 
 Sum-type enums (with payloads) cannot use `@layout(c)`: there is no portable C representation of a tagged union, so a payload-carrying variant under `@layout(c)` is rejected with **E0509**. Cross the boundary via two `@layout(c)` types (a tag struct and a union) marshalled by hand.
 

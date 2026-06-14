@@ -4668,6 +4668,23 @@ fn extern_out_param_passes_addr_of_mut() {
     );
 }
 
+/// A `@layout(c, repr)` C enum may cross the FFI boundary by value: the foreign
+/// signature emits the plain enum name (it is already `#[repr(i32)]`, so it is
+/// FFI-safe as a bare `i32`). §L.1.3.
+#[test]
+fn extern_c_enum_param_and_return() {
+    let rust = emit(
+        "@layout(c, repr = \"i32\") enum Status { Ok = 0, Err = 1 } \
+         @extern(lib = \"c\") unsafe native { Status flip(Status s); } \
+         public void main() { unsafe { Status r = flip(Status.Ok); } }",
+    );
+    assert!(rust.contains("#[repr(i32)]"), "enum should be repr(i32): {rust}");
+    assert!(
+        rust.contains("pub fn flip(s: Status) -> Status"),
+        "C enum should cross by value as the bare enum name: {rust}"
+    );
+}
+
 /// The sqlite-style combination: a `String` argument AND an `out` argument in
 /// one call marshal together (CString temp + `addr_of_mut!`).
 #[test]
