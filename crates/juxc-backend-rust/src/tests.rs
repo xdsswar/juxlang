@@ -4535,6 +4535,18 @@ fn layout_c_struct_lowers_to_repr_c_value() {
     assert!(rust.contains("addr_of_mut!(p)"), "&valueStruct is addr_of_mut!: {rust}");
 }
 
+/// A field access through a raw-pointer deref parenthesizes the receiver:
+/// `(*q).x`, not `*q.x` (which Rust parses as `*(q.x)`).
+#[test]
+fn deref_field_access_parenthesizes() {
+    let rust = emit(
+        "@layout(c) struct P { int x; public P(int x) { this.x = x; } } \
+         public void main() { P p = new P(7); unsafe { P* q = &p; int v = (*q).x; } }",
+    );
+    assert!(rust.contains("(*q).x"), "deref field should be (*q).x: {rust}");
+    assert!(!rust.contains("*q.x"), "must not emit the ambiguous *q.x: {rust}");
+}
+
 // ---------------------------------------------------------------------------
 // §L.7 — C FFI: `unsafe native` blocks → `extern "C"` + String marshalling
 // ---------------------------------------------------------------------------
