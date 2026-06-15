@@ -616,6 +616,105 @@ pub fn build_with_manifest(
     Ok(BuildArtifact { crate_dir: crate_dir.to_path_buf(), binary_path })
 }
 
+/// Normalize an emitted relative path to forward slashes so the on-disk walk
+/// (which yields OS separators) matches the keys in `RustCrate::sources`.
+fn norm_rel(p: &str) -> String {
+    p.replace('\\', "/")
+}
+
+/// Deterministic content hash for the emit cache. `DefaultHasher` uses a fixed
+/// seed, so the value is stable across builds — a toolchain change at worst
+/// invalidates the cache and forces a rewrite, which is safe.
+fn content_hash(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// Write `bytes` to `path` only if the file is absent or its current contents
+/// differ. Returns `true` when a write happened. Skipping an identical write
+/// preserves the file's mtime so `cargo` doesn't treat it as changed.
+fn write_if_changed(path: &Path, bytes: &str) -> std::io::Result<bool> {
+    if let Ok(existing) = fs::read_to_string(path) {
+        if existing == bytes {
+            return Ok(false);
+        }
+    }
+    fs::write(path, bytes)?;
+    Ok(true)
+}
+
+/// The driver's per-file emit cache: emitted-source-path → content hash of the
+/// (pre-rustfmt) text that produced it. Lets a rebuild skip rewriting +
+/// reformatting an emitted `.rs` whose source content is unchanged — which is
+/// what keeps `cargo`'s incremental compilation from recompiling the world.
+/// Stored as one `<hash> <path>` line per entry under the crate dir.
+fn emit_cache_path(crate_dir: &Path) -> PathBuf {
+    crate_dir.join(".jux-emit-cache")
+}
+
+fn load_emit_cache(crate_dir: &Path) -> std::collections::HashMap<String, u64> {
+    let mut map = std::collections::HashMap::new();
+    if let Ok(text) = fs::read_to_string(emit_cache_path(crate_dir)) {
+        for line in text.lines() {
+            if let Some((h, p)) = line.split_once(' ') {
+                if let Ok(h) = h.parse::<u64>() {
+                    map.insert(p.to_string(), h);
+                }
+            }
+        }
+    }
+    map
+}
+
+fn save_emit_cache(crate_dir: &Path, cache: &std::collections::HashMap<String, u64>) {
+    let mut lines: Vec<String> = cache.iter().map(|(p, h)| format!("{h} {p}")).collect();
+    lines.sort(); // deterministic file for clean diffs / reproducibility
+    let _ = fs::write(emit_cache_path(crate_dir), lines.join("\n"));
+}
+
+/// Delete emitted `.rs` files under `crate_dir/src` that are no longer part of
+/// the current source set (their `.jux` was removed or renamed), then drop any
+/// directories left empty. Safe because the whole `src/` tree is owned by the
+/// emitter — the driver wrote every file there. `keep` holds the normalized
+/// relative paths (`src/…/x.rs`) of the current emission.
+fn prune_orphaned_sources(
+    crate_dir: &Path,
+    keep: &std::collections::HashSet<String>,
+    cache: &mut std::collections::HashMap<String, u64>,
+) {
+    let src = crate_dir.join("src");
+    if !src.is_dir() {
+        return;
+    }
+    let mut stack = vec![src];
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                dirs.push(p.clone());
+                stack.push(p);
+            } else if p.extension().and_then(|s| s.to_str()) == Some("rs") {
+                if let Ok(rel) = p.strip_prefix(crate_dir) {
+                    let rel = norm_rel(&rel.to_string_lossy());
+                    if !keep.contains(&rel) {
+                        let _ = fs::remove_file(&p);
+                        cache.remove(&rel);
+                    }
+                }
+            }
+        }
+    }
+    // Remove now-empty dirs deepest-first (`remove_dir` only deletes empties).
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+    for d in dirs {
+        let _ = fs::remove_dir(&d);
+    }
+}
+
 /// Materialize and build a [`RustCrate`] for a specific
 /// [`juxc_backend_rust::CrateTarget`] — the manifest-driven build path for
 /// the multi-module project model.
@@ -678,7 +777,9 @@ pub fn build_emitted_crate(
         &registry_deps,
         in_workspace,
     );
-    fs::write(crate_dir.join("Cargo.toml"), &cargo_toml)
+    // Only rewrite Cargo.toml when it actually changed — an identical rewrite
+    // would bump its mtime and make cargo re-fingerprint the whole package.
+    write_if_changed(&crate_dir.join("Cargo.toml"), &cargo_toml)
         .with_context(|| format!("writing Cargo.toml to {}", crate_dir.display()))?;
 
     // Windows-resource build script (icon / version-info) — same logic as
@@ -696,7 +797,7 @@ pub fn build_emitted_crate(
             juxc_backend_rust::CrateTarget::Lib { name, .. } => name.as_str(),
         };
         let build_rs = generate_build_rs(&cargo_meta, target_name, icon_in_crate.as_deref());
-        fs::write(crate_dir.join("build.rs"), &build_rs)
+        write_if_changed(&crate_dir.join("build.rs"), &build_rs)
             .with_context(|| format!("writing build.rs to {}", crate_dir.display()))?;
     } else {
         let stale = crate_dir.join("build.rs");
@@ -711,25 +812,47 @@ pub fn build_emitted_crate(
         .map(|m| m.ffi.iter().map(|b| b.lib.as_str()).collect())
         .unwrap_or_default();
 
-    // Write each emitted source file.
+    // Write each emitted source file — incrementally. A `.rs` whose source
+    // content is unchanged (matched against the per-file emit cache) is left on
+    // disk untouched, so its mtime stays put and cargo skips recompiling it; we
+    // only reformat the files we actually rewrote. Sources whose `.jux` was
+    // removed/renamed are pruned afterward so stale Rust can't get compiled.
+    let prior_cache = load_emit_cache(crate_dir);
+    let mut new_cache: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut keep: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut written_rs: Vec<PathBuf> = Vec::with_capacity(crate_.sources.len());
     for (rel_path, content) in &crate_.sources {
         let full = crate_dir.join(rel_path);
-        if let Some(parent) = full.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating parent dir for {}", full.display()))?;
-        }
         let to_write = if rel_path.ends_with(".rs") && !ffi_libs.is_empty() {
             strip_extern_link_attrs(content, &ffi_libs)
         } else {
             content.clone()
         };
+        if rel_path.ends_with(".rs") {
+            let rel = norm_rel(rel_path);
+            let hash = content_hash(&to_write);
+            keep.insert(rel.clone());
+            new_cache.insert(rel.clone(), hash);
+            // Unchanged source AND the formatted file still on disk → skip the
+            // rewrite + reformat entirely (preserves mtime for cargo).
+            if prior_cache.get(&rel) == Some(&hash) && full.is_file() {
+                continue;
+            }
+        }
+        if let Some(parent) = full.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("creating parent dir for {}", full.display()))?;
+        }
         fs::write(&full, &to_write)
             .with_context(|| format!("writing source file {}", full.display()))?;
         if rel_path.ends_with(".rs") {
             written_rs.push(full);
         }
     }
+
+    // Drop emitted `.rs` (and the now-empty dirs) for sources no longer present.
+    prune_orphaned_sources(crate_dir, &keep, &mut new_cache);
+    save_emit_cache(crate_dir, &new_cache);
 
     run_rustfmt(&written_rs);
 
