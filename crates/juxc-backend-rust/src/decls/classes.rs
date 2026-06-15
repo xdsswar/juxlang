@@ -497,7 +497,7 @@ impl RustEmitter {
                 {
                     self.pending_setter_observer = Some((
                         prop_name.to_string(),
-                        crate::decls::observers::property_ty_is_comparable(&prop.ty),
+                        self.property_type_is_comparable(&prop.ty),
                         Vec::new(),
                         true,
                         0,
@@ -1005,13 +1005,13 @@ impl RustEmitter {
                             .map(|c| {
                                 (
                                     c.name.text.clone(),
-                                    crate::decls::observers::property_ty_is_comparable(&c.ty),
+                                    self.property_type_is_comparable(&c.ty),
                                 )
                             })
                             .collect();
                     self.pending_setter_observer = Some((
                         prop_name.to_string(),
-                        crate::decls::observers::property_ty_is_comparable(&prop.ty),
+                        self.property_type_is_comparable(&prop.ty),
                         dependents,
                         false,
                         0,
@@ -1026,7 +1026,7 @@ impl RustEmitter {
                     // are out of Phase-1 scope).
                     self.pending_setter_observer = Some((
                         prop_name.to_string(),
-                        crate::decls::observers::property_ty_is_comparable(&prop.ty),
+                        self.property_type_is_comparable(&prop.ty),
                         Vec::new(),
                         true,
                         0,
@@ -1340,7 +1340,7 @@ impl RustEmitter {
                                 .map(|c| {
                                     (
                                         c.name.text.clone(),
-                                        crate::decls::observers::property_ty_is_comparable(
+                                        self.property_type_is_comparable(
                                             &c.ty,
                                         ),
                                     )
@@ -1348,7 +1348,7 @@ impl RustEmitter {
                                 .collect();
                         self.pending_setter_observer = Some((
                             prop_name.to_string(),
-                            crate::decls::observers::property_ty_is_comparable(&prop.ty),
+                            self.property_type_is_comparable(&prop.ty),
                             dependents,
                             false,
                             depth,
