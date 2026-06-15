@@ -39,4 +39,19 @@ object JuxNativeLspStatus {
         // fall back to contributing the IDE-side items.
         false
     }
+
+    /**
+     * Restart every running Jux LSP server so `juxc-lsp` re-reads `jux.toml` and
+     * re-resolves its `rust.<crate>` dependencies / stubs — invoked when the
+     * manifest changes (see `JuxManifestChangeListener`). Guarded by the caller
+     * behind the native-LSP EP probe; defensive here too so a restart hiccup
+     * never surfaces as an IDE error.
+     */
+    fun restart(project: Project) {
+        try {
+            LspServerManager.getInstance(project)
+                .stopAndRestartIfNeeded(JuxLspServerSupportProvider::class.java)
+        } catch (_: Throwable) {
+        }
+    }
 }

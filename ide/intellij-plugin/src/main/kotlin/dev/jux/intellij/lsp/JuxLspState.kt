@@ -57,4 +57,25 @@ object JuxLspState {
         if (!JuxLspCommandLine.isResolvable()) return false
         return PropertiesComponent.getInstance(project).getBoolean(LSP4IJ_ENABLED_KEY, true)
     }
+
+    /**
+     * Restart whichever `juxc-lsp` client is serving this project so it re-reads
+     * `jux.toml` and rediscovers its dependencies — called when the manifest
+     * changes (see `JuxManifestChangeListener`). Each backend is touched ONLY
+     * behind its extension-point probe (same classloading discipline as
+     * [isServing]): the firewalled restart helpers ([JuxNativeLspStatus.restart]
+     * / [dev.jux.intellij.lsp4ij.JuxLsp4ijRestart]) link lazily at the guarded
+     * call site, so neither loads on an IDE that lacks its LSP backend.
+     */
+    fun refresh(project: Project) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+
+        val nativeRegistered = NATIVE_LSP_EP.extensionsIfPointIsRegistered
+            .any { it.javaClass.name == JUX_NATIVE_PROVIDER }
+        if (nativeRegistered) JuxNativeLspStatus.restart(project)
+
+        if (LSP4IJ_SERVER_EP.extensionsIfPointIsRegistered.isNotEmpty()) {
+            dev.jux.intellij.lsp4ij.JuxLsp4ijRestart.restart(project)
+        }
+    }
 }

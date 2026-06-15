@@ -57,6 +57,9 @@ class JuxCompletionContributor : CompletionContributor() {
         const val P_MEMBER = 80.0
         const val P_KEYWORD = 60.0
         const val P_TYPE = 50.0
+
+        /** Cap on the backward scan in [isTypeOnlyContext] (keeps it O(1)-ish). */
+        const val MAX_LOOKBACK = 240
     }
 
     init {
@@ -102,6 +105,17 @@ class JuxCompletionContributor : CompletionContributor() {
                         return
                     }
 
+                    // Type-only positions (`new X`, `extends X`, `implements X`):
+                    // a type name is the ONLY grammatically legal token here, so
+                    // suppress keywords and value-position declarations (locals,
+                    // params, members) entirely and offer just the visible +
+                    // project type names. This is the context-awareness that keeps
+                    // the popup showing only relevant options.
+                    if (isTypeOnlyContext(parameters)) {
+                        addVisibleDeclarations(parameters, result, typesOnly = true)
+                        return
+                    }
+
                     // Tier 3: only the keywords the grammar accepts here.
                     val keywords = JuxKeywordContext.keywordsFor(parameters.position)
                     for (kw in keywords) {
@@ -119,7 +133,7 @@ class JuxCompletionContributor : CompletionContributor() {
                     }
 
                     // Tiers 1, 2, 4: declarations visible from the caret only.
-                    addVisibleDeclarations(parameters, result)
+                    addVisibleDeclarations(parameters, result, typesOnly = false)
                 }
             },
         )
@@ -133,14 +147,20 @@ class JuxCompletionContributor : CompletionContributor() {
      * [dev.jux.intellij.resolve.JuxReference.resolveLocally], with relevance
      * falling as the scope widens.
      */
-    private fun addVisibleDeclarations(parameters: CompletionParameters, result: CompletionResultSet) {
+    private fun addVisibleDeclarations(
+        parameters: CompletionParameters,
+        result: CompletionResultSet,
+        typesOnly: Boolean = false,
+    ) {
         val offset = parameters.offset
         val seen = HashSet<String>()
         fun add(element: LookupElement, name: String) {
             if (seen.add(name)) result.addElement(element)
         }
 
-        var scope: PsiElement? = parameters.position.parent
+        // Value-position tiers (locals, params, members, setter `value`) — skipped
+        // in a type-only position, where none of them could legally appear.
+        var scope: PsiElement? = if (typesOnly) null else parameters.position.parent
         while (scope != null && scope !is JuxFile) {
             when (scope.elementType) {
                 E.CODE_BLOCK ->
@@ -208,7 +228,7 @@ class JuxCompletionContributor : CompletionContributor() {
             // §L.7 C-FFI: surface a `native { … }` block's foreign functions as
             // file-level callables, but only inside `unsafe` (see above).
             if (decl.elementType === E.EXTERN_BLOCK) {
-                if (insideUnsafe) {
+                if (insideUnsafe && !typesOnly) {
                     for (fn in decl.children) {
                         if (fn.elementType !== E.METHOD_DECLARATION) continue
                         val named = fn as? JuxNamedElement ?: continue
@@ -535,6 +555,44 @@ class JuxCompletionContributor : CompletionContributor() {
         E.RECORD_DECLARATION, E.STRUCT_DECLARATION, E.ANNOTATION_DECLARATION,
         E.TYPE_ALIAS_DECLARATION,
     )
+
+    /** Keywords that make the following token a TYPE name (and only a type). */
+    private val TYPE_GOVERNING = setOf("new", "extends", "implements")
+
+    /**
+     * True when the caret sits where only a TYPE name is legal — directly after
+     * `new`, or within an `extends` / `implements` clause (including later
+     * entries in a comma-separated `implements A, B` list). Scans backward over
+     * the "type-list gap" — identifiers, dots, commas, generics punctuation,
+     * whitespace — and reports true if a [TYPE_GOVERNING] keyword is reached
+     * before any statement punctuation. Hitting `{ ( ; = }` etc. (which can't
+     * precede a bare type name) stops the scan with false, so ordinary
+     * expression positions keep their full completion set.
+     */
+    private fun isTypeOnlyContext(parameters: CompletionParameters): Boolean {
+        val text = parameters.editor.document.charsSequence
+        var i = parameters.offset - 1
+        // Skip the partial identifier currently being completed.
+        while (i >= 0 && (text[i].isLetterOrDigit() || text[i] == '_')) i--
+        var steps = 0
+        while (i >= 0 && steps < MAX_LOOKBACK) {
+            val c = text[i]
+            when {
+                c.isWhitespace() || c == '.' || c == ',' || c == '<' || c == '>' || c == '?' || c == '&' -> {
+                    i--
+                }
+                c.isLetterOrDigit() || c == '_' -> {
+                    var j = i
+                    while (j >= 0 && (text[j].isLetterOrDigit() || text[j] == '_')) j--
+                    if (text.subSequence(j + 1, i + 1).toString() in TYPE_GOVERNING) return true
+                    i = j
+                }
+                else -> return false
+            }
+            steps++
+        }
+        return false
+    }
 
     /**
      * True when the caret sits in a member-access position — i.e. the nearest
