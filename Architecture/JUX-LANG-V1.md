@@ -599,6 +599,8 @@ When the initializer is a compile-time-constant expression, the binding is addit
 
 The compiler accepts either spelling, treats them identically, and echoes whichever you wrote in error messages. Programmers from C/C++/Rust gravitate to `const`; programmers from Java/Kotlin gravitate to `final`. Pick whichever reads more naturally.
 
+A `const`/`final` **field** is assign-once, just like a `final` local: it may be set only by its declaration initializer or in a constructor (or `init` block) of its own object, and a `static final` field only in its initializer or a `static` init block. Reassigning it anywhere else (in a method, by external code, or through another instance) is rejected with `E0465`. As with a `final` local, mutating the value the field holds stays legal (`final List xs;` then `xs.add(1)`); only rebinding the field itself is barred.
+
 Type inference is local — it never crosses function boundaries. Public function signatures must always have explicit types.
 
 ### 5.7. Type Aliases
