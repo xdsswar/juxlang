@@ -11,9 +11,9 @@ public class Node<T> {
 }
 
 public void main() {
-    var list = new ArrayList<Node<String>>();
-    list.add(new Node<String>("alpha"));
-    list.add(new Node<String>(null));
+    var list = new Vec<Node<String>>();
+    list.push(new Node<String>("alpha"));
+    list.push(new Node<String>(null));
 
     for (var n : list) {
         print(n.data?.length() ?? -1);   // expect 5 then -1

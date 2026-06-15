@@ -3009,6 +3009,20 @@ impl<'a> Checker<'a> {
                         Ty::User { generic_args, .. } if iter_is_stream => {
                             generic_args.first().cloned().unwrap_or(Ty::Unknown)
                         }
+                        // A `rust.std` sequence collection iterates over its
+                        // element type (the first generic arg) — the stub
+                        // exposes `iter()`, not the Jux `iterator()` protocol,
+                        // so recognize these directly. (`HashMap`/`BTreeMap`
+                        // iterate as key/value pairs and aren't covered here.)
+                        Ty::User { name, generic_args }
+                            if name.starts_with("rust.std")
+                                && matches!(
+                                    name.rsplit('.').next().unwrap_or(name),
+                                    "Vec" | "VecDeque" | "HashSet" | "BTreeSet",
+                                ) =>
+                        {
+                            generic_args.first().cloned().unwrap_or(Ty::Unknown)
+                        }
                         // User iterable (§O.6/§K.5): the protocol's
                         // element type — `iterator()`'s Iterator<T>
                         // argument, or the iterator's own `next()`
