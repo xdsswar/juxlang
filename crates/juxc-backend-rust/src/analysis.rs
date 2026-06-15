@@ -2732,7 +2732,18 @@ impl crate::RustEmitter {
         match coercion {
             IfaceCoercion::None => unreachable!("handled above"),
             IfaceCoercion::WrapClass { clone_first } => {
-                self.w.push_str("(std::rc::Rc::new(");
+                // Match the wrapper the value-type emission uses: a FOREIGN
+                // (`@rust`) interface lowers to an owned `Box<dyn …>`, otherwise
+                // the Jux-internal shared `Rc<dyn …>`.
+                let foreign_iface = target_ty
+                    .name
+                    .segments
+                    .last()
+                    .and_then(|s| self.lookup_interface_by_bare_or_fqn(s.text.as_str()))
+                    .map(|(_, i)| i.is_external)
+                    .unwrap_or(false);
+                self.w
+                    .push_str(if foreign_iface { "(Box::new(" } else { "(std::rc::Rc::new(" });
                 self.emit_expr(expr);
                 if clone_first {
                     self.w.push_str(".clone()");

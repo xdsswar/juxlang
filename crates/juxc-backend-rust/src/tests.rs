@@ -4406,6 +4406,31 @@ fn cargo_toml_registry_dep_is_linked() {
     assert_eq!(toml.matches("[dependencies]").count(), 1, "{toml}");
 }
 
+/// An anonymous class implementing an interface emits each method with the
+/// receiver mutability the INTERFACE declares — a `@MutSelf` method becomes
+/// `&mut self`, a plain method stays `&self`. This is what lets an anon impl of
+/// a foreign `@rust @MutSelf` trait (e.g. `minifb::InputCallback::add_char`)
+/// match the trait signature instead of tripping rustc E0053.
+#[test]
+fn anon_class_impl_uses_interface_mut_self_receiver() {
+    let out = emit(
+        r#"
+        public interface Sink {
+            @MutSelf public void push(int v);
+            public int peek();
+        }
+        public void main() {
+            var s = new Sink() {
+                public void push(int v) {}
+                public int peek() { return 0; }
+            };
+        }
+        "#,
+    );
+    assert!(out.contains("fn push(&mut self"), "@MutSelf method should be &mut self:\n{out}");
+    assert!(out.contains("fn peek(&self"), "plain method should be &self:\n{out}");
+}
+
 /// Tier-0 (`optimizations.md`): a stand-alone crate with no user profiles gets
 /// an optimized default `[profile.release]` (opt-level=3 / lto / codegen-units=1
 /// / strip / overflow-checks). `panic` is NOT auto-set (would break try/catch).
