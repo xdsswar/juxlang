@@ -4506,11 +4506,21 @@ impl RustEmitter {
         // Every unit that declares a free `main`. For a clean compile there's
         // exactly one (a second is E0400); a `[[bin]] main = "…"` key lets a
         // multi-`main` project pick which one is THE entry.
-        let has_main = |u: &&CompilationUnit| {
-            u.items.iter().any(|item| {
-                matches!(item, TopLevelDecl::Function(f) if f.name.text == "main")
-            })
-        };
+        // A unit provides an entry point when it has a free `main` OR a class
+        // `static main` (§E.1.2.2). Free main takes precedence within a unit.
+        fn unit_item_is_entry(item: &TopLevelDecl) -> bool {
+            match item {
+                TopLevelDecl::Function(f) => f.name.text == "main",
+                TopLevelDecl::Class(c) => c.methods.iter().any(|m| {
+                    m.name.text == "main"
+                        && m.modifiers
+                            .iter()
+                            .any(|md| matches!(md, juxc_ast::FnModifier::Static))
+                }),
+                _ => false,
+            }
+        }
+        let has_main = |u: &&CompilationUnit| u.items.iter().any(unit_item_is_entry);
         let unit_pkg = |u: &CompilationUnit| -> Vec<String> {
             u.package
                 .as_ref()
@@ -4518,21 +4528,30 @@ impl RustEmitter {
                 .unwrap_or_default()
         };
         // Prefer the unit whose package matches the manifest's entry package;
-        // otherwise the first `main`-bearing unit (legacy behavior).
+        // otherwise the first entry-bearing unit (legacy behavior).
         let chosen = self
             .entry_package
             .as_ref()
             .and_then(|want| units.iter().filter(has_main).find(|u| &unit_pkg(u) == want))
             .or_else(|| units.iter().find(has_main));
         let Some(unit) = chosen else { return };
+
+        // A free `main` is the legacy path; if there's none, fall back to the
+        // first class `static main` in the chosen unit and emit a shim that
+        // calls `[pkg::]ClassName::main(...)`.
+        let free_main = unit.items.iter().find_map(|item| match item {
+            TopLevelDecl::Function(fn_decl) if fn_decl.name.text == "main" => Some(fn_decl),
+            _ => None,
+        });
+        if free_main.is_none() {
+            self.emit_class_main_shim(unit);
+            return;
+        }
         {
             // Locate the user's `main` and remember its async-ness —
             // async mains are emitted under `__jux_async_main` and
             // need `futures::executor::block_on(...)` to drive.
-            let main_fn = unit.items.iter().find_map(|item| match item {
-                TopLevelDecl::Function(fn_decl) if fn_decl.name.text == "main" => Some(fn_decl),
-                _ => None,
-            });
+            let main_fn = free_main;
             let Some(main_fn) = main_fn else { return };
             let is_async_main =
                 matches!(main_fn.return_type, juxc_ast::ReturnType::AsyncType(_));
@@ -4604,6 +4623,72 @@ impl RustEmitter {
             self.w.line("}");
             return;
         }
+    }
+
+    /// Emit the `fn main()` shim that drives a class `static main` entry point
+    /// (§E.1.2.2) when the chosen unit has no free `main`. Calls
+    /// `[pkg::]ClassName::main(args)`, marshalling `std::env::args()` for the
+    /// `String[]` / `String...` form, wrapping an async entry in the futures
+    /// executor, and forwarding an `int` return as the process exit code.
+    fn emit_class_main_shim(&mut self, unit: &CompilationUnit) {
+        // The first class declaring a `static main`.
+        let mut found: Option<(&str, &juxc_ast::FnDecl)> = None;
+        for item in &unit.items {
+            if let TopLevelDecl::Class(class) = item {
+                if let Some(m) = class.methods.iter().find(|m| {
+                    m.name.text == "main"
+                        && m.modifiers
+                            .iter()
+                            .any(|md| matches!(md, juxc_ast::FnModifier::Static))
+                }) {
+                    found = Some((class.name.text.as_str(), m));
+                    break;
+                }
+            }
+        }
+        let Some((class_name, method)) = found else { return };
+
+        let is_async = matches!(method.return_type, juxc_ast::ReturnType::AsyncType(_));
+        // An entry-shaped non-void return is `int` — use it as the exit code.
+        let returns_value = matches!(method.return_type, juxc_ast::ReturnType::Type(_));
+        let takes_args = !method.params.is_empty();
+        let args_expr = if takes_args {
+            "std::env::args().skip(1).collect::<Vec<String>>()"
+        } else {
+            ""
+        };
+
+        // `ClassName::main` at the crate root, else `pkg::path::ClassName::main`.
+        let pkg: Vec<&str> = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect())
+            .unwrap_or_default();
+        let mut path = pkg.join("::");
+        if !path.is_empty() {
+            path.push_str("::");
+        }
+        path.push_str(class_name);
+        let call = format!("{path}::main({args_expr})");
+
+        self.w.newline();
+        self.w.line("fn main() {");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        if is_async {
+            self.w.push_str("futures::executor::block_on(");
+            self.w.push_str(&call);
+            self.w.push_str(");\n");
+        } else if returns_value {
+            self.w.push_str("std::process::exit(");
+            self.w.push_str(&call);
+            self.w.push_str(" as i32);\n");
+        } else {
+            self.w.push_str(&call);
+            self.w.push_str(";\n");
+        }
+        self.w.indent_dec();
+        self.w.line("}");
     }
 
     /// Emit the test-runner `fn main()` for `jux test`
