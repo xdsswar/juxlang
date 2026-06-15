@@ -2555,6 +2555,34 @@ fn nullable_field_write_wraps_value_in_some() {
     );
 }
 
+/// Java dispatches non-`private` instance methods virtually, so a
+/// package-private (no modifier) overridable method called through a
+/// base-typed reference must be on the `<Name>Kind` trait. Regression: the
+/// trait only carried `public`/`protected` methods, so a package-private
+/// `speak()` left `trait AnimalKind {}` empty and `Rc<dyn AnimalKind>.speak()`
+/// failed to resolve (rustc E0599) — silently breaking polymorphism for any
+/// class that didn't mark its methods `public`.
+#[test]
+fn package_private_method_is_virtual_on_kind_trait() {
+    let rust = emit(
+        r#"
+        class Animal { String speak() { return "..."; } }
+        class Dog extends Animal { String speak() { return "Woof"; } }
+        public void main() { Animal a = new Dog(); print(a.speak()); }
+        "#,
+    );
+    // The Kind trait declares the package-private virtual method.
+    assert!(
+        rust.contains("trait AnimalKind") && rust.contains("fn speak(&self)"),
+        "package-private method must be on the Kind trait: {rust}",
+    );
+    // The trait is NOT the empty marker form.
+    assert!(
+        !rust.contains("trait AnimalKind: std::fmt::Debug {}"),
+        "AnimalKind must not be empty: {rust}",
+    );
+}
+
 /// A 3-level wrapper hierarchy (`Dog` → `Mammal` → `Animal`) walks
 /// TWO `__parent` hops for a field declared on the grandparent. This
 /// locks in the depth indexing for inlined inherited methods: `Dog`'s

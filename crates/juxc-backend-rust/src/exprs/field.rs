@@ -137,10 +137,10 @@ impl RustEmitter {
                         .symbols
                         .lookup_field(&bare, &f.field.text)
                         .map(|(fsig, _)| {
-                            matches!(
-                                fsig.visibility,
-                                juxc_ast::Visibility::Public | juxc_ast::Visibility::Protected
-                            )
+                            // Non-private fields get a `__get_`/`__set_` accessor
+                            // on the `Kind` trait (see the field-hook gate in
+                            // classes.rs); private fields stay struct-local.
+                            !matches!(fsig.visibility, juxc_ast::Visibility::Private)
                         })
                         .unwrap_or(false);
                     if accessor_ok {
