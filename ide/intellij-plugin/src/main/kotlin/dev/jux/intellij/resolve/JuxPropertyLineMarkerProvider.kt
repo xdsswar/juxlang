@@ -65,6 +65,9 @@ class JuxPropertyLineMarkerProvider : LineMarkerProviderDescriptor() {
 
         // Aggregate every project file's cached §P scan ONCE for this batch.
         val project = props.first().second.project
+        // FileTypeIndex.getFiles throws IndexNotReadyException while indexing; the
+        // daemon re-runs slow markers once smart mode returns.
+        if (com.intellij.openapi.project.DumbService.isDumb(project)) return
         val attach = HashMap<String, MutableList<PsiElement>>()
         val bind = HashMap<String, MutableList<PsiElement>>()
         val sources = HashSet<String>()
