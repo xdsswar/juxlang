@@ -55,6 +55,39 @@ still on paper. I'll be honest below about which is which.
 
 ---
 
+## The first window Jux ever drew
+
+![The first native desktop window written in Jux](screenshots/first-juxlang-desktop-window.png)
+
+This is one of those screenshots I'm going to keep forever. It isn't a benchmark or
+a clever language trick, it's a tiny empty window with a title bar, sitting on the
+desktop like it owns the place. And it was drawn by a program written in **Jux**.
+
+Look at what's actually happening here. The editor on the left is plain Jux: a
+`package`, a couple of imports, a `public void main()`. It builds a window, pumps an
+event loop with `while (window.is_open())`, and listens for a keypress, printing
+"Enter was pressed" every time you hit Enter. The console at the bottom is that loop
+running for real, line after line, as a native executable. No VM warming up in the
+background, no interpreter, no runtime stitched on. Jux lowered that source to Rust,
+`rustc` turned it into machine code, and the operating system handed it a real
+window.
+
+What makes it click is *how little* it took. The window isn't some bespoke widget
+toolkit I had to build into the language. It's a **Rust crate** doing the drawing,
+the [`fltk`](https://crates.io/crates/fltk) GUI bindings, pulled in as a dependency
+and called with ordinary Jux syntax. Those `import rust.fltk.Window` lines at the
+top of the file are the whole trick: a crate from crates.io, surfaced as Jux types,
+constructing a real native window. It's the exact same "Rust's ecosystem is your
+ecosystem" promise from the pitch above, except now you can *see* it. The day a
+Java-shaped language I'd been chasing since 2019 popped up its first native window
+by borrowing the entire Rust crate world, the whole thing stopped feeling like a
+toy and started feeling like a tool.
+
+It's empty on purpose. Empty windows are where every UI story starts. This one just
+happens to be the first one that started in Jux.
+
+---
+
 ## A taste of Jux
 
 If you've written Java or C#, none of this needs a tutorial:
