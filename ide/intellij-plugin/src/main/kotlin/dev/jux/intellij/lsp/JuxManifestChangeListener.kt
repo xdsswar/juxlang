@@ -1,6 +1,7 @@
 package dev.jux.intellij.lsp
 
 import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.newvfs.BulkFileListener
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent
@@ -26,24 +27,35 @@ class JuxManifestChangeListener(private val project: Project) : BulkFileListener
 
     override fun after(events: MutableList<out VFileEvent>) {
         if (project.isDisposed) return
-        val base = project.basePath?.replace('\\', '/') ?: return
-        val touched = events.any { e ->
-            val p = e.path.replace('\\', '/')
-            p.endsWith("/jux.toml") && p.startsWith(base)
-        }
-        if (!touched) return
+        val base = project.basePath ?: return
+        if (events.none { isManifestPath(it.path, base) }) return
+        LOG.info("jux.toml changed - scheduling dependency re-discovery (LSP restart)")
         alarm.cancelAllRequests()
         alarm.addRequest({ rediscover() }, REFRESH_DELAY_MS)
     }
 
     private fun rediscover() {
         if (project.isDisposed) return
+        LOG.info("Re-discovering Jux dependencies: restarting juxc-lsp + refreshing daemon")
         JuxLspState.refresh(project)
         DaemonCodeAnalyzer.getInstance(project).restart("jux.toml dependencies changed")
     }
 
-    private companion object {
+    internal companion object {
+        private val LOG = Logger.getInstance(JuxManifestChangeListener::class.java)
+
         /** Coalesce a save's event burst (and rapid edits) into one restart. */
         const val REFRESH_DELAY_MS = 800
+
+        /**
+         * True when [path] is a `jux.toml` inside the project rooted at [base]
+         * (the workspace root or any member). Both are normalized to `/` so it
+         * matches regardless of the OS path separator.
+         */
+        fun isManifestPath(path: String, base: String): Boolean {
+            val p = path.replace('\\', '/')
+            val b = base.replace('\\', '/')
+            return p.endsWith("/jux.toml") && p.startsWith(b)
+        }
     }
 }
