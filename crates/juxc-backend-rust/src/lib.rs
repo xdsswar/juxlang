@@ -711,14 +711,6 @@ struct RustEmitter {
     /// (a `*mut T` has no `is_none`). Reset per function alongside
     /// `nullable_locals`.
     pub(crate) pointer_locals: HashSet<String>,
-    /// In-scope locals whose static type is a FOREIGN (`rust.<crate>`) value —
-    /// most commonly an observer lambda's `(old, now)` parameters bound to a
-    /// foreign-enum property type. Foreign types derive `Debug` but rarely
-    /// `Display`, so [`Self::emit_format_arg`] routes a bare reference to one of
-    /// these through the `Debug` format adapter (`JuxDbg`/`JuxOptDbg`). The
-    /// lambda body can't recover this from the untyped closure param otherwise.
-    /// Reset per function alongside `nullable_locals`.
-    pub(crate) foreign_format_locals: HashSet<String>,
     /// Enclosing locals CAPTURED by the anonymous class currently being emitted.
     /// Anonymous-class methods lower to `fn` items (which can't close over the
     /// environment), so each captured local is stored as a field on the
@@ -3620,45 +3612,50 @@ impl RustEmitter {
         w.push_str("#![allow(non_camel_case_types)]\n");
         w.push_str("#![allow(non_upper_case_globals)]\n");
         w.push_str("#![allow(clippy::all)]\n\n");
-        // Prelude: a tiny `Display` adapter for `Option<T>` so
-        // `print(maybeName)` produces `"value"` or `"null"` rather
-        // than failing to compile (Rust's std doesn't impl
-        // `Display` for `Option`). Used by the print/format-arg
-        // emit paths whenever the value being formatted has
-        // nullable shape; non-nullable args pass straight through.
-        // Hidden behind `#[allow(dead_code)]` from the block
-        // above, so unused-Optional programs don't emit a warning.
-        w.push_str("struct JuxOpt<'a, T: std::fmt::Display>(&'a Option<T>);\n");
-        w.push_str("impl<'a, T: std::fmt::Display> std::fmt::Display for JuxOpt<'a, T> {\n");
-        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
-        w.push_str("        match self.0 {\n");
-        w.push_str("            Some(v) => std::fmt::Display::fmt(v, f),\n");
-        w.push_str("            None => f.write_str(\"null\"),\n");
-        w.push_str("        }\n");
-        w.push_str("    }\n");
-        w.push_str("}\n\n");
-        // Debug-based format adapters for FOREIGN (`rust.<crate>`) values. A
-        // bound Rust type — most commonly an enum like `minifb::Key` — derives
-        // `Debug` but rarely `Display`, so interpolating it through the plain
-        // `{}` path (which needs `Display`) won't compile. `JuxDbg` (and the
-        // nullable `JuxOptDbg`, which prints `null` for `None`) format via
-        // `Debug` instead, so `$"…${foreignValue}"` just works. The backend
-        // routes a value here purely by whether its type is external — no
-        // per-type knowledge.
-        w.push_str("struct JuxDbg<'a, T: std::fmt::Debug>(&'a T);\n");
-        w.push_str("impl<'a, T: std::fmt::Debug> std::fmt::Display for JuxDbg<'a, T> {\n");
-        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
-        w.push_str("        std::fmt::Debug::fmt(self.0, f)\n");
-        w.push_str("    }\n");
-        w.push_str("}\n\n");
-        w.push_str("struct JuxOptDbg<'a, T: std::fmt::Debug>(&'a Option<T>);\n");
-        w.push_str("impl<'a, T: std::fmt::Debug> std::fmt::Display for JuxOptDbg<'a, T> {\n");
-        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
-        w.push_str("        match self.0 {\n");
-        w.push_str("            Some(v) => std::fmt::Debug::fmt(v, f),\n");
-        w.push_str("            None => f.write_str(\"null\"),\n");
-        w.push_str("        }\n");
-        w.push_str("    }\n");
+        // Prelude: ONE universal value formatter for every interpolation /
+        // `print(...)` / string-concat argument. Jux's `$"…${expr}"` needs each
+        // value rendered to text, but Rust splits that across two traits: most
+        // types implement `Display` ({}), while many — notably FOREIGN
+        // `rust.<crate>` enums/structs like `minifb::Key` — implement only
+        // `Debug` ({:?}). Rather than have the backend guess which trait a type
+        // supports (brittle, needs a new patch per shape: param, getter, local,
+        // nested), we let the Rust compiler decide via autoref-based
+        // specialization (the well-known "spez" trick):
+        //
+        //   `(&&JuxShow(&value)).jux_show()` resolves to the `Display` impl when
+        //   `value: Display` (that impl is written for `&&JuxShow<T>`, so it
+        //   matches the outer `&&` at the first probe step), and otherwise — when
+        //   `T: Display` does not hold so that conditional impl simply does NOT
+        //   exist — method resolution autoderefs one step to the `Debug` impl
+        //   written for `&JuxShow<T>`. Gating by IMPL EXISTENCE (not a bound on a
+        //   single impl) is what lets the fallback kick in: a missing impl is
+        //   "no candidate", which continues resolution, whereas a present-but-
+        //   unsatisfied impl would hard-error. Both receivers are references, so
+        //   nothing is moved out of the temporary `JuxShow` wrapper.
+        //
+        // Both paths return a `String`, so the `{}` placeholders the emit sites
+        // push stay unchanged. Nullable values are handled at the call site by
+        // matching the `Option` and rendering `None` as `"null"`. The
+        // `__jux_show!` macro brings both traits into method scope locally, so
+        // the call works inside ANY emitted submodule with no per-module `use`.
+        // Hidden behind `#[allow(dead_code)]` so programs that never interpolate
+        // don't warn.
+        w.push_str("pub struct JuxShow<T>(pub T);\n");
+        w.push_str("pub trait JuxShowViaDisplay { fn jux_show(self) -> String; }\n");
+        w.push_str("impl<T: std::fmt::Display> JuxShowViaDisplay for &&JuxShow<T> {\n");
+        w.push_str("    fn jux_show(self) -> String { format!(\"{}\", self.0) }\n");
+        w.push_str("}\n");
+        w.push_str("pub trait JuxShowViaDebug { fn jux_show(self) -> String; }\n");
+        w.push_str("impl<T: std::fmt::Debug> JuxShowViaDebug for &JuxShow<T> {\n");
+        w.push_str("    fn jux_show(self) -> String { format!(\"{:?}\", self.0) }\n");
+        w.push_str("}\n");
+        w.push_str("#[macro_export]\n");
+        w.push_str("macro_rules! __jux_show {\n");
+        w.push_str("    ($v:expr) => {{\n");
+        w.push_str("        #[allow(unused_imports)]\n");
+        w.push_str("        use $crate::{JuxShowViaDisplay as _, JuxShowViaDebug as _};\n");
+        w.push_str("        (&&$crate::JuxShow(&$v)).jux_show()\n");
+        w.push_str("    }};\n");
         w.push_str("}\n\n");
         // Observable-property observer handle (§P.2/§P.3): one
         // attached observer of a `{ get; set; }` property. NAMED
@@ -4083,7 +4080,6 @@ impl RustEmitter {
             nullable_locals: HashSet::new(),
             ref_locals: HashSet::new(),
             pointer_locals: HashSet::new(),
-            foreign_format_locals: HashSet::new(),
             captured_locals: HashSet::new(),
             weak_params: std::collections::HashMap::new(),
             emitting_ref_handle: false,

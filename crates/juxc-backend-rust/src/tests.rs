@@ -2713,9 +2713,12 @@ fn interp_bare_ident_in_print_collapses_to_println() {
         rust.contains(r#"println!("Hello, {}!", name)"#),
         "got: {rust}",
     );
-    // No nested format! shape after the specialization.
+    // No nested format! shape after the specialization: the interp content
+    // collapses straight into the `println!`, never `println!("{}", format!(…))`.
+    // (The prelude's `__jux_show!` helpers contain their own `format!`, so the
+    // check targets the user's interp text specifically.)
     assert!(
-        !rust.contains("format!("),
+        !rust.contains(r#"format!("Hello"#),
         "print($\"...\") should not need an inner format!: {rust}",
     );
 }
@@ -2754,6 +2757,59 @@ fn interp_outside_print_lowers_to_format_macro() {
 fn interp_empty_string_emits_empty_println() {
     let rust = emit(r#"public void main() { print($""); }"#);
     assert!(rust.contains(r#"println!("")"#), "got: {rust}");
+}
+
+/// A value whose `Display`-ness isn't guaranteed (here a user enum) routes
+/// through the universal `__jux_show!` renderer instead of a bare `{}` slot.
+/// `__jux_show!` resolves to `Display` when available and falls back to
+/// `Debug` otherwise (the prelude autoref trick), so a `Debug`-only type —
+/// e.g. a foreign `rust.<crate>` enum like `minifb::Key` — still formats with
+/// NO per-type detection in the backend.
+#[test]
+fn interp_non_primitive_routes_through_universal_show() {
+    let rust = emit(
+        r#"enum Color { RED, GREEN }
+           public void main() { var c = Color.RED; print($"c=${c}"); }"#,
+    );
+    assert!(
+        rust.contains("crate::__jux_show!(c)"),
+        "a non-primitive interp arg must route through __jux_show!: {rust}",
+    );
+}
+
+/// A nullable value renders `null` for `None` at the call site via an
+/// `Option` match, with the present value going through the same universal
+/// renderer — no separate `JuxOpt`/`JuxOptDbg` adapters needed.
+#[test]
+fn interp_nullable_renders_null_via_option_match() {
+    let rust = emit(
+        r#"public void main() { String? s = null; print($"s=${s}"); }"#,
+    );
+    assert!(
+        rust.contains(r#"None => "null".to_string()"#),
+        "nullable interp must render None as \"null\": {rust}",
+    );
+    assert!(
+        rust.contains("Some(__jux_v) => crate::__jux_show!(__jux_v)"),
+        "nullable interp must render the present value via __jux_show!: {rust}",
+    );
+}
+
+/// A primitive / `String` value stays on the clean fast path — a bare `{}`
+/// slot, never wrapped — so the common case keeps producing readable output.
+#[test]
+fn interp_primitive_stays_on_clean_fast_path() {
+    let rust = emit(
+        r#"public void main() { var n = 41; print($"n=${n + 1}"); }"#,
+    );
+    assert!(
+        rust.contains(r#"println!("n={}", n + 1)"#),
+        "a primitive interp arg must stay a bare {{}} slot: {rust}",
+    );
+    assert!(
+        !rust.contains("__jux_show!(n + 1)"),
+        "a primitive interp arg must not be wrapped: {rust}",
+    );
 }
 
 /// Curly braces in literal-text chunks are doubled when emitted
@@ -3018,7 +3074,14 @@ fn multiple_imports_emit_use_block() {
 #[test]
 fn no_imports_emits_no_use_block() {
     let rust = emit("public void main() {}");
-    assert!(!rust.contains("use "), "unexpected `use` in: {rust}");
+    // No TOP-LEVEL import `use` block. (The prelude's `__jux_show!` macro
+    // carries an indented, macro-internal `use $crate::{...}` for the
+    // Display-or-Debug autoref trick — that's not an import and is excluded
+    // by the column-0 check.)
+    assert!(
+        !rust.lines().any(|l| l.starts_with("use ")),
+        "unexpected top-level `use` in: {rust}",
+    );
 }
 
 // ============================================================================
