@@ -24,6 +24,10 @@ clap             = { workspace = true }
 # small. Project mode (`jux build`/`run`/`check` without a file)
 # uses this to discover the package layout.
 toml             = { version = "0.8", default-features = false, features = ["parse"] }
+# `serde_json` renders the machine-readable `jux metadata --format json`
+# output the IntelliJ "Jux Project" tool window consumes (workspace
+# members, targets, dependencies, resolved artifact paths).
+serde_json       = { workspace = true }
 
 # Embed Windows resources (icon + VERSIONINFO with product name,
 # company, copyright, file/product version). Only active on the
