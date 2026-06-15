@@ -1616,9 +1616,15 @@ impl RustEmitter {
             return;
         }
         // Walk ancestors (nearest first), composing the generic substitution
-        // exactly like `emit_inherited_wrapper_methods`. The first concrete
-        // version of each overridden method wins (that's what `super` names).
-        let mut shimmed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // exactly like `emit_inherited_wrapper_methods`. Emit the ENTIRE chain
+        // of concrete ancestor bodies, one shim per level: the nearest concrete
+        // ancestor is `__jux_super_<m>` (level 0), the next is
+        // `__jux_super_<m>__1`, and so on. A `super.<m>()` inside a level-`d`
+        // shim body climbs to level `d + 1` (see `super_shim_depth`), so a 3+
+        // level `super.<m>()` chain resolves grandparent→great-grandparent
+        // instead of re-entering the same shim (infinite recursion).
+        let mut depth_by_method: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         let mut cursor: Option<juxc_ast::TypeRef> = class_decl.extends.clone();
         let mut subst: std::collections::HashMap<String, juxc_ast::TypeRef> =
             std::collections::HashMap::new();
@@ -1649,7 +1655,7 @@ impl RustEmitter {
                 }
             }
             for m in &parent.methods {
-                if !overridden.contains(&m.name.text) || shimmed.contains(&m.name.text) {
+                if !overridden.contains(&m.name.text) {
                     continue;
                 }
                 if m.body.is_none()
@@ -1657,20 +1663,27 @@ impl RustEmitter {
                         .iter()
                         .any(|mo| matches!(mo, juxc_ast::FnModifier::Static))
                 {
-                    // Abstract / static here — keep walking for a concrete one.
+                    // Abstract / static here — not a concrete shim level; keep
+                    // walking for a concrete body (the depth slot is unused).
                     continue;
                 }
-                shimmed.insert(m.name.text.clone());
+                let depth = *depth_by_method.get(&m.name.text).unwrap_or(&0);
                 let mut renamed = if subst.is_empty() {
                     m.clone()
                 } else {
                     substitute_fn_signature(m, &subst)
                 };
-                renamed.name = juxc_ast::Ident {
-                    text: format!("__jux_super_{}", m.name.text),
-                    span: m.name.span,
+                let shim_name = if depth == 0 {
+                    format!("__jux_super_{}", m.name.text)
+                } else {
+                    format!("__jux_super_{}__{}", m.name.text, depth)
                 };
+                renamed.name = juxc_ast::Ident { text: shim_name, span: m.name.span };
+                let prev_depth = self.super_shim_depth;
+                self.super_shim_depth = Some(depth);
                 self.emit_method(&renamed);
+                self.super_shim_depth = prev_depth;
+                depth_by_method.insert(m.name.text.clone(), depth + 1);
             }
             cursor = parent.extends.clone();
         }

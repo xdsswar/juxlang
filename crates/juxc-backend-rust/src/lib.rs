@@ -552,6 +552,14 @@ struct RustEmitter {
     /// - `None` everywhere else (and `this` would never appear there
     ///   — the resolver flags it earlier).
     this_alias: Option<String>,
+    /// When emitting a `super.<m>()` **shim chain** (`emit_super_shims`), the
+    /// chain LEVEL of the shim body currently being emitted, or `None` in a
+    /// normal method body. A `super.<m>()` call resolves to shim level
+    /// `level + 1` (an ordinary method, `None`, targets level 0 — the nearest
+    /// ancestor's `__jux_super_<m>`). This is what makes `super` in a COPIED
+    /// ancestor body climb to the GRANDPARENT instead of re-entering the same
+    /// shim (the 3+ level `super` infinite-recursion fix).
+    pub(crate) super_shim_depth: Option<usize>,
     /// Name of the class whose body we're currently emitting (a
     /// constructor, method, or operator). Used to rewrite bare
     /// references to static fields — `a` inside `class Test`'s
@@ -4063,6 +4071,7 @@ impl RustEmitter {
             w,
             mutated_in_fn: HashSet::new(),
             this_alias: None,
+            super_shim_depth: None,
             enclosing_class: None,
             current_fn_params: std::collections::HashSet::new(),
             enclosing_interface: None,

@@ -2583,6 +2583,35 @@ fn package_private_method_is_virtual_on_kind_trait() {
     );
 }
 
+/// `super.m()` through a 3+ level hierarchy must climb one ancestor per shim,
+/// not re-enter the same shim. Regression: the middle class's body was copied
+/// into the grandchild's `__jux_super_m` shim, but the `super.m()` inside it
+/// still lowered to `self.__jux_super_m()` (the grandchild's own shim) →
+/// infinite recursion / stack overflow at runtime. Each level now gets a
+/// numbered shim (`__jux_super_m`, `__jux_super_m__1`, …) and a `super` call in
+/// a level-`d` shim targets level `d + 1`.
+#[test]
+fn super_call_chains_through_three_levels() {
+    let rust = emit(
+        r#"
+        public class A { public String who() { return "A"; } }
+        public class B extends A { public String who() { return "B" + super.who(); } }
+        public class C extends B { public String who() { return "C" + super.who(); } }
+        public void main() { print(new C().who()); }
+        "#,
+    );
+    // C carries a two-level shim chain.
+    assert!(
+        rust.contains("fn __jux_super_who(") && rust.contains("fn __jux_super_who__1("),
+        "C needs a numbered super-shim chain: {rust}",
+    );
+    // The level-0 shim (B's body) climbs to level 1, NOT back to itself.
+    assert!(
+        rust.contains("self.__jux_super_who__1()"),
+        "level-0 shim must call level 1, not recurse: {rust}",
+    );
+}
+
 /// A 3-level wrapper hierarchy (`Dog` → `Mammal` → `Animal`) walks
 /// TWO `__parent` hops for a field declared on the grandparent. This
 /// locks in the depth indexing for inlined inherited methods: `Dog`'s
