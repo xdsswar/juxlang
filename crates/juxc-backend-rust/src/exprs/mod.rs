@@ -1790,7 +1790,29 @@ impl RustEmitter {
             self.this_alias = Some("self".to_string());
             let saved_return = self.current_return_type.take();
             self.current_return_type = Some(method.return_type.clone());
+            // Register foreign-typed params so `${param}` in the body formats via
+            // the Debug adapter — a foreign enum/struct (e.g. `minifb::Key`) has
+            // `Debug`, not `Display`. Anon-method bodies aren't typed into
+            // `expr_types`, so `emit_format_arg` can't recover this otherwise.
+            let mut undo_foreign: Vec<String> = Vec::new();
+            let mut undo_nullable: Vec<String> = Vec::new();
+            for p in &method.params {
+                if self.external_class_real_path(&p.ty.name).is_some() {
+                    if self.foreign_format_locals.insert(p.name.text.clone()) {
+                        undo_foreign.push(p.name.text.clone());
+                    }
+                    if p.ty.nullable && self.nullable_locals.insert(p.name.text.clone()) {
+                        undo_nullable.push(p.name.text.clone());
+                    }
+                }
+            }
             self.emit_fn_body_at(body, &method.return_type);
+            for n in undo_foreign {
+                self.foreign_format_locals.remove(&n);
+            }
+            for n in undo_nullable {
+                self.nullable_locals.remove(&n);
+            }
             self.current_return_type = saved_return;
             self.this_alias = prev_alias;
         }
