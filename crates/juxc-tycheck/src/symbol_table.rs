@@ -944,6 +944,11 @@ pub struct InterfaceSig {
     /// already forces those flags on the `FieldSig` before it
     /// lands here.
     pub fields: HashMap<String, FieldSig>,
+    /// `true` when this interface is a foreign (`rust.<crate>` / `.jux.d`)
+    /// stub `@rust("…")` trait rather than a user-declared Jux interface.
+    /// Drives the `Box<dyn Trait>` (owned foreign trait object) vs
+    /// `Rc<dyn Trait>` (Jux-internal shared) wrapper choice in the backend.
+    pub is_external: bool,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -3463,6 +3468,7 @@ fn insert_interface(
             extends: interface_decl.extends.clone(),
             methods,
             fields,
+            is_external,
             span: interface_decl.span,
         },
     );

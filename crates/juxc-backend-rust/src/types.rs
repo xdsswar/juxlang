@@ -519,10 +519,15 @@ impl RustEmitter {
         // generic-method interfaces are rejected at tycheck (E0435) before
         // reaching here, so the produced `dyn` is always object-safe.
         let last_seg = ty.name.segments.last().map(|s| s.text.as_str());
-        let value_iface = self.in_value_type_position
-            && last_seg
-                .map(|s| self.lookup_interface_by_bare_or_fqn(s).is_some())
-                .unwrap_or(false);
+        // `Some(is_external)` when the name resolves to an interface, else `None`.
+        let iface_external = last_seg
+            .and_then(|s| self.lookup_interface_by_bare_or_fqn(s))
+            .map(|(_, i)| i.is_external);
+        let value_iface = self.in_value_type_position && iface_external.is_some();
+        // A foreign (`@rust`) interface in a value slot is an OWNED `Box<dyn …>`
+        // trait object (the Rust convention for an implemented-and-handed-over
+        // trait), vs the Jux-internal shared `Rc<dyn …>`.
+        let value_iface_box = value_iface && iface_external == Some(true);
         // **Polymorphic-base CLASS in a value position → `Rc<dyn <Name>Kind>`.**
         // A base-typed slot holds any subclass and dispatches virtually through
         // the populated `<Name>Kind` trait (Stage-2), NOT the class struct.
@@ -540,7 +545,8 @@ impl RustEmitter {
             return;
         }
         if value_iface {
-            self.w.push_str("std::rc::Rc<dyn ");
+            self.w
+                .push_str(if value_iface_box { "Box<dyn " } else { "std::rc::Rc<dyn " });
         }
         self.w.push_str(&path);
         // Emit any generic args attached to this type — `Box<int>`

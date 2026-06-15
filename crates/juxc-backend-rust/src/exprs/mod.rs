@@ -1681,10 +1681,28 @@ impl RustEmitter {
         self.w.push_str(" for ");
         self.w.push_str(&struct_name);
         self.w.push_str(" {");
-        for method in &methods {
-            // Interface trait methods take `&self` (Stage-1 dispatch
-            // flip) — the impl must match the trait exactly (E0053).
-            self.emit_anonymous_method(method, false);
+        // Receiver mutability per method follows the implemented trait's own
+        // signature: a `@MutSelf` interface method is `&mut self`, so the anon
+        // impl MUST match it exactly (E0053). Discovered from the interface
+        // sig (e.g. a foreign `@rust` trait's `@MutSelf` methods), not hardcoded.
+        let mut_flags: Vec<bool> = {
+            let iface = self.lookup_interface_by_bare_or_fqn(target_bare);
+            methods
+                .iter()
+                .map(|m| {
+                    iface
+                        .and_then(|(_, i)| i.methods.get(&m.name.text))
+                        .map(|ms| {
+                            ms.annotations
+                                .iter()
+                                .any(crate::exprs::field::annotation_is_mut_self)
+                        })
+                        .unwrap_or(false)
+                })
+                .collect()
+        };
+        for (method, &mut_self) in methods.iter().zip(mut_flags.iter()) {
+            self.emit_anonymous_method(method, mut_self);
         }
         self.w.push_str(" }");
         // Instance-initializer blocks run before returning the
@@ -1695,15 +1713,26 @@ impl RustEmitter {
             self.emit_block_contents(ib);
             self.w.push_str(" }");
         }
-        // The instance is born as the interface's trait-object value —
-        // an anonymous implementer has no nameable type at the Jux
-        // level, so EVERY slot it can flow into is `Rc<dyn Trait>`.
-        // Wrapping here (instead of relying on `iface_coercion_to`,
-        // which keys off the symbol table the synthetic struct isn't
-        // in) makes the coercion unconditional.
-        self.w.push_str(" std::rc::Rc::new(");
-        self.w.push_str(&struct_name);
-        self.w.push_str(") as std::rc::Rc<dyn ");
+        // The instance is born as the interface's trait-object value. A FOREIGN
+        // (`@rust`) trait taken by value is an OWNED `Box<dyn Trait>` — the Rust
+        // convention for "implement this trait and hand it over" (e.g. minifb's
+        // `set_input_callback(Box<dyn InputCallback>)`). A Jux-internal interface
+        // value stays the shared `Rc<dyn Trait>`. Wrapping here (instead of
+        // relying on `iface_coercion_to`, which keys off the symbol table the
+        // synthetic struct isn't in) makes the coercion unconditional.
+        let iface_is_external = self
+            .lookup_interface_by_bare_or_fqn(target_bare)
+            .map(|(_, i)| i.is_external)
+            .unwrap_or(false);
+        if iface_is_external {
+            self.w.push_str(" Box::new(");
+            self.w.push_str(&struct_name);
+            self.w.push_str(") as Box<dyn ");
+        } else {
+            self.w.push_str(" std::rc::Rc::new(");
+            self.w.push_str(&struct_name);
+            self.w.push_str(") as std::rc::Rc<dyn ");
+        }
         self.w.push_str(crate_prefix);
         self.w.push_str(&path);
         self.w.push_str("> }");
