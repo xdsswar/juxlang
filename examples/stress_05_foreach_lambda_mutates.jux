@@ -5,20 +5,20 @@
 package stress05;
 
 public class Sums {
-    public ArrayList<int> items = new ArrayList<int>();
+    public Vec<int> items = new Vec<int>();
     public int total = 0;
-    public ArrayList<int> audit = new ArrayList<int>();
+    public Vec<int> audit = new Vec<int>();
 }
 
 void main() {
     var s = new Sums();
-    s.items.add(1);
-    s.items.add(2);
-    s.items.add(3);
-    s.items.forEach(x -> {
+    s.items.push(1);
+    s.items.push(2);
+    s.items.push(3);
+    for (var x : s.items) {
         s.total = s.total + x;
-        s.audit.add(x);
-    });
+        s.audit.push(x);
+    }
     print(s.total);
-    print(s.audit.size());
+    print((int) s.audit.len());
 }

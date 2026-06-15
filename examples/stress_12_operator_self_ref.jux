@@ -20,16 +20,16 @@ public class Num12 {
 }
 
 public class Grid12 {
-    public ArrayList<int> cells = new ArrayList<int>();
+    public Vec<int> cells = new Vec<int>();
     public Grid12() {
-        this.cells.add(5);
-        this.cells.add(1);
+        this.cells.push(5);
+        this.cells.push(1);
     }
     public int operator [](int i) {
-        return this.cells.get(i);
+        return this.cells[i];
     }
     public void operator []=(int i, int v) {
-        this.cells.set(i, v);
+        this.cells[i] = v;
     }
     public int total() {
         var t = 0;
