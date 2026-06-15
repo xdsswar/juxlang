@@ -1,17 +1,17 @@
 // Wave-3 borrow stress #3: a collection-typed auto-property mutated
-// THROUGH the getter. Java reference semantics: `s.Items.add(3)` must
+// THROUGH the getter. Java reference semantics: `s.Items.push(3)` must
 // mutate the stored list, not a getter-returned clone. Expect 2 / 3 4.
 package stress03;
 
 public class Store {
-    public ArrayList<int> Items { get; set; } = new ArrayList<int>();
+    public Vec<int> Items { get; set; } = new Vec<int>();
 }
 
 void main() {
     var s = new Store();
-    s.Items.add(3);
-    s.Items.add(4);
-    print(s.Items.size());
-    print(s.Items.get(0));
-    print(s.Items.get(1));
+    s.Items.push(3);
+    s.Items.push(4);
+    print((int) s.Items.len());
+    print(s.Items[0]);
+    print(s.Items[1]);
 }
