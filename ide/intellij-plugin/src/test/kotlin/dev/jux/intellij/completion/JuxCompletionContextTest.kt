@@ -84,6 +84,53 @@ class JuxCompletionContextTest : BasePlatformTestCase() {
         assertContainsElements(top, "extends", "implements", "permits")
     }
 
+    // ---- type-only positions (context-aware: only relevant options) ----------
+
+    fun testAfterNewOffersOnlyTypes() {
+        val items = completionsAt(
+            """
+            package demo;
+            public class Widget {}
+            public class A {
+                public void go(int myParam) {
+                    var myLocal = 1;
+                    Widget w = new <caret>
+                }
+            }
+            """.trimIndent(),
+        )
+        // A type name is the only legal token after `new`: types yes…
+        assertContainsElements(items, "Widget", "A")
+        // …value-position names and keywords are suppressed as noise.
+        assertDoesntContain(items, "myLocal", "myParam", "return", "if", "var", "new")
+    }
+
+    fun testAfterExtendsOffersOnlyTypes() {
+        val items = completionsAt(
+            """
+            package demo;
+            public class Base {}
+            public class Sub extends <caret>
+            """.trimIndent(),
+        )
+        assertContainsElements(items, "Base")
+        assertDoesntContain(items, "class", "public", "return")
+    }
+
+    fun testImplementsListOffersOnlyTypes() {
+        // The later entry in a comma-separated implements list is still a type.
+        val items = completionsAt(
+            """
+            package demo;
+            public interface X {}
+            public interface Y {}
+            public class C implements X, <caret>
+            """.trimIndent(),
+        )
+        assertContainsElements(items, "X", "Y")
+        assertDoesntContain(items, "class", "return", "if")
+    }
+
     // ---- observable properties (§P) ------------------------------------------
 
     fun testAccessorBlockOffersGetSetAndVisibilityOnly() {

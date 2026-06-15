@@ -503,6 +503,13 @@
     <postStartupActivity implementation="dev.jux.intellij.run.JuxRunConfigStartup"/>
   </extensions>
 
+  <!-- Re-discover dependencies when jux.toml changes: restart the serving
+       juxc-lsp (so new rust.<crate> deps resolve) and refresh the daemon. -->
+  <projectListeners>
+    <listener class="dev.jux.intellij.lsp.JuxManifestChangeListener"
+              topic="com.intellij.openapi.vfs.newvfs.BulkFileListener"/>
+  </projectListeners>
+
   <actions>
     <!-- A single "Jux File" entry under New, anchored before the generic
          "New File". Its dialog offers the class/interface/enum/record/
