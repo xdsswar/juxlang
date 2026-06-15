@@ -330,9 +330,19 @@ impl RustEmitter {
         if let Expr::Field(f) = &*call.callee {
             if matches!(f.object.as_ref(), Expr::Super(_)) {
                 let alias = self.this_alias.as_deref().unwrap_or("self").to_string();
+                // Which shim in the chain runs the ancestor body. A normal
+                // method body (`super_shim_depth == None`) calls level 0
+                // (`__jux_super_<m>`, the nearest ancestor). Inside a level-`d`
+                // shim — itself a copied ancestor body — `super.<m>()` must climb
+                // ONE more level (`__jux_super_<m>__{d+1}`), so a 3+ level chain
+                // walks grandparent→great-grandparent instead of looping.
+                let target_level = self.super_shim_depth.map_or(0, |d| d + 1);
                 self.w.push_str(&alias);
                 self.w.push_str(".__jux_super_");
                 self.w.push_str(&f.field.text);
+                if target_level > 0 {
+                    self.w.push_str(&format!("__{target_level}"));
+                }
                 self.w.push('(');
                 for (i, arg) in call.args.iter().enumerate() {
                     if i > 0 {
