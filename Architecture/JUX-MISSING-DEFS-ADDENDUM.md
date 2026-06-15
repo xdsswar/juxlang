@@ -613,6 +613,43 @@ public class Config {
 }
 ```
 
+### M.7.3.1. Implicit-Nullable Auto-Properties (No Initializer)
+
+An auto-property declared with **no initializer**, or with an explicit `= null`, is
+**implicitly nullable** and defaults to `null`. The author writes the property type
+without a `?`, and the compiler treats the property as `T?`: the getter returns `T?`,
+the setter accepts `T?`, and reading the property before anything assigns it yields `null`.
+
+```jux
+public class Box<T> {
+    public T Value { get; set; }              // implicitly T?, reads null until set
+    public int Count { get; set; }            // implicitly int?, reads null until set
+    public String Name { get; set; } = null;  // same: implicitly String?
+}
+
+var b = new Box<String>();
+print(b.Value == null);                       // true
+print(b.Count == null);                       // true
+b.Count = 10;                                 // assigns Some(10)
+int n = b.Count!! + 1;                        // 11 (assert non-null to read as int)
+```
+
+A property that carries a **real initializer** keeps its declared, non-nullable type:
+
+```jux
+public int Count { get; set; } = 0;           // non-nullable int, reads 0
+```
+
+This makes "declare a property and assign it later" ergonomic without forcing an explicit
+initializer, while keeping null-safety honest: because the property type is `T?`, a read
+must null-check (or use `!!`) before the value can be used where `T` is required. A
+non-nullable read is only available once the property has a real initializer or has been
+assigned a non-null value.
+
+> **Why nullable rather than a zero value.** A uniform `null` default lets code, and
+> change-observers (§P), distinguish "never set" from "set to a value": the first
+> assignment is a real `null -> value` transition that observers detect.
+
 ### M.7.4. Expression-Bodied Properties
 
 For computed read-only properties, `-> expression` is a shorthand for `{ get -> expression; }`:
