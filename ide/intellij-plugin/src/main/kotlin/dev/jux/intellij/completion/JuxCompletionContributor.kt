@@ -287,7 +287,11 @@ class JuxCompletionContributor : CompletionContributor() {
 
     /** A non-method declaration lookup: icon + declared-type hint + tier. */
     private fun declaration(decl: PsiElement, name: String, icon: Icon, priority: Double): LookupElement {
-        val typeText = decl.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
+        // For an auto-property the type hint reflects the EFFECTIVE type — an
+        // uninitialized auto-property is implicitly nullable (§M.7.3.1), so the
+        // popup shows `int?`, not `int`. Other declarations keep their declared type.
+        val typeText = (decl as? JuxPropertyDeclaration)?.effectiveTypeText()
+            ?: decl.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
         var builder = LookupElementBuilder.create(name).withIcon(icon)
         if (typeText != null) builder = builder.withTypeText(typeText, true)
         return ranked(builder, priority)

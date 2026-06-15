@@ -184,6 +184,52 @@ class JuxPropertyDeclaration(node: ASTNode) : JuxFieldDeclaration(node) {
      */
     fun typeText(): String? = typeReference()?.text?.replace(WS, "")
 
+    /**
+     * True when `accessor` is an AUTO accessor — `get;` / `set;` with no `->`
+     * expression body and no `{ … }` block. An auto accessor is what makes the
+     * compiler synthesize a backing field for the property.
+     */
+    private fun isAutoAccessor(accessor: PsiElement): Boolean {
+        var c = accessor.node.firstChildNode
+        while (c != null) {
+            if (c.elementType == JuxTokenTypes.ARROW || c.elementType == JuxElementTypes.CODE_BLOCK) {
+                return false
+            }
+            c = c.treeNext
+        }
+        return true
+    }
+
+    /** True when this property synthesizes a backing field (any auto accessor). */
+    fun hasBackingField(): Boolean = accessors().any { isAutoAccessor(it) }
+
+    /** True when a `= initializer` follows the accessor list. */
+    fun hasInitializer(): Boolean = node.findChildByType(JuxTokenTypes.EQ) != null
+
+    /**
+     * True when this auto-property is IMPLICITLY NULLABLE (§M.7.3.1): the
+     * compiler rewrites an auto-property with no initializer (or `= null`) to
+     * `T?` and defaults it to null. Mirrors the desugar rule so offline tooling
+     * (completion, hover) reflects the real `T?` type the program sees. A
+     * property with a real initializer, an already-nullable (`T?`) type, a raw
+     * pointer type, or only custom accessors (no backing field) is not affected.
+     */
+    fun isImplicitlyNullable(): Boolean {
+        val t = typeText() ?: return false
+        if (t.endsWith("?") || t.contains("*")) return false
+        return hasBackingField() && !hasInitializer()
+    }
+
+    /**
+     * The property's EFFECTIVE type as the compiler sees it: the declared type,
+     * with a trailing `?` when [isImplicitlyNullable]. `null` when there's no
+     * declared type.
+     */
+    fun effectiveTypeText(): String? {
+        val t = typeText() ?: return null
+        return if (isImplicitlyNullable()) "$t?" else t
+    }
+
     private companion object {
         val WS = Regex("\\s+")
     }
