@@ -464,6 +464,15 @@ pub enum Code {
     /// mutating the FIELDS of a `final` class binding, remain legal — only
     /// rebinding the name is rejected (Java's `final` parameter rule).
     E0464_FinalBindingReassigned,
+    /// E0465 — **Reassignment of a `final`/`const` class field** (§5.6, the §M.14.2
+    /// rule extended to fields). A `final` (or its synonym `const`) field is
+    /// assign-once: it may be set only by its declaration initializer or in a
+    /// constructor / instance `init` block of its own object — never reassigned
+    /// in a method or by external code. Mutating the value a `final` field holds
+    /// (`finalList.add(x)`) stays legal; only rebinding the field is rejected, the
+    /// same shape as the `final` local-binding rule (E0464). A `static final`
+    /// field may be set only in its initializer or a `static` init block.
+    E0465_FinalFieldReassigned,
     /// E0466 — **Invalid parameter binding-mode combination** (§M.14.5). The
     /// `ref` (§M.13) and `weak` (§M.14.3) binding modes are mutually exclusive
     /// and cannot apply to a varargs parameter (which binds a `T[]` array — a
@@ -767,6 +776,7 @@ impl Code {
             Code::E0455_WeakOnNonClass           => "E0455",
             Code::E0456_WeakReadNeedsGet         => "E0456",
             Code::E0464_FinalBindingReassigned   => "E0464",
+            Code::E0465_FinalFieldReassigned     => "E0465",
             Code::E0466_InvalidParamBindingCombo => "E0466",
             Code::E0467_DefaultParamOrdering     => "E0467",
             Code::E0454_GenericBasePolymorphic   => "E0454",

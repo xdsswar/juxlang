@@ -288,6 +288,12 @@ pub(crate) struct Checker<'a> {
     /// first statement), and a delegation may not resolve back to
     /// the declaring constructor itself.
     pub(crate) current_ctor: Option<usize>,
+    /// `true` while walking an instance or `static` `init { }` block.
+    /// Like `current_ctor.is_some()`, this is a context in which a
+    /// `final`/`const` field MAY be assigned (the init runs during
+    /// construction / class setup); used by the E0465 field-reassignment
+    /// check to stay false-positive-free on legitimate init-block writes.
+    pub(crate) in_init_block: bool,
     /// CHECKED exceptions the current function body may raise without
     /// an enclosing catch absorbing them — `(exception FQN, site)`
     /// pairs collected while walking. Compared against the declared
@@ -374,6 +380,7 @@ impl<'a> Checker<'a> {
             ctor_selections: HashMap::new(),
             method_selections: HashMap::new(),
             current_ctor: None,
+            in_init_block: false,
             checked_escapes: Vec::new(),
             catch_absorb_stack: Vec::new(),
             lambda_depth: 0,
@@ -1942,7 +1949,11 @@ impl<'a> Checker<'a> {
             self.env.declare("this", this_ty.clone());
             let saved_async = self.in_async;
             self.in_async = false;
+            // Init blocks run during construction / class setup, so a
+            // `final`/`const` field MAY be assigned here (E0465 allowance).
+            let saved_init = std::mem::replace(&mut self.in_init_block, true);
             self.check_block(block);
+            self.in_init_block = saved_init;
             self.in_async = saved_async;
             self.env.pop_scope();
         }
@@ -2741,6 +2752,26 @@ impl<'a> Checker<'a> {
                 // assignment reaching tycheck is a post-construction or
                 // out-of-scope write.
                 self.check_property_write(&a.target);
+                // **E0465: `final`/`const` field reassignment (§5.6).** A final
+                // field is assign-once — settable only by its declaration
+                // initializer or in a constructor / `init` block of its own
+                // object. Any other write (a method, external code, another
+                // instance, a static method) is rejected. Covers plain `=`,
+                // compound `+=`, and desugared `++`/`--` (all `Stmt::Assign`).
+                if let Some(field) = self.final_field_assign_violation(&a.target) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0465_FinalFieldReassigned,
+                            format!(
+                                "cannot assign to `{field}`: it is a `final`/`const` field \
+                                 and may only be set in its declaration or a constructor \
+                                 (§5.6). Drop `final`/`const`, or move the assignment into \
+                                 the constructor.",
+                            ),
+                        )
+                        .with_span(a.span),
+                    );
+                }
                 let target_ty = infer_expr(&a.target, &self.env, self.symbols);
                 let value_ty = infer_expr(&a.value, &self.env, self.symbols);
                 let effective_target = if weak_target {
@@ -4020,6 +4051,81 @@ impl<'a> Checker<'a> {
             }
         }
         false
+    }
+
+    /// When `target` is a **disallowed** write to a `final`/`const` field,
+    /// return that field's name to flag (E0465); otherwise `None`.
+    ///
+    /// A `final` field is assign-once: legal only in its declaration initializer
+    /// (not an assignment statement, so never seen here) or in a constructor /
+    /// `init` block of its OWN object. This resolves both `obj.x` / `this.x`
+    /// (`Expr::Field`) and the bare `x = …` (implicit `this.x`, `Expr::Path`)
+    /// forms. Exemptions, to stay false-positive-free:
+    /// - a bare name that is a local/param is NOT a field write (that path is the
+    ///   E0464 local-binding check) — skipped via `env.lookup`;
+    /// - `weak` fields use store-through write semantics (§6.5), handled
+    ///   separately, so they never trip E0465.
+    ///
+    /// Allowance is deliberately permissive inside a constructor / init block (it
+    /// does not enforce Java's once-only / declaring-class-only rules there —
+    /// definite-assignment E0600 governs required init), which avoids false
+    /// positives on legitimate construction-time writes. A `static final` field
+    /// has no per-instance constructor, so it is settable only in a `static`
+    /// init block.
+    fn final_field_assign_violation(&self, target: &juxc_ast::Expr) -> Option<String> {
+        let (name, is_final, is_weak, is_static, recv_is_this) = match target {
+            Expr::Field(f) => {
+                // Resolve the declaring class — instance (`obj.x` / `this.x`) or
+                // static (`ClassName.x`) — the same way property-write
+                // resolution does, so a qualified static-final write is caught.
+                let class_fqn = if let Expr::Path(qn) = f.object.as_ref() {
+                    crate::infer::path_resolves_to_class(qn, &self.env, self.symbols)
+                        .or_else(|| match infer_expr(&f.object, &self.env, self.symbols) {
+                            Ty::User { name, .. } => self.resolve_class_fqn(&name),
+                            _ => None,
+                        })
+                } else {
+                    match infer_expr(&f.object, &self.env, self.symbols) {
+                        Ty::User { name, .. } => self.resolve_class_fqn(&name),
+                        _ => None,
+                    }
+                };
+                let class_fqn = class_fqn?;
+                let (fs, _) = self.symbols.lookup_field(&class_fqn, &f.field.text)?;
+                (
+                    f.field.text.clone(),
+                    fs.is_final,
+                    fs.is_weak,
+                    fs.is_static,
+                    matches!(&*f.object, Expr::This(_)),
+                )
+            }
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let nm = qn.segments[0].text.clone();
+                // A local/param of this name shadows the field: the write is a
+                // binding reassignment (E0464), not a field write.
+                if self.env.lookup(&nm).is_some() {
+                    return None;
+                }
+                let class = self.env.current_class.clone()?;
+                let (fs, _) = self.symbols.lookup_field(&class, &nm)?;
+                (nm, fs.is_final, fs.is_weak, fs.is_static, true)
+            }
+            _ => return None,
+        };
+        if !is_final || is_weak {
+            return None;
+        }
+        let allowed = if is_static {
+            self.in_init_block
+        } else {
+            (self.current_ctor.is_some() || self.in_init_block) && recv_is_this
+        };
+        if allowed {
+            None
+        } else {
+            Some(name)
+        }
     }
 
     /// True when an assignment target is a **raw-pointer field** (`obj.ptr`
@@ -8016,6 +8122,85 @@ mod tests {
     fn final_local_reassign_is_e0464() {
         let d = run("public void f() { final int y = 1; y = 2; }");
         assert!(has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
+    }
+
+    // ---- E0465: final/const FIELD reassignment (§5.6) ------------------------
+
+    /// The user's case: a bare `x = 5` (implicit `this.x`) in a method, where
+    /// `x` is a `const`/`final` field, is E0465.
+    #[test]
+    fn final_field_bare_reassign_in_method_is_e0465() {
+        let d = run(
+            "public class C { const int x = 10; public void m() { x = 5; } }",
+        );
+        assert!(has(&d, code::Code::E0465_FinalFieldReassigned), "{d:?}");
+    }
+
+    /// `this.x = 5` in a method is also E0465.
+    #[test]
+    fn final_field_this_reassign_in_method_is_e0465() {
+        let d = run(
+            "public class C { final int x = 10; public void m() { this.x = 5; } }",
+        );
+        assert!(has(&d, code::Code::E0465_FinalFieldReassigned), "{d:?}");
+    }
+
+    /// External write `c.x = 5` from outside the class is E0465.
+    #[test]
+    fn final_field_external_reassign_is_e0465() {
+        let d = run(
+            "public class C { const int x = 10; } \
+             public void main() { var c = new C(); c.x = 5; }",
+        );
+        assert!(has(&d, code::Code::E0465_FinalFieldReassigned), "{d:?}");
+    }
+
+    /// Compound `x += 1` and desugared `x++` on a final field are E0465.
+    #[test]
+    fn final_field_compound_and_incr_are_e0465() {
+        let comp = run("public class C { final int x = 0; public void m() { x += 1; } }");
+        assert!(has(&comp, code::Code::E0465_FinalFieldReassigned), "{comp:?}");
+        let incr = run("public class C { final int x = 0; public void m() { x++; } }");
+        assert!(has(&incr, code::Code::E0465_FinalFieldReassigned), "{incr:?}");
+    }
+
+    /// A `static final` field reassigned (qualified `C.N` or bare) is E0465.
+    #[test]
+    fn static_final_field_reassign_is_e0465() {
+        let q = run("public class C { static final int N = 10; public void m() { C.N = 5; } }");
+        assert!(has(&q, code::Code::E0465_FinalFieldReassigned), "{q:?}");
+    }
+
+    /// A `final` field assigned in the CONSTRUCTOR (bare or `this.`) is allowed —
+    /// no E0465. (The whole point of `final`: set once at construction.)
+    #[test]
+    fn final_field_assign_in_ctor_is_ok() {
+        let bare = run("public class C { final int x; public C(int v) { x = v; } }");
+        assert!(!has(&bare, code::Code::E0465_FinalFieldReassigned), "{bare:?}");
+        let this_ = run("public class C { final int x; public C(int v) { this.x = v; } }");
+        assert!(!has(&this_, code::Code::E0465_FinalFieldReassigned), "{this_:?}");
+    }
+
+    /// A `final` field assigned in an instance `init { }` block is allowed.
+    #[test]
+    fn final_field_assign_in_init_block_is_ok() {
+        let d = run("public class C { final int x; init { x = 7; } }");
+        assert!(!has(&d, code::Code::E0465_FinalFieldReassigned), "{d:?}");
+    }
+
+    /// A non-`final` (`var`) field reassigned in a method is fine — no E0465.
+    #[test]
+    fn non_final_field_reassign_is_ok() {
+        let d = run("public class C { int x = 0; public void m() { x = 5; } }");
+        assert!(!has(&d, code::Code::E0465_FinalFieldReassigned), "{d:?}");
+    }
+
+    /// A `final` LOCAL stays E0464 (binding rule), never E0465 (field rule).
+    #[test]
+    fn final_local_is_e0464_not_e0465() {
+        let d = run("public void f() { final int y = 1; y = 2; }");
+        assert!(has(&d, code::Code::E0464_FinalBindingReassigned), "{d:?}");
+        assert!(!has(&d, code::Code::E0465_FinalFieldReassigned), "{d:?}");
     }
 
     /// A non-final local that SHADOWS a `final` param (in an inner scope) may be

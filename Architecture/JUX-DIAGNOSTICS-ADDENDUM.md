@@ -339,6 +339,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0453`  | Generic type inference has no solution (uninferable `new X<>()`) | Type system §T.4.2 |
 | `E0460`  | Non-void function can finish without returning a value (missing return; conservative, JLS-14.21-style reachability) | Semantics §S.4.6 |
 | `E0464`  | Reassignment of a `final`/`const` binding (parameter or local) | §M.14.2 |
+| `E0465`  | Reassignment of a `final`/`const` field outside its declaration initializer or a constructor / `init` block | §5.6 |
 | `E0466`  | Invalid parameter binding-mode combination (`ref`+`weak`, `ref`/`weak` on varargs, `weak`+default) | §M.14.5 |
 | `E0467`  | A defaulted parameter precedes a non-defaulted parameter | §M.14.4 |
 | `E0470`  | Annotation applied outside its `@Target` set *(reserved)* | Annotations §A.13        |
