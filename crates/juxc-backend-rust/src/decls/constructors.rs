@@ -434,6 +434,9 @@ impl RustEmitter {
         // a body that passes a `T?` parameter into a `T?` slot
         // doesn't double-wrap.
         self.nullable_locals.clear();
+        // Observer-lambda-scoped foreign bindings are balanced, but reset here
+        // too so they can never leak across constructors.
+        self.foreign_format_locals.clear();
         for p in &ctor.params {
             if p.ty.nullable {
                 self.nullable_locals.insert(p.name.text.clone());
