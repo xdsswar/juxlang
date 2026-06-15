@@ -1,0 +1,37 @@
+// The blessed standard library: Rust's std, used with Rust's names. `Vec`,
+// `VecDeque`, `Rc`, … are auto-prelude'd (no import, like Rust's prelude);
+// `HashMap`/`HashSet` come from `import rust.std.*`. Methods are the real Rust
+// ones (`push`/`len`/`insert`/`contains_key`/indexing), and an `Option`-returning
+// method (`get`) surfaces as a Jux `T?` — the value, or null, never a panic.
+package rust_collections;
+
+import rust.std.HashMap;
+import rust.std.HashSet;
+
+public void main() {
+    // Vec — no import needed.
+    var v = new Vec<int>();
+    v.push(10); v.push(20); v.push(30);
+    int sum = 0;
+    for (int i = 0; i < (int) v.len(); i = i + 1) { sum = sum + v[i]; }
+    print($"vec len=${(int) v.len()} sum=$sum v1=${v[1]}");
+
+    // HashMap — `get` is a `T?` (value or null).
+    var m = new HashMap<String, int>();
+    m.insert("a", 1); m.insert("b", 2);
+    var a = m.get("a");
+    var miss = m.get("z");
+    print($"map has_a=${m.contains_key("a")} a=${a ?? -1} miss_null=${miss == null}");
+
+    // HashSet — dedups; iterate it.
+    var s = new HashSet<int>();
+    s.insert(1); s.insert(2); s.insert(2);
+    var scount = 0;
+    for (var x : s) { scount = scount + 1; }
+    print($"set len=${(int) s.len()} iterated=$scount has2=${s.contains(2)}");
+
+    // VecDeque — auto-prelude'd; push/pop at both ends, pop is `T?`.
+    var d = new VecDeque<int>();
+    d.push_back(2); d.push_front(1); d.push_back(3);
+    print($"deque len=${(int) d.len()} front=${d.pop_front() ?? -1} back=${d.pop_back() ?? -1}");
+}
