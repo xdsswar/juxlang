@@ -1,0 +1,25 @@
+// Regression: a user-defined class with its own `pop()` method must NOT get the
+// Phase-1 `Vec::pop -> .unwrap()` workaround appended. Before the fix, ANY call
+// named `pop()` with no args had `.unwrap()` tacked on, so a user `pop()`
+// returning (say) a `String` emitted `s.pop().unwrap()` -> a leaked rustc E0599
+// (`String` has no `unwrap`). The unwrap is only for the real `Vec::pop`.
+package generic_stack_pop;
+
+import rust.std.Vec;
+
+public class Stack<T> {
+    private Vec<T> data = new Vec<T>();
+    public void push(T v) { this.data.push(v); }
+    // This `pop()` returns T directly (the inner `this.data.pop()` is the real
+    // Vec::pop that legitimately needs the unwrap).
+    public T pop() { return this.data.pop(); }
+    public bool isEmpty() { return this.data.len() == 0; }
+}
+
+public void main() {
+    var s = new Stack<String>();
+    s.push("a"); s.push("b"); s.push("c");
+    var out = "";
+    while (!s.isEmpty()) { out = out + s.pop(); }   // user pop(): no bogus unwrap
+    print($"popped=$out");
+}
