@@ -2515,6 +2515,46 @@ fn ctor_property_and_implicit_this_writes_resolve() {
     );
 }
 
+/// Assigning a NON-null value to a nullable field (`T?`) must wrap it in
+/// `Some(...)`, whether the write is `this.f = v`, a bare implicit-`this`
+/// `f = v`, or an inherited field. Regression: `assign_target_is_nullable`
+/// only recognized nullable LOCALS for a bare-name target and a DIRECT field
+/// for a `this.f`, so a bare write to a nullable instance field (and any
+/// inherited nullable field) skipped the `Some(...)` coercion → rustc E0308
+/// (expected `Option<T>`, found `T`).
+#[test]
+fn nullable_field_write_wraps_value_in_some() {
+    let rust = emit(
+        r#"
+        public class Tag { public int v; public Tag(int v) { this.v = v; } }
+        public class Base { protected Tag? bt; public Base() {} }
+        public class Holder extends Base {
+            private Tag? t;
+            public Holder() {}
+            public void setOwn() { t = new Tag(1); }
+            public void setThis() { this.t = new Tag(2); }
+            public void setInherited() { bt = new Tag(3); }
+        }
+        public void main() { var h = new Holder(); h.setOwn(); }
+        "#,
+    );
+    // Bare implicit-this write to a nullable field wraps in Some.
+    assert!(
+        rust.contains("= Some(") && rust.contains("Tag::new(1"),
+        "bare nullable-field write wraps in Some: {rust}",
+    );
+    // `this.t = …` and the inherited `bt = …` both wrap too — no bare
+    // `T`-into-`Option<T>` assignment leaks.
+    assert!(
+        rust.contains("Tag::new(2") && rust.contains("Tag::new(3"),
+        "all nullable-field writes emit: {rust}",
+    );
+    assert!(
+        !rust.contains("= Tag::new(1)") && !rust.contains("= Tag::new(3)"),
+        "no unwrapped value assigned to a nullable field: {rust}",
+    );
+}
+
 /// A 3-level wrapper hierarchy (`Dog` → `Mammal` → `Animal`) walks
 /// TWO `__parent` hops for a field declared on the grandparent. This
 /// locks in the depth indexing for inlined inherited methods: `Dog`'s
