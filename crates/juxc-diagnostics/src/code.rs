@@ -29,6 +29,12 @@ pub enum Code {
     // ---- Resolution (E0300–E0399) ----
     /// E0301 — Name not found in scope.
     E0301_NameNotFound,
+    /// E0302 — A file `import`s a type from its **own package**. Types in the
+    /// same package are mutually visible without an import (Java semantics), so
+    /// a same-package import is redundant — and the backend would emit a `use`
+    /// that collides with the type's own definition in the emitted module. Drop
+    /// the import; refer to the sibling type by its bare name.
+    E0302_SamePackageImport,
     /// E0304 — A `var` or typed-local declaration uses a name
     /// already bound in the **same** lexical scope. Per
     /// `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 / `JUX-LANG-V1.md` §6.1,
@@ -711,6 +717,7 @@ impl Code {
             Code::E0210_ConstructorCallNotFirst  => "E0210",
             Code::E0211_MissingSuperCall         => "E0211",
             Code::E0301_NameNotFound             => "E0301",
+            Code::E0302_SamePackageImport        => "E0302",
             Code::E0304_DuplicateLocalDeclaration => "E0304",
             Code::E0303_ConflictingImport        => "E0303",
             Code::E0305_RustKeywordIdentifier    => "E0305",

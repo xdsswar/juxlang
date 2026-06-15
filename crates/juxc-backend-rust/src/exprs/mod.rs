@@ -65,12 +65,32 @@ impl RustEmitter {
                 .collect::<Vec<_>>()
                 .join(".")
         };
-        let sig = self.symbols.classes.get(&fqn)?;
-        if sig.is_external {
-            sig.rust_path.clone()
-        } else {
-            None
+        // A foreign type may be a class OR an enum stub — each records its real
+        // Rust path on its own sig. Without the enum arm a `rust.<crate>` enum
+        // (`minifb::key::Key`) used in TYPE position would miss the external
+        // branch and lower to the bogus `crate::rust::minifb::Key` module path.
+        if let Some(sig) = self.symbols.classes.get(&fqn) {
+            if sig.is_external {
+                return sig.rust_path.clone();
+            }
         }
+        if let Some(sig) = self.symbols.enums.get(&fqn) {
+            if sig.is_external {
+                // Prefer the crate's RE-EXPORT path (`minifb::Key`) for a
+                // non-std foreign crate: the `@rust("…")` annotation may record
+                // the canonical path through a PRIVATE module (`minifb::key::Key`,
+                // which trips rustc E0603), while the crate re-exports the type at
+                // its root — matching the import's own `use minifb::Key;`. `std`
+                // keeps its annotation path (the stub flattens nested std modules,
+                // so `std::collections::HashSet` is the only valid form).
+                let segs: Vec<&str> = fqn.split('.').collect();
+                if segs.first() == Some(&"rust") && segs.len() >= 3 && segs[1] != "std" {
+                    return Some(segs[1..].join("::"));
+                }
+                return sig.rust_path.clone();
+            }
+        }
+        None
     }
 
     /// True when `ty` (after unwrapping `T?`) is an external (`rust.std` / crate)
