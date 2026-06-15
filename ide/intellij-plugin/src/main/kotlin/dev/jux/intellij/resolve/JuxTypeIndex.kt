@@ -1,5 +1,6 @@
 package dev.jux.intellij.resolve
 
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiFile
@@ -61,6 +62,11 @@ object JuxTypeIndex {
         scope: GlobalSearchScope,
         action: (JuxTypeDeclaration) -> Unit,
     ) {
+        // FileTypeIndex.getFiles throws IndexNotReadyException during indexing;
+        // every caller (line markers, inspections, annotator, Go-to) runs on the
+        // daemon/EDT where that surfaces as an error. Yield nothing while dumb —
+        // the daemon re-runs once indexing completes.
+        if (DumbService.isDumb(project)) return
         val manager = PsiManager.getInstance(project)
         for (vf in FileTypeIndex.getFiles(JuxFileType, scope)) {
             val psi = manager.findFile(vf) ?: continue
@@ -80,6 +86,8 @@ object JuxTypeIndex {
         scope: GlobalSearchScope,
         action: (JuxNamedElement) -> Unit,
     ) {
+        // See forEachType: skip while indexing so callers never hit IndexNotReadyException.
+        if (DumbService.isDumb(project)) return
         val manager = PsiManager.getInstance(project)
         for (vf in FileTypeIndex.getFiles(JuxFileType, scope)) {
             val psi = manager.findFile(vf) ?: continue

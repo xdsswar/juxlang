@@ -30,8 +30,14 @@ class JuxManifestChangeListener(private val project: Project) : BulkFileListener
         val base = project.basePath ?: return
         if (events.none { isManifestPath(it.path, base) }) return
         LOG.info("jux.toml changed - scheduling dependency re-discovery (LSP restart)")
-        alarm.cancelAllRequests()
-        alarm.addRequest({ rediscover() }, REFRESH_DELAY_MS)
+        try {
+            alarm.cancelAllRequests()
+            alarm.addRequest({ rediscover() }, REFRESH_DELAY_MS)
+        } catch (_: Throwable) {
+            // The project may be closing concurrently (the disposed check above is
+            // not atomic with the scheduling) — drop the request rather than let an
+            // exception escape the bulk VFS dispatch.
+        }
     }
 
     private fun rediscover() {
@@ -55,7 +61,13 @@ class JuxManifestChangeListener(private val project: Project) : BulkFileListener
         fun isManifestPath(path: String, base: String): Boolean {
             val p = path.replace('\\', '/')
             val b = base.replace('\\', '/')
-            return p.endsWith("/jux.toml") && p.startsWith(b)
+            // Case-insensitive: a Windows VFS path and project.basePath can differ in
+            // drive-letter case, which would otherwise silently drop the event.
+            return p.endsWith("/jux.toml", ignoreCase = true) &&
+                p.startsWith(b, ignoreCase = true) &&
+                // Ignore build output (e.g. emitted crates under target/) so a build
+                // doesn't trigger spurious LSP restarts.
+                !p.contains("/target/", ignoreCase = true)
         }
     }
 }

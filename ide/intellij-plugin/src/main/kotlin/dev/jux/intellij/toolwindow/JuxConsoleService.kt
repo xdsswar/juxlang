@@ -54,6 +54,9 @@ class JuxConsoleService(private val project: Project) : Disposable {
     fun run(tool: String, args: List<String>, workDir: File, notice: String? = null, onFinish: (() -> Unit)? = null) {
         val c = console
         activateToolWindow()
+        // Supersede any still-running build/run on the shared console so two quick
+        // actions don't interleave output and leak the first child process.
+        current?.takeIf { !it.isProcessTerminated }?.destroyProcess()
         c.clear()
         val found = JuxToolchain.find(tool)
         if (found == null) {
@@ -74,14 +77,20 @@ class JuxConsoleService(private val project: Project) : Disposable {
             .withWorkDirectory(workDir)
             .withCharset(Charsets.UTF_8)
         ApplicationManager.getApplication().executeOnPooledThread {
+            // The project (and the console, disposed with it) may close between
+            // scheduling and running — don't touch a disposed console.
+            if (project.isDisposed) return@executeOnPooledThread
             try {
                 val handler = OSProcessHandler(cmd)
+                current = handler
                 ProcessTerminatedListener.attach(handler)
                 c.attachToProcess(handler)
                 if (onFinish != null) {
                     handler.addProcessListener(object : com.intellij.execution.process.ProcessListener {
                         override fun processTerminated(event: com.intellij.execution.process.ProcessEvent) {
-                            ApplicationManager.getApplication().invokeLater(onFinish)
+                            ApplicationManager.getApplication().invokeLater {
+                                if (!project.isDisposed) onFinish()
+                            }
                         }
                     })
                 }
@@ -91,6 +100,10 @@ class JuxConsoleService(private val project: Project) : Disposable {
             }
         }
     }
+
+    /** The most recently started process, so a new run can supersede it. */
+    @Volatile
+    private var current: OSProcessHandler? = null
 
     /** Bring the bottom build window forward (no-op if it isn't registered yet). */
     private fun activateToolWindow() {

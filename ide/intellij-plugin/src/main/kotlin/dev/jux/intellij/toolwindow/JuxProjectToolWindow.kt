@@ -257,7 +257,9 @@ private class JuxProjectPanel(private val project: Project) {
         object : AnAction("New Module", "Add a new library module to this workspace", AllIcons.General.Add) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun update(e: AnActionEvent) {
-                e.presentation.isEnabled = workspaceRoot != null
+                // Only on a real Jux project — never fabricate a manifest in a
+                // folder that has no jux.toml.
+                e.presentation.isEnabled = workspaceRoot?.let { File(it, "jux.toml").isFile } == true
             }
             override fun actionPerformed(e: AnActionEvent) = promptAndCreateModule()
         }
@@ -334,9 +336,9 @@ private class JuxProjectPanel(private val project: Project) {
         VfsUtil.saveText(f, content)
     }
 
-    /** Add [member] to the root `[workspace] members`, creating the section if needed. */
+    /** Add [member] to the root `[workspace] members` (only if the root manifest exists). */
     private fun addWorkspaceMember(rootVf: VirtualFile, member: String) {
-        val manifest = rootVf.findChild("jux.toml") ?: rootVf.createChildData(this, "jux.toml")
+        val manifest = rootVf.findChild("jux.toml") ?: return
         val text = VfsUtil.loadText(manifest)
         JuxToml.withWorkspaceMember(text, member)?.let { VfsUtil.saveText(manifest, it) }
     }
@@ -350,33 +352,43 @@ private class JuxProjectPanel(private val project: Project) {
             e.presentation.description = "Set the cross-compile target triple for builds"
         }
         override fun actionPerformed(e: AnActionEvent) {
-            val current = JuxSettings.getInstance().crossTarget
-            // Offer the installed triples (from `jux target list --installed`) as an
-            // editable chooser; fall back to a plain input if rustup isn't around.
-            val installed = installedTargets()
-            val choice = if (installed.isNotEmpty()) {
-                val options = (listOf("") + installed).toTypedArray() // "" = host
-                Messages.showEditableChooseDialog(
-                    "Rust target triple for builds (blank = host):",
-                    "Jux Build Target",
-                    AllIcons.General.Settings,
-                    options,
-                    current.ifBlank { "" },
-                    null,
-                )
-            } else {
-                Messages.showInputDialog(
-                    project,
-                    "Rust target triple for builds (blank = host):\n" +
-                        "e.g. x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu, aarch64-apple-darwin",
-                    "Jux Build Target",
-                    AllIcons.General.Settings,
-                    current,
-                    null,
-                )
-            } ?: return
-            JuxSettings.getInstance().crossTarget = choice.trim()
+            // `installedTargets()` shells out to `jux target list` (up to 10s) — do
+            // it off the EDT, then show the picker on the EDT, so the toolbar never
+            // freezes while rustup runs.
+            ApplicationManager.getApplication().executeOnPooledThread {
+                val installed = installedTargets()
+                ApplicationManager.getApplication().invokeLater {
+                    if (!project.isDisposed) chooseCrossTarget(installed)
+                }
+            }
         }
+    }
+
+    /** Prompt for the cross-compile triple (editable chooser of [installed], else free text). */
+    private fun chooseCrossTarget(installed: List<String>) {
+        val cur = JuxSettings.getInstance().crossTarget
+        val choice = if (installed.isNotEmpty()) {
+            val options = (listOf("") + installed).toTypedArray() // "" = host
+            Messages.showEditableChooseDialog(
+                "Rust target triple for builds (blank = host):",
+                "Jux Build Target",
+                AllIcons.General.Settings,
+                options,
+                cur.ifBlank { "" },
+                null,
+            )
+        } else {
+            Messages.showInputDialog(
+                project,
+                "Rust target triple for builds (blank = host):\n" +
+                    "e.g. x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu, aarch64-apple-darwin",
+                "Jux Build Target",
+                AllIcons.General.Settings,
+                cur,
+                null,
+            )
+        } ?: return
+        JuxSettings.getInstance().crossTarget = choice.trim()
     }
 
     // ---- Command execution -------------------------------------------------
@@ -553,7 +565,7 @@ private class JuxProjectPanel(private val project: Project) {
         val tail = when (kind) {
             "bin" -> t.str("entry") ?: "bin"
             "lib" -> t.get("crate_type")?.takeIf { it.isJsonArray }?.asJsonArray
-                ?.mapNotNull { e -> e.takeIf { !it.isJsonNull }?.asString }?.joinToString(", ")
+                ?.mapNotNull { e -> e.takeIf { it.isJsonPrimitive }?.asString }?.joinToString(", ")
                 ?.ifEmpty { "lib" } ?: "lib"
             else -> null
         }
@@ -755,12 +767,13 @@ private class JuxProjectPanel(private val project: Project) {
         try { if (f.isFile) f.readText() else "" } catch (_: Exception) { "" }
 }
 
-/** Read a string field, treating JSON null / blank as absent. */
+/** Read a string field, treating a non-primitive / null / blank value as absent
+ *  (so an unexpectedly-shaped field never throws and discards the whole model). */
 private fun JsonObject.str(key: String): String? =
-    get(key)?.takeIf { !it.isJsonNull }?.asString?.takeIf { it.isNotBlank() }
+    get(key)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() }
 
 private fun JsonObject.bool(key: String): Boolean =
-    get(key)?.takeIf { !it.isJsonNull }?.asBoolean ?: false
+    get(key)?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false
 
 private class JuxModuleCellRenderer : com.intellij.ui.ColoredTreeCellRenderer() {
     override fun customizeCellRenderer(
@@ -884,15 +897,20 @@ internal object JuxToml {
      */
     fun withWorkspaceMember(text: String, member: String): String? {
         if (member in workspaceMembers(text)) return null
+        val header = Regex("""(?m)^\s*\[\s*workspace\s*]\s*$""").find(text)
         // No [workspace] at all → append the section.
-        if (sectionBody(text, "workspace") == null) {
+        if (header == null) {
             val sep = if (text.isEmpty() || text.endsWith("\n")) "" else "\n"
             return text + sep + "\n[workspace]\nmembers = [\"$member\"]\n"
         }
-        val array = Regex("""members\s*=\s*\[(.*?)]""", RegexOption.DOT_MATCHES_ALL).find(text)
+        // Bound the search to the [workspace] section (up to the next `[` header or
+        // EOF) so a `members = [...]` in any other table can never be edited.
+        val sectionStart = header.range.last + 1
+        val sectionEnd = Regex("""(?m)^\s*\[""").find(text, sectionStart)?.range?.first ?: text.length
+        val section = text.substring(sectionStart, sectionEnd)
+        val array = Regex("""members\s*=\s*\[(.*?)]""", RegexOption.DOT_MATCHES_ALL).find(section)
         if (array == null) {
             // [workspace] present but no members array → add one after the header.
-            val header = Regex("""(?m)^\s*\[\s*workspace\s*]\s*$""").find(text) ?: return null
             val nl = text.indexOf('\n', header.range.last)
             // When the header is the last line (no trailing newline), prepend one
             // so `members` doesn't get glued onto the `[workspace]` line.
@@ -904,7 +922,10 @@ internal object JuxToml {
         }
         val inner = array.groupValues[1].trimEnd().trimEnd(',')
         val updated = if (inner.isBlank()) "\"$member\"" else "$inner, \"$member\""
-        return text.substring(0, array.range.first) + "members = [$updated]" + text.substring(array.range.last + 1)
+        // Splice within the section (offsets are relative to the full text).
+        val absStart = sectionStart + array.range.first
+        val absEnd = sectionStart + array.range.last
+        return text.substring(0, absStart) + "members = [$updated]" + text.substring(absEnd + 1)
     }
 
     /** `[workspace] members = [ ... ]` — the listed member paths (incl. globs). */
