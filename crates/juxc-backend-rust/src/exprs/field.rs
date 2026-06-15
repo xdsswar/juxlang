@@ -1594,6 +1594,42 @@ impl RustEmitter {
         }
         None
     }
+
+    /// Walk the `extends` chain of `class_name` to find a field, returning the
+    /// bare name of the class that DECLARES it plus its `(is_static, is_final)`
+    /// storage flags. Mirrors [`Self::lookup_class_field_ty_in_chain`] but hands
+    /// back what the bare implicit-`this` rewrite needs. Crucially, an INHERITED
+    /// field (declared in an ancestor) is found too — so a bare reference to a
+    /// base-class field inside a subclass method (whether the subclass's own
+    /// method or a copied inherited body, §CR.5) resolves to `this.field`, which
+    /// the field emitter then routes through the `__parent` hops. The declaring
+    /// class flows back so a bare reference to an inherited STATIC names the
+    /// class that actually holds the storage, not the using subclass.
+    pub(crate) fn lookup_class_field_owner_in_chain(
+        &self,
+        class_name: &str,
+        field_name: &str,
+    ) -> Option<(String, bool, bool)> {
+        let mut cursor: Option<String> = Some(class_name.to_string());
+        let mut depth = 0usize;
+        while let Some(name) = cursor {
+            if depth > 64 {
+                return None;
+            }
+            let Some(class) = self.lookup_class_by_bare_or_fqn(&name) else {
+                break;
+            };
+            if let Some(field) = class.fields.get(field_name) {
+                return Some((name, field.is_static, field.is_final));
+            }
+            cursor = class
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            depth += 1;
+        }
+        None
+    }
 }
 
 /// True when emitting `expr` as the receiver of a method call (e.g.

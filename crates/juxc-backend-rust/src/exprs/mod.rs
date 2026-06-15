@@ -282,15 +282,17 @@ impl RustEmitter {
                         // local in scope) is NOT a field reference — leave it.
                         let shadowed = self.current_fn_params.contains(&name)
                             || self.local_types.iter().any(|s| s.contains_key(&name));
-                        let field = self
-                            .lookup_class_by_bare_or_fqn(&class_name)
-                            .and_then(|c| c.fields.get(name.as_str()))
-                            .map(|f| (f.is_static, f.is_final));
-                        if let (false, Some((is_static, is_final))) = (shadowed, field) {
+                        // Walk the `extends` chain, not just the enclosing class's
+                        // OWN fields — a bare reference to an INHERITED field (in a
+                        // subclass method, or in a base body copied onto the child,
+                        // §CR.5) must resolve the same as `this.field`.
+                        let field = self.lookup_class_field_owner_in_chain(&class_name, &name);
+                        if let (false, Some((owner, is_static, is_final))) = (shadowed, field) {
                             if is_static {
                                 // Static field — no `this` needed (works in a
-                                // static method too).
-                                self.emit_enclosing_class_static_ref(&class_name, &name, is_final);
+                                // static method too). Reference the class that
+                                // DECLARES it so an inherited static resolves.
+                                self.emit_enclosing_class_static_ref(&owner, &name, is_final);
                                 return;
                             }
                             // Implicit-`this` for an INSTANCE field (Java rule:

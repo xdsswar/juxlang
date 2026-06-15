@@ -2425,6 +2425,47 @@ fn wrapper_hierarchy_inherited_field_walks_parent() {
     );
 }
 
+/// A BARE reference to an inherited field (Java implicit-`this`, e.g.
+/// `return name;` where `name` is declared in a base class) must resolve the
+/// same as `this.name` — both in the base's own emitted body AND in the copy
+/// inlined onto the subclass, which reaches the field through `__parent`.
+/// Regression: the implicit-`this` rewrite used to consult only the enclosing
+/// class's OWN fields, so a bare inherited-field read leaked an unresolved
+/// identifier (rustc E0425) on every subclassed base.
+#[test]
+fn bare_inherited_field_resolves_through_this() {
+    let rust = emit(
+        r#"
+        public class Base {
+            protected String name;
+            public Base(String name) { this.name = name; }
+            public String tag() { return name; }
+        }
+        public class Sub extends Base {
+            public Sub(String name) { super(name); }
+            public String tagBare() { return name; }
+        }
+        public void main() { Base b = new Sub("Rex"); print(b.tag()); }
+        "#,
+    );
+    // Base's own body reads its own field directly.
+    assert!(
+        rust.contains("self.0.borrow().name"),
+        "base reads own field: {rust}",
+    );
+    // Sub's inherited `tag()` AND its own `tagBare()` reach the inherited field
+    // through `__parent` — never a bare, unresolved `name`.
+    assert!(
+        rust.contains("self.0.borrow().__parent.name"),
+        "subclass reaches inherited field via __parent: {rust}",
+    );
+    // The smoking gun: no method body emits a bare `name` statement/return.
+    assert!(
+        !rust.contains("\n        name\n") && !rust.contains("crate::__jux_show!(name)"),
+        "no unresolved bare inherited-field identifier leaks: {rust}",
+    );
+}
+
 /// A 3-level wrapper hierarchy (`Dog` → `Mammal` → `Animal`) walks
 /// TWO `__parent` hops for a field declared on the grandparent. This
 /// locks in the depth indexing for inlined inherited methods: `Dog`'s
