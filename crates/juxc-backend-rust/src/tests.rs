@@ -4431,6 +4431,45 @@ fn anon_class_impl_uses_interface_mut_self_receiver() {
     assert!(out.contains("fn peek(&self"), "plain method should be &self:\n{out}");
 }
 
+/// An anonymous class CAPTURES the enclosing locals its body references: each
+/// becomes a field on the synthetic struct, a bare read rewrites to `self.<name>`,
+/// and it's cloned in at construction. (Rust `fn` items can't close over the
+/// environment, so without this the body would be rustc E0434.)
+#[test]
+fn anon_class_captures_enclosing_local() {
+    let out = emit(
+        r#"
+        public interface Sink { public int read(); }
+        public void main() {
+            int n = 41;
+            var s = new Sink() { public int read() { return n + 1; } };
+        }
+        "#,
+    );
+    assert!(out.contains("struct __JuxAnon0 { n:"), "captured field missing:\n{out}");
+    assert!(out.contains("self.n"), "body should read self.n:\n{out}");
+    assert!(out.contains("__JuxAnon0 { n: n.clone() }"), "construction should clone n:\n{out}");
+}
+
+/// A capture-LESS anonymous class is byte-identical to before — capture is
+/// purely additive (unit struct, bare `Rc::new(__JuxAnon0)`, no field block).
+#[test]
+fn anon_class_without_captures_is_unit_struct() {
+    let out = emit(
+        r#"
+        public interface Sink { public int read(); }
+        public void main() {
+            var s = new Sink() { public int read() { return 7; } };
+        }
+        "#,
+    );
+    assert!(out.contains("struct __JuxAnon0;"), "no-capture anon should be a unit struct:\n{out}");
+    assert!(
+        out.contains("Rc::new(__JuxAnon0) as"),
+        "no-capture anon should construct the bare value, no field block:\n{out}",
+    );
+}
+
 /// Tier-0 (`optimizations.md`): a stand-alone crate with no user profiles gets
 /// an optimized default `[profile.release]` (opt-level=3 / lto / codegen-units=1
 /// / strip / overflow-checks). `panic` is NOT auto-set (would break try/catch).
