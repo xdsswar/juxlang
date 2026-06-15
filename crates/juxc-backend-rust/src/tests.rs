@@ -4470,6 +4470,30 @@ fn anon_class_without_captures_is_unit_struct() {
     );
 }
 
+/// An ENUM-typed observable property is comparable (enums derive `PartialEq`),
+/// so its setter fires observers only on a real change (`if old != now`), not on
+/// every write — the distinct-until-changed guard, same as for primitives.
+#[test]
+fn enum_property_setter_is_change_guarded() {
+    let out = emit(
+        r#"
+        public enum Color { Red, Green, Blue }
+        public class Model {
+            public Color C { get; set; } = Color.Red;
+        }
+        public void main() {
+            var m = new Model();
+            m.C.observers.attach((old, now) -> {});
+            m.C = Color.Green;
+        }
+        "#,
+    );
+    assert!(
+        out.contains("if __jux_old != __jux_now"),
+        "an enum property's setter should be change-guarded:\n{out}",
+    );
+}
+
 /// Tier-0 (`optimizations.md`): a stand-alone crate with no user profiles gets
 /// an optimized default `[profile.release]` (opt-level=3 / lto / codegen-units=1
 /// / strip / overflow-checks). `panic` is NOT auto-set (would break try/catch).

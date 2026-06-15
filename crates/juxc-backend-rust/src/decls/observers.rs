@@ -324,6 +324,61 @@ pub(crate) fn property_ty_is_comparable(ty: &juxc_ast::TypeRef) -> bool {
 }
 
 impl RustEmitter {
+    /// True when `name` resolves to an ENUM (user or foreign) in the symbol
+    /// table — direct FQN, a same-package bare name, the unit's import-alias
+    /// map, or a cross-package last-segment match. Foreign `@rust` enums live in
+    /// `symbols.enums` too (flagged `is_external`).
+    pub(crate) fn type_name_is_enum(&self, name: &juxc_ast::QualifiedName) -> bool {
+        if name.segments.is_empty() {
+            return false;
+        }
+        if name.segments.len() > 1 {
+            let fqn = name
+                .segments
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            if self.symbols.enums.contains_key(&fqn) {
+                return true;
+            }
+        }
+        let bare = name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+        if self.symbols.enums.contains_key(bare) {
+            return true;
+        }
+        if let Some(idx) = self.current_unit_idx {
+            if let Some(ctx) = self.symbols.units.get(idx) {
+                if let Some(fqn) = ctx.unqualified.get(bare) {
+                    if self.symbols.enums.contains_key(fqn.as_str()) {
+                        return true;
+                    }
+                }
+            }
+        }
+        self.symbols
+            .enums
+            .keys()
+            .any(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+    }
+
+    /// True when a property of type `ty` supports `!=` change detection (the
+    /// distinct-until-changed setter guard). Primitives and `String` compare
+    /// (the [`property_ty_is_comparable`] rule), and so do ENUMS (user enums
+    /// derive `PartialEq`; foreign `@rust` enums like `minifb::Key` derive it
+    /// too) — discovered from the symbol table, not a hardcoded name list.
+    /// `Option<T>` over a comparable `T` is itself comparable, so the nullable
+    /// flag is irrelevant here.
+    pub(crate) fn property_type_is_comparable(&self, ty: &juxc_ast::TypeRef) -> bool {
+        if property_ty_is_comparable(ty) {
+            return true;
+        }
+        if ty.fn_shape.is_some() || ty.array_shape.is_some() || ty.ptr_depth > 0 {
+            return false;
+        }
+        self.type_name_is_enum(&ty.name)
+    }
+
     /// Look up a class AST by bare name (exact key, or unique
     /// `…\.<bare>` FQN suffix) — `class_asts` is keyed by FQN.
     pub(crate) fn class_ast_by_bare(&self, bare: &str) -> Option<&ClassDecl> {
