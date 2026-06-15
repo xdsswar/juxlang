@@ -1518,7 +1518,40 @@ impl crate::RustEmitter {
         // `expr_types` consult below.
         if let juxc_ast::Expr::Path(qn) = expr {
             if qn.segments.len() == 1 {
-                return self.nullable_locals.contains(&qn.segments[0].text);
+                let name = &qn.segments[0].text;
+                // A nullable local/parameter (smart-cast aware — a narrowed
+                // local is popped from the set inside `if (x != null)`).
+                if self.nullable_locals.contains(name) {
+                    return true;
+                }
+                // Otherwise a bare `name` in a method body may be an implicit
+                // `this.name` field read (`return k;` ≡ `return this.k;`). A
+                // nullable field is ALREADY `Option`-shaped, so it must not be
+                // re-wrapped in `Some(...)` (the double-wrap that produced
+                // `Some(self.k.clone())` → `Option<Option<K>>`). Resolve through
+                // the enclosing class/record's field signature.
+                if let Some(cls) = self.enclosing_class.clone() {
+                    // `enclosing_class` may be a bare name while the symbol table
+                    // is FQN-keyed, so resolve through the bare-or-FQN helper.
+                    if let Some(class) = self.lookup_class_by_bare_or_fqn(&cls) {
+                        if let Some(field) = class.fields.get(name) {
+                            return field.ty.nullable;
+                        }
+                    }
+                    let rec = self.symbols.records.get(&cls).or_else(|| {
+                        self.symbols
+                            .records
+                            .iter()
+                            .find(|(k, _)| k.rsplit('.').next() == Some(cls.as_str()))
+                            .map(|(_, v)| v)
+                    });
+                    if let Some(record) = rec {
+                        if let Some(c) = record.components.iter().find(|c| &c.name == name) {
+                            return c.ty.nullable;
+                        }
+                    }
+                }
+                return false;
             }
         }
         // **Arithmetic/comparison results are never `Option` values.**

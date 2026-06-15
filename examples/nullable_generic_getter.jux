@@ -1,0 +1,21 @@
+// Regression: a getter that returns a nullable generic FIELD by bare name
+// (`return k;` where `k : K?`) must NOT re-wrap the already-`Option`-shaped value
+// in `Some(...)`. Before the fix the backend emitted `Some(self.k.clone())` for a
+// `K?` field, yielding `Option<Option<K>>` (leaked rustc E0308). The bare field
+// read is now recognized as already-nullable, so it passes through unchanged.
+package nullable_generic_getter;
+
+public class Controller<K, T> {
+    private K? k;
+    private T? t;
+    public K? getK() { return k; }          // bare nullable-field read
+    public T? getT() { return this.t; }      // explicit form, same rule
+    public void setK(K? v) { this.k = v; }
+}
+
+public void main() {
+    var c = new Controller<String, int>();
+    print($"k0=${c.getK() ?? "none"}");
+    c.setK("hello");
+    print($"k1=${c.getK() ?? "none"} t=${c.getT() ?? -1}");
+}
