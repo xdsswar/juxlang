@@ -3244,6 +3244,40 @@ impl RustEmitter {
             return false;
         }
         if !is_array && !is_string && !is_map && !is_set && !is_deque {
+            // A `rust.std` collection's ref-returning Option getter (`get`,
+            // `first`/`last`, `front`/`back`) yields `Option<&V>` in Rust, but
+            // Jux's `T?` is owned `Option<V>` — bindgen drops the `&` from the
+            // stub return type, so the generic call path can't know. Clone the
+            // borrowed value out so the nullable lines up. (Only these read
+            // getters; the owned-`Option` methods like `pop`/`pop_front` already
+            // line up.)
+            if let juxc_tycheck::Ty::User { name, .. } = &recv_ty {
+                let bare = name.rsplit('.').next().unwrap_or(name);
+                let is_rust_std_coll = name.starts_with("rust.std")
+                    && matches!(
+                        bare,
+                        "Vec" | "HashMap" | "HashSet" | "VecDeque" | "BTreeMap" | "BTreeSet",
+                    );
+                if is_rust_std_coll
+                    && matches!(method, "get" | "first" | "last" | "front" | "back")
+                {
+                    self.w.push('(');
+                    self.emit_stdlib_receiver(&f.object);
+                    self.w.push('.');
+                    self.w.push_str(method);
+                    self.w.push('(');
+                    // `get(k)` borrows its key (`&k`); the no-arg getters take none.
+                    if method == "get" && !call.args.is_empty() {
+                        self.w.push_str("&(");
+                        self.emit_call_args(call);
+                        self.w.push(')');
+                    } else {
+                        self.emit_call_args(call);
+                    }
+                    self.w.push_str(")).cloned()");
+                    return true;
+                }
+            }
             return false;
         }
         // **Gap N1: mutating collection method on a wrapped-class field.**
