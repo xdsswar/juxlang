@@ -2466,6 +2466,55 @@ fn bare_inherited_field_resolves_through_this() {
     );
 }
 
+/// A constructor with a non-trivial body — a bare auto-property write
+/// (`Title = title;`), a bare instance-field write that READS the property
+/// (`label = "[" + Title + "]";`), and a bare property read inside a method —
+/// must all resolve to the right instance slots. Regression: such bodies were
+/// (mis)classified as the simple-ctor fast path and emitted inline before the
+/// `*_Inner` literal with no constructed instance, leaking `self`/bare names
+/// (rustc E0424/E0425). The constructor must use the `__self`-builder, route a
+/// property write/read through its `__prop_<Name>` backing field, and lower a
+/// bare property read in a method to the getter `self.Title()`.
+#[test]
+fn ctor_property_and_implicit_this_writes_resolve() {
+    let rust = emit(
+        r#"
+        public class Frame {
+            public String Title { get; set; } = "";
+            private String label;
+            public Frame(String title) {
+                Title = title;
+                label = "[" + Title + "]";
+            }
+            public String tag() { return Title; }
+        }
+        public void main() { var f = new Frame("Hi"); print(f.tag()); }
+        "#,
+    );
+    // Non-trivial body uses the __self-builder, not the inline `Self { … }`.
+    assert!(rust.contains("let mut __self ="), "uses __self-builder: {rust}");
+    // Bare property write in the ctor targets the backing field on __self.
+    assert!(
+        rust.contains("__self.__prop_Title = title"),
+        "ctor property write -> backing field: {rust}",
+    );
+    // Bare field write whose RHS reads the property reads the backing field.
+    assert!(
+        rust.contains("__self.label =") && rust.contains("__self.__prop_Title"),
+        "ctor field write reads property backing: {rust}",
+    );
+    // Bare property READ in a method lowers to the getter call.
+    assert!(
+        rust.contains("self.Title()"),
+        "method bare property read -> getter call: {rust}",
+    );
+    // No leaked bare property identifier or wrapper-setter call on the inner.
+    assert!(
+        !rust.contains("__self.__set_Title"),
+        "ctor must not call the wrapper setter on the inner struct: {rust}",
+    );
+}
+
 /// A 3-level wrapper hierarchy (`Dog` → `Mammal` → `Animal`) walks
 /// TWO `__parent` hops for a field declared on the grandparent. This
 /// locks in the depth indexing for inlined inherited methods: `Dog`'s

@@ -209,7 +209,19 @@ fn desugar_class(class: &mut ClassDecl) {
         .collect();
     if !backing_props.is_empty() {
         for ctor in &mut class.constructors {
-            rewrite_block_property_writes(&mut ctor.body, &backing_props);
+            // A bare reference to an auto-property name (Java implicit-`this`,
+            // e.g. `Title = title;` or reading `Title` in an initializer) must
+            // hit the backing field too — but a constructor PARAMETER of the
+            // same name shadows the property, so exclude param names from the
+            // rewrite set for this ctor.
+            let param_names: std::collections::HashSet<String> =
+                ctor.params.iter().map(|p| p.name.text.clone()).collect();
+            let ctor_props: std::collections::HashSet<String> = backing_props
+                .iter()
+                .filter(|n| !param_names.contains(*n))
+                .cloned()
+                .collect();
+            rewrite_block_property_writes(&mut ctor.body, &ctor_props);
         }
         // `init { }` blocks run in the same ctor-inner context (against
         // the bare inner struct, §S.4.4 step 4), so `this.<AutoProp>`
@@ -753,6 +765,18 @@ fn rewrite_expr_property_access(
                 f.field.text = backing_field_name(&f.field.text);
             }
         }
+        // Bare `AutoProp` (Java implicit-`this`) — a single-segment path naming
+        // an auto-property (with shadowing params already removed by the caller).
+        // Rewrite to the backing field so a constructor / init block read or
+        // write hits the inner struct slot, not the wrapper accessor that
+        // doesn't exist on the bare `*_Inner` value. `__prop_<Name>` is itself
+        // a bare path, so the backend's implicit-`this` rewrite then resolves it
+        // to `__self.__prop_<Name>`.
+        Expr::Path(qn) => {
+            if qn.segments.len() == 1 && auto_props.contains(&qn.segments[0].text) {
+                qn.segments[0].text = backing_field_name(&qn.segments[0].text);
+            }
+        }
         Expr::Binary(b) => {
             rewrite_expr_property_access(&mut b.left, auto_props);
             rewrite_expr_property_access(&mut b.right, auto_props);
@@ -774,6 +798,44 @@ fn rewrite_expr_property_access(
             rewrite_expr_property_access(&mut t.else_branch, auto_props);
         }
         Expr::Cast(c) => rewrite_expr_property_access(&mut c.value, auto_props),
+        // A property read can appear inside any composite expression, most
+        // commonly a constructor argument — `new Window(Title, …)`. Recurse into
+        // every operand-bearing form so the backing-field rewrite reaches them;
+        // missing a form leaks a bare property name into the inner ctor, where
+        // the wrapper accessor doesn't exist (rustc E0599).
+        Expr::NewObject(n) => {
+            for a in &mut n.args {
+                rewrite_expr_property_access(a, auto_props);
+            }
+        }
+        Expr::NewArrayLit(n) => {
+            for el in &mut n.elements {
+                rewrite_expr_property_access(el, auto_props);
+            }
+        }
+        Expr::NewArray(n) => {
+            rewrite_expr_property_access(&mut n.size, auto_props);
+            for inner in &mut n.inner_sizes {
+                rewrite_expr_property_access(inner, auto_props);
+            }
+        }
+        Expr::Range(r) => {
+            rewrite_expr_property_access(&mut r.start, auto_props);
+            rewrite_expr_property_access(&mut r.end, auto_props);
+        }
+        Expr::TypeTest(t) => rewrite_expr_property_access(&mut t.value, auto_props),
+        Expr::Elvis(el) => {
+            rewrite_expr_property_access(&mut el.value, auto_props);
+            rewrite_expr_property_access(&mut el.fallback, auto_props);
+        }
+        Expr::Await(inner, _) => rewrite_expr_property_access(inner, auto_props),
+        Expr::InterpString(s) => {
+            for seg in &mut s.segments {
+                if let crate::InterpSegment::Expr(inner) = seg {
+                    rewrite_expr_property_access(inner, auto_props);
+                }
+            }
+        }
         _ => {}
     }
 }

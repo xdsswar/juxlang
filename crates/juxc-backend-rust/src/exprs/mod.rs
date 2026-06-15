@@ -311,6 +311,30 @@ impl RustEmitter {
                                 return;
                             }
                         }
+                        // Bare PROPERTY read (Java implicit-`this`): `Title` ≡
+                        // `this.Title`, lowered to the synthesized getter call
+                        // `self.Title()`. Walk the enclosing class + ancestors;
+                        // skip when shadowed by a param/local or when there's no
+                        // `this` (a static method). A name is never both a field
+                        // and a property, so this only fires when the field lookup
+                        // above missed. We emit the getter call DIRECTLY rather
+                        // than routing a synthetic `this.Title` through `emit_field`
+                        // — that path keys the getter decision off the receiver's
+                        // recorded type, which a synthetic span doesn't carry. In
+                        // a constructor the desugarer already rewrote the bare name
+                        // to the `__prop_<Name>` backing field, so this is a
+                        // method-only path where the alias is `self`.
+                        if !shadowed
+                            && self.bare_name_is_property_in_chain(&class_name, &name)
+                        {
+                            if let Some(alias) = self.this_alias.clone() {
+                                self.w.push_str(&alias);
+                                self.w.push('.');
+                                self.w.push_str(&name);
+                                self.w.push_str("()");
+                                return;
+                            }
+                        }
                     }
                 }
                 // Dot-separated Jux paths become `::`-separated Rust paths.
