@@ -1002,8 +1002,14 @@ fn infer_stdlib_method(
             // String → String
             "trim" | "toUpperCase" | "toLowerCase" | "replace" | "substring"
             | "repeat" | "to_string" | "clone" => Some(Ty::String),
+            // String → uint. `len()` is the Rust `str::len()` byte count, which
+            // returns `usize`; typing it `uint` keeps it consistent with the
+            // emitted Rust (and with `Vec::len()`), so a mixed-type use coerces
+            // through the binary-op promotion and `int x = s.len()` gives a clean
+            // E0410 (use the `s.length` property, or a cast, for a signed length).
+            "len" => Some(Ty::Primitive(Primitive::Uint)),
             // String → int
-            "length" | "len" | "indexOf" | "byteLength" | "charLength" => {
+            "length" | "indexOf" | "byteLength" | "charLength" => {
                 Some(Ty::Primitive(Primitive::Int))
             }
             // String → bool
@@ -1676,10 +1682,12 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         | BinaryOp::In
         | BinaryOp::And
         | BinaryOp::Or => Ty::Primitive(Primitive::Bool),
-        // Arithmetic, bitwise, shift — take the left operand's type.
-        // Phase D will promote when operands differ in width.
-        // The wrapping family (§S.2.1) is integer-only and preserves
-        // the operand type by construction (wrap = modulo 2^N).
+        // Arithmetic / bitwise — Java-style numeric promotion of the two
+        // operand types (a float operand wins; otherwise the wider integer,
+        // with a same-width signed/unsigned tie going unsigned). This must
+        // match the backend's operand coercion (`numeric_promote_target`) so a
+        // `long / double` is `double` (not `long` → silent integer division),
+        // and `int + long` is `long` (not `int` → a leaked `isize + i64`).
         BinaryOp::Add
         | BinaryOp::Sub
         | BinaryOp::Mul
@@ -1687,8 +1695,15 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         | BinaryOp::Rem
         | BinaryOp::BitOr
         | BinaryOp::BitXor
-        | BinaryOp::BitAnd
-        | BinaryOp::Shl
+        | BinaryOp::BitAnd => {
+            let right_ty = infer_expr(&b.right, env, symbols);
+            numeric_promote(&left_ty, &right_ty)
+                .map(Ty::Primitive)
+                .unwrap_or(left_ty)
+        }
+        // Shift and the wrapping family (§S.2.1) preserve the LEFT operand's
+        // type by construction (the right operand is only a shift/step count).
+        BinaryOp::Shl
         | BinaryOp::Shr
         | BinaryOp::WrapAdd
         | BinaryOp::WrapSub
@@ -1696,6 +1711,72 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         | BinaryOp::WrapShl
         | BinaryOp::WrapShr => left_ty,
     }
+}
+
+/// Java-style numeric promotion of two operand types: the common primitive an
+/// arithmetic/bitwise op over `l` and `r` produces, or `None` when either side
+/// is not a numeric primitive (so the caller keeps its existing left-type
+/// fallback). Mirrors `juxc_backend_rust`'s `numeric_promote_target` exactly so
+/// the inferred result type matches the operand casts the backend emits:
+/// a float operand wins (`double`, or `float` only when both floats are 32-bit);
+/// otherwise the wider integer, with a same-width signed/unsigned tie resolving
+/// to the unsigned type.
+fn numeric_promote(l: &Ty, r: &Ty) -> Option<Primitive> {
+    let (Ty::Primitive(lp), Ty::Primitive(rp)) = (l, r) else {
+        return None;
+    };
+    let (lp, rp) = (*lp, *rp);
+    if matches!(lp, Primitive::Bool | Primitive::Char)
+        || matches!(rp, Primitive::Bool | Primitive::Char)
+    {
+        return None;
+    }
+    if lp == rp {
+        return Some(lp);
+    }
+    let is_float =
+        |p: Primitive| matches!(p, Primitive::Float | Primitive::Double | Primitive::F32 | Primitive::F64);
+    if is_float(lp) || is_float(rp) {
+        let is_f64 = |p: Primitive| matches!(p, Primitive::Double | Primitive::F64);
+        return Some(if is_f64(lp) || is_f64(rp) {
+            Primitive::Double
+        } else {
+            Primitive::Float
+        });
+    }
+    let rank = |p: Primitive| -> u8 {
+        match p {
+            Primitive::Byte | Primitive::I8 | Primitive::Ubyte | Primitive::U8 => 1,
+            Primitive::Short | Primitive::I16 | Primitive::Ushort | Primitive::U16 => 2,
+            Primitive::I32 | Primitive::U32 => 3,
+            Primitive::Int | Primitive::Uint => 4,
+            Primitive::Long | Primitive::I64 | Primitive::Ulong | Primitive::U64 => 5,
+            _ => 0,
+        }
+    };
+    let unsigned = |p: Primitive| {
+        matches!(
+            p,
+            Primitive::Uint
+                | Primitive::Ubyte
+                | Primitive::U8
+                | Primitive::Ushort
+                | Primitive::U16
+                | Primitive::U32
+                | Primitive::Ulong
+                | Primitive::U64,
+        )
+    };
+    let (rl, rr) = (rank(lp), rank(rp));
+    Some(if rl > rr {
+        lp
+    } else if rr > rl {
+        rp
+    } else if unsigned(lp) {
+        lp
+    } else {
+        rp
+    })
 }
 
 /// Map a [`BinaryOp`] to the [`OperatorKind`] that would override it,

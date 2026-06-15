@@ -1,0 +1,30 @@
+// Regression: mixed-type numeric binary operations must promote correctly in
+// BOTH tycheck (result type) and the backend (operand casts), or the emitted
+// Rust fails to compile (`isize + i64`, `isize < usize`) or silently does the
+// wrong thing (`long / double` as integer division). Each line below previously
+// leaked a rustc error or mis-computed; all must now produce the values shown.
+package numeric_mixed_ops;
+
+import rust.std.Vec;
+
+public void main() {
+    // int + long: promotes to long (was a leaked `isize + i64`).
+    int i = 7;
+    long big = 1000000;
+    long mixed = big + i;                    // 1000007
+
+    // long / double: float division (was typed `long` -> integer division).
+    double half = big / 2000000.0;           // 0.5
+
+    // int compared against / mixed with a uint (`Vec::len()` is usize): the
+    // loop condition `i < v.len()` and `v.len() - 1` index math both used to
+    // leak `isize`-vs-`usize` errors.
+    var v = new Vec<int>();
+    for (int k = 0; k < 5; k = k + 1) { v.push(k * 10); }
+    int sum = 0;
+    for (int k = 0; k < (int) v.len(); k = k + 1) { sum = sum + v[k]; }
+    var lastIdx = v.len() - 1;               // usize 4
+    int last = v[(int) lastIdx];             // 40
+
+    print($"mixed=$mixed half=$half sum=$sum last=$last");
+}
