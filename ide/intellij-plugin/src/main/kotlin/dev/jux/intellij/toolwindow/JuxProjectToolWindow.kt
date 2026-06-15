@@ -13,17 +13,23 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.InputValidator
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VfsUtil
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.PopupHandler
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.content.ContentFactory
 import com.intellij.ui.treeStructure.Tree
+import dev.jux.intellij.project.JuxProjectKind
+import dev.jux.intellij.project.JuxScaffold
 import dev.jux.intellij.run.JuxToolchain
 import dev.jux.intellij.settings.JuxSettings
 import java.awt.BorderLayout
@@ -163,6 +169,8 @@ private class JuxProjectPanel(private val project: Project) {
     )
 
     private fun toolbarGroup(): DefaultActionGroup = DefaultActionGroup().apply {
+        add(newModuleAction())
+        addSeparator()
         coreActions().forEach(::add)
         addSeparator()
         add(CrossTargetAction())
@@ -190,6 +198,8 @@ private class JuxProjectPanel(private val project: Project) {
         addSeparator()
         add(revealArtifactAction())
         add(openManifestAction())
+        addSeparator()
+        add(newModuleAction())
     }
 
     /**
@@ -241,6 +251,95 @@ private class JuxProjectPanel(private val project: Project) {
                 selectedNode()?.file?.let(::openFile)
             }
         }
+
+    /** "New Module" — scaffold a library module and add it to the workspace. */
+    private fun newModuleAction(): AnAction =
+        object : AnAction("New Module", "Add a new library module to this workspace", AllIcons.General.Add) {
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = workspaceRoot != null
+            }
+            override fun actionPerformed(e: AnActionEvent) = promptAndCreateModule()
+        }
+
+    /** Ask for a module name, then scaffold a `[lib]` module under the root. */
+    private fun promptAndCreateModule() {
+        val base = workspaceRoot ?: return
+        val rootVf = LocalFileSystem.getInstance().findFileByIoFile(base) ?: return
+        val name = Messages.showInputDialog(
+            project,
+            "Name of the new library module (created under the workspace root):",
+            "New Jux Module",
+            AllIcons.General.Add,
+            "",
+            object : InputValidator {
+                // A safe directory name that doesn't already exist at the root.
+                override fun checkInput(input: String?): Boolean {
+                    val n = input?.trim().orEmpty()
+                    return n.isNotEmpty() &&
+                        n.all { it.isLetterOrDigit() || it == '_' || it == '-' } &&
+                        rootVf.findChild(n) == null
+                }
+                override fun canClose(input: String?): Boolean = checkInput(input)
+            },
+        )?.trim().orEmpty()
+        if (name.isEmpty()) return
+        createLibraryModule(rootVf, name)
+    }
+
+    /**
+     * Scaffold `<root>/<name>/` as a library: a `[lib]` `jux.toml`, a
+     * `src/lib.jux` API stub, and a `[workspace] members` entry in the root
+     * manifest (created if absent — turning a single package into a workspace).
+     * Editing the root `jux.toml` also fires the dependency re-discovery, and the
+     * tree reloads to show the new module. Reuses [JuxScaffold] (the same content
+     * the New Project wizard writes).
+     */
+    private fun createLibraryModule(rootVf: VirtualFile, name: String) {
+        var ok = false
+        WriteCommandAction.runWriteCommandAction(project) {
+            ok = try {
+                val modDir = VfsUtil.createDirectoryIfMissing(rootVf, name)
+                if (modDir == null) {
+                    false
+                } else {
+                    val pkg = JuxScaffold.packageNameFor(name)
+                    writeChild(modDir, "jux.toml", JuxScaffold.manifest(pkg, JuxProjectKind.LIBRARY, "lib"))
+                    VfsUtil.createDirectoryIfMissing(modDir, "src")?.let { src ->
+                        writeChild(
+                            src,
+                            JuxScaffold.entryFileName(JuxProjectKind.LIBRARY),
+                            JuxScaffold.entryContent(JuxProjectKind.LIBRARY, sample = true),
+                        )
+                    }
+                    addWorkspaceMember(rootVf, name)
+                    true
+                }
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        if (!ok) {
+            Messages.showErrorDialog(project, "Could not create module `$name`.", "New Jux Module")
+            return
+        }
+        reload()
+        rootVf.findFileByRelativePath("$name/src/${JuxScaffold.entryFileName(JuxProjectKind.LIBRARY)}")
+            ?.let { FileEditorManager.getInstance(project).openFile(it, true) }
+    }
+
+    /** Write (or overwrite) a child file under [dir] with [content]. */
+    private fun writeChild(dir: VirtualFile, fileName: String, content: String) {
+        val f = dir.findChild(fileName) ?: dir.createChildData(this, fileName)
+        VfsUtil.saveText(f, content)
+    }
+
+    /** Add [member] to the root `[workspace] members`, creating the section if needed. */
+    private fun addWorkspaceMember(rootVf: VirtualFile, member: String) {
+        val manifest = rootVf.findChild("jux.toml") ?: rootVf.createChildData(this, "jux.toml")
+        val text = VfsUtil.loadText(manifest)
+        JuxToml.withWorkspaceMember(text, member)?.let { VfsUtil.saveText(manifest, it) }
+    }
 
     /** The "Target: <triple>" action — picks the cross-compile triple. */
     private inner class CrossTargetAction : AnAction() {
@@ -775,6 +874,37 @@ internal object JuxToml {
         }
         field("version")?.let { return it }
         return value.trim('{', '}', ' ')
+    }
+
+    /**
+     * Return [text] with [member] added to `[workspace] members`, or `null` when
+     * it is already a member (no change needed). Creates the `[workspace]`
+     * section, or the `members` array within it, when absent — so adding the
+     * first module to a single-package project converts it into a workspace.
+     */
+    fun withWorkspaceMember(text: String, member: String): String? {
+        if (member in workspaceMembers(text)) return null
+        // No [workspace] at all → append the section.
+        if (sectionBody(text, "workspace") == null) {
+            val sep = if (text.isEmpty() || text.endsWith("\n")) "" else "\n"
+            return text + sep + "\n[workspace]\nmembers = [\"$member\"]\n"
+        }
+        val array = Regex("""members\s*=\s*\[(.*?)]""", RegexOption.DOT_MATCHES_ALL).find(text)
+        if (array == null) {
+            // [workspace] present but no members array → add one after the header.
+            val header = Regex("""(?m)^\s*\[\s*workspace\s*]\s*$""").find(text) ?: return null
+            val nl = text.indexOf('\n', header.range.last)
+            // When the header is the last line (no trailing newline), prepend one
+            // so `members` doesn't get glued onto the `[workspace]` line.
+            return if (nl < 0) {
+                "$text\nmembers = [\"$member\"]\n"
+            } else {
+                text.substring(0, nl + 1) + "members = [\"$member\"]\n" + text.substring(nl + 1)
+            }
+        }
+        val inner = array.groupValues[1].trimEnd().trimEnd(',')
+        val updated = if (inner.isBlank()) "\"$member\"" else "$inner, \"$member\""
+        return text.substring(0, array.range.first) + "members = [$updated]" + text.substring(array.range.last + 1)
     }
 
     /** `[workspace] members = [ ... ]` — the listed member paths (incl. globs). */

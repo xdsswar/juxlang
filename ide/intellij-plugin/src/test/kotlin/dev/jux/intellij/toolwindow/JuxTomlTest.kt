@@ -112,4 +112,46 @@ class JuxTomlTest : TestCase() {
         assertEquals("x86_64-unknown-linux-gnu", JuxToml.buildTarget(t))
         assertNull(JuxToml.buildTarget(exe))
     }
+
+    // ---- adding a workspace member (New Module action) -----------------------
+
+    /** No `[workspace]` yet → the section is appended with the new member. */
+    fun testAddMemberCreatesWorkspaceSection() {
+        val out = JuxToml.withWorkspaceMember(exe, "core")!!
+        assertTrue("section appended", out.contains("[workspace]"))
+        assertEquals(listOf("core"), JuxToml.workspaceMembers(out))
+        // The original package stays intact.
+        assertEquals("com.example.app", JuxToml.packageName(out))
+    }
+
+    /** Existing members array → the new member is appended to it. */
+    fun testAddMemberExtendsExistingArray() {
+        val ws = """
+            [workspace]
+            members = ["core"]
+        """.trimIndent()
+        val out = JuxToml.withWorkspaceMember(ws, "app")!!
+        assertEquals(listOf("core", "app"), JuxToml.workspaceMembers(out))
+    }
+
+    /** Already a member → no change (null). */
+    fun testAddMemberAlreadyPresentIsNoOp() {
+        val ws = """
+            [workspace]
+            members = ["core", "app"]
+        """.trimIndent()
+        assertNull(JuxToml.withWorkspaceMember(ws, "app"))
+    }
+
+    /** `[workspace]` present but empty → a `members` array is created. */
+    fun testAddMemberCreatesArrayInEmptyWorkspace() {
+        val ws = """
+            [package]
+            name = "com.example.root"
+
+            [workspace]
+        """.trimIndent()
+        val out = JuxToml.withWorkspaceMember(ws, "core")!!
+        assertEquals(listOf("core"), JuxToml.workspaceMembers(out))
+    }
 }
