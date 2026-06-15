@@ -3005,6 +3005,14 @@ impl RustEmitter {
         let Expr::Field(f) = &*call.callee else {
             return false;
         };
+        // A safe-navigation call (`x?.method()`) must go through the dedicated
+        // `?.` lowering (`emit_safe_method_call`), which wraps the receiver in
+        // `.as_ref().map(|__t| …)` and re-dispatches the method on the unwrapped
+        // `__t`. Handling a stdlib method here would emit it directly on the
+        // `Option` (`opt.chars()…`), silently dropping the null check.
+        if f.safe {
+            return false;
+        }
         let method = f.field.text.as_str();
         // AUTO-PROPERTY receiver (S3): `s.Items.add(3)` where `Items`
         // is `{ get; set; }`. The getter returns a CLONE of the
