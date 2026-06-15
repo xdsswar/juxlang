@@ -1853,6 +1853,38 @@ impl<'a> Checker<'a> {
             if field.is_weak {
                 self.check_weak_field(field);
             }
+            // E0410: a `null` initializer requires a nullable (`T?`) field. A
+            // bare non-nullable type — including a type parameter `K` — cannot
+            // hold `null`; without this the backend emits `None` into a
+            // non-`Option` field (invalid Rust, the "juxc bug" path). `weak`
+            // fields (default null, initializer already barred above) and raw
+            // pointers (`null` is a valid pointer value) are exempt.
+            if !field.is_weak {
+                if let (Some(default), Some(fty)) = (&field.default, &field.ty) {
+                    if matches!(default, Expr::Literal(juxc_ast::Literal::Null))
+                        && !fty.nullable
+                        && fty.ptr_depth == 0
+                    {
+                        let tname = fty
+                            .name
+                            .segments
+                            .last()
+                            .map(|s| s.text.as_str())
+                            .unwrap_or("T");
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0410_TypeMismatch,
+                                format!(
+                                    "cannot assign `null` to the non-nullable field `{}` of \
+                                     type `{tname}` — declare it nullable (`{tname}?`)",
+                                    field.name.text,
+                                ),
+                            )
+                            .with_span(field.span),
+                        );
+                    }
+                }
+            }
         }
         // §P.1.1 PascalCase property convention (W0974) — preferred,
         // never enforced: a lowercase-initial property name compiles
@@ -8519,6 +8551,24 @@ mod tests {
     fn null_does_not_fit_non_nullable_slot() {
         let d = run(r#"public void main() { String x = null; }"#);
         assert!(has(&d, code::Code::E0410_TypeMismatch), "got: {d:?}");
+    }
+
+    /// A `null` initializer on a NON-nullable field is E0410 — including a bare
+    /// type parameter `K` (the reported generics bug: it leaked invalid Rust).
+    #[test]
+    fn null_init_on_non_nullable_field_is_e0410() {
+        let gen = run("public class C<K> { private K k = null; } public void main() {}");
+        assert!(has(&gen, code::Code::E0410_TypeMismatch), "generic K: {gen:?}");
+        let concrete = run("public class C { private String s = null; } public void main() {}");
+        assert!(has(&concrete, code::Code::E0410_TypeMismatch), "String: {concrete:?}");
+    }
+
+    /// A `null` initializer on a NULLABLE field (`K?`) is fine — nullable fields
+    /// default to null.
+    #[test]
+    fn null_init_on_nullable_field_is_ok() {
+        let d = run("public class C<K> { private K? k = null; } public void main() {}");
+        assert!(!has(&d, code::Code::E0410_TypeMismatch), "K?: {d:?}");
     }
 
     // ---- Async/await context (E0700, §18.1.2) ----
