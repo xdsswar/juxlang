@@ -1978,11 +1978,12 @@ impl RustEmitter {
         false
     }
 
-    /// The **introduced virtual methods** of `class_bare` — public/protected,
-    /// non-static instance methods it declares that no ancestor declares.
-    /// These belong on its own `<Name>Kind` trait (`final` is included — still
-    /// callable through a base ref; `static`/`private` are excluded — not
-    /// virtual). Sorted by name for deterministic output.
+    /// The **introduced virtual methods** of `class_bare` — every non-static
+    /// instance method it declares that no ancestor declares. Java dispatches
+    /// public, protected, internal AND package-private instance methods
+    /// virtually, so all of them go on the `<Name>Kind` trait (`final` included
+    /// — still callable through a base ref); only `static` and `private` are
+    /// excluded (never virtual). Sorted by name for deterministic output.
     fn class_introduced_virtual_methods(&self, class_bare: &str) -> Vec<(String, MethodSig)> {
         let Some(sig) = self.lookup_class_by_bare_or_fqn(class_bare) else {
             return Vec::new();
@@ -1991,11 +1992,7 @@ impl RustEmitter {
             .methods
             .iter()
             .filter(|(_, m)| {
-                !m.is_static
-                    && matches!(
-                        m.visibility,
-                        juxc_ast::Visibility::Public | juxc_ast::Visibility::Protected
-                    )
+                !m.is_static && !matches!(m.visibility, juxc_ast::Visibility::Private)
             })
             .filter(|(name, _)| !self.ancestor_declares_method(class_bare, name))
             .map(|(n, m)| (n.clone(), m.clone()))
@@ -2221,11 +2218,11 @@ impl RustEmitter {
             .fields
             .iter()
             .filter(|f| {
+                // A non-private instance field is reachable through a base ref
+                // (Java semantics); only `private`/`static` aren't. Must match the
+                // `__get_`/`__set_` accessor gate in `emit_field` (field.rs).
                 !f.is_static
-                    && matches!(
-                        f.visibility,
-                        juxc_ast::Visibility::Public | juxc_ast::Visibility::Protected
-                    )
+                    && !matches!(f.visibility, juxc_ast::Visibility::Private)
                     && f.ty.is_some()
             })
             .map(|f| (f.name.text.clone(), f.ty.clone().unwrap()))
