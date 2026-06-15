@@ -320,6 +320,14 @@
         implementationClass="dev.jux.intellij.inspections.JuxRedundantSemicolonInspection"/>
     <localInspection
         language="Jux"
+        shortName="JuxMisplacedAccessorBlock"
+        displayName="Accessor block after `=`"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxMisplacedAccessorBlockInspection"/>
+    <localInspection
+        language="Jux"
         shortName="JuxUnusedImport"
         displayName="Unused or duplicate import"
         groupName="Jux"

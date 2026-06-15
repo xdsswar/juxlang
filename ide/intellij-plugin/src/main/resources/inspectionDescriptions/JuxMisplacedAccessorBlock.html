@@ -1,0 +1,13 @@
+<html>
+<body>
+Reports the misplaced-accessor mistake <code>T Name = { get; set; };</code>, where
+the accessor block is written <i>after</i> the <code>=</code> (<b>E0200</b>, §M.7).
+<p>
+The accessor block comes first; an initializer, if any, follows it:
+<code>T Name { get; set; } = init;</code>. Written the wrong way round, the
+<code>{ get; set; }</code> parses as a field initializer rather than a property
+body. The quick-fix removes the stray <code>=</code> so the declaration reads
+<code>T Name { get; set; };</code>.
+</p>
+</body>
+</html>
