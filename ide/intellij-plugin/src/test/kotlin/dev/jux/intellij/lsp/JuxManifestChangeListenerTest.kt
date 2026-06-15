@@ -47,4 +47,9 @@ class JuxManifestChangeListenerTest : TestCase() {
     fun testCaseInsensitiveDriveLetter() {
         assertTrue(JuxManifestChangeListener.isManifestPath("f:/DEV/proj/mod/jux.toml", "F:/DEV/proj"))
     }
+
+    /** A sibling project whose name extends the base must not match. */
+    fun testSiblingPrefixDoesNotMatch() {
+        assertFalse(JuxManifestChangeListener.isManifestPath("F:/DEV/proj2/jux.toml", "F:/DEV/proj"))
+    }
 }

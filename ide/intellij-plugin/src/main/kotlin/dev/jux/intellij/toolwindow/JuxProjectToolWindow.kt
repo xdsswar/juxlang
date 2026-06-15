@@ -127,7 +127,11 @@ private class JuxProjectPanel(private val project: Project) {
     private val tree = Tree(model)
 
     /** Last computed workspace root — the working directory for every action. */
+    @Volatile
     private var workspaceRoot: File? = null
+
+    /** Monotonic reload id so an older async reload can't overwrite a newer one. */
+    private val reloadToken = java.util.concurrent.atomic.AtomicInteger(0)
 
     init {
         tree.isRootVisible = true
@@ -442,9 +446,12 @@ private class JuxProjectPanel(private val project: Project) {
                 .withWorkDirectory(base).withCharset(Charsets.UTF_8)
             val out = CapturingProcessHandler(cmd).runProcess(10_000)
             if (out.exitCode != 0) return emptyList()
+            // Each line is a triple, possibly followed by an annotation like
+            // " (installed)" / " (installed, default)" — take the first token and
+            // keep only things that look like a target triple.
             out.stdout.lineSequence()
-                .map { it.removeSuffix("(installed)").removeSuffix("(default)").trim() }
-                .filter { it.isNotEmpty() && !it.contains(' ') }
+                .map { it.trim().substringBefore(' ') }
+                .filter { it.contains('-') }
                 .toList()
         } catch (_: Throwable) {
             emptyList()
@@ -483,9 +490,12 @@ private class JuxProjectPanel(private val project: Project) {
      */
     private fun reload() {
         val base = project.basePath?.let(::File)
+        val token = reloadToken.incrementAndGet()
         ApplicationManager.getApplication().executeOnPooledThread {
             val (rootLabel, children) = computeModel(base)
             ApplicationManager.getApplication().invokeLater {
+                // Skip if the project closed or a newer reload already superseded us.
+                if (project.isDisposed || token != reloadToken.get()) return@invokeLater
                 workspaceRoot = base?.takeIf { it.isDirectory }
                 treeRoot.userObject = rootLabel
                 treeRoot.removeAllChildren()
