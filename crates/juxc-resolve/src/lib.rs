@@ -323,6 +323,16 @@ impl Resolver {
         builtins.insert("ArrayList");
         builtins.insert("HashMap");
         builtins.insert("HashSet");
+        // `rust.std` collections are Jux's std (same names as Rust), reachable by
+        // bare name with no `import` (the tycheck side seeds the matching
+        // `rust.std.<T>` FQN, see `RUST_STD_PRELUDE`). `HashMap`/`HashSet` are
+        // already listed above; the names below have no `jux.std` equivalent.
+        builtins.insert("Vec");
+        builtins.insert("VecDeque");
+        builtins.insert("BTreeMap");
+        builtins.insert("BTreeSet");
+        builtins.insert("Rc");
+        builtins.insert("Arc");
         // Exceptions.
         builtins.insert("Throwable");
         builtins.insert("Exception");

@@ -1394,6 +1394,22 @@ pub(crate) fn fqn_package(fqn: &str) -> Option<&str> {
 ///    sibling in the workspace's `com.foo.*` namespace.
 /// 4. Grouped imports `import com.foo.{A, B as C};` expand to the
 ///    obvious mapping.
+/// The `rust.std` types auto-prelude'd into every compilation unit (reachable by
+/// bare name, no `import`), because Rust's std is Jux's std. FQNs are flat under
+/// `rust.std` (the generated stub uses a single `package rust.std;`). Mirrors
+/// Rust's prelude plus the everyday collections, EXCEPT `HashMap`/`HashSet`,
+/// which are withheld until the legacy `jux.std` collection facade is removed (a
+/// bare `HashMap` must keep resolving to the facade until then). Builtins handled
+/// elsewhere (`String`, the optional `T?`) are deliberately omitted.
+const RUST_STD_PRELUDE: &[&str] = &[
+    "rust.std.Vec",
+    "rust.std.VecDeque",
+    "rust.std.BTreeMap",
+    "rust.std.BTreeSet",
+    "rust.std.Rc",
+    "rust.std.Arc",
+];
+
 fn build_unit_contexts(
     units: &[juxc_ast::CompilationUnit],
     table: &SymbolTable,
@@ -1429,6 +1445,24 @@ fn build_unit_contexts(
             // Imports.
             for import in &unit.imports {
                 seed_unqualified_from_import(&mut unqualified, &import.spec, &all_fqns);
+            }
+
+            // Auto-prelude: Rust's std IS Jux's std, so the common `rust.std`
+            // types are reachable by bare name with no `import` (the way Rust's
+            // own prelude exposes `Vec`/`String`/…). The flat `rust.std` stub
+            // declares them all under one package, so the FQN is `rust.std.<T>`.
+            // `or_insert` lets a same-package name or an explicit import win, and
+            // we only seed entries actually present in the loaded stub (the
+            // `rust.std` stub is absent when no rustdoc JSON / cache resolves).
+            // NOTE: `HashMap`/`HashSet` are intentionally NOT here yet — their
+            // bare names still resolve to the `jux.std` facade until it is
+            // removed; they join this list once that facade is gone.
+            for fqn in RUST_STD_PRELUDE {
+                if table.classes.contains_key(*fqn) {
+                    unqualified
+                        .entry(fqn_bare(fqn).to_string())
+                        .or_insert_with(|| (*fqn).to_string());
+                }
             }
 
             UnitContext { package: pkg, unqualified }
