@@ -551,10 +551,10 @@ fn return_statements() {
     );
     let body_m = body_of(&ast.items[0]);
     let body_n = body_of(&ast.items[1]);
-    assert!(matches!(body_m.statements[0], Stmt::Return(None)));
+    assert!(matches!(body_m.statements[0], Stmt::Return(None, _)));
     assert!(matches!(
         body_n.statements[0],
-        Stmt::Return(Some(Expr::Literal(Literal::String(_))))
+        Stmt::Return(Some(Expr::Literal(Literal::String(_))), _)
     ));
 }
 

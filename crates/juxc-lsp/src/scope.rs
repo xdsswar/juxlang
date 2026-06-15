@@ -331,7 +331,7 @@ impl<'a> Walker<'a> {
             // No bindings and no blocks to descend into (lambda bodies and
             // switch-expression arms are a later refinement).
             Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Assign(_)
             | Stmt::Break(..)
             | Stmt::Continue(..)

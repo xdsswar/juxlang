@@ -152,7 +152,7 @@ fn expand_block(block: &mut Block, plans: &HashMap<Span, Vec<ArgSource>>) {
 fn expand_stmt(stmt: &mut Stmt, plans: &HashMap<Span, Vec<ArgSource>>) {
     match stmt {
         Stmt::Expr(e) => expand_expr(e, plans),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 expand_expr(e, plans);
             }

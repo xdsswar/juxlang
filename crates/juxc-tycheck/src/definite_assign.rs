@@ -183,7 +183,7 @@ impl Da<'_> {
                 }
                 Flow { assigned: st, reachable: true }
             }
-            Stmt::Return(_) => {
+            Stmt::Return(_, _) => {
                 self.exits.push(st.clone());
                 Flow { assigned: st, reachable: false }
             }

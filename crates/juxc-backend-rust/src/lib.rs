@@ -1676,7 +1676,7 @@ pub(crate) fn compute_aliased_classes(
     ) {
         match s {
             Stmt::Expr(e) => walk_expr(e, aliased, mark),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     // A class-typed return ESCAPES the function but is not, by
                     // itself, ALIASED — a returned-but-otherwise-unaliased class
@@ -1860,8 +1860,8 @@ pub(crate) fn compute_aliased_classes(
         for s in &b.statements {
             match s {
                 Stmt::Expr(e) => mark_lambda_captures(e, aliased, mark),
-                Stmt::Return(Some(e)) => mark_lambda_captures(e, aliased, mark),
-                Stmt::Return(None) => {}
+                Stmt::Return(Some(e), _) => mark_lambda_captures(e, aliased, mark),
+                Stmt::Return(None, _) => {}
                 Stmt::VarDecl(v) => {
                     if let Some(init) = &v.init {
                         mark_lambda_captures(init, aliased, mark);
@@ -2184,7 +2184,7 @@ pub(crate) fn compute_escaping_classes(
     }
     fn walk_stmt(s: &Stmt, et: &HashMap<Span, Ty>, out: &mut HashSet<String>) {
         match s {
-            Stmt::Return(Some(e)) => {
+            Stmt::Return(Some(e), _) => {
                 if let Some(c) = et.get(&exprs::expr_span_of(e)).and_then(class_bare_of_ty) {
                     out.insert(c);
                 }
@@ -2539,7 +2539,7 @@ pub(crate) fn compute_mutated_classes(
     ) {
         match s {
             Stmt::Expr(e) => walk_expr(e, et, um, out),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     walk_expr(e, et, um, out);
                 }
@@ -3210,8 +3210,8 @@ fn cast_targets_stmt(s: &juxc_ast::Stmt, out: &mut HashSet<String>) {
     use juxc_ast::Stmt;
     match s {
         Stmt::Expr(e) => cast_targets_expr(e, out),
-        Stmt::Return(Some(e)) => cast_targets_expr(e, out),
-        Stmt::Return(None) | Stmt::Break(..) | Stmt::Continue(..) => {}
+        Stmt::Return(Some(e), _) => cast_targets_expr(e, out),
+        Stmt::Return(None, _) | Stmt::Break(..) | Stmt::Continue(..) => {}
         Stmt::Labeled { stmt, .. } => cast_targets_stmt(stmt, out),
         Stmt::VarDecl(v) => {
             if let Some(e) = &v.init {

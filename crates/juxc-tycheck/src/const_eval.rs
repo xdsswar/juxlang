@@ -346,8 +346,8 @@ fn eval_block(block: &Block, f: &mut Frame) -> Result<Option<ConstVal>, ConstEva
         }
         f.budget.ops -= 1;
         match stmt {
-            Stmt::Return(Some(e)) => return Ok(Some(eval(e, f)?)),
-            Stmt::Return(None) => {
+            Stmt::Return(Some(e), _) => return Ok(Some(eval(e, f)?)),
+            Stmt::Return(None, _) => {
                 return Err(ConstEvalError::NonConst(
                     "a const-evaluable function must return a value".to_string(),
                 ))

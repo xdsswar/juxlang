@@ -1872,7 +1872,7 @@ impl RustEmitter {
         for stmt in &block.statements {
             match stmt {
                 Stmt::Expr(e) => scan_expr(e, generic_fields, out),
-                Stmt::Return(Some(e)) => scan_expr(e, generic_fields, out),
+                Stmt::Return(Some(e), _) => scan_expr(e, generic_fields, out),
                 Stmt::VarDecl(v) => {
                     if let Some(init) = &v.init {
                         scan_expr(init, generic_fields, out);
