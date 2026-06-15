@@ -317,61 +317,96 @@ impl TypeChecker {
 
     /// Walk the compilation unit, performing milestone-1 checks.
     fn check_unit(&mut self, unit: &CompilationUnit) {
+        // The entry point may be a FREE `main` or a class `static main`
+        // (§E.1.2.2), in any of the accepted signatures (`main()`,
+        // `main(String[] args)`, `main(String... args)`). Collect every valid
+        // candidate first so the free-vs-class and ambiguity rules can see the
+        // whole file before reporting.
+        let mut valid_entries: Vec<(String, Span)> = Vec::new();
+        // Non-static class `main`s shaped like an entry — only a mistake when
+        // there's no other valid entry to run.
+        let mut nonstatic_class_mains: Vec<(String, Span)> = Vec::new();
+
         for item in &unit.items {
             match item {
                 TopLevelDecl::Function(fn_decl) => {
                     if fn_decl.name.text == "main" {
-                        self.check_main_signature(fn_decl);
-                    }
-                }
-                // A class member named `main` with an entry-shaped signature
-                // must be `static` (§E.1.2.2) — it has no receiver for the
-                // runtime to call it on. A non-static one is an ordinary
-                // method; flag the likely mistake as E0326.
-                TopLevelDecl::Class(class) => {
-                    for m in &class.methods {
-                        if m.name.text == "main"
-                            && is_entry_shaped(m)
-                            && !m
-                                .modifiers
-                                .iter()
-                                .any(|md| matches!(md, juxc_ast::FnModifier::Static))
-                        {
-                            self.diagnostics.push(
-                                Diagnostic::error(
-                                    code::Code::E0326_ClassMainNotStatic,
-                                    format!(
-                                        "class member `main` must be `static` to be an entry \
-                                         point (in class `{}`)",
-                                        class.name.text,
-                                    ),
-                                )
-                                .with_span(m.span)
-                                .with_help("add `static` to the `main` method"),
-                            );
+                        if is_entry_shaped(fn_decl) {
+                            valid_entries.push(("free function `main`".to_string(), fn_decl.span));
+                        } else {
+                            // A free `main` with a non-accepted shape is a
+                            // mistake (E0323).
+                            self.check_main_signature(fn_decl);
                         }
                     }
                 }
-                // Same story for enums — no top-level signature rules
-                // until methods on enums land.
+                TopLevelDecl::Class(class) => {
+                    for m in &class.methods {
+                        if m.name.text != "main" || !is_entry_shaped(m) {
+                            continue;
+                        }
+                        let is_static = m
+                            .modifiers
+                            .iter()
+                            .any(|md| matches!(md, juxc_ast::FnModifier::Static));
+                        if is_static {
+                            valid_entries
+                                .push((format!("`{}.main`", class.name.text), m.span));
+                        } else {
+                            nonstatic_class_mains.push((class.name.text.clone(), m.span));
+                        }
+                    }
+                }
+                // Enums/records/interfaces/aliases/consts/extern blocks declare
+                // no entry point; their checks live elsewhere.
                 TopLevelDecl::Enum(_) => {}
-                // Records carry no top-level signature rules today.
                 TopLevelDecl::Record(_) => {}
-                // Interfaces neither — signatures only, no rules to
-                // check at this milestone.
                 TopLevelDecl::Interface(_) => {}
-                // Type aliases — no body to walk; the target is a
-                // syntactic TypeRef checked at use sites via
-                // alias expansion in `ty_from_ref`.
                 TopLevelDecl::TypeAlias(_) => {}
-                // Top-level constants — value-vs-type check lives
-                // in `check::Checker::check_unit` (it has the
-                // expression-inference machinery).
                 TopLevelDecl::Const(_) => {}
-                // Foreign-function blocks declare no entry point; their
-                // FFI-compat validation lives in `check::Checker::check_unit`.
                 TopLevelDecl::ExternBlock(_) => {}
             }
+        }
+
+        // E0326: a non-static class `main` shaped like an entry point has no
+        // receiver for the runtime to call it on. It's only a likely mistake
+        // when there's NO other valid entry — with a free `main` or a static
+        // class `main` present it is just an ordinary method.
+        if valid_entries.is_empty() {
+            for (class_name, span) in &nonstatic_class_mains {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0326_ClassMainNotStatic,
+                        format!(
+                            "class member `main` must be `static` to be an entry point \
+                             (in class `{class_name}`)",
+                        ),
+                    )
+                    .with_span(*span)
+                    .with_help("add `static` to the `main` method, or declare a free `void main()`"),
+                );
+            }
+        }
+
+        // E0320: more than one valid entry point in a single file is
+        // ambiguous — the runtime can't choose. Report once, listing them.
+        if valid_entries.len() > 1 {
+            let names = valid_entries
+                .iter()
+                .map(|(d, _)| d.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let span = valid_entries.last().map(|(_, s)| *s).unwrap();
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0320_AmbiguousEntryPoint,
+                    format!(
+                        "multiple entry points in one file ({names}) — a program may have only \
+                         one `main`; keep one and remove or rename the others",
+                    ),
+                )
+                .with_span(span),
+            );
         }
     }
 
@@ -449,16 +484,19 @@ fn is_int(t: &TypeRef) -> bool {
         && !t.nullable
 }
 
-/// Does parameter `p` look like `String[] args`?
+/// Does parameter `p` look like `String[] args` (or the equivalent varargs
+/// `String... args`, which the parser desugars to the same `String[]` shape)?
 ///
-/// Milestone-1 placeholder: we accept anything for the parameter for now.
-/// Array-type parsing (`Type[]`) isn't implemented in the parser yet —
-/// once it is, this becomes a proper check.
-fn is_string_array(_p: &Param) -> bool {
-    // TODO: enforce `String[]` once array-type parsing lands. For
-    // milestone 1 hello.jux has no `main(...)` params at all, so this
-    // path is unreachable from the canary test.
-    true
+/// Both forms carry the program arguments and lower to a Rust `Vec<String>`
+/// that the entry shim fills from `std::env::args()`. We accept a single-segment
+/// `String` element with an array shape, non-nullable; a bare `String`, a
+/// non-`String` array, or a nullable array is not an accepted entry parameter.
+fn is_string_array(p: &Param) -> bool {
+    let t = &p.ty;
+    t.name.segments.len() == 1
+        && t.name.segments.last().map(|s| s.text.as_str()) == Some("String")
+        && t.array_shape.is_some()
+        && !t.nullable
 }
 
 // ============================================================================
