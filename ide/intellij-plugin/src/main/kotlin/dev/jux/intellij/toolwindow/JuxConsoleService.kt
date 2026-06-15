@@ -109,7 +109,11 @@ class JuxConsoleService(private val project: Project) : Disposable {
         ToolWindowManager.getInstance(project).getToolWindow(BUILD_TOOL_WINDOW_ID)?.activate(null)
     }
 
-    override fun dispose() { /* console disposed via Disposer registration */ }
+    override fun dispose() {
+        // Kill any still-running build/run on project close (the console itself is
+        // freed via the Disposer registration above).
+        current.getAndSet(null)?.takeIf { !it.isProcessTerminated }?.destroyProcess()
+    }
 
     companion object {
         /** Tool-window id of the bottom build console (see plugin.xml). */

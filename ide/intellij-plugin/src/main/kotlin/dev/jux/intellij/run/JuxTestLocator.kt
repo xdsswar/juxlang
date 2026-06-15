@@ -31,6 +31,9 @@ object JuxTestLocator : SMTestLocator {
         scope: GlobalSearchScope,
     ): List<Location<*>> {
         if (protocol != PROTOCOL || path.isBlank()) return emptyList()
+        // FileTypeIndex.getFiles throws IndexNotReadyException while indexing;
+        // navigation re-resolves once smart mode returns.
+        if (com.intellij.openapi.project.DumbService.isDumb(project)) return emptyList()
         val pkg = path.substringBeforeLast('.', "")
         val fn = path.substringAfterLast('.')
 
