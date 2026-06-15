@@ -974,7 +974,27 @@ impl<'a> Parser<'a> {
         // dispatcher *before* reaching here, so a plain field never
         // sees a `{` / `=>` suffix — it's always `type name [= expr] ;`.
         let default = if self.eat(&TokenKind::Eq) {
-            self.parse_expr()
+            // Catch the common mistake of writing the accessor block *after*
+            // the `=`: `T P = { get; set; };`. The accessor block must come
+            // *before* the initializer (`T P { get; set; } = init;`). Without
+            // this guard the `{ … }` falls into `parse_expr` (which has no
+            // block-expression form), and the leftover `get; set; }` tokens
+            // cascade into a pile of spurious errors on neighbouring members.
+            if self.at(&TokenKind::LBrace) && self.brace_block_looks_like_accessors() {
+                let here = self.peek_span();
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0200_UnexpectedToken,
+                        "the accessor block must come before `=` — write \
+                         `Name { get; set; } = init;`, not `Name = { get; set; }`",
+                    )
+                    .with_span(here),
+                );
+                self.skip_balanced_braces();
+                None
+            } else {
+                self.parse_expr()
+            }
         } else {
             None
         };
@@ -990,6 +1010,8 @@ impl<'a> Parser<'a> {
             ty,
             name,
             default,
+            // A hand-written field is never an auto-property backing slot.
+            origin_property: None,
             span: start.join(end),
         })
     }
@@ -2079,6 +2101,50 @@ impl<'a> Parser<'a> {
             }
             self.advance();
         }
+    }
+
+    /// Consume a brace-balanced `{ … }` block at the cursor (used for error
+    /// recovery). No-op if the cursor isn't on `{`.
+    fn skip_balanced_braces(&mut self) {
+        if !self.at(&TokenKind::LBrace) {
+            return;
+        }
+        self.advance(); // opening `{`
+        let mut depth: u32 = 1;
+        while depth > 0 && !self.at_eof() {
+            match self.peek() {
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RBrace => depth -= 1,
+                _ => {}
+            }
+            self.advance();
+        }
+    }
+
+    /// Non-consuming lookahead: with the cursor on `{`, does the brace block
+    /// contain an accessor-shaped `get` / `set` identifier before the matching
+    /// `}`? Used to recognise the mistake `T P = { get; set; };` (the accessor
+    /// block written *after* the `=`) and give a precise diagnostic instead of
+    /// a cascade of expression-parse errors.
+    fn brace_block_looks_like_accessors(&self) -> bool {
+        if !self.at(&TokenKind::LBrace) {
+            return false;
+        }
+        let mut i = self.pos + 1; // past the `{`
+        let mut depth: u32 = 1;
+        while depth > 0 {
+            match self.tokens.get(i).map(|t| &t.kind) {
+                Some(TokenKind::LBrace) => depth += 1,
+                Some(TokenKind::RBrace) => depth -= 1,
+                Some(TokenKind::Ident(name)) if depth == 1 && (name == "get" || name == "set") => {
+                    return true;
+                }
+                Some(TokenKind::Eof) | None => break,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     /// Parse one `operator OP(...) { ... }` declaration. Caller has

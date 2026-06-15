@@ -171,6 +171,29 @@ fn desugar_class(class: &mut ClassDecl) {
     if class.properties.is_empty() {
         return;
     }
+    // Implicit-nullable auto-properties (§M.7): an auto-property with no
+    // initializer — or an explicit `= null` — is *implicitly nullable* and
+    // defaults to null. The user writes `T P { get; set; }` and reads back
+    // `null` until something assigns it; the getter/setter/backing field all
+    // become `T?`. We mutate the retained `PropertyDecl` in place so the
+    // symbol table (and therefore `obj.P` read typing) sees the nullable type,
+    // and clear the redundant `= null` so the backing field defaults to `None`.
+    // Already-nullable properties and those with a real initializer are left
+    // alone; raw-pointer-typed properties keep their own null semantics.
+    for prop in &mut class.properties {
+        if !prop.has_backing_field || prop.ty.nullable || prop.ty.ptr_depth > 0 {
+            continue;
+        }
+        let no_init = prop.initializer.is_none();
+        let null_init = matches!(
+            &prop.initializer,
+            Some(Expr::Literal(crate::literals::Literal::Null))
+        );
+        if no_init || null_init {
+            prop.ty.nullable = true;
+            prop.initializer = None;
+        }
+    }
     // Build the set of auto-property names (those with a backing
     // field). Constructor bodies that write `this.AutoProp = e` must
     // target the backing field `__prop_AutoProp` directly — a
@@ -260,6 +283,10 @@ fn lower_one_property(
             ty: Some(prop.ty.clone()),
             name: ident(&backing, span),
             default: prop.initializer.clone(),
+            // Remember the user-visible property name so field diagnostics
+            // (E0410 null-on-non-nullable, E0600 definite-assignment, …) name
+            // `P`, not the internal `__prop_P` slot.
+            origin_property: Some(prop.name.clone()),
             span,
         });
     }

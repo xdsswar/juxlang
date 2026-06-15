@@ -1871,16 +1871,23 @@ impl<'a> Checker<'a> {
                             .last()
                             .map(|s| s.text.as_str())
                             .unwrap_or("T");
+                        // For an auto-property backing slot (`__prop_P`), name the
+                        // user-visible property `P` and point at its declaration,
+                        // never the internal slot name.
+                        let (disp_name, disp_span) = field
+                            .origin_property
+                            .as_ref()
+                            .map(|p| (p.text.as_str(), p.span))
+                            .unwrap_or((field.name.text.as_str(), field.span));
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0410_TypeMismatch,
                                 format!(
-                                    "cannot assign `null` to the non-nullable field `{}` of \
+                                    "cannot assign `null` to the non-nullable field `{disp_name}` of \
                                      type `{tname}` — declare it nullable (`{tname}?`)",
-                                    field.name.text,
                                 ),
                             )
-                            .with_span(field.span),
+                            .with_span(disp_span),
                         );
                     }
                 }
@@ -1953,6 +1960,8 @@ impl<'a> Checker<'a> {
         // non-`weak`, initializer-less instance field must be assigned on every
         // path through every constructor (and the instance `init` blocks).
         for v in crate::definite_assign::analyze_class(class) {
+            // `v.display` is the user-visible name — the property name for an
+            // auto-property backing slot, never the internal `__prop_…`.
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0600_FieldNotDefinitelyAssigned,
@@ -1960,7 +1969,7 @@ impl<'a> Checker<'a> {
                         "field `{}` of class `{}` is not definitely assigned — give it an \
                          initializer (`= …`) or assign it in every constructor before the \
                          constructor returns (§S.4.5)",
-                        v.field, class.name.text,
+                        v.display, class.name.text,
                     ),
                 )
                 .with_span(v.span),
