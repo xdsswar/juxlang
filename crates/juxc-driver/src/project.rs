@@ -79,7 +79,22 @@ impl PackageBuild {
     }
 }
 
-/// Build every target (`[lib]` + each `[[bin]]`) declared by `manifest`.
+/// Restricts which of a package's targets [`build_package_selected`] builds.
+/// The default (all-permissive) builds every target — the behavior of the plain
+/// [`build_package`]. The CLI sets this from `--bin`/`--lib` so a multi-target
+/// package can build a single target while still excluding the *other* bins'
+/// entry files from the compile (which needs the full target list).
+#[derive(Debug, Clone, Default)]
+pub struct TargetSelection {
+    /// Build only the `[[bin]]` with this name (skips the lib and other bins).
+    pub bin: Option<String>,
+    /// Build only the `[lib]` target (skips every bin).
+    pub lib_only: bool,
+}
+
+/// Build every target (`[lib]` + each `[[bin]]`) declared by `manifest`. See
+/// [`build_package_selected`] for the target-filtered form; this is the
+/// build-everything entry point used by the workspace orchestration.
 ///
 /// `dep_sources` are extra `.jux` sources (the public sources of this
 /// package's path-dependencies) to prepend so cross-module symbols resolve;
@@ -95,6 +110,29 @@ pub fn build_package(
     emit_root: &Path,
     release: bool,
 ) -> Result<PackageBuild> {
+    build_package_selected(
+        manifest,
+        dep_sources,
+        path_deps,
+        emit_root,
+        release,
+        &TargetSelection::default(),
+    )
+}
+
+/// Build the `manifest`'s targets restricted by `selection` (`--bin`/`--lib`).
+/// The FULL `manifest.bins` list is always consulted for sibling-entry
+/// exclusion (`load_bin_sources`), so building one bin of a multi-bin package
+/// still drops the other bins' top-level `main`s. Same arguments as
+/// [`build_package`] otherwise.
+pub fn build_package_selected(
+    manifest: &Manifest,
+    dep_sources: &[SourceFile],
+    path_deps: &[PathDep],
+    emit_root: &Path,
+    release: bool,
+    selection: &TargetSelection,
+) -> Result<PackageBuild> {
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
     let mut all_sources: Vec<SourceFile> = Vec::new();
     let mut binaries = Vec::new();
@@ -108,7 +146,9 @@ pub fn build_package(
     let stub_sources = resolve_and_load_stub_sources(manifest);
 
     // ---- [lib] target ---------------------------------------------------
-    if let Some(lib) = &manifest.lib {
+    // Built unless a specific `--bin` was requested (a bin selection excludes
+    // the lib). `--lib` keeps it; the default builds it.
+    if let (Some(lib), None) = (&manifest.lib, &selection.bin) {
         let mut sources = dep_sources.to_vec();
         sources.extend(stub_sources.clone());
         sources.extend(load_lib_sources(manifest)?);
@@ -138,7 +178,18 @@ pub fn build_package(
     }
 
     // ---- [[bin]] targets ------------------------------------------------
+    // `--lib` skips bins entirely; `--bin X` builds only X. The loop still
+    // iterates the FULL `manifest.bins` so `load_bin_sources` can exclude the
+    // non-selected bins' entry files from the selected bin's compile.
     for bin in &manifest.bins {
+        if selection.lib_only {
+            break;
+        }
+        if let Some(only) = &selection.bin {
+            if &bin.name != only {
+                continue;
+            }
+        }
         // A `[[bin]] main = "xss.it.Main"` key names the entry file by dotted
         // path — validate it resolves to a real source so a typo is a clean
         // jux-level error, not a silent "no main found" later.
@@ -405,10 +456,31 @@ fn load_lib_sources(manifest: &Manifest) -> Result<Vec<SourceFile>> {
 
 /// Load the `.jux` sources for a `[[bin]]` target. A binary needs its own
 /// entry-point file *plus* any sibling package sources under `src/` (shared
-/// library code per §B.15.2) — except other top-level `bin`/`main` files,
-/// which we keep simple by including the whole `src/` tree.
-fn load_bin_sources(manifest: &Manifest, _entry: &Path) -> Result<Vec<SourceFile>> {
-    load_src_tree(&manifest.project_root.join("src"))
+/// library code per §B.15.2). The OTHER `[[bin]]` targets' entry files are
+/// excluded: each declares its own top-level `main`, so compiling them together
+/// would be a duplicate-`main` error (E0400). This bin's own entry is kept, as
+/// is every non-entry source (the shared package code).
+fn load_bin_sources(manifest: &Manifest, entry: &Path) -> Result<Vec<SourceFile>> {
+    // The sibling bins' entry files to drop. Compare by path *components* so a
+    // `/`-vs-`\` separator mismatch (manifest `join("src/main.jux")` vs the
+    // walker's `join("src").join("main.jux")`) doesn't defeat the filter.
+    let others: Vec<&Path> = manifest
+        .bins
+        .iter()
+        .map(|b| b.path.as_path())
+        .filter(|p| !same_path(p, entry))
+        .collect();
+    let all = load_src_tree(&manifest.project_root.join("src"))?;
+    Ok(all
+        .into_iter()
+        .filter(|s| !others.iter().any(|o| same_path(s.path(), o)))
+        .collect())
+}
+
+/// Path equality that is robust to separator/`.`-segment differences by
+/// comparing normalized [`Path::components`] (so `a/b` == `a\b` == `./a/b`).
+fn same_path(a: &Path, b: &Path) -> bool {
+    a.components().eq(b.components())
 }
 
 /// Collect a dependency's *public* sources for prepending into a dependent
@@ -582,6 +654,52 @@ fn record(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A multi-`[[bin]]` package: loading the sources for one bin must include
+    /// that bin's entry plus shared (non-entry) sources, but EXCLUDE the other
+    /// bins' entry files (each declares a top-level `main`, which would collide
+    /// — E0400). Regression for `--bin` selection on a multi-bin package.
+    #[test]
+    fn load_bin_sources_excludes_sibling_bin_entries() {
+        let root =
+            std::env::temp_dir().join(format!("juxc-bin-sources-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("jux.toml"),
+            "[package]\nname = \"com.example.multi\"\n\n\
+             [[bin]]\nname = \"alpha\"\npath = \"src/alpha.jux\"\n\n\
+             [[bin]]\nname = \"beta\"\npath = \"src/beta.jux\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src").join("alpha.jux"), "public void main(){}").unwrap();
+        std::fs::write(root.join("src").join("beta.jux"), "public void main(){}").unwrap();
+        // Shared, non-entry package source — included for every bin.
+        std::fs::write(root.join("src").join("shared.jux"), "public int helper(){ return 1; }")
+            .unwrap();
+
+        let m = Manifest::load(&root).expect("manifest loads");
+        let alpha = m.bins.iter().find(|b| b.name == "alpha").unwrap();
+        let sources = load_bin_sources(&m, &alpha.path).unwrap();
+        let names: Vec<String> = sources
+            .iter()
+            .map(|s| {
+                s.path()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+        assert!(names.contains(&"alpha.jux".to_string()), "own entry kept: {names:?}");
+        assert!(names.contains(&"shared.jux".to_string()), "shared source kept: {names:?}");
+        assert!(
+            !names.contains(&"beta.jux".to_string()),
+            "sibling bin entry excluded: {names:?}",
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// `ensure_project_stubs` discovers a `rust.<crate>` dependency in the
     /// project manifest and resolves it to its cached `.jux.d` — the cache-hit

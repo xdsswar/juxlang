@@ -503,7 +503,8 @@ runs. That currently includes:
 
 ## What's stubbed or in progress
 
-- `jux new` / `jux test` CLI subcommands are still stubs.
+- `jux new` scaffolds a project and `jux test` runs `@Test` functions today;
+  `jux bench` is not added yet.
 - `rust.std` compile coverage is partial: construction and method calls work;
   free functions, traits/operators, and the full type mapping are being filled in.
 - **C FFI** works for the common case: declare C functions in an
@@ -818,6 +819,34 @@ juxc examples/multifile --run           # compile a whole directory as one works
 jux  run examples/hello.jux             # via the project tool
 jux  run --release examples/hello.jux   # optimized emitted program
 ```
+
+### `jux` command reference
+
+`jux` resolves the **nearest `jux.toml`** walking up from the current directory
+(like Cargo), or acts on an explicit project with the global `--manifest-path`
+flag (a `jux.toml` or its directory). The build/run/check commands all accept
+`--release` and `--target <triple>`; in a workspace, `-p, --package <name>`
+selects a member, and `--bin <name>` / `--lib` select a target within a package.
+
+```sh
+jux build                               # build the project (every workspace member)
+jux build -p server                     # build only the `server` member
+jux build --bin tool                    # build only the `tool` binary of a package
+jux build --lib                         # build only the `[lib]` target
+jux build --target x86_64-pc-windows-gnu   # cross-compile
+jux run  --bin tool                     # run a specific binary (multi-bin packages)
+jux run  -p client --release            # run a member, optimized
+jux check -p server                     # type-check one member, no codegen
+jux test -p server                      # run a member's tests
+jux --manifest-path ../app/jux.toml run # act on another project without cd
+jux target list                         # list cross-compile triples (via rustup)
+jux metadata --format json              # machine-readable project model (for IDEs)
+```
+
+`jux metadata` emits the workspace's members, each package's targets (with their
+resolved artifact paths), dependencies (tagged by source), and profiles as JSON.
+It is what the IntelliJ "Jux Project" tool window reads to build its module/target
+tree, so the IDE never has to hand-parse `jux.toml`.
 
 ---
 
