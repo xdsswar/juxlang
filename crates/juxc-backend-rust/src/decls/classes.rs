@@ -738,6 +738,84 @@ impl RustEmitter {
     /// ([`Self::emit_class_decl`]) gates entry on
     /// [`crate::class_decl_uses_wrapper`], so there's no `extends`,
     /// `sealed`, generic, or abstract handling here.
+    /// True when `ty` names a foreign type from a NON-`std` crate
+    /// (`rust.<crate>.*`, crate != `std`). Such a type may not implement `Clone`
+    /// — `minifb::Window` is the canonical example — whereas `rust.std`
+    /// collections (`Vec`, `HashMap`, …) always are. Used to decide whether a
+    /// wrapper's `*_Inner` can `#[derive(Clone)]`.
+    fn type_is_nonstd_foreign(&self, ty: &juxc_ast::TypeRef) -> bool {
+        let qn = &ty.name;
+        let fqn = if qn.segments.len() == 1 {
+            self.symbols.find_fqn_by_bare(&qn.segments[0].text)
+        } else {
+            Some(
+                qn.segments
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            )
+        };
+        let Some(fqn) = fqn else { return false };
+        let is_external = self
+            .symbols
+            .classes
+            .get(&fqn)
+            .map(|s| s.is_external)
+            .unwrap_or(false)
+            || self
+                .symbols
+                .enums
+                .get(&fqn)
+                .map(|s| s.is_external)
+                .unwrap_or(false);
+        if !is_external {
+            return false;
+        }
+        let segs: Vec<&str> = fqn.split('.').collect();
+        segs.first() == Some(&"rust") && segs.get(1) != Some(&"std")
+    }
+
+    /// True when this class — or any ancestor it embeds as `__parent` — holds a
+    /// non-`std`-foreign instance field. Such a field may not be `Clone`, so the
+    /// flattened `*_Inner` can't `#[derive(Clone)]`. The wrapper newtype stays
+    /// `Clone` regardless (it shares the instance BY REFERENCE through its `Rc`,
+    /// which never deep-copies the inner value), so dropping the inner derive is
+    /// safe for a wrapper class.
+    fn wrapper_inner_blocks_clone(&self, class_decl: &juxc_ast::ClassDecl) -> bool {
+        let own = |fields: &[juxc_ast::FieldDecl]| {
+            fields.iter().any(|f| {
+                !f.is_static
+                    && f.ty
+                        .as_ref()
+                        .map(|t| self.type_is_nonstd_foreign(t))
+                        .unwrap_or(false)
+            })
+        };
+        if own(&class_decl.fields) {
+            return true;
+        }
+        let mut cursor = class_decl.extends.clone();
+        let mut depth = 0usize;
+        while let Some(p) = cursor {
+            if depth > 64 {
+                break;
+            }
+            let Some(bare) = p.name.segments.last().map(|s| s.text.clone()) else {
+                break;
+            };
+            let Some(pd) = self.lookup_class_ast_by_bare_or_fqn(&bare) else {
+                break;
+            };
+            if own(&pd.fields) {
+                return true;
+            }
+            cursor = pd.extends.clone();
+            depth += 1;
+        }
+        false
+    }
+
     pub(crate) fn emit_wrapper_class_decl(&mut self, class_decl: &juxc_ast::ClassDecl) {
         let name = &class_decl.name.text;
         let inner = format!("{name}_Inner");
@@ -758,10 +836,21 @@ impl RustEmitter {
                 })
                 .unwrap_or(false)
         });
-        if inner_has_fn_field {
-            self.w.line("#[derive(Clone)]");
-        } else {
-            self.w.line("#[derive(Clone, Debug)]");
+        // `Clone` is dropped from the inner when a non-`std`-foreign field may
+        // not be `Clone` (e.g. `minifb::Window`). The wrapper newtype still
+        // clones — it shares the instance by reference through its `Rc`, which
+        // never deep-copies the inner — so the inner never needs `Clone` for a
+        // wrapper class. `Debug` is dropped only for fn/observer fields (no
+        // `Debug`), which instead get the manual name-printing impl below.
+        let blocks_clone = self.wrapper_inner_blocks_clone(class_decl);
+        let derive = match (blocks_clone, inner_has_fn_field) {
+            (false, false) => "#[derive(Clone, Debug)]",
+            (false, true) => "#[derive(Clone)]",
+            (true, false) => "#[derive(Debug)]",
+            (true, true) => "",
+        };
+        if !derive.is_empty() {
+            self.w.line(derive);
         }
         self.w.emit_indent();
         // The inner struct is `pub` so the wrapper (and any
