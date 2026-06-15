@@ -1684,7 +1684,8 @@ impl crate::RustEmitter {
                 }
             }
         }
-        // Static or instance method: `Receiver.method(...)`.
+        // Static method: `ClassName.method(...)` — the receiver path resolves
+        // to a class.
         if let juxc_ast::Expr::Field(f) = callee {
             if let juxc_ast::Expr::Path(qn) = &*f.object {
                 if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
@@ -1696,6 +1697,29 @@ impl crate::RustEmitter {
                                 .map(|p| p.ty.nullable)
                                 .unwrap_or(false);
                         }
+                    }
+                }
+            }
+            // Instance method: `recv.method(...)` where `recv` is a value
+            // (local/param/field), NOT a class name — resolve the receiver's
+            // class from its inferred type and walk to the method. Without this,
+            // a `c.setK(v)` call to a `setK(T? v)` setter never saw the param as
+            // nullable, so the arg skipped its `Some(...)` lift and a bare `T`
+            // reached an `Option<T>` slot (rustc E0308). Mirrors the receiver
+            // resolution in `callee_param_flag`.
+            if let Some(bare) = self.receiver_class_bare(&f.object) {
+                let sig = self.symbols.classes.get(&bare).or_else(|| {
+                    self.symbols
+                        .find_fqn_by_bare(&bare)
+                        .and_then(|fqn| self.symbols.classes.get(&fqn))
+                });
+                if let Some(c) = sig {
+                    if let Some(m) = c.methods.get(f.field.text.as_str()) {
+                        return m
+                            .params
+                            .get(arg_idx)
+                            .map(|p| p.ty.nullable)
+                            .unwrap_or(false);
                     }
                 }
             }

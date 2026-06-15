@@ -168,7 +168,18 @@ impl RustEmitter {
             .cloned()
             .map(strip_nullable)
         {
-            let external = if self.symbols.classes.contains_key(&name) {
+            // **`this` is never external.** A `this`-rooted read is always the
+            // enclosing user class instance — never a bare `rust.std` value —
+            // so it takes the wrapper-class path below, not this one. The guard
+            // matters because a desugared accessor body (`this.__prop_X`)
+            // carries the PROPERTY's span on its `this`, and tycheck recorded
+            // that span with the property's (possibly external, e.g. `Vec`)
+            // type; without the guard the span collision misroutes
+            // `this.__prop_X` here and emits a raw `self.__prop_X`, skipping the
+            // `.0.borrow()` the `Rc<RefCell>` rep needs (rustc E0609).
+            let external = if matches!(&*f.object, Expr::This(_)) {
+                false
+            } else if self.symbols.classes.contains_key(&name) {
                 self.symbols.classes.get(&name).map(|c| c.is_external).unwrap_or(false)
             } else {
                 self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(&name))
@@ -1011,16 +1022,22 @@ impl RustEmitter {
                     .map(|p| p.name.text.as_str())
                     .collect();
                 let ty = crate::exprs::ty_kind_from_ref_with_params(&field.ty, &params);
-                // A generic-instantiated TypeRef (`ArrayList<int>`)
-                // converts to `Ty::Unknown` — resolve its base name
-                // instead: a known class (collections included) is
-                // always Clone-not-Copy, so a value-position read
-                // must clone (S15).
+                // A generic-INSTANTIATED TypeRef (`Vec<int>`, `HashMap<K,V>`,
+                // `ArrayList<int>`, a user `Box<T>`, …) converts to
+                // `Ty::Unknown` (see `ty_kind_from_ref_with_params`: any name
+                // carrying `generic_args` short-circuits to Unknown). Every such
+                // type is a collection or generic wrapper — Clone, never Copy —
+                // so a value-position read out of the statement-scoped
+                // `.0.borrow()` guard MUST clone, or it moves out of the `Ref`
+                // (rustc E0507). We don't gate on resolving the base name: an
+                // external `rust.std` type is keyed by its FQN and isn't in
+                // `classes` at all (a bare lookup misses it). The only exception
+                // is a wrapper-class base, whose field already shares via its own
+                // `Rc` machinery. Without this a `Vec<int>` auto-property getter
+                // emitted `self.0.borrow().__prop_X` with no `.clone()`.
                 if matches!(ty, Ty::Unknown) && field.ty.array_shape.is_none() {
                     if let Some(base) = field.ty.name.segments.last() {
-                        if self.lookup_class_by_bare_or_fqn(&base.text).is_some() {
-                            return !self.wrapper_classes.contains(&base.text);
-                        }
+                        return !self.wrapper_classes.contains(&base.text);
                     }
                 }
                 return self.ty_needs_clone_on_field_read(&ty);

@@ -1209,6 +1209,17 @@ pub(crate) fn compute_wrapper_classes(
     // itself be thrown (`!Send` `Rc<RefCell>` would break `panic_any`).
     let mut by_name: HashMap<String, Vec<(&juxc_ast::ClassDecl, String)>> = HashMap::new();
     for unit in units {
+        // External (`rust.std` / crate) stub classes are plain Rust values with
+        // their own representation (`Vec` → `std::vec::Vec`, never an
+        // `Rc<RefCell>` handle) — the backend never lowers their bodies. They
+        // must NEVER be classified as wrapper classes: doing so poisoned the
+        // wrapper-field clone decision (a `Vec`-typed auto-property backing
+        // field read out of `.0.borrow()` skipped its `.clone()` because the
+        // type was treated as a shared `Rc`), and would mis-shape any other
+        // wrapper-keyed lowering. Skip the whole external unit.
+        if unit.is_external {
+            continue;
+        }
         let pkg: Vec<String> = unit
             .package
             .as_ref()
