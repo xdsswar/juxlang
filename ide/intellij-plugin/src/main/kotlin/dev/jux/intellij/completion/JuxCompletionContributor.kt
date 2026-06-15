@@ -79,8 +79,19 @@ class JuxCompletionContributor : CompletionContributor() {
                     // of the file. Must come before the LSP early-return below.
                     if (addInterpHoleCompletion(parameters, result)) return
 
+                    // The §P property surface (`.observers` + its ops
+                    // attach/detach/clear/size, and `bind`/`unbind`/
+                    // `bindBidirectional` on a property) is plugin-owned even
+                    // under an active LSP — juxc-lsp doesn't model the observable
+                    // surface, so offer it BEFORE standing down for the server
+                    // (same exception as interp-hole completion above). Without
+                    // this, an active LSP session would suppress observer-member
+                    // completion entirely.
+                    val afterDot = isAfterDot(parameters)
+                    if (afterDot) addPropertySurface(parameters, result)
+
                     // An active LSP session supplies smarter versions of
-                    // everything this contributor offers — stand down. (The
+                    // everything ELSE this contributor offers — stand down. (The
                     // probe only reports "active" when juxc-lsp can ACTUALLY
                     // serve — toolchain resolvable + session up — so a missing
                     // or broken toolchain never silences the fallback.)
@@ -88,12 +99,10 @@ class JuxCompletionContributor : CompletionContributor() {
 
                     // After a `.` (member access): offer the receiver's real
                     // members (methods/fields/properties/enum constants of an
-                    // in-file-resolvable type — see JuxTypeInference) plus the
-                    // §P property surface. Without the LSP this is the only
-                    // member completion the user gets, so it must be solid.
-                    if (isAfterDot(parameters)) {
+                    // in-file-resolvable type — see JuxTypeInference). The §P
+                    // property surface was already added above.
+                    if (afterDot) {
                         addMemberCompletion(parameters, result)
-                        addPropertySurface(parameters, result)
                         return
                     }
 
