@@ -2846,49 +2846,109 @@ impl crate::RustEmitter {
         }
     }
 
-    /// Emit `arg` as the body of a `println!` / `format!` value
-    /// slot. When `arg` has nullable shape (Option<T>), wrap in
-    /// the prelude's `JuxOpt(&value)` adapter so Display works —
-    /// `Some(v)` prints as `v`, `None` as `"null"`. Non-nullable
-    /// args pass straight through.
+    /// Emit `arg` as the body of a `println!` / `format!` value slot.
+    ///
+    /// Every interpolated/printed value goes through ONE universal renderer:
+    /// `crate::__jux_show!(value)` resolves at compile time to `Display` when
+    /// the value supports it and falls back to `Debug` otherwise (the prelude's
+    /// autoref "spez" trick). This means foreign `Debug`-only types (e.g. a
+    /// `minifb::Key` keyboard enum) AND user types that only derive `Debug`
+    /// format correctly with ZERO per-type detection in the backend — the Rust
+    /// compiler picks the right trait. The macro yields a `String`, which fits
+    /// the `{}` placeholder the caller already pushed.
+    ///
+    /// Nullable values are unwrapped at the call site: `None` renders as
+    /// `"null"`, `Some(v)` through the same universal renderer. Nullability MUST
+    /// come from the smart-cast-aware tracker (`expression_is_already_nullable`),
+    /// never the declared `Ty` — after `if (x != null)` an unwrapped value must
+    /// not be re-wrapped. The observer-lambda / anon-method paths register their
+    /// nullable params in `nullable_locals` directly, so this stays correct for
+    /// them too.
     pub(crate) fn emit_format_arg(&mut self, arg: &juxc_ast::Expr) {
-        // A FOREIGN (`rust.<crate>`) value derives `Debug` but rarely `Display`
-        // (Rust enums/structs from a bound crate — e.g. a `minifb::Key` keyboard
-        // enum), so the plain `{}` / `JuxOpt` paths (which need `Display`) won't
-        // compile for it. Route any external-typed value through the `Debug`
-        // adapter instead. This is keyed purely on the value's STATIC type being
-        // external — fully dynamic, no per-type knowledge.
+        if self.expression_is_already_nullable(arg) {
+            // `match &(<arg>)` borrows so the value is never moved out of its
+            // place; `Some(__jux_v)` binds `&T`, rendered through the same
+            // universal macro (an extra reference is transparent to Display /
+            // Debug). `None` becomes the literal `"null"`.
+            self.w.push_str("match &(");
+            self.emit_expr(arg);
+            self.w.push_str(
+                ") { Some(__jux_v) => crate::__jux_show!(__jux_v), None => \"null\".to_string() }",
+            );
+        } else if self.format_arg_is_obviously_display(arg) {
+            // Clean fast path: a primitive scalar / `String` always implements
+            // `Display`, so it drops straight into the `{}` slot — keeping the
+            // emitted `println!`/`format!` readable for the common case.
+            self.emit_expr(arg);
+        } else {
+            // Universal path: a user/foreign type whose `Display`-ness we can't
+            // guarantee. `__jux_show!` resolves to `Display` when available and
+            // falls back to `Debug` otherwise (the prelude's autoref trick), so
+            // ANY value formats correctly with no per-type detection.
+            self.w.push_str("crate::__jux_show!(");
+            self.emit_expr(arg);
+            self.w.push(')');
+        }
+    }
+
+    /// True when `arg`'s rendered value is GUARANTEED to implement Rust's
+    /// `Display` — a primitive scalar (numeric / `bool` / `char`) or `String`.
+    /// Such a value drops straight into a `{}` slot, keeping the emitted format
+    /// macro clean. Everything else routes through the universal `__jux_show!`
+    /// (Display-or-Debug). This is a pure readability optimization: the universal
+    /// path would also compile, so a conservative `false` only adds a wrapper —
+    /// it never miscompiles.
+    fn format_arg_is_obviously_display(&self, arg: &juxc_ast::Expr) -> bool {
+        use juxc_tycheck::Ty;
+        // Literals carry a DUMMY span (no recorded type), so classify by shape:
+        // every literal except `null` renders as a `Display` scalar / `String`.
+        if let juxc_ast::Expr::Literal(lit) = arg {
+            return matches!(
+                lit,
+                juxc_ast::Literal::Int(_)
+                    | juxc_ast::Literal::Float(_)
+                    | juxc_ast::Literal::String(_)
+                    | juxc_ast::Literal::Bool(_)
+                    | juxc_ast::Literal::Char(_)
+            );
+        }
+        // Otherwise consult the recorded static type (the normal route),
+        // falling back to the name-keyed `local_types` for a bare variable —
+        // string interpolation synthesizes spans that make the `expr_types`
+        // lookup miss, so a `$name` interp recovers `name`'s type from the
+        // scope stack. A nullable type is handled by the caller's `Option`
+        // match, never here, so the bare check suffices.
+        let bare_path = matches!(arg, juxc_ast::Expr::Path(qn) if qn.segments.len() == 1);
         let ty = self
             .expr_types
             .get(&crate::exprs::expr_span_of(arg))
-            .cloned();
-        // A bare reference to a foreign-typed local (e.g. an observer lambda's
-        // `now` bound to a foreign-enum property) carries no recorded `Ty` —
-        // the closure param is untyped — so fall back to the scope set the
-        // observer-attach emission populated.
-        let bare_foreign = matches!(arg, juxc_ast::Expr::Path(qn)
-            if qn.segments.len() == 1
-                && self.foreign_format_locals.contains(&qn.segments[0].text));
-        let is_foreign =
-            bare_foreign || ty.as_ref().is_some_and(|t| self.is_external_user_ty(t));
-        // Nullability MUST come from the smart-cast-aware tracker, not the
-        // declared `Ty`: after `if (x != null)` a `int?` value is unwrapped and
-        // must NOT be re-wrapped. The observer-lambda path registers its
-        // foreign params in `nullable_locals` directly, so this stays correct
-        // for them too.
-        let is_nullable = self.expression_is_already_nullable(arg);
-        let open = match (is_foreign, is_nullable) {
-            (true, true) => Some("crate::JuxOptDbg(&"),
-            (true, false) => Some("crate::JuxDbg(&"),
-            (false, true) => Some("crate::JuxOpt(&"),
-            (false, false) => None,
-        };
-        if let Some(open) = open {
-            self.w.push_str(open);
-            self.emit_expr(arg);
-            self.w.push(')');
-        } else {
-            self.emit_expr(arg);
+            .cloned()
+            .or_else(|| {
+                if let juxc_ast::Expr::Path(qn) = arg {
+                    if qn.segments.len() == 1 {
+                        return self
+                            .local_types
+                            .iter()
+                            .rev()
+                            .find_map(|s| s.get(&qn.segments[0].text).cloned());
+                    }
+                }
+                None
+            });
+        match ty {
+            // Known to be a primitive scalar / `String` — clean `{}`.
+            Some(Ty::Primitive(_)) | Some(Ty::String) => true,
+            // Known to be anything else (user/foreign/generic) — route through
+            // the universal `__jux_show!` so a `Debug`-only type still formats.
+            Some(_) => false,
+            // No recorded type. A bare single-segment ident with no type is
+            // only ever a primitive/`String` whose declaration left nothing
+            // recorded — a literal-init `var name = "Ada"`, or a primitive
+            // param. User/foreign values are ALWAYS recorded as `Ty::User`
+            // (in `local_types` or `expr_types`), so they never reach here.
+            // Assume `Display` to keep `$name` clean; the universal path would
+            // also compile but would needlessly wrap the common case.
+            None => bare_path,
         }
     }
 }

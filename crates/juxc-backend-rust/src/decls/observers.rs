@@ -1076,21 +1076,20 @@ impl RustEmitter {
     }
 
     /// Emit an inline observer-attach lambda, first binding its `(old, now)`
-    /// params as foreign-typed (and nullable, if the property is) locals when
-    /// the observed property has a FOREIGN type. That lets `${now}` in the body
-    /// format through the `Debug` adapter — a foreign enum derives `Debug`, not
-    /// `Display`. A no-op for a non-lambda arg or a non-foreign property.
+    /// params as nullable locals when the observed property type is nullable
+    /// (e.g. an implicitly-nullable auto-property). That lets `${old}`/`${now}`
+    /// in the body render `null` for an absent value through the universal
+    /// `__jux_show!` path, instead of Debug's `Some(..)`/`None`. Value rendering
+    /// itself is type-agnostic now (Display-or-Debug, see `emit_format_arg`), so
+    /// no foreign-type bookkeeping is needed here. A no-op for a non-lambda arg
+    /// or a non-nullable property.
     fn emit_observer_arg_expr(&mut self, prop: &str, arg: &juxc_ast::Expr) {
-        let mut undo_foreign: Vec<String> = Vec::new();
         let mut undo_nullable: Vec<String> = Vec::new();
         if let juxc_ast::Expr::Lambda(l) = arg {
             if let Some(ty) = self.observed_property_type(prop) {
-                if self.external_class_real_path(&ty.name).is_some() {
+                if ty.nullable {
                     for p in &l.params {
-                        if self.foreign_format_locals.insert(p.name.text.clone()) {
-                            undo_foreign.push(p.name.text.clone());
-                        }
-                        if ty.nullable && self.nullable_locals.insert(p.name.text.clone()) {
+                        if self.nullable_locals.insert(p.name.text.clone()) {
                             undo_nullable.push(p.name.text.clone());
                         }
                     }
@@ -1098,9 +1097,6 @@ impl RustEmitter {
             }
         }
         self.emit_expr(arg);
-        for n in undo_foreign {
-            self.foreign_format_locals.remove(&n);
-        }
         for n in undo_nullable {
             self.nullable_locals.remove(&n);
         }
