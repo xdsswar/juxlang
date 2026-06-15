@@ -194,6 +194,19 @@ impl RustEmitter {
                 self.w.push(')');
             }
             Expr::Path(qn) => {
+                // **Captured enclosing local** (anonymous-class capture): a bare
+                // read of a captured name is a field on the synthetic struct, so
+                // `name` → `self.name`. A method param of the same name shadows
+                // the capture and keeps the bare name. Empty set outside an
+                // anon body, so no effect on ordinary code.
+                if qn.segments.len() == 1
+                    && self.captured_locals.contains(&qn.segments[0].text)
+                    && !self.current_fn_params.contains(&qn.segments[0].text)
+                {
+                    self.w.push_str("self.");
+                    self.w.push_str(&qn.segments[0].text);
+                    return;
+                }
                 // **`ref` binding read** (§M.13): a value-position read
                 // of a `ref` local/param clones the value OUT of the
                 // shared cell (statement-scoped borrow). Lvalue targets
@@ -1595,6 +1608,11 @@ impl RustEmitter {
             init_blocks: Vec::new(),
             methods: Vec::new(),
         });
+        // Enclosing locals the body references (the Java capture pattern). Empty
+        // for a capture-less anon, so everything below stays byte-identical then.
+        let captures = self.collect_anon_captures(&body);
+        let capture_names: std::collections::HashSet<String> =
+            captures.iter().map(|(name, _)| name.clone()).collect();
         let methods = body.methods;
         let init_blocks = body.init_blocks;
 
@@ -1609,6 +1627,7 @@ impl RustEmitter {
             self.w.push_str(" { __parent: ");
             self.w.push_str(crate_prefix);
             self.w.push_str(&path);
+            self.emit_anon_capture_field_decls(&captures, true);
             self.w.push_str(" } impl std::ops::Deref for ");
             self.w.push_str(&struct_name);
             self.w.push_str(" { type Target = ");
@@ -1621,6 +1640,9 @@ impl RustEmitter {
             self.w.push_str("impl ");
             self.w.push_str(&struct_name);
             self.w.push_str(" {");
+            // Captured names rewrite to `self.<field>` inside the method bodies.
+            let prev_captured =
+                std::mem::replace(&mut self.captured_locals, capture_names.clone());
             // Inherent override methods — `&mut self` so `this.field`
             // writes through the embedded `__parent` borrow mutably.
             for method in &methods {
@@ -1637,6 +1659,9 @@ impl RustEmitter {
                 self.emit_block_contents(ib);
                 self.w.push_str(" }");
             }
+            // Restore BEFORE the construction so capture inits name the enclosing
+            // locals (`l.clone()`), not the rewritten `self.l`.
+            self.captured_locals = prev_captured;
             // Instantiate the synthetic with __parent built via the
             // target class's `new(args)`.
             self.w.push(' ');
@@ -1665,7 +1690,9 @@ impl RustEmitter {
                 self.emit_expr(arg);
             }
             self.emitting_format_arg = prev_fmt;
-            self.w.push_str(") } }");
+            self.w.push_str(")");
+            self.emit_anon_capture_field_inits(&captures, true);
+            self.w.push_str(" } }");
             return;
         }
         // Default path — interface target. Empty `impl Trait for
@@ -1675,12 +1702,20 @@ impl RustEmitter {
         // implementer must derive it too.
         self.w.push_str("{ #[derive(Clone, Debug)] struct ");
         self.w.push_str(&struct_name);
-        self.w.push_str("; impl ");
+        if captures.is_empty() {
+            self.w.push_str("; impl ");
+        } else {
+            self.w.push_str(" { ");
+            self.emit_anon_capture_field_decls(&captures, false);
+            self.w.push_str(" } impl ");
+        }
         self.w.push_str(crate_prefix);
         self.w.push_str(&path);
         self.w.push_str(" for ");
         self.w.push_str(&struct_name);
         self.w.push_str(" {");
+        // Captured names rewrite to `self.<field>` inside the method bodies.
+        let prev_captured = std::mem::replace(&mut self.captured_locals, capture_names.clone());
         // Receiver mutability per method follows the implemented trait's own
         // signature: a `@MutSelf` interface method is `&mut self`, so the anon
         // impl MUST match it exactly (E0053). Discovered from the interface
@@ -1713,6 +1748,9 @@ impl RustEmitter {
             self.emit_block_contents(ib);
             self.w.push_str(" }");
         }
+        // Restore BEFORE the construction so the capture inits name the enclosing
+        // locals (`l.clone()`), not the rewritten `self.l`.
+        self.captured_locals = prev_captured;
         // The instance is born as the interface's trait-object value. A FOREIGN
         // (`@rust`) trait taken by value is an OWNED `Box<dyn Trait>` — the Rust
         // convention for "implement this trait and hand it over" (e.g. minifb's
@@ -1724,18 +1762,96 @@ impl RustEmitter {
             .lookup_interface_by_bare_or_fqn(target_bare)
             .map(|(_, i)| i.is_external)
             .unwrap_or(false);
-        if iface_is_external {
-            self.w.push_str(" Box::new(");
-            self.w.push_str(&struct_name);
-            self.w.push_str(") as Box<dyn ");
-        } else {
-            self.w.push_str(" std::rc::Rc::new(");
-            self.w.push_str(&struct_name);
-            self.w.push_str(") as std::rc::Rc<dyn ");
+        self.w
+            .push_str(if iface_is_external { " Box::new(" } else { " std::rc::Rc::new(" });
+        self.w.push_str(&struct_name);
+        if !captures.is_empty() {
+            self.w.push_str(" { ");
+            self.emit_anon_capture_field_inits(&captures, false);
+            self.w.push_str(" }");
         }
+        self.w
+            .push_str(if iface_is_external { ") as Box<dyn " } else { ") as std::rc::Rc<dyn " });
         self.w.push_str(crate_prefix);
         self.w.push_str(&path);
         self.w.push_str("> }");
+    }
+
+    /// The enclosing locals an anonymous-class body CAPTURES — every bare name
+    /// read in a method body (minus that method's own params) or an init block
+    /// that resolves to a typed local in the enclosing scope. A method-local or
+    /// an unknown name isn't in the enclosing `local_types`, so it's left alone.
+    /// Returned `(name, type)` in first-seen order; empty for a capture-less anon.
+    fn collect_anon_captures(
+        &self,
+        body: &juxc_ast::AnonymousBody,
+    ) -> Vec<(String, juxc_ast::TypeRef)> {
+        let mut candidates: Vec<String> = Vec::new();
+        for m in &body.methods {
+            let params: std::collections::HashSet<String> =
+                m.params.iter().map(|p| p.name.text.clone()).collect();
+            if let Some(b) = &m.body {
+                collect_bare_names_block(b, &mut |n| {
+                    if !params.contains(n) {
+                        candidates.push(n.to_string());
+                    }
+                });
+            }
+        }
+        for b in &body.init_blocks {
+            collect_bare_names_block(b, &mut |n| candidates.push(n.to_string()));
+        }
+        let mut out: Vec<(String, juxc_ast::TypeRef)> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for n in candidates {
+            if n == "this" || n == "self" || !seen.insert(n.clone()) {
+                continue;
+            }
+            if let Some(ty) = self.local_types.iter().rev().find_map(|s| s.get(&n)) {
+                if let Some(tref) = crate::analysis::ty_to_type_ref(ty) {
+                    out.push((n, tref));
+                }
+            }
+        }
+        out
+    }
+
+    /// Emit captured-local struct-field declarations (`name: <Type>`). With
+    /// `leading_comma`, every field is comma-prefixed (used after a `__parent`
+    /// field); otherwise the first field has none (a fields-only struct).
+    fn emit_anon_capture_field_decls(
+        &mut self,
+        captures: &[(String, juxc_ast::TypeRef)],
+        leading_comma: bool,
+    ) {
+        for (i, (name, tref)) in captures.iter().enumerate() {
+            if i > 0 || leading_comma {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(name);
+            self.w.push_str(": ");
+            self.emit_value_type_as_rust(tref);
+        }
+    }
+
+    /// Emit captured-local struct-literal inits (`name: name.clone()`) — the
+    /// clone is the cheap `Rc` refcount bump for a captured class handle, a copy
+    /// for value types. Must run with `captured_locals` NOT yet set so the RHS
+    /// names the enclosing local, not `self.name`.
+    fn emit_anon_capture_field_inits(
+        &mut self,
+        captures: &[(String, juxc_ast::TypeRef)],
+        leading_comma: bool,
+    ) {
+        for (i, (name, _)) in captures.iter().enumerate() {
+            if i > 0 || leading_comma {
+                self.w.push_str(", ");
+            }
+            self.w.push_str(name);
+            self.w.push_str(": ");
+            self.w.push_str(name);
+            self.w.push_str(".clone()");
+        }
     }
 
     /// Emit one method from an anonymous-class body as an
@@ -1790,6 +1906,12 @@ impl RustEmitter {
             self.this_alias = Some("self".to_string());
             let saved_return = self.current_return_type.take();
             self.current_return_type = Some(method.return_type.clone());
+            // This method's params shadow any captured enclosing local of the
+            // same name (the capture rewrite checks `current_fn_params`).
+            let saved_params = std::mem::replace(
+                &mut self.current_fn_params,
+                method.params.iter().map(|p| p.name.text.clone()).collect(),
+            );
             // Register foreign-typed params so `${param}` in the body formats via
             // the Debug adapter — a foreign enum/struct (e.g. `minifb::Key`) has
             // `Debug`, not `Display`. Anon-method bodies aren't typed into
@@ -1813,6 +1935,7 @@ impl RustEmitter {
             for n in undo_nullable {
                 self.nullable_locals.remove(&n);
             }
+            self.current_fn_params = saved_params;
             self.current_return_type = saved_return;
             self.this_alias = prev_alias;
         }

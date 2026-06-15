@@ -23,7 +23,7 @@ use juxc_source::Span;
 /// receiver's concrete type args (`Registry<User, …>` → `K = User`) into a
 /// method's declared param type so wildcards over class params lower with
 /// the real element type instead of a dangling `dyn K` (gap 5).
-fn ty_to_type_ref(ty: &juxc_tycheck::Ty) -> Option<TypeRef> {
+pub(crate) fn ty_to_type_ref(ty: &juxc_tycheck::Ty) -> Option<TypeRef> {
     use juxc_tycheck::ty::Primitive;
     use juxc_tycheck::Ty;
     // Build a single-segment `TypeRef` from a bare name + optional args.

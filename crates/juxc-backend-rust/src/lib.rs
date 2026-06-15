@@ -719,6 +719,14 @@ struct RustEmitter {
     /// lambda body can't recover this from the untyped closure param otherwise.
     /// Reset per function alongside `nullable_locals`.
     pub(crate) foreign_format_locals: HashSet<String>,
+    /// Enclosing locals CAPTURED by the anonymous class currently being emitted.
+    /// Anonymous-class methods lower to `fn` items (which can't close over the
+    /// environment), so each captured local is stored as a field on the
+    /// synthetic struct and a bare read of `name` in a method body is rewritten
+    /// to `self.name`. Empty outside an anonymous-class body — capture is purely
+    /// additive, a no-capture anon emits exactly as before. Saved/restored
+    /// around each anon (nested anons compose).
+    pub(crate) captured_locals: HashSet<String>,
     /// In-scope `weak` parameters (§M.14.3) → the bare name of the target
     /// class. The slot is a `Weak<RefCell<Class_Inner>>`; `param.get()` lowers
     /// to `param.upgrade().map(Class)` (→ `Option<Class>` = `Class?`), and a
@@ -4076,6 +4084,7 @@ impl RustEmitter {
             ref_locals: HashSet::new(),
             pointer_locals: HashSet::new(),
             foreign_format_locals: HashSet::new(),
+            captured_locals: HashSet::new(),
             weak_params: std::collections::HashMap::new(),
             emitting_ref_handle: false,
             current_return_type: None,
