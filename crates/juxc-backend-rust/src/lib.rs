@@ -711,6 +711,14 @@ struct RustEmitter {
     /// (a `*mut T` has no `is_none`). Reset per function alongside
     /// `nullable_locals`.
     pub(crate) pointer_locals: HashSet<String>,
+    /// In-scope locals whose static type is a FOREIGN (`rust.<crate>`) value —
+    /// most commonly an observer lambda's `(old, now)` parameters bound to a
+    /// foreign-enum property type. Foreign types derive `Debug` but rarely
+    /// `Display`, so [`Self::emit_format_arg`] routes a bare reference to one of
+    /// these through the `Debug` format adapter (`JuxDbg`/`JuxOptDbg`). The
+    /// lambda body can't recover this from the untyped closure param otherwise.
+    /// Reset per function alongside `nullable_locals`.
+    pub(crate) foreign_format_locals: HashSet<String>,
     /// In-scope `weak` parameters (§M.14.3) → the bare name of the target
     /// class. The slot is a `Weak<RefCell<Class_Inner>>`; `param.get()` lowers
     /// to `param.upgrade().map(Class)` (→ `Option<Class>` = `Class?`), and a
@@ -3621,6 +3629,29 @@ impl RustEmitter {
         w.push_str("        }\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
+        // Debug-based format adapters for FOREIGN (`rust.<crate>`) values. A
+        // bound Rust type — most commonly an enum like `minifb::Key` — derives
+        // `Debug` but rarely `Display`, so interpolating it through the plain
+        // `{}` path (which needs `Display`) won't compile. `JuxDbg` (and the
+        // nullable `JuxOptDbg`, which prints `null` for `None`) format via
+        // `Debug` instead, so `$"…${foreignValue}"` just works. The backend
+        // routes a value here purely by whether its type is external — no
+        // per-type knowledge.
+        w.push_str("struct JuxDbg<'a, T: std::fmt::Debug>(&'a T);\n");
+        w.push_str("impl<'a, T: std::fmt::Debug> std::fmt::Display for JuxDbg<'a, T> {\n");
+        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
+        w.push_str("        std::fmt::Debug::fmt(self.0, f)\n");
+        w.push_str("    }\n");
+        w.push_str("}\n\n");
+        w.push_str("struct JuxOptDbg<'a, T: std::fmt::Debug>(&'a Option<T>);\n");
+        w.push_str("impl<'a, T: std::fmt::Debug> std::fmt::Display for JuxOptDbg<'a, T> {\n");
+        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
+        w.push_str("        match self.0 {\n");
+        w.push_str("            Some(v) => std::fmt::Debug::fmt(v, f),\n");
+        w.push_str("            None => f.write_str(\"null\"),\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n\n");
         // Observable-property observer handle (§P.2/§P.3): one
         // attached observer of a `{ get; set; }` property. NAMED
         // observer variables attach weakly (§P.2.3 — the owner's
@@ -4044,6 +4075,7 @@ impl RustEmitter {
             nullable_locals: HashSet::new(),
             ref_locals: HashSet::new(),
             pointer_locals: HashSet::new(),
+            foreign_format_locals: HashSet::new(),
             weak_params: std::collections::HashMap::new(),
             emitting_ref_handle: false,
             current_return_type: None,

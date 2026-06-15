@@ -2841,8 +2841,39 @@ impl crate::RustEmitter {
     /// `Some(v)` prints as `v`, `None` as `"null"`. Non-nullable
     /// args pass straight through.
     pub(crate) fn emit_format_arg(&mut self, arg: &juxc_ast::Expr) {
-        if self.expression_is_already_nullable(arg) {
-            self.w.push_str("crate::JuxOpt(&");
+        // A FOREIGN (`rust.<crate>`) value derives `Debug` but rarely `Display`
+        // (Rust enums/structs from a bound crate — e.g. a `minifb::Key` keyboard
+        // enum), so the plain `{}` / `JuxOpt` paths (which need `Display`) won't
+        // compile for it. Route any external-typed value through the `Debug`
+        // adapter instead. This is keyed purely on the value's STATIC type being
+        // external — fully dynamic, no per-type knowledge.
+        let ty = self
+            .expr_types
+            .get(&crate::exprs::expr_span_of(arg))
+            .cloned();
+        // A bare reference to a foreign-typed local (e.g. an observer lambda's
+        // `now` bound to a foreign-enum property) carries no recorded `Ty` —
+        // the closure param is untyped — so fall back to the scope set the
+        // observer-attach emission populated.
+        let bare_foreign = matches!(arg, juxc_ast::Expr::Path(qn)
+            if qn.segments.len() == 1
+                && self.foreign_format_locals.contains(&qn.segments[0].text));
+        let is_foreign =
+            bare_foreign || ty.as_ref().is_some_and(|t| self.is_external_user_ty(t));
+        // Nullability MUST come from the smart-cast-aware tracker, not the
+        // declared `Ty`: after `if (x != null)` a `int?` value is unwrapped and
+        // must NOT be re-wrapped. The observer-lambda path registers its
+        // foreign params in `nullable_locals` directly, so this stays correct
+        // for them too.
+        let is_nullable = self.expression_is_already_nullable(arg);
+        let open = match (is_foreign, is_nullable) {
+            (true, true) => Some("crate::JuxOptDbg(&"),
+            (true, false) => Some("crate::JuxDbg(&"),
+            (false, true) => Some("crate::JuxOpt(&"),
+            (false, false) => None,
+        };
+        if let Some(open) = open {
+            self.w.push_str(open);
             self.emit_expr(arg);
             self.w.push(')');
         } else {

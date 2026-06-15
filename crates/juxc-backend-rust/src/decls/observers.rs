@@ -996,13 +996,58 @@ impl RustEmitter {
         }
         if inline {
             self.w.push_str("crate::JuxObserver::Strong(");
-            self.emit_expr(arg);
+            self.emit_observer_arg_expr(prop, arg);
             self.w.push(')');
         } else {
             self.w
                 .push_str("crate::JuxObserver::Weak(std::rc::Rc::downgrade(&(");
             self.emit_expr(arg);
             self.w.push_str(")))");
+        }
+    }
+
+    /// The declared type of property `prop` on the CURRENT enclosing class, if
+    /// resolvable. Used to learn that an observed property is foreign-typed
+    /// (e.g. a `minifb::Key` enum), which the untyped observer-lambda params
+    /// can't recover on their own.
+    fn observed_property_type(&self, prop: &str) -> Option<juxc_ast::TypeRef> {
+        let enclosing = self.enclosing_class.as_ref()?;
+        let class = self.class_ast_by_bare(enclosing)?;
+        class
+            .properties
+            .iter()
+            .find(|p| p.name.text == prop)
+            .map(|p| p.ty.clone())
+    }
+
+    /// Emit an inline observer-attach lambda, first binding its `(old, now)`
+    /// params as foreign-typed (and nullable, if the property is) locals when
+    /// the observed property has a FOREIGN type. That lets `${now}` in the body
+    /// format through the `Debug` adapter — a foreign enum derives `Debug`, not
+    /// `Display`. A no-op for a non-lambda arg or a non-foreign property.
+    fn emit_observer_arg_expr(&mut self, prop: &str, arg: &juxc_ast::Expr) {
+        let mut undo_foreign: Vec<String> = Vec::new();
+        let mut undo_nullable: Vec<String> = Vec::new();
+        if let juxc_ast::Expr::Lambda(l) = arg {
+            if let Some(ty) = self.observed_property_type(prop) {
+                if self.external_class_real_path(&ty.name).is_some() {
+                    for p in &l.params {
+                        if self.foreign_format_locals.insert(p.name.text.clone()) {
+                            undo_foreign.push(p.name.text.clone());
+                        }
+                        if ty.nullable && self.nullable_locals.insert(p.name.text.clone()) {
+                            undo_nullable.push(p.name.text.clone());
+                        }
+                    }
+                }
+            }
+        }
+        self.emit_expr(arg);
+        for n in undo_foreign {
+            self.foreign_format_locals.remove(&n);
+        }
+        for n in undo_nullable {
+            self.nullable_locals.remove(&n);
         }
     }
 
