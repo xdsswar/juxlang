@@ -1631,6 +1631,36 @@ impl RustEmitter {
         None
     }
 
+    /// True when the field `field_name` of `class_name` or any ancestor is
+    /// declared nullable (`T?`). Reads the field's `TypeRef.nullable` flag
+    /// directly (not the erased `Ty`, which can drop nullability), so it drives
+    /// the assign-time `Some(...)` coercion for both own and inherited fields.
+    pub(crate) fn class_field_is_nullable_in_chain(
+        &self,
+        class_name: &str,
+        field_name: &str,
+    ) -> bool {
+        let mut cursor: Option<String> = Some(class_name.to_string());
+        let mut depth = 0usize;
+        while let Some(cn) = cursor {
+            if depth > 64 {
+                return false;
+            }
+            let Some(class) = self.lookup_class_by_bare_or_fqn(&cn) else {
+                return false;
+            };
+            if let Some(field) = class.fields.get(field_name) {
+                return field.ty.nullable;
+            }
+            cursor = class
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            depth += 1;
+        }
+        false
+    }
+
     /// True when `name` is a PROPERTY of `class_name` or any ancestor (walking
     /// the `extends` chain over the class ASTs). Drives the bare implicit-`this`
     /// rewrite for a property READ: `Title` ≡ `this.Title`, which the field

@@ -3308,8 +3308,27 @@ impl RustEmitter {
         // name for the narrowed region, where a raw assign would be
         // assigning into the unwrapped binding).
         if let Expr::Path(qn) = target {
-            return qn.segments.len() == 1
-                && self.nullable_locals.contains(&qn.segments[0].text);
+            if qn.segments.len() != 1 {
+                return false;
+            }
+            let name = &qn.segments[0].text;
+            // A nullable LOCAL (`C? maybe; maybe = a;`).
+            if self.nullable_locals.contains(name) {
+                return true;
+            }
+            // Implicit-`this` write to a nullable INSTANCE field (Java style,
+            // `options = new Opts();` where `Opts? options`). Only when the bare
+            // name isn't shadowed by a param/local — those are ordinary variable
+            // assignments. Walk the `extends` chain so an inherited nullable
+            // field coerces too.
+            let shadowed = self.current_fn_params.contains(name)
+                || self.local_types.iter().any(|s| s.contains_key(name));
+            if !shadowed {
+                if let Some(class) = self.enclosing_class.clone() {
+                    return self.class_field_is_nullable_in_chain(&class, name);
+                }
+            }
+            return false;
         }
         let Expr::Field(f) = target else { return false };
         let Some(juxc_tycheck::Ty::User { name, .. }) =
@@ -3317,18 +3336,13 @@ impl RustEmitter {
         else {
             return false;
         };
-        // Walk the class's own fields; ancestor fields would need
-        // an inheritance walk like `lookup_field_type` does. For
-        // Phase 1 the assign-coercion fires only on direct fields
-        // — Java/Kotlin user code that assigns to an inherited
-        // nullable field is rare enough that we'll wait for an
-        // example to motivate the deeper walk.
-        if let Some(class) = self.symbols.classes.get(name) {
-            if let Some(field) = class.fields.get(&f.field.text) {
-                return field.ty.nullable;
-            }
+        // Walk the receiver class's `extends` chain (Java semantics) so a write
+        // to an INHERITED nullable field coerces the same as a direct one.
+        let name = name.clone();
+        if self.class_field_is_nullable_in_chain(&name, &f.field.text) {
+            return true;
         }
-        if let Some(record) = self.symbols.records.get(name) {
+        if let Some(record) = self.symbols.records.get(&name) {
             if let Some(c) = record.components.iter().find(|c| c.name == f.field.text) {
                 return c.ty.nullable;
             }
