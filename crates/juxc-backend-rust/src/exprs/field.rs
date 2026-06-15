@@ -1630,6 +1630,34 @@ impl RustEmitter {
         }
         None
     }
+
+    /// True when `name` is a PROPERTY of `class_name` or any ancestor (walking
+    /// the `extends` chain over the class ASTs). Drives the bare implicit-`this`
+    /// rewrite for a property READ: `Title` ≡ `this.Title`, which the field
+    /// emitter then routes to the synthesized getter. A property and a field
+    /// never share a name (the backing slot is `__prop_<Name>`), so this is
+    /// consulted only after the field lookup misses.
+    pub(crate) fn bare_name_is_property_in_chain(&self, class_name: &str, name: &str) -> bool {
+        let mut cursor: Option<String> = Some(class_name.to_string());
+        let mut depth = 0usize;
+        while let Some(cn) = cursor {
+            if depth > 64 {
+                return false;
+            }
+            let Some(cd) = self.lookup_class_ast_by_bare_or_fqn(&cn) else {
+                return false;
+            };
+            if cd.properties.iter().any(|p| p.name.text == name) {
+                return true;
+            }
+            cursor = cd
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+            depth += 1;
+        }
+        false
+    }
 }
 
 /// True when emitting `expr` as the receiver of a method call (e.g.

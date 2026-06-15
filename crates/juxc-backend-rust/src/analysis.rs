@@ -938,7 +938,94 @@ pub(crate) struct SimpleCtorInits {
     pub(crate) side_effects: Vec<juxc_ast::Stmt>,
 }
 
-pub(crate) fn extract_simple_ctor_inits(ctor: &juxc_ast::ConstructorDecl) -> Option<SimpleCtorInits> {
+/// True when `e` reads INSTANCE state — `this`/`super`, or a bare reference to
+/// one of `instance_names` (the class's non-static fields + properties). Such an
+/// expression can't be folded into the `Self { … }` struct literal (there is no
+/// constructed instance yet) and can't run as a pre-literal "side effect", so it
+/// disqualifies the simple-ctor fast path in favor of the `__self`-builder.
+fn expr_reads_instance_state(
+    e: &Expr,
+    instance_names: &std::collections::HashSet<String>,
+) -> bool {
+    match e {
+        Expr::This(_) | Expr::Super(_) => true,
+        Expr::Path(qn) => {
+            qn.segments.len() == 1 && instance_names.contains(&qn.segments[0].text)
+        }
+        Expr::Call(c) => {
+            expr_reads_instance_state(&c.callee, instance_names)
+                || c.args.iter().any(|a| expr_reads_instance_state(a, instance_names))
+        }
+        Expr::NewObject(n) => {
+            n.args.iter().any(|a| expr_reads_instance_state(a, instance_names))
+        }
+        Expr::NewArrayLit(n) => n
+            .elements
+            .iter()
+            .any(|el| expr_reads_instance_state(el, instance_names)),
+        Expr::NewArray(n) => {
+            expr_reads_instance_state(&n.size, instance_names)
+                || n.inner_sizes
+                    .iter()
+                    .any(|i| expr_reads_instance_state(i, instance_names))
+        }
+        Expr::Binary(b) => {
+            expr_reads_instance_state(&b.left, instance_names)
+                || expr_reads_instance_state(&b.right, instance_names)
+        }
+        Expr::Unary(u) => expr_reads_instance_state(&u.operand, instance_names),
+        Expr::Range(r) => {
+            expr_reads_instance_state(&r.start, instance_names)
+                || expr_reads_instance_state(&r.end, instance_names)
+        }
+        Expr::Cast(c) => expr_reads_instance_state(&c.value, instance_names),
+        Expr::TypeTest(t) => expr_reads_instance_state(&t.value, instance_names),
+        Expr::Index(i) => {
+            expr_reads_instance_state(&i.array, instance_names)
+                || expr_reads_instance_state(&i.index, instance_names)
+        }
+        Expr::Field(f) => expr_reads_instance_state(&f.object, instance_names),
+        Expr::InterpString(s) => s.segments.iter().any(|seg| {
+            matches!(seg, juxc_ast::InterpSegment::Expr(inner)
+                if expr_reads_instance_state(inner, instance_names))
+        }),
+        Expr::Elvis(el) => {
+            expr_reads_instance_state(&el.value, instance_names)
+                || expr_reads_instance_state(&el.fallback, instance_names)
+        }
+        Expr::Ternary(t) => {
+            expr_reads_instance_state(&t.condition, instance_names)
+                || expr_reads_instance_state(&t.then_branch, instance_names)
+                || expr_reads_instance_state(&t.else_branch, instance_names)
+        }
+        Expr::Await(inner, _) => expr_reads_instance_state(inner, instance_names),
+        _ => false,
+    }
+}
+
+pub(crate) fn extract_simple_ctor_inits(
+    ctor: &juxc_ast::ConstructorDecl,
+    class_decl: &juxc_ast::ClassDecl,
+) -> Option<SimpleCtorInits> {
+    // Instance state that can't be touched by a foldable init / pre-literal side
+    // effect: non-static fields plus every property (its backing field is
+    // instance state too). A bare WRITE to one of these — `options = …;`,
+    // `Title = …;` (Java implicit-`this`) — or any RHS that READS one disqualifies
+    // the fast path so the `__self`-builder runs the whole body on a real `__self`.
+    // CTOR PARAMETERS shadow same-named fields/properties (`Point(int a){ this.a
+    // = a; }` — the RHS `a` is the param, NOT the field), so they're excluded;
+    // otherwise every `this.f = f;` init would be misread as touching instance
+    // state and the simple fast path would never fire.
+    let param_names: std::collections::HashSet<&str> =
+        ctor.params.iter().map(|p| p.name.text.as_str()).collect();
+    let instance_names: std::collections::HashSet<String> = class_decl
+        .fields
+        .iter()
+        .filter(|f| !f.is_static)
+        .map(|f| f.name.text.clone())
+        .chain(class_decl.properties.iter().map(|p| p.name.text.clone()))
+        .filter(|n| !param_names.contains(n.as_str()))
+        .collect();
     let mut super_args: Option<Vec<Expr>> = None;
     let mut inits = Vec::with_capacity(ctor.body.statements.len());
     let mut side_effects: Vec<juxc_ast::Stmt> = Vec::new();
@@ -958,9 +1045,16 @@ pub(crate) fn extract_simple_ctor_inits(ctor: &juxc_ast::ConstructorDecl) -> Opt
                 super_args = Some(args.clone());
             }
             Stmt::Assign(a) => {
-                // `this.field = expr;` → field init.
+                // `this.field = expr;` → field init — but ONLY when the RHS is
+                // instance-state-independent. `this.b = this.a + 1;` (RHS reads
+                // `this`) or a re-assignment that reads a sibling field can't be
+                // folded into the struct literal; disqualify so the body runs
+                // sequentially against `__self`.
                 if let Expr::Field(f) = &a.target {
                     if matches!(&*f.object, Expr::This(_)) {
+                        if expr_reads_instance_state(&a.value, &instance_names) {
+                            return None;
+                        }
                         inits.push((f.field.text.clone(), a.value.clone()));
                         continue;
                     }
@@ -979,22 +1073,31 @@ pub(crate) fn extract_simple_ctor_inits(ctor: &juxc_ast::ConstructorDecl) -> Opt
                     // `LazyLock<Mutex<…>>` form. Anything more complex
                     // (`obj.a.b = …`, an indexed object) stays on the slow
                     // path — we can't prove it's instance-state-independent.
-                    if matches!(&*f.object, Expr::Path(p) if p.segments.len() == 1) {
+                    if matches!(&*f.object, Expr::Path(p) if p.segments.len() == 1)
+                        && !expr_reads_instance_state(&a.value, &instance_names)
+                    {
                         side_effects.push(stmt.clone());
                         continue;
                     }
                     return None;
                 }
-                // `staticField = expr;` (bare-name Path target) →
-                // side effect. The simple path can run these
-                // before the struct literal without needing
-                // Default initialization for any generic-typed
-                // field. Anything more complex (array indexing,
-                // arbitrary lvalues) still falls through to the
-                // slow path.
-                if matches!(&a.target, Expr::Path(_)) {
-                    side_effects.push(stmt.clone());
-                    continue;
+                // Bare-name Path target. This is AMBIGUOUS: it can be a static
+                // field write (`staticField = expr;`) — a pure side effect — OR a
+                // Java implicit-`this` write to an INSTANCE field / PROPERTY
+                // (`options = …;`, `Title = …;`). Only the former is safe on the
+                // fast path; the latter needs a constructed `__self`, so it
+                // disqualifies. An RHS that reads instance state disqualifies too.
+                if let Expr::Path(p) = &a.target {
+                    let bare = p.segments.first().map(|s| s.text.as_str()).unwrap_or("");
+                    let touches_instance = p.segments.len() == 1
+                        && instance_names.contains(bare);
+                    if !touches_instance
+                        && !expr_reads_instance_state(&a.value, &instance_names)
+                    {
+                        side_effects.push(stmt.clone());
+                        continue;
+                    }
+                    return None;
                 }
                 return None;
             }

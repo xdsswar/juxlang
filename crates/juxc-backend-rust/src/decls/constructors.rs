@@ -324,7 +324,7 @@ impl RustEmitter {
         // so an init block must observe the field-initializer values, not
         // the body's writes. The `__self`-builder below gets that order.
         let simple = if class_decl.init_blocks.is_empty() {
-            extract_simple_ctor_inits(ctor)
+            extract_simple_ctor_inits(ctor, class_decl)
         } else {
             None
         };
@@ -954,7 +954,7 @@ impl RustEmitter {
         // A class with `init { }` blocks can't use the simple fast path —
         // its init blocks run after construction and mutate `this`.
         let simple = if class_decl.init_blocks.is_empty() {
-            extract_simple_ctor_inits(ctor)
+            extract_simple_ctor_inits(ctor, class_decl)
         } else {
             None
         };
