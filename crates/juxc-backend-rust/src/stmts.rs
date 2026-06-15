@@ -1776,6 +1776,21 @@ impl RustEmitter {
         // / `[]` / comparisons / format don't move it.
         let element_is_copy = match self.expr_types.get(&expr_span_of(&f.iter)) {
             Some(Ty::Array { element, .. }) => matches!(element.as_ref(), Ty::Primitive(_)),
+            // A `rust.std` sequence collection (`Vec<int>`, `VecDeque<int>`,
+            // `HashSet<int>`, `BTreeSet<int>`) whose element is a Copy primitive
+            // takes the same pattern-deref fast-path as an array: `for &x in &xs`
+            // binds `x` BY VALUE, so `x == 2` / `x + 1` work (a bare `for x in
+            // &xs` would bind `&int`, and `&i32 == i32` / `&i32 + i32` mix ref and
+            // value — the gap arrays didn't have).
+            Some(Ty::User { name, generic_args })
+                if name.starts_with("rust.std")
+                    && matches!(
+                        name.rsplit('.').next().unwrap_or(name),
+                        "Vec" | "VecDeque" | "HashSet" | "BTreeSet",
+                    ) =>
+            {
+                matches!(generic_args.first(), Some(Ty::Primitive(_)))
+            }
             _ => false,
         };
         let body_moves_var =
