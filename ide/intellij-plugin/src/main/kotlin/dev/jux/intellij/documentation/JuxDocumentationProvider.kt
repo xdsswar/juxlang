@@ -8,6 +8,7 @@ import com.intellij.psi.util.elementType
 import dev.jux.intellij.highlight.JuxTokenTypes
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxNamedElement
+import dev.jux.intellij.psi.JuxPropertyDeclaration
 
 /**
  * Quick Documentation (Ctrl+Q) and the navigation-bar tooltip for Jux
@@ -22,7 +23,7 @@ class JuxDocumentationProvider : AbstractDocumentationProvider() {
     /** The one-line summary shown in the navigation bar / Ctrl+hover preview. */
     override fun getQuickNavigateInfo(element: PsiElement?, originalElement: PsiElement?): String? {
         val decl = element as? JuxNamedElement ?: return null
-        return "${kindLabel(decl)} ${signature(decl)}"
+        return "${kindLabel(decl)} ${signature(decl)}${nullableSuffix(decl)}"
     }
 
     /** The full Ctrl+Q popup: a definition block plus the doc comment, if any. */
@@ -32,6 +33,16 @@ class JuxDocumentationProvider : AbstractDocumentationProvider() {
         sb.append(DocumentationMarkup.DEFINITION_START)
         sb.append(StringUtil.escapeXmlEntities(signature(decl)))
         sb.append(DocumentationMarkup.DEFINITION_END)
+        // An uninitialized auto-property is implicitly nullable (§M.7.3.1): note
+        // the effective `T?` type the program actually sees, so offline tooling
+        // is honest about nullability without an LSP session.
+        implicitNullableType(decl)?.let { eff ->
+            sb.append(DocumentationMarkup.CONTENT_START)
+            sb.append("Implicitly nullable: reads <code>")
+            sb.append(StringUtil.escapeXmlEntities(eff))
+            sb.append("</code> (null until set).")
+            sb.append(DocumentationMarkup.CONTENT_END)
+        }
         docComment(decl)?.let { doc ->
             sb.append(DocumentationMarkup.CONTENT_START)
             sb.append(StringUtil.escapeXmlEntities(doc).replace("\n", "<br/>"))
@@ -67,6 +78,17 @@ class JuxDocumentationProvider : AbstractDocumentationProvider() {
         val end = text.indexOfFirst { it == '{' || it == ';' }.let { if (it < 0) text.length else it }
         return text.substring(0, end).trim().replace(WHITESPACE, " ")
     }
+
+    /**
+     * The effective `T?` type when `decl` is an implicitly-nullable auto-property
+     * (uninitialized, §M.7.3.1), else null. Drives the hover nullability note.
+     */
+    private fun implicitNullableType(decl: JuxNamedElement): String? =
+        (decl as? JuxPropertyDeclaration)?.takeIf { it.isImplicitlyNullable() }?.effectiveTypeText()
+
+    /** ` : T?` appended to the nav-bar summary of an implicitly-nullable property. */
+    private fun nullableSuffix(decl: JuxNamedElement): String =
+        implicitNullableType(decl)?.let { " : $it" } ?: ""
 
     /**
      * The doc comment immediately preceding `decl`: a `/** … */` block (stripped
