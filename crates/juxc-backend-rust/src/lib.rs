@@ -4681,8 +4681,18 @@ impl RustEmitter {
         let Some((class_name, method)) = found else { return };
 
         let is_async = matches!(method.return_type, juxc_ast::ReturnType::AsyncType(_));
-        // An entry-shaped non-void return is `int` — use it as the exit code.
-        let returns_value = matches!(method.return_type, juxc_ast::ReturnType::Type(_));
+        // An entry-shaped non-void return is `int` — forward it as the process
+        // exit code. This covers BOTH `int main()` (ReturnType::Type) and
+        // `async int main()` (ReturnType::AsyncType whose inner isn't the `void`
+        // sentinel); the latter would otherwise drop its exit code.
+        let returns_int = match &method.return_type {
+            juxc_ast::ReturnType::Type(_) => true,
+            juxc_ast::ReturnType::AsyncType(t) => !(t.name.segments.len() == 1
+                && t.name.segments[0].text == "void"
+                && t.generic_args.is_empty()
+                && !t.nullable),
+            juxc_ast::ReturnType::Void => false,
+        };
         let takes_args = !method.params.is_empty();
         let args_expr = if takes_args {
             "std::env::args().skip(1).collect::<Vec<String>>()"
@@ -4703,20 +4713,24 @@ impl RustEmitter {
         path.push_str(class_name);
         let call = format!("{path}::main({args_expr})");
 
+        // Drive the call (an async entry runs under the futures executor), then
+        // forward an `int` return as the exit code. Unified so async-int doesn't
+        // lose its code and async-void / sync-void stay plain statements.
+        let inner = if is_async {
+            format!("futures::executor::block_on({call})")
+        } else {
+            call
+        };
         self.w.newline();
         self.w.line("fn main() {");
         self.w.indent_inc();
         self.w.emit_indent();
-        if is_async {
-            self.w.push_str("futures::executor::block_on(");
-            self.w.push_str(&call);
-            self.w.push_str(");\n");
-        } else if returns_value {
+        if returns_int {
             self.w.push_str("std::process::exit(");
-            self.w.push_str(&call);
+            self.w.push_str(&inner);
             self.w.push_str(" as i32);\n");
         } else {
-            self.w.push_str(&call);
+            self.w.push_str(&inner);
             self.w.push_str(";\n");
         }
         self.w.indent_dec();

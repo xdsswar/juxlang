@@ -494,6 +494,9 @@ impl RustEmitter {
             // `int?` shapes) goes in so call sites passing it
             // through to other slots don't double-wrap.
             self.nullable_locals.clear();
+            // Foreign-format bindings are observer-lambda-scoped and always
+            // balanced, but reset here too so they can never leak across fns.
+            self.foreign_format_locals.clear();
             for p in &fn_decl.params {
                 if p.ty.nullable {
                     self.nullable_locals.insert(p.name.text.clone());
