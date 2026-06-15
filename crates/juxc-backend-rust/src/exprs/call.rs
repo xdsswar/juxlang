@@ -1573,9 +1573,27 @@ impl RustEmitter {
         // Vec then panics, which mirrors Java's `NoSuchElementException`
         // shape. Remove this special case once `Option<T>` lands and
         // pop can return `T?` directly.
+        //
+        // This is EXCLUSIVELY the `Vec::pop` intrinsic: a user-defined class
+        // with its own `pop()` method returns its declared type directly, so
+        // appending `.unwrap()` there would call it on the user's return value
+        // (e.g. `String::unwrap`, which does not exist — a leaked rustc E0599).
+        // Gate on the receiver NOT being a user class.
         if let Expr::Field(f) = &*call.callee {
             if f.field.text == "pop" && call.args.is_empty() {
-                self.w.push_str(".unwrap()");
+                // `class_asts` is keyed by FQN (`x4.Stack`); the receiver bare
+                // name matches a user class when it equals some key's last
+                // segment.
+                let receiver_is_user_class = self
+                    .receiver_class_bare(&f.object)
+                    .is_some_and(|bare| {
+                        self.class_asts
+                            .keys()
+                            .any(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+                    });
+                if !receiver_is_user_class {
+                    self.w.push_str(".unwrap()");
+                }
             }
         }
     }
