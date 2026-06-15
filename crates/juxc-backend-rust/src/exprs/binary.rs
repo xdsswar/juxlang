@@ -541,23 +541,32 @@ impl RustEmitter {
         if is_cmp {
             self.emitting_comparison_operand = true;
         }
-        // **Java-style numeric promotion.** In `int <op> double` Java widens the
-        // integer operand to the float type; Rust has no implicit numeric
-        // coercion, so an un-cast `i * 2.0` is rejected (`isize * f64`). For a
-        // mixed integer/float arithmetic op we cast the integer side to `f64`.
+        // **Java-style numeric promotion.** Rust has no implicit numeric
+        // coercion, so a mixed-type op (`isize * f64`, `isize + i64`,
+        // `isize < usize`) is a hard rustc error. For an arithmetic, bitwise, or
+        // comparison op whose operands differ in numeric type we widen both
+        // sides to a common type (see `numeric_promote_target`) by emitting an
+        // `as <T>` on whichever side(s) differ. Same-type and non-numeric
+        // operands are emitted untouched.
         let is_arith = matches!(
             b.op,
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Rem
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor,
         );
-        let (cast_left, cast_right) = if is_arith {
-            match (self.operand_is_float(&b.left), self.operand_is_float(&b.right)) {
-                (Some(false), Some(true)) => (true, false),
-                (Some(true), Some(false)) => (false, true),
-                _ => (false, false),
-            }
+        let promote = if is_arith || is_cmp {
+            self.numeric_promote_target(&b.left, &b.right)
         } else {
-            (false, false)
+            None
         };
+        let target_name = promote.map(crate::exprs::rust_primitive_name);
+        let cast_left = target_name.is_some() && self.operand_primitive(&b.left) != promote;
+        let cast_right = target_name.is_some() && self.operand_primitive(&b.right) != promote;
 
         // Left side of a left-associative op: equal precedence is OK,
         // because emission order already preserves grouping.
@@ -566,7 +575,9 @@ impl RustEmitter {
         }
         self.emit_expr_with_parent_prec(&b.left, prec, /*right=*/ false);
         if cast_left {
-            self.w.push_str(" as f64)");
+            self.w.push_str(" as ");
+            self.w.push_str(target_name.unwrap());
+            self.w.push(')');
         }
         self.w.push(' ');
         self.w.push_str(b.op.as_rust_str());
@@ -578,7 +589,9 @@ impl RustEmitter {
         }
         self.emit_expr_with_parent_prec(&b.right, prec, /*right=*/ true);
         if cast_right {
-            self.w.push_str(" as f64)");
+            self.w.push_str(" as ");
+            self.w.push_str(target_name.unwrap());
+            self.w.push(')');
         }
         self.emitting_comparison_operand = prev_cmp;
     }
@@ -606,6 +619,66 @@ impl RustEmitter {
             Ty::Primitive(_) => Some(false),
             _ => None,
         }
+    }
+
+    /// The common Rust numeric type two operands of a binary op must be cast to,
+    /// or `None` when no cast is needed (same type, a non-numeric operand, or an
+    /// unknown type). Rust has no implicit numeric coercion, so a mixed-width or
+    /// mixed-signedness op (`isize + i64`, `isize < usize`, `isize * f64`) is a
+    /// hard error; we widen both sides to a common type, Java-promotion style:
+    ///
+    /// - any float operand wins (`f64` unless both floats are 32-bit → `f32`);
+    /// - otherwise both are integers: the wider rank wins, and a same-width
+    ///   signed/unsigned tie resolves to the **unsigned** type — so a length /
+    ///   index value (`usize`) keeps its natural space and stays usable as an
+    ///   index after the op (`v.len() - 1`, `i < v.len()`).
+    ///
+    /// Used for arithmetic, bitwise, and comparison ops. Bool/char operands and
+    /// unknown types yield `None` (left untouched).
+    pub(crate) fn numeric_promote_target(
+        &self,
+        left: &Expr,
+        right: &Expr,
+    ) -> Option<juxc_tycheck::Primitive> {
+        use juxc_tycheck::Primitive as P;
+        let lp = self.operand_primitive(left)?;
+        let rp = self.operand_primitive(right)?;
+        if lp == rp || matches!(lp, P::Bool | P::Char) || matches!(rp, P::Bool | P::Char) {
+            return None;
+        }
+        let is_float = |p: P| matches!(p, P::Float | P::Double | P::F32 | P::F64);
+        if is_float(lp) || is_float(rp) {
+            let is_f64 = |p: P| matches!(p, P::Double | P::F64);
+            return Some(if is_f64(lp) || is_f64(rp) { P::Double } else { P::Float });
+        }
+        // Both integers. Rank by width; pointer-width (`isize`/`usize`) and the
+        // 64-bit explicit widths share the top tiers.
+        let rank = |p: P| -> u8 {
+            match p {
+                P::Byte | P::I8 | P::Ubyte | P::U8 => 1,
+                P::Short | P::I16 | P::Ushort | P::U16 => 2,
+                P::I32 | P::U32 => 3,
+                P::Int | P::Uint => 4,
+                P::Long | P::I64 | P::Ulong | P::U64 => 5,
+                _ => 0,
+            }
+        };
+        let unsigned = |p: P| {
+            matches!(
+                p,
+                P::Uint | P::Ubyte | P::U8 | P::Ushort | P::U16 | P::U32 | P::Ulong | P::U64,
+            )
+        };
+        let (rl, rr) = (rank(lp), rank(rp));
+        Some(if rl > rr {
+            lp
+        } else if rr > rl {
+            rp
+        } else if unsigned(lp) {
+            lp
+        } else {
+            rp
+        })
     }
 
     /// True when `e`'s recorded type is a user class (or record)
