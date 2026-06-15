@@ -131,6 +131,21 @@ class JuxCompletionContextTest : BasePlatformTestCase() {
         assertDoesntContain(items, "class", "return", "if")
     }
 
+    /** A comma-separated implements list spanning lines is still type-only. */
+    fun testMultilineImplementsListOffersOnlyTypes() {
+        val items = completionsAt(
+            """
+            package demo;
+            public interface X {}
+            public interface Y {}
+            public class C implements X,
+                                      <caret>
+            """.trimIndent(),
+        )
+        assertContainsElements(items, "X", "Y")
+        assertDoesntContain(items, "class", "return")
+    }
+
     // ---- observable properties (§P) ------------------------------------------
 
     fun testAccessorBlockOffersGetSetAndVisibilityOnly() {

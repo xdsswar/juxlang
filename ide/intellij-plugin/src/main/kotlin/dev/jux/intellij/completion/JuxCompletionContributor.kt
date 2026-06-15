@@ -578,9 +578,21 @@ class JuxCompletionContributor : CompletionContributor() {
         while (i >= 0 && steps < MAX_LOOKBACK) {
             val c = text[i]
             when {
-                c.isWhitespace() || c == '.' || c == ',' || c == '<' || c == '>' || c == '?' || c == '&' -> {
+                // A line break ends the scan UNLESS it's a comma-list continuation
+                // (`implements A,⏎  B`); otherwise a governing keyword on an earlier
+                // line — a half-typed `class C extends Base⏎ Field‸` — would wrongly
+                // suppress keyword/value completion while the user types a member.
+                c == '\n' -> {
+                    var k = i - 1
+                    while (k >= 0 && text[k] != '\n' && text[k].isWhitespace()) k--
+                    if (k < 0 || text[k] != ',') return false
                     i--
                 }
+                // `.`/`,`/`<`/`>` are the only non-space gap chars (qualified names,
+                // type lists, generics). `?` and `&` are deliberately NOT here: they
+                // are ternary / bitwise / wildcard operators far more often than type
+                // punctuation in the positions this scan reaches.
+                c.isWhitespace() || c == '.' || c == ',' || c == '<' || c == '>' -> i--
                 c.isLetterOrDigit() || c == '_' -> {
                     var j = i
                     while (j >= 0 && (text[j].isLetterOrDigit() || text[j] == '_')) j--

@@ -35,4 +35,16 @@ class JuxManifestChangeListenerTest : TestCase() {
     fun testNonBoundaryNameDoesNotMatch() {
         assertFalse(JuxManifestChangeListener.isManifestPath("F:/DEV/proj/src/notjux.toml", base))
     }
+
+    /** Build output under target/ must not trigger a restart. */
+    fun testManifestUnderTargetIsIgnored() {
+        assertFalse(
+            JuxManifestChangeListener.isManifestPath("F:/DEV/proj/target/.rust-build/x/jux.toml", base),
+        )
+    }
+
+    /** Windows drive-letter case differences must still match. */
+    fun testCaseInsensitiveDriveLetter() {
+        assertTrue(JuxManifestChangeListener.isManifestPath("f:/DEV/proj/mod/jux.toml", "F:/DEV/proj"))
+    }
 }
