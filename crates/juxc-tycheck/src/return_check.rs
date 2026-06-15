@@ -33,7 +33,7 @@ fn block_diverges(block: &Block) -> bool {
 fn stmt_diverges(stmt: &Stmt) -> bool {
     match stmt {
         // An explicit `return` / `throw` is the canonical divergence.
-        Stmt::Return(_) | Stmt::Throw(..) => true,
+        Stmt::Return(_, _) | Stmt::Throw(..) => true,
         // `if` diverges only when it has an `else` AND both arms diverge —
         // otherwise the missing/short arm provides a fall-through path.
         Stmt::If(i) => if_diverges(i),

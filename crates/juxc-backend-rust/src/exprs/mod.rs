@@ -2078,8 +2078,8 @@ pub(crate) fn collect_bare_names_block(b: &juxc_ast::Block, sink: &mut dyn FnMut
     for s in &b.statements {
         match s {
             Stmt::Expr(e) => collect_bare_names_expr(e, sink),
-            Stmt::Return(Some(e)) => collect_bare_names_expr(e, sink),
-            Stmt::Return(None) => {}
+            Stmt::Return(Some(e), _) => collect_bare_names_expr(e, sink),
+            Stmt::Return(None, _) => {}
             Stmt::VarDecl(v) => {
                 if let Some(init) = &v.init {
                     collect_bare_names_expr(init, sink);

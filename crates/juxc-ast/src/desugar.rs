@@ -412,7 +412,7 @@ fn rewrite_block_implicit_this(
             Stmt::Expr(e) | Stmt::Throw(e, _) => {
                 rewrite_implicit_this(e, members, locals);
             }
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     rewrite_implicit_this(e, members, locals);
                 }
@@ -633,7 +633,7 @@ fn rewrite_stmt_property_writes(
         Stmt::Expr(e) | Stmt::Throw(e, _) => {
             rewrite_expr_property_access(e, auto_props);
         }
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 rewrite_expr_property_access(e, auto_props);
             }
@@ -793,7 +793,7 @@ fn path_ident(name: &str, span: Span) -> Expr {
 /// `{ return <expr>; }`.
 fn block_return(expr: Expr, span: Span) -> Block {
     Block {
-        statements: vec![Stmt::Return(Some(expr))],
+        statements: vec![Stmt::Return(Some(expr), span)],
         span,
     }
 }

@@ -795,10 +795,10 @@ impl RustEmitter {
         let elide_tail = matches!(
             (body.statements.last(), return_type),
             // Non-void function with explicit trailing `return expr;`.
-            (Some(Stmt::Return(Some(_))), _)
+            (Some(Stmt::Return(Some(_), _)), _)
             // Void function ending with a bare `return;` — equivalent
             // to "fall off the end," which Rust does for free.
-            | (Some(Stmt::Return(None)), ReturnType::Void)
+            | (Some(Stmt::Return(None, _)), ReturnType::Void)
         );
 
         let last_idx = body.statements.len().saturating_sub(1);
@@ -852,7 +852,7 @@ impl RustEmitter {
     /// `emit_indent()` produces the right leading whitespace.
     pub(crate) fn emit_tail_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Return(Some(expr)) => {
+            Stmt::Return(Some(expr), _) => {
                 // `return expr;` → bare `expr` on its own line.
                 //
                 // Nullable-return wrap: a `T?`-returning fn lifts a
@@ -920,7 +920,7 @@ impl RustEmitter {
                 }
                 self.w.push('\n');
             }
-            Stmt::Return(None) => {
+            Stmt::Return(None, _) => {
                 // Void tail `return;` — drop entirely. Nothing to emit.
             }
             _ => unreachable!("emit_tail_stmt called on non-Return stmt"),

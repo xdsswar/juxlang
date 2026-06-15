@@ -1954,7 +1954,7 @@ fn infer_stmt(stmt: &Stmt, env: &mut TypeEnv, symbols: &SymbolTable) {
             let _ = infer_expr(&a.target, env, symbols);
             let _ = infer_expr(&a.value, env, symbols);
         }
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 let _ = infer_expr(e, env, symbols);
             }

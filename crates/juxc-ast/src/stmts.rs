@@ -30,8 +30,10 @@ pub struct Block {
 pub enum Stmt {
     /// `expr ;` — an expression evaluated for its side effects.
     Expr(Expr),
-    /// `return [expr] ;`.
-    Return(Option<Expr>),
+    /// `return [expr] ;`. The [`Span`] covers the `return` keyword (and the
+    /// value when present) so diagnostics on the statement — notably a bare
+    /// `return;` in a non-`void` function — carry a source location for the IDE.
+    Return(Option<Expr>, Span),
     /// `var name = expr ;` — a local variable declaration with type
     /// inference. See [`VarDecl`].
     VarDecl(VarDecl),

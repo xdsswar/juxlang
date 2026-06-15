@@ -271,7 +271,7 @@ fn collect_anon_method_calls(
                         walk_expr(init, out, anon_locals);
                     }
                 }
-                Stmt::Return(Some(e)) => walk_expr(e, out, anon_locals),
+                Stmt::Return(Some(e), _) => walk_expr(e, out, anon_locals),
                 Stmt::If(if_stmt) => {
                     walk_expr(&if_stmt.condition, out, anon_locals);
                     walk_block(&if_stmt.then_block, out, anon_locals);
@@ -369,7 +369,7 @@ fn collect_mutated_names_real(
                     collect_mutating_calls(init, out, user_mut);
                 }
             }
-            Stmt::Return(Some(e)) => collect_mutating_calls(e, out, user_mut),
+            Stmt::Return(Some(e), _) => collect_mutating_calls(e, out, user_mut),
             Stmt::If(if_stmt) => {
                 collect_mutating_calls(&if_stmt.condition, out, user_mut);
                 collect_mutated_names(&if_stmt.then_block, out, user_mut);
@@ -646,8 +646,8 @@ pub(crate) fn block_contains_await(block: &Block) -> bool {
 fn stmt_contains_await(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Expr(e) | Stmt::Throw(e, _) => expr_contains_await(e),
-        Stmt::Return(Some(e)) => expr_contains_await(e),
-        Stmt::Return(None) => false,
+        Stmt::Return(Some(e), _) => expr_contains_await(e),
+        Stmt::Return(None, _) => false,
         Stmt::VarDecl(v) => v.init.as_ref().is_some_and(expr_contains_await),
         Stmt::Assign(a) => expr_contains_await(&a.value) || expr_contains_await(&a.target),
         Stmt::If(i) => if_contains_await(i),
@@ -1118,8 +1118,8 @@ pub(crate) fn body_calls_mut_method_on_this(
 
 fn stmt_calls_mut_method_on_this(stmt: &Stmt, mut_methods: &HashSet<String>) -> bool {
     match stmt {
-        Stmt::Expr(e) | Stmt::Return(Some(e)) => expr_calls_mut_method_on_this(e, mut_methods),
-        Stmt::Return(None) => false,
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) => expr_calls_mut_method_on_this(e, mut_methods),
+        Stmt::Return(None, _) => false,
         Stmt::VarDecl(v) => v
             .init
             .as_ref()
@@ -2096,7 +2096,7 @@ impl crate::RustEmitter {
                 return;
             }
             match stmt {
-                Stmt::Expr(e) | Stmt::Throw(e, _) | Stmt::Return(Some(e)) => {
+                Stmt::Expr(e) | Stmt::Throw(e, _) | Stmt::Return(Some(e), _) => {
                     self.scan_expr_for_self_aliasing_byref(e, found)
                 }
                 Stmt::Assign(a) => {

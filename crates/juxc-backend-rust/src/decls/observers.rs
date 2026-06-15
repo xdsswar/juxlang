@@ -115,8 +115,8 @@ fn note_dep(name: &str, settable: &[&str], out: &mut Vec<String>) {
 fn walk_stmt_deps(stmt: &Stmt, settable: &[&str], out: &mut Vec<String>) {
     match stmt {
         Stmt::Expr(e) | Stmt::Throw(e, _) => walk_expr_deps(e, settable, out),
-        Stmt::Return(Some(e)) => walk_expr_deps(e, settable, out),
-        Stmt::Return(None) | Stmt::Break(..) | Stmt::Continue(..) => {}
+        Stmt::Return(Some(e), _) => walk_expr_deps(e, settable, out),
+        Stmt::Return(None, _) | Stmt::Break(..) | Stmt::Continue(..) => {}
         Stmt::VarDecl(v) => {
             if let Some(init) = &v.init {
                 walk_expr_deps(init, settable, out);

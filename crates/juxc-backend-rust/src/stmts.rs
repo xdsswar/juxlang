@@ -55,7 +55,7 @@ fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
         Stmt::Labeled { stmt, .. } => stmt_moves_path(stmt, name),
         Stmt::Expr(e) => expr_moves_path_at_top(e, name),
         Stmt::VarDecl(v) => v.init.as_ref().map_or(false, |e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
-        Stmt::Return(opt) => opt.as_ref().map_or(false, |e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
+        Stmt::Return(opt, _) => opt.as_ref().map_or(false, |e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
         Stmt::Assign(a) => {
             is_path_named(&a.value, name)
                 || expr_moves_path_at_top(&a.value, name)
@@ -505,7 +505,7 @@ impl RustEmitter {
                 self.emit_expr(e);
                 self.w.push_str(";\n");
             }
-            Stmt::Return(value) => {
+            Stmt::Return(value, _) => {
                 // **Try-body return threading.** Inside a `try` block's
                 // `catch_unwind` closure a `return` can't exit the
                 // enclosing fn — it threads the value out as
@@ -3484,15 +3484,15 @@ impl RustEmitter {
 /// marker emission. Several `Stmt` variants store their span on the
 /// inner payload (`IfStmt.span`, `VarDecl.span`, …); two (`Break`,
 /// `Continue`) carry a bare `Span`; `SuperCall` puts the span second
-/// in the tuple. For `Stmt::Expr` and `Stmt::Return(Some)` we forward
-/// to [`expr_span_of`] on the inner expression. `Stmt::Return(None)`
+/// in the tuple. For `Stmt::Expr` and `Stmt::Return(Some, _)` we forward
+/// to [`expr_span_of`] on the inner expression. `Stmt::Return(None, _)`
 /// has no expression span — falls back to `Span::DUMMY` so the
 /// marker emission skips it cleanly.
 pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
     match stmt {
         Stmt::Expr(e) => expr_span_of(e),
-        Stmt::Return(Some(e)) => expr_span_of(e),
-        Stmt::Return(None) => Span::DUMMY,
+        Stmt::Return(Some(e), _) => expr_span_of(e),
+        Stmt::Return(None, _) => Span::DUMMY,
         Stmt::VarDecl(v) => v.span,
         Stmt::If(i) => i.span,
         Stmt::While(w) => w.span,
@@ -3548,7 +3548,7 @@ fn stmt_contains_return_where(
     pred: &dyn Fn(&Option<juxc_ast::Expr>) -> bool,
 ) -> bool {
     match s {
-        Stmt::Return(opt) => pred(opt),
+        Stmt::Return(opt, _) => pred(opt),
         Stmt::If(i) => {
             if block_contains_return_where(&i.then_block, pred) {
                 return true;

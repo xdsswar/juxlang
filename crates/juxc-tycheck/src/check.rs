@@ -2830,7 +2830,7 @@ impl<'a> Checker<'a> {
                 }
             }
 
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, ret_span) => {
                 // Clone the expected return type up front so we can
                 // mutably borrow `self` to walk the expression below
                 // without a borrow conflict on `current_return`.
@@ -2840,7 +2840,9 @@ impl<'a> Checker<'a> {
                     (Some(t), None) if t.is_void() => {}
                     // Bare `return;` outside any function — fine.
                     (None, None) => {}
-                    // Bare `return;` in a value-returning function.
+                    // Bare `return;` in a value-returning function. Carry the
+                    // statement span so the diagnostic reaches the IDE (a
+                    // file-less diagnostic is dropped by the LSP).
                     (Some(exp), None) => {
                         self.diagnostics.push(
                             Diagnostic::error(
@@ -2848,7 +2850,8 @@ impl<'a> Checker<'a> {
                                 format!(
                                     "expected return value of type {exp}, found bare `return`",
                                 ),
-                            ),
+                            )
+                            .with_span(*ret_span),
                         );
                     }
                     (_, Some(expr)) => {
@@ -7257,7 +7260,7 @@ fn collect_bare_name_reads(e: &Expr, sink: &mut dyn FnMut(&juxc_ast::QualifiedNa
 fn collect_bare_name_reads_stmt(s: &Stmt, sink: &mut dyn FnMut(&juxc_ast::QualifiedName)) {
     match s {
         Stmt::Expr(e) | Stmt::Throw(e, _) => collect_bare_name_reads(e, sink),
-        Stmt::Return(Some(e)) => collect_bare_name_reads(e, sink),
+        Stmt::Return(Some(e), _) => collect_bare_name_reads(e, sink),
         Stmt::VarDecl(v) => {
             if let Some(init) = &v.init {
                 collect_bare_name_reads(init, sink);
@@ -7386,11 +7389,10 @@ fn collect_returns_in_if(i: &juxc_ast::IfStmt, out: &mut Vec<Span>) {
 
 fn collect_returns_in_stmt(stmt: &Stmt, out: &mut Vec<Span>) {
     match stmt {
-        Stmt::Return(e) => {
-            // Best span available: the returned expression's, else the
-            // statement has no own span — fall back to DUMMY (the
-            // caller anchors on the finally block if needed).
-            out.push(e.as_ref().map(expr_span).unwrap_or(Span::DUMMY));
+        Stmt::Return(_, span) => {
+            // The statement carries its own span (covering the `return`
+            // keyword), so even a bare `return;` reports a real location.
+            out.push(*span);
         }
         Stmt::If(i) => collect_returns_in_if(i, out),
         Stmt::While(w) => collect_returns_in_block(&w.body, out),
@@ -7537,7 +7539,7 @@ fn block_has_await_shallow(b: &juxc_ast::Block) -> bool {
 fn stmt_has_await_shallow(s: &Stmt) -> bool {
     match s {
         Stmt::Expr(e) | Stmt::Throw(e, _) => expr_has_await_shallow(e),
-        Stmt::Return(Some(e)) => expr_has_await_shallow(e),
+        Stmt::Return(Some(e), _) => expr_has_await_shallow(e),
         Stmt::VarDecl(v) => v.init.as_ref().is_some_and(expr_has_await_shallow),
         Stmt::Assign(a) => {
             expr_has_await_shallow(&a.value) || expr_has_await_shallow(&a.target)
@@ -8569,6 +8571,16 @@ mod tests {
     fn null_init_on_nullable_field_is_ok() {
         let d = run("public class C<K> { private K? k = null; } public void main() {}");
         assert!(!has(&d, code::Code::E0410_TypeMismatch), "K?: {d:?}");
+    }
+
+    /// A bare `return;` in a non-`void` function is E0410 (now carrying a span so
+    /// the LSP surfaces it); a bare `return;` in a `void` function is fine.
+    #[test]
+    fn bare_return_in_non_void_is_e0410() {
+        let bad = run("public int f() { return ; }");
+        assert!(has(&bad, code::Code::E0410_TypeMismatch), "non-void: {bad:?}");
+        let ok = run("public void f() { return ; }");
+        assert!(!has(&ok, code::Code::E0410_TypeMismatch), "void: {ok:?}");
     }
 
     // ---- Async/await context (E0700, §18.1.2) ----

@@ -714,10 +714,12 @@ impl<'a> Parser<'a> {
 
     /// `return-stmt = 'return' expression? ';'`.
     pub(crate) fn parse_return_stmt(&mut self) -> Stmt {
+        let kw_span = self.peek_span(); // 'return' keyword
         self.advance(); // 'return'
         let value = if self.at(&TokenKind::Semicolon) { None } else { self.parse_expr() };
         self.expect(&TokenKind::Semicolon, "';' after return");
-        Stmt::Return(value)
+        let span = kw_span.join(self.last_consumed_span());
+        Stmt::Return(value, span)
     }
 
     /// `var name = expr ;` — the inferred-type local-decl form per §A.2.8.
