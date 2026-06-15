@@ -54,9 +54,6 @@ class JuxConsoleService(private val project: Project) : Disposable {
     fun run(tool: String, args: List<String>, workDir: File, notice: String? = null, onFinish: (() -> Unit)? = null) {
         val c = console
         activateToolWindow()
-        // Supersede any still-running build/run on the shared console so two quick
-        // actions don't interleave output and leak the first child process.
-        current?.takeIf { !it.isProcessTerminated }?.destroyProcess()
         c.clear()
         val found = JuxToolchain.find(tool)
         if (found == null) {
@@ -82,7 +79,10 @@ class JuxConsoleService(private val project: Project) : Disposable {
             if (project.isDisposed) return@executeOnPooledThread
             try {
                 val handler = OSProcessHandler(cmd)
-                current = handler
+                // Supersede the prior run atomically: each new handler destroys the
+                // one it replaces, so no child process is ever orphaned — even when
+                // two runs race and publish their handlers out of order.
+                current.getAndSet(handler)?.takeIf { !it.isProcessTerminated }?.destroyProcess()
                 ProcessTerminatedListener.attach(handler)
                 c.attachToProcess(handler)
                 if (onFinish != null) {
@@ -102,8 +102,7 @@ class JuxConsoleService(private val project: Project) : Disposable {
     }
 
     /** The most recently started process, so a new run can supersede it. */
-    @Volatile
-    private var current: OSProcessHandler? = null
+    private val current = java.util.concurrent.atomic.AtomicReference<OSProcessHandler?>()
 
     /** Bring the bottom build window forward (no-op if it isn't registered yet). */
     private fun activateToolWindow() {
