@@ -899,6 +899,15 @@ pub struct EnumSig {
     /// C-compatible integer enum (§L.1.3) that lowers to a `#[repr(…)]` Rust
     /// enum and is therefore allowed to cross the FFI boundary by value.
     pub is_layout_c: bool,
+    /// `true` when this enum is a foreign (`rust.<crate>` / `.jux.d`) stub
+    /// rather than a user-declared Jux enum. Mirrors [`ClassSig::is_external`].
+    pub is_external: bool,
+    /// For an `is_external` stub enum: the **real** fully-qualified Rust path
+    /// from the stub's `@rust("…")` annotation (`minifb::key::Key`), so a
+    /// field/param/return typed with this foreign enum lowers to its real path
+    /// instead of the non-existent `crate::rust::minifb::Key`. `None` for an
+    /// ordinary Jux enum. Mirrors [`ClassSig::rust_path`].
+    pub rust_path: Option<String>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -1316,6 +1325,13 @@ fn check_imports_resolve(
                     }
                 }
             };
+        // The importing file's own package (`xss.it`), for the same-package
+        // self-import check (E0302) below.
+        let unit_pkg = unit
+            .package
+            .as_ref()
+            .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+            .unwrap_or_default();
         for import in &unit.imports {
             match &import.spec {
                 ImportSpec::Path { name, wildcard, alias } => {
@@ -1323,6 +1339,33 @@ fn check_imports_resolve(
                         continue;
                     }
                     let fqn = name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+                    // E0302: importing a type from this file's OWN package. The
+                    // sibling is already visible by its bare name, and emitting a
+                    // `use` for it would collide with its definition in the same
+                    // module (rustc E0255). Only fires when there's a real package
+                    // segment before the type name and it equals the unit package.
+                    if name.segments.len() >= 2 {
+                        let import_pkg = name.segments[..name.segments.len() - 1]
+                            .iter()
+                            .map(|s| s.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join(".");
+                        if import_pkg == unit_pkg && !unit_pkg.is_empty() {
+                            let leaf = name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+                            diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0302_SamePackageImport,
+                                    format!(
+                                        "`{fqn}` is in this file's own package `{unit_pkg}` — \
+                                         same-package types are already visible without an import; \
+                                         remove this line and refer to `{leaf}` directly",
+                                    ),
+                                )
+                                .with_span(import.span),
+                            );
+                            continue;
+                        }
+                    }
                     report(fqn.clone(), import.span, diagnostics);
                     // Binding name = alias, else the imported leaf segment.
                     let bind = alias
@@ -1680,7 +1723,7 @@ fn insert_top_level(
             insert_record(table, record_decl, package, is_external, diagnostics);
         }
         TopLevelDecl::Enum(enum_decl) => {
-            insert_enum(table, enum_decl, package, diagnostics);
+            insert_enum(table, enum_decl, package, is_external, diagnostics);
         }
         TopLevelDecl::Interface(interface_decl) => {
             insert_interface(table, interface_decl, package, is_external, diagnostics);
@@ -3284,6 +3327,7 @@ fn insert_enum(
     table: &mut SymbolTable,
     enum_decl: &EnumDecl,
     package: &[String],
+    is_external: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let fqn = make_fqn(package, &enum_decl.name.text);
@@ -3354,6 +3398,8 @@ fn insert_enum(
                 .map(|m| (m.name.text.clone(), method_sig(m, false)))
                 .collect(),
             is_layout_c: is_layout_c_annotation(&enum_decl.annotations),
+            is_external,
+            rust_path: rust_path_annotation(&enum_decl.annotations),
             span: enum_decl.span,
         },
     );
