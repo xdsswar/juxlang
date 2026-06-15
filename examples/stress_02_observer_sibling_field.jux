@@ -5,17 +5,17 @@ package stress02;
 
 public class Model {
     public int Count { get; set; } = 0;
-    public ArrayList<int> log = new ArrayList<int>();
+    public Vec<int> log = new Vec<int>();
 }
 
 void main() {
     var m = new Model();
     m.Count.observers.attach((old, now) -> {
-        m.log.add(now);
+        m.log.push(now);
     });
     m.Count = 7;
     m.Count = 9;
-    print(m.log.size());
-    print(m.log.get(0));
-    print(m.log.get(1));
+    print((int) m.log.len());
+    print(m.log[0]);
+    print(m.log[1]);
 }
