@@ -47,9 +47,11 @@ class JuxConsoleService(private val project: Project) : Disposable {
      * is a bare name (`jux` / `juxc`) resolved through [JuxToolchain]; a missing
      * tool prints a configuration hint instead of failing silently. An optional
      * [notice] (e.g. a CLI-limitation caveat) is printed just under the command
-     * line. Never throws; the process is started on a pooled thread.
+     * line. [onFinish] (if given) runs on the EDT once the process terminates —
+     * used to refresh the project tree after `jux update`. Never throws; the
+     * process is started on a pooled thread.
      */
-    fun run(tool: String, args: List<String>, workDir: File, notice: String? = null) {
+    fun run(tool: String, args: List<String>, workDir: File, notice: String? = null, onFinish: (() -> Unit)? = null) {
         val c = console
         activateToolWindow()
         c.clear()
@@ -76,6 +78,13 @@ class JuxConsoleService(private val project: Project) : Disposable {
                 val handler = OSProcessHandler(cmd)
                 ProcessTerminatedListener.attach(handler)
                 c.attachToProcess(handler)
+                if (onFinish != null) {
+                    handler.addProcessListener(object : com.intellij.execution.process.ProcessListener {
+                        override fun processTerminated(event: com.intellij.execution.process.ProcessEvent) {
+                            ApplicationManager.getApplication().invokeLater(onFinish)
+                        }
+                    })
+                }
                 handler.startNotify()
             } catch (t: Throwable) {
                 c.print("Failed to start $tool: ${t.message}\n", ConsoleViewContentType.ERROR_OUTPUT)
