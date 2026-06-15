@@ -31,9 +31,13 @@ use juxc_source::Span;
 
 /// One field that may remain unassigned at the end of construction.
 pub(crate) struct DaViolation {
-    /// The unassigned field's name.
+    /// The unassigned field's internal name (the `__prop_…` slot for an
+    /// auto-property). Used for the analysis; not for the message.
     pub field: String,
-    /// Span of the field declaration (where E0600 is reported).
+    /// The user-visible name to print in the diagnostic — the property name
+    /// for an auto-property backing slot, otherwise the field name.
+    pub display: String,
+    /// Span of the field (property) declaration (where E0600 is reported).
     pub span: Span,
 }
 
@@ -44,6 +48,9 @@ pub(crate) fn analyze_class(class: &ClassDecl) -> Vec<DaViolation> {
     //    non-nullable, with no textual initializer.
     let mut required: HashSet<String> = HashSet::new();
     let mut spans: HashMap<String, Span> = HashMap::new();
+    // field-internal-name -> user-visible display name (the property name for
+    // an auto-property backing slot, else the field name).
+    let mut display: HashMap<String, String> = HashMap::new();
     for f in &class.fields {
         if f.is_static || f.is_weak || f.default.is_some() {
             continue;
@@ -54,6 +61,12 @@ pub(crate) fn analyze_class(class: &ClassDecl) -> Vec<DaViolation> {
         }
         required.insert(f.name.text.clone());
         spans.insert(f.name.text.clone(), f.span);
+        let disp = f
+            .origin_property
+            .as_ref()
+            .map(|p| p.text.clone())
+            .unwrap_or_else(|| f.name.text.clone());
+        display.insert(f.name.text.clone(), disp);
     }
     if required.is_empty() {
         return Vec::new();
@@ -102,7 +115,8 @@ pub(crate) fn analyze_class(class: &ClassDecl) -> Vec<DaViolation> {
         .into_iter()
         .map(|f| {
             let span = spans[&f];
-            DaViolation { field: f, span }
+            let disp = display.get(&f).cloned().unwrap_or_else(|| f.clone());
+            DaViolation { field: f, display: disp, span }
         })
         .collect();
     out.sort_by(|a, b| a.field.cmp(&b.field));

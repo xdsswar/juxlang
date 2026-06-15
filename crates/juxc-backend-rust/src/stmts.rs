@@ -2674,7 +2674,12 @@ impl RustEmitter {
                         self.property_on_receiver(&tf.object, &tf.field.text).cloned()
                     {
                         if prop.setter.is_some() {
-                            self.emit_property_setter_call(&tf.object, &tf.field.text, &a.value);
+                            self.emit_property_setter_call(
+                                &tf.object,
+                                &tf.field.text,
+                                &a.value,
+                                prop.ty.nullable,
+                            );
                             return;
                         }
                         // Read-only property write outside the ctor —
@@ -2715,13 +2720,13 @@ impl RustEmitter {
                                     self.w.push_str("Self::");
                                     self.w.push_str(&setter);
                                     self.w.push('(');
-                                    self.emit_property_setter_arg(&a.value);
+                                    self.emit_property_setter_arg(&a.value, prop.ty.nullable);
                                     self.w.push_str(");\n");
                                 } else {
                                     let this_expr =
                                         Expr::This(juxc_source::Span::DUMMY);
                                     self.emit_property_setter_call(
-                                        &this_expr, &name, &a.value,
+                                        &this_expr, &name, &a.value, prop.ty.nullable,
                                     );
                                 }
                                 return;
@@ -3180,6 +3185,7 @@ impl RustEmitter {
         receiver: &Expr,
         prop_name: &str,
         value: &Expr,
+        nullable: bool,
     ) {
         let setter = juxc_ast::desugar_static_setter_name(prop_name);
         // Static property: `Class.Prop = v` where `Class` is a path
@@ -3190,7 +3196,7 @@ impl RustEmitter {
                 self.w.push_str("::");
                 self.w.push_str(&setter);
                 self.w.push('(');
-                self.emit_property_setter_arg(value);
+                self.emit_property_setter_arg(value, nullable);
                 self.w.push_str(");\n");
                 return;
             }
@@ -3204,13 +3210,19 @@ impl RustEmitter {
         self.w.push('.');
         self.w.push_str(&setter);
         self.w.push('(');
-        self.emit_property_setter_arg(value);
+        self.emit_property_setter_arg(value, nullable);
         self.w.push_str(");\n");
     }
 
     /// Emit a single setter argument, applying the same value-position
-    /// coercions a normal call argument gets (wrapper-class share).
-    fn emit_property_setter_arg(&mut self, value: &Expr) {
+    /// coercions a normal call argument gets: the `Some(...)` lift when the
+    /// property type is nullable (`int? K { get; set; }`, so `K = 10` lowers
+    /// to `__set_K(Some(10))`), plus the wrapper-class share-clone otherwise.
+    fn emit_property_setter_arg(&mut self, value: &Expr, nullable: bool) {
+        if nullable {
+            self.emit_arg_with_nullable_wrap(value, true);
+            return;
+        }
         self.emit_expr(value);
         if self.wrapper_value_needs_clone(value) {
             self.w.push_str(".clone()");

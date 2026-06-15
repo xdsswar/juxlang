@@ -742,6 +742,12 @@ pub struct FieldDecl {
     /// zero/empty-initializes per the type's natural default. Required when
     /// [`ty`](Self::ty) is `None` (inference needs a value).
     pub default: Option<Expr>,
+    /// When this field was **synthesized** as the backing slot of an
+    /// auto-property (`T P { get; set; }` → `__prop_P`), this carries the
+    /// user-visible property name + span. `None` for ordinary fields.
+    /// Diagnostics print this instead of the internal `__prop_<name>` slot
+    /// name so errors read as `P`, not `__prop_P`.
+    pub origin_property: Option<Ident>,
     /// Span covering the whole field declaration including the `;`.
     pub span: Span,
 }
