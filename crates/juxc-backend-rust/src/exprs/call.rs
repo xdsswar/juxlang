@@ -3120,20 +3120,29 @@ impl RustEmitter {
             );
         let is_string =
             matches!(&recv_ty, juxc_tycheck::Ty::String);
+        // The Java-style facade lives under `jux.std.collections`; the
+        // `rust.std.*` collections share the bare names (`HashMap`/`HashSet`)
+        // but carry the real Rust API via their generated stub, so they must
+        // NOT take the facade lowering (which would mis-apply `put`/`get`+unwrap
+        // etc.). Gate the facade detection on the `jux.std` FQN so a `rust.std`
+        // collection falls through to the generic stub-method path.
         let is_map = matches!(
             &recv_ty,
             juxc_tycheck::Ty::User { name, .. }
                 if name.rsplit('.').next().unwrap_or(name) == "HashMap"
+                    && name.starts_with("jux.std")
         );
         let is_set = matches!(
             &recv_ty,
             juxc_tycheck::Ty::User { name, .. }
                 if name.rsplit('.').next().unwrap_or(name) == "HashSet"
+                    && name.starts_with("jux.std")
         );
         let is_deque = matches!(
             &recv_ty,
             juxc_tycheck::Ty::User { name, .. }
                 if name.rsplit('.').next().unwrap_or(name) == "Deque"
+                    && name.starts_with("jux.std")
         );
         // `Instant` elapsed readings (jux.std.time) — the receiver is
         // a Copy `std::time::Instant` value.
