@@ -445,6 +445,50 @@ impl RustEmitter {
             // recognize a raw-pointer target by name (`pointer_locals`) because
             // the lowered `Ty` erases `ptr_depth`. Address-of `&obj` / `&x` is
             // intrinsically a pointer too, and never null.
+            // Non-nullable generic param compared to `null`: a bare `T` value
+            // (NOT `T?`) is never `Option`-shaped, so `val.is_none()` would be
+            // E0599 (no such method on a type parameter). Such a comparison is
+            // statically constant — `== null` is always false, `!= null` always
+            // true. Emit the constant, but still evaluate the target for any
+            // side effects (`&(target)` borrows without moving a non-Copy `T`).
+            // Scoped to `Ty::Param`: a `T?` param is recorded as
+            // `Ty::Nullable(Param)` and correctly keeps the `.is_none()` path.
+            // Resolve the target's type as a bare generic `Ty::Param` via the
+            // span-keyed `expr_types`, falling back to the name-keyed
+            // `local_types` — a generic PARAM's use site is often `Unknown` in
+            // `expr_types` but carries its `Ty::Param` in `local_types` (same
+            // dual-lookup the wrapper-clone predicate uses).
+            let target_is_nonnull_generic = matches!(
+                self.expr_types.get(&crate::exprs::expr_span_of(target)),
+                Some(juxc_tycheck::Ty::Param(_))
+            ) || matches!(
+                target,
+                Expr::Path(qn) if qn.segments.len() == 1
+                    && matches!(
+                        self.local_types
+                            .iter()
+                            .rev()
+                            .find_map(|s| s.get(qn.segments[0].text.as_str())),
+                        Some(juxc_tycheck::Ty::Param(_))
+                    )
+            );
+            if target_is_nonnull_generic {
+                let lit = if is_eq { "false" } else { "true" };
+                if matches!(
+                    target,
+                    Expr::Path(_) | Expr::This(_) | Expr::Super(_)
+                ) {
+                    // Side-effect-free place — emit the bare constant.
+                    self.w.push_str(lit);
+                } else {
+                    self.w.push_str("{ let _ = &(");
+                    self.emit_expr(target);
+                    self.w.push_str("); ");
+                    self.w.push_str(lit);
+                    self.w.push_str(" }");
+                }
+                return;
+            }
             let target_is_ptr = self.expr_is_raw_pointer(target);
             let needs_parens = receiver_needs_parens(target);
             if target_is_ptr && !is_eq {
