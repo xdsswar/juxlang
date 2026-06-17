@@ -2338,16 +2338,17 @@ public void main() {
     // receiver is null. The result here is a reference type (String?).
     var upper = findName(42)?.toUpperCase();    // String?
 
-    // For a chain that would end in a primitive, test-and-use instead
-    // (primitives cannot be nullable — see below):
-    var name = findName(42);
-    var length = name != null ? name.length() : 0;   // int
+    // A chain ending in a primitive yields a nullable primitive (int?),
+    // or test-and-use for a plain non-null int (see below):
+    var maybeLen = findName(42)?.length();           // int?
+    var nm = findName(42);
+    var length = nm != null ? nm.length() : 0;       // int
 }
 ```
 
 Nullability is tracked in the type system. Non-nullable references cannot hold null. This eliminates NullPointerException as a runtime failure mode.
 
-**Primitives cannot be nullable.** Per `ERRATA.md` E5, `T?` is well-formed only for reference types — `String`, user classes, records, enums, arrays of references. `int?`, `bool?`, `char?`, `float?`, and the width-explicit numerics are rejected at type-check time (`E0410` with a "primitive type X cannot be nullable" message). A `?.` chain whose last segment produces a primitive has no expressible result type yet — restructure with a null test / smart-cast (as above). Lifting such chains into a boxed shape (`Integer?`-style) is deferred until boxed primitive types land.
+**Primitives can be nullable.** Per `ERRATA.md` E5, `T?` is well-formed for any type `T`, reference or primitive. A nullable primitive (`int?`, `bool?`, `char?`, `float?`, and the width-explicit numerics) lowers to a stack `Option` with no boxing: `None` is a discriminant, so a null primitive costs no heap allocation (no Java-style `Integer` boxing). The two spellings `T?` and `Option<T>` denote the same shape (§K.3.1). Nullability is uniform across the type system; there is no reference-only restriction. A `?.` chain whose last segment produces a primitive therefore has type `int?` (or the matching nullable primitive), and a null test / smart-cast remains available when a plain non-null result is wanted.
 
 ### 7.11. Error Handling
 

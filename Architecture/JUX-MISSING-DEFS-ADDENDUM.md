@@ -1344,6 +1344,65 @@ binding-mode varargs is the array-element case and falls under the same bar.
 
 ---
 
+## §M.15 — Nullable Type Parameters and Nested Nullability
+
+This section defines how `T?` interacts with primitives and with generic type
+parameters. It supersedes the stale "primitives cannot be nullable" text and gives
+nested nullability a normative home. See also `ERRATA.md` E5 and JUX-LANG-V1.md §7.10.
+
+### M.15.1. Nullable primitives are well-formed
+
+`T?` is well-formed for ANY type `T`, reference or primitive. `int?`, `bool?`,
+`char?`, `float?`, and the unsigned / width-explicit numerics are all valid. A
+nullable primitive lowers to a stack `Option<T>` with no boxing: `None` is a
+discriminant, so a null primitive costs no heap allocation. The two spellings `T?`
+and `Option<T>` denote the same shape (§K.3.1). There is no reference-only
+restriction; nullability is uniform across the type system.
+
+```java
+int? maybe = null;            // valid; lowered to Option<isize>
+var list = new ArrayList<int?>();   // collection of nullable primitives
+list.add(1); list.add(null);
+var first = list.get(0) ?: -1;      // Elvis default
+```
+
+### M.15.2. Nested nullability nests (it does not flatten)
+
+When a generic parameter `T` is instantiated with a nullable type, an inner `T?`
+produces TWO nullability layers, NOT one. Jux does NOT flatten `T?` to `T` the way
+Kotlin collapses `T??`. The reason is the lowering: a generic `T?` parameter is a
+single `Option<T>` slot, and instantiating `T = int?` makes that slot
+`Option<Option<isize>>`. Collapsing one layer is not expressible under monomorphized
+generics, so the language nests.
+
+```java
+public void f<T>(T? val) { ... }   // slot is Option<T>
+f<int?>(5);      // T = int?  =>  slot Option<Option<isize>>; arg lifts to Some(Some(5))
+f<int?>(null);   // outer layer absent  =>  None
+```
+
+A non-null argument that is one layer shallower than the instantiated slot is lifted
+into `T` automatically: `f<int?>(5)` passes `Some(Some(5))`. A `null` argument fills
+only the outer layer (`None`). The choice of nest over flatten is observationally
+transparent for the common test `val == null` (true exactly when the outer layer is
+absent), so user code rarely needs to reason about the inner layer.
+
+### M.15.3. Comparing a non-nullable type parameter to `null`
+
+For a BARE non-nullable type parameter `T` (not `T?`), `val == null` is statically
+`false` and `val != null` is statically `true`: a non-nullable value can never be
+null. The compiler folds the comparison to the constant (still evaluating `val` for
+any side effects) rather than emitting an `Option` test, since a bare `T` is not
+`Option`-shaped.
+
+```java
+public void g<T>(T val) {
+    print(val == null ? 1 : 0);   // always 0; g<int>(5) prints 0
+}
+```
+
+---
+
 ## Summary
 
 This addendum closes every dangling reference and acknowledged inconsistency identified in the gap analysis:
@@ -1363,6 +1422,7 @@ This addendum closes every dangling reference and acknowledged inconsistency ide
 | `@Reflectable`                                | §M.11   | Opt-in compile-time reflection metadata     |
 | `ref` bindings                                | §M.13   | Shared references to value types (`Rc<RefCell>`) |
 | Parameter modifiers (final/weak/defaults/combos) | §M.14 | `final` semantics, `weak` parameters, default ordering, combination matrix |
+| Nullable type parameters                      | §M.15   | Nullable primitives valid; nested `T?` nests (no flatten); bare-`T` `== null` is constant |
 | `spawn` keyword/function                      | §M.12.1 | Library function only                       |
 | Cross-module class extension                   | §M.12.2 | Java-style: extendable by default, `final`/`const` opts out |
 | Static thread safety per profile              | §M.12.3 | Per-profile rule                            |

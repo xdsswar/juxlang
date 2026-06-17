@@ -202,33 +202,29 @@ implying `int?` is a valid type. The general spec design treats
 primitives (`int`, `bool`, `float`, etc.) as **value types**
 that never hold null.
 
-**Resolution.** **Primitives cannot be marked nullable directly
-in source.** `int?`, `bool?`, `char?`, `float?`, and the
-unsigned / width-explicit numerics are rejected at type-check
-time (`E0410_TypeMismatch` with a "primitive type X cannot be
-nullable" message). Reference types — `String`, user classes,
-records, enums, arrays of references — are the well-formed
-inner shapes for `T?`.
+**Resolution (revised 2026-06-17).** **Primitives CAN be nullable.**
+The original resolution below rejected `int?` etc.; it was superseded
+by commit `516fb1c` (2026-06-10), which removed the rejecting pre-pass.
+`T?` is well-formed for any type `T`, reference OR primitive. A nullable
+primitive (`int?`, `bool?`, `char?`, `float?`, and the unsigned /
+width-explicit numerics) lowers to a stack `Option<T>`: `None` is a
+discriminant, so a null primitive costs no heap allocation (no
+`Integer`-style boxing). `T?` and `Option<T>` denote the same shape
+(§K.3.1). The `findName(42)?.length()` example is therefore normative
+and has type `int?`.
 
-For the `?.length()` example: the safe-call propagates `None`
-through the chain. To keep the spec consistent with the
-"no nullable primitives" rule, the result of
-`findName(42)?.length()` should be lifted into a reference
-shape (e.g. an explicit `int?` typedef bridged to `Optional<int>`
-or a boxed `Integer?`) once we have boxed primitive types.
-Until then the example in §7.10 is **non-normative** — it's a
-sketch of the operator's shape, not a sanctioned program.
+Nested nullability (a generic `T?` parameter where `T` is itself
+instantiated to a nullable type, e.g. `f<int?>(5)`) NESTS into two
+`Option` layers (`Option<Option<isize>>`); flattening is not possible
+under Rust monomorphization. See `JUX-MISSING-DEFS-ADDENDUM.md` §M.15.
 
-**Spec edits this implies:**
-- `JUX-LANG-V1.md` §7.10's `?.length()` example should be
-  flagged as non-normative or rewritten using a reference-typed
-  field.
-- A new entry in `JUX-LANG-V1.md` §5 / §7.10 should explicitly
-  state the "primitives can't be `T?`" rule.
+**Superseded original resolution.** Primitives were once rejected as
+nullable (`E0410_TypeMismatch`, "primitive type X cannot be nullable"),
+with `T?` restricted to reference inner shapes. No longer in force.
 
-**Spec status:** Aligned (applied 2026-06-10) — `JUX-LANG-V1.md` §7.10
-now uses a reference-typed safe-navigation example and states the
-"primitives cannot be nullable" rule explicitly.
+**Spec status:** Realigned 2026-06-17 to "primitives can be nullable".
+`JUX-LANG-V1.md` §7.10 states the rule; the nested-nullability rule
+lives in `JUX-MISSING-DEFS-ADDENDUM.md` §M.15.
 
 ---
 
