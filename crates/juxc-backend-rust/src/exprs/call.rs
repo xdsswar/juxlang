@@ -3312,17 +3312,34 @@ impl RustEmitter {
         // Route those through the borrow_mut() collection path instead;
         // everything else (a plain local Vec) falls through to the generic
         // call, where the direct `vec.push(v)` already works.
+        // The rust.std collections (Vec/VecDeque/HashMap/HashSet/BTreeMap/
+        // BTreeSet) all share this shape: no facade table, methods passthrough
+        // to Rust verbatim. When the receiver is such a collection FIELD of a
+        // shared-reference (wrapped) class AND the method mutates, route it
+        // through the borrow_mut() path so the write lands in the real cell —
+        // the generic clone-hoist would mutate a discarded copy (and need a
+        // `mut` binding → rustc E0596). A plain local collection doesn't read
+        // through a borrow, so it's untouched and falls to the generic call.
+        if let juxc_tycheck::Ty::User { name, .. } = &recv_ty {
+            let bare = name.rsplit('.').next().unwrap_or(name);
+            let is_rust_std_coll = name.starts_with("rust.std")
+                && matches!(
+                    bare,
+                    "Vec" | "VecDeque" | "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet",
+                );
+            if is_rust_std_coll
+                && self.collection_method_mutates(&recv_ty, method)
+                && self.callee_receiver_reads_through_borrow(&call.callee).is_some()
+            {
+                return self.emit_mut_collection_method(call, method, &recv_ty);
+            }
+        }
         let is_vec = matches!(
             &recv_ty,
             juxc_tycheck::Ty::User { name, .. }
                 if name.rsplit('.').next().unwrap_or(name) == "Vec"
         );
         if is_vec {
-            if self.collection_method_mutates(&recv_ty, method)
-                && self.callee_receiver_reads_through_borrow(&call.callee).is_some()
-            {
-                return self.emit_mut_collection_method(call, method, &recv_ty);
-            }
             // Non-mutating or non-wrapper Vec call → generic passthrough.
             return false;
         }
@@ -3659,11 +3676,38 @@ impl RustEmitter {
             ),
             juxc_tycheck::Ty::User { name, .. } => {
                 match name.rsplit('.').next().unwrap_or(name) {
-                    "HashMap" => matches!(method, "put" | "remove" | "clear"),
-                    "HashSet" => matches!(method, "add" | "remove" | "clear"),
+                    // `put`/`add`/`addFirst`/… are the legacy jux.std facade
+                    // names; `insert`/`push_back`/… are the rust.std verbatim
+                    // names. Both are accepted on the matching bare type — the
+                    // facade never sees a rust.std name and vice-versa.
+                    "HashMap" | "BTreeMap" => matches!(
+                        method,
+                        "put" | "insert" | "remove" | "clear" | "extend" | "retain" | "append"
+                    ),
+                    "HashSet" | "BTreeSet" => matches!(
+                        method,
+                        "add" | "insert" | "remove" | "clear" | "extend" | "retain"
+                    ),
                     "Deque" => matches!(
                         method,
                         "addFirst" | "addLast" | "removeFirst" | "removeLast" | "clear"
+                    ),
+                    "VecDeque" => matches!(
+                        method,
+                        "push_back"
+                            | "push_front"
+                            | "pop_back"
+                            | "pop_front"
+                            | "clear"
+                            | "insert"
+                            | "remove"
+                            | "truncate"
+                            | "retain"
+                            | "extend"
+                            | "append"
+                            | "rotate_left"
+                            | "rotate_right"
+                            | "resize"
                     ),
                     // Raw `rust.std.Vec<T>` — its mutating Rust methods are
                     // emitted as direct passthrough calls (no builtin table),
@@ -3725,15 +3769,24 @@ impl RustEmitter {
             let handled = match recv_ty {
                 juxc_tycheck::Ty::Array { .. } => this.emit_array_stdlib_method(c, method),
                 juxc_tycheck::Ty::User { name, .. } => {
-                    match name.rsplit('.').next().unwrap_or(name) {
-                        "HashMap" => this.emit_map_stdlib_method(c, method),
-                        "HashSet" => this.emit_set_stdlib_method(c, method),
-                        "Deque" => this.emit_deque_stdlib_method(c, method),
-                        // Raw Vec mutating method — passthrough call on the
-                        // `borrow_mut()` receiver (flags already set by the
-                        // surrounding dispatch closure).
-                        "Vec" => this.emit_vec_raw_mut_method(c, method),
-                        _ => false,
+                    // rust.std collections carry the real Rust method name
+                    // already (`insert`/`push_back`/…), so they emit as a raw
+                    // passthrough on the `borrow_mut()` receiver — same handler
+                    // as a raw Vec. Only the legacy jux.std facade needs the
+                    // per-kind name-translation tables (`put`→`insert`, …).
+                    if name.starts_with("rust.std") {
+                        this.emit_vec_raw_mut_method(c, method)
+                    } else {
+                        match name.rsplit('.').next().unwrap_or(name) {
+                            "HashMap" => this.emit_map_stdlib_method(c, method),
+                            "HashSet" => this.emit_set_stdlib_method(c, method),
+                            "Deque" => this.emit_deque_stdlib_method(c, method),
+                            // Raw Vec mutating method — passthrough call on the
+                            // `borrow_mut()` receiver (flags already set by the
+                            // surrounding dispatch closure).
+                            "Vec" => this.emit_vec_raw_mut_method(c, method),
+                            _ => false,
+                        }
                     }
                 }
                 _ => false,
