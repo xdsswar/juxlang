@@ -4717,6 +4717,18 @@ impl<'a> Checker<'a> {
                         return;
                     }
                 }
+                // `.length` on a rust.std collection is valid — the backend
+                // lowers `coll.length` to `coll.len() as isize` (same as the Jux
+                // array facade), and `infer_field` types it `int`. Don't flag it
+                // as a missing field.
+                if field_name == "length"
+                    && matches!(
+                        name.rsplit('.').next().unwrap_or(name.as_str()),
+                        "Vec" | "VecDeque" | "HashSet" | "HashMap" | "BTreeMap" | "BTreeSet",
+                    )
+                {
+                    return;
+                }
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0412_UnresolvedField,
