@@ -3325,6 +3325,21 @@ impl RustEmitter {
                         bare,
                         "Vec" | "HashMap" | "HashSet" | "VecDeque" | "BTreeMap" | "BTreeSet",
                     );
+                // `keys()` / `values()` on a `rust.std` map yield an iterator of
+                // `&K` / `&V` in Rust. Clone to an owned `Vec<K>` / `Vec<V>` (as
+                // the Jux facade does), so `for (k : m.keys()) m.get(k)` iterates
+                // owned keys and `get`'s `&k` is `&K`, not `&&K` (rustc E0277
+                // `K: Borrow<&K>`).
+                if is_rust_std_coll
+                    && matches!(method, "keys" | "values")
+                    && call.args.is_empty()
+                {
+                    self.emit_stdlib_receiver(&f.object);
+                    self.w.push('.');
+                    self.w.push_str(method);
+                    self.w.push_str("().cloned().collect::<Vec<_>>()");
+                    return true;
+                }
                 if is_rust_std_coll
                     && matches!(method, "get" | "first" | "last" | "front" | "back")
                 {
