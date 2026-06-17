@@ -23,6 +23,15 @@ pub const RUST_KEYWORDS: &[&str] = &[
     "return", "static", "struct", "super", "trait", "true", "try", "type",
     "typeof", "union", "unsafe", "unsized", "use", "virtual", "where",
     "while", "yield",
+    // `self` and `Self` are reserved too. They are NOT valid Jux keywords
+    // (Jux uses `this`), so the parser accepts them as ordinary identifiers —
+    // which means a user CAN write `public int self() {}`. Unlike every other
+    // keyword they cannot be `r#`-escaped at lowering (`r#self` is illegal
+    // Rust), so the ONLY safe handling is for the resolver to reject them here
+    // with E0305 ("rename it"). Without them in this list a `self`/`Self`
+    // method name leaked to emission as `pub fn self` → a raw rustc parse error
+    // (the very leak `to_rust_ident`'s doc-comment claims the resolver catches).
+    "self", "Self",
 ];
 
 /// True when `name` is a Rust reserved word (see [`RUST_KEYWORDS`]).
