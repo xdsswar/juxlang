@@ -959,6 +959,19 @@ impl RustEmitter {
                 if wrap_some && is_switch {
                     self.emitting_nullable_target = true;
                 }
+                // Numeric widening on a trailing (elided) return — same as the
+                // non-tail arm: `int` value into a `long`/`double` return slot
+                // needs an `as <T>` cast (tycheck accepts the widening; Rust does
+                // not implicitly widen). Widens only, never narrows.
+                let widen = if !wrap_some && !wrap_upcast {
+                    self.return_type_primitive()
+                        .and_then(|t| self.numeric_widen_to(expr, t))
+                } else {
+                    None
+                };
+                if widen.is_some() {
+                    self.w.push('(');
+                }
                 self.emit_expr(expr);
                 self.emitting_nullable_target = prev_nullable_target;
                 // **Wrapper-class share-on-return (§CR.4.1).** Same as the
@@ -973,6 +986,11 @@ impl RustEmitter {
                 }
                 if wrap_upcast {
                     self.w.push_str(".into()");
+                }
+                if let Some(cast) = widen {
+                    self.w.push_str(" as ");
+                    self.w.push_str(cast);
+                    self.w.push(')');
                 }
                 if wrap_some && !is_switch {
                     self.w.push(')');

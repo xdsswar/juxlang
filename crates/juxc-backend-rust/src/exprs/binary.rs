@@ -725,6 +725,97 @@ impl RustEmitter {
         })
     }
 
+    /// The primitive of the enclosing function's declared return type, when it
+    /// is a plain numeric primitive (no array / generics / nullable / pointer).
+    /// Used to widen a narrower numeric `return` value to the declared type.
+    pub(crate) fn return_type_primitive(&self) -> Option<juxc_tycheck::Primitive> {
+        use juxc_tycheck::Primitive as P;
+        let t = match self.current_return_type.as_ref()? {
+            juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => t,
+            _ => return None,
+        };
+        if t.array_shape.is_some()
+            || !t.generic_args.is_empty()
+            || t.nullable
+            || t.ptr_depth > 0
+            || t.name.segments.len() != 1
+        {
+            return None;
+        }
+        match t.name.segments[0].text.as_str() {
+            "byte" => Some(P::Byte),
+            "ubyte" => Some(P::Ubyte),
+            "short" => Some(P::Short),
+            "ushort" => Some(P::Ushort),
+            "int" => Some(P::Int),
+            "uint" => Some(P::Uint),
+            "long" => Some(P::Long),
+            "ulong" => Some(P::Ulong),
+            "float" => Some(P::Float),
+            "double" => Some(P::Double),
+            "i8" => Some(P::I8),
+            "u8" => Some(P::U8),
+            "i16" => Some(P::I16),
+            "u16" => Some(P::U16),
+            "i32" => Some(P::I32),
+            "u32" => Some(P::U32),
+            "i64" => Some(P::I64),
+            "u64" => Some(P::U64),
+            "f32" => Some(P::F32),
+            "f64" => Some(P::F64),
+            _ => None,
+        }
+    }
+
+    /// The Rust cast spelling (`as i64`, `as f64`, …) needed to WIDEN `value`
+    /// to `target`, or `None` when no widening applies (same type, narrowing,
+    /// non-numeric, `bool`/`char`, or an unknown source). Java-family implicit
+    /// widening: smaller int -> bigger int, any int -> float/double, float ->
+    /// double. NEVER narrows (rustc / Java both forbid silent narrowing). Used
+    /// for `return <int> ;` into a `long`/`double` slot, where tycheck already
+    /// accepts the widening but the backend otherwise emits the bare value and
+    /// leaks an isize into an i64 slot (rustc E0308).
+    pub(crate) fn numeric_widen_to(
+        &self,
+        value: &Expr,
+        target: juxc_tycheck::Primitive,
+    ) -> Option<&'static str> {
+        use juxc_tycheck::Primitive as P;
+        let src = self.operand_primitive(value)?;
+        if src == target
+            || matches!(src, P::Bool | P::Char)
+            || matches!(target, P::Bool | P::Char)
+        {
+            return None;
+        }
+        let is_float = |p: P| matches!(p, P::Float | P::Double | P::F32 | P::F64);
+        let is_f64 = |p: P| matches!(p, P::Double | P::F64);
+        let rank = |p: P| -> u8 {
+            match p {
+                P::Byte | P::I8 | P::Ubyte | P::U8 => 1,
+                P::Short | P::I16 | P::Ushort | P::U16 => 2,
+                P::I32 | P::U32 => 3,
+                P::Int | P::Uint => 4,
+                P::Long | P::I64 | P::Ulong | P::U64 => 5,
+                _ => 0,
+            }
+        };
+        let widens = if is_float(target) && !is_float(src) {
+            true // any integer -> any float is a widening
+        } else if is_float(target) && is_float(src) {
+            is_f64(target) && !is_f64(src) // float -> double
+        } else if !is_float(target) && !is_float(src) {
+            rank(target) > rank(src) // wider integer
+        } else {
+            false // float source -> integer target is narrowing
+        };
+        if widens {
+            Some(crate::exprs::rust_primitive_name(target))
+        } else {
+            None
+        }
+    }
+
     /// True when `e`'s recorded type is a user class (or record)
     /// declaring the given operator overload — the dispatch gate for
     /// `obj[i]`, `obj[i] = v`, `obj(args)`, and unary `-obj`
