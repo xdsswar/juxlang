@@ -579,6 +579,20 @@ impl RustEmitter {
                     if let Some(ret_ty) = ret_iface_ty {
                         self.emit_expr_coerced_to_iface(&ret_ty, e);
                     } else {
+                        // **Numeric widening on return.** `return <int>;` into a
+                        // `long`/`double` slot needs an `as <T>` cast: tycheck
+                        // accepts the widening but Rust does not implicitly widen,
+                        // so the bare value would leak (rustc E0308). Only widens
+                        // (never narrows); skipped under nullable/sealed wraps.
+                        let widen = if !do_some && !wrap_upcast {
+                            self.return_type_primitive()
+                                .and_then(|t| self.numeric_widen_to(e, t))
+                        } else {
+                            None
+                        };
+                        if widen.is_some() {
+                            self.w.push('(');
+                        }
                         self.emit_expr(e);
                         // **Wrapper-class share-on-return (§CR.4.1).** A
                         // `return <wrapped place>;` (a `Path`/`this` local or
@@ -594,6 +608,11 @@ impl RustEmitter {
                         }
                         if wrap_upcast {
                             self.w.push_str(".into()");
+                        }
+                        if let Some(cast) = widen {
+                            self.w.push_str(" as ");
+                            self.w.push_str(cast);
+                            self.w.push(')');
                         }
                     }
                     if do_some {
