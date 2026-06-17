@@ -1116,7 +1116,7 @@ impl RustEmitter {
         self.w.push_str(if is_break { "break" } else { "continue" });
         if let Some(l) = label {
             self.w.push_str(" '");
-            self.w.push_str(l);
+            self.w.push_str(&escaped_label(l));
         }
         self.w.push(';');
     }
@@ -1608,7 +1608,7 @@ impl RustEmitter {
             self.w.emit_indent();
             if let Some(l) = label {
                 self.w.push('\'');
-                self.w.push_str(&l);
+                self.w.push_str(&escaped_label(&l));
                 self.w.push_str(": ");
             }
             self.w.push_str("while let Some(");
@@ -2213,7 +2213,7 @@ impl RustEmitter {
         if let Some(l) = &label {
             self.w.emit_indent();
             self.w.push('\'');
-            self.w.push_str(l);
+            self.w.push_str(&escaped_label(l));
             self.w.push_str(": loop {\n");
         } else {
             self.w.line("loop {");
@@ -2256,7 +2256,7 @@ impl RustEmitter {
     pub(crate) fn emit_pending_loop_label(&mut self) {
         if let Some(l) = self.pending_loop_label.take() {
             self.w.push('\'');
-            self.w.push_str(&l);
+            self.w.push_str(&escaped_label(&l));
             self.w.push_str(": ");
         }
     }
@@ -2969,11 +2969,28 @@ impl RustEmitter {
                 self.w.push_str("{ let __jux_v = ");
                 let assign_nullable =
                     a.op.is_none() && self.assign_target_is_nullable(&a.target);
-                self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
-                // Wrapper-class share-on-store: a wrapped place stored
-                // into a field hands the field a SHARED handle (§CR.4.1).
-                if !assign_nullable && self.wrapper_value_needs_clone(&a.value) {
-                    self.w.push_str(".clone()");
+                // Base/interface upcast (S8): a derived RHS stored into a
+                // base- or interface-typed field must coerce exactly like the
+                // general store path below (`.into()` for a concrete base,
+                // `Rc<dyn …>` for an interface). Without this, a wrapper
+                // class's field write skips the upcast the legacy Inline path
+                // applied — e.g. a `RuntimeException` catch binder stored into
+                // an `Exception?` field (now that every class is RcRefCell,
+                // this store-through path is the only one such writes take).
+                let iface_tref = if a.op.is_none() {
+                    self.assign_iface_coercion_tref(&a.target, &a.value)
+                } else {
+                    None
+                };
+                if let Some(tref) = iface_tref {
+                    self.emit_expr_coerced_to_iface(&tref, &a.value);
+                } else {
+                    self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
+                    // Wrapper-class share-on-store: a wrapped place stored
+                    // into a field hands the field a SHARED handle (§CR.4.1).
+                    if !assign_nullable && self.wrapper_value_needs_clone(&a.value) {
+                        self.w.push_str(".clone()");
+                    }
                 }
                 self.w.push_str("; ");
                 // LHS place expression with a MUTABLE borrow.
@@ -3069,42 +3086,11 @@ impl RustEmitter {
         // the plain value + wrapper-clone path. The target's interface name
         // comes from its inferred type; we synthesize a bare `TypeRef` to
         // feed the shared coercion helper.
-        let mut iface_tref: Option<juxc_ast::TypeRef> = None;
-        if !is_compound {
-            if let Some(ty) = self
-                .expr_types
-                .get(&crate::exprs::expr_span_of(&a.target))
-                .cloned()
-            {
-                // Peel a `T?` wrapper — the LHS may be a nullable dyn slot
-                // (`shape = new Square()` where `shape: Shape?`). The synthesized
-                // `tref` carries the slot's nullability so the coercion helper
-                // wraps `Some(...)` exactly when the slot is `Option`-shaped.
-                let (inner, slot_nullable) = match ty {
-                    juxc_tycheck::Ty::Nullable(inner) => (*inner, true),
-                    other => (other, false),
-                };
-                if let juxc_tycheck::Ty::User { name, .. } = inner {
-                    let bare = name.rsplit('.').next().unwrap_or(&name).to_string();
-                    // Any user-typed LHS goes through the shared coercion
-                    // predicate: an interface / polymorphic-base slot
-                    // takes the `Rc<dyn …>` wrap, and a CONCRETE base-
-                    // class slot takes the `From<Sub> for Base` `.into()`
-                    // upcast (S8 — e.g. a `RuntimeException` catch binder
-                    // stored into an `Exception?` field). The helper
-                    // returns `None` for plain same-type assigns, which
-                    // fall through to the normal path below.
-                    let mut tref = crate::analysis::synth_iface_type_ref(&bare, a.span);
-                    tref.nullable = slot_nullable;
-                    if !matches!(
-                        self.iface_coercion_to(&tref, &a.value),
-                        crate::analysis::IfaceCoercion::None,
-                    ) {
-                        iface_tref = Some(tref);
-                    }
-                }
-            }
-        }
+        let iface_tref = if is_compound {
+            None
+        } else {
+            self.assign_iface_coercion_tref(&a.target, &a.value)
+        };
         if !is_compound
             && matches!(a.value, Expr::Literal(juxc_ast::Literal::Null))
             && self.assign_target_is_raw_pointer(&a.target)
@@ -3138,6 +3124,47 @@ impl RustEmitter {
             }
         }
         self.w.push_str(";\n");
+    }
+
+    /// The interface / base-class upcast target for an assignment store, or
+    /// `None` when the RHS needs no coercion (a plain same-type assign). The
+    /// LHS's inferred type drives it: an interface / polymorphic-base slot
+    /// takes the `Rc<dyn …>` wrap, and a CONCRETE base-class slot takes the
+    /// `From<Sub> for Base` `.into()` upcast (S8 — e.g. a `RuntimeException`
+    /// catch binder stored into an `Exception?` field). A `T?` LHS is peeled
+    /// so the synthesized `TypeRef` carries the slot's nullability (the
+    /// coercion helper then wraps `Some(...)` exactly when the slot is
+    /// `Option`-shaped). Callers MUST gate on non-compound assigns: `+=` has
+    /// no upcast meaning. Shared by the general store path and the
+    /// wrapper-field store-through path so both apply the same coercion.
+    fn assign_iface_coercion_tref(
+        &self,
+        target: &Expr,
+        value: &Expr,
+    ) -> Option<juxc_ast::TypeRef> {
+        let ty = self
+            .expr_types
+            .get(&crate::exprs::expr_span_of(target))
+            .cloned()?;
+        let (inner, slot_nullable) = match ty {
+            juxc_tycheck::Ty::Nullable(inner) => (*inner, true),
+            other => (other, false),
+        };
+        let juxc_tycheck::Ty::User { name, .. } = inner else {
+            return None;
+        };
+        let bare = name.rsplit('.').next().unwrap_or(&name).to_string();
+        let mut tref =
+            crate::analysis::synth_iface_type_ref(&bare, crate::exprs::expr_span_of(target));
+        tref.nullable = slot_nullable;
+        if matches!(
+            self.iface_coercion_to(&tref, value),
+            crate::analysis::IfaceCoercion::None,
+        ) {
+            None
+        } else {
+            Some(tref)
+        }
     }
 
     /// True when an assignment target resolves to a PROPERTY with a
@@ -3529,6 +3556,26 @@ impl RustEmitter {
 /// to [`expr_span_of`] on the inner expression. `Stmt::Return(None, _)`
 /// has no expression span — falls back to `Span::DUMMY` so the
 /// marker emission skips it cleanly.
+/// Make a Jux loop label safe to emit as a Rust label. A Jux label that
+/// happens to spell a Rust keyword (`loop`, `match`, `move`, `ref`, …) would
+/// emit an invalid Rust label (`'loop:`), so prefix exactly those. Non-keyword
+/// labels pass through unchanged, keeping the emitted Rust readable. The break /
+/// continue sites and the loop-header site MUST agree, so both route here.
+pub(crate) fn escaped_label(l: &str) -> String {
+    const RUST_KEYWORDS: &[&str] = &[
+        "as", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false",
+        "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
+        "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type",
+        "union", "unsafe", "use", "where", "while", "async", "await", "box", "do", "final",
+        "macro", "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
+    ];
+    if RUST_KEYWORDS.contains(&l) {
+        format!("__jux_lbl_{l}")
+    } else {
+        l.to_string()
+    }
+}
+
 pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
     match stmt {
         Stmt::Expr(e) => expr_span_of(e),

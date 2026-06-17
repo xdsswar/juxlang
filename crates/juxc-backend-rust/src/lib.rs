@@ -2306,35 +2306,23 @@ pub(crate) fn compute_class_reps(
 
     let mutated = compute_mutated_classes(units, expr_types);
 
-    // §CR.3.3 + §CR.4.1 decision table (first match wins):
-    //   forced                          → RcRefCell
-    //   aliased &&  mutated             → RcRefCell  (Java shared mutation)
-    //   aliased && !mutated             → Rc         (read-only sharing, no cell)
-    //  !aliased &&  escapes && !mutated → Box        (unique owner, heap, &self)
-    //  !aliased &&  escapes &&  mutated → RcRefCell  (Box would need &mut-self
-    //                                                 method receivers — deferred;
-    //                                                 keep wrapped, safe)
-    //  !aliased && !escapes             → Inline     (absent from the map)
+    // §CR.3.3 + §CR.4.1 decision table — SUPERSEDED by the uniform-RcRefCell
+    // rewrite. The legacy tiering chose Inline / Box / Rc / RcRefCell from
+    // aliasing × escape × mutation to emit hand-written-looking Rust, but every
+    // tier boundary was a place the Rust borrow checker could fire (a borrow
+    // outliving its statement, a direct field move, an avoided clone). We now
+    // give EVERY wrap-eligible class the interior-mutable `Rc<RefCell>` rep and
+    // enforce one invariant downstream: no RefCell borrow guard outlives its
+    // statement. Cloning a value out of a guard is then always sound — for a
+    // class the clone is an `Rc` refcount bump (same identity, mutation still
+    // hits the real object = Java shared-reference semantics); for a value type
+    // it is the correct value-copy. The borrow checker becomes structurally
+    // unable to fire. The tiering inputs are retained above for bisectability
+    // (and so the analysis fns stay live) but no longer select the rep.
+    let _ = (&aliased, &escapes, &forced, &mutated);
     let mut reps: HashMap<String, ClassRep> = HashMap::new();
     for n in &eligible {
-        let rep = if forced.contains(n) {
-            ClassRep::RcRefCell
-        } else if aliased.contains(n) {
-            if mutated.contains(n) {
-                ClassRep::RcRefCell
-            } else {
-                ClassRep::Rc
-            }
-        } else if escapes.contains(n) {
-            if mutated.contains(n) {
-                ClassRep::RcRefCell
-            } else {
-                ClassRep::Box
-            }
-        } else {
-            continue; // Inline — legacy plain struct, no rep entry.
-        };
-        reps.insert(n.clone(), rep);
+        reps.insert(n.clone(), ClassRep::RcRefCell);
     }
 
     // §CR.3.5 inheritance roll-up: a connected `extends` component takes the

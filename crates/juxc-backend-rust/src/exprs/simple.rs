@@ -130,6 +130,25 @@ impl RustEmitter {
                 return;
             }
         }
+        // `(char) intVal` — Rust only permits `u8 as char`, so a wider integer
+        // (`int` is `isize`) would hit E0604. Route it through `char::from_u32`,
+        // lossily mapping an out-of-range code unit to U+FFFD (a tolerant
+        // narrowing). A `char`-typed source needs no conversion and falls
+        // through to the identity-ish `as` path below.
+        if target_plain
+            && c.ty.name.segments.last().map(|s| s.text.as_str()) == Some("char")
+        {
+            let src_is_char = matches!(
+                self.expr_types.get(&crate::exprs::expr_span_of(&c.value)),
+                Some(juxc_tycheck::Ty::Primitive(juxc_tycheck::Primitive::Char))
+            );
+            if !src_is_char {
+                self.w.push_str("char::from_u32((");
+                self.emit_expr(&c.value);
+                self.w.push_str(") as u32).unwrap_or('\u{FFFD}')");
+                return;
+            }
+        }
         // Numeric / primitive cast — Rust `value as type`. The operand must be
         // parenthesized when it isn't a simple atom: a binary/range expression,
         // or a method call that hoists into a `{ … }` block (a bare block before
