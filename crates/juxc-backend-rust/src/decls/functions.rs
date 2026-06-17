@@ -836,6 +836,18 @@ impl RustEmitter {
         // anonymous-class method nested inside a lambda doesn't
         // inherit inference-typed channels (S9).
         let prev_lam = std::mem::take(&mut self.in_lambda_body);
+        // FnMut / mutable-capture closures: a local that is captured by a closure
+        // AND reassigned must lower to an `Rc<RefCell<T>>` shared cell. Compute
+        // the set for this body and register it in `ref_locals` (so reads/writes
+        // lower through the cell, reusing §M.13) and `forced_cell_locals` (so the
+        // var-decl wraps it). Save/restore for nested bodies; the trailing
+        // `ref_locals.remove` undoes the per-body additions.
+        let prev_forced = std::mem::take(&mut self.forced_cell_locals);
+        let cell_locals = crate::analysis::collect_captured_mutated_locals(body);
+        for n in &cell_locals {
+            self.ref_locals.insert(n.clone());
+        }
+        self.forced_cell_locals = cell_locals.clone();
         let mut elide_tail = matches!(
             (body.statements.last(), return_type),
             // Non-void function with explicit trailing `return expr;`.
@@ -901,6 +913,10 @@ impl RustEmitter {
             self.w
                 .line("unreachable!(\"function fell off the end of a try without returning\");");
         }
+        for n in &cell_locals {
+            self.ref_locals.remove(n);
+        }
+        self.forced_cell_locals = prev_forced;
         self.in_lambda_body = prev_lam;
     }
 

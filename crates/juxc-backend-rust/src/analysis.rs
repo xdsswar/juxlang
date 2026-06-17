@@ -345,6 +345,227 @@ fn collect_anon_bound_locals(block: &Block, out: &mut HashSet<String>) {
     }
 }
 
+/// Locals that must lower to an `Rc<RefCell<T>>` shared cell because they are
+/// **captured by a closure AND mutated** (the FnMut / mutable-capture case).
+/// The set is `declared ∩ captured ∩ mutated_strict`:
+/// - `declared` — locals var-decl'd in this body (NOT names declared inside a
+///   nested lambda — those are the lambda's own locals).
+/// - `captured` — names referenced free inside some lambda in this body.
+/// - `mutated_strict` — names that are the target of a WHOLE-NAME reassignment
+///   (a single-segment `Expr::Path`), scanned anywhere INCLUDING inside lambda
+///   bodies (the mutation usually lives in the closure). Deliberately excludes
+///   index/field/method mutations so a captured collection is never cell-ified
+///   (its `arr[i] = v` / `arr.push(..)` have no cell store-through path).
+///
+/// The triple intersection makes this safe: a mutated-but-not-captured local
+/// (a loop counter) or a captured-but-not-mutated local (a read-only capture)
+/// is excluded and keeps its current lowering.
+pub(crate) fn collect_captured_mutated_locals(block: &Block) -> HashSet<String> {
+    let captured = crate::exprs::collect_lambda_referenced_names(block);
+    if captured.is_empty() {
+        return HashSet::new();
+    }
+    let mut declared = HashSet::new();
+    collect_local_decl_names(block, &mut declared);
+    let mut mutated = HashSet::new();
+    collect_whole_name_reassigned(block, &mut mutated);
+    captured
+        .into_iter()
+        .filter(|n| declared.contains(n) && mutated.contains(n))
+        .collect()
+}
+
+/// Var-decl names declared directly in `block` (recursing statement nesting, but
+/// NOT into lambda bodies — a `var` inside a lambda is that lambda's local).
+fn collect_local_decl_names(block: &Block, out: &mut HashSet<String>) {
+    for stmt in &block.statements {
+        match stmt {
+            Stmt::VarDecl(v) => {
+                out.insert(v.name.text.clone());
+            }
+            Stmt::If(i) => {
+                collect_local_decl_names(&i.then_block, out);
+                let mut cursor = i.else_branch.as_deref();
+                while let Some(b) = cursor {
+                    match b {
+                        ElseBranch::If(inner) => {
+                            collect_local_decl_names(&inner.then_block, out);
+                            cursor = inner.else_branch.as_deref();
+                        }
+                        ElseBranch::Block(blk) => {
+                            collect_local_decl_names(blk, out);
+                            cursor = None;
+                        }
+                    }
+                }
+            }
+            Stmt::While(w) => collect_local_decl_names(&w.body, out),
+            Stmt::DoWhile(d) => collect_local_decl_names(&d.body, out),
+            Stmt::ForEach(f) => collect_local_decl_names(&f.body, out),
+            Stmt::ForC(f) => collect_local_decl_names(&f.body, out),
+            Stmt::Try(t) => {
+                collect_local_decl_names(&t.body, out);
+                for c in &t.catches {
+                    collect_local_decl_names(&c.body, out);
+                }
+                if let Some(fin) = &t.finally {
+                    collect_local_decl_names(fin, out);
+                }
+            }
+            Stmt::Unsafe(b) => collect_local_decl_names(b, out),
+            Stmt::Labeled { stmt, .. } => {
+                let synth = Block {
+                    statements: vec![(**stmt).clone()],
+                    span: Span::DUMMY,
+                };
+                collect_local_decl_names(&synth, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Names that are the target of a WHOLE-NAME reassignment (`name = …`, a
+/// single-segment `Expr::Path`) anywhere in `block`, INCLUDING inside lambda
+/// bodies. Used by [`collect_captured_mutated_locals`].
+fn collect_whole_name_reassigned(block: &Block, out: &mut HashSet<String>) {
+    fn ex(e: &Expr, out: &mut HashSet<String>) {
+        // Only need to descend into lambda bodies (where a captured local is
+        // mutated) and through expr children that can hold a lambda.
+        match e {
+            Expr::Lambda(l) => match &l.body {
+                juxc_ast::LambdaBody::Expr(inner) => ex(inner, out),
+                juxc_ast::LambdaBody::Block(b) => blk(b, out),
+            },
+            Expr::Call(c) => {
+                ex(&c.callee, out);
+                for a in &c.args {
+                    ex(a, out);
+                }
+            }
+            Expr::NewObject(n) => {
+                for a in &n.args {
+                    ex(a, out);
+                }
+            }
+            Expr::NewArrayLit(n) => {
+                for el in &n.elements {
+                    ex(el, out);
+                }
+            }
+            Expr::Binary(b) => {
+                ex(&b.left, out);
+                ex(&b.right, out);
+            }
+            Expr::Unary(u) => ex(&u.operand, out),
+            Expr::Cast(c) => ex(&c.value, out),
+            Expr::Index(i) => {
+                ex(&i.array, out);
+                ex(&i.index, out);
+            }
+            Expr::Field(f) => ex(&f.object, out),
+            Expr::Elvis(el) => {
+                ex(&el.value, out);
+                ex(&el.fallback, out);
+            }
+            Expr::Ternary(t) => {
+                ex(&t.condition, out);
+                ex(&t.then_branch, out);
+                ex(&t.else_branch, out);
+            }
+            Expr::Await(inner, _) => ex(inner, out),
+            Expr::InterpString(s) => {
+                for seg in &s.segments {
+                    if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                        ex(inner, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    fn blk(b: &Block, out: &mut HashSet<String>) {
+        for s in &b.statements {
+            match s {
+                Stmt::Assign(a) => {
+                    if let Expr::Path(qn) = &a.target {
+                        if qn.segments.len() == 1 {
+                            out.insert(qn.segments[0].text.clone());
+                        }
+                    }
+                    ex(&a.value, out);
+                }
+                Stmt::VarDecl(v) => {
+                    if let Some(init) = &v.init {
+                        ex(init, out);
+                    }
+                }
+                Stmt::Expr(e) | Stmt::Throw(e, _) | Stmt::Return(Some(e), _) => ex(e, out),
+                Stmt::SuperCall(args, _) => {
+                    for a in args {
+                        ex(a, out);
+                    }
+                }
+                Stmt::If(i) => {
+                    ex(&i.condition, out);
+                    blk(&i.then_block, out);
+                    let mut cursor = i.else_branch.as_deref();
+                    while let Some(br) = cursor {
+                        match br {
+                            ElseBranch::If(inner) => {
+                                ex(&inner.condition, out);
+                                blk(&inner.then_block, out);
+                                cursor = inner.else_branch.as_deref();
+                            }
+                            ElseBranch::Block(b2) => {
+                                blk(b2, out);
+                                cursor = None;
+                            }
+                        }
+                    }
+                }
+                Stmt::While(w) => {
+                    ex(&w.condition, out);
+                    blk(&w.body, out);
+                }
+                Stmt::DoWhile(d) => {
+                    blk(&d.body, out);
+                    ex(&d.condition, out);
+                }
+                Stmt::ForEach(f) => {
+                    ex(&f.iter, out);
+                    blk(&f.body, out);
+                }
+                Stmt::ForC(f) => {
+                    if let Some(cond) = &f.cond {
+                        ex(cond, out);
+                    }
+                    blk(&f.body, out);
+                }
+                Stmt::Try(t) => {
+                    blk(&t.body, out);
+                    for c in &t.catches {
+                        blk(&c.body, out);
+                    }
+                    if let Some(fin) = &t.finally {
+                        blk(fin, out);
+                    }
+                }
+                Stmt::Unsafe(b) => blk(b, out),
+                Stmt::Labeled { stmt, .. } => {
+                    let synth = Block {
+                        statements: vec![(**stmt).clone()],
+                        span: Span::DUMMY,
+                    };
+                    blk(&synth, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    blk(block, out);
+}
+
 /// Original reassignment/mutating-call walker, split out from
 /// [`collect_mutated_names`] so the public entry point can run the
 /// anonymous-class pre-passes first.

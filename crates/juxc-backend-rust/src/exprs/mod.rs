@@ -1453,6 +1453,21 @@ impl RustEmitter {
                 .map(|c| self.wrapper_classes.contains(&c))
                 .unwrap_or(false)
         });
+        // Also clone-capture any `ref_locals` name the lambda references — a
+        // §M.13 ref binding OR a FnMut mutable-capture cell (forced_cell_locals,
+        // which are added to ref_locals). The closure grabs a clone of the `Rc`
+        // (refcount bump) so it shares the one cell with the outer scope rather
+        // than moving the binding in by value. Dedup against `names` directly:
+        // `seen` was already filled with every bare name by the first pass above
+        // (before the wrapper-only `retain`), so it can no longer gate inserts.
+        collect_bare_names_in_lambda(l, &mut |name| {
+            if !params.contains(name)
+                && self.ref_locals.contains(name)
+                && !names.iter().any(|x| x.as_str() == name)
+            {
+                names.push(name.to_string());
+            }
+        });
         names
     }
 
@@ -1499,6 +1514,19 @@ impl RustEmitter {
             }
         }
         self.w.push_str("| ");
+        // A lambda PARAM shadows an outer `ref`/FnMut-cell local of the same
+        // name inside the body — temporarily drop those names from `ref_locals`
+        // so the body reads the param value directly, not `param.borrow()`
+        // (rustc E0599 "no method `borrow` for isize"). Restored after the body.
+        let shadowed_refs: Vec<String> = l
+            .params
+            .iter()
+            .filter(|p| self.ref_locals.contains(&p.name.text))
+            .map(|p| p.name.text.clone())
+            .collect();
+        for n in &shadowed_refs {
+            self.ref_locals.remove(n);
+        }
         // Take-and-clear the void-target marker (§TS.3): an expression
         // body under a `() -> void` slot discards its value.
         let void_target = std::mem::take(&mut self.lambda_void_target);
@@ -1531,6 +1559,9 @@ impl RustEmitter {
                 self.w.push('}');
                 self.in_lambda_body = prev_lam;
             }
+        }
+        for n in &shadowed_refs {
+            self.ref_locals.insert(n.clone());
         }
         self.w.push(')');
         if !self.collect_wrapper_captures(l).is_empty() {
@@ -2369,4 +2400,163 @@ pub(crate) fn collect_bare_names_block(b: &juxc_ast::Block, sink: &mut dyn FnMut
             }
         }
     }
+}
+
+/// Collect the bare names referenced INSIDE any lambda in `block` (a lambda's
+/// free variables, minus that lambda's own params). Unlike
+/// [`collect_bare_names_block`], names used OUTSIDE a lambda are not collected —
+/// this is the closure-CAPTURE set used to detect mutable-capture locals (FnMut).
+/// `collect_bare_names_in_lambda` already descends nested lambdas, so a single
+/// `f(l)` per top-level lambda harvests nested captures too.
+pub(crate) fn collect_lambda_referenced_names(
+    block: &juxc_ast::Block,
+) -> std::collections::HashSet<String> {
+    fn lam_expr(e: &Expr, f: &mut dyn FnMut(&juxc_ast::LambdaExpr)) {
+        match e {
+            Expr::Lambda(l) => f(l),
+            Expr::Call(c) => {
+                lam_expr(&c.callee, f);
+                for a in &c.args {
+                    lam_expr(a, f);
+                }
+            }
+            Expr::NewObject(n) => {
+                for a in &n.args {
+                    lam_expr(a, f);
+                }
+            }
+            Expr::NewArrayLit(n) => {
+                for el in &n.elements {
+                    lam_expr(el, f);
+                }
+            }
+            Expr::NewArray(n) => {
+                lam_expr(&n.size, f);
+                for inner in &n.inner_sizes {
+                    lam_expr(inner, f);
+                }
+            }
+            Expr::Binary(b) => {
+                lam_expr(&b.left, f);
+                lam_expr(&b.right, f);
+            }
+            Expr::Unary(u) => lam_expr(&u.operand, f),
+            Expr::Range(r) => {
+                lam_expr(&r.start, f);
+                lam_expr(&r.end, f);
+            }
+            Expr::Cast(c) => lam_expr(&c.value, f),
+            Expr::TypeTest(t) => lam_expr(&t.value, f),
+            Expr::Index(i) => {
+                lam_expr(&i.array, f);
+                lam_expr(&i.index, f);
+            }
+            Expr::Field(fd) => lam_expr(&fd.object, f),
+            Expr::InterpString(s) => {
+                for seg in &s.segments {
+                    if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                        lam_expr(inner, f);
+                    }
+                }
+            }
+            Expr::Elvis(el) => {
+                lam_expr(&el.value, f);
+                lam_expr(&el.fallback, f);
+            }
+            Expr::Ternary(t) => {
+                lam_expr(&t.condition, f);
+                lam_expr(&t.then_branch, f);
+                lam_expr(&t.else_branch, f);
+            }
+            Expr::Await(inner, _) => lam_expr(inner, f),
+            _ => {}
+        }
+    }
+    fn lam_block(b: &juxc_ast::Block, f: &mut dyn FnMut(&juxc_ast::LambdaExpr)) {
+        use juxc_ast::Stmt;
+        for s in &b.statements {
+            match s {
+                Stmt::Expr(e) | Stmt::Throw(e, _) | Stmt::Return(Some(e), _) => lam_expr(e, f),
+                Stmt::VarDecl(v) => {
+                    if let Some(init) = &v.init {
+                        lam_expr(init, f);
+                    }
+                }
+                Stmt::Assign(a) => {
+                    lam_expr(&a.target, f);
+                    lam_expr(&a.value, f);
+                }
+                Stmt::SuperCall(args, _) => {
+                    for a in args {
+                        lam_expr(a, f);
+                    }
+                }
+                Stmt::If(i) => {
+                    lam_expr(&i.condition, f);
+                    lam_block(&i.then_block, f);
+                    let mut cursor = i.else_branch.as_deref();
+                    while let Some(branch) = cursor {
+                        match branch {
+                            juxc_ast::ElseBranch::If(inner) => {
+                                lam_expr(&inner.condition, f);
+                                lam_block(&inner.then_block, f);
+                                cursor = inner.else_branch.as_deref();
+                            }
+                            juxc_ast::ElseBranch::Block(blk) => {
+                                lam_block(blk, f);
+                                cursor = None;
+                            }
+                        }
+                    }
+                }
+                Stmt::While(w) => {
+                    lam_expr(&w.condition, f);
+                    lam_block(&w.body, f);
+                }
+                Stmt::DoWhile(d) => {
+                    lam_block(&d.body, f);
+                    lam_expr(&d.condition, f);
+                }
+                Stmt::ForEach(fe) => {
+                    lam_expr(&fe.iter, f);
+                    lam_block(&fe.body, f);
+                }
+                Stmt::ForC(fc) => {
+                    if let Some(cond) = &fc.cond {
+                        lam_expr(cond, f);
+                    }
+                    lam_block(&fc.body, f);
+                }
+                Stmt::Try(t) => {
+                    lam_block(&t.body, f);
+                    for c in &t.catches {
+                        lam_block(&c.body, f);
+                    }
+                    if let Some(fin) = &t.finally {
+                        lam_block(fin, f);
+                    }
+                }
+                Stmt::Unsafe(b) => lam_block(b, f),
+                Stmt::Labeled { stmt, .. } => lam_block(
+                    &juxc_ast::Block {
+                        statements: vec![(**stmt).clone()],
+                        span: juxc_source::Span::DUMMY,
+                    },
+                    f,
+                ),
+                _ => {}
+            }
+        }
+    }
+    let mut out = std::collections::HashSet::new();
+    lam_block(block, &mut |l| {
+        let params: std::collections::HashSet<&str> =
+            l.params.iter().map(|p| p.name.text.as_str()).collect();
+        collect_bare_names_in_lambda(l, &mut |name| {
+            if !params.contains(name) {
+                out.insert(name.to_string());
+            }
+        });
+    });
+    out
 }

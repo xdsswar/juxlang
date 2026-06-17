@@ -1,0 +1,27 @@
+// FnMut / mutable-capture closures: a closure that MUTATES a captured local
+// shares an Rc<RefCell> cell with the outer scope (Java capture-by-reference),
+// so the mutation is observed both inside and outside. A read-only capture
+// stays a plain capture-by-value.
+package mutcap;
+
+public void main() {
+    int base = 100;
+    var add = (int x) -> x + base;     // read-only capture: no cell
+    print(add(5));                     // 105
+
+    var counter = 0;
+    var bump = () -> { counter = counter + 1; };
+    bump(); bump(); bump();
+    print(counter);                    // 3
+
+    var s = "a";
+    var append = () -> { s = s + "b"; };
+    append(); append();
+    print(s);                          // abb
+
+    var c = 0;
+    var inc = () -> { c = c + 1; };
+    var get = () -> c;
+    inc(); inc();
+    print(get());                      // 2
+}
