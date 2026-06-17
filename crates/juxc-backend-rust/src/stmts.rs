@@ -1835,25 +1835,35 @@ impl RustEmitter {
             self.w.emit_indent();
         }
 
+        // Borrow-iterate (`&<iter>`) is valid ONLY when the iterable is a
+        // borrowable collection PLACE (`&Vec`/`&[T]`/`&HashMap` are
+        // `IntoIterator`) or the snapshotted local. A non-place by-value
+        // temporary must be iterated BY VALUE: notably an iterator expression
+        // like `s.chars()` — `&Chars` is NOT `IntoIterator` (rustc E0277) — and
+        // by-value also works for a function that returns a collection.
+        let iter_is_place = snapshot
+            || matches!(&f.iter, Expr::Path(_) | Expr::Field(_) | Expr::Index(_));
         self.w.push_str("for ");
-        if element_is_copy {
+        if element_is_copy && iter_is_place {
             self.w.push('&');
         }
         self.w.push_str(&f.var_name.text);
         self.w.push_str(" in ");
-        if element_is_copy {
-            self.w.push('&');
-        } else if !body_moves_var {
-            // Borrow-iter: yields `&T`, so `x.method()` / `format!("{}", x)` /
-            // `x == y` all work through auto-deref / `Display` / `PartialEq`.
-            self.w.push('&');
+        if iter_is_place {
+            if element_is_copy {
+                self.w.push('&');
+            } else if !body_moves_var {
+                // Borrow-iter: yields `&T`, so `x.method()` / `format!("{}", x)`
+                // / `x == y` all work through auto-deref / `Display` / `PartialEq`.
+                self.w.push('&');
+            }
         }
         if snapshot {
             self.w.push_str("__jux_fe_iter");
         } else {
             self.emit_expr(&f.iter);
         }
-        if body_moves_var {
+        if iter_is_place && body_moves_var {
             self.w.push_str(".iter().cloned()");
         }
         self.w.push_str(" {\n");
