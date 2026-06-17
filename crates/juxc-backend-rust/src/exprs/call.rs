@@ -424,30 +424,46 @@ impl RustEmitter {
             self.w.push(')');
             return;
         }
-        // §P.3: `<prop>.observers.attach(o)` / `.detach(o)` — route to
-        // the per-property observer storage before any generic method
-        // dispatch (the chain would otherwise read like field accesses
-        // on the property's VALUE).
+        // §P.3: `<prop>.observers.add(o)` / `.remove(o)` (and the legacy
+        // `.attach`/`.detach` spellings) — route to the per-property observer
+        // storage before any generic method dispatch (the chain would otherwise
+        // read like field accesses on the property's VALUE). `add`/`remove` are
+        // the canonical surface names; they normalize to the existing
+        // attach/detach lowering.
         if let Expr::Field(opf) = &*call.callee {
-            let opname = opf.field.text.as_str();
-            if matches!(opname, "attach" | "detach") {
+            let raw_op = opf.field.text.as_str();
+            let opname = match raw_op {
+                "add" => Some("attach"),
+                "remove" => Some("detach"),
+                "attach" | "detach" => Some(raw_op),
+                _ => None,
+            };
+            if let Some(opname) = opname {
                 if let Expr::Field(obsf) = &*opf.object {
                     if obsf.field.text == "observers" {
                         if let Some((recv, prop, class)) =
                             self.resolve_observable_prop(&obsf.object)
                         {
-                            let opname = opname.to_string();
-                            return self.emit_observers_call(recv, &prop, &class, &opname, call);
+                            return self.emit_observers_call(
+                                recv,
+                                &prop,
+                                &class,
+                                &opname.to_string(),
+                                call,
+                            );
                         }
-                        // P7: `Config.Level.observers.attach(o)` — the
-                        // receiver names a CLASS, so the instance
-                        // resolution above misses; route to the
-                        // class-scoped static observer helpers.
+                        // P7: `Config.Level.observers.add(o)` — the receiver
+                        // names a CLASS, so the instance resolution above misses;
+                        // route to the class-scoped static observer helpers.
                         if let Some((class, prop)) =
                             self.resolve_static_observable_prop(&obsf.object)
                         {
-                            let opname = opname.to_string();
-                            return self.emit_static_observers_call(&class, &prop, &opname, call);
+                            return self.emit_static_observers_call(
+                                &class,
+                                &prop,
+                                &opname.to_string(),
+                                call,
+                            );
                         }
                     }
                 }
