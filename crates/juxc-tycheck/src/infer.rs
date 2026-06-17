@@ -520,19 +520,6 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             return Ty::Primitive(Primitive::Int);
         }
     }
-    // `.length` on a rust.std sequence / set / map collection → int. The Jux
-    // array facade exposes `.length`; rust.std collections get it too for
-    // uniformity (the backend lowers `coll.length` to `coll.len() as isize`).
-    if let Ty::User { name, .. } = &object_ty {
-        if field_name == "length"
-            && matches!(
-                name.rsplit('.').next().unwrap_or(name),
-                "Vec" | "VecDeque" | "HashSet" | "HashMap" | "BTreeMap" | "BTreeSet",
-            )
-        {
-            return Ty::Primitive(Primitive::Int);
-        }
-    }
 
     // Field on a user type.
     if let Ty::User { name, generic_args } = &object_ty {

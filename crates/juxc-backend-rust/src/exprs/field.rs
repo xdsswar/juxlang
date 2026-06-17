@@ -187,24 +187,6 @@ impl RustEmitter {
                     .unwrap_or(false)
             };
             if external {
-                // `.length` is Jux's universal collection-size field. A
-                // rust.std collection (Vec/VecDeque/HashSet/HashMap/…) exposes
-                // its size as `.len()`, so mirror the array facade and emit
-                // `<recv>.len() as isize` rather than the verbatim `.length`
-                // (which is not a real Rust field — rustc E0609). Only a plain
-                // read; a `.length()` call callee falls through to verbatim.
-                if f.field.text == "length" && !is_call_callee {
-                    let needs_parens = receiver_needs_parens(&f.object);
-                    if needs_parens {
-                        self.w.push('(');
-                    }
-                    self.emit_expr(&f.object);
-                    if needs_parens {
-                        self.w.push(')');
-                    }
-                    self.w.push_str(".len() as isize");
-                    return;
-                }
                 // When this Field is a method-call CALLEE, its object
                 // is the method's RECEIVER — a place, not a value:
                 //  - suppress the collection-field auto-`.clone()`
