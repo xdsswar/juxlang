@@ -2129,6 +2129,21 @@ impl RustEmitter {
             self.emit_arg_with_nullable_wrap(arg, nullable);
             self.w.push_str(".into()");
         } else {
+            // Numeric coercion into a typed parameter: `f(v.len())` (uint -> int)
+            // or `f(intExpr)` into a `long` param (widening). Cast the arg to the
+            // param's numeric type when it differs; never narrows. Skipped under
+            // the nullable wrap.
+            let num_widen = if nullable {
+                None
+            } else {
+                self.callee_param_type(&call.callee, i)
+                    .as_ref()
+                    .and_then(|t| self.type_ref_primitive(t))
+                    .and_then(|target| self.numeric_widen_to(arg, target))
+            };
+            if num_widen.is_some() {
+                self.w.push('(');
+            }
             self.emit_arg_with_nullable_wrap(arg, nullable);
             // **Wrapper-class share-on-pass (§CR.4.1).** A wrapped
             // place passed as an argument hands the callee a SHARED
@@ -2144,6 +2159,11 @@ impl RustEmitter {
                 // value-copy (§7.6). Both keep the caller's binding live and
                 // avoid moving a place that is also the call receiver.
                 self.w.push_str(".clone()");
+            }
+            if let Some(cast) = num_widen {
+                self.w.push_str(" as ");
+                self.w.push_str(cast);
+                self.w.push(')');
             }
         }
     }

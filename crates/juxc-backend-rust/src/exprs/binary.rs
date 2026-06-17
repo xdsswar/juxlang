@@ -729,11 +729,22 @@ impl RustEmitter {
     /// is a plain numeric primitive (no array / generics / nullable / pointer).
     /// Used to widen a narrower numeric `return` value to the declared type.
     pub(crate) fn return_type_primitive(&self) -> Option<juxc_tycheck::Primitive> {
-        use juxc_tycheck::Primitive as P;
         let t = match self.current_return_type.as_ref()? {
             juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) => t,
             _ => return None,
         };
+        self.type_ref_primitive(t)
+    }
+
+    /// The numeric primitive a plain (non-array / non-generic / non-nullable /
+    /// non-pointer, single-segment) `TypeRef` names, else `None`. The target
+    /// type for a numeric coercion at a declaration slot (local init, parameter,
+    /// field) — see [`Self::numeric_widen_to`].
+    pub(crate) fn type_ref_primitive(
+        &self,
+        t: &juxc_ast::TypeRef,
+    ) -> Option<juxc_tycheck::Primitive> {
+        use juxc_tycheck::Primitive as P;
         if t.array_shape.is_some()
             || !t.generic_args.is_empty()
             || t.nullable
@@ -805,7 +816,10 @@ impl RustEmitter {
         } else if is_float(target) && is_float(src) {
             is_f64(target) && !is_f64(src) // float -> double
         } else if !is_float(target) && !is_float(src) {
-            rank(target) > rank(src) // wider integer
+            // Wider integer (int -> long) OR same-width signedness reinterpret
+            // (uint -> int, e.g. a `len()` returned as `int`). Both need the
+            // `as <T>`; never narrows (rank(target) < rank(src) stays false).
+            rank(target) >= rank(src)
         } else {
             false // float source -> integer target is narrowing
         };

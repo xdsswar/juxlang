@@ -199,6 +199,15 @@ The exceptions (where promotion is automatic and well-defined):
 
 > **Edit to JUX-LANG-V1 §5.1:** Add a paragraph after the primitive types table: "Arithmetic between two distinct numeric types requires an explicit `as` cast. Untyped integer and float literals automatically adopt the surrounding type when the value fits. See §S.2.6."
 
+### S.2.7. Assignment-Context Numeric Coercion
+
+Mixed-type **arithmetic** stays strict (§S.2.6), but a numeric value flowing into a typed SLOT (a local initializer, an assignment target, a `return`, or a call argument) is coerced to the slot's numeric type automatically, in two safe cases:
+
+- **Widening.** A narrower numeric value adapts to a wider slot: `long x = anInt;`, `double d = aFloat;`, `return anInt;` from a `long`-returning function. This never loses information (it is the Java widening direction) and the compiler emits the matching cast.
+- **`uint` to a signed integer.** A `uint` value (notably a collection length or index, `list.len()`) flows into an `int` (or wider) slot without an explicit cast: `int n = list.len();`, `int size() { return data.len(); }`. This is the "size() is int" ergonomic, the most common cross-signedness case.
+
+Narrowing (e.g. `long` into `int`, `double` into `int`) is NOT automatic and still requires an explicit `as`. These coercions apply only at assignment-style slots, never to the operands of a binary operator: `intVal + longVal` remains a compile error per §S.2.6.
+
 ---
 
 ## §S.3 — String and Unicode Semantics

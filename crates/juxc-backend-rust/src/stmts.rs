@@ -2149,6 +2149,22 @@ impl RustEmitter {
                 // Carry the full LHS shape so a multi-dim `new T[a][b]`
                 // can pick fixed/dynamic INDEPENDENTLY per dimension.
                 self.target_array_shape = lhs_shape;
+                // Numeric coercion into a typed local: `int n = v.len();`
+                // (uint -> int) or `long x = intExpr;` (int -> long widening).
+                // Cast the init to the declared numeric type when it differs
+                // (widen or same-width signedness); never narrows. Skipped under
+                // the nullable `Some(...)` wrap.
+                let num_widen = if wrap_some {
+                    None
+                } else {
+                    var.ty
+                        .as_ref()
+                        .and_then(|t| self.type_ref_primitive(t))
+                        .and_then(|target| self.numeric_widen_to(init, target))
+                };
+                if num_widen.is_some() {
+                    self.w.push('(');
+                }
                 self.emit_expr(init);
                 self.dynamic_array_target = prev_dyn;
                 self.target_array_shape = prev_shape;
@@ -2168,6 +2184,11 @@ impl RustEmitter {
                 // index-read (`var r = xs[0]`) places the field path doesn't.
                 if !wrap_some && self.wrapper_value_needs_clone(init) {
                     self.w.push_str(".clone()");
+                }
+                if let Some(cast) = num_widen {
+                    self.w.push_str(" as ");
+                    self.w.push_str(cast);
+                    self.w.push(')');
                 }
             }
             if wrap_some {
@@ -3120,6 +3141,19 @@ impl RustEmitter {
         } else if let Some(tref) = iface_tref {
             self.emit_expr_coerced_to_iface(&tref, &a.value);
         } else {
+            // Numeric coercion into a typed target: `m = v.len();` (uint -> int)
+            // or `longVar = intExpr;` (int -> long widening). Cast the RHS to the
+            // target's numeric type when it differs; never narrows. Skipped for
+            // compound (`+=`) and nullable assigns.
+            let num_widen = if is_compound || assign_nullable {
+                None
+            } else {
+                self.operand_primitive(&a.target)
+                    .and_then(|target| self.numeric_widen_to(&a.value, target))
+            };
+            if num_widen.is_some() {
+                self.w.push('(');
+            }
             self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
             // Wrapper-class share-on-assign (§CR.4.1): when the RHS is a
             // wrapped place (`Path`/`this` local or `xs[i]` index read), the
@@ -3140,6 +3174,11 @@ impl RustEmitter {
                         self.w.push_str(".clone()");
                     }
                 }
+            }
+            if let Some(cast) = num_widen {
+                self.w.push_str(" as ");
+                self.w.push_str(cast);
+                self.w.push(')');
             }
         }
         self.w.push_str(";\n");
