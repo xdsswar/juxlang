@@ -1140,6 +1140,12 @@ impl<'a> Parser<'a> {
                     (b, false)
                 } else if self.at(&TokenKind::LBrace) {
                     let b = self.parse_block();
+                    // Optional trailing `;` after a block-body accessor, so both
+                    // `get { … }` and `get { … };` parse (the auto `get;` and
+                    // arrow `get -> e;` forms already consume their own `;`).
+                    // Without this, `get { … };` left a stray `;` that the
+                    // accessor loop rejected with "expected `get` or `set`".
+                    let _ = self.eat(&TokenKind::Semicolon);
                     (AccessorBody::Block(b), false)
                 } else {
                     let here = self.peek_span();
