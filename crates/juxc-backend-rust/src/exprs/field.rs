@@ -1025,20 +1025,22 @@ impl RustEmitter {
                 // A generic-INSTANTIATED TypeRef (`Vec<int>`, `HashMap<K,V>`,
                 // `ArrayList<int>`, a user `Box<T>`, …) converts to
                 // `Ty::Unknown` (see `ty_kind_from_ref_with_params`: any name
-                // carrying `generic_args` short-circuits to Unknown). Every such
-                // type is a collection or generic wrapper — Clone, never Copy —
-                // so a value-position read out of the statement-scoped
-                // `.0.borrow()` guard MUST clone, or it moves out of the `Ref`
-                // (rustc E0507). We don't gate on resolving the base name: an
-                // external `rust.std` type is keyed by its FQN and isn't in
-                // `classes` at all (a bare lookup misses it). The only exception
-                // is a wrapper-class base, whose field already shares via its own
-                // `Rc` machinery. Without this a `Vec<int>` auto-property getter
-                // emitted `self.0.borrow().__prop_X` with no `.clone()`.
+                // carrying `generic_args` short-circuits to Unknown). A bare
+                // NESTED-type name (`HttpServer.Config`) also lands here. Every
+                // such type — collection, generic wrapper, OR wrapper class — is
+                // Clone, never Copy, so a value-position read out of the
+                // statement-scoped `.0.borrow()` guard MUST clone, or it moves
+                // out of the `Ref` (rustc E0507). For a wrapper class the clone
+                // is a cheap `Rc` refcount bump (same identity, mutation still
+                // hits the real object); for a collection it is the value copy.
+                // (A wrapper-class base used to be EXEMPTED on the theory its own
+                // `Rc` machinery shared it, but a receiver read through a borrow
+                // guard — e.g. the receiver-hoist `let __jux_recv =
+                // self.0.borrow().config;` — has no other clone site, so the
+                // exemption moved the field out of the guard and failed to
+                // compile once every class became `Rc<RefCell>`.)
                 if matches!(ty, Ty::Unknown) && field.ty.array_shape.is_none() {
-                    if let Some(base) = field.ty.name.segments.last() {
-                        return !self.wrapper_classes.contains(&base.text);
-                    }
+                    return true;
                 }
                 return self.ty_needs_clone_on_field_read(&ty);
             }
@@ -1452,16 +1454,32 @@ impl RustEmitter {
                 // FQNs from a TypeRef). Try direct lookup, then
                 // fall back to a suffix scan on each kind of
                 // user-type slot in the symbol table.
+                // Match on the SIMPLE name (last component after both the
+                // package separator `.` AND the nested-type separator `__`) of
+                // BOTH the key and the queried name. A nested type's name
+                // arrives mangled — `HttpServer__Config`, possibly under a
+                // package (`nested.HttpServer__Config`) — which is neither a
+                // bare name nor a plain dotted FQN, so the old last-`.`-segment
+                // compare missed it and a wrapper-class field of a nested type
+                // read out of a `.0.borrow()` guard moved instead of cloning
+                // (rustc E0507). This predicate only asks "is this a (non-Copy)
+                // class/enum/interface/record"; a simple-name match is
+                // sufficient (a same-named type in another scope is still a
+                // reference type that needs the clone).
+                // Local `fn` (not a closure) so each call gets fresh borrow
+                // lifetimes — a `|&str| -> &str` closure would unify the
+                // input/output lifetimes and reject the cross-lifetime compares
+                // below.
+                fn simple(k: &str) -> &str {
+                    let after_pkg = k.rsplit('.').next().unwrap_or(k);
+                    after_pkg.rsplit("__").next().unwrap_or(after_pkg)
+                }
+                let want = simple(name.as_str());
                 let resolve_record = || -> Option<&juxc_tycheck::symbol_table::RecordSig> {
-                    self.symbols.records.get(name.as_str()).or_else(|| {
-                        self.symbols
-                            .records
-                            .iter()
-                            .find(|(k, _)| {
-                                k.rsplit('.').next().unwrap_or(k.as_str()) == name.as_str()
-                            })
-                            .map(|(_, v)| v)
-                    })
+                    self.symbols
+                        .records
+                        .get(name.as_str())
+                        .or_else(|| self.symbols.records.iter().find(|(k, _)| simple(k) == want).map(|(_, v)| v))
                 };
                 if let Some(record) = resolve_record() {
                     let all_copy = record
@@ -1470,18 +1488,14 @@ impl RustEmitter {
                         .all(|c| crate::analysis::field_supports_copy(&c.ty));
                     return !all_copy;
                 }
-                // Class / enum / unknown user type — always clone
-                // (classes derive Clone, never Copy; enums derive
-                // Clone via the auto-derive set).
-                let class_hit = self.symbols.classes.contains_key(name.as_str())
-                    || self.symbols.classes.keys().any(|k| {
-                        k.rsplit('.').next().unwrap_or(k.as_str()) == name.as_str()
-                    });
-                let enum_hit = self.symbols.enums.contains_key(name.as_str())
-                    || self.symbols.enums.keys().any(|k| {
-                        k.rsplit('.').next().unwrap_or(k.as_str()) == name.as_str()
-                    });
-                class_hit || enum_hit
+                // Class / enum / interface / nested user type — clone. Classes
+                // and enums derive Clone (never Copy); an interface slot is an
+                // `Rc<dyn …>` (Clone = handle share). Reading any of them in a
+                // value position out of the borrow guard must clone.
+                let class_hit = self.symbols.classes.keys().any(|k| simple(k) == want);
+                let enum_hit = self.symbols.enums.keys().any(|k| simple(k) == want);
+                let iface_hit = self.symbols.interfaces.keys().any(|k| simple(k) == want);
+                class_hit || enum_hit || iface_hit
             }
             _ => false,
         }

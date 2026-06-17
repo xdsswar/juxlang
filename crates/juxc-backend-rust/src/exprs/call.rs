@@ -2651,7 +2651,12 @@ impl RustEmitter {
         callee: &juxc_ast::FieldExpr,
         hoist_args: bool,
     ) {
-        self.w.push_str("{ let __jux_recv = ");
+        // Parenthesize the whole hoist block: as a bare `{ … }` it would be
+        // read as a statement when it lands in operand position (e.g. the LHS
+        // of `{ … } == 0`, where Rust parses a leading `{` as a block stmt and
+        // chokes on the `==`). `({ … })` is a valid expression everywhere,
+        // including standalone-statement position.
+        self.w.push_str("({ let __jux_recv = ");
         // Value position → the wrapper-field read appends `.clone()`, producing
         // an owned handle and dropping the `borrow()` temporary at the `;`.
         let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
@@ -2721,7 +2726,7 @@ impl RustEmitter {
         if callee.field.text == "pop" && call.args.is_empty() {
             self.w.push_str(".unwrap()");
         }
-        self.w.push_str(" }");
+        self.w.push_str(" })");
     }
 
     /// Lower `obj?.method(args)` to
@@ -3347,6 +3352,13 @@ impl RustEmitter {
         self.w.push('(');
         self.emit_call_args(call);
         self.w.push(')');
+        // Same `Vec::pop -> .unwrap()` Phase-1 bridge as the generic call tail
+        // (`emit_call`): Rust's `Vec::pop` yields `Option<T>` but a Jux `pop()`
+        // returns `T`. This path is EXCLUSIVELY raw-Vec mutating methods, so the
+        // receiver is always a real Vec — no user-`pop()` ambiguity to guard.
+        if method == "pop" && call.args.is_empty() {
+            self.w.push_str(".unwrap()");
+        }
         true
     }
 
@@ -4193,14 +4205,19 @@ impl RustEmitter {
                 self.w.push_str(".trim().to_string()");
                 true
             }
-            "startsWith" => {
+            // Accept BOTH the rust-verbatim snake_case names (`starts_with`,
+            // `ends_with` — the std String API surface) and the legacy
+            // camelCase Java-style aliases. Without the snake_case arms these
+            // fell through to a generic call that passed a `String` where the
+            // method wants `&str`/`Pattern` (rustc E0277).
+            "startsWith" | "starts_with" => {
                 self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".starts_with(");
                 self.emit_call_args(call);
                 self.w.push_str(".as_str())");
                 true
             }
-            "endsWith" => {
+            "endsWith" | "ends_with" => {
                 self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".ends_with(");
                 self.emit_call_args(call);
