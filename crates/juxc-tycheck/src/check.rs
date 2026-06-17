@@ -7775,6 +7775,22 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
         {
             true
         }
+        // `uint` -> any numeric. A collection length / index (`usize` ->
+        // `uint`) is routinely used as an `int` (`int size() { return
+        // list.len(); }`) or wider; permit it without an explicit cast (the
+        // backend emits the matching `as <T>`). Excludes bool/char. This is the
+        // opted-in uint->int ergonomic coercion; it is an assignment/return/arg
+        // rule, NOT the binary-op promotion that stays strict (no silent
+        // int+long promotion).
+        (Ty::Primitive(_), Ty::Primitive(Primitive::Uint))
+            if expected.is_numeric()
+                && !matches!(
+                    expected,
+                    Ty::Primitive(Primitive::Bool | Primitive::Char)
+                ) =>
+        {
+            true
+        }
         // Arrays — recurse on element. Per JUX-LANG-V1 §5.6, a
         // FIXED-size array (`found`) flows into a runtime-sized
         // (`Dynamic`) slot (`expected`) — the size info is simply
