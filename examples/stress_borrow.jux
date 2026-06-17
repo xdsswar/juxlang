@@ -20,8 +20,6 @@
 //      on null, and chains keep going (`a.peer!!.id = 99` writes
 //      through).
 
-import jux.std.collections.ArrayList;
-
 public class Acc {
     public int sum;
     public Acc() { this.sum = 0; }
@@ -68,12 +66,12 @@ public void main() {
 
     // 4. One object in two containers — all three handles share.
     var shared = new Counter();
-    var l1 = new ArrayList<Counter>();
-    var l2 = new ArrayList<Counter>();
-    l1.add(shared);
-    l2.add(shared);
-    l1.get(0).inc();
-    print(l2.get(0).n);
+    var l1 = new Vec<Counter>();
+    var l2 = new Vec<Counter>();
+    l1.push(shared);
+    l2.push(shared);
+    l1[0].inc();
+    print(l2[0].n);
     print(shared.n);
 
     // 5. Cycle + `!!` chains: two nodes pointing at each other.

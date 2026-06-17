@@ -5,7 +5,7 @@
  * gathers the partial results into a `HashMap<String, int>` for
  * a per-worker breakdown. Exercises:
  *
- *   - jux.std.collections.HashMap (intrinsic-templated)
+ *   - rust.std.HashMap (consumed verbatim: insert / get / len)
  *   - jux.std.time.Clock (`nowMs()` for wall-clock timing)
  *   - Worker.spawn + Task.await (true preemptive parallelism)
  *
@@ -38,11 +38,11 @@ public async HashMap<String, int> run_parallel(int iters) {
     final int c = await tc;
     final int d = await td;
 
-    final HashMap<String, int> results = new HashMap<String, int>();
-    results.put("A", a);
-    results.put("B", b);
-    results.put("C", c);
-    results.put("D", d);
+    HashMap<String, int> results = new HashMap<String, int>();
+    results.insert("A", a);
+    results.insert("B", b);
+    results.insert("C", c);
+    results.insert("D", d);
     return results;
 }
 
@@ -53,10 +53,10 @@ public void main() {
     final long elapsed = Clock.nowMs() - t0;
 
     print("");
-    print($"results.size = ${results.size()}");
-    print($"  A = ${results.get("A")}");
-    print($"  B = ${results.get("B")}");
-    print($"  C = ${results.get("C")}");
-    print($"  D = ${results.get("D")}");
+    print($"results.size = ${(int) results.len()}");
+    print($"  A = ${results.get("A") ?? -1}");
+    print($"  B = ${results.get("B") ?? -1}");
+    print($"  C = ${results.get("C") ?? -1}");
+    print($"  D = ${results.get("D") ?? -1}");
     print($"elapsed = ${elapsed} ms (4 workers × ${iters} iters)");
 }

@@ -1445,13 +1445,16 @@ pub(crate) fn fqn_package(fqn: &str) -> Option<&str> {
 /// The `rust.std` types auto-prelude'd into every compilation unit (reachable by
 /// bare name, no `import`), because Rust's std is Jux's std. FQNs are flat under
 /// `rust.std` (the generated stub uses a single `package rust.std;`). Mirrors
-/// Rust's prelude plus the everyday collections, EXCEPT `HashMap`/`HashSet`,
-/// which are withheld until the legacy `jux.std` collection facade is removed (a
-/// bare `HashMap` must keep resolving to the facade until then). Builtins handled
-/// elsewhere (`String`, the optional `T?`) are deliberately omitted.
+/// Rust's prelude plus the everyday collections. `HashMap`/`HashSet` are now
+/// included: the legacy `jux.std` collection facade that used to claim those bare
+/// names has been removed, so a bare `HashMap` resolves to `rust.std.HashMap`.
+/// Builtins handled elsewhere (`String`, the optional `T?`) are deliberately
+/// omitted.
 const RUST_STD_PRELUDE: &[&str] = &[
     "rust.std.Vec",
     "rust.std.VecDeque",
+    "rust.std.HashMap",
+    "rust.std.HashSet",
     "rust.std.BTreeMap",
     "rust.std.BTreeSet",
     "rust.std.Rc",

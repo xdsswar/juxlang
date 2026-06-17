@@ -5,23 +5,21 @@
 // `RefCell already borrowed`. The iterable must be snapshotted first.
 // Expected output: result size=3 / 10 / 20 / 30 / total=10.
 
-import jux.std.collections.ArrayList;
-
 public class Acc {
-    public ArrayList<int> items;
-    public ArrayList<int> result;
+    public Vec<int> items;
+    public Vec<int> result;
     public int total;
     public Acc() {
-        this.items = new ArrayList<int>();
-        this.result = new ArrayList<int>();
+        this.items = new Vec<int>();
+        this.result = new Vec<int>();
         this.total = 0;
     }
-    public void seed() { this.items.add(1); this.items.add(2); this.items.add(3); }
+    public void seed() { this.items.push(1); this.items.push(2); this.items.push(3); }
     public void bump(int v) { this.total = this.total + v; }
     public void run() {
         // mutate a DIFFERENT field while iterating items
-        for (var n : this.items) { this.result.add(n * 10); }
-        print("result size=" + this.result.size());
+        for (var n : this.items) { this.result.push(n * 10); }
+        print("result size=" + (int) this.result.len());
         for (var r : this.result) { print(r); }
         // re-entrant method call mutating the SAME object during iteration
         for (var n : this.items) { this.bump(n); }
