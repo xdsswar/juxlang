@@ -398,13 +398,11 @@ impl RustEmitter {
                 self.emit_anonymous_class(n);
             }
             Expr::NewObject(n) => {
-                // **Stdlib compiler primitives** — `new HashMap()`
-                // / `new HashSet()` / `new ArrayList()` lower
-                // directly to the Rust std container's `new()`
-                // with turbofish-spliced generic args. The Jux
-                // source files document the API; the compiler
-                // knows the mapping by bare name (same small
-                // fixed set as the type-position rule above).
+                // **rust.std collection construction** — explicit-generic
+                // `new HashMap<K,V>()` / `new HashSet<T>()` lower directly to the
+                // Rust std container's `new()` with turbofish-spliced generic
+                // args (the no-arg `new HashMap()` form goes through the generic
+                // rust.std `new` path).
                 if n.class_name.segments.len() == 1 {
                     let bare = n.class_name.segments[0].text.as_str();
                     if bare == "HashMap" && n.generic_args.len() == 2 {
@@ -419,24 +417,8 @@ impl RustEmitter {
                         self.w.push_str(">::new()");
                         return;
                     }
-                    if bare == "ArrayList" && n.generic_args.len() == 1 {
-                        self.w.push_str("Vec::<");
-                        if let Some(arg) = n.generic_args.first() {
-                            self.emit_element_type_as_rust(arg);
-                        }
-                        self.w.push_str(">::new()");
-                        return;
-                    }
                     if bare == "HashSet" && n.generic_args.len() == 1 {
                         self.w.push_str("std::collections::HashSet::<");
-                        if let Some(arg) = n.generic_args.first() {
-                            self.emit_element_type_as_rust(arg);
-                        }
-                        self.w.push_str(">::new()");
-                        return;
-                    }
-                    if bare == "Deque" && n.generic_args.len() == 1 {
-                        self.w.push_str("std::collections::VecDeque::<");
                         if let Some(arg) = n.generic_args.first() {
                             self.emit_element_type_as_rust(arg);
                         }
@@ -2102,20 +2084,6 @@ pub(crate) fn ty_kind_from_ref_with_params(
             element: Box::new(element),
             kind,
         };
-    }
-    // Phase-1 `ArrayList<T>` ≡ `T[]` shortcut, mirroring tycheck's
-    // `ty_from_ref` (ty.rs): the stdlib dispatch and clone decisions
-    // treat both spellings as the same `Vec<T>`.
-    if t.name.segments.len() == 1
-        && t.name.segments[0].text == "ArrayList"
-        && t.generic_args.len() == 1
-    {
-        if let juxc_ast::GenericArg::Type(inner) = &t.generic_args[0] {
-            return Ty::Array {
-                element: Box::new(ty_kind_from_ref_with_params(inner, generic_params)),
-                kind: ArrayKind::Dynamic,
-            };
-        }
     }
     if t.name.segments.len() != 1 || !t.generic_args.is_empty() {
         return Ty::Unknown;
