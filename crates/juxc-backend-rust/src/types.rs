@@ -347,7 +347,7 @@ impl RustEmitter {
                             self.w.push_str(", ");
                         }
                         if let juxc_ast::GenericArg::Type(t) = arg {
-                            self.emit_type_as_rust(t);
+                            self.emit_element_type_as_rust(t);
                         }
                     }
                     self.w.push('>');
@@ -356,7 +356,7 @@ impl RustEmitter {
                 "HashSet" if ty.generic_args.len() == 1 => {
                     self.w.push_str("std::collections::HashSet<");
                     if let Some(juxc_ast::GenericArg::Type(t)) = ty.generic_args.first() {
-                        self.emit_type_as_rust(t);
+                        self.emit_element_type_as_rust(t);
                     }
                     self.w.push('>');
                     return;
@@ -364,7 +364,7 @@ impl RustEmitter {
                 "ArrayList" if ty.generic_args.len() == 1 => {
                     self.w.push_str("Vec<");
                     if let Some(juxc_ast::GenericArg::Type(t)) = ty.generic_args.first() {
-                        self.emit_type_as_rust(t);
+                        self.emit_element_type_as_rust(t);
                     }
                     self.w.push('>');
                     return;
@@ -372,7 +372,7 @@ impl RustEmitter {
                 "Deque" if ty.generic_args.len() == 1 => {
                     self.w.push_str("std::collections::VecDeque<");
                     if let Some(juxc_ast::GenericArg::Type(t)) = ty.generic_args.first() {
-                        self.emit_type_as_rust(t);
+                        self.emit_element_type_as_rust(t);
                     }
                     self.w.push('>');
                     return;
@@ -598,6 +598,38 @@ impl RustEmitter {
     ///    falls back to `Box<dyn std::any::Any>`. This is a
     ///    placeholder strategy; the function-generic lift for
     ///    parameter positions is wired in a later phase.
+    /// Emit a generic-container ELEMENT type (the `T` in `Vec<T>` / `Box<T>` / a
+    /// `HashMap` value, an array element, …) in VALUE position. A generic
+    /// argument is a storage slot, so an interface / polymorphic-base element
+    /// must lower to its `Rc<dyn …>` handle — NOT the bare trait name, which is
+    /// not a Rust type (rustc E0782 "expected a type, found a trait"). Setting
+    /// `in_value_type_position` is exactly what makes the interface / poly-base
+    /// wrap in `emit_type_as_rust` fire; it is otherwise only set for the
+    /// OUTERMOST slot type, so an interface buried in a generic arg slipped
+    /// through as a bare trait.
+    pub(crate) fn emit_element_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
+        // Force value position ONLY for an INTERFACE element, so it lowers to
+        // `Rc<dyn Iface>`. A concrete class element (including a POLYMORPHIC BASE
+        // class) must keep its concrete newtype in the container — forcing value
+        // position there would also trip the poly-base `Rc<dyn …Kind>` wrap
+        // (`emit_type_as_rust`), wrongly turning `Vec<Animal>` into
+        // `Vec<Rc<dyn AnimalKind>>` and breaking `Bag<? super Dog>`-style stores.
+        let is_iface = ty
+            .name
+            .segments
+            .last()
+            .map(|s| self.lookup_interface_by_bare_or_fqn(&s.text).is_some())
+            .unwrap_or(false);
+        if is_iface {
+            let prev = self.in_value_type_position;
+            self.in_value_type_position = true;
+            self.emit_type_as_rust(ty);
+            self.in_value_type_position = prev;
+        } else {
+            self.emit_type_as_rust(ty);
+        }
+    }
+
     pub(crate) fn emit_generic_arg_type_as_rust(&mut self, arg: &juxc_ast::GenericArg) {
         match arg {
             juxc_ast::GenericArg::Type(ty) => {
@@ -605,7 +637,7 @@ impl RustEmitter {
                     self.w.push_str("String");
                     return;
                 }
-                self.emit_type_as_rust(ty);
+                self.emit_element_type_as_rust(ty);
             }
             juxc_ast::GenericArg::Wildcard(w) => {
                 self.emit_wildcard_arg_placeholder(w);
