@@ -780,6 +780,50 @@ impl RustEmitter {
     /// (`emit_fn_decl`, `emit_method`) must have called
     /// `self.w.indent_inc()` to position the writer at the body depth
     /// before invoking.
+    /// True when a trailing-return expression is a FIELD/INDEX read whose
+    /// receiver chain bottoms out at an OWNED wrapper-class binding (a local or
+    /// value parameter — NOT `this`). Such a tail lowers to
+    /// `binding.0.borrow().field`, leaving a `Ref` temporary that, as a
+    /// block-tail temporary, drops AFTER the block's locals and so outlives the
+    /// binding it borrows (rustc E0597). The caller suppresses trailing-return
+    /// elision for these so the explicit `return …;` drops the `Ref` at the `;`.
+    /// A method-call result (`x.m()`) returns an owned value, so a read off it
+    /// borrows only a short-lived temporary, never an owned block binding —
+    /// those keep the idiomatic elided tail.
+    fn tail_return_reads_owned_wrapper_field(&self, e: &juxc_ast::Expr) -> bool {
+        // Walk a field/index receiver chain to its root expression.
+        fn root(e: &juxc_ast::Expr) -> &juxc_ast::Expr {
+            match e {
+                juxc_ast::Expr::Field(f) => root(&f.object),
+                juxc_ast::Expr::Index(i) => root(&i.array),
+                _ => e,
+            }
+        }
+        // Only a field/index READ leaves a borrow temporary.
+        if !matches!(e, juxc_ast::Expr::Field(_) | juxc_ast::Expr::Index(_)) {
+            return false;
+        }
+        let r = root(e);
+        let juxc_ast::Expr::Path(qn) = r else {
+            return false;
+        };
+        if qn.segments.len() != 1 {
+            return false;
+        }
+        // `this`/`self` roots are `&self` references, not owned block bindings —
+        // their borrows are safe as elided tails. Only an owned local/param can
+        // hit the drop-order E0597. Resolve the root's type via the span-keyed
+        // `expr_types` map (local_types isn't populated yet — the elision
+        // decision runs BEFORE the body statements emit).
+        let Some(juxc_tycheck::Ty::User { name: tn, .. }) =
+            self.expr_types.get(&crate::exprs::expr_span_of(r))
+        else {
+            return false;
+        };
+        let bare = tn.rsplit('.').next().unwrap_or(tn);
+        self.wrapper_classes.contains(bare)
+    }
+
     pub(crate) fn emit_fn_body_at(&mut self, body: &Block, return_type: &ReturnType) {
         // (Migrated to Writer indent-aware API)
         // Callers have set the writer's indent level to the body depth
@@ -792,7 +836,7 @@ impl RustEmitter {
         // anonymous-class method nested inside a lambda doesn't
         // inherit inference-typed channels (S9).
         let prev_lam = std::mem::take(&mut self.in_lambda_body);
-        let elide_tail = matches!(
+        let mut elide_tail = matches!(
             (body.statements.last(), return_type),
             // Non-void function with explicit trailing `return expr;`.
             (Some(Stmt::Return(Some(_), _)), _)
@@ -800,6 +844,21 @@ impl RustEmitter {
             // to "fall off the end," which Rust does for free.
             | (Some(Stmt::Return(None, _)), ReturnType::Void)
         );
+        // E0597 guard: a bare tail expression that reads a field through a
+        // wrapper-class `.0.borrow()` rooted at an OWNED local/param leaves a
+        // `Ref` temporary alive to the END of the block — and block-tail
+        // temporaries drop AFTER the block's locals, so the `Ref` outlives the
+        // binding it borrows (`{ let x = …; x.0.borrow().id }`). Keeping the
+        // explicit `return …;` form drops the temporary at the `;`, before the
+        // locals. `this`-rooted reads are safe (self is a `&self` reference, not
+        // an owned block binding), so they keep the idiomatic elided tail.
+        if elide_tail {
+            if let Some(Stmt::Return(Some(e), _)) = body.statements.last() {
+                if self.tail_return_reads_owned_wrapper_field(e) {
+                    elide_tail = false;
+                }
+            }
+        }
 
         let last_idx = body.statements.len().saturating_sub(1);
         for (i, stmt) in body.statements.iter().enumerate() {
