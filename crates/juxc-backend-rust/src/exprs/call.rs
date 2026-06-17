@@ -2100,6 +2100,30 @@ impl RustEmitter {
             }
         }
         let nullable = self.callee_param_is_nullable(&call.callee, i);
+        // Nested nullability (§7.10): an explicit `f<int?>(5)` whose param is a
+        // bare generic `T`/`T?` makes the slot `Option<T>` with T = `int?`, i.e.
+        // `Option<Option<isize>>`. A non-null inner-typed arg is one layer too
+        // shallow — lift it into `T` with an extra `Some(…)`, INSIDE the param's
+        // own `?` wrap: `T?` → `Some(Some(5))`, bare `T` → `Some(5)`. A `null`
+        // arg / already-nullable arg is excluded by the predicate, so the outer
+        // `None` / pass-through paths are unaffected. Gated on explicit generic
+        // args, so the common call path never reaches here. (Flatten/Kotlin
+        // collapse is impossible under Rust monomorphization; nest is the only
+        // sound lowering and `== null` behaves identically either way.)
+        if self.callee_arg_needs_nested_nullable_wrap(call, i, arg) {
+            if nullable {
+                self.w.push_str("Some(");
+            }
+            self.w.push_str("Some(");
+            let prev = std::mem::take(&mut self.emitting_format_arg);
+            self.emit_expr(arg);
+            self.emitting_format_arg = prev;
+            self.w.push(')');
+            if nullable {
+                self.w.push(')');
+            }
+            return;
+        }
         let upcast = self.arg_needs_sealed_upcast(&call.callee, i, arg);
         if upcast {
             self.emit_arg_with_nullable_wrap(arg, nullable);

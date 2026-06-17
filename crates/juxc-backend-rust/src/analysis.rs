@@ -2897,6 +2897,94 @@ impl crate::RustEmitter {
         }
     }
 
+    /// Resolve the callee's (param types, generic-param names) for the two
+    /// statically-resolvable call shapes — a free function and a static method.
+    /// Returns owned clones; only ever called on the rare explicit-generic-arg
+    /// path (see [`Self::callee_arg_needs_nested_nullable_wrap`]), so the copy is
+    /// negligible. Instance-method receivers are intentionally not resolved here
+    /// (nested-nullable generics through an inferred receiver are rarer still and
+    /// add receiver-class resolution complexity — falls back to "no wrap").
+    fn callee_params_and_generics(
+        &self,
+        callee: &juxc_ast::Expr,
+    ) -> Option<(Vec<juxc_ast::TypeRef>, Vec<String>)> {
+        fn pack(
+            params: &[juxc_tycheck::symbol_table::ParamSig],
+            gparams: &[juxc_ast::TypeParam],
+        ) -> (Vec<juxc_ast::TypeRef>, Vec<String>) {
+            (
+                params.iter().map(|p| p.ty.clone()).collect(),
+                gparams.iter().map(|g| g.name.text.clone()).collect(),
+            )
+        }
+        // Free function: `f<…>(…)`.
+        if let juxc_ast::Expr::Path(qn) = callee {
+            if qn.segments.len() == 1 {
+                if let Some((_, f)) = self.symbols.lookup_function(&qn.segments[0].text) {
+                    return Some(pack(&f.params, &f.generic_params));
+                }
+            }
+        }
+        // Static method: `ClassName.method<…>(…)`.
+        if let juxc_ast::Expr::Field(f) = callee {
+            if let juxc_ast::Expr::Path(qn) = &*f.object {
+                if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
+                    if let Some(class) = self.symbols.classes.get(&class_fqn) {
+                        if let Some(m) = class.methods.get(f.field.text.as_str()) {
+                            return Some(pack(&m.params, &m.generic_params));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// True when arg `i` is a non-null value passed to a param whose declared
+    /// type is a BARE generic parameter `T` (or `T?`) that the call's EXPLICIT
+    /// generic arguments instantiate to a NULLABLE type. Such an arg is one
+    /// nullability layer too shallow for the monomorphized `Option<T>` slot and
+    /// must be lifted into `T` with an extra `Some(…)` (nested nullability,
+    /// §7.10) — `f<int?>(5)` where `f<T>(T? val)` lowers the arg to
+    /// `Some(Some(5))` (param `?` over the inner-`T` lift). Gated on explicit
+    /// generic args, so the ordinary call path (no `<…>`) is never touched.
+    pub(crate) fn callee_arg_needs_nested_nullable_wrap(
+        &self,
+        call: &juxc_ast::CallExpr,
+        i: usize,
+        arg: &juxc_ast::Expr,
+    ) -> bool {
+        if call.explicit_generic_args.is_empty() {
+            return false;
+        }
+        if matches!(arg, juxc_ast::Expr::Literal(juxc_ast::Literal::Null)) {
+            return false;
+        }
+        // An arg already at the nullable (`T`) level needs no extra lift.
+        if self.expression_is_already_nullable(arg) {
+            return false;
+        }
+        let Some((params, gparams)) = self.callee_params_and_generics(&call.callee) else {
+            return false;
+        };
+        let Some(pty) = params.get(i) else {
+            return false;
+        };
+        // The param's BASE type must be a bare generic-param name (no array, no
+        // generic args of its own, single path segment). Its own `?` is allowed.
+        if pty.array_shape.is_some()
+            || !pty.generic_args.is_empty()
+            || pty.name.segments.len() != 1
+        {
+            return false;
+        }
+        let base = pty.name.segments[0].text.as_str();
+        let Some(k) = gparams.iter().position(|g| g == base) else {
+            return false;
+        };
+        matches!(call.explicit_generic_args.get(k), Some(t) if t.nullable)
+    }
+
     /// Wrap `arg` in `Some(arg)` if the target slot wants a
     /// nullable value and the expression isn't already
     /// `Option<T>`-shaped. Emits the wrapping parentheses; the
