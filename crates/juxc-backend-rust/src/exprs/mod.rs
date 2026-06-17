@@ -414,7 +414,7 @@ impl RustEmitter {
                             if i > 0 {
                                 self.w.push_str(", ");
                             }
-                            self.emit_type_as_rust(arg);
+                            self.emit_element_type_as_rust(arg);
                         }
                         self.w.push_str(">::new()");
                         return;
@@ -422,7 +422,7 @@ impl RustEmitter {
                     if bare == "ArrayList" && n.generic_args.len() == 1 {
                         self.w.push_str("Vec::<");
                         if let Some(arg) = n.generic_args.first() {
-                            self.emit_type_as_rust(arg);
+                            self.emit_element_type_as_rust(arg);
                         }
                         self.w.push_str(">::new()");
                         return;
@@ -430,7 +430,7 @@ impl RustEmitter {
                     if bare == "HashSet" && n.generic_args.len() == 1 {
                         self.w.push_str("std::collections::HashSet::<");
                         if let Some(arg) = n.generic_args.first() {
-                            self.emit_type_as_rust(arg);
+                            self.emit_element_type_as_rust(arg);
                         }
                         self.w.push_str(">::new()");
                         return;
@@ -438,7 +438,7 @@ impl RustEmitter {
                     if bare == "Deque" && n.generic_args.len() == 1 {
                         self.w.push_str("std::collections::VecDeque::<");
                         if let Some(arg) = n.generic_args.first() {
-                            self.emit_type_as_rust(arg);
+                            self.emit_element_type_as_rust(arg);
                         }
                         self.w.push_str(">::new()");
                         return;
@@ -642,7 +642,10 @@ impl RustEmitter {
                         if i > 0 {
                             self.w.push_str(", ");
                         }
-                        self.emit_type_as_rust(arg);
+                        // Value position: an interface / poly-base generic arg
+                        // (`new Vec<Shape>()`) must lower to its `Rc<dyn …>`
+                        // handle, not the bare trait (rustc E0782).
+                        self.emit_element_type_as_rust(arg);
                     }
                     self.w.push('>');
                 }
