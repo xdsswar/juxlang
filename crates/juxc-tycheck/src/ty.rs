@@ -501,31 +501,6 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         }
     }
 
-    // Phase-1 stdlib concrete-collection shortcut. `ArrayList<T>`
-    // is structurally identical to `T[]` (Rust `Vec<T>`), so we
-    // lower it to `Ty::Array { kind: Dynamic }` here. This makes
-    // the existing `BUILTIN_ARRAY_METHODS` dispatch (push/get/
-    // contains/…) fire on `ArrayList<T>` receivers without
-    // duplicating the table. `List<T>` (the interface) keeps its
-    // `Ty::User` shape — users implement it with their own classes
-    // or with the stdlib `ArrayList<T>`.
-    //
-    // The shortcut is suppressed when the user has declared their
-    // own `class ArrayList<T>` (symbol-table evidence wins).
-    if t.name.segments.len() == 1
-        && t.name.segments[0].text == "ArrayList"
-        && t.generic_args.len() == 1
-        && !symbols.classes.contains_key("ArrayList")
-        && !symbols.records.contains_key("ArrayList")
-    {
-        if let juxc_ast::GenericArg::Type(inner) = &t.generic_args[0] {
-            return Ty::Array {
-                element: Box::new(ty_from_ref(inner, env, symbols)),
-                kind: ArrayKind::Dynamic,
-            };
-        }
-    }
-
     // 5. User-defined type — single-segment name. Three paths,
     //    tried in order:
     //

@@ -176,55 +176,6 @@ const BUILTIN_STRING_METHODS: &[&str] = &[
     "byteLength", "charLength", "repeat",
 ];
 
-/// Methods we let through on **a Map receiver** without checking
-/// against a class signature. Maps to Rust `HashMap` operations:
-///
-/// | Jux            | Rust equivalent              |
-/// |----------------|------------------------------|
-/// | `.put(k, v)`   | `.insert(k, v)`              |
-/// | `.get(k)`      | `.get(&k).cloned().unwrap()` |
-/// | `.contains(k)` | `.contains_key(&k)`          |
-/// | `.remove(k)`   | `.remove(&k)`                |
-/// | `.size()`      | `.len() as isize`            |
-/// | `.isEmpty()`   | `.is_empty()`                |
-/// | `.clear()`     | `.clear()`                   |
-/// | `.keys()`      | `.keys().cloned().collect()` |
-/// | `.values()`    | `.values().cloned().collect()` |
-/// Methods we let through on **a HashMap receiver** without
-/// checking against a class signature. Maps to Rust `HashMap`
-/// operations:
-///
-/// | Jux            | Rust equivalent              |
-/// |----------------|------------------------------|
-/// | `.put(k, v)`   | `.insert(k, v)`              |
-/// | `.get(k)`      | `.get(&k).cloned().unwrap()` |
-/// | `.contains(k)` | `.contains_key(&k)`          |
-/// | `.remove(k)`   | `.remove(&k)`                |
-/// | `.size()`      | `.len() as isize`            |
-/// | `.isEmpty()`   | `.is_empty()`                |
-/// | `.clear()`     | `.clear()`                   |
-/// | `.keys()`      | `.keys().cloned().collect()` |
-/// | `.values()`    | `.values().cloned().collect()` |
-const BUILTIN_MAP_METHODS: &[&str] = &[
-    "put", "get", "contains", "remove", "size", "isEmpty",
-    "clear", "keys", "values",
-];
-
-/// Methods we let through on **a HashSet receiver** without
-/// checking against a class signature. Maps to Rust `HashSet`
-/// operations.
-const BUILTIN_SET_METHODS: &[&str] = &[
-    "add", "contains", "remove", "size", "isEmpty", "clear",
-];
-
-/// Methods we let through on a **Deque receiver** without checking
-/// against a class signature. Maps to Rust `VecDeque` operations;
-/// the remove/peek forms are nullable (`T?`) — `null` when empty.
-const BUILTIN_DEQUE_METHODS: &[&str] = &[
-    "addFirst", "addLast", "removeFirst", "removeLast",
-    "peekFirst", "peekLast", "contains", "size", "isEmpty", "clear",
-];
-
 /// Field/property names we allow on **any array receiver** without a
 /// class lookup. Today just `length`; the typechecker treats it as `Int`.
 const BUILTIN_ARRAY_FIELDS: &[&str] = &["length"];
@@ -5828,24 +5779,6 @@ impl<'a> Checker<'a> {
                             "next" | "mapAsync" | "filterAsync" | "take" | "skip" | "chain",
                         )
                     {
-                        for arg in &c.args {
-                            self.check_expr(arg);
-                        }
-                        return;
-                    }
-                    if bare == "HashMap" && BUILTIN_MAP_METHODS.contains(&method_name) {
-                        for arg in &c.args {
-                            self.check_expr(arg);
-                        }
-                        return;
-                    }
-                    if bare == "HashSet" && BUILTIN_SET_METHODS.contains(&method_name) {
-                        for arg in &c.args {
-                            self.check_expr(arg);
-                        }
-                        return;
-                    }
-                    if bare == "Deque" && BUILTIN_DEQUE_METHODS.contains(&method_name) {
                         for arg in &c.args {
                             self.check_expr(arg);
                         }

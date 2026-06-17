@@ -1085,57 +1085,6 @@ fn infer_stdlib_method(
             }
             None
         }
-        // `Map<K, V>` — stdlib HashMap. Method return shapes
-        // mirror the spec's expected behavior.
-        Ty::User { name, generic_args } if name.rsplit('.').next().unwrap_or(name) == "HashMap" => {
-            let key_ty = generic_args.first().cloned().unwrap_or(Ty::Unknown);
-            let value_ty = generic_args.get(1).cloned().unwrap_or(Ty::Unknown);
-            match method_name {
-                "size" => Some(Ty::Primitive(Primitive::Int)),
-                "isEmpty" | "contains" => Some(Ty::Primitive(Primitive::Bool)),
-                "get" | "remove" => Some(value_ty),
-                "put" | "clear" => Some(Ty::Unknown),
-                "keys" => Some(Ty::Array {
-                    element: Box::new(key_ty),
-                    kind: crate::ty::ArrayKind::Dynamic,
-                }),
-                "values" => Some(Ty::Array {
-                    element: Box::new(value_ty),
-                    kind: crate::ty::ArrayKind::Dynamic,
-                }),
-                _ => None,
-            }
-        }
-        // `Deque<T>` — stdlib double-ended queue (VecDeque-backed).
-        // The remove/peek forms are nullable: `null` when empty.
-        Ty::User { name, generic_args }
-            if name.rsplit('.').next().unwrap_or(name) == "Deque" =>
-        {
-            let elem_ty = generic_args.first().cloned().unwrap_or(Ty::Unknown);
-            match method_name {
-                "size" => Some(Ty::Primitive(Primitive::Int)),
-                "isEmpty" | "contains" => Some(Ty::Primitive(Primitive::Bool)),
-                "removeFirst" | "removeLast" | "peekFirst" | "peekLast" => {
-                    Some(Ty::nullable(elem_ty))
-                }
-                "addFirst" | "addLast" | "clear" => Some(Ty::Unknown),
-                _ => None,
-            }
-        }
-        // `HashSet<T>` — stdlib hash-backed set. Same dispatch
-        // shape as HashMap; methods that mutate return Unknown
-        // because Phase-1 doesn't carry their meaningful return
-        // values through.
-        Ty::User { name, .. } if name.rsplit('.').next().unwrap_or(name) == "HashSet" => {
-            match method_name {
-                "size" => Some(Ty::Primitive(Primitive::Int)),
-                "isEmpty" | "contains" | "add" | "remove" => {
-                    Some(Ty::Primitive(Primitive::Bool))
-                }
-                "clear" => Some(Ty::Unknown),
-                _ => None,
-            }
-        }
         Ty::Array { element, kind } => match method_name {
             // List<T> → int
             "length" | "len" | "size" | "indexOf" => Some(Ty::Primitive(Primitive::Int)),
@@ -1276,23 +1225,6 @@ fn infer_new_object(n: &NewObjectExpr, env: &TypeEnv, symbols: &SymbolTable) -> 
     // verbatim as a dot-joined FQN. Falls back to the bare name
     // when neither resolves.
     let name = resolve_class_name(&n.class_name, env, symbols);
-    // Stdlib container short-circuit: `new ArrayList<T>()`
-    // returns `Ty::Array { kind: Dynamic }` so it unifies with
-    // `ArrayList<T>`-declared LHS slots (which `ty_from_ref`
-    // also lowers to `Ty::Array`) AND with `List<T>` slots
-    // through the upcast machinery. The interface `List<T>`
-    // declared in `jux.std.collections.List` stays as a regular
-    // `Ty::User`.
-    if n.class_name.segments.len() == 1
-        && n.class_name.segments[0].text == "ArrayList"
-        && n.generic_args.len() == 1
-    {
-        let element = ty_from_ref(&n.generic_args[0], env, symbols);
-        return Ty::Array {
-            element: Box::new(element),
-            kind: crate::ty::ArrayKind::Dynamic,
-        };
-    }
     // Explicit `<...>` on the `new` site wins: `new Box<int>(42)`
     // skips inference entirely.
     if !n.generic_args.is_empty() {

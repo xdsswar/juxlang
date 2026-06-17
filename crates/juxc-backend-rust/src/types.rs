@@ -361,22 +361,6 @@ impl RustEmitter {
                     self.w.push('>');
                     return;
                 }
-                "ArrayList" if ty.generic_args.len() == 1 => {
-                    self.w.push_str("Vec<");
-                    if let Some(juxc_ast::GenericArg::Type(t)) = ty.generic_args.first() {
-                        self.emit_element_type_as_rust(t);
-                    }
-                    self.w.push('>');
-                    return;
-                }
-                "Deque" if ty.generic_args.len() == 1 => {
-                    self.w.push_str("std::collections::VecDeque<");
-                    if let Some(juxc_ast::GenericArg::Type(t)) = ty.generic_args.first() {
-                        self.emit_element_type_as_rust(t);
-                    }
-                    self.w.push('>');
-                    return;
-                }
                 // Monotonic time-point (jux.std.time) — a plain Copy
                 // value, not a wrapper class.
                 "Instant" if ty.generic_args.is_empty() => {

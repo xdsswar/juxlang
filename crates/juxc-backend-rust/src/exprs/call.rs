@@ -3191,42 +3191,11 @@ impl RustEmitter {
         let Some(recv_ty) = recv_ty else {
             return false;
         };
-        // `ArrayList<T>` normalizes to `Ty::Array` in most paths
-        // (tycheck's ty_from_ref shortcut), but a few — e.g. property
-        // getter return types — can surface it under its user-type
-        // name; accept both spellings (S3).
-        let is_array = matches!(&recv_ty, juxc_tycheck::Ty::Array { .. })
-            || matches!(
-                &recv_ty,
-                juxc_tycheck::Ty::User { name, .. }
-                    if name.rsplit('.').next().unwrap_or(name) == "ArrayList"
-            );
+        // The Jux native array facade (`int[]`, `T[]`) — distinct from the
+        // rust.std collections, which carry their real Rust method surface.
+        let is_array = matches!(&recv_ty, juxc_tycheck::Ty::Array { .. });
         let is_string =
             matches!(&recv_ty, juxc_tycheck::Ty::String);
-        // The Java-style facade lives under `jux.std.collections`; the
-        // `rust.std.*` collections share the bare names (`HashMap`/`HashSet`)
-        // but carry the real Rust API via their generated stub, so they must
-        // NOT take the facade lowering (which would mis-apply `put`/`get`+unwrap
-        // etc.). Gate the facade detection on the `jux.std` FQN so a `rust.std`
-        // collection falls through to the generic stub-method path.
-        let is_map = matches!(
-            &recv_ty,
-            juxc_tycheck::Ty::User { name, .. }
-                if name.rsplit('.').next().unwrap_or(name) == "HashMap"
-                    && name.starts_with("jux.std")
-        );
-        let is_set = matches!(
-            &recv_ty,
-            juxc_tycheck::Ty::User { name, .. }
-                if name.rsplit('.').next().unwrap_or(name) == "HashSet"
-                    && name.starts_with("jux.std")
-        );
-        let is_deque = matches!(
-            &recv_ty,
-            juxc_tycheck::Ty::User { name, .. }
-                if name.rsplit('.').next().unwrap_or(name) == "Deque"
-                    && name.starts_with("jux.std")
-        );
         // `Instant` elapsed readings (jux.std.time) — the receiver is
         // a Copy `std::time::Instant` value.
         if matches!(
@@ -3341,7 +3310,7 @@ impl RustEmitter {
             // Non-mutating or non-wrapper Vec call → generic passthrough.
             return false;
         }
-        if !is_array && !is_string && !is_map && !is_set && !is_deque {
+        if !is_array && !is_string {
             // A `rust.std` collection's ref-returning Option getter (`get`,
             // `first`/`last`, `front`/`back`) yields `Option<&V>` in Rust, but
             // Jux's `T?` is owned `Option<V>` — bindgen drops the `&` from the
@@ -3410,15 +3379,6 @@ impl RustEmitter {
         if is_string {
             return self.emit_string_stdlib_method(call, method);
         }
-        if is_map {
-            return self.emit_map_stdlib_method(call, method);
-        }
-        if is_set {
-            return self.emit_set_stdlib_method(call, method);
-        }
-        if is_deque {
-            return self.emit_deque_stdlib_method(call, method);
-        }
         false
     }
 
@@ -3450,190 +3410,6 @@ impl RustEmitter {
             self.w.push_str(".unwrap()");
         }
         true
-    }
-
-    /// Emit the Rust equivalent of a Jux `Deque<T>` method call —
-    /// lowered onto `std::collections::VecDeque<T>`. The remove/peek
-    /// forms return `T?` in Jux, which is exactly the `Option<T>` the
-    /// Rust methods produce (peeks clone the element out).
-    fn emit_deque_stdlib_method(&mut self, call: &CallExpr, method: &str) -> bool {
-        let Expr::Field(f) = &*call.callee else {
-            return false;
-        };
-        let receiver = &*f.object;
-        match method {
-            "addFirst" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".push_front(");
-                self.emit_call_args(call);
-                self.w.push(')');
-                true
-            }
-            "addLast" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".push_back(");
-                self.emit_call_args(call);
-                self.w.push(')');
-                true
-            }
-            "removeFirst" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".pop_front()");
-                true
-            }
-            "removeLast" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".pop_back()");
-                true
-            }
-            "peekFirst" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".front().cloned()");
-                true
-            }
-            "peekLast" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".back().cloned()");
-                true
-            }
-            "contains" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".contains(&(");
-                self.emit_call_args(call);
-                self.w.push_str("))");
-                true
-            }
-            "size" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".len() as isize");
-                true
-            }
-            "isEmpty" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".is_empty()");
-                true
-            }
-            "clear" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".clear()");
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Emit the Rust equivalent of a Jux `HashMap<K, V>` method
-    /// call. Returns `true` when the method was handled.
-    fn emit_map_stdlib_method(&mut self, call: &CallExpr, method: &str) -> bool {
-        let Expr::Field(f) = &*call.callee else {
-            return false;
-        };
-        let receiver = &*f.object;
-        match method {
-            "put" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".insert(");
-                self.emit_call_args(call);
-                self.w.push(')');
-                true
-            }
-            "get" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".get(&(");
-                self.emit_call_args(call);
-                self.w.push_str(")).cloned().unwrap()");
-                true
-            }
-            "contains" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".contains_key(&(");
-                self.emit_call_args(call);
-                self.w.push_str("))");
-                true
-            }
-            "remove" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".remove(&(");
-                self.emit_call_args(call);
-                self.w.push_str(")).unwrap()");
-                true
-            }
-            "size" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".len() as isize");
-                true
-            }
-            "isEmpty" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".is_empty()");
-                true
-            }
-            "clear" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".clear()");
-                true
-            }
-            "keys" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w
-                    .push_str(".keys().cloned().collect::<Vec<_>>()");
-                true
-            }
-            "values" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w
-                    .push_str(".values().cloned().collect::<Vec<_>>()");
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Emit the Rust equivalent of a Jux `HashSet<T>` method call.
-    fn emit_set_stdlib_method(&mut self, call: &CallExpr, method: &str) -> bool {
-        let Expr::Field(f) = &*call.callee else {
-            return false;
-        };
-        let receiver = &*f.object;
-        match method {
-            "add" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".insert(");
-                self.emit_call_args(call);
-                self.w.push(')');
-                true
-            }
-            "contains" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".contains(&(");
-                self.emit_call_args(call);
-                self.w.push_str("))");
-                true
-            }
-            "remove" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".remove(&(");
-                self.emit_call_args(call);
-                self.w.push_str("))");
-                true
-            }
-            "size" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".len() as isize");
-                true
-            }
-            "isEmpty" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".is_empty()");
-                true
-            }
-            "clear" => {
-                self.emit_stdlib_receiver(receiver);
-                self.w.push_str(".clear()");
-                true
-            }
-            _ => false,
-        }
     }
 
     /// Emit a stdlib-collection method **receiver** that the method will
@@ -3673,22 +3449,18 @@ impl RustEmitter {
                 "add" | "set" | "remove" | "insert" | "clear" | "reverse" | "sort"
             ),
             juxc_tycheck::Ty::User { name, .. } => {
+                // The rust.std collections carry their verbatim Rust mutating
+                // method names — a wrapper-field receiver reads through
+                // `borrow_mut()` rather than the clone-hoist (which would mutate
+                // a discarded copy + need a `mut` binding → rustc E0596).
                 match name.rsplit('.').next().unwrap_or(name) {
-                    // `put`/`add`/`addFirst`/… are the legacy jux.std facade
-                    // names; `insert`/`push_back`/… are the rust.std verbatim
-                    // names. Both are accepted on the matching bare type — the
-                    // facade never sees a rust.std name and vice-versa.
                     "HashMap" | "BTreeMap" => matches!(
                         method,
-                        "put" | "insert" | "remove" | "clear" | "extend" | "retain" | "append"
+                        "insert" | "remove" | "clear" | "extend" | "retain" | "append"
                     ),
                     "HashSet" | "BTreeSet" => matches!(
                         method,
-                        "add" | "insert" | "remove" | "clear" | "extend" | "retain"
-                    ),
-                    "Deque" => matches!(
-                        method,
-                        "addFirst" | "addLast" | "removeFirst" | "removeLast" | "clear"
+                        "insert" | "remove" | "clear" | "extend" | "retain"
                     ),
                     "VecDeque" => matches!(
                         method,
@@ -3766,27 +3538,11 @@ impl RustEmitter {
             this.collection_args_prehoisted = true;
             let handled = match recv_ty {
                 juxc_tycheck::Ty::Array { .. } => this.emit_array_stdlib_method(c, method),
-                juxc_tycheck::Ty::User { name, .. } => {
-                    // rust.std collections carry the real Rust method name
-                    // already (`insert`/`push_back`/…), so they emit as a raw
-                    // passthrough on the `borrow_mut()` receiver — same handler
-                    // as a raw Vec. Only the legacy jux.std facade needs the
-                    // per-kind name-translation tables (`put`→`insert`, …).
-                    if name.starts_with("rust.std") {
-                        this.emit_vec_raw_mut_method(c, method)
-                    } else {
-                        match name.rsplit('.').next().unwrap_or(name) {
-                            "HashMap" => this.emit_map_stdlib_method(c, method),
-                            "HashSet" => this.emit_set_stdlib_method(c, method),
-                            "Deque" => this.emit_deque_stdlib_method(c, method),
-                            // Raw Vec mutating method — passthrough call on the
-                            // `borrow_mut()` receiver (flags already set by the
-                            // surrounding dispatch closure).
-                            "Vec" => this.emit_vec_raw_mut_method(c, method),
-                            _ => false,
-                        }
-                    }
-                }
+                // A rust.std collection carries the real Rust method name
+                // already (`insert`/`push_back`/`push`/…), so it emits as a raw
+                // passthrough on the `borrow_mut()` receiver (flags set by the
+                // surrounding dispatch closure).
+                juxc_tycheck::Ty::User { .. } => this.emit_vec_raw_mut_method(c, method),
                 _ => false,
             };
             this.emitting_out_place = prev_out;
