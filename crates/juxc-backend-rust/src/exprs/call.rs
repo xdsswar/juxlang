@@ -3582,6 +3582,10 @@ impl RustEmitter {
     /// exact `self.0.borrow_mut().items` shape. A non-wrapper receiver (a plain
     /// local `Vec`) is a `Path`, never reaches `emit_field`, so the flags are
     /// harmless there.
+    // Currently unreferenced (the mutating-collection paths emit the receiver
+    // inline via the out-place flags). Retained as the canonical helper for that
+    // shape; `#[allow(dead_code)]` rather than deleting in case a path wires it.
+    #[allow(dead_code)]
     fn emit_mut_collection_receiver(&mut self, receiver: &Expr) {
         let prev_out = self.emitting_out_place;
         let prev_lv = self.emitting_lvalue;

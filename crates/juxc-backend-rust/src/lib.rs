@@ -61,8 +61,6 @@ mod tests;
 // modules through the canonical short paths used by the impl blocks.
 pub(crate) use exprs::ArgRef;
 
-use analysis::collect_user_mut_methods;
-
 /// A fully-generated Rust crate ready to be compiled by `cargo`.
 ///
 /// Per `JUX-COMPILER-PIPELINE-ADDENDUM.md` §C.9.5, Phase 1 always emits a
@@ -2145,6 +2143,13 @@ pub(crate) fn compute_wrapped_set(
 /// struct — semantically identical to [`ClassRep::Inline`]; the map only lists
 /// wrap-*eligible* classes, so the emitters treat "absent" as Inline.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+// Under the uniform-`Rc<RefCell>` lowering, `compute_class_reps` only ever
+// constructs `RcRefCell`; `Inline`/`Box`/`Rc` are no longer produced. They (and
+// the aliasing/escape/mutation analysis that selects between them) are retained
+// deliberately: a future "optimizations as a verified pass" effort re-introduces
+// the tighter tiers on top of the borrow-safe baseline. `#[allow(dead_code)]`
+// keeps that infrastructure without warning rather than deleting and rebuilding it.
+#[allow(dead_code)]
 pub(crate) enum ClassRep {
     /// Plain owned struct — never escapes, never aliased. Zero indirection.
     Inline,
