@@ -2925,14 +2925,30 @@ impl crate::RustEmitter {
                 }
             }
         }
-        // Static method: `ClassName.method<…>(…)`.
         if let juxc_ast::Expr::Field(f) = callee {
+            // Static method: `ClassName.method<…>(…)`.
             if let juxc_ast::Expr::Path(qn) = &*f.object {
                 if let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) {
                     if let Some(class) = self.symbols.classes.get(&class_fqn) {
                         if let Some(m) = class.methods.get(f.field.text.as_str()) {
                             return Some(pack(&m.params, &m.generic_params));
                         }
+                    }
+                }
+            }
+            // Instance method: `recv.method<…>(…)` where `recv` is a value
+            // (local/param/field). Resolve the receiver's class from its
+            // inferred type, then walk to the method (mirrors the instance-method
+            // resolution in `callee_param_is_nullable`).
+            if let Some(bare) = self.receiver_class_bare(&f.object) {
+                let sig = self.symbols.classes.get(&bare).or_else(|| {
+                    self.symbols
+                        .find_fqn_by_bare(&bare)
+                        .and_then(|fqn| self.symbols.classes.get(&fqn))
+                });
+                if let Some(c) = sig {
+                    if let Some(m) = c.methods.get(f.field.text.as_str()) {
+                        return Some(pack(&m.params, &m.generic_params));
                     }
                 }
             }
