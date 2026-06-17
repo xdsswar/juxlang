@@ -973,23 +973,14 @@ impl<'a> Parser<'a> {
     pub(crate) fn parse_bare_array_initializer(&mut self, lhs_ty: &TypeRef) -> Option<Expr> {
         let start = self.peek_span();
         self.expect(&TokenKind::LBrace, "'{' to open array initializer");
-        let mut elements = Vec::new();
-        if !self.at(&TokenKind::RBrace) {
-            loop {
-                let Some(e) = self.parse_expr() else { break };
-                elements.push(e);
-                if !self.eat(&TokenKind::Comma) {
-                    break;
-                }
-            }
-        }
-        let end = self.peek_span();
-        self.expect(&TokenKind::RBrace, "'}' to close array initializer");
 
         // Peel ONE (outermost) dimension off the LHS to get the *element*
         // type. For a 1-D `int[]`/`int[N]` LHS the element is the scalar
         // (`peeled()` → `None`); for a multi-dim `int[][]` LHS the element
         // is itself an array (`int[]`), so its own `array_shape` is kept.
+        // Computed BEFORE the element loop so a NESTED literal recurses with the
+        // peeled type — this handles ANY depth (`int[][]`, `int[][][]`, …)
+        // uniformly, with no per-rank special-casing.
         let element_type = TypeRef {
             name: lhs_ty.name.clone(),
             generic_args: lhs_ty.generic_args.clone(),
@@ -999,6 +990,26 @@ impl<'a> Parser<'a> {
             ptr_depth: 0,
             span: lhs_ty.span,
         };
+        // When the element is itself an array, a `{ … }` element is a nested
+        // initializer for the next dimension down — recurse. Otherwise the
+        // element is a scalar/reference expression.
+        let element_is_array = element_type.array_shape.is_some();
+        let mut elements = Vec::new();
+        if !self.at(&TokenKind::RBrace) {
+            loop {
+                let e = if element_is_array && self.at(&TokenKind::LBrace) {
+                    self.parse_bare_array_initializer(&element_type)?
+                } else {
+                    self.parse_expr()?
+                };
+                elements.push(e);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        let end = self.peek_span();
+        self.expect(&TokenKind::RBrace, "'}' to close array initializer");
         // Fixed-vs-dynamic dispatch keys off the OUTERMOST dimension —
         // the one this literal directly fills.
         let fixed = matches!(

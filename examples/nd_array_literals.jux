@@ -1,0 +1,16 @@
+// N-dimensional array literals (`{{...},{...}}`) at any depth. A nested `{ … }`
+// element is parsed recursively against the peeled element type, so 2D / 3D / 4D
+// (and deeper) all work uniformly.
+package ndarr;
+
+public void main() {
+    int[][] m = {{1, 2}, {3, 4}};
+    print(m[0][0] + m[0][1] + m[1][0] + m[1][1]);   // 10
+
+    int[][][] c = {{{1, 2}, {3, 4}}, {{5, 6}, {7, 8}}};
+    print(c[0][0][0]);   // 1
+    print(c[1][1][1]);   // 8
+
+    int[][][][] d = {{{{1}}}, {{{42}}}};
+    print(d[1][0][0][0]);   // 42
+}
