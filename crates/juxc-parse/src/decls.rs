@@ -345,8 +345,15 @@ impl<'a> Parser<'a> {
                 let after_return_type = self.scan_type_at(i);
                 if let Some(j) = after_return_type {
                     i = j;
-                    // Member name.
-                    if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
+                    // Member name. A keyword-spelled name (`move`/`type`/`match`
+                    // /…) is accepted here too, mirroring `parse_decl_name`, so a
+                    // method named after a reserved word is classified as a
+                    // method (and the resolver later reports a Rust-reserved name
+                    // via E0305) instead of mis-routing to the field path.
+                    if matches!(
+                        self.tokens.get(i).map(|t| &t.kind),
+                        Some(TokenKind::Ident(_)) | Some(TokenKind::Kw(_))
+                    ) {
                         i += 1;
                         // Optional method-level generic params `<T, …>` between
                         // the name and the parameter list (§A.2.4
