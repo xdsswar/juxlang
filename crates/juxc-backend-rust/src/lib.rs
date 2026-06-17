@@ -709,6 +709,16 @@ struct RustEmitter {
     /// to a `ref` parameter shares the handle (`x.clone()`). Reset
     /// per function alongside `nullable_locals`.
     pub(crate) ref_locals: HashSet<String>,
+    /// Names of locals that are **captured by a closure AND mutated** in the
+    /// current function body, so they lower to an `Rc<RefCell<T>>` shared cell
+    /// (the FnMut / mutable-capture case). A closure capturing such a local
+    /// clone-captures the `Rc` (so it stays `Fn`, callable through
+    /// `Rc<dyn Fn>`) and mutates through the cell; the outer reads/writes route
+    /// through the same cell so the mutation is observed both ways (Java
+    /// capture-by-reference). Populated by a per-body pre-pass in
+    /// `emit_fn_body_at`; the names are also added to [`Self::ref_locals`] so the
+    /// existing §M.13 read/write/decl lowering applies. Reset per body.
+    pub(crate) forced_cell_locals: HashSet<String>,
     /// Names of in-scope **raw-pointer** locals/params (declared type has
     /// `ptr_depth > 0`, e.g. `int* p`, `Point* ptr`). The lowered `Ty` erases
     /// `ptr_depth`, so this set is how the emitter recovers pointer-ness at a
@@ -4081,6 +4091,7 @@ impl RustEmitter {
             emitting_nullable_target: false,
             nullable_locals: HashSet::new(),
             ref_locals: HashSet::new(),
+            forced_cell_locals: HashSet::new(),
             pointer_locals: HashSet::new(),
             captured_locals: HashSet::new(),
             weak_params: std::collections::HashMap::new(),

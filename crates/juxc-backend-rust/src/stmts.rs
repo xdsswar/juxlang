@@ -1982,8 +1982,11 @@ impl RustEmitter {
         // reference. Initializing from another `ref` binding shares
         // the handle; a plain value wraps into a fresh object. The
         // name is registered in `ref_locals` so reads clone out and
-        // assignments store through.
-        if var.is_ref {
+        // assignments store through. The same lowering also serves a
+        // FnMut mutable-capture local (`forced_cell_locals`) — a local
+        // captured by a closure AND reassigned — so the closure mutates
+        // a shared cell observed by the outer scope.
+        if var.is_ref || self.forced_cell_locals.contains(&var.name.text) {
             if let Some(ty_ref) = &var.ty {
                 let ty = juxc_tycheck::ty_from_ref_in_env(ty_ref, &self.symbols);
                 if let Some(scope) = self.local_types.last_mut() {
