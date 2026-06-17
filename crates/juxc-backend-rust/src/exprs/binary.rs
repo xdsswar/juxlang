@@ -611,13 +611,29 @@ impl RustEmitter {
         let target_name = promote.map(crate::exprs::rust_primitive_name);
         let cast_left = target_name.is_some() && self.operand_primitive(&b.left) != promote;
         let cast_right = target_name.is_some() && self.operand_primitive(&b.right) != promote;
+        // Inside an enum method `self` is `&Self`; comparing it to a variant
+        // value (`this == Op.Add`) is `&Op == Op`, which the derived `PartialEq`
+        // does not cover (rustc E0277). Deref the `this`/`super` operand so both
+        // sides are the enum value (`(*self) == Op::Add` — `==` re-borrows, so it
+        // is safe even for payload-carrying variants). Enums only ever take
+        // `==`/`!=` here, so gating on the operand shape is enough.
+        let deref_left =
+            self.in_enum_method && matches!(b.left.as_ref(), Expr::This(_) | Expr::Super(_));
+        let deref_right =
+            self.in_enum_method && matches!(b.right.as_ref(), Expr::This(_) | Expr::Super(_));
 
         // Left side of a left-associative op: equal precedence is OK,
         // because emission order already preserves grouping.
         if cast_left {
             self.w.push('(');
         }
+        if deref_left {
+            self.w.push_str("(*");
+        }
         self.emit_expr_with_parent_prec(&b.left, prec, /*right=*/ false);
+        if deref_left {
+            self.w.push(')');
+        }
         if cast_left {
             self.w.push_str(" as ");
             self.w.push_str(target_name.unwrap());
@@ -631,7 +647,13 @@ impl RustEmitter {
         if cast_right {
             self.w.push('(');
         }
+        if deref_right {
+            self.w.push_str("(*");
+        }
         self.emit_expr_with_parent_prec(&b.right, prec, /*right=*/ true);
+        if deref_right {
+            self.w.push(')');
+        }
         if cast_right {
             self.w.push_str(" as ");
             self.w.push_str(target_name.unwrap());
