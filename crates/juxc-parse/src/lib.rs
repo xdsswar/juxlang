@@ -358,19 +358,21 @@ impl<'a> Parser<'a> {
         self.parse_ident()
     }
 
-    /// Consume a **declaration name** for a member (method / field / parameter).
+    /// Consume a **declaration name** for a member (method / field / parameter /
+    /// record component / foreign signature).
     ///
-    /// In a foreign declaration stub ([`Self::foreign_mode`]) a keyword-spelled
-    /// token is accepted as the name, so a Rust member that collides with a Jux
-    /// keyword (`default()`, `match()`, …) is declared verbatim and resolves
-    /// against the matching keyword-spelled call (see [`Self::parse_member_name`]).
-    /// In ordinary user `.jux` files this delegates to [`Self::parse_ident`], so
-    /// declaring a member named like a keyword stays a parse error — the Rust
-    /// keyword reservation is reported separately by the resolver.
+    /// A keyword-spelled token is accepted as the name. Every caller is a name
+    /// position that follows a type or return type, so the grammar is
+    /// unambiguous: a keyword there can only be the declared name, never a
+    /// statement. Accepting it lets the RESOLVER diagnose a name uniformly:
+    /// a Rust reserved word (`move`, `type`, `match`, `box`, `self`, …) gets the
+    /// clean `E0305` "rename it", and a non-reserved keyword (`default`, …)
+    /// becomes a valid member name (it lowers to legal Rust). Previously
+    /// keyword-TOKEN names (`move`/`type`/`match`/`loop`) died here at parse with
+    /// a terse `E0200` while plain-identifier names that happen to be Rust
+    /// keywords (`box`/`self`) sailed through to the resolver — an inconsistency.
+    /// (`foreign_mode` already relied on this acceptance for Rust stub members.)
     pub(crate) fn parse_decl_name(&mut self) -> Option<Ident> {
-        if self.foreign_mode {
-            return self.parse_member_name();
-        }
-        self.parse_ident()
+        self.parse_member_name()
     }
 }
