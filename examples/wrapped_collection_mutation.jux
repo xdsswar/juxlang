@@ -6,16 +6,13 @@
 // argument that re-enters the same object must be evaluated BEFORE that borrow
 // — otherwise `RefCell` panics `already borrowed` at runtime.
 
-import jux.std.collections.ArrayList;
-import jux.std.collections.HashMap;
-
 public class Bag {
-    public ArrayList<int> items;
+    public Vec<int> items;
     public HashMap<String, int> seen;
     public int counter;
 
     public Bag() {
-        this.items = new ArrayList<int>();
+        this.items = new Vec<int>();
         this.seen = new HashMap<String, int>();
         this.counter = 0;
     }
@@ -28,9 +25,9 @@ public class Bag {
     }
 
     public void fill() {
-        this.items.add(this.next());     // re-entrant arg + list mutation
-        this.items.add(this.next());
-        this.seen.put("a", this.next()); // map mutation, re-entrant arg
+        this.items.push(this.next());    // re-entrant arg + list mutation
+        this.items.push(this.next());
+        this.seen.insert("a", this.next()); // map mutation, re-entrant arg
     }
 }
 
@@ -39,8 +36,8 @@ public void main() {
     var alias = b;                       // force the wrapper (Rc<RefCell>) shape
 
     b.fill();
-    print("size=" + b.items.size());     // size=2
-    print("counter=" + b.counter);       // counter=3
-    print("a=" + b.seen.get("a"));       // a=3
-    print("first=" + b.items.get(0));    // first=1
+    print("size=" + (int) b.items.len()); // size=2
+    print("counter=" + b.counter);        // counter=3
+    print("a=" + (b.seen.get("a") ?? -1)); // a=3
+    print("first=" + b.items[0]);          // first=1
 }

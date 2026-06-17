@@ -313,20 +313,22 @@ impl Resolver {
         // stdlib actually ships; adding a new stdlib type means
         // adding a line here.
         //
-        // Collections (interfaces and concretes).
+        // Collection INTERFACES (the only `jux.std.collections` types that
+        // remain — the concrete `ArrayList`/`HashMap`/`HashSet`/`Deque` Java
+        // facade was removed in favour of consuming `rust.std` verbatim).
         builtins.insert("Iterable");
         builtins.insert("Iterator");
         builtins.insert("Collection");
         builtins.insert("List");
         builtins.insert("Map");
         builtins.insert("Set");
-        builtins.insert("ArrayList");
-        builtins.insert("HashMap");
-        builtins.insert("HashSet");
         // `rust.std` collections are Jux's std (same names as Rust), reachable by
         // bare name with no `import` (the tycheck side seeds the matching
-        // `rust.std.<T>` FQN, see `RUST_STD_PRELUDE`). `HashMap`/`HashSet` are
-        // already listed above; the names below have no `jux.std` equivalent.
+        // `rust.std.<T>` FQN, see `RUST_STD_PRELUDE`). `HashMap`/`HashSet` now
+        // resolve here too (the jux.std facade that used to claim those bare
+        // names is gone); `Vec` replaces the old `ArrayList`.
+        builtins.insert("HashMap");
+        builtins.insert("HashSet");
         builtins.insert("Vec");
         builtins.insert("VecDeque");
         builtins.insert("BTreeMap");

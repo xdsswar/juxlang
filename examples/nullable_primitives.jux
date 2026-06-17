@@ -58,16 +58,19 @@ public void main() {
     print(h.maybe!!);
 
     // Containers of nullable primitives — null elements unallocated.
-    var xs = new ArrayList<int?>();
-    xs.add(1);
-    xs.add(null);
-    print(xs.size());
-    print(xs.get(0) ?: -1);
-    print(xs.get(1) ?: -1);
+    var xs = new Vec<int?>();
+    xs.push(1);
+    xs.push(null);
+    print((int) xs.len());
+    print(xs[0] ?: -1);
+    print(xs[1] ?: -1);
 
+    // A rust.std map's `get` is itself nullable, so a `HashMap<String, int?>`
+    // value comes back doubly-wrapped: `!!` asserts the key is present, then
+    // `?:` supplies the default for a null element.
     var m = new HashMap<String, int?>();
-    m.put("hit", 9);
-    m.put("miss", null);
-    print(m.get("hit") ?: -1);
-    print(m.get("miss") ?: -1);
+    m.insert("hit", 9);
+    m.insert("miss", null);
+    print(m.get("hit")!! ?: -1);
+    print(m.get("miss")!! ?: -1);
 }

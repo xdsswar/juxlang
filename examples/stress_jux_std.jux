@@ -3,9 +3,8 @@
  *
  * Exercises every shipped stdlib package end-to-end:
  *
- *   - jux.std.collections — ArrayList, HashMap, HashSet, plus the
- *     interfaces (List, Map, Set) and the implicit `for x : it`
- *     iteration on the concrete shapes.
+ *   - rust.std collections — Vec, HashMap, HashSet, consumed verbatim
+ *     (push/insert/get/len) plus the implicit `for x : it` iteration.
  *   - jux.std.exceptions  — throw / catch with typed exceptions,
  *     cross-package resolution of `IllegalArgumentException`,
  *     `NoSuchElementException`, etc.
@@ -30,7 +29,7 @@ public class TestFailure extends Exception {
  * Assertion helper — bails out via `throw new TestFailure(...)` so
  * the surrounding `try` sees a typed payload it can name.
  */
-public void check(bool cond, String label) {
+public void check(bool cond, String label) throws TestFailure {
     if (!cond) {
         throw new TestFailure(label);
     }
@@ -41,19 +40,19 @@ public void check(bool cond, String label) {
  *
  * Builds a HashMap<String, int> keyed by the words we see, with
  * counts as values. Returns the map so callers can read top-N
- * results, etc. Exercises HashMap.put/get/contains plus the
- * ArrayList we iterate over.
+ * results, etc. Exercises HashMap.insert/get/contains_key plus the
+ * Vec we iterate over.
  */
-public HashMap<String, int> tally(ArrayList<String> words) {
-    final HashMap<String, int> counts = new HashMap<String, int>();
+public HashMap<String, int> tally(Vec<String> words) {
+    HashMap<String, int> counts = new HashMap<String, int>();
     for (String w : words) {
         // Compute the new count first so we don't borrow `w`
-        // twice in the same `put` call's argument list.
+        // twice in the same `insert` call's argument list.
         int next = 1;
-        if (counts.contains(w)) {
-            next = counts.get(w) + 1;
+        if (counts.contains_key(w)) {
+            next = (counts.get(w) ?? 0) + 1;
         }
-        counts.put(w, next);
+        counts.insert(w, next);
     }
     return counts;
 }
@@ -61,44 +60,43 @@ public HashMap<String, int> tally(ArrayList<String> words) {
 /**
  * Section 1 — collection basics.
  */
-public void section_collections() {
+public void section_collections() throws TestFailure {
     print("--- section 1: collections ---");
 
-    // ArrayList<int> covers add / get / size / contains / indexOf.
-    final ArrayList<int> xs = new ArrayList<int>();
-    xs.add(1);
-    xs.add(2);
-    xs.add(3);
-    xs.add(4);
-    check(xs.size() == 4,              "xs.size == 4");
-    check(xs.get(0) == 1,              "xs[0] == 1");
-    check(xs.get(3) == 4,              "xs[3] == 4");
-    check(xs.contains(3),              "xs.contains(3)");
-    check(!xs.contains(99),            "!xs.contains(99)");
-    check(xs.indexOf(2) == 1,          "xs.indexOf(2) == 1");
-    check(xs.indexOf(42) == -1,        "xs.indexOf(missing) == -1");
-    print($"xs        = size=${xs.size()}, first=${xs.get(0)}, last=${xs.get(3)}");
+    // Vec<int> covers push / index / len / iteration.
+    Vec<int> xs = new Vec<int>();
+    xs.push(1);
+    xs.push(2);
+    xs.push(3);
+    xs.push(4);
+    check((int) xs.len() == 4,         "xs.len == 4");
+    check(xs[0] == 1,                  "xs[0] == 1");
+    check(xs[3] == 4,                  "xs[3] == 4");
+    int total = 0;
+    for (int v : xs) { total = total + v; }
+    check(total == 10,                 "sum of xs == 10");
+    print($"xs        = len=${(int) xs.len()}, first=${xs[0]}, last=${xs[3]}");
 
-    // HashMap<String, int> — read / write / contains / size.
-    final HashMap<String, int> ages = new HashMap<String, int>();
-    ages.put("Ada", 36);
-    ages.put("Linus", 54);
-    ages.put("Grace", 85);
-    check(ages.size() == 3,            "ages.size == 3");
-    check(ages.get("Ada") == 36,       "ages[Ada] == 36");
-    check(ages.contains("Linus"),      "ages.contains(Linus)");
-    check(!ages.contains("Donald"),    "!ages.contains(Donald)");
-    print($"ages.size = ${ages.size()}");
+    // HashMap<String, int> — insert / get / contains_key / len.
+    HashMap<String, int> ages = new HashMap<String, int>();
+    ages.insert("Ada", 36);
+    ages.insert("Linus", 54);
+    ages.insert("Grace", 85);
+    check((int) ages.len() == 3,       "ages.len == 3");
+    check((ages.get("Ada") ?? -1) == 36, "ages[Ada] == 36");
+    check(ages.contains_key("Linus"),  "ages.contains(Linus)");
+    check(!ages.contains_key("Donald"),"!ages.contains(Donald)");
+    print($"ages.size = ${(int) ages.len()}");
 
     // HashSet<String> — dedup behavior is the headline.
-    final HashSet<String> seen = new HashSet<String>();
-    seen.add("alpha");
-    seen.add("beta");
-    seen.add("alpha");   // duplicate — set absorbs it
-    check(seen.size() == 2,            "set dedups duplicates");
+    HashSet<String> seen = new HashSet<String>();
+    seen.insert("alpha");
+    seen.insert("beta");
+    seen.insert("alpha");   // duplicate — set absorbs it
+    check((int) seen.len() == 2,       "set dedups duplicates");
     check(seen.contains("alpha"),      "set has alpha");
     check(!seen.contains("gamma"),     "set lacks gamma");
-    print($"seen.size = ${seen.size()}");
+    print($"seen.size = ${(int) seen.len()}");
 }
 
 /**
@@ -109,7 +107,7 @@ public void section_collections() {
  * resolution of bare names (e.g. `IllegalArgumentException`
  * lives in `jux.std.exceptions`).
  */
-public void section_exceptions() {
+public void section_exceptions() throws TestFailure {
     print("--- section 2: exceptions ---");
 
     // IllegalArgumentException — the canonical "you passed me
@@ -140,33 +138,33 @@ public void section_exceptions() {
 /**
  * Section 3 — word-frequency demo using the helper above.
  */
-public void section_word_count() {
+public void section_word_count() throws TestFailure {
     print("--- section 3: word count ---");
 
-    final ArrayList<String> words = new ArrayList<String>();
-    words.add("apple");
-    words.add("banana");
-    words.add("apple");
-    words.add("cherry");
-    words.add("banana");
-    words.add("apple");
+    Vec<String> words = new Vec<String>();
+    words.push("apple");
+    words.push("banana");
+    words.push("apple");
+    words.push("cherry");
+    words.push("banana");
+    words.push("apple");
 
-    final HashMap<String, int> counts = tally(words);
+    HashMap<String, int> counts = tally(words);
 
-    check(counts.get("apple")  == 3, "apple count");
-    check(counts.get("banana") == 2, "banana count");
-    check(counts.get("cherry") == 1, "cherry count");
-    check(counts.size() == 3,        "three unique words");
-    print($"apple  = ${counts.get("apple")}");
-    print($"banana = ${counts.get("banana")}");
-    print($"cherry = ${counts.get("cherry")}");
+    check((counts.get("apple")  ?? -1) == 3, "apple count");
+    check((counts.get("banana") ?? -1) == 2, "banana count");
+    check((counts.get("cherry") ?? -1) == 1, "cherry count");
+    check((int) counts.len() == 3,   "three unique words");
+    print($"apple  = ${counts.get("apple") ?? -1}");
+    print($"banana = ${counts.get("banana") ?? -1}");
+    print($"cherry = ${counts.get("cherry") ?? -1}");
 }
 
 /**
  * Section 4 — timing. Establishes that `Clock.nowMs()` produces a
  * monotonically-non-decreasing value across a tight loop.
  */
-public void section_clock() {
+public void section_clock() throws TestFailure {
     print("--- section 4: clock ---");
 
     final long t0 = Clock.nowMs();

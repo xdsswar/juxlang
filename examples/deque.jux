@@ -1,36 +1,34 @@
-// Deque<T> — double-ended queue (jux.std.collections).
+// VecDeque<T> — double-ended queue from rust.std (auto-prelude'd, no import).
 //
-// O(1) push/pop at both ends; use as a stack (addLast/removeLast),
-// a queue (addLast/removeFirst), or a sliding window. The remove/
-// peek forms follow Jux's nullable protocol — `T?`, `null` when
-// empty — instead of throwing. Lowers to Rust's VecDeque<T>.
+// O(1) push/pop at both ends; use as a stack (push_back/pop_back), a queue
+// (push_back/pop_front), or a sliding window. The pop/peek forms follow Jux's
+// nullable protocol, returning `T?` (`null` when empty) instead of throwing.
+// Consumed verbatim as Rust's std::collections::VecDeque<T>.
 
 package deques;
 
-import jux.std.collections.Deque;
-
 public void main() {
-    var d = new Deque<int>();
-    d.addLast(2);
-    d.addLast(3);
-    d.addFirst(1);          // [1, 2, 3]
-    print(d.size());        // 3
-    print(d.peekFirst());   // 1
-    print(d.peekLast());    // 3
-    print(d.contains(2));   // true
+    var d = new VecDeque<int>();
+    d.push_back(2);
+    d.push_back(3);
+    d.push_front(1);             // [1, 2, 3]
+    print((int) d.len());        // 3
+    print(d.front() ?? 0);       // 1
+    print(d.back() ?? 0);        // 3
+    print(d.contains(2));        // true
 
     // Queue front, stack back.
-    print(d.removeFirst()); // 1
-    print(d.removeLast());  // 3
-    print(d.removeFirst()); // 2
-    print(d.removeFirst()); // null — empty, no throw
-    print(d.isEmpty());     // true
+    print(d.pop_front());        // 1
+    print(d.pop_back());         // 3
+    print(d.pop_front());        // 2
+    print(d.pop_front());        // null — empty, no throw
+    print(d.is_empty());         // true
 
     // Works with any element type.
-    Deque<String> names = new Deque<String>();
-    names.addLast("ada");
-    names.addFirst("bob");
-    print(names.peekFirst()); // bob
+    VecDeque<String> names = new VecDeque<String>();
+    names.push_back("ada");
+    names.push_front("bob");
+    print(names.front() ?? "");  // bob
     names.clear();
-    print(names.size());      // 0
+    print((int) names.len());    // 0
 }

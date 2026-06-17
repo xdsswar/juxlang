@@ -16,9 +16,9 @@ async void ofAndForAwait() {
 }
 
 async void fromArray() {
-    var names = new ArrayList<String>();
-    names.add("ada");
-    names.add("grace");
+    var names = new Vec<String>();
+    names.push("ada");
+    names.push("grace");
     for await (var n : Stream.from(names)) {
         print("name " + n);
     }

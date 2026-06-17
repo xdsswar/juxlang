@@ -3314,12 +3314,13 @@ impl RustEmitter {
         // call, where the direct `vec.push(v)` already works.
         // The rust.std collections (Vec/VecDeque/HashMap/HashSet/BTreeMap/
         // BTreeSet) all share this shape: no facade table, methods passthrough
-        // to Rust verbatim. When the receiver is such a collection FIELD of a
-        // shared-reference (wrapped) class AND the method mutates, route it
-        // through the borrow_mut() path so the write lands in the real cell —
-        // the generic clone-hoist would mutate a discarded copy (and need a
-        // `mut` binding → rustc E0596). A plain local collection doesn't read
-        // through a borrow, so it's untouched and falls to the generic call.
+        // to Rust verbatim. Route every MUTATING method through the collection
+        // path, which (a) pre-hoists args through the element-coercion ladder so
+        // a non-null value into a `Vec<int?>` / `HashMap<_, int?>` is lifted to
+        // `Some(...)` and numerics widen, and (b) reads a wrapped-class field
+        // through `borrow_mut()` so the write lands in the real cell (else a
+        // clone-hoist mutates a discarded copy → rustc E0596). A plain local
+        // receiver is a `Path`, so the borrow_mut flags are harmless there.
         if let juxc_tycheck::Ty::User { name, .. } = &recv_ty {
             let bare = name.rsplit('.').next().unwrap_or(name);
             let is_rust_std_coll = name.starts_with("rust.std")
@@ -3327,10 +3328,7 @@ impl RustEmitter {
                     bare,
                     "Vec" | "VecDeque" | "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet",
                 );
-            if is_rust_std_coll
-                && self.collection_method_mutates(&recv_ty, method)
-                && self.callee_receiver_reads_through_borrow(&call.callee).is_some()
-            {
+            if is_rust_std_coll && self.collection_method_mutates(&recv_ty, method) {
                 return self.emit_mut_collection_method(call, method, &recv_ty);
             }
         }
@@ -4492,13 +4490,6 @@ impl RustEmitter {
     fn builtin_arg_elem_nullable(&self, call: &CallExpr, arg_idx: usize) -> bool {
         let Expr::Field(f) = call.callee.as_ref() else { return false };
         let method = f.field.text.as_str();
-        // Which generic-arg slot does this argument store into?
-        let generic_idx = match (method, arg_idx) {
-            ("add", 0) => 0,                  // list/set value
-            ("set", 1) | ("insert", 1) => 0,  // list value (idx, value)
-            ("put", 1) => 1,                  // map value (key, value)
-            _ => return false,
-        };
         // Receiver type: span-keyed `expr_types` first, then the
         // name-keyed `local_types` fallback (span collisions and
         // unrecorded `Path` leaves miss the first map — same fallback
@@ -4520,9 +4511,43 @@ impl RustEmitter {
                 }
                 None
             });
+        // Which generic-arg slot does this argument store into? The mapping is
+        // collection-kind-aware so the same method name disambiguates — a
+        // rust.std `Vec::insert(idx, value)` stores into the element slot (0),
+        // while a `HashMap::insert(key, value)` stores the value into slot 1.
+        // Both the legacy facade names (`add`/`set`/`put`) and the rust.std
+        // verbatim names (`push`/`insert`/`push_back`/…) are recognized.
+        let generic_idx = match &recv_ty {
+            // `ArrayList<T>` lowers to `Ty::Array { element }`; the element IS
+            // generic-arg 0 (checked specially below).
+            Some(juxc_tycheck::Ty::Array { .. }) => match (method, arg_idx) {
+                ("add", 0) | ("push", 0) => 0,
+                ("set", 1) | ("insert", 1) => 0, // (index, value) → element
+                _ => return false,
+            },
+            Some(juxc_tycheck::Ty::User { name, .. }) => {
+                match name.rsplit('.').next().unwrap_or(name) {
+                    "Vec" | "VecDeque" => match (method, arg_idx) {
+                        ("add", 0) | ("push", 0) | ("push_back", 0)
+                        | ("push_front", 0) => 0,
+                        ("set", 1) | ("insert", 1) => 0, // (index, value) → element
+                        _ => return false,
+                    },
+                    "HashMap" | "BTreeMap" => match (method, arg_idx) {
+                        ("put", 0) | ("insert", 0) => 0, // key slot
+                        ("put", 1) | ("insert", 1) => 1, // value slot
+                        _ => return false,
+                    },
+                    "HashSet" | "BTreeSet" => match (method, arg_idx) {
+                        ("add", 0) | ("insert", 0) => 0,
+                        _ => return false,
+                    },
+                    _ => return false,
+                }
+            }
+            _ => return false,
+        };
         match recv_ty {
-            // `ArrayList<T>` lowers to `Ty::Array { element }` (dynamic
-            // kind), not `Ty::User` — the element IS generic-arg 0.
             Some(juxc_tycheck::Ty::Array { element, .. }) => {
                 generic_idx == 0 && matches!(*element, juxc_tycheck::Ty::Nullable(_))
             }
