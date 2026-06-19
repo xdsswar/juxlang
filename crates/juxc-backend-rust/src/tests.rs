@@ -1505,12 +1505,11 @@ fn pop_method_call_promotes_receiver_to_let_mut() {
 /// **format-arg positions** skip the clone since `format!`/
 /// `println!` borrow via `Display`.
 ///
-/// Phase B note: `User` here is purely local (created, field-read,
-/// dropped — never aliased / stored / passed / returned), so it
-/// demotes to the legacy Inline plain-struct shape (§CR.3.3). Field
-/// reads are direct `self.name` / `u.name` with no `.0.borrow()`
-/// wrapper — the auto-`.clone()` discipline still fires on
-/// value-consuming reads.
+/// Uniform Rc<RefCell> note: every class is the wrapper shape (a private
+/// `User_Inner` field struct behind `Rc<RefCell<…>>`). Field reads go
+/// through a statement-scoped `.0.borrow()`; the auto-`.clone()` discipline
+/// fires on value-consuming reads but not on `Display` format args (which
+/// only need a borrow).
 #[test]
 fn string_field_lowers_to_owned_string_with_plain_move_init() {
     let rust = emit(
@@ -1526,35 +1525,35 @@ fn string_field_lowers_to_owned_string_with_plain_move_init() {
         }
         "#,
     );
-    // Inline (demoted) shape: a plain field struct, no inner newtype,
-    // owned `String` field.
-    assert!(rust.contains("pub struct User {"), "inline plain struct: {rust}");
-    assert!(!rust.contains("User_Inner"), "no inner newtype when Inline: {rust}");
+    // Wrapper shape: inner field struct + `Rc<RefCell<…>>` newtype, owned
+    // `String` field on the inner struct.
+    assert!(rust.contains("pub struct User_Inner {"), "inner field struct: {rust}");
+    assert!(
+        rust.contains("pub struct User(std::rc::Rc<std::cell::RefCell<User_Inner>>);"),
+        "Rc<RefCell> newtype: {rust}",
+    );
     assert!(rust.contains("name: String,"), "field type: {rust}");
     assert!(rust.contains("pub fn new(name: String)"), "param: {rust}");
-    // Rust struct field shorthand kicks in when init expr matches the
-    // field name — the (raw, pre-rustfmt) literal reads `Self {\n name,\n}`.
-    assert!(rust.contains("Self {"), "inline self literal: {rust}");
+    // The inner literal uses Rust field shorthand (raw emit reads
+    // `User_Inner { name }`).
+    assert!(rust.contains("User_Inner { name }"), "inner literal shorthand: {rust}");
     assert!(!rust.contains("name: name"), "no longhand: {rust}");
-    assert!(!rust.contains("name: self"), "no longhand: {rust}");
-    // Value-consuming context — `return this.name;` — reads `self.name`
-    // directly and clones so the field doesn't move out of `&self`.
+    // Value-consuming context — `return this.name;` — reads through a
+    // borrow guard and clones so the field doesn't move out of the cell.
     assert!(
-        rust.contains("self.name.clone()"),
-        "value-position read should still clone: {rust}",
+        rust.contains("self.0.borrow().name.clone()"),
+        "value-position read should borrow + clone: {rust}",
     );
-    // Format-arg context — `println!("{}", u.name)` — borrows direct
-    // field, no clone needed.
+    // Format-arg context — `println!("{}", u.name)` — borrows the field
+    // through the guard, no clone needed.
     assert!(
-        rust.contains(r#"println!("{}", u.name)"#),
-        "format-arg read should NOT clone: {rust}",
+        rust.contains(r#"println!("{}", u.0.borrow().name)"#),
+        "format-arg read should borrow without clone: {rust}",
     );
     assert!(
-        !rust.contains("u.name.clone()"),
+        !rust.contains("u.0.borrow().name.clone()"),
         "stale clone in format arg: {rust}",
     );
-    // No interior-mutability wrapper in the Inline shape.
-    assert!(!rust.contains(".0.borrow()"), "no borrow when Inline: {rust}");
 }
 
 // ----------------------------------------------------------------------
@@ -2046,33 +2045,27 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
         "#,
     );
     assert!(rust.contains("#[derive(Clone, Debug)]"), "derive(Clone, Debug): {rust}");
-    // Inline plain struct holds the generic field directly — no inner
-    // newtype, no `Rc<RefCell>` wrapper. The struct's own type params carry the
-    // `Clone + Debug` bound (the `#[derive]` needs it, and a generic field of a
-    // bounded type propagates the bound).
+    // Uniform wrapper shape for a generic class: an inner `Box_Inner<T>`
+    // field struct behind `Rc<RefCell<…>>`. Both the inner struct and the
+    // newtype carry the `Clone + Debug` bound (the `#[derive]` needs it, and
+    // a generic field of a bounded type propagates the bound).
     assert!(
-        rust.contains("pub struct Box<T: Clone + std::fmt::Debug + 'static> {"),
-        "inline struct header carries the Clone+Debug bound: {rust}",
+        rust.contains("pub struct Box_Inner<T: Clone + std::fmt::Debug + 'static> {"),
+        "inner struct header carries the Clone+Debug bound: {rust}",
     );
-    assert!(!rust.contains("Box_Inner"), "no inner newtype when Inline: {rust}");
-    // Class-scoped probe — the prelude's JuxStream/JuxChannel types
-    // are RefCell-backed, so a whole-output `contains` would
-    // false-positive.
     assert!(
-        !rust.contains("RefCell<Box"),
-        "no RefCell wrapper when Inline: {rust}",
+        rust.contains("pub struct Box<T: Clone + std::fmt::Debug + 'static>(std::rc::Rc<std::cell::RefCell<Box_Inner<T>>>);"),
+        "Rc<RefCell> newtype carries the bound: {rust}",
     );
     assert!(rust.contains("value: T,"), "generic field: {rust}");
     // The inherent impl carries the `T: Clone + Debug` bound.
     assert!(rust.contains("impl<T: Clone + std::fmt::Debug + 'static> Box<T> {"), "impl bound: {rust}");
-    assert!(rust.contains("pub fn new(value: T) -> Self {"), "inline new: {rust}");
-    // Field shorthand (raw emit is multi-line; rustfmt collapses to
-    // `Self { value }`).
-    assert!(rust.contains("Self {"), "inline self literal: {rust}");
+    assert!(rust.contains("pub fn new(value: T) -> Self {"), "new: {rust}");
+    // Inner literal uses field shorthand (`Box_Inner { value }`).
+    assert!(rust.contains("Box_Inner { value }"), "inner literal shorthand: {rust}");
     assert!(!rust.contains("value: value"), "no longhand: {rust}");
-    // Method body reads the generic field directly + clones.
-    assert!(rust.contains("self.value.clone()"), "direct field read+clone: {rust}");
-    assert!(!rust.contains(".0.borrow()"), "no borrow when Inline: {rust}");
+    // Method body reads the generic field through the borrow guard + clones.
+    assert!(rust.contains("self.0.borrow().value.clone()"), "borrow-guarded field read+clone: {rust}");
 }
 
 /// A generic wrapper class shares mutation through its `Rc<RefCell>`:
@@ -2113,11 +2106,11 @@ fn generic_class_alias_shares_mutation_through_rc_refcell() {
     assert!(rust.contains("borrow_mut()"), "scoped write: {rust}");
 }
 
-/// §CR.4.1 read-only-shared demotion: a class that is ALIASED (a second
-/// binding) but never MUTATED after construction lowers to a bare `Rc<C_Inner>`
-/// — no `RefCell`, no borrow-flag cost. Field reads go through plain `.0`.
+/// Uniform lowering: an ALIASED class (a second binding) shares the same
+/// instance through the `Rc<RefCell<C_Inner>>` wrapper — `var q = p` clones
+/// the `Rc` (refcount bump), not the cell, so both names see one instance.
 #[test]
-fn aliased_immutable_class_lowers_to_bare_rc_no_refcell() {
+fn aliased_class_shares_through_rc_refcell() {
     let rust = emit(
         r#"
         public class Point {
@@ -2132,30 +2125,25 @@ fn aliased_immutable_class_lowers_to_bare_rc_no_refcell() {
         }
         "#,
     );
-    // Bare `Rc` newtype — the cell is gone (the ctor write is construction, the
-    // getter is a read, so `Point` is never mutated).
+    // Uniform `Rc<RefCell>` newtype.
     assert!(
-        rust.contains("pub struct Point(std::rc::Rc<Point_Inner>);"),
-        "expected bare-Rc newtype (no RefCell): {rust}",
+        rust.contains("pub struct Point(std::rc::Rc<std::cell::RefCell<Point_Inner>>);"),
+        "expected Rc<RefCell> newtype: {rust}",
     );
+    // Constructor wraps the inner in `Rc::new(RefCell::new(…))`.
     assert!(
-        !rust.contains("RefCell<Point_Inner>"),
-        "Point must NOT carry a RefCell: {rust}",
+        rust.contains("std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner"),
+        "ctor wraps in Rc::new(RefCell::new(…)): {rust}",
     );
-    // Constructor wraps in plain `Rc::new`, no `RefCell::new`.
-    assert!(
-        rust.contains("std::rc::Rc::new(Self::new_inner"),
-        "ctor wraps in plain Rc::new: {rust}",
-    );
-    // Aliasing still shares via an `Rc` clone (pointer bump, not deep copy).
+    // Aliasing shares via an `Rc` clone (pointer bump, not deep copy).
     assert!(rust.contains("q = p.clone()"), "alias rebind via Rc clone: {rust}");
 }
 
-/// §CR.3.3 Box demotion: a class that ESCAPES (returned from a function) but is
-/// never aliased and never mutated lowers to `C(Box<C_Inner>)` — a unique owner
-/// on the heap, no refcount and no cell.
+/// Uniform lowering: a class that ESCAPES (returned from a function) takes the
+/// same `Rc<RefCell<C_Inner>>` wrapper as every other class — no special
+/// escape-tier `Box` shape.
 #[test]
-fn escaping_unaliased_immutable_class_lowers_to_box() {
+fn escaping_class_lowers_to_rc_refcell() {
     let rust = emit(
         r#"
         public class Token {
@@ -2170,14 +2158,13 @@ fn escaping_unaliased_immutable_class_lowers_to_box() {
         "#,
     );
     assert!(
-        rust.contains("pub struct Token(std::boxed::Box<Token_Inner>);"),
-        "expected Box newtype: {rust}",
+        rust.contains("pub struct Token(std::rc::Rc<std::cell::RefCell<Token_Inner>>);"),
+        "expected Rc<RefCell> newtype: {rust}",
     );
     assert!(
-        rust.contains("std::boxed::Box::new(Self::new_inner"),
-        "ctor wraps in Box::new: {rust}",
+        rust.contains("std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner"),
+        "ctor wraps in Rc::new(RefCell::new(…)): {rust}",
     );
-    assert!(!rust.contains("RefCell<Token_Inner>"), "Box Token has no RefCell: {rust}");
 }
 
 /// Explicit construction `new Box<int>(7)` lowers to the Rust
@@ -2203,18 +2190,13 @@ fn generic_new_object_emits_turbofish_when_args_explicit() {
     assert!(rust.contains("Box::new(8)"), "inferred: {rust}");
 }
 
-/// Simple constructors (body is purely `this.field = expr;` lines)
-/// build the inner struct directly — no `__self` builder, no
-/// `Default`-based initialization.
-///
-/// Post class-representation Phase B (§CR.3.3), a class whose instances
-/// are never aliased / stored / passed / returned demotes back to the
-/// legacy plain-struct **Inline** shape (the escape-analysis "fast
-/// tier"). Here `Pair` is created, read via a field access, and dropped
-/// — purely local — so it lowers to `pub struct Pair { … }` with a
-/// direct `Self { a, b }` constructor and NO `Rc<RefCell<…>>` wrapper.
+/// Simple constructors (body is purely `this.field = expr;` lines) build the
+/// inner struct directly via a `new_inner` helper — no `__self` builder, no
+/// `Default`-based initialization — and the public `new` wraps that inner in
+/// the uniform `Rc<RefCell<…>>` handle. The inner literal uses Rust field
+/// shorthand (`Pair_Inner { a, b }`).
 #[test]
-fn simple_constructor_emits_direct_self_literal() {
+fn simple_constructor_emits_direct_inner_literal() {
     let rust = emit(
         r#"
         public class Pair {
@@ -2228,31 +2210,27 @@ fn simple_constructor_emits_direct_self_literal() {
         }
         "#,
     );
-    // Inline (demoted) shape: a plain field struct, no inner newtype.
+    // Wrapper shape: inner field struct + `Rc<RefCell>` newtype.
+    assert!(rust.contains("pub struct Pair_Inner {"), "inner field struct: {rust}");
     assert!(
-        rust.contains("pub struct Pair {"),
-        "inline plain struct: {rust}",
+        rust.contains("pub struct Pair(std::rc::Rc<std::cell::RefCell<Pair_Inner>>);"),
+        "Rc<RefCell> newtype: {rust}",
     );
-    assert!(!rust.contains("Pair_Inner"), "no inner newtype when Inline: {rust}");
-    // Class-scoped probe — the always-emitted prelude legitimately
-    // contains `Rc::new(RefCell::new(…))` (JuxStream), so a whole-
-    // output `contains` would false-positive.
-    assert!(
-        !rust.contains("RefCell<Pair"),
-        "no Rc<RefCell> wrapper when Inline: {rust}",
-    );
-    // No `__self` builder — the simple-ctor path emits the literal
+    // No `__self` builder — the simple-ctor path emits the inner literal
     // directly with field shorthand.
     assert!(!rust.contains("__self"), "should not use __self pattern: {rust}");
     assert!(
         rust.contains("pub fn new(a: isize, b: isize) -> Self {"),
-        "inline new signature: {rust}",
+        "public new signature: {rust}",
     );
-    // Inline struct literal with field shorthand (the raw emit is
-    // multi-line; rustfmt collapses it to `Self { a, b }`).
-    assert!(rust.contains("Self {"), "inline self literal: {rust}");
+    // The public `new` wraps the inner in `Rc::new(RefCell::new(…))`.
+    assert!(
+        rust.contains("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner(a, b))))"),
+        "ctor wraps inner in Rc<RefCell>: {rust}",
+    );
+    // Inner literal with field shorthand.
+    assert!(rust.contains("Pair_Inner { a, b }"), "inner literal shorthand: {rust}");
     assert!(!rust.contains("a: a"), "no longhand: {rust}");
-    assert!(!rust.contains("a: self"), "no longhand: {rust}");
 }
 
 // ----------------------------------------------------------------------
@@ -2862,15 +2840,13 @@ fn string_returning_method_returns_owned_with_field_clone() {
         rust.contains("pub fn getName(&self) -> String {"),
         "return type should be owned String: {rust}",
     );
-    // Phase B: `User` is purely local (`u.getName()` is a borrow, never
-    // aliased / stored / passed / returned), so it demotes to the
-    // Inline plain-struct shape (§CR.3.3). `this.name` reads `self.name`
-    // directly and auto-clones the String so it outlives `&self`.
+    // Uniform Rc<RefCell> lowering: every class is the wrapper shape, so
+    // `this.name` reads through a statement-scoped `self.0.borrow()` and
+    // auto-clones the String so the value outlives the borrow guard.
     assert!(
-        rust.contains("self.name.clone()"),
-        "inline field clone missing: {rust}",
+        rust.contains("self.0.borrow().name.clone()"),
+        "borrow-guarded field clone missing: {rust}",
     );
-    assert!(!rust.contains(".0.borrow()"), "no borrow when Inline: {rust}");
 }
 
 /// A program that never calls a mutating method on `xs` keeps it
