@@ -821,6 +821,15 @@ impl RustEmitter {
         {
             return None;
         }
+        // Distinct `Primitive` variants can still lower to the SAME Rust type
+        // (e.g. `Long` and `I64` both emit `i64`, `Int`/`Long` differ but
+        // `Long`/`I64` don't). A cast between two names that render identically
+        // is a no-op that only clutters the output, so skip it. Genuine
+        // coercions survive: `Uint`->`Int` is `usize`->`isize`, `Int`->`Long`
+        // is `isize`->`i64` -- different names, real `as`.
+        if crate::exprs::rust_primitive_name(src) == crate::exprs::rust_primitive_name(target) {
+            return None;
+        }
         let is_float = |p: P| matches!(p, P::Float | P::Double | P::F32 | P::F64);
         let is_f64 = |p: P| matches!(p, P::Double | P::F64);
         let rank = |p: P| -> u8 {

@@ -4323,10 +4323,27 @@ impl RustEmitter {
 /// `double`, matching the inference pass. Returns `None` as soon as a
 /// non-literal leaf appears (those have real spans and use the map).
 pub(crate) fn literal_numeric_ty(e: &Expr) -> Option<juxc_tycheck::Primitive> {
+    use juxc_ast::{FloatKind, IntKind};
     use juxc_tycheck::Primitive as P;
     match e {
-        Expr::Literal(juxc_ast::Literal::Int(_)) => Some(P::Int),
-        Expr::Literal(juxc_ast::Literal::Float(_)) => Some(P::Double),
+        // Honor the literal's own suffix so the operand's type matches the
+        // suffix the emitter actually prints (`1000L` -> `1000i64`). Without
+        // this an `L`-suffixed literal would read as the default `Int`, and a
+        // widen into a `long`/`i64` slot would emit a no-op `(1000i64 as i64)`.
+        Expr::Literal(juxc_ast::Literal::Int(lit)) => Some(match lit.kind {
+            None => P::Int,
+            Some(IntKind::Byte) => P::I8,
+            Some(IntKind::UByte) => P::U8,
+            Some(IntKind::Short) => P::I16,
+            Some(IntKind::UShort) => P::U16,
+            Some(IntKind::UInt) => P::U32,
+            Some(IntKind::Long) => P::I64,
+            Some(IntKind::ULong) => P::U64,
+        }),
+        Expr::Literal(juxc_ast::Literal::Float(lit)) => Some(match lit.kind {
+            Some(FloatKind::Float) => P::F32,
+            _ => P::Double,
+        }),
         Expr::Literal(juxc_ast::Literal::Char(_)) => Some(P::Char),
         Expr::Unary(u) => literal_numeric_ty(&u.operand),
         Expr::Binary(b) => {
