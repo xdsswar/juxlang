@@ -1529,7 +1529,7 @@ fn string_field_lowers_to_owned_string_with_plain_move_init() {
     // `String` field on the inner struct.
     assert!(rust.contains("pub struct User_Inner {"), "inner field struct: {rust}");
     assert!(
-        rust.contains("pub struct User(std::rc::Rc<std::cell::RefCell<User_Inner>>);"),
+        rust.contains("pub struct User(pub std::rc::Rc<std::cell::RefCell<User_Inner>>);"),
         "Rc<RefCell> newtype: {rust}",
     );
     assert!(rust.contains("name: String,"), "field type: {rust}");
@@ -1748,11 +1748,11 @@ fn extends_lowers_to_wrapper_hierarchy() {
     );
     // Both classes wrap in `Rc<RefCell<_Inner>>`.
     assert!(
-        rust.contains("pub struct Animal(std::rc::Rc<std::cell::RefCell<Animal_Inner>>);"),
+        rust.contains("pub struct Animal(pub std::rc::Rc<std::cell::RefCell<Animal_Inner>>);"),
         "Animal wrapper newtype: {rust}",
     );
     assert!(
-        rust.contains("pub struct Dog(std::rc::Rc<std::cell::RefCell<Dog_Inner>>);"),
+        rust.contains("pub struct Dog(pub std::rc::Rc<std::cell::RefCell<Dog_Inner>>);"),
         "Dog wrapper newtype: {rust}",
     );
     // Stage-2: `Animal` is a polymorphic base (extended by `Dog`), so the
@@ -2054,7 +2054,7 @@ fn generic_class_lowers_to_rust_struct_and_clone_bounded_impl() {
         "inner struct header carries the Clone+Debug bound: {rust}",
     );
     assert!(
-        rust.contains("pub struct Box<T: Clone + std::fmt::Debug + 'static>(std::rc::Rc<std::cell::RefCell<Box_Inner<T>>>);"),
+        rust.contains("pub struct Box<T: Clone + std::fmt::Debug + 'static>(pub std::rc::Rc<std::cell::RefCell<Box_Inner<T>>>);"),
         "Rc<RefCell> newtype carries the bound: {rust}",
     );
     assert!(rust.contains("value: T,"), "generic field: {rust}");
@@ -2093,7 +2093,7 @@ fn generic_class_alias_shares_mutation_through_rc_refcell() {
     );
     // Newtype + inner are the wrapper shape (shared cell).
     assert!(
-        rust.contains("pub struct Holder<T: Clone + std::fmt::Debug + 'static>(std::rc::Rc<std::cell::RefCell<Holder_Inner<T>>>);"),
+        rust.contains("pub struct Holder<T: Clone + std::fmt::Debug + 'static>(pub std::rc::Rc<std::cell::RefCell<Holder_Inner<T>>>);"),
         "newtype: {rust}",
     );
     // `var y = x` aliases through the newtype's derived Clone — the
@@ -2127,7 +2127,7 @@ fn aliased_class_shares_through_rc_refcell() {
     );
     // Uniform `Rc<RefCell>` newtype.
     assert!(
-        rust.contains("pub struct Point(std::rc::Rc<std::cell::RefCell<Point_Inner>>);"),
+        rust.contains("pub struct Point(pub std::rc::Rc<std::cell::RefCell<Point_Inner>>);"),
         "expected Rc<RefCell> newtype: {rust}",
     );
     // Constructor wraps the inner in `Rc::new(RefCell::new(…))`.
@@ -2158,7 +2158,7 @@ fn escaping_class_lowers_to_rc_refcell() {
         "#,
     );
     assert!(
-        rust.contains("pub struct Token(std::rc::Rc<std::cell::RefCell<Token_Inner>>);"),
+        rust.contains("pub struct Token(pub std::rc::Rc<std::cell::RefCell<Token_Inner>>);"),
         "expected Rc<RefCell> newtype: {rust}",
     );
     assert!(
@@ -2213,7 +2213,7 @@ fn simple_constructor_emits_direct_inner_literal() {
     // Wrapper shape: inner field struct + `Rc<RefCell>` newtype.
     assert!(rust.contains("pub struct Pair_Inner {"), "inner field struct: {rust}");
     assert!(
-        rust.contains("pub struct Pair(std::rc::Rc<std::cell::RefCell<Pair_Inner>>);"),
+        rust.contains("pub struct Pair(pub std::rc::Rc<std::cell::RefCell<Pair_Inner>>);"),
         "Rc<RefCell> newtype: {rust}",
     );
     // No `__self` builder — the simple-ctor path emits the inner literal
@@ -2274,7 +2274,7 @@ fn simple_class_lowers_to_shared_mutation_wrapper() {
     // The newtype handle.
     assert!(
         rust.contains(
-            "pub struct Counter(std::rc::Rc<std::cell::RefCell<Counter_Inner>>);"
+            "pub struct Counter(pub std::rc::Rc<std::cell::RefCell<Counter_Inner>>);"
         ),
         "newtype handle: {rust}",
     );

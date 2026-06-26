@@ -2159,7 +2159,40 @@ impl crate::RustEmitter {
     /// from `expr_types`; the method is looked up by its Jux (camelCase) name and
     /// the parameter's `is_ref` flag (set from the stub's `&` marker) consulted.
     pub(crate) fn callee_param_is_ref(&self, callee: &juxc_ast::Expr, arg_idx: usize) -> bool {
-        let juxc_ast::Expr::Field(f) = callee else { return false };
+        self.foreign_callee_param(callee, arg_idx)
+            .map(|p| p.is_ref)
+            .unwrap_or(false)
+    }
+
+    /// True when arg `arg_idx` of `callee` maps to an **external** method
+    /// parameter typed as a Jux array (`T[]`) — which bindgen produces for a
+    /// Rust **slice** borrow (`&[T]` / `&mut [T]`). Unlike a scalar `&T`
+    /// borrow, a slice param does NOT carry the stub's `&` marker (so `is_ref`
+    /// is false), yet the real Rust signature still takes it by reference. The
+    /// call slot must therefore borrow the argument: a Jux array (`Vec<T>` or
+    /// `[T; N]`) coerces to `&[T]` through `&__jux_argN`, which is exactly what
+    /// `update_with_buffer(&[u32], …)` and similar foreign APIs expect.
+    pub(crate) fn callee_param_is_foreign_slice(
+        &self,
+        callee: &juxc_ast::Expr,
+        arg_idx: usize,
+    ) -> bool {
+        self.foreign_callee_param(callee, arg_idx)
+            .map(|p| p.ty.array_shape.is_some() && !p.is_ref)
+            .unwrap_or(false)
+    }
+
+    /// Resolve the **external** (`rust.std` / crate) method parameter that arg
+    /// `arg_idx` of `callee` maps to, or `None` when `callee` is not a foreign
+    /// method/static-method call. Shared by [`Self::callee_param_is_ref`] and
+    /// [`Self::callee_param_is_foreign_slice`], which read different flags off
+    /// the returned [`ParamSig`].
+    fn foreign_callee_param(
+        &self,
+        callee: &juxc_ast::Expr,
+        arg_idx: usize,
+    ) -> Option<&juxc_tycheck::symbol_table::ParamSig> {
+        let juxc_ast::Expr::Field(f) = callee else { return None };
         // Static call `ClassName.method(...)`: the receiver is a class NAME, not
         // a value, so it never appears in `expr_types`. Resolve the class
         // directly and read the static method's param. Only foreign (external)
@@ -2170,7 +2203,7 @@ impl crate::RustEmitter {
                     if c.is_external {
                         if let Some(m) = c.methods.get(f.field.text.as_str()) {
                             if m.is_static {
-                                return m.params.get(arg_idx).map(|p| p.is_ref).unwrap_or(false);
+                                return m.params.get(arg_idx);
                             }
                         }
                     }
@@ -2201,26 +2234,21 @@ impl crate::RustEmitter {
             Some(juxc_tycheck::Ty::User { name, .. }) => name,
             Some(juxc_tycheck::Ty::Nullable(inner)) => match *inner {
                 juxc_tycheck::Ty::User { name, .. } => name,
-                _ => return false,
+                _ => return None,
             },
-            _ => return false,
+            _ => return None,
         };
         let sig = if let Some(c) = self.symbols.classes.get(&recv_ty) {
             c
         } else {
-            match self.lookup_class_by_bare_or_fqn(recv_ty.rsplit('.').next().unwrap_or(&recv_ty)) {
-                Some(c) => c,
-                None => return false,
-            }
+            self.lookup_class_by_bare_or_fqn(recv_ty.rsplit('.').next().unwrap_or(&recv_ty))?
         };
         if !sig.is_external {
-            return false;
+            return None;
         }
         sig.methods
             .get(f.field.text.as_str())
             .and_then(|m| m.params.get(arg_idx))
-            .map(|p| p.is_ref)
-            .unwrap_or(false)
     }
 
     // ============================================================

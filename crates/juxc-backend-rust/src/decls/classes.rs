@@ -970,12 +970,12 @@ impl RustEmitter {
         // (escapes-but-unaliased, unique owner) is `Box<..>`.
         let is_box = self.box_classes.contains(&class_decl.name.text);
         let refcell = self.refcell_classes.contains(&class_decl.name.text);
-        let (open, close): (&str, &str) = if is_box {
-            ("(std::boxed::Box<", ">);\n")
+        let (wrap_open, close): (&str, &str) = if is_box {
+            ("std::boxed::Box<", ">);\n")
         } else if refcell {
-            ("(std::rc::Rc<std::cell::RefCell<", ">>);\n")
+            ("std::rc::Rc<std::cell::RefCell<", ">>);\n")
         } else {
-            ("(std::rc::Rc<", ">);\n")
+            ("std::rc::Rc<", ">);\n")
         };
         self.w.line("#[derive(Clone, Debug)]");
         self.w.emit_indent();
@@ -983,7 +983,14 @@ impl RustEmitter {
         self.w.push_str("struct ");
         self.w.push_str(name);
         self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
-        self.w.push_str(open);
+        // The newtype's single field carries the SAME visibility as the struct.
+        // A `public` class is consumed from OTHER crates (a workspace path
+        // dependency), and every lowered field/method access reaches the handle
+        // through `.0`; a private tuple field would be inaccessible across the
+        // crate boundary (rustc E0616). Package-private classes stay crate-local.
+        self.w.push_str("(");
+        self.emit_visibility(class_decl.visibility);
+        self.w.push_str(wrap_open);
         self.w.push_str(&inner);
         self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(close);
