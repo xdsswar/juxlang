@@ -333,6 +333,36 @@ impl RustEmitter {
                     })
                     .cloned();
                 if let Some(enum_fqn) = enum_hit {
+                    // A FOREIGN (`rust.<crate>`) enum variant lowers through
+                    // the enum's REAL Rust path (`minifb::MouseButton::Left`),
+                    // not its Jux FQN: the `crate::rust::minifb::…` spelling
+                    // below names no real module (rustc E0433). Mirror
+                    // `external_class_real_path` — the crate RE-EXPORT path for
+                    // a non-std crate (its `@rust("…")` annotation may point
+                    // through a private module, E0603), else the annotation
+                    // path verbatim (std keeps its flattened form).
+                    if let Some(sig) = self.symbols.enums.get(&enum_fqn) {
+                        if sig.is_external {
+                            let segs: Vec<&str> = enum_fqn.split('.').collect();
+                            let real = if segs.first() == Some(&"rust")
+                                && segs.len() >= 3
+                                && segs[1] != "std"
+                            {
+                                Some(segs[1..].join("::"))
+                            } else {
+                                sig.rust_path.clone()
+                            };
+                            if let Some(real) = real {
+                                self.w.push_str(&real);
+                                self.w.push_str("::");
+                                self.w.push_str(&f.field.text);
+                                if let Some(sfx) = &method_suffix {
+                                    self.w.push_str(sfx);
+                                }
+                                return;
+                            }
+                        }
+                    }
                     // Cross-package auto-import: crate-root the path.
                     // A bare `Option::Some` / `Result::Ok` would
                     // otherwise resolve to Rust's PRELUDE types in

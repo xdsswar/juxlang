@@ -1573,7 +1573,9 @@ impl RustEmitter {
             }
             // §G.9.2: a borrowed parameter (`&T`) of an external method gets the
             // call-site `&` back — `m.containsKey("a")` → `m.contains_key(&"a"…)`.
-            if self.callee_param_is_ref(&call.callee, i) {
+            if self.callee_param_is_ref(&call.callee, i)
+                || self.callee_param_is_foreign_slice(&call.callee, i)
+            {
                 self.w.push('&');
             }
             // C6: a foreign-collection param lowered to `&mut T` takes the
@@ -1984,7 +1986,9 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            if self.callee_param_is_ref(&call.callee, i) {
+            if self.callee_param_is_ref(&call.callee, i)
+                || self.callee_param_is_foreign_slice(&call.callee, i)
+            {
                 self.w.push('&');
             }
             if taken.iter().any(|(ti, _)| *ti == i) {
@@ -2667,7 +2671,9 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            if self.callee_param_is_ref(&call.callee, i) {
+            if self.callee_param_is_ref(&call.callee, i)
+                || self.callee_param_is_foreign_slice(&call.callee, i)
+            {
                 self.w.push('&');
             }
             // C6 by-ref arg: borrow the original place directly (it was
@@ -2766,7 +2772,9 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            if self.callee_param_is_ref(&call.callee, i) {
+            if self.callee_param_is_ref(&call.callee, i)
+                || self.callee_param_is_foreign_slice(&call.callee, i)
+            {
                 self.w.push('&');
             }
             // C6 by-ref arg: borrow the place directly (not hoisted).
