@@ -1459,6 +1459,43 @@ fn empty_bare_init_on_dynamic_lhs_emits_turbofish_new() {
     );
 }
 
+/// §5.6: a RUNTIME-sized `new T[n]` is a heap allocation (`vec![..; n]`),
+/// never a fixed stack array — that's how a runtime-sized buffer is built.
+#[test]
+fn runtime_new_array_size_emits_vec() {
+    let rust = emit("public void main() { var n = 5; var a = new int[n + 1]; print(a.length); }");
+    assert!(rust.contains("vec!["), "expected a heap vec!: {rust}");
+}
+
+/// A const-sized `new T[N]` assigned to a dynamic `T[]` FIELD heaps
+/// (`vec![..]`) to match the field's `Vec<T>` lowering — NOT a fixed
+/// `[T; N]` (which would be a type error against the `Vec<T>` field, and on
+/// a large buffer would overflow the stack at construction).
+#[test]
+fn field_assign_dynamic_array_emits_vec() {
+    let rust = emit(
+        "public class Buf { public int[] data; \
+         public Buf() { this.data = new int[16]; } } \
+         public void main() { var b = new Buf(); }",
+    );
+    assert!(rust.contains("vec!["), "expected a heap vec!: {rust}");
+    assert!(
+        !rust.contains("[0isize; 16]"),
+        "dynamic field should heap, not emit a fixed array: {rust}",
+    );
+}
+
+/// An inline dynamic-array FIELD default (`int[] data = new int[16];`) heaps
+/// the same way (through `emit_ctor_field_init`).
+#[test]
+fn field_default_dynamic_array_emits_vec() {
+    let rust = emit(
+        "public class Buf { public int[] data = new int[16]; public Buf() { } } \
+         public void main() { var b = new Buf(); }",
+    );
+    assert!(rust.contains("vec!["), "expected a heap vec!: {rust}");
+}
+
 // ----------------------------------------------------------------------
 // Push / pop methods on dynamic arrays
 // ----------------------------------------------------------------------

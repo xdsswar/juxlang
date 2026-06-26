@@ -817,6 +817,33 @@ impl RustEmitter {
                         })
                     })
                     .unwrap_or_default();
+                // A FOREIGN slice ctor parameter (`T[]` = Rust `&[T]`) also gets
+                // the call-site `&` (mirrors `callee_param_is_foreign_slice` on
+                // the method path): a Jux array / `Vec<T>` argument borrows to
+                // `&[T]`. Gated on the class being external so user `T[]` ctor
+                // params keep their by-value behavior.
+                let ctor_param_is_foreign_slice: Vec<bool> = n
+                    .class_name
+                    .segments
+                    .last()
+                    .map(|s| s.text.as_str())
+                    .and_then(|name| {
+                        self.lookup_class_by_bare_or_fqn(name)
+                            .filter(|c| c.is_external)
+                            .and_then(|c| {
+                                c.constructors
+                                    .iter()
+                                    .find(|ctor| ctor.params.len() == n.args.len())
+                                    .or_else(|| c.constructors.first())
+                                    .map(|ctor| {
+                                        ctor.params
+                                            .iter()
+                                            .map(|p| p.ty.array_shape.is_some() && !p.is_ref)
+                                            .collect()
+                                    })
+                            })
+                    })
+                    .unwrap_or_default();
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
                 // The per-arg coercion (iface/base wrap, nullable
@@ -832,7 +859,8 @@ impl RustEmitter {
                             return;
                         }
                     }
-                    let by_ref = ctor_param_is_ref.get(i).copied().unwrap_or(false);
+                    let by_ref = ctor_param_is_ref.get(i).copied().unwrap_or(false)
+                        || ctor_param_is_foreign_slice.get(i).copied().unwrap_or(false);
                     if by_ref {
                         this.w.push('&');
                     }

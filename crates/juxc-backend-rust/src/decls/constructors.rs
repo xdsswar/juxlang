@@ -512,7 +512,13 @@ impl RustEmitter {
                 return;
             }
         }
+        // §5.6: a `new T[…]` initializer into a dynamic `T[]` field heaps
+        // (`vec![…]`) to match the field's `Vec<T>` lowering — set the slot
+        // shape (the runtime-size case heaps regardless; this fixes the
+        // const-size case, which would otherwise emit a fixed `[T; N]`).
+        let saved = self.set_array_target_shape(field_ty.and_then(|t| t.array_shape.clone()));
         self.emit_expr(init);
+        self.restore_array_target(saved);
     }
 
     /// Emit `__phantom_<name>: std::marker::PhantomData,` init lines for
