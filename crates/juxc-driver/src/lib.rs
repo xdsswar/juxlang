@@ -580,20 +580,14 @@ pub fn build_with_manifest(
         .with_context(|| format!("invoking `cargo build` in {}", crate_dir.display()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Rewrite emitted-Rust file/line anchors back to original
-        // `.jux` locations using the `// JUX:` markers the backend
-        // sprinkles into the emission. When markers are absent
-        // (caller used `lower_with_types` directly, e.g. tests) the
-        // stderr passes through unchanged. The primary emitted file
-        // is `src/main.rs`; locate it in the source list and use its
-        // contents to build the lookup table.
-        let main_rs = crate_
-            .sources
-            .iter()
-            .find(|(p, _)| p == "src/main.rs")
-            .map(|(_, c)| c.as_str())
-            .unwrap_or("");
-        let map = source_map::MarkerMap::from_emitted_source(main_rs);
+        // Rewrite emitted-Rust file/line anchors back to original `.jux`
+        // locations using the `// JUX:` markers the backend sprinkles into
+        // the emission. Built from the ON-DISK, post-rustfmt files (every
+        // emitted `.rs`, not just `src/main.rs`) so line numbers match what
+        // rustc saw and multi-file/multi-package leaks map correctly. When
+        // markers are absent (a `lower_with_types` build) stderr passes
+        // through unchanged.
+        let map = source_map::SourceMap::from_disk(crate_dir, &written_rs);
         let rewritten = source_map::rewrite_rustc_output(&stderr, &map);
         anyhow::bail!(
             "`cargo build` failed for the emitted Rust crate (this is a juxc bug):\n{rewritten}",
@@ -871,15 +865,18 @@ pub fn build_emitted_crate(
         .with_context(|| format!("invoking `cargo build` in {}", crate_dir.display()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Map emitted-Rust anchors back to `.jux` sites via markers in the
-        // primary emitted file (main.rs for bins, lib.rs for libs).
-        let primary = crate_
-            .sources
+        // Map emitted-Rust anchors back to `.jux` sites via `// JUX:` markers
+        // in EVERY emitted `.rs`, read from disk (post-rustfmt) so line numbers
+        // match what rustc saw. Built from the full `keep` set, not just the
+        // files written this run — the incremental cache skips rewriting
+        // unchanged files, but their on-disk (formatted) copy is still what
+        // rustc compiled and may carry the failing span.
+        let all_rs: Vec<PathBuf> = keep
             .iter()
-            .find(|(p, _)| p == "src/main.rs" || p == "src/lib.rs")
-            .map(|(_, c)| c.as_str())
-            .unwrap_or("");
-        let map = source_map::MarkerMap::from_emitted_source(primary);
+            .filter(|r| r.ends_with(".rs"))
+            .map(|r| crate_dir.join(r))
+            .collect();
+        let map = source_map::SourceMap::from_disk(crate_dir, &all_rs);
         let rewritten = source_map::rewrite_rustc_output(&stderr, &map);
         anyhow::bail!(
             "`cargo build` failed for the emitted Rust crate (this is a juxc bug):\n{rewritten}",

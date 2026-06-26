@@ -13,6 +13,9 @@
 //! Crude (string-walk + regex-ish parsing, not real DWARF) but enough
 //! to close the audit's Tier 2.2 UX gap until proper debuginfo lands.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
 /// One marker found inside the emitted Rust crate. Used to back-map
 /// a rustc error anchor at `emitted-line` to a Jux source location.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +91,82 @@ impl MarkerMap {
     }
 }
 
+/// Normalize an emitted-file path for cross-platform matching: forward
+/// slashes, no leading `./`. rustc reports `src/main.rs` (or `src\main.rs`
+/// on Windows); our keys are crate-relative paths — both normalize to the
+/// same string so the lookup matches regardless of separator.
+fn normalize_path(p: &str) -> String {
+    p.replace('\\', "/").trim_start_matches("./").to_string()
+}
+
+/// A whole-crate marker map: one [`MarkerMap`] per emitted `.rs` file, keyed
+/// by the crate-relative path rustc reports in its `--> <file>:L:C` anchors.
+///
+/// Built from the **on-disk, post-rustfmt** files (NOT the in-memory
+/// pre-rustfmt strings) so the line numbers match what rustc actually saw —
+/// rustfmt reflows lines, which would otherwise drift the mapping. Covers
+/// every file in a multi-file / multi-package emission, not just `src/main.rs`.
+#[derive(Debug, Default)]
+pub(crate) struct SourceMap {
+    files: HashMap<String, MarkerMap>,
+}
+
+impl SourceMap {
+    /// Build a [`SourceMap`] by reading each emitted `.rs` file from disk
+    /// (post-rustfmt) and scanning it for `// JUX:` markers. `crate_dir` is
+    /// the crate root; `written` are the absolute paths of the emitted files.
+    /// Files with no markers are skipped.
+    pub(crate) fn from_disk(crate_dir: &Path, written: &[PathBuf]) -> Self {
+        let mut files = HashMap::new();
+        for full in written {
+            let Ok(src) = std::fs::read_to_string(full) else { continue };
+            let map = MarkerMap::from_emitted_source(&src);
+            if map.is_empty() {
+                continue;
+            }
+            let key = full
+                .strip_prefix(crate_dir)
+                .map(|rel| normalize_path(&rel.to_string_lossy()))
+                .unwrap_or_else(|_| normalize_path(&full.to_string_lossy()));
+            files.insert(key, map);
+        }
+        Self { files }
+    }
+
+    /// Look up the Jux location for a rustc anchor `(rust_path, rust_line)`.
+    /// Matches the reported path to a known emitted file by normalized exact
+    /// match, then by suffix (rustc may report a shorter/longer prefix), so a
+    /// `src/app/main.rs` arrow resolves to the right file's markers.
+    pub(crate) fn lookup(&self, rust_path: &str, rust_line: u32) -> Option<&MarkerEntry> {
+        let key = normalize_path(rust_path);
+        self.files
+            .get(&key)
+            .or_else(|| {
+                self.files
+                    .iter()
+                    .find(|(k, _)| key.ends_with(k.as_str()) || k.ends_with(&key))
+                    .map(|(_, v)| v)
+            })
+            .and_then(|m| m.lookup(rust_line))
+    }
+
+    /// True when no emitted file carried markers — the rewriter early-exits
+    /// and passes stderr through verbatim (e.g. a `lower_with_types` build).
+    pub(crate) fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
+    /// Test/compat constructor: a single-file map under `path`.
+    #[cfg(test)]
+    pub(crate) fn single(path: &str, map: MarkerMap) -> Self {
+        let mut files = HashMap::new();
+        if !map.is_empty() {
+            files.insert(normalize_path(path), map);
+        }
+        Self { files }
+    }
+}
+
 /// Rewrite rustc's stderr so file-anchor lines (`--> src/main.rs:N:M`)
 /// point at the original `.jux` source location instead of the
 /// emitted Rust. The snippet lines below the arrow stay as-is — they
@@ -110,7 +189,7 @@ impl MarkerMap {
 /// locations on `note:` / `help:` lines but those use varied
 /// shapes — a future turn can extend coverage. The primary error
 /// anchor being correct is the practical win.
-pub(crate) fn rewrite_rustc_output(stderr: &str, map: &MarkerMap) -> String {
+pub(crate) fn rewrite_rustc_output(stderr: &str, map: &SourceMap) -> String {
     if map.is_empty() {
         return stderr.to_string();
     }
@@ -131,9 +210,9 @@ pub(crate) fn rewrite_rustc_output(stderr: &str, map: &MarkerMap) -> String {
 }
 
 /// Try to rewrite a single line as a `--> path:line:col` anchor.
-/// Returns `None` when the line isn't an arrow line or when the
-/// referenced emitted-line has no preceding marker.
-fn rewrite_arrow_line(line: &str, map: &MarkerMap) -> Option<String> {
+/// Returns `None` when the line isn't an arrow line or when the referenced
+/// emitted file/line has no preceding marker.
+fn rewrite_arrow_line(line: &str, map: &SourceMap) -> Option<String> {
     let trimmed = line.trim_start();
     let indent_len = line.len() - trimmed.len();
     let indent = &line[..indent_len];
@@ -144,7 +223,7 @@ fn rewrite_arrow_line(line: &str, map: &MarkerMap) -> Option<String> {
     let (before_col, col_str) = rest.rsplit_once(':')?;
     let (rust_path, line_str) = before_col.rsplit_once(':')?;
     let rust_line: u32 = line_str.parse().ok()?;
-    let entry = map.lookup(rust_line)?;
+    let entry = map.lookup(rust_path, rust_line)?;
     Some(format!(
         "{indent}--> {jux_path}:{jline}:{jcol}  (= {rust_path}:{rust_line}:{col_str})",
         jux_path = entry.jux_path,
@@ -222,7 +301,7 @@ mod tests {
     #[test]
     fn rewrite_rewrites_arrow_lines() {
         let rust = "// JUX:test.jux:5:9\nfn main() {\n    \"oops\"\n}";
-        let map = MarkerMap::from_emitted_source(rust);
+        let map = SourceMap::single("src/main.rs", MarkerMap::from_emitted_source(rust));
         let stderr = "error[E0308]: mismatched types\n  --> src/main.rs:3:5\n   |";
         let rewritten = rewrite_rustc_output(stderr, &map);
         assert!(
@@ -238,7 +317,7 @@ mod tests {
     /// Lines without `--> ` pass through untouched.
     #[test]
     fn rewrite_leaves_other_lines_alone() {
-        let map = MarkerMap::from_emitted_source("// JUX:a.jux:1:1\n");
+        let map = SourceMap::single("src/main.rs", MarkerMap::from_emitted_source("// JUX:a.jux:1:1\n"));
         let stderr = "error[E0308]: mismatched types\n   |\n3 |     foo\n   |     ^^^\n";
         let rewritten = rewrite_rustc_output(stderr, &map);
         // Everything except `--> ...` should be byte-identical.
@@ -251,7 +330,7 @@ mod tests {
     /// emitted crate was built without markers (`lower_with_types`).
     #[test]
     fn empty_map_passes_stderr_through() {
-        let map = MarkerMap::default();
+        let map = SourceMap::default();
         let stderr = "error: something --> src/main.rs:5:1\n";
         assert_eq!(rewrite_rustc_output(stderr, &map), stderr);
     }
@@ -263,11 +342,50 @@ mod tests {
         // Marker on line 5 of the emitted Rust; rustc error on
         // line 2 has no preceding marker.
         let rust = "fn main() {\n}\n// JUX:x.jux:1:1\n";
-        let map = MarkerMap::from_emitted_source(rust);
+        let map = SourceMap::single("src/main.rs", MarkerMap::from_emitted_source(rust));
         let stderr = "  --> src/main.rs:2:1\n";
         let rewritten = rewrite_rustc_output(stderr, &map);
         // No marker covers line 2 → pass through verbatim.
         assert!(rewritten.contains("--> src/main.rs:2:1"));
         assert!(!rewritten.contains("(= "));
+    }
+
+    /// Test-only multi-file constructor: build a `SourceMap` from
+    /// `(rel_path, emitted_rust)` pairs without touching disk.
+    fn source_map_from_pairs(pairs: &[(&str, &str)]) -> SourceMap {
+        let mut files = HashMap::new();
+        for (path, src) in pairs {
+            let map = MarkerMap::from_emitted_source(src);
+            if !map.is_empty() {
+                files.insert(normalize_path(path), map);
+            }
+        }
+        SourceMap { files }
+    }
+
+    /// MULTI-FILE: an arrow into `src/app/main.rs` resolves against THAT
+    /// file's markers, not another package's `src/lib.rs` — the path keys
+    /// the lookup, so a multi-package build maps each leak to the right file.
+    #[test]
+    fn multi_file_arrow_resolves_by_path() {
+        let map = source_map_from_pairs(&[
+            ("src/lib.rs", "// JUX:lib.jux:10:3\nfn a() {}"),
+            ("src/app/main.rs", "fn main() {\n// JUX:app.jux:7:5\n    bad\n}"),
+        ]);
+        // Arrow into the app file, line 3 → app.jux:7:5 (its marker on line 2).
+        let stderr = "  --> src/app/main.rs:3:5\n";
+        let rewritten = rewrite_rustc_output(stderr, &map);
+        assert!(rewritten.contains("--> app.jux:7:5"), "got: {rewritten}");
+        assert!(!rewritten.contains("lib.jux"), "wrong file: {rewritten}");
+    }
+
+    /// Separator-insensitive: a Windows `src\main.rs` arrow still matches a
+    /// `src/main.rs` key.
+    #[test]
+    fn backslash_path_matches_forward_slash_key() {
+        let map = source_map_from_pairs(&[("src/main.rs", "// JUX:m.jux:1:1\nfn main() {}")]);
+        let stderr = r"  --> src\main.rs:1:1";
+        let rewritten = rewrite_rustc_output(stderr, &map);
+        assert!(rewritten.contains("--> m.jux:1:1"), "got: {rewritten}");
     }
 }
