@@ -1500,6 +1500,12 @@ impl RustEmitter {
         // A `return` inside the lambda belongs to the LAMBDA, not any
         // enclosing try-closure — clear the threading flag for the body.
         let prev_try = std::mem::take(&mut self.in_try_closure);
+        // BARE-closure target (§G.3): a lambda flowing into a foreign
+        // `impl Fn(..)` param emits `move |..| ..` directly, with no
+        // `Rc<dyn Fn>` wrapper. Take-and-clear here so a nested lambda in the
+        // body doesn't inherit it. The wrapper-capture clone block is kept —
+        // it gives the bare closure the same share-on-capture semantics.
+        let bare = std::mem::take(&mut self.lambda_bare_target);
         let captures = self.collect_wrapper_captures(l);
         if !captures.is_empty() {
             self.w.push_str("{ ");
@@ -1511,7 +1517,11 @@ impl RustEmitter {
                 self.w.push_str(".clone(); ");
             }
         }
-        self.w.push_str("std::rc::Rc::new(move ");
+        if bare {
+            self.w.push_str("move ");
+        } else {
+            self.w.push_str("std::rc::Rc::new(move ");
+        }
         self.w.push('|');
         for (i, p) in l.params.iter().enumerate() {
             if i > 0 {
@@ -1573,7 +1583,10 @@ impl RustEmitter {
         for n in &shadowed_refs {
             self.ref_locals.insert(n.clone());
         }
-        self.w.push(')');
+        // Close the `Rc::new(` wrapper — skipped for a bare closure.
+        if !bare {
+            self.w.push(')');
+        }
         if !self.collect_wrapper_captures(l).is_empty() {
             self.w.push_str(" }");
         }

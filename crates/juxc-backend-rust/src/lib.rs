@@ -1131,6 +1131,12 @@ struct RustEmitter {
     /// closure types as `()`. Take-and-cleared by the lambda
     /// emitters.
     pub(crate) lambda_void_target: bool,
+    /// Set just before emitting a lambda argument that flows into a FOREIGN
+    /// (`rust.<crate>`) `impl Fn(..)`-typed parameter: the lambda lowers to a
+    /// BARE Rust closure (`move |..| ..`) instead of the default
+    /// `Rc<dyn Fn>`, since `impl Fn`/`FnMut`/`FnOnce` accept a bare closure.
+    /// Take-and-cleared by [`Self::emit_lambda`].
+    pub(crate) lambda_bare_target: bool,
 }
 
 /// True when a class declaration should lower to the shared-mutation
@@ -4142,6 +4148,7 @@ impl RustEmitter {
             emitting_method_receiver: false,
             in_lambda_body: false,
             lambda_void_target: false,
+            lambda_bare_target: false,
         }
     }
 

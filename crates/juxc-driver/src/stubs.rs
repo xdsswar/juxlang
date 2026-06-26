@@ -58,14 +58,14 @@ const STD_MERGE_CRATES: &[&str] = &["alloc", "std"];
 /// Bump to invalidate previously-cached generated `rust.std` stubs when the
 /// bindgen surface or the merge set changes. Embedded in the cache header and
 /// checked on load.
-const STD_STUB_CACHE_VERSION: u32 = 10;
+const STD_STUB_CACHE_VERSION: u32 = 11;
 
 /// Bump to invalidate previously-cached generated per-crate (`rust.<crate>`)
 /// stubs when the bindgen surface / naming changes. Stamped as the first line of
 /// each generated `.jux-stubs/rust/<crate>.jux.d` and checked on load so a stale
 /// stub (e.g. a pre-snake_case cache) is regenerated rather than trusted. Started
 /// at 1 alongside the snake_case-verbatim naming switch.
-const CRATE_STUB_CACHE_VERSION: u32 = 1;
+const CRATE_STUB_CACHE_VERSION: u32 = 2;
 
 /// First-line marker a generated crate stub must carry to be trusted fresh.
 fn crate_cache_header() -> String {

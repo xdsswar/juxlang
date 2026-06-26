@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use rustdoc_types::{
     Crate, Enum, Function, GenericArgs, GenericArg, GenericBound, GenericParamDefKind, Generics,
-    Item, ItemEnum, Path, Struct, StructKind, Type, VariantKind, Visibility,
+    Item, ItemEnum, Path, Struct, StructKind, Type, VariantKind, Visibility, WherePredicate,
 };
 
 use crate::model::{
@@ -388,10 +388,51 @@ fn map_params(f: &Function) -> Vec<StubParam> {
         .filter(|(n, _)| n != "self")
         .map(|(n, ty)| StubParam {
             name: param_name(n),
-            ty: map_type(ty),
+            ty: map_param_type(ty, &f.generics),
             by_ref: is_borrow_param(ty),
         })
         .collect()
+}
+
+/// Like [`map_type`], but with closure-parameter recovery: a parameter typed
+/// by a generic with an `Fn`/`FnMut`/`FnOnce` bound (`fn f<F: Fn(A) -> B>(cb: F)`)
+/// surfaces as the Jux function type `(A) -> B` so a Jux lambda can be passed,
+/// instead of an opaque type parameter `F`. The unused `<F>` stays on the
+/// method's generic list and is inferred at the Rust call site from the bare
+/// closure the backend emits. (The syntactic `impl Fn(..)` form is handled
+/// directly in [`map_type`].)
+fn map_param_type(ty: &Type, generics: &Generics) -> JuxType {
+    if let Type::Generic(name) = ty {
+        if let Some(fnty) = generic_fn_bound(name, generics) {
+            return fnty;
+        }
+    }
+    map_type(ty)
+}
+
+/// Recover the closure signature for a generic param `name` whose bound is an
+/// `Fn`-family trait — checking both the param's own bound list and the
+/// `where` clause. `None` when `name` has no Fn bound.
+fn generic_fn_bound(name: &str, generics: &Generics) -> Option<JuxType> {
+    for p in &generics.params {
+        if p.name == name {
+            if let GenericParamDefKind::Type { bounds, .. } = &p.kind {
+                if let Some(fnty) = fn_trait_to_jux(bounds) {
+                    return Some(fnty);
+                }
+            }
+        }
+    }
+    for w in &generics.where_predicates {
+        if let WherePredicate::BoundPredicate { type_, bounds, .. } = w {
+            if matches!(type_, Type::Generic(n) if n == name) {
+                if let Some(fnty) = fn_trait_to_jux(bounds) {
+                    return Some(fnty);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// True when the Rust parameter is a borrow that maps to a by-value Jux type but
@@ -512,9 +553,16 @@ pub fn map_type(t: &Type) -> JuxType {
             other => map_type(other),
         },
         Type::RawPointer { type_, .. } => JuxType::RawPtr(Box::new(map_type(type_))),
-        Type::ImplTrait(bounds) => first_trait_in_bounds(bounds)
-            .map(JuxType::user)
-            .unwrap_or_else(|| JuxType::Unknown("Object".into())),
+        // `impl Fn(A) -> B` (and `FnMut`/`FnOnce`) recovers its CALL SIGNATURE
+        // as a Jux function type `(A) -> B`, so a Jux lambda can be passed to
+        // the foreign API (§G.3 closures). A bare `impl Fn*` param accepts a
+        // bare Rust closure, which the backend emits for foreign fn-typed
+        // params. A non-Fn `impl Trait` keeps its first-trait name.
+        Type::ImplTrait(bounds) => fn_trait_to_jux(bounds).unwrap_or_else(|| {
+            first_trait_in_bounds(bounds)
+                .map(JuxType::user)
+                .unwrap_or_else(|| JuxType::Unknown("Object".into()))
+        }),
         Type::DynTrait(dt) => dt
             .traits
             .first()
@@ -602,6 +650,37 @@ fn first_trait_in_bounds(bounds: &[GenericBound]) -> Option<String> {
         GenericBound::TraitBound { trait_, .. } => Some(last_segment(&trait_.path).to_string()),
         _ => None,
     })
+}
+
+/// If a bound list contains an `Fn`/`FnMut`/`FnOnce` trait, recover its
+/// parenthesized call signature (`Fn(A, B) -> R`) as a Jux function type
+/// `(A, B) -> R`. Returns `None` for a non-Fn bound list. The Fn-family
+/// distinction isn't carried in the surface type: a bare Rust closure (what
+/// the backend emits for a foreign fn-typed param) satisfies `Fn`, `FnMut`,
+/// AND `FnOnce`, so all three map to the same `(A) -> R`.
+fn fn_trait_to_jux(bounds: &[GenericBound]) -> Option<JuxType> {
+    for b in bounds {
+        let GenericBound::TraitBound { trait_, .. } = b else { continue };
+        if !matches!(last_segment(&trait_.path), "Fn" | "FnMut" | "FnOnce") {
+            continue;
+        }
+        // The call signature lives in the trait path's PARENTHESIZED args
+        // (`Fn(inputs) -> output`), distinct from the angle-bracketed form.
+        if let Some(args) = &trait_.args {
+            if let GenericArgs::Parenthesized { inputs, output } = args.as_ref() {
+                let params = inputs.iter().map(map_type).collect();
+                let ret = output.as_ref().map(map_type).unwrap_or(JuxType::Void);
+                return Some(JuxType::Fn { params, ret: Box::new(ret), is_async: false });
+            }
+        }
+        // An `Fn` bound with no parenthesized args (rare) → a no-arg closure.
+        return Some(JuxType::Fn {
+            params: Vec::new(),
+            ret: Box::new(JuxType::Void),
+            is_async: false,
+        });
+    }
+    None
 }
 
 // ============================================================================
@@ -719,6 +798,36 @@ mod tests {
             map_type(&resolved("Box", vec![resolved("Widget", vec![])])).to_string(),
             "Widget",
         );
+    }
+
+    /// `impl Fn(A) -> B` recovers its parenthesized call signature as the Jux
+    /// function type `(A) -> B`, so a Jux lambda can be passed (§G.3).
+    #[test]
+    fn impl_fn_recovers_call_signature() {
+        let bound = GenericBound::TraitBound {
+            trait_: Path {
+                path: "Fn".into(),
+                id: Id(0),
+                args: Some(Box::new(GenericArgs::Parenthesized {
+                    inputs: vec![Type::Primitive("i32".into())],
+                    output: Some(Type::Primitive("bool".into())),
+                })),
+            },
+            generic_params: Vec::new(),
+            modifier: rustdoc_types::TraitBoundModifier::None,
+        };
+        assert_eq!(map_type(&Type::ImplTrait(vec![bound])).to_string(), "(i32) -> bool");
+    }
+
+    /// A non-Fn `impl Trait` keeps its first-trait name (no closure recovery).
+    #[test]
+    fn impl_non_fn_trait_keeps_name() {
+        let bound = GenericBound::TraitBound {
+            trait_: Path { path: "Display".into(), id: Id(0), args: None },
+            generic_params: Vec::new(),
+            modifier: rustdoc_types::TraitBoundModifier::None,
+        };
+        assert_eq!(map_type(&Type::ImplTrait(vec![bound])).to_string(), "Display");
     }
 
     #[test]

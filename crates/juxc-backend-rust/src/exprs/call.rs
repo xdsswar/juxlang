@@ -2118,6 +2118,13 @@ impl RustEmitter {
                     }
                 }
             }
+            // A lambda into a FOREIGN `impl Fn(..)` param lowers to a BARE Rust
+            // closure (`move |..| ..`), not the default `Rc<dyn Fn>` — that's
+            // what `impl Fn`/`FnMut`/`FnOnce` accepts (§G.3). Jux-to-Jux fn
+            // params (not external) keep the `Rc` representation.
+            if self.callee_param_is_foreign_fn(&call.callee, i) {
+                self.lambda_bare_target = true;
+            }
         }
         let nullable = self.callee_param_is_nullable(&call.callee, i);
         // Nested nullability (§7.10): an explicit `f<int?>(5)` whose param is a
