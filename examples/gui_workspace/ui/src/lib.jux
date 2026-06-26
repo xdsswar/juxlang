@@ -1,0 +1,5 @@
+// Library crate root for the `demo.ui` package.
+//
+// This file is package-less (the crate root always is); the actual widgets
+// live under `src/demo/ui/` in `package demo.ui;`. The build compiles every
+// `.jux` file under `src/`, so the package tree is picked up automatically.

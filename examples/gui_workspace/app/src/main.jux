@@ -1,0 +1,73 @@
+// demo.app -- the executable. It owns a real desktop window (minifb) and
+// drives the widgets from the sibling `demo.ui` package.
+//
+// This exercises the whole multipackage + crate-interop chain at once:
+//   - `import demo.ui.*`  -> a Jux workspace path-dependency (sibling lib)
+//   - `import rust.minifb.*` -> a crates.io crate consumed in Jux syntax
+//   - a software-rendered, mouse-interactive GUI loop
+//
+// This is the binary crate root, so it is package-less (its package identity,
+// `demo.app`, comes from the manifest).
+
+import demo.ui.Canvas;
+import demo.ui.Button;
+
+import rust.minifb.Window;
+import rust.minifb.WindowOptions;
+import rust.minifb.MouseMode;
+import rust.minifb.MouseButton;
+
+public void main() {
+    var canvas = new Canvas();
+    int w = canvas.width();
+    int h = canvas.height();
+
+    // Two action buttons (clicking flips their color) plus a quit button.
+    var cycleRed = new Button(28, 24, 200, 36, "Cycle Red", (u32) 0x00AA3344);
+    var cycleBlue = new Button(28, 78, 200, 36, "Cycle Blue", (u32) 0x00334488);
+    var quit = new Button(28, 132, 200, 36, "Quit", (u32) 0x00555555);
+
+    var opts = new WindowOptions();
+    var window = new Window("Jux GUI -- multipackage demo", (uint) w, (uint) h, opts);
+    window.set_target_fps(60);
+
+    int clicks = 0;
+    bool prevDown = false;
+
+    print("window open -- click the buttons (Quit closes it)");
+
+    while (window.is_open()) {
+        // ---- input: edge-triggered left click ----
+        bool down = window.get_mouse_down(MouseButton.Left);
+        if (down && !prevDown) {
+            var mp = window.get_mouse_pos(MouseMode.Clamp);
+            if (mp != null) {
+                var (fx, fy) = mp!!;
+                int mx = (int) fx;
+                int my = (int) fy;
+
+                if (cycleRed.contains(mx, my)) {
+                    cycleRed.color = cycleRed.color ^ (u32) 0x00FFFFFF;
+                    clicks = clicks + 1;
+                    print("clicked: " + cycleRed.label + " (total " + clicks + ")");
+                } else if (cycleBlue.contains(mx, my)) {
+                    cycleBlue.color = cycleBlue.color ^ (u32) 0x00FFFFFF;
+                    clicks = clicks + 1;
+                    print("clicked: " + cycleBlue.label + " (total " + clicks + ")");
+                } else if (quit.contains(mx, my)) {
+                    print("clicked: Quit -- closing after " + clicks + " clicks");
+                    return;
+                }
+            }
+        }
+        prevDown = down;
+
+        // ---- render ----
+        canvas.clear((u32) 0x00101418);
+        cycleRed.draw(canvas);
+        cycleBlue.draw(canvas);
+        quit.draw(canvas);
+
+        window.update_with_buffer(canvas.buf, (uint) w, (uint) h);
+    }
+}
