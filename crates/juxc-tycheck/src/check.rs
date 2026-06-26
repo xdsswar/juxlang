@@ -3407,14 +3407,16 @@ impl<'a> Checker<'a> {
                 for inner in &n.inner_sizes {
                     self.check_expr(inner);
                 }
-                // A fixed-array size is a Rust const position: when it
-                // references a const-generic param it must be the BARE
-                // name (`new int[N]`) — arithmetic over it (`N + 1`)
-                // needs the const-eval interpreter (spec phase 16) and
-                // would leak rustc's `generic_const_exprs` error.
-                self.check_const_size_expr(&n.size);
+                // `new T[«size»]` is HEAPABLE: a non-const (or const-generic
+                // arithmetic) size lowers to a heap `vec![..; size]`, so any
+                // runtime size is allowed here — that's how a runtime-sized
+                // buffer (`new int[w * h]`) is allocated (§5.6). Only a fixed
+                // array *type* (`int[N] field;`) needs a const size; that's
+                // guarded separately by `check_fixed_array_size_in_type`.
+                // Const-fold panics / limit overruns still fire (see helper).
+                self.check_const_size_expr(&n.size, true);
                 for inner in &n.inner_sizes {
-                    self.check_const_size_expr(inner);
+                    self.check_const_size_expr(inner, true);
                 }
             }
 
@@ -4740,7 +4742,9 @@ impl<'a> Checker<'a> {
             for dim in &shape.dims {
                 if let juxc_ast::ArrayDim::Fixed(size) = dim {
                     let size = size.clone();
-                    self.check_const_size_expr(&size);
+                    // A FIXED array TYPE (`int[«size»] field;`) is a genuine
+                    // Rust `[T; N]` const position — the size MUST be const.
+                    self.check_const_size_expr(&size, false);
                 }
             }
         }
@@ -4755,7 +4759,17 @@ impl<'a> Checker<'a> {
     /// instead of a rustc leak. Sizes that don't mention a const param
     /// are left alone — their (pre-existing) validation is rustc's
     /// const-expr check.
-    fn check_const_size_expr(&mut self, size: &Expr) {
+    ///
+    /// `heapable` is `true` at a `new T[«size»]` **expression** site: such an
+    /// allocation lowers to a heap `vec![..; size]` whenever the size isn't a
+    /// bare compile-time constant (backend `emit_new_array_dim`), and a
+    /// `Vec` repeat accepts ANY runtime `usize` length. So a non-const or
+    /// const-generic-arithmetic size is fine there — it just heaps. The
+    /// const-ness restriction only bites for a FIXED array TYPE (`heapable =
+    /// false`), which is a real Rust `[T; N]` and genuinely needs a const `N`.
+    /// Const-fold *panics* (overflow / divide-by-zero) and resource-limit
+    /// overruns are reported regardless, since they're real errors either way.
+    fn check_const_size_expr(&mut self, size: &Expr, heapable: bool) {
         let ctx = crate::const_eval::ConstCtx {
             symbols: self.symbols,
             generic_param_names: &self.const_param_names,
@@ -4766,9 +4780,11 @@ impl<'a> Checker<'a> {
             Ok(_) => {}
             // Mentions a GENERIC const param: a bare `[N]` is fine (forwarded
             // as a Rust const-generic arg), but computed `[N + 1]` needs the
-            // nightly `generic_const_exprs` we don't enable — keep E0445.
+            // nightly `generic_const_exprs` we don't enable — keep E0445 for a
+            // FIXED array type. At a `new` site it heaps (`vec![..; N + 1]`),
+            // so there's nothing to reject.
             Err(crate::const_eval::ConstEvalError::Generic) => {
-                if !matches!(size, Expr::Path(qn) if qn.segments.len() == 1) {
+                if !heapable && !matches!(size, Expr::Path(qn) if qn.segments.len() == 1) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0445_ConstGenericUnsupported,
@@ -4801,7 +4817,10 @@ impl<'a> Checker<'a> {
             // a clearly non-const ARITHMETIC size is a hard error now (it would
             // otherwise leak a rustc "array size must be const" error).
             Err(crate::const_eval::ConstEvalError::NonConst(msg)) => {
-                if !matches!(size, Expr::Literal(_) | Expr::Path(_)) {
+                // A runtime size is only an error for a FIXED array TYPE. At a
+                // `new T[n]` expression it heaps to `vec![..; n]` (§5.6), which
+                // is exactly how a runtime-sized buffer is allocated.
+                if !heapable && !matches!(size, Expr::Literal(_) | Expr::Path(_)) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0841_NonConstInConstContext,
@@ -6967,20 +6986,37 @@ impl<'a> Checker<'a> {
             };
             let expected = substitute(&expected_raw, subst_params, subst_args);
             let found = infer_expr(arg, &self.env, self.symbols);
-            if !compatible(&expected, &found, self.symbols) {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        code::Code::E0410_TypeMismatch,
-                        format!(
-                            "argument {} to `{}`: expected {}, found {}",
-                            i + 1,
-                            callee_name,
-                            expected,
-                            found,
-                        ),
-                    )
-                    .with_span(expr_span(arg)),
-                );
+            // A foreign SLICE param (`T[]` = Rust `&[T]`) bridges a Jux array
+            // or `rust.std` `Vec<T>` argument (both Deref-coerce to `&[T]`);
+            // that's accepted here without touching the global `compatible()`.
+            if !foreign_arg_bridges(&expected, &found, param, declaring_class, self.symbols)
+                && !compatible(&expected, &found, self.symbols)
+            {
+                let mut diag = Diagnostic::error(
+                    code::Code::E0410_TypeMismatch,
+                    format!(
+                        "argument {} to `{}`: expected {}, found {}",
+                        i + 1,
+                        callee_name,
+                        expected,
+                        found,
+                    ),
+                )
+                .with_span(expr_span(arg));
+                // A nullable `T?` flowing into a non-nullable slot is the #1
+                // foreign-boundary mistake (e.g. a `WindowOptions?` field
+                // passed to `new Window(.., WindowOptions)`). Point the user at
+                // the fix instead of leaking a rustc `Option<T>` mismatch.
+                if matches!(found, Ty::Nullable(_))
+                    && !matches!(expected, Ty::Nullable(_) | Ty::Unknown)
+                {
+                    diag = diag.with_help(
+                        "this value may be null; unwrap it with `!!` (panics on null), provide a \
+                         fallback with `?:`, guard it with `if (x != null) { … }`, or make the \
+                         parameter nullable",
+                    );
+                }
+                self.diagnostics.push(diag);
             }
         }
     }
@@ -6990,6 +7026,61 @@ impl<'a> Checker<'a> {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// Foreign-call argument BRIDGE (§G interop). A `rust.*` / crate callee whose
+/// parameter is a Rust **slice** (`&[T]`, spelled `T[]` in the `.jux.d` stub)
+/// accepts a Jux array OR the `rust.std` owned `Vec<T>` as its argument:
+/// `&[T; N]` and `&Vec<T>` both Deref-coerce to `&[T]` in Rust, and the
+/// backend re-adds the borrow at the call slot (`callee_param_is_foreign_slice`).
+///
+/// Deliberately narrow — it fires ONLY for an external callee, ONLY for a
+/// slice parameter, and leaves the global [`compatible`] untouched, so normal
+/// (non-foreign) call-arg checking is unchanged. `Vec` is the sole owned std
+/// container that derefs to a slice, so naming it is a correct discriminator,
+/// not a maintenance-prone allowlist.
+fn foreign_arg_bridges(
+    expected: &Ty,
+    found: &Ty,
+    param: &ParamSig,
+    declaring_class: Option<&str>,
+    symbols: &SymbolTable,
+) -> bool {
+    // External (foreign) callee only — resolve by exact key, else by bare name.
+    let Some(cls) = declaring_class else { return false };
+    let is_external = symbols
+        .classes
+        .get(cls)
+        .or_else(|| {
+            let bare = cls.rsplit('.').next().unwrap_or(cls);
+            symbols
+                .classes
+                .iter()
+                .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+                .map(|(_, v)| v)
+        })
+        .is_some_and(|c| c.is_external);
+    if !is_external {
+        return false;
+    }
+    // The parameter must be a SLICE: a `T[]` (array_shape), not a scalar `&T`
+    // borrow (`is_ref`). The lowered `expected` is then a `Ty::Array`.
+    if param.ty.array_shape.is_none() || param.is_ref {
+        return false;
+    }
+    let Ty::Array { element, .. } = expected else {
+        return false;
+    };
+    match found {
+        // A Jux array argument, element-compatible.
+        Ty::Array { element: found_el, .. } => compatible(element, found_el, symbols),
+        // The `rust.std` owned `Vec<E>`, element-compatible.
+        Ty::User { name, generic_args } if generic_args.len() == 1 => {
+            let bare = name.rsplit('.').next().unwrap_or(name);
+            bare == "Vec" && compatible(element, &generic_args[0], symbols)
+        }
+        _ => false,
+    }
+}
 
 /// Lower a [`ReturnType`] to a [`Ty`]. Duplicated from `infer.rs` so the
 /// checker can use it without exporting an internal helper. `async T`
@@ -7824,6 +7915,109 @@ mod tests {
         let mut checker = Checker::new(&symbols, &mut diags);
         checker.check_unit(&parse_result.ast);
         diags
+    }
+
+    /// Like [`run`], but first builds a FOREIGN (`is_external`) stub unit from
+    /// `stub_src` into the same workspace — so `@rust`-style external classes
+    /// (e.g. a `rust.std.Vec` or a crate type taking a slice param) are in
+    /// scope. Returns only the diagnostics from checking the user `src`.
+    fn run_with_stub(stub_src: &str, src: &str) -> Vec<Diagnostic> {
+        let stub_sf = SourceFile::new("stub.jux.d", stub_src);
+        let stub_lex = lex(&stub_sf);
+        assert!(stub_lex.diagnostics.is_empty(), "stub lex: {:?}", stub_lex.diagnostics);
+        let stub_parse = parse(&stub_lex.tokens);
+        assert!(stub_parse.diagnostics.is_empty(), "stub parse: {:?}", stub_parse.diagnostics);
+        let mut stub_ast = stub_parse.ast;
+        stub_ast.is_external = true;
+
+        let sf = SourceFile::new("test.jux", src);
+        let lex_result = lex(&sf);
+        assert!(lex_result.diagnostics.is_empty(), "lex: {:?}", lex_result.diagnostics);
+        let parse_result = parse(&lex_result.tokens);
+        assert!(parse_result.diagnostics.is_empty(), "parse: {:?}", parse_result.diagnostics);
+        let main_ast = parse_result.ast;
+
+        let mut throwaway = Vec::new();
+        let symbols = crate::symbol_table::build_workspace(
+            std::slice::from_ref(&stub_ast)
+                .iter()
+                .cloned()
+                .chain(std::iter::once(main_ast.clone()))
+                .collect::<Vec<_>>()
+                .as_slice(),
+            &mut throwaway,
+        );
+        let mut diags = Vec::new();
+        let mut checker = Checker::new(&symbols, &mut diags);
+        checker.check_unit(&main_ast);
+        diags
+    }
+
+    /// A single-package foreign stub: a `Vec<T>` / `HashSet<T>` container plus
+    /// a crate class `Sink` with a SLICE parameter (`u32[]` = Rust `&[u32]`).
+    /// One `package` per unit, so everything lives in `demo.stub` — the bridge
+    /// keys on the type's bare name (`Vec`), not its package.
+    const FOREIGN_STUB: &str = r#"
+        package demo.stub;
+        @rust("std::vec::Vec")
+        public class Vec<T> { public Vec(); public void push(T v); }
+        @rust("std::collections::HashSet")
+        public class HashSet<T> { public HashSet(); public void insert(T v); }
+        @rust("demo::Sink")
+        public class Sink { public Sink(); public void feed(u32[] data); }
+    "#;
+
+    /// A `Vec<u32>` argument bridges to a foreign `u32[]` (slice) parameter —
+    /// `&Vec<u32>` Deref-coerces to `&[u32]`, so NO E0410.
+    #[test]
+    fn vec_bridges_to_foreign_slice_param() {
+        let d = run_with_stub(
+            FOREIGN_STUB,
+            "import demo.stub.Sink; import demo.stub.Vec; \
+             public void main() { var s = new Sink(); var v = new demo.stub.Vec<u32>(); s.feed(v); }",
+        );
+        assert!(!has(&d, code::Code::E0410_TypeMismatch), "Vec should bridge to a slice: {d:?}");
+    }
+
+    /// A plain Jux array argument bridges to a foreign slice parameter — NO E0410.
+    #[test]
+    fn array_bridges_to_foreign_slice_param() {
+        let d = run_with_stub(
+            FOREIGN_STUB,
+            "import demo.stub.Sink; \
+             public void main() { var s = new Sink(); var a = new u32[8]; s.feed(a); }",
+        );
+        assert!(!has(&d, code::Code::E0410_TypeMismatch), "array should bridge to a slice: {d:?}");
+    }
+
+    /// The bridge is Vec/array-ONLY: a non-`Vec` external container into a
+    /// foreign slice parameter still mismatches (E0410). Proves the bridge
+    /// didn't loosen foreign-arg checking generally.
+    #[test]
+    fn non_vec_container_to_foreign_slice_still_e0410() {
+        let d = run_with_stub(
+            FOREIGN_STUB,
+            "import demo.stub.Sink; import demo.stub.HashSet; \
+             public void main() { var s = new Sink(); var h = new demo.stub.HashSet<u32>(); s.feed(h); }",
+        );
+        assert!(has(&d, code::Code::E0410_TypeMismatch), "HashSet must NOT bridge to a slice: {d:?}");
+    }
+
+    /// A nullable `T?` argument flowing into a non-nullable parameter raises
+    /// E0410 WITH actionable unwrap guidance (the `Frame.options` mistake).
+    #[test]
+    fn nullable_arg_to_non_null_param_emits_e0410_with_help() {
+        let d = run(
+            "public class Opt { public Opt() { } } \
+             public void take(Opt o) { } \
+             public void main() { Opt? maybe = new Opt(); take(maybe); }",
+        );
+        let hit = d.iter().find(|x| x.code == code::Code::E0410_TypeMismatch);
+        assert!(hit.is_some(), "expected E0410 for T? -> T param: {d:?}");
+        assert!(
+            hit.unwrap().help.iter().any(|h| h.contains("!!")),
+            "expected unwrap help on the diagnostic: {d:?}",
+        );
     }
 
     /// Convenience: did any diagnostic with `code` fire?
@@ -10054,9 +10248,13 @@ mod tests {
 
     /// A non-const arithmetic array size (over a runtime local) is rejected.
     #[test]
-    fn const_eval_non_const_array_size_e0841() {
+    fn runtime_new_array_size_heaps_no_e0841() {
+        // §5.6: a runtime-sized `new T[n]` EXPRESSION is a HEAP allocation
+        // (`vec![..; n]`), so a non-const size is accepted — that's how a
+        // runtime-sized buffer is allocated. (A fixed array *type* `int[n]`
+        // still requires a const size; the type-position check is unchanged.)
         let d = run("public void main() { var n = 5; var a = new int[n + 1]; }");
-        assert!(has(&d, code::Code::E0841_NonConstInConstContext), "{d:?}");
+        assert!(!has(&d, code::Code::E0841_NonConstInConstContext), "{d:?}");
     }
 
     /// REGRESSION: const-generic ARITHMETIC over a generic param stays E0445
@@ -10089,10 +10287,12 @@ mod tests {
         assert!(!has(&d, code::Code::E0842_ConstEvalPanic), "{d:?}");
     }
 
-    /// Const-generic arithmetic in an array size (`new int[N + 1]`)
-    /// → E0445 (needs the const-eval interpreter, deferred).
+    /// Const-generic arithmetic in a `new T[N + 1]` EXPRESSION now heaps
+    /// (`vec![..; N + 1]`, valid because `N` is a `usize` const-generic in
+    /// scope) — so NO E0445. The fixed array *type* `byte[N + 1]` still gets
+    /// E0445 (see `generic_param_arithmetic_array_size_still_e0445`).
     #[test]
-    fn const_arithmetic_array_size_emits_e0445() {
+    fn const_generic_arithmetic_new_array_heaps_no_e0445() {
         let d = run(
             r#"
             public class S<int N> {
@@ -10103,8 +10303,8 @@ mod tests {
             "#,
         );
         assert!(
-            has(&d, code::Code::E0445_ConstGenericUnsupported),
-            "expected E0445 for const arithmetic in an array size: {d:?}",
+            !has(&d, code::Code::E0445_ConstGenericUnsupported),
+            "expected `new int[N + 1]` to heap (no E0445): {d:?}",
         );
     }
 

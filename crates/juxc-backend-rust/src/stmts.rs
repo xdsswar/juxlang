@@ -2150,18 +2150,11 @@ impl RustEmitter {
                 // §5.6: a `new T[N]` flowing into a DYNAMIC array slot
                 // (`int[] a = …`) lowers to a heap `vec![…]`. The flag
                 // is read by `emit_new_array`; a `var` / fixed-array
-                // (`int[N]`) slot leaves it clear (stack array).
-                let prev_dyn = self.dynamic_array_target;
-                let prev_shape = self.target_array_shape.take();
+                // (`int[N]`) slot leaves it clear (stack array). The full
+                // LHS shape is carried so a multi-dim `new T[a][b]` picks
+                // fixed/dynamic INDEPENDENTLY per dimension.
                 let lhs_shape = var.ty.as_ref().and_then(|t| t.array_shape.clone());
-                self.dynamic_array_target = lhs_shape.as_ref().map_or(false, |s| {
-                    // Only the OUTERMOST dimension decides the outer
-                    // wrapper (`Vec` vs fixed array) of `new T[…]`.
-                    matches!(s.outer(), juxc_ast::ArrayDim::Dynamic)
-                });
-                // Carry the full LHS shape so a multi-dim `new T[a][b]`
-                // can pick fixed/dynamic INDEPENDENTLY per dimension.
-                self.target_array_shape = lhs_shape;
+                let saved_array_target = self.set_array_target_shape(lhs_shape);
                 // Numeric coercion into a typed local: `int n = v.len();`
                 // (uint -> int) or `long x = intExpr;` (int -> long widening).
                 // Cast the init to the declared numeric type when it differs
@@ -2179,8 +2172,7 @@ impl RustEmitter {
                     self.w.push('(');
                 }
                 self.emit_expr(init);
-                self.dynamic_array_target = prev_dyn;
-                self.target_array_shape = prev_shape;
+                self.restore_array_target(saved_array_target);
                 // **Wrapper-class share-on-assignment (§CR.4.1).** When the
                 // init re-reads an existing wrapper-class binding
                 // (`var y = x;`, `var y = obj.child;`, `var y = this;`),
@@ -2390,7 +2382,67 @@ impl RustEmitter {
         }
     }
 
+    /// Set `dynamic_array_target` / `target_array_shape` from an LHS array
+    /// shape (so a `new T[…]` init/RHS heaps to `vec![…]` when the slot is a
+    /// dynamic `T[]`), returning the previous values. Pair every call with
+    /// [`Self::restore_array_target`]. Shared by the `let`-binding path and
+    /// the assignment path so both lower `new T[…]` identically.
+    pub(crate) fn set_array_target_shape(
+        &mut self,
+        lhs_shape: Option<juxc_ast::ArrayShape>,
+    ) -> (bool, Option<juxc_ast::ArrayShape>) {
+        let prev = (self.dynamic_array_target, self.target_array_shape.take());
+        // Only the OUTERMOST dimension decides the outer wrapper (`Vec` vs
+        // fixed array); inner dims are read per-dim from the full shape.
+        self.dynamic_array_target = lhs_shape
+            .as_ref()
+            .is_some_and(|s| matches!(s.outer(), juxc_ast::ArrayDim::Dynamic));
+        self.target_array_shape = lhs_shape;
+        prev
+    }
+
+    /// Restore the array-target flags saved by [`Self::set_array_target_shape`].
+    pub(crate) fn restore_array_target(&mut self, prev: (bool, Option<juxc_ast::ArrayShape>)) {
+        self.dynamic_array_target = prev.0;
+        self.target_array_shape = prev.1;
+    }
+
+    /// The declared array shape of an assignment's LHS when it is a class
+    /// FIELD (`this.buf` / `obj.buf`) — used to heap a `new T[…]` RHS into a
+    /// dynamic `T[]` field. `None` for non-field / non-array targets (locals
+    /// are handled by the `let`-binding path, and a runtime-sized `new` heaps
+    /// regardless of the slot).
+    fn assign_lhs_array_shape(&self, target: &Expr) -> Option<juxc_ast::ArrayShape> {
+        let Expr::Field(tf) = target else { return None };
+        let bare = if matches!(&*tf.object, Expr::This(_)) {
+            self.enclosing_class.clone()?
+        } else {
+            self.receiver_class_bare(&tf.object)?
+        };
+        let (fsig, _) = self.symbols.lookup_field(&bare, &tf.field.text)?;
+        fsig.ty.array_shape.clone()
+    }
+
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
+        // §5.6: `target = new T[…]` into a DYNAMIC array slot (`T[] field`)
+        // must heap the allocation (`vec![…]`) to match the slot's `Vec<T>`
+        // lowering — even for a const size (otherwise a fixed `[T; N]` value
+        // is assigned to a `Vec<T>` field, a type error). Mirror the
+        // `let`-binding path; the guaranteed restore keeps the flag from
+        // leaking to later statements regardless of which branch
+        // `emit_assign_impl` returns from.
+        if matches!(a.value, Expr::NewArray(_)) {
+            if let Some(shape) = self.assign_lhs_array_shape(&a.target) {
+                let saved = self.set_array_target_shape(Some(shape));
+                self.emit_assign_impl(a);
+                self.restore_array_target(saved);
+                return;
+            }
+        }
+        self.emit_assign_impl(a);
+    }
+
+    fn emit_assign_impl(&mut self, a: &AssignStmt) {
         // Integer `/=` and `%=` desugar to `target = target / value` so
         // the compound forms get the same checked lowering as the binary
         // ops (`__jux_idiv`/`__jux_irem` — zero divisor throws a

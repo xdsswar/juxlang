@@ -10,31 +10,34 @@
 // package. The library crate root (src/lib.jux) stays package-less.
 package demo.ui;
 
-// Screen geometry is fixed at compile time so the pixel buffer can be a
-// const-sized array. The buffer lives inside the Rc-allocated Canvas, so the
-// dimensions are kept modest to stay within the stack budget on construction.
-public const int W = 256;
-public const int H = 192;
-
 // An ARGB software canvas backed by a flat row-major u32 pixel buffer.
+//
+// The buffer is a dynamic `u32[]` allocated at runtime with `new u32[w * h]`,
+// so it lives on the HEAP (a `Vec<u32>`) and can be any size the caller picks
+// without overflowing the stack -- a full-window framebuffer is fine.
 public class Canvas {
-    public u32[W * H] buf;   // W*H pixels, 0x00RRGGBB, row-major
+    public u32[] buf;   // w*h pixels, 0x00RRGGBB, row-major (heap)
+    public int w;
+    public int h;
 
-    public Canvas() {
-        this.buf = new u32[W * H];
+    public Canvas(int w, int h) {
+        this.w = w;
+        this.h = h;
+        this.buf = new u32[w * h];
     }
 
     public int width() {
-        return W;
+        return this.w;
     }
 
     public int height() {
-        return H;
+        return this.h;
     }
 
     // Paint the whole surface one color.
     public void clear(u32 color) {
-        for (int i = 0; i < W * H; i++) {
+        var n = this.w * this.h;
+        for (int i = 0; i < n; i++) {
             this.buf[i] = color;
         }
     }
@@ -42,14 +45,14 @@ public class Canvas {
     // Fill an axis-aligned rectangle, clipped to the canvas bounds.
     public void fillRect(int x, int y, int rw, int rh, u32 color) {
         for (int yy = y; yy < y + rh; yy++) {
-            if (yy < 0 || yy >= H) {
+            if (yy < 0 || yy >= this.h) {
                 continue;
             }
             for (int xx = x; xx < x + rw; xx++) {
-                if (xx < 0 || xx >= W) {
+                if (xx < 0 || xx >= this.w) {
                     continue;
                 }
-                this.buf[yy * W + xx] = color;
+                this.buf[yy * this.w + xx] = color;
             }
         }
     }

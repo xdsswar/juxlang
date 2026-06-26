@@ -18,14 +18,14 @@ import rust.minifb.MouseMode;
 import rust.minifb.MouseButton;
 
 public void main() {
-    var canvas = new Canvas();
-    int w = canvas.width();
-    int h = canvas.height();
+    int w = 480;
+    int h = 320;
+    var canvas = new Canvas(w, h);   // full-window heap framebuffer
 
     // Two action buttons (clicking flips their color) plus a quit button.
-    var cycleRed = new Button(28, 24, 200, 36, "Cycle Red", (u32) 0x00AA3344);
-    var cycleBlue = new Button(28, 78, 200, 36, "Cycle Blue", (u32) 0x00334488);
-    var quit = new Button(28, 132, 200, 36, "Quit", (u32) 0x00555555);
+    var cycleRed = new Button(40, 60, 200, 48, "Cycle Red", (u32) 0x00AA3344);
+    var cycleBlue = new Button(40, 130, 200, 48, "Cycle Blue", (u32) 0x00334488);
+    var quit = new Button(40, 220, 200, 48, "Quit", (u32) 0x00555555);
 
     var opts = new WindowOptions();
     var window = new Window("Jux GUI -- multipackage demo", (uint) w, (uint) h, opts);
