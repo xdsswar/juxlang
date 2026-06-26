@@ -2182,6 +2182,22 @@ impl crate::RustEmitter {
             .unwrap_or(false)
     }
 
+    /// True when arg `arg_idx` of `callee` maps to an **external** method
+    /// parameter that is a Jux FUNCTION type (`(A) -> R`) — bindgen produces
+    /// this for a Rust `impl Fn(..)` closure parameter (§G.3). A Jux lambda
+    /// flowing into such a slot lowers to a BARE Rust closure rather than the
+    /// default `Rc<dyn Fn>`, since `impl Fn`/`FnMut`/`FnOnce` accept a bare
+    /// closure. Jux-to-Jux fn params (not external) keep the `Rc` form.
+    pub(crate) fn callee_param_is_foreign_fn(
+        &self,
+        callee: &juxc_ast::Expr,
+        arg_idx: usize,
+    ) -> bool {
+        self.foreign_callee_param(callee, arg_idx)
+            .map(|p| p.ty.fn_shape.is_some())
+            .unwrap_or(false)
+    }
+
     /// Resolve the **external** (`rust.std` / crate) method parameter that arg
     /// `arg_idx` of `callee` maps to, or `None` when `callee` is not a foreign
     /// method/static-method call. Shared by [`Self::callee_param_is_ref`] and

@@ -1,0 +1,25 @@
+// Passing Jux closures into Rust-crate APIs (§G.3 closures).
+//
+// A Rust function that takes a closure -- whether spelled `impl Fn(..)` or as
+// a generic `F: Fn(..)` bound -- now surfaces in Jux as a function type
+// `(A) -> R`, so a Jux lambda flows straight in. The lambda lowers to a bare
+// Rust closure (`move |..| ..`), which satisfies `Fn` / `FnMut` / `FnOnce`,
+// and mutable captures work through the usual Rc<RefCell> capture cells.
+
+import rust.std.Vec;
+
+public void main() {
+    // `Vec::resize_with(new_len, F)` where `F: FnMut() -> T` (§std). The Jux
+    // lambda is passed directly; here it captures and mutates `counter`, so it
+    // is an `FnMut` closure -- each element gets the next multiple of 10.
+    var v = new rust.std.Vec<int>();
+    var counter = 0;
+    v.resize_with(4, () -> {
+        counter = counter + 10;
+        return counter;
+    });
+
+    print((int) v.len());   // 4
+    print((int) v[0]);      // 10
+    print((int) v[3]);      // 40
+}
