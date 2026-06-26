@@ -1,0 +1,97 @@
+// demo.ui -- a tiny software-rendering widget toolkit.
+//
+// Everything here is pure: it paints 0x00RRGGBB pixels into a fixed u32 buffer
+// and hit-tests mouse coordinates. It has no idea a window exists, which is the
+// whole point of splitting it into its own workspace package -- the `app`
+// package owns the desktop window (minifb) and merely *uses* these widgets.
+//
+// The widgets live in the `demo.ui` package so they are reachable by their
+// fully-qualified name (`import demo.ui.Canvas;`) from the sibling `app`
+// package. The library crate root (src/lib.jux) stays package-less.
+package demo.ui;
+
+// Screen geometry is fixed at compile time so the pixel buffer can be a
+// const-sized array. The buffer lives inside the Rc-allocated Canvas, so the
+// dimensions are kept modest to stay within the stack budget on construction.
+public const int W = 256;
+public const int H = 192;
+
+// An ARGB software canvas backed by a flat row-major u32 pixel buffer.
+public class Canvas {
+    public u32[W * H] buf;   // W*H pixels, 0x00RRGGBB, row-major
+
+    public Canvas() {
+        this.buf = new u32[W * H];
+    }
+
+    public int width() {
+        return W;
+    }
+
+    public int height() {
+        return H;
+    }
+
+    // Paint the whole surface one color.
+    public void clear(u32 color) {
+        for (int i = 0; i < W * H; i++) {
+            this.buf[i] = color;
+        }
+    }
+
+    // Fill an axis-aligned rectangle, clipped to the canvas bounds.
+    public void fillRect(int x, int y, int rw, int rh, u32 color) {
+        for (int yy = y; yy < y + rh; yy++) {
+            if (yy < 0 || yy >= H) {
+                continue;
+            }
+            for (int xx = x; xx < x + rw; xx++) {
+                if (xx < 0 || xx >= W) {
+                    continue;
+                }
+                this.buf[yy * W + xx] = color;
+            }
+        }
+    }
+
+    // A 1px-thick rectangle outline.
+    public void strokeRect(int x, int y, int rw, int rh, u32 color) {
+        this.fillRect(x, y, rw, 1, color);
+        this.fillRect(x, y + rh - 1, rw, 1, color);
+        this.fillRect(x, y, 1, rh, color);
+        this.fillRect(x + rw - 1, y, 1, rh, color);
+    }
+}
+
+// A clickable rectangular button. It carries its own geometry, a label (for
+// console feedback, since the framebuffer has no font), and a fill color that
+// the app flips on each click so the change is visible on screen.
+public class Button {
+    public int x;
+    public int y;
+    public int w;
+    public int h;
+    public String label;
+    public u32 color;
+
+    public Button(int x, int y, int w, int h, String label, u32 color) {
+        this.x = x;
+        this.y = y;
+        this.w = w;
+        this.h = h;
+        this.label = label;
+        this.color = color;
+    }
+
+    // Is the point (mx, my) inside this button's rectangle?
+    public bool contains(int mx, int my) {
+        return mx >= this.x && mx < this.x + this.w
+            && my >= this.y && my < this.y + this.h;
+    }
+
+    // Draw the button: a filled body with a light border.
+    public void draw(Canvas c) {
+        c.fillRect(this.x, this.y, this.w, this.h, this.color);
+        c.strokeRect(this.x, this.y, this.w, this.h, (u32) 0x00FFFFFF);
+    }
+}

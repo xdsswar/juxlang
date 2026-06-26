@@ -1,0 +1,9 @@
+[package]
+name = "demo.ui"
+version = "0.1.0"
+
+# A pure software-rendering widget library: an ARGB pixel Canvas plus a
+# clickable Button. No windowing dependency lives here -- the library only
+# knows how to paint into a u32 buffer and hit-test points. The `app`
+# package wires it to a real desktop window.
+[lib]

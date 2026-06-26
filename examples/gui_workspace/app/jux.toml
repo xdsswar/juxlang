@@ -1,0 +1,12 @@
+[package]
+name = "demo.app"
+version = "0.1.0"
+
+# Two dependencies, two kinds:
+#   - `demo.ui` is a sibling Jux workspace package (path dep) -- the widget
+#     toolkit, imported with a normal `import demo.ui.*;`.
+#   - `rust.minifb` is a real crates.io desktop-window crate, consumed in Jux
+#     syntax via the `rust.<crate>` interop form.
+[dependencies]
+"demo.ui" = { path = "../ui" }
+"rust.minifb" = "0.27"
