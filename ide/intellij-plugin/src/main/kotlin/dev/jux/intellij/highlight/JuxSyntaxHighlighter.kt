@@ -46,7 +46,7 @@ class JuxSyntaxHighlighter : SyntaxHighlighterBase() {
         // the plain parameter color). JBColor adapts: a deep green on light
         // backgrounds, a darker-but-readable green on dark ones. Users can
         // still recolor it under Color Scheme | Jux | References | Type parameter.
-        val TYPE_PARAMETER = createTextAttributesKey(
+        val TYPE_PARAMETER = keyWithDefault(
             "JUX_TYPE_PARAMETER",
             TextAttributes(JBColor(0x1E6B1E, 0x4C8A4C), null, null, null, Font.PLAIN),
         )
@@ -69,7 +69,7 @@ class JuxSyntaxHighlighter : SyntaxHighlighterBase() {
         // on dark ones. Recolor under Color Scheme | Jux | String | Interpolated
         // variable. (Call NAMES inside a hole stay code-colored — see
         // JuxStringAnnotator.highlightFragment.)
-        val INTERPOLATED_VARIABLE = createTextAttributesKey(
+        val INTERPOLATED_VARIABLE = keyWithDefault(
             "JUX_INTERPOLATED_VARIABLE",
             TextAttributes(JBColor(0x876885, 0x9876AA), null, null, null, Font.ITALIC),
         )
@@ -94,6 +94,23 @@ class JuxSyntaxHighlighter : SyntaxHighlighterBase() {
 
         private fun key(externalName: String, base: TextAttributesKey) =
             createTextAttributesKey(externalName, base)
+
+        /**
+         * Registers a key whose default attributes are baked in as a literal
+         * [TextAttributes] rather than inherited from a base key.
+         *
+         * The platform deprecates the `String` + `TextAttributes` overload
+         * because hardcoded attributes bypass color schemes, but we use it
+         * deliberately for [TYPE_PARAMETER] and [INTERPOLATED_VARIABLE]: a
+         * [JBColor] default makes the color appear on EVERY scheme, including
+         * custom themes that bundle no Jux mapping (see those fields' comments).
+         * The supported `additionalTextAttributes` XML route only covers the
+         * named schemes we ship, which is exactly the gap this closes. Users can
+         * still recolor both keys under Settings | Editor | Color Scheme | Jux.
+         */
+        @Suppress("DEPRECATION")
+        private fun keyWithDefault(externalName: String, default: TextAttributes) =
+            createTextAttributesKey(externalName, default)
 
         private val KEYS: Map<IElementType, TextAttributesKey> = buildMap {
             fun fill(set: com.intellij.psi.tree.TokenSet, value: TextAttributesKey) {
