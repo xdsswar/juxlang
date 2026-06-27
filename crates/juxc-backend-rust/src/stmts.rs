@@ -2443,6 +2443,51 @@ impl RustEmitter {
     }
 
     fn emit_assign_impl(&mut self, a: &AssignStmt) {
+        // **Bare implicit-`this` instance-field write** (`field = v` inside a
+        // method, Java implicit `this`). A bare single-segment target that is
+        // neither a local/param/ref-local nor a property but DOES name a
+        // non-static instance field of the enclosing class is normalized to
+        // the explicit `this.field = v` form so it routes through the
+        // wrapper store-through path and takes a `borrow_mut()`. Without the
+        // rewrite a bare target fell to the generic place-write path, which
+        // emits a read-only `.0.borrow()` and trips rustc E0594 ("cannot
+        // assign to data in dereference of `Ref<…>`"). Placed first so every
+        // downstream target shape (compound desugar, nullable wrap, §P fire,
+        // poly-base `__set_`) sees the canonical `this.field` form.
+        if let Expr::Path(qn) = &a.target {
+            if qn.segments.len() == 1 {
+                let name = qn.segments[0].text.clone();
+                let shadowed = self.current_fn_params.contains(&name)
+                    || self.local_types.iter().any(|s| s.contains_key(&name))
+                    || self.nullable_locals.contains(&name)
+                    || self.ref_locals.contains(&name);
+                let this_expr = Expr::This(juxc_source::Span::DUMMY);
+                let is_property = self
+                    .enclosing_class
+                    .clone()
+                    .and_then(|c| self.lookup_class_ast_by_bare_or_fqn(&c))
+                    .map(|cd| cd.properties.iter().any(|p| p.name.text == name))
+                    .unwrap_or(false);
+                if !shadowed
+                    && !is_property
+                    && self.wrapper_field_parent_depth(&this_expr, &name).is_some()
+                {
+                    let rewritten = AssignStmt {
+                        target: Expr::Field(juxc_ast::FieldExpr {
+                            object: Box::new(this_expr),
+                            field: qn.segments[0].clone(),
+                            safe: false,
+                            span: a.span,
+                        }),
+                        op: a.op,
+                        value: a.value.clone(),
+                        span: a.span,
+                    };
+                    self.emit_assign(&rewritten);
+                    return;
+                }
+            }
+        }
         // Integer `/=` and `%=` desugar to `target = target / value` so
         // the compound forms get the same checked lowering as the binary
         // ops (`__jux_idiv`/`__jux_irem` — zero divisor throws a
@@ -3481,14 +3526,27 @@ impl RustEmitter {
             return false;
         }
         let Expr::Field(f) = target else { return false };
-        let Some(juxc_tycheck::Ty::User { name, .. }) =
-            self.expr_types.get(&expr_span_of(&f.object))
-        else {
-            return false;
+        // Receiver class name. An explicit/synthesized `this.field` (the latter
+        // produced by the bare implicit-`this` write normalization in
+        // `emit_assign_impl`) carries no `expr_types` entry for its `This`
+        // object, so resolve it through `enclosing_class`; every other receiver
+        // reads its recorded type. Without the `This` arm a normalized bare
+        // write to a nullable field would skip the `Some(...)` lift (E0308).
+        let name = if matches!(&*f.object, Expr::This(_)) {
+            let Some(cls) = self.enclosing_class.clone() else {
+                return false;
+            };
+            cls
+        } else {
+            let Some(juxc_tycheck::Ty::User { name, .. }) =
+                self.expr_types.get(&expr_span_of(&f.object))
+            else {
+                return false;
+            };
+            name.clone()
         };
         // Walk the receiver class's `extends` chain (Java semantics) so a write
         // to an INHERITED nullable field coerces the same as a direct one.
-        let name = name.clone();
         if self.class_field_is_nullable_in_chain(&name, &f.field.text) {
             return true;
         }

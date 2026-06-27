@@ -2570,6 +2570,67 @@ fn nullable_field_write_wraps_value_in_some() {
     );
 }
 
+/// A bare implicit-`this` instance-field WRITE (`f = v`, Java style) must take
+/// a `borrow_mut()` on the wrapper cell, exactly like the explicit `this.f = v`
+/// form. Regression: the bare target fell to the generic place-write path,
+/// which emitted a read-only `.0.borrow()` for the LHS and tripped rustc E0594
+/// ("cannot assign to data in dereference of `Ref<…>`") — every setter that
+/// wrote a field through implicit `this` failed to compile.
+#[test]
+fn bare_implicit_this_field_write_uses_borrow_mut() {
+    let rust = emit(
+        r#"
+        public class C {
+            private String s = "";
+            public void setBare(String v) { s = v; }
+            public void setThis(String v) { this.s = v; }
+        }
+        public void main() { var c = new C(); c.setBare("x"); }
+        "#,
+    );
+    // The bare write borrows mutably — no read-only `borrow()` store leaks.
+    assert!(
+        !rust.contains("self.0.borrow().s ="),
+        "bare field write must not assign through a shared borrow: {rust}",
+    );
+    assert!(
+        rust.contains("self.0.borrow_mut().s ="),
+        "bare field write takes borrow_mut: {rust}",
+    );
+}
+
+/// A concrete inherited accessor copied into a subclass
+/// (`emit_inherited_wrapper_methods`) must resolve the nullability of a bare
+/// implicit-`this` field read through the `extends` chain. Regression:
+/// `expression_is_already_nullable` consulted only the SUBCLASS's own fields,
+/// so a copied `return name;` over an INHERITED nullable field was re-wrapped
+/// in `Some(...)` → `Option<Option<T>>` (rustc E0308, expected `Option<T>`,
+/// found `Option<Option<T>>`).
+#[test]
+fn inherited_nullable_getter_not_double_wrapped() {
+    let rust = emit(
+        r#"
+        public abstract class Base {
+            private String? name;
+            public final String? getName() { return name; }
+            protected abstract void d();
+        }
+        public final class Sub extends Base { public void d() {} }
+        public void main() { var s = new Sub(); print(s.getName()); }
+        "#,
+    );
+    // The copied `Sub::getName` reads the inherited field through `__parent`
+    // WITHOUT a `Some(...)` wrap — the field is already `Option`-shaped.
+    assert!(
+        !rust.contains("Some(self.0.borrow().__parent.name"),
+        "inherited nullable getter must not double-wrap Some: {rust}",
+    );
+    assert!(
+        rust.contains("self.0.borrow().__parent.name.clone()"),
+        "inherited getter still reads the parent field: {rust}",
+    );
+}
+
 /// Java dispatches non-`private` instance methods virtually, so a
 /// package-private (no modifier) overridable method called through a
 /// base-typed reference must be on the `<Name>Kind` trait. Regression: the

@@ -1857,10 +1857,30 @@ impl crate::RustEmitter {
                 if let Some(cls) = self.enclosing_class.clone() {
                     // `enclosing_class` may be a bare name while the symbol table
                     // is FQN-keyed, so resolve through the bare-or-FQN helper.
-                    if let Some(class) = self.lookup_class_by_bare_or_fqn(&cls) {
+                    // Walk the `extends` chain: a bare implicit-`this` read may
+                    // name an INHERITED field stored under `__parent`. A copied
+                    // inherited accessor (`emit_inherited_wrapper_methods`)
+                    // emits in the SUBCLASS's scope, where the field isn't in
+                    // the subclass's own `fields` map — the single-class lookup
+                    // would mis-report it as non-nullable and double-wrap the
+                    // return in `Some(...)` (`Option<Option<T>>`, rustc E0308).
+                    let mut cursor = Some(cls.clone());
+                    let mut hops = 0usize;
+                    while let Some(cur) = cursor {
+                        if hops > 64 {
+                            break;
+                        }
+                        let Some(class) = self.lookup_class_by_bare_or_fqn(&cur) else {
+                            break;
+                        };
                         if let Some(field) = class.fields.get(name) {
                             return field.ty.nullable;
                         }
+                        cursor = class
+                            .extends
+                            .as_ref()
+                            .and_then(|t| t.name.segments.last().map(|s| s.text.clone()));
+                        hops += 1;
                     }
                     let rec = self.symbols.records.get(&cls).or_else(|| {
                         self.symbols
