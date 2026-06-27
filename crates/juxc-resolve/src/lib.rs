@@ -78,6 +78,17 @@ pub struct ResolveResult {
 pub struct PackageExports {
     /// Dot-joined package FQN → set of top-level declared names in it.
     by_package: std::collections::HashMap<String, HashSet<String>>,
+    /// Workspace-wide class → member-name index (bare class name → its
+    /// own static/instance fields + methods). Mirrors the per-unit
+    /// [`Resolver::class_members`] but spans EVERY file, so a subclass
+    /// whose parent lives in another file can still pre-declare the
+    /// inherited member names into its body's scope (Java rule: `foo()`
+    /// ≡ `this.foo()`). Without it a bare call to a cross-file inherited
+    /// method fired a spurious E0301.
+    class_members: std::collections::HashMap<String, HashSet<String>>,
+    /// Workspace-wide class → direct `extends` parent (bare name), so the
+    /// inherited-member walk crosses file boundaries.
+    class_parents: std::collections::HashMap<String, String>,
 }
 
 impl PackageExports {
@@ -90,6 +101,10 @@ impl PackageExports {
     /// Build the table from every unit of the workspace.
     pub fn collect(units: &[CompilationUnit]) -> Self {
         let mut by_package: std::collections::HashMap<String, HashSet<String>> =
+            std::collections::HashMap::new();
+        let mut class_members: std::collections::HashMap<String, HashSet<String>> =
+            std::collections::HashMap::new();
+        let mut class_parents: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for unit in units {
             let pkg = unit
@@ -105,6 +120,25 @@ impl PackageExports {
                 })
                 .unwrap_or_default();
             let names = by_package.entry(pkg).or_default();
+            // Workspace-wide class member/parent index for cross-file
+            // inherited-member resolution (see the field docs).
+            for item in &unit.items {
+                if let TopLevelDecl::Class(d) = item {
+                    let mut members: HashSet<String> = HashSet::new();
+                    for f in &d.fields {
+                        members.insert(f.name.text.clone());
+                    }
+                    for m in &d.methods {
+                        members.insert(m.name.text.clone());
+                    }
+                    class_members.insert(d.name.text.clone(), members);
+                    if let Some(parent) = &d.extends {
+                        if let Some(seg) = parent.name.segments.first() {
+                            class_parents.insert(d.name.text.clone(), seg.text.clone());
+                        }
+                    }
+                }
+            }
             for item in &unit.items {
                 match item {
                     TopLevelDecl::Function(d) => names.insert(d.name.text.clone()),
@@ -124,7 +158,11 @@ impl PackageExports {
                 };
             }
         }
-        Self { by_package }
+        Self {
+            by_package,
+            class_members,
+            class_parents,
+        }
     }
 
     /// The top-level names declared in `package` (dot-joined), if any.
@@ -172,6 +210,35 @@ pub fn resolve_with_exports_opts(
     // Imports first — they introduce names that top-level decls and
     // body expressions may both reference.
     r.collect_imports(unit, exports);
+    // Seed the workspace-wide class member/parent index so a subclass
+    // whose parent is declared in ANOTHER file can still pre-declare the
+    // inherited member names into its body's scope. `collect_top_level`
+    // re-inserts this unit's own classes over the top (identical data),
+    // leaving cross-file parents available for the inherited-member walk.
+    r.class_members = exports.class_members.clone();
+    r.class_parents = exports.class_parents.clone();
+    // Same-package siblings are visible without an import (Java rule): seed
+    // every top-level name declared anywhere in THIS unit's package into the
+    // known set, so a cross-file `new Sibling()` / `Sibling x` resolves. The
+    // real visibility check stays with tycheck — the resolver only answers
+    // "does this name exist?". Mirrors the package-join in `collect`.
+    let pkg = unit
+        .package
+        .as_ref()
+        .map(|p| {
+            p.name
+                .segments
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(".")
+        })
+        .unwrap_or_default();
+    if let Some(siblings) = exports.names_in(&pkg) {
+        for name in siblings {
+            r.imported_names.insert(name.clone());
+        }
+    }
     r.collect_top_level(unit);
     r.visit_compilation_unit(unit);
     ResolveResult { diagnostics: r.diagnostics }
@@ -1454,10 +1521,69 @@ mod tests {
         resolve(&parse_result.ast).diagnostics.len()
     }
 
+    /// Lex+parse several sources into units, then resolve each with the
+    /// shared workspace [`PackageExports`] table — the multi-file path the
+    /// driver uses. Returns the total resolve-diagnostic count across units.
+    fn resolve_workspace_count(srcs: &[&str]) -> usize {
+        let units: Vec<CompilationUnit> = srcs
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let sf = SourceFile::new(&format!("f{i}.jux"), *s);
+                let lex_result = lex(&sf);
+                assert!(lex_result.diagnostics.is_empty(), "lex errors: {:?}", lex_result.diagnostics);
+                let parse_result = parse(&lex_result.tokens);
+                assert!(
+                    parse_result.diagnostics.is_empty(),
+                    "parse errors: {:?}",
+                    parse_result.diagnostics
+                );
+                parse_result.ast
+            })
+            .collect();
+        let exports = PackageExports::collect(&units);
+        units
+            .iter()
+            .map(|u| resolve_with_exports(u, &exports).diagnostics.len())
+            .sum()
+    }
+
     /// `print` is built-in: a call to it must resolve cleanly.
     #[test]
     fn print_is_builtin() {
         assert_eq!(resolve_count(r#"public void main() { print("hi"); }"#), 0);
+    }
+
+    /// Same-package classes in DIFFERENT files see each other without an
+    /// import (Java rule). Regression: the resolver indexed only the unit's
+    /// own top-level names, so a cross-file `new Sibling()` fired a spurious
+    /// E0301.
+    #[test]
+    fn same_package_sibling_resolves_across_files() {
+        let a = r#"package t; public class A { public int v = 1; public A() {} }"#;
+        let b = r#"package t; public class B { public void go() { var a = new A(); } }"#;
+        assert_eq!(resolve_workspace_count(&[a, b]), 0);
+    }
+
+    /// A bare (implicit-`this`) call to a method INHERITED from a parent in
+    /// another file resolves. Regression: the inherited-member walk consulted
+    /// only the unit's own per-class member index, so a cross-file inherited
+    /// `setName(...)` fired a spurious E0301.
+    #[test]
+    fn cross_file_inherited_bare_call_resolves() {
+        let base = r#"package t;
+            public abstract class Base {
+                private String? name;
+                public final void setName(String? v) { name = v; }
+                public final String? getName() { return name; }
+                protected abstract void d();
+            }"#;
+        let sub = r#"package t;
+            public final class Sub extends Base {
+                public Sub(String n) { setName(n); }
+                public void d() { print($"${getName()}"); }
+            }"#;
+        assert_eq!(resolve_workspace_count(&[base, sub]), 0);
     }
 
     /// An unknown identifier emits exactly one E0301.
