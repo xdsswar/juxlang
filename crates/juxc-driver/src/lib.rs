@@ -56,6 +56,7 @@ pub(crate) fn cross_target() -> Option<String> {
     }
 }
 
+pub mod big_stack;
 pub mod git_deps;
 pub mod manifest;
 mod package_check;
@@ -464,6 +465,30 @@ pub fn build(
 /// When `manifest` is `None`, the emitted manifest is byte-identical to
 /// the legacy template and no `build.rs` is written — exactly the path
 /// loose `.jux` files and the example corpus take.
+/// Spawn `cmd`, turning a missing-executable failure into an actionable error.
+///
+/// `cargo` is the single hardest dependency the product has -- Jux compiles to
+/// Rust and hands it to rustc -- and the raw failure for a missing one is
+/// `program not found`, which names neither the program nor the fix. Someone
+/// who just downloaded a Jux binary and has never installed Rust hits this on
+/// their very first build. `git_deps::run_git` already gets this right; this is
+/// the same courtesy for the toolchain itself.
+fn spawn_toolchain(
+    mut cmd: Command,
+    program: &str,
+    needed_for: &str,
+) -> Result<std::process::Output> {
+    cmd.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow::anyhow!(
+                "`{program}` is not installed or not on PATH: {needed_for}. Jux compiles through the Rust toolchain — install it from https://rustup.rs",
+            )
+        } else {
+            anyhow::anyhow!("failed to run `{program}`: {e}")
+        }
+    })
+}
+
 pub fn build_with_manifest(
     crate_: &RustCrate,
     crate_dir: &Path,
@@ -574,9 +599,8 @@ pub fn build_with_manifest(
     if let Some(triple) = cross_target() {
         cmd.args(["--target", &triple]);
     }
-    let output = cmd
-        .current_dir(crate_dir)
-        .output()
+    cmd.current_dir(crate_dir);
+    let output = spawn_toolchain(cmd, "cargo", "building a Jux program needs it")
         .with_context(|| format!("invoking `cargo build` in {}", crate_dir.display()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -859,9 +883,8 @@ pub fn build_emitted_crate(
     if let Some(triple) = cross_target() {
         cmd.args(["--target", &triple]);
     }
-    let output = cmd
-        .current_dir(crate_dir)
-        .output()
+    cmd.current_dir(crate_dir);
+    let output = spawn_toolchain(cmd, "cargo", "building a Jux program needs it")
         .with_context(|| format!("invoking `cargo build` in {}", crate_dir.display()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

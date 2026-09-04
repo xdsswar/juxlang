@@ -73,7 +73,20 @@ impl<'a> Parser<'a> {
     /// - `while (cond) block`
     /// - `name = expr ;` (assignment to a previously-declared `var`)
     /// - `expr ;` (expression statement)
+    /// Parse one statement.
+    ///
+    /// Guards the recursion depth (E0201) and delegates to
+    /// [`Self::parse_stmt_inner`]. See [`crate::MAX_NESTING`].
     pub(crate) fn parse_stmt(&mut self) -> Option<Stmt> {
+        if !self.enter_nesting() {
+            return None;
+        }
+        let out = self.parse_stmt_inner();
+        self.leave_nesting();
+        out
+    }
+
+    pub(crate) fn parse_stmt_inner(&mut self) -> Option<Stmt> {
         if self.at_kw(Keyword::Return) {
             return Some(self.parse_return_stmt());
         }

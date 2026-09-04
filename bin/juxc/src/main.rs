@@ -89,7 +89,13 @@ struct Cli {
 
 fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
-    run_juxc(cli).map(|c| c.unwrap_or(ExitCode::SUCCESS))
+    // The front end recurses in step with source nesting and its frames are
+    // large; on a default 8 MB main stack that caps out around 60 levels of
+    // nested expression and then aborts the process with no diagnostic. Give it
+    // room -- see `juxc_driver::big_stack`.
+    juxc_driver::big_stack::run(move || {
+        run_juxc(cli).map(|c| c.unwrap_or(ExitCode::SUCCESS))
+    })
 }
 
 /// Real `main` body — returns `Ok(Some(code))` when we want to forward an

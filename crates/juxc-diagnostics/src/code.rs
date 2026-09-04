@@ -21,6 +21,14 @@ pub enum Code {
     // ---- Syntax (E0200–E0299) ----
     /// E0200 — Unexpected token.
     E0200_UnexpectedToken,
+    /// E0201 — **Expression, type or block nested past the parser's depth
+    /// limit.** The parser is recursive descent, so nesting depth in the source
+    /// becomes stack depth in the compiler; without a bound, input like ten
+    /// thousand nested parentheses overflows the stack and the process dies
+    /// with no diagnostic at all. A hand-written program never comes close to
+    /// the limit, so hitting this means either generated source or a mistake --
+    /// either way a reported error beats a crash.
+    E0201_NestingTooDeep,
     /// E0210 — `super(...)` or `this(...)` not first statement.
     E0210_ConstructorCallNotFirst,
     /// E0211 — Constructor missing required `super(...)` call.
@@ -714,6 +722,7 @@ impl Code {
             Code::E0101_UnterminatedString       => "E0101",
             Code::E0102_BadDigitSeparator        => "E0102",
             Code::E0200_UnexpectedToken          => "E0200",
+            Code::E0201_NestingTooDeep           => "E0201",
             Code::E0210_ConstructorCallNotFirst  => "E0210",
             Code::E0211_MissingSuperCall         => "E0211",
             Code::E0301_NameNotFound             => "E0301",

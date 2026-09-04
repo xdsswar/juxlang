@@ -109,6 +109,22 @@ pub fn parse_foreign(tokens: &[Token]) -> ParseResult {
 /// `decls`, `stmts`, `exprs`, …) can read and write the cursor and
 /// emit diagnostics. The struct itself stays private — outside the
 /// crate the only entry point is the free [`parse`] fn.
+/// Maximum recursive-descent nesting depth for expressions, statements and
+/// types before the parser reports [`code::Code::E0201_NestingTooDeep`].
+///
+/// Chosen well above anything hand-written -- real code rarely passes a depth
+/// of 20 -- and well below the point where the default 8 MB main-thread stack
+/// runs out. Each level costs a few hundred bytes across the
+/// `parse_expr` -> ... -> `parse_primary` chain, so 256 leaves multiple orders
+/// of magnitude of headroom.
+///
+/// Public because it is part of the contract with anyone embedding the front
+/// end: the parser bounds its own recursion here, but this many levels of
+/// frames still needs far more stack than a thread gets by default. Run the
+/// front end on a large stack -- `juxc_driver::big_stack` does exactly that for
+/// the compiler, the project tool and the language server.
+pub const MAX_NESTING: u32 = 256;
+
 pub(crate) struct Parser<'a> {
     /// Token stream from the lexer, EOF-terminated.
     pub(crate) tokens: &'a [Token],
@@ -142,6 +158,12 @@ pub(crate) struct Parser<'a> {
     /// [`Self::parse_decl_name`]. User `.jux` files keep `foreign_mode == false`
     /// and reject keyword names at parse, as before.
     pub(crate) foreign_mode: bool,
+    /// Current recursive-descent nesting depth, guarded by
+    /// [`Self::enter_nesting`] / [`Self::leave_nesting`]. See [`MAX_NESTING`].
+    pub(crate) depth: u32,
+    /// Set once the depth limit has been reported, so a single over-deep file
+    /// yields one E0201 instead of one per nested construct on the way out.
+    pub(crate) depth_reported: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -155,7 +177,48 @@ impl<'a> Parser<'a> {
             pending_stmts: Vec::new(),
             tuple_tmp_counter: 0,
             foreign_mode: false,
+            depth: 0,
+            depth_reported: false,
         }
+    }
+
+    /// Take one unit of nesting budget, or report E0201 and refuse.
+    ///
+    /// Recursive descent turns source nesting directly into compiler stack
+    /// depth. Unbounded, a file of ten thousand nested parentheses overflows
+    /// the stack and the process aborts with no diagnostic -- a crash, not an
+    /// error. Callers that recurse ([`Self::parse_expr`], [`Self::parse_stmt`],
+    /// [`Self::parse_type_ref`]) take budget here and give it back with
+    /// [`Self::leave_nesting`]; on refusal they return `None`, which unwinds
+    /// through the normal parse-failure path.
+    ///
+    /// Only the first refusal is reported. Once the limit is hit, every
+    /// enclosing level would report the same thing on the way out, and one
+    /// clear error beats thousands of identical ones.
+    pub(crate) fn enter_nesting(&mut self) -> bool {
+        if self.depth >= MAX_NESTING {
+            if !self.depth_reported {
+                self.depth_reported = true;
+                let span = self.peek_span();
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0201_NestingTooDeep,
+                        format!(
+                            "expression, type or block nested more than {MAX_NESTING} levels deep",
+                        ),
+                    )
+                    .with_span(span),
+                );
+            }
+            return false;
+        }
+        self.depth += 1;
+        true
+    }
+
+    /// Give back one unit of nesting budget taken by [`Self::enter_nesting`].
+    pub(crate) fn leave_nesting(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
     }
 
     // ------------------------------------------------------------------
