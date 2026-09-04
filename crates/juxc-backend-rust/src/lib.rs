@@ -46,6 +46,7 @@ mod backend_fqn;
 mod decls;
 mod exprs;
 mod interp;
+mod lastuse;
 mod literals;
 mod patterns;
 mod sizeof_emit;
@@ -984,6 +985,15 @@ struct RustEmitter {
     /// accordingly. Empty everywhere else, so non-generic hierarchies are
     /// untouched.
     pub(crate) kind_type_subst: std::collections::HashMap<String, juxc_ast::TypeRef>,
+    /// Spans of local reads that are **not** that local's last read, for the
+    /// function body currently being emitted (see [`crate::lastuse`]).
+    ///
+    /// A Jux binding stays readable after it is passed (Java/C# semantics), but
+    /// Rust moves a non-`Copy` value on a by-value pass. Cloning at every such
+    /// argument would be correct and slow; the emitter instead moves on the last
+    /// read and clones only at the reads listed here — the same choice a Rust
+    /// programmer makes by hand.
+    pub(crate) non_final_uses: std::collections::HashSet<juxc_source::Span>,
     /// Names of **`int`-typed const-generic parameters** in scope —
     /// the `N` of an enclosing `class RingBuffer<T, int N>` or
     /// `fn cap<int N>()`. A bare read of such a name in *value*
@@ -4154,6 +4164,7 @@ impl RustEmitter {
             poly_base_classes: std::collections::HashSet::new(),
             bound_position_classes: std::collections::HashSet::new(),
             kind_type_subst: std::collections::HashMap::new(),
+            non_final_uses: std::collections::HashSet::new(),
             const_int_params: std::collections::HashSet::new(),
             out_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),
@@ -5157,6 +5168,36 @@ impl RustEmitter {
     /// crate's `#![allow(unused_imports)]` banner. With no source attached
     /// (`lower_with_types`, not a user-facing path) every member is expanded, so
     /// the output stays correct and only loses its terseness.
+    /// True when this unit's source appears to CALL `name` — the identifier
+    /// followed by `(`, allowing whitespace. A lexical test, matched to the
+    /// lexical `ident_words` mention test it refines; both exist only to keep a
+    /// wildcard import from expanding members the file never uses.
+    fn source_calls(&self, name: &str) -> bool {
+        let Some(src) = self.source.as_ref() else {
+            return true;
+        };
+        let text = src.contents();
+        let bytes = text.as_bytes();
+        let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find(name) {
+            let at = from + rel;
+            let end = at + name.len();
+            from = end;
+            // Whole-word only: `copy` must not match inside `copy_all`.
+            if at > 0 && is_word(bytes[at - 1]) {
+                continue;
+            }
+            if bytes.get(end).is_some_and(|b| is_word(*b)) {
+                continue;
+            }
+            if text[end..].trim_start().starts_with('(') {
+                return true;
+            }
+        }
+        false
+    }
+
     fn foreign_wildcard_use_lines(&self, spec: &ImportSpec) -> Option<Vec<String>> {
         let ImportSpec::Path { name, wildcard: true, .. } = spec else {
             return None;
@@ -5199,9 +5240,16 @@ impl RustEmitter {
         // Foreign free functions carry the same `@rust("…")` mapping, but their
         // Rust name is snake_case while the stub exposes the Jux spelling, so
         // they bind under an alias exactly as the single-import path does.
+        //
+        // A function is expanded only where the source actually CALLS it, not
+        // merely mentions the word. Function names collide with ordinary
+        // variable names far more often than type names do (`copy`, `min`,
+        // `read`), and an unnecessary `use` is not harmless: it binds a real
+        // Rust path, so one that resolves badly is a hard error in a file that
+        // never asked for the function.
         for (fqn, sig) in &self.symbols.functions {
             let Some(simple) = fqn.strip_prefix(&prefix) else { continue };
-            if simple.contains('.') || !mentions(simple) {
+            if simple.contains('.') || !mentions(simple) || !self.source_calls(simple) {
                 continue;
             }
             if let Some(real) = sig.rust_path.as_ref() {

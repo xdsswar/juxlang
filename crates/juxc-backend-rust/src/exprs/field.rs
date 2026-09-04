@@ -1140,6 +1140,53 @@ impl RustEmitter {
         false
     }
 
+    /// True when `expr` is a **local read** of a non-`Copy` VALUE — a `String`,
+    /// an array, or a `rust.std` collection — that still has a later reader, so
+    /// a by-value slot must copy it instead of moving out of the binding.
+    ///
+    /// Jux keeps Java/C# semantics: `take(w); print(w);` is ordinary code. Rust
+    /// moves a non-`Copy` value on a by-value pass, which makes the second read
+    /// a rustc `E0382`. Rather than clone at every argument (a heap allocation
+    /// the source never asked for), the emitter moves on the binding's LAST read
+    /// and copies only where [`crate::lastuse`] found a later one.
+    ///
+    /// Deliberately narrow on both axes:
+    ///
+    /// - only a bare single-segment `Path` — a field or index read can't be
+    ///   moved out of in the first place, and already gets its own clone from
+    ///   [`Self::emit_field`];
+    /// - only the types whose Rust lowering is known to be `Clone`. A foreign
+    ///   handle (`rust.minifb.Window`) may not be, and cloning one would be a
+    ///   rustc error rather than a slow program.
+    pub(crate) fn value_place_needs_clone(&self, expr: &Expr) -> bool {
+        let Expr::Path(qn) = expr else { return false };
+        if qn.segments.len() != 1 || !self.non_final_uses.contains(&qn.span) {
+            return false;
+        }
+        let ty = self
+            .expr_types
+            .get(&expr_span_of(expr))
+            .or_else(|| {
+                self.local_types
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(qn.segments[0].text.as_str()))
+            });
+        match ty {
+            // Jux's own owned representations: `String` is a Rust `String`, an
+            // array is a `Vec`/`[T; N]`. Both are `Clone` whenever their element
+            // is, which every Jux value type is.
+            Some(juxc_tycheck::Ty::String) | Some(juxc_tycheck::Ty::Array { .. }) => true,
+            Some(juxc_tycheck::Ty::User { name, .. }) => {
+                matches!(
+                    name.rsplit('.').next().unwrap_or(name),
+                    "Vec" | "VecDeque" | "HashMap" | "BTreeMap" | "HashSet" | "BTreeSet",
+                )
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn wrapper_value_needs_clone(&self, expr: &Expr) -> bool {
         match expr {
             // Bare local/param reference of wrapped-class type.

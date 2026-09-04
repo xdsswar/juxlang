@@ -2180,11 +2180,15 @@ impl RustEmitter {
             // by the caller). Skipped under nullable/upcast wraps,
             // which never carry a bare wrapped place.
             if !nullable
-                && (self.wrapper_value_needs_clone(arg) || self.record_place_needs_clone(arg))
+                && (self.wrapper_value_needs_clone(arg)
+                    || self.record_place_needs_clone(arg)
+                    || self.value_place_needs_clone(arg))
             {
                 // Wrapper place → shared-handle refcount bump; record place →
-                // value-copy (§7.6). Both keep the caller's binding live and
-                // avoid moving a place that is also the call receiver.
+                // value-copy (§7.6); non-`Copy` value place with a later reader
+                // → copy so the caller's binding survives the call. All three
+                // keep the caller's binding live and avoid moving a place that
+                // is also the call receiver.
                 self.w.push_str(".clone()");
             }
             if let Some(cast) = num_widen {
@@ -4259,7 +4263,7 @@ impl RustEmitter {
         // would otherwise be a rustc E0382 on the second use, and
         // a mutation through the container element must stay
         // visible through the original binding.
-        if self.wrapper_value_needs_clone(arg) {
+        if self.wrapper_value_needs_clone(arg) || self.value_place_needs_clone(arg) {
             self.w.push_str(".clone()");
         }
         if wrap_some {

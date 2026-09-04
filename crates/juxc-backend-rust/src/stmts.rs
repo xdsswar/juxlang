@@ -603,7 +603,11 @@ impl RustEmitter {
                         // fire for nullable / sealed shapes (never a bare
                         // wrapped place) — the helper would return false there
                         // anyway, but gating keeps the emit unambiguous.
-                        if !wrap_some && !wrap_upcast && self.wrapper_value_needs_clone(e) {
+                        if !wrap_some
+                            && !wrap_upcast
+                            && (self.wrapper_value_needs_clone(e)
+                                || self.value_place_needs_clone(e))
+                        {
                             self.w.push_str(".clone()");
                         }
                         if wrap_upcast {
@@ -2187,7 +2191,10 @@ impl RustEmitter {
                 // `.clone()` from `emit_field`'s class-field auto-clone, so
                 // the shared helper covers only the bare-`Path` / `this` and
                 // index-read (`var r = xs[0]`) places the field path doesn't.
-                if !wrap_some && self.wrapper_value_needs_clone(init) {
+                if !wrap_some
+                    && (self.wrapper_value_needs_clone(init)
+                        || self.value_place_needs_clone(init))
+                {
                     self.w.push_str(".clone()");
                 }
                 if let Some(cast) = num_widen {
@@ -2373,8 +2380,12 @@ impl RustEmitter {
     fn emit_assign_rhs(&mut self, value: &Expr) {
         self.emit_expr(value);
         if let Expr::Path(qn) = value {
+            // A local that is still read after this store must be copied into
+            // the slot, not moved out of: `ctor_live_after` is the constructor
+            // form of that question, `value_place_needs_clone` the general one.
             if qn.segments.len() == 1
-                && self.ctor_live_after.contains(&qn.segments[0].text)
+                && (self.ctor_live_after.contains(&qn.segments[0].text)
+                    || self.value_place_needs_clone(value))
                 && !self.wrapper_value_needs_clone(value)
             {
                 self.w.push_str(".clone()");
@@ -3138,7 +3149,12 @@ impl RustEmitter {
                     self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
                     // Wrapper-class share-on-store: a wrapped place stored
                     // into a field hands the field a SHARED handle (§CR.4.1).
-                    if !assign_nullable && self.wrapper_value_needs_clone(&a.value) {
+                    // A non-`Copy` value place with a later reader is copied in
+                    // instead of moved out of the binding.
+                    if !assign_nullable
+                        && (self.wrapper_value_needs_clone(&a.value)
+                            || self.value_place_needs_clone(&a.value))
+                    {
                         self.w.push_str(".clone()");
                     }
                 }
@@ -3419,7 +3435,7 @@ impl RustEmitter {
             return;
         }
         self.emit_expr(value);
-        if self.wrapper_value_needs_clone(value) {
+        if self.wrapper_value_needs_clone(value) || self.value_place_needs_clone(value) {
             self.w.push_str(".clone()");
         }
     }

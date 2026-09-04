@@ -895,7 +895,10 @@ impl RustEmitter {
                     }
                     let nullable = ctor_nullable_flags.get(i).copied().unwrap_or(false);
                     this.emit_arg_with_nullable_wrap(arg, nullable);
-                    if !nullable && this.wrapper_value_needs_clone(arg) {
+                    if !nullable
+                        && (this.wrapper_value_needs_clone(arg)
+                            || this.value_place_needs_clone(arg))
+                    {
                         this.w.push_str(".clone()");
                     }
                 };
