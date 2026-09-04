@@ -31,14 +31,9 @@ fn polymorphic_collection_elements() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "jux exited with {:?}
-stderr:
-{stderr}
-stdout:
-{stdout}",
+        "jux exited with {:?}\nstderr:\n{stderr}\nstdout:\n{stdout}",
         output.status.code(),
     );
     let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
-    assert_eq!(lines.as_slice(), ["Tweet", "Beep", "rex: Woof", "tom: Meow", "1"], "unexpected output:
-{stdout}");
+    assert_eq!(lines.as_slice(), ["Tweet", "Beep", "rex: Woof", "tom: Meow", "1"], "unexpected output:\n{stdout}");
 }

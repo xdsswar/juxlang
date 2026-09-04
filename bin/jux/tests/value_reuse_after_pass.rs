@@ -33,11 +33,7 @@ fn a_value_stays_readable_after_it_is_passed() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "jux exited with {:?}
-stderr:
-{stderr}
-stdout:
-{stdout}",
+        "jux exited with {:?}\nstderr:\n{stderr}\nstdout:\n{stdout}",
         output.status.code(),
     );
     let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
@@ -50,6 +46,5 @@ stdout:
             "appleapple",
             "appleapple",
             "2",
-        ], "unexpected output:
-{stdout}");
+        ], "unexpected output:\n{stdout}");
 }

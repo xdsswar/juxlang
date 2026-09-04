@@ -1637,10 +1637,19 @@ impl RustEmitter {
         parent_prec: u8,
         right_of_left_assoc: bool,
     ) {
+        // Rust's comparison operators are NON-ASSOCIATIVE: `a < b == true` is a
+        // parse error there ("comparison operators cannot be chained") even
+        // though Jux's precedence table makes it unambiguous. So a comparison
+        // nested directly inside a comparison always gets parens, whichever way
+        // precedence would fall. Levels 6 (`==`, `!=`) and 7 (`<`, `<=`, `>`,
+        // `>=`) are exactly that family.
+        let is_comparison = |p: u8| p == 6 || p == 7;
         let needs_paren = match e {
             Expr::Binary(b) => {
                 let p = binary_prec(b.op);
-                if right_of_left_assoc {
+                if is_comparison(p) && is_comparison(parent_prec) {
+                    true
+                } else if right_of_left_assoc {
                     p <= parent_prec
                 } else {
                     p < parent_prec

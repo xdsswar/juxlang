@@ -610,7 +610,7 @@ impl<'a> Parser<'a> {
     /// Shared by the two places that must decide that question without
     /// consuming input: the postfix turbofish form (`id<int>(5)`) and the
     /// C-style cast (`(Circle<String>) s`).
-    fn skip_type_args(&self, mut i: usize) -> Option<usize> {
+    pub(crate) fn skip_type_args(&self, mut i: usize) -> Option<usize> {
         if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
             return None;
         }

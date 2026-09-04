@@ -1625,6 +1625,49 @@ fn c_style_cast_with_array_marker_on_user_type() {
     assert!(c.ty.array_shape.is_some(), "cast type should carry array shape");
 }
 
+/// A function-typed local declaration — `(int) -> int f = …;`. Grammar §A.2.7
+/// makes `function-type` a `simple-type`, so it is legal in `local-decl`; the
+/// statement starts with `(`, which otherwise reads as an expression.
+#[test]
+fn function_typed_local_parses_as_a_declaration() {
+    let ast = parse_clean("public void main() { (int) -> int f = (n) -> n; }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::VarDecl(v) = &body.statements[0] else {
+        panic!("expected a local declaration, got {:?}", body.statements[0]);
+    };
+    assert_eq!(v.name.text, "f");
+    let ty = v.ty.as_ref().expect("declared type");
+    let shape = ty.fn_shape.as_ref().expect("function type");
+    assert_eq!(shape.params.len(), 1);
+}
+
+/// The return type may itself be a function type (`(int) -> (int) -> int`),
+/// so the lookahead has to recurse rather than stop at the first `->`.
+#[test]
+fn curried_function_typed_local_parses_as_a_declaration() {
+    let ast = parse_clean("public void main() { (int) -> (int) -> int g = (a) -> (b) -> a; }");
+    let body = body_of(&ast.items[0]);
+    assert!(
+        matches!(&body.statements[0], Stmt::VarDecl(_)),
+        "expected a local declaration, got {:?}",
+        body.statements[0],
+    );
+}
+
+/// A lambda used as an expression statement starts with `(` and contains `->`
+/// too — what separates it from a declaration is that nothing follows the body
+/// that could be a type plus a binding name.
+#[test]
+fn lambda_expression_statement_is_not_a_declaration() {
+    let ast = parse_clean("public void main() { run((a, b) -> a + b); }");
+    let body = body_of(&ast.items[0]);
+    assert!(
+        matches!(&body.statements[0], Stmt::Expr(_)),
+        "expected an expression statement, got {:?}",
+        body.statements[0],
+    );
+}
+
 /// A user-named type with **generic arguments** (`(Box<int>) b`) triggers the
 /// cast path: a balanced, type-only `<…>` sitting right before the closing `)`
 /// has no reading as a comparison chain, so the markers are unambiguous the

@@ -848,6 +848,127 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Lookahead for a **function-typed local declaration**:
+    /// `( type-list? ) 'async'? ( 'throws' type-list )? '->' type IDENT ( '=' | ';' )`.
+    ///
+    /// The discriminator against a lambda expression statement
+    /// (`(a, b) -> a + b;`) is what follows the `->`: a declaration has a type
+    /// AND a binding name before the `=` or `;`, and a lambda body does not.
+    /// `(a) -> b + c;` fails at "binding name", so it stays an expression.
+    fn looks_like_fn_type_local(&self) -> bool {
+        let Some(mut i) = self.skip_balanced_parens(self.pos) else {
+            return false;
+        };
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Kw(Keyword::Async))) {
+            i += 1;
+        }
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Kw(Keyword::Throws))) {
+            i += 1;
+            let Some(next) = self.skip_type_list(i) else { return false };
+            i = next;
+        }
+        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Arrow)) {
+            return false;
+        }
+        i += 1;
+        let Some(after_ret) = self.skip_one_type(i) else {
+            return false;
+        };
+        matches!(self.tokens.get(after_ret).map(|t| &t.kind), Some(TokenKind::Ident(_)))
+            && matches!(
+                self.tokens.get(after_ret + 1).map(|t| &t.kind),
+                Some(TokenKind::Eq) | Some(TokenKind::Semicolon),
+            )
+    }
+
+    /// Index just past the `)` matching the `(` at `i`, or `None` when the
+    /// group never closes.
+    fn skip_balanced_parens(&self, mut i: usize) -> Option<usize> {
+        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen)) {
+            return None;
+        }
+        i += 1;
+        let mut depth = 1u32;
+        while depth > 0 {
+            match self.tokens.get(i).map(|t| &t.kind) {
+                Some(TokenKind::LParen) => depth += 1,
+                Some(TokenKind::RParen) => depth -= 1,
+                Some(TokenKind::Eof) | None => return None,
+                _ => {}
+            }
+            i += 1;
+        }
+        Some(i)
+    }
+
+    /// Non-consuming scan of ONE type at `i`, returning the index just past it.
+    /// Handles the named form (dotted name, generic args, `?`, array dims,
+    /// pointer stars) and recurses for a nested function type, which is what a
+    /// curried return type (`(int) -> (int) -> int`) needs.
+    fn skip_one_type(&self, i: usize) -> Option<usize> {
+        if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen)) {
+            let mut j = self.skip_balanced_parens(i)?;
+            if matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Kw(Keyword::Async))) {
+                j += 1;
+            }
+            if matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Kw(Keyword::Throws))) {
+                j = self.skip_type_list(j + 1)?;
+            }
+            if !matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Arrow)) {
+                // A parenthesized group with no `->` is a tuple type; it is
+                // reserved syntax with no meaning yet, so stop here.
+                return None;
+            }
+            return self.skip_one_type(j + 1);
+        }
+        // `void` is a keyword, and a legitimate return type.
+        let mut j = match self.tokens.get(i).map(|t| &t.kind) {
+            Some(TokenKind::Kw(Keyword::Void)) => i + 1,
+            Some(TokenKind::Ident(_)) => {
+                let mut j = i + 1;
+                while matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Dot))
+                    && matches!(self.tokens.get(j + 1).map(|t| &t.kind), Some(TokenKind::Ident(_)))
+                {
+                    j += 2;
+                }
+                if let Some(next) = self.skip_type_args(j) {
+                    j = next;
+                }
+                j
+            }
+            _ => return None,
+        };
+        if matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Question)) {
+            j += 1;
+        }
+        while matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::LBracket)) {
+            j += 1;
+            let mut depth = 1u32;
+            while depth > 0 {
+                match self.tokens.get(j).map(|t| &t.kind) {
+                    Some(TokenKind::LBracket) => depth += 1,
+                    Some(TokenKind::RBracket) => depth -= 1,
+                    Some(TokenKind::Eof) | None => return None,
+                    _ => {}
+                }
+                j += 1;
+            }
+        }
+        while matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Star)) {
+            j += 1;
+        }
+        Some(j)
+    }
+
+    /// Non-consuming scan of a comma-separated type list at `i`.
+    fn skip_type_list(&self, i: usize) -> Option<usize> {
+        let mut j = self.skip_one_type(i)?;
+        while matches!(self.tokens.get(j).map(|t| &t.kind), Some(TokenKind::Comma)) {
+            j = self.skip_one_type(j + 1)?;
+        }
+        Some(j)
+    }
+
     /// Lookahead heuristic for typed local declarations.
     ///
     /// Matches the shape `IDENT (`[` … `]`)* IDENT (= | ;)` — a single
@@ -862,6 +983,14 @@ impl<'a> Parser<'a> {
     /// types (`List<int> nums = …;`) don't trip the heuristic — those
     /// users can fall back to `var`.
     pub(crate) fn looks_like_typed_local(&self) -> bool {
+        // A FUNCTION-typed local — `(int) -> int f = (n) -> n + 1;`. Grammar
+        // §A.2.7 makes `function-type` a `simple-type`, so it is legal wherever
+        // a type is, `local-decl` included. It needs its own lookahead because
+        // the statement starts with `(`, which otherwise reads as a
+        // parenthesized expression or a lambda.
+        if self.at(&TokenKind::LParen) {
+            return self.looks_like_fn_type_local();
+        }
         // `void* p = …;` / `void** pp;` — a raw pointer to an untyped C region
         // (§L.7). `void` is a keyword (not an `Ident`) and a bare `void` is never
         // a value type, so the shape is unambiguous: `void` + at least one `*` +
