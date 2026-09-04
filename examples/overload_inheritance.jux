@@ -1,0 +1,38 @@
+// Method overloading across an inheritance chain. A subclass may override one
+// member of an inherited overload group, add a new member to it, or both, and a
+// base-typed reference dispatches to the override it can see.
+
+public class Writer {
+    public String write() { return "base:none"; }
+    public String write(int n) { return "base:int " + n; }
+    public String write(String s) { return "base:str " + s; }
+}
+
+// Overrides ONE member; the other two are inherited unchanged.
+public class Loud extends Writer {
+    @Override public String write(int n) { return "loud:int " + n; }
+}
+
+// Adds a NEW member to an inherited group, and reaches the overridden one
+// through `super`.
+public class Tagged extends Writer {
+    @Override public String write(String s) { return "tag[" + super.write(s) + "]"; }
+    public String write(int n, String s) { return "tag:pair " + n + s; }
+}
+
+public void main() {
+    // Dispatch through the base type picks the override for the member the
+    // base declares.
+    Writer w = new Loud();
+    print(w.write());
+    print(w.write(7));
+    print(w.write("x"));
+
+    Writer t = new Tagged();
+    print(t.write("y"));
+
+    // The member the subclass introduced is reachable from the subclass type.
+    Tagged concrete = new Tagged();
+    print(concrete.write(1, "z"));
+    print(concrete.write());
+}

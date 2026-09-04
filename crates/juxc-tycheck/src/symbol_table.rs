@@ -304,6 +304,115 @@ impl SymbolTable {
     /// A 64-step recursion cap guards against cycles the build pass
     /// somehow missed (today the build pass doesn't check for cycles at
     /// all — class hierarchies trust the resolver).
+    /// Resolve a class by **exact FQN key** or by a unique bare-name suffix.
+    /// The two spellings reach the table from different places (an inferred
+    /// `Ty::User` carries the FQN, source text carries the bare name), and every
+    /// lookup that accepts either wants the same rule: exact first, then a
+    /// suffix match that is unambiguous.
+    pub fn resolve_class(&self, class_name: &str) -> Option<(&String, &ClassSig)> {
+        if let Some(kv) = self.classes.get_key_value(class_name) {
+            return Some(kv);
+        }
+        if class_name.contains('.') {
+            return None;
+        }
+        let suffix = format!(".{class_name}");
+        let mut hits = self.classes.iter().filter(|(k, _)| k.ends_with(&suffix));
+        match (hits.next(), hits.next()) {
+            (Some(kv), None) => Some(kv),
+            _ => None,
+        }
+    }
+
+    /// The **merged overload group** for `method_name` as seen from
+    /// `class_name`: every declaration of that name the class can dispatch,
+    /// inherited ones included, in a stable order.
+    ///
+    /// Built root-down. Each class takes its parent's group and, for each of
+    /// its own declarations of the name, either REPLACES the member it
+    /// overrides (same parameter shape) or APPENDS a new overload. Replacing in
+    /// place is the whole point: an override keeps the index its parent's
+    /// declaration had, so the two emit under the same name (`m`, `m__ov1`, …)
+    /// and a base-typed call reaches the subclass body.
+    ///
+    /// The returned index IS the overload's emitted identity. A name declared
+    /// once, nowhere overloaded, yields a single member at index 0 — the plain
+    /// name, exactly as before overloading and inheritance were combined.
+    ///
+    /// Returns an empty vector when nothing in the chain declares the name.
+    pub fn merged_method_overloads(&self, class_name: &str, method_name: &str) -> Vec<MethodSig> {
+        // Walk up to the root first so the group can be built downward.
+        let mut chain: Vec<&ClassSig> = Vec::new();
+        let mut cursor = self.resolve_class(class_name).map(|(_, c)| c);
+        let mut depth = 0usize;
+        while let Some(c) = cursor {
+            if depth > 64 {
+                break;
+            }
+            depth += 1;
+            chain.push(c);
+            cursor = c
+                .extends_fqn
+                .as_deref()
+                .or_else(|| {
+                    c.extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+                })
+                .and_then(|p| self.resolve_class(p).map(|(_, c)| c));
+        }
+        // Root-down, carrying each member's declaring class so an override can
+        // be recognized against the type parameters that class declared.
+        let mut merged: Vec<(&ClassSig, MethodSig)> = Vec::new();
+        for class in chain.iter().rev() {
+            // A class's own declarations of the name, in source order: the
+            // overload group when it has one, else the single method.
+            let own: Vec<&MethodSig> = match class.method_overloads.get(method_name) {
+                Some(group) => group.iter().collect(),
+                None => class.methods.get(method_name).into_iter().collect(),
+            };
+            for m in own {
+                match override_slot(&merged, m) {
+                    Some(i) => merged[i] = (class, m.clone()),
+                    None => merged.push((class, m.clone())),
+                }
+            }
+        }
+        merged.into_iter().map(|(_, m)| m).collect()
+    }
+
+    /// The merged-group index a declaration in `class_name` emits under — the
+    /// suffix number for `m__ovK`. `None` when the name isn't dispatchable from
+    /// this class at all (which the caller reads as "index 0, plain name").
+    pub fn merged_overload_index(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        param_types: &[TypeRef],
+    ) -> Option<usize> {
+        let merged = self.merged_method_overloads(class_name, method_name);
+        if merged.len() <= 1 {
+            return Some(0);
+        }
+        let want = type_list_shape_key(param_types);
+        merged
+            .iter()
+            .position(|m| param_shape_key(&m.params) == want)
+            .or_else(|| {
+                // A generic base's `T` becomes a concrete type in the override
+                // (`implements Holder<Object>` overrides as `test(Object)`), so
+                // the shapes differ textually. Fall back to arity when that
+                // picks exactly one member.
+                let same_arity: Vec<usize> = merged
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| m.params.len() == param_types.len())
+                    .map(|(i, _)| i)
+                    .collect();
+                (same_arity.len() == 1).then(|| same_arity[0])
+            })
+    }
+
     /// Method-overload pick (§T.3, Phase-1 count rule): when
     /// `class_name` (exact key or unique FQN suffix) declares an
     /// overload GROUP for `method_name`, return the group index and
@@ -2677,11 +2786,12 @@ fn check_diamond_default_conflicts(
 /// `crate::infer::select_method_overload_typed`). At the declaration,
 /// the only rejected shape is true ambiguity: two members whose
 /// count ranges overlap AND whose parameter-type shapes are
-/// indistinguishable (E0450). Additionally, Phase 1 keeps overload
-/// groups out of the inheritance machinery: a group's name may not
-/// also exist on an ancestor class (override matching,
-/// virtual-dispatch traits, and body copy-down are all name-keyed
-/// today).
+/// indistinguishable (E0450).
+///
+/// Overloading composes with inheritance: a subclass may override one member of
+/// an inherited group, add a new one, or both. Dispatch identity comes from the
+/// MERGED group ([`SymbolTable::merged_method_overloads`]), which keeps an
+/// override at the index its parent's declaration had.
 fn check_method_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (class_name, class) in &table.classes {
         if class.is_external {
@@ -2714,61 +2824,6 @@ fn check_method_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>
                             .with_span(group[j].span),
                         );
                     }
-                }
-            }
-            // Inheritance restriction (forward): walk the extends chain.
-            let mut cursor = class.extends_fqn.clone();
-            let mut depth = 0usize;
-            while let Some(parent_name) = cursor {
-                if depth > 64 {
-                    break;
-                }
-                depth += 1;
-                let Some(parent) = table.classes.get(&parent_name) else { break };
-                if parent.methods.contains_key(name) {
-                    diagnostics.push(
-                        Diagnostic::error(
-                            code::Code::E0450_AmbiguousOverload,
-                            format!(
-                                "`{class_name}.{name}` is overloaded AND inherited from \
-                                 `{parent_name}` — Phase 1 doesn't combine overloading \
-                                 with overriding; rename the overloads or the inherited \
-                                 method",
-                            ),
-                        )
-                        .with_span(group[0].span),
-                    );
-                    break;
-                }
-                cursor = parent.extends_fqn.clone();
-            }
-        }
-        // Inheritance restriction (reverse): extending a class that
-        // declares ANY overload group is a Phase-1 error — the
-        // virtual-dispatch machinery (Kind traits, body copy-down,
-        // override matching) is name-keyed and doesn't understand
-        // mangled overload members yet.
-        if let Some(parent_name) = &class.extends_fqn {
-            if let Some(parent) = table.classes.get(parent_name) {
-                if !parent.method_overloads.is_empty() {
-                    let group_name = parent
-                        .method_overloads
-                        .keys()
-                        .next()
-                        .cloned()
-                        .unwrap_or_default();
-                    diagnostics.push(
-                        Diagnostic::error(
-                            code::Code::E0450_AmbiguousOverload,
-                            format!(
-                                "`{class_name}` extends `{parent_name}`, which overloads \
-                                 `{group_name}` — Phase 1 doesn't combine method \
-                                 overloading with inheritance; rename the overloads or \
-                                 make the parent's methods distinct",
-                            ),
-                        )
-                        .with_span(class.span),
-                    );
                 }
             }
         }
@@ -2832,10 +2887,57 @@ fn check_constructor_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagno
 /// whose count ranges overlap are distinguishable (§T.3) exactly when
 /// their shape keys differ; identical keys are the true-ambiguity
 /// E0450 case.
+/// The index in `merged` that `m` OVERRIDES, or `None` when it introduces a
+/// new overload.
+///
+/// An exact parameter-shape match is the ordinary case. When none matches, a
+/// same-arity member is treated as overridden only if its own declaring class
+/// spelled one of ITS type parameters in that position: a generic base declares
+/// `test(T)` and the override names the bound argument (`test(Object)`, §T.3),
+/// so the two never match textually. Requiring an unambiguous single candidate
+/// keeps `show(int)` from silently replacing an inherited `show(String)` — with
+/// two same-arity members the declaration appends instead of guessing.
+fn override_slot(merged: &[(&ClassSig, MethodSig)], m: &MethodSig) -> Option<usize> {
+    let want = param_shape_key(&m.params);
+    if let Some(i) = merged
+        .iter()
+        .position(|(_, x)| param_shape_key(&x.params) == want)
+    {
+        return Some(i);
+    }
+    let substituted: Vec<usize> = merged
+        .iter()
+        .enumerate()
+        .filter(|(_, (owner, x))| {
+            x.params.len() == m.params.len()
+                && x.params.iter().any(|p| {
+                    p.ty.generic_args.is_empty()
+                        && p.ty.name.segments.len() == 1
+                        && owner
+                            .generic_params
+                            .iter()
+                            .any(|g| g.name.text == p.ty.name.segments[0].text)
+                })
+        })
+        .map(|(i, _)| i)
+        .collect();
+    (substituted.len() == 1).then(|| substituted[0])
+}
+
 pub(crate) fn param_shape_key(params: &[ParamSig]) -> String {
     params
         .iter()
         .map(|p| type_ref_shape_key(&p.ty))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// [`param_shape_key`] over bare parameter TYPES — the form available to a
+/// caller holding an AST declaration rather than a checked signature.
+pub(crate) fn type_list_shape_key(types: &[TypeRef]) -> String {
+    types
+        .iter()
+        .map(type_ref_shape_key)
         .collect::<Vec<_>>()
         .join(",")
 }
