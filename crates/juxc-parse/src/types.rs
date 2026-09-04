@@ -18,7 +18,20 @@ impl<'a> Parser<'a> {
     ///
     /// Generics, pointers, function types, tuple types are still future
     /// extensions.
+    /// Parse one type reference.
+    ///
+    /// Guards the recursion depth (E0201) and delegates to
+    /// [`Self::parse_type_ref_inner`]. See [`crate::MAX_NESTING`].
     pub(crate) fn parse_type_ref(&mut self) -> Option<TypeRef> {
+        if !self.enter_nesting() {
+            return None;
+        }
+        let out = self.parse_type_ref_inner();
+        self.leave_nesting();
+        out
+    }
+
+    pub(crate) fn parse_type_ref_inner(&mut self) -> Option<TypeRef> {
         // Function-type shape `(A, B) async? throws? -> R` per
         // grammar §A.2.7. Detected by the `(` lead. We commit to
         // the function-type branch only after the closing `)` so

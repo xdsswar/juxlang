@@ -180,6 +180,16 @@ enum TargetCmd {
 
 fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
+    // Same reason as `juxc`: the front end runs in-process here, it recurses
+    // with source nesting, and its frames are large enough that a default main
+    // stack aborts the process around 60 levels deep. See
+    // `juxc_driver::big_stack`.
+    juxc_driver::big_stack::run(move || run_cli(cli))
+}
+
+/// Dispatch one parsed command line. Split out of `main` so the whole of it
+/// runs on the large-stack thread.
+fn run_cli(cli: Cli) -> Result<ExitCode> {
     // Resolve the project root once: an explicit `--manifest-path`, else the
     // nearest `jux.toml` walking up from the cwd. `None` when no manifest is
     // found (project-mode commands report their own "no jux.toml" error).

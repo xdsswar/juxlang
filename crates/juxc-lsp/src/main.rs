@@ -28,8 +28,22 @@ pub(crate) fn stubs_dirname() -> &'static str {
     juxc_driver::stubs::PROJECT_STUB_DIRNAME
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // The analysis path is the compiler front end, which recurses in step with
+    // source nesting and has large frames. Tokio's worker threads default to a
+    // 2 MB stack -- less than a main thread gets -- so a deeply nested file
+    // would abort the whole language server while the user was typing in it.
+    // Reserve the same headroom the batch compiler uses.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(juxc_driver::big_stack::STACK_SIZE)
+        .enable_all()
+        .build()
+        .expect("building the tokio runtime");
+    runtime.block_on(serve());
+}
+
+/// The server's async body: LSP over stdio, until the client disconnects.
+async fn serve() {
     // stdio transport. `tokio::io::stdin/stdout` give us the async byte
     // streams tower-lsp frames JSON-RPC over.
     let stdin = tokio::io::stdin();

@@ -53,7 +53,20 @@ impl<'a> Parser<'a> {
     /// `? :`, elvis `?:`, three-way `<=>`, type-test `=>` / `in`, cast
     /// `as`) drop straight through to the next implemented layer and
     /// land as features need them.
+    /// Parse one expression.
+    ///
+    /// Guards the recursion depth (E0201) and delegates to
+    /// [`Self::parse_expr_inner`]. See [`crate::MAX_NESTING`].
     pub(crate) fn parse_expr(&mut self) -> Option<Expr> {
+        if !self.enter_nesting() {
+            return None;
+        }
+        let out = self.parse_expr_inner();
+        self.leave_nesting();
+        out
+    }
+
+    pub(crate) fn parse_expr_inner(&mut self) -> Option<Expr> {
         // Lambda forms — checked before the operator-precedence
         // chain because they bind looser than any binary op and
         // can be heralded by either `identifier ->` or `(…) ->`.
