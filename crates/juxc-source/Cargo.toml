@@ -8,4 +8,7 @@ authors.workspace = true
 repository.workspace = true
 description = "Source-file storage, byte positions, and spans for the Jux compiler."
 
+[lints]
+workspace = true
+
 [dependencies]

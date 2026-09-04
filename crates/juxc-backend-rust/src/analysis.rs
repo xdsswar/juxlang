@@ -1039,11 +1039,10 @@ pub(crate) fn body_writes_to_this(block: &Block) -> bool {
                     return true;
                 }
             }
-            Stmt::ForEach(f) => {
-                if body_writes_to_this(&f.body) {
+            Stmt::ForEach(f)
+                if body_writes_to_this(&f.body) => {
                     return true;
                 }
-            }
             _ => {}
         }
     }

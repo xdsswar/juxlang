@@ -8,6 +8,9 @@ authors.workspace = true
 repository.workspace = true
 description = "Glue that wires each pipeline phase together (per JUX-COMPILER-PIPELINE-ADDENDUM.md §C.11)."
 
+[lints]
+workspace = true
+
 [dependencies]
 juxc-source       = { workspace = true }
 juxc-diagnostics  = { workspace = true }

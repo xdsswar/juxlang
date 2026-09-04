@@ -317,6 +317,18 @@ pub(crate) struct Checker<'a> {
     pub(crate) const_param_names: std::collections::HashSet<String>,
 }
 
+/// Everything the checker hands downstream, all keyed by expression [`Span`]:
+/// inferred types, the call-sugar expansion plan (which argument came from
+/// where), the selected constructor overload, and the selected method overload.
+/// Named because a bare four-tuple of `HashMap`s at a function boundary tells a
+/// reader nothing about which is which.
+pub(crate) type CheckerMaps = (
+    HashMap<Span, Ty>,
+    HashMap<Span, Vec<crate::ArgSource>>,
+    HashMap<Span, usize>,
+    HashMap<Span, usize>,
+);
+
 impl<'a> Checker<'a> {
     /// Construct a fresh checker. `symbols` is the Phase-A symbol table;
     /// `diagnostics` is the same vec the rest of typecheck appends to.
@@ -434,16 +446,8 @@ impl<'a> Checker<'a> {
                 .any(|m| matches!(m, juxc_ast::FnModifier::Async))
     }
 
-    /// Consume the checker, returning both span-keyed maps it built:
-    /// the per-expression types AND the call-sugar expansion plans.
-    pub(crate) fn into_maps(
-        self,
-    ) -> (
-        HashMap<Span, Ty>,
-        HashMap<Span, Vec<crate::ArgSource>>,
-        HashMap<Span, usize>,
-        HashMap<Span, usize>,
-    ) {
+    /// Consume the checker, returning every span-keyed map it built.
+    pub(crate) fn into_maps(self) -> CheckerMaps {
         (
             self.expr_types,
             self.call_expansions,
@@ -3926,7 +3930,7 @@ impl<'a> Checker<'a> {
         match vis {
             Visibility::Public => true,
             Visibility::Private => accessor == Some(declaring_class),
-            Visibility::Protected => accessor.map_or(false, |a| {
+            Visibility::Protected => accessor.is_some_and(|a| {
                 a == declaring_class
                     || crate::ty::walk_extends_reaches(a, declaring_class, self.symbols)
             }),
@@ -4011,7 +4015,7 @@ impl<'a> Checker<'a> {
         let target_ok = field
             .ty
             .as_ref()
-            .map_or(false, |t| self.type_ref_is_weakable_class(t));
+            .is_some_and(|t| self.type_ref_is_weakable_class(t));
         if !target_ok {
             self.diagnostics.push(
                 Diagnostic::error(
@@ -4058,7 +4062,7 @@ impl<'a> Checker<'a> {
                 return self
                     .symbols
                     .lookup_field(name, &f.field.text)
-                    .map_or(false, |(fs, _)| fs.is_weak);
+                    .is_some_and(|(fs, _)| fs.is_weak);
             }
         }
         false
@@ -4152,7 +4156,7 @@ impl<'a> Checker<'a> {
                 return self
                     .symbols
                     .lookup_field(name, &f.field.text)
-                    .map_or(false, |(fs, _)| fs.ty.ptr_depth > 0);
+                    .is_some_and(|(fs, _)| fs.ty.ptr_depth > 0);
             }
         }
         false
@@ -4184,7 +4188,7 @@ impl<'a> Checker<'a> {
                 .symbols
                 .classes
                 .get(&fqn)
-                .map_or(false, |c| c.generic_params.is_empty()),
+                .is_some_and(|c| c.generic_params.is_empty()),
             None => false,
         }
     }
@@ -4208,7 +4212,7 @@ impl<'a> Checker<'a> {
                 code::Code::E0414_PrivateAccess
             }
             Visibility::Protected => {
-                if accessor.map_or(false, |a| {
+                if accessor.is_some_and(|a| {
                     a == declaring_class
                         || crate::ty::walk_extends_reaches(a, declaring_class, self.symbols)
                 }) {
@@ -4489,7 +4493,7 @@ impl<'a> Checker<'a> {
             if self
                 .symbols
                 .lookup_field(name, field_name)
-                .map_or(false, |(fs, _)| fs.is_weak)
+                .is_some_and(|(fs, _)| fs.is_weak)
             {
                 self.diagnostics.push(
                     Diagnostic::error(
@@ -4540,7 +4544,6 @@ impl<'a> Checker<'a> {
             // Arrays: allow .length and friends silently.
             Ty::Array { .. } => {
                 if BUILTIN_ARRAY_FIELDS.contains(&field_name) {
-                    return;
                 }
                 // Unknown field on array — stay quiet today. A future
                 // pass may tighten this.
@@ -4548,7 +4551,6 @@ impl<'a> Checker<'a> {
             // Strings: same allowlist treatment.
             Ty::String => {
                 if BUILTIN_STRING_FIELDS.contains(&field_name) {
-                    return;
                 }
             }
             // User types: walk the inheritance chain looking for the
@@ -5234,7 +5236,6 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                return;
             }
             Expr::Path(qn) if qn.segments.len() == 1 => {
                 let name = &qn.segments[0].text;
@@ -5482,7 +5483,7 @@ impl<'a> Checker<'a> {
                             if self
                                 .symbols
                                 .lookup_field(name, &inner.field.text)
-                                .map_or(false, |(fs, _)| fs.is_weak)
+                                .is_some_and(|(fs, _)| fs.is_weak)
                             {
                                 self.check_expr(&inner.object);
                                 return;
@@ -6361,7 +6362,6 @@ impl<'a> Checker<'a> {
                 )
                 .with_span(n.span),
             );
-            return;
         }
         // Not a known class, record, interface, or enum. Stay silent
         // if the resolver already flagged the name (it lands in
@@ -6742,6 +6742,14 @@ impl<'a> Checker<'a> {
         self.call_expansions.insert(call_span, plan);
     }
 
+    /// Validate a call's arguments against a resolved callee signature and record
+    /// the expansion plan the backend replays (§7.2).
+    ///
+    /// Handles the three shapes uniformly: positional, named (`f(x: 1)`), and
+    /// variadic (`T...`). `declaring_class` scopes visibility checks to the
+    /// caller's position in the hierarchy; `subst_params`/`subst_args` carry the
+    /// generic substitution in effect, so a parameter typed `T` is checked
+    /// against the bound type rather than against `T` itself.
     fn check_call_args(
         &mut self,
         callee_name: &str,

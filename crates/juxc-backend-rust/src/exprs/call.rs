@@ -448,7 +448,7 @@ impl RustEmitter {
                                 recv,
                                 &prop,
                                 &class,
-                                &opname.to_string(),
+                                opname,
                                 call,
                             );
                         }
@@ -461,7 +461,7 @@ impl RustEmitter {
                             return self.emit_static_observers_call(
                                 &class,
                                 &prop,
-                                &opname.to_string(),
+                                opname,
                                 call,
                             );
                         }

@@ -13,6 +13,9 @@ build = "build.rs"
 name = "juxc"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 juxc-driver      = { workspace = true }
 juxc-source      = { workspace = true }

@@ -761,7 +761,7 @@ pub fn build_emitted_crate(
     // emitted Cargo.toml so the bound crate is actually linked into the binary
     // (the `.jux.d` stub only put its API in scope at type-check time).
     let registry_deps = manifest
-        .map(|m| collect_registry_deps(m))
+        .map(collect_registry_deps)
         .unwrap_or_default();
     let cargo_toml = juxc_backend_rust::cargo_toml_for_target(
         target,

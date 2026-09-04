@@ -469,13 +469,13 @@ impl RustEmitter {
                     .into_iter()
                     .find(|p| p.name.text == prop_name)
                 {
-                    self.pending_setter_observer = Some((
-                        prop_name.to_string(),
-                        self.property_type_is_comparable(&prop.ty),
-                        Vec::new(),
-                        true,
-                        0,
-                    ));
+                    self.pending_setter_observer = Some(crate::PendingSetterObserver {
+                        prop: prop_name.to_string(),
+                        comparable: self.property_type_is_comparable(&prop.ty),
+                        dependents: Vec::new(),
+                        is_static: true,
+                        parent_depth: 0,
+                    });
                 }
             }
             self.emit_method(method);
@@ -1079,13 +1079,13 @@ impl RustEmitter {
                                 )
                             })
                             .collect();
-                    self.pending_setter_observer = Some((
-                        prop_name.to_string(),
-                        self.property_type_is_comparable(&prop.ty),
+                    self.pending_setter_observer = Some(crate::PendingSetterObserver {
+                        prop: prop_name.to_string(),
+                        comparable: self.property_type_is_comparable(&prop.ty),
                         dependents,
-                        false,
-                        0,
-                    ));
+                        is_static: false,
+                        parent_depth: 0,
+                    });
                 } else if let Some(prop) =
                     crate::decls::observers::static_observable_props(class_decl)
                         .into_iter()
@@ -1094,13 +1094,13 @@ impl RustEmitter {
                     // P7: static setter — class-scoped observer fire,
                     // no computed-dep tracking (static computed props
                     // are out of Phase-1 scope).
-                    self.pending_setter_observer = Some((
-                        prop_name.to_string(),
-                        self.property_type_is_comparable(&prop.ty),
-                        Vec::new(),
-                        true,
-                        0,
-                    ));
+                    self.pending_setter_observer = Some(crate::PendingSetterObserver {
+                        prop: prop_name.to_string(),
+                        comparable: self.property_type_is_comparable(&prop.ty),
+                        dependents: Vec::new(),
+                        is_static: true,
+                        parent_depth: 0,
+                    });
                 }
             }
             self.emit_method(method);
@@ -1416,13 +1416,13 @@ impl RustEmitter {
                                     )
                                 })
                                 .collect();
-                        self.pending_setter_observer = Some((
-                            prop_name.to_string(),
-                            self.property_type_is_comparable(&prop.ty),
+                        self.pending_setter_observer = Some(crate::PendingSetterObserver {
+                            prop: prop_name.to_string(),
+                            comparable: self.property_type_is_comparable(&prop.ty),
                             dependents,
-                            false,
-                            depth,
-                        ));
+                            is_static: false,
+                            parent_depth: depth,
+                        });
                     }
                 }
                 // Apply the accumulated parent-param → concrete-type
@@ -1894,13 +1894,12 @@ impl RustEmitter {
                     mark_field_read(&f.object, generic_fields, out);
                 }
                 // bare `field` (implicit this inside the body)
-                Expr::Path(qn) => {
-                    if qn.segments.len() == 1 {
+                Expr::Path(qn)
+                    if qn.segments.len() == 1 => {
                         if let Some(param) = generic_fields.get(qn.segments[0].text.as_str()) {
                             out.insert((*param).to_string());
                         }
                     }
-                }
                 _ => {}
             }
         }
@@ -3814,7 +3813,10 @@ impl RustEmitter {
         // other modules call it; Jux-level access stays enforced by
         // tycheck E0972), and a thin public `__set_X` gate wrapper is
         // appended after the method (E0973 bound-assignment guard).
-        let p2_setter = matches!(&self.pending_setter_observer, Some((_, _, _, false, _)))
+        let p2_setter = self
+            .pending_setter_observer
+            .as_ref()
+            .is_some_and(|o| !o.is_static)
             && method.name.text.starts_with("__set_");
         if p2_setter {
             self.w.push_str("pub ");
@@ -3929,10 +3931,11 @@ impl RustEmitter {
         // emitted after the body below. An early `return` in a custom
         // setter body skips the fire (W0973 semantics).
         let setter_observer = self.pending_setter_observer.take();
-        if let Some((prop, _, dependents, observer_static, _)) = &setter_observer {
+        if let Some(obs) = &setter_observer {
+            let (prop, dependents) = (&obs.prop, &obs.dependents);
             // Static setters read through the associated getter; the
             // class-scoped storage has no `self`.
-            let recv = if *observer_static { "Self::" } else { "self." };
+            let recv = if obs.is_static { "Self::" } else { "self." };
             self.w.line(&format!("let __jux_old = {recv}{prop}();"));
             // §P.1.5: pre-capture every dependent COMPUTED property's
             // value so the post-body bracket can fire on change.
@@ -4031,8 +4034,9 @@ impl RustEmitter {
             // close. Comparable property types fire only on an actual
             // value change; user-class types (no `PartialEq` on the
             // wrapper) fire on every completed set.
-            if let Some((prop, comparable, dependents, observer_static, _)) = &setter_observer {
-                let recv = if *observer_static { "Self::" } else { "self." };
+            if let Some(obs) = &setter_observer {
+                let (prop, comparable, dependents) = (&obs.prop, &obs.comparable, &obs.dependents);
+                let recv = if obs.is_static { "Self::" } else { "self." };
                 self.w.line(&format!("let __jux_now = {recv}{prop}();"));
                 if *comparable {
                     // §P.3.6 re-entrant sets: an observer may set this
@@ -4101,7 +4105,11 @@ impl RustEmitter {
         // assignment while a binding drives the property — an
         // `IllegalStateException` in debug builds (E0973). The binding
         // machinery writes through `__set_X_raw` above.
-        if let Some((prop, _, _, false, depth)) = &setter_observer {
+        if let Some((prop, depth)) = setter_observer
+            .as_ref()
+            .filter(|o| !o.is_static)
+            .map(|o| (&o.prop, &o.parent_depth))
+        {
             if let Some(p0) = method.params.first() {
                 let mark = self.w.len();
                 self.emit_value_type_as_rust(&p0.ty);

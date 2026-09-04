@@ -8,6 +8,9 @@ authors.workspace = true
 repository.workspace = true
 description = "Phase 19 — lowering Jux to Rust source (per JUX-COMPILER-PIPELINE-ADDENDUM.md §C.9)."
 
+[lints]
+workspace = true
+
 [dependencies]
 juxc-source      = { workspace = true }
 juxc-diagnostics = { workspace = true }

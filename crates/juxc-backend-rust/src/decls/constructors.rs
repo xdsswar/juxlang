@@ -1018,7 +1018,7 @@ impl RustEmitter {
                             if i > 0 {
                                 self.w.push_str(", ");
                             }
-                            self.emit_expr(&arg);
+                            self.emit_expr(arg);
                             // Wrapper-class share-on-pass (§CR.4.1): a
                             // wrapped place forwarded into the parent's
                             // `new_inner(...)` shares the instance.
@@ -1161,7 +1161,7 @@ impl RustEmitter {
                         if i > 0 {
                             self.w.push_str(", ");
                         }
-                        self.emit_expr(&arg);
+                        self.emit_expr(arg);
                     }
                 }
                 self.w.push_str(")");
