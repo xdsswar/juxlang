@@ -1,0 +1,23 @@
+// `import rust.std.*;` -- a wildcard over a foreign (stub) package.
+//
+// `rust.std` is not a real Rust module: it is a flattened view over `alloc` +
+// `std`, so a wildcard cannot lower to `use rust::std::*`. Each member the file
+// names is expanded to its real Rust path instead (`std::collections::HashMap`,
+// `std::vec::Vec`, ...), which is what the single-type import form already did.
+import rust.std.*;
+
+public void main() {
+    Vec<int> v = new Vec<int>();
+    v.push(3);
+    v.push(4);
+
+    HashMap<String, int> ages = new HashMap<String, int>();
+    ages.insert("ada", 36);
+    ages.insert("alan", 41);
+
+    VecDeque<int> q = new VecDeque<int>();
+    q.push_back(1);
+    q.push_back(2);
+
+    print($"vec=${v.len()} map=${ages.len()} deque=${q.len()}");
+}

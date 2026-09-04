@@ -1284,8 +1284,37 @@ fn check_imports_resolve(
             .find(|k| fqn_bare(k) == bare && k.contains('.'))
             .cloned()
     };
+    // True when `fqn` names a PACKAGE rather than a declaration — i.e. some
+    // known symbol lives beneath it. `import rust.std;` hits this: `rust.std`
+    // is a package full of types, not a type. Java requires the `.*` there, and
+    // reporting "no declaration with that fully-qualified name" for a path that
+    // demonstrably exists reads as a compiler bug. Name the real fix instead.
+    let is_package = |fqn: &str| {
+        let prefix = format!("{fqn}.");
+        table
+            .classes
+            .keys()
+            .chain(table.records.keys())
+            .chain(table.enums.keys())
+            .chain(table.interfaces.keys())
+            .chain(table.functions.keys())
+            .chain(table.consts.keys())
+            .any(|k| k.starts_with(&prefix))
+    };
     let report = |fqn: String, span: Span, diagnostics: &mut Vec<Diagnostic>| {
         if exists(&fqn) {
+            return;
+        }
+        if is_package(&fqn) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0301_NameNotFound,
+                    format!(
+                        "`{fqn}` is a package, not a declaration: import one type (`import {fqn}.Name;`) or all of them (`import {fqn}.*;`)",
+                    ),
+                )
+                .with_span(span),
+            );
             return;
         }
         let bare = fqn_bare(&fqn).to_string();
@@ -4069,6 +4098,25 @@ mod tests {
         let parse_result = parse(&lex_result.tokens);
         assert!(parse_result.diagnostics.is_empty(), "parse: {:?}", parse_result.diagnostics);
         parse_result.ast
+    }
+
+    /// Importing a PACKAGE (`import a.b;`) instead of a declaration used to
+    /// report "no declaration with that fully-qualified name", which is
+    /// misleading — the path does exist, it just names a package. Java requires
+    /// the `.*` there, so the diagnostic has to say so.
+    #[test]
+    fn importing_a_package_suggests_the_wildcard_form() {
+        let lib = parse_unit("package a.b; public class Foo { public int x; }");
+        let user = parse_unit("package app; import a.b; public class Bar { }");
+        let mut diags = Vec::new();
+        let _ = build_workspace(&[lib, user], &mut diags);
+        let msg = diags
+            .iter()
+            .find(|d| d.code == code::Code::E0301_NameNotFound)
+            .map(|d| d.message.clone())
+            .expect("E0301 for the package import");
+        assert!(msg.contains("is a package, not a declaration"), "got: {msg}");
+        assert!(msg.contains("import a.b.*;"), "should suggest the wildcard: {msg}");
     }
 
     /// Two classes with the same bare name in DIFFERENT packages are distinct,

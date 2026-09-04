@@ -60,6 +60,28 @@ const STD_MERGE_CRATES: &[&str] = &["alloc", "std"];
 /// checked on load.
 const STD_STUB_CACHE_VERSION: u32 = 11;
 
+/// A pre-generated `rust.std` surface, compiled into the binary as the
+/// last-resort fallback.
+///
+/// The generated stub (step 3 below) is built from
+/// `<sysroot>/share/doc/rust/json/{alloc,std}.json`, which only exists when the
+/// user has installed the **nightly** `rust-docs-json` rustup component. Most
+/// people have not, and before this fallback existed the whole `rust.std`
+/// surface silently evaporated for them: every `Vec` / `HashMap` / `String`
+/// reference failed with an unresolved-type error that named no cause and
+/// suggested no fix. Shipping a frozen snapshot means `rust.std` works out of
+/// the box on a stock stable toolchain, and a user who *does* install the
+/// component transparently gets the fresher, toolchain-exact surface instead.
+///
+/// **Regenerating:** install the component
+/// (`rustup component add rust-docs-json --toolchain nightly`), delete the
+/// cached stub under `<user-cache>/juxc/stubs/rust-std.jux.d`, run any compile
+/// to regenerate it, then copy it over `crates/juxc-driver/stubs/rust-std.jux.d`.
+/// `vendored_std_stub_is_current` fails the build's test suite whenever this
+/// snapshot's header falls behind [`STD_STUB_CACHE_VERSION`], so a bindgen
+/// change can't leave it quietly stale.
+const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
+
 /// Bump to invalidate previously-cached generated per-crate (`rust.<crate>`)
 /// stubs when the bindgen surface / naming changes. Stamped as the first line of
 /// each generated `.jux-stubs/rust/<crate>.jux.d` and checked on load so a stale
@@ -152,10 +174,13 @@ pub fn drop_external_diagnostics(diagnostics: &mut Vec<Diagnostic>, sources: &[S
 /// 3. Otherwise, locate the installed toolchain's pre-built rustdoc JSON
 ///    (`<sysroot>/share/doc/rust/json/{alloc,std}.json`), merge it through
 ///    [`juxc_bindgen`], cache the result, and load it.
+/// 4. Failing all of that, fall back to [`VENDORED_RUST_STD`] — a frozen
+///    snapshot compiled into the binary, so `rust.std` resolves on a stock
+///    stable toolchain with nothing installed.
 ///
-/// Every failure mode degrades gracefully to an empty list: std autocomplete is
-/// simply unavailable (e.g. the `rust-docs-json` rustup component isn't
-/// installed), never a hard error.
+/// Step 4 is what most users get, because step 3 needs the nightly
+/// `rust-docs-json` component. The result is never an empty list, so an
+/// unresolved `Vec` now means the user really did mistype it.
 pub fn load_std_stub_sources() -> Vec<SourceFile> {
     // (1) Explicit override — a directory of `.jux.d` files, loaded as-is.
     if let Ok(dir) = std::env::var("JUX_STUBS_DIR") {
@@ -164,11 +189,22 @@ pub fn load_std_stub_sources() -> Vec<SourceFile> {
             return collect_stub_sources(&p);
         }
     }
-    // (2)+(3) Cached-or-generated `rust.std`.
+    // (2)+(3) Cached-or-generated `rust.std`, then (4) the vendored snapshot.
     match cached_or_generated_std_stub() {
         Ok(Some(src)) => vec![src],
-        _ => Vec::new(),
+        _ => vec![vendored_std_stub()],
     }
+}
+
+/// The frozen `rust.std` snapshot as a [`SourceFile`]. Its path is synthetic —
+/// nothing on disk backs it — but it is stable and self-describing, so a
+/// diagnostic or a go-to-definition that lands in the std surface names
+/// something the user can recognise.
+fn vendored_std_stub() -> SourceFile {
+    SourceFile::new(
+        PathBuf::from("<vendored>/rust-std.jux.d"),
+        VENDORED_RUST_STD.to_string(),
+    )
 }
 
 /// Return the generated `rust.std` stub as a [`SourceFile`], loading a fresh
@@ -577,5 +613,33 @@ mod tests {
         let got = resolve_crate_stub(&dir, "rust", "serde_json", None).expect("cache hit");
         assert_eq!(got, cached);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The vendored `rust.std` snapshot must stay in lockstep with
+    /// [`STD_STUB_CACHE_VERSION`]. Bumping that constant means the bindgen
+    /// surface changed, which makes the frozen copy wrong for everyone who
+    /// lacks the nightly `rust-docs-json` component — and they are the majority,
+    /// so the staleness would be invisible in normal development. Failing here
+    /// is the reminder to regenerate it (see [`VENDORED_RUST_STD`]).
+    #[test]
+    fn vendored_std_stub_is_current() {
+        assert!(
+            VENDORED_RUST_STD.starts_with(&std_cache_header()),
+            "crates/juxc-driver/stubs/rust-std.jux.d is stale: expected header {:?},              found {:?}. Regenerate it -- see the VENDORED_RUST_STD doc comment.",
+            std_cache_header().trim_end(),
+            VENDORED_RUST_STD.lines().next().unwrap_or(""),
+        );
+    }
+
+    /// The snapshot has to actually carry the prelude collections, otherwise the
+    /// fallback resolves to an empty surface and we are back to the silent
+    /// evaporation it exists to prevent.
+    #[test]
+    fn vendored_std_stub_carries_the_prelude_types() {
+        let src = vendored_std_stub();
+        for ty in ["class Vec", "class HashMap", "class VecDeque", "class HashSet"] {
+            assert!(src.contents().contains(ty), "vendored rust.std is missing `{ty}`");
+        }
+        assert!(src.contents().contains("package rust.std;"), "missing package header");
     }
 }
