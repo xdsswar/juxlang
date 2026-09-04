@@ -32,11 +32,7 @@ fn overloading_composes_with_inheritance() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "jux exited with {:?}
-stderr:
-{stderr}
-stdout:
-{stdout}",
+        "jux exited with {:?}\nstderr:\n{stderr}\nstdout:\n{stdout}",
         output.status.code(),
     );
     let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
@@ -50,7 +46,6 @@ stdout:
             "tag:pair 1z",
             "base:none",
         ],
-        "unexpected output:
-{stdout}",
+        "unexpected output:\n{stdout}",
     );
 }

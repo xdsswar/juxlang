@@ -1,13 +1,16 @@
-//! End-to-end test for the `Display` bound on a generic value formatted by a
-//! method INHERITED from a generic base. The bound has to reach the subclass's
-//! impl as well; without it the interpolation resolves to `Debug` and a
-//! `String` prints wrapped in quotes.
+//! End-to-end test for a FUNCTION-TYPED LOCAL declaration —
+//! `(int) -> int inc = (n) -> n + 1;`. The grammar has always allowed it
+//! (§A.2.7 makes `function-type` a `simple-type`), but the statement starts
+//! with `(`, which the parser read as a parenthesized expression or a lambda.
+//! Also covers the two shapes it must NOT swallow, and the parenthesized
+//! comparison Rust needs to keep (`a < b == true` is a parse error there even
+//! though Jux's precedence makes it unambiguous).
 
 use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
-fn generic_value_formatted_by_an_inherited_method() {
+fn function_typed_locals_parse_as_declarations() {
     let jux = env!("CARGO_BIN_EXE_jux");
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -15,8 +18,8 @@ fn generic_value_formatted_by_an_inherited_method() {
         .expect("workspace root resolves from bin/jux")
         .to_path_buf();
 
-    let source = workspace_root.join("examples").join("generic_inherited_display.jux");
-    let emit_dir = workspace_root.join("target").join("it-generic-inherited-display");
+    let source = workspace_root.join("examples").join("fn_type_locals.jux");
+    let emit_dir = workspace_root.join("target").join("it-fn-type-locals");
 
     let output = Command::new(jux)
         .arg("run")
@@ -34,5 +37,9 @@ fn generic_value_formatted_by_an_inherited_method() {
         output.status.code(),
     );
     let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
-    assert_eq!(lines.as_slice(), ["holding abc", "HOLDING ABC"], "unexpected output:\n{stdout}");
+    assert_eq!(
+        lines.as_slice(),
+        ["7", "5", "5", "hey", "3", "3", "true"],
+        "unexpected output:\n{stdout}",
+    );
 }

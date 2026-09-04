@@ -1,0 +1,32 @@
+// Function types in a LOCAL declaration. Grammar §A.2.7 makes `function-type` a
+// `simple-type`, so it is legal wherever a type is — including `local-decl`,
+// which starts the statement with `(` and so needs its own lookahead to tell it
+// apart from a parenthesized expression or a lambda statement.
+
+int twice((int) -> int f, int x) {
+    return f(f(x));
+}
+
+public void main() {
+    (int) -> int inc = (n) -> n + 1;
+    print(twice(inc, 5));
+
+    () -> int five = () -> 5;
+    print(five());
+
+    (int, int) -> int add = (a, b) -> a + b;
+    print(add(2, 3));
+
+    (String) -> void shout = (s) -> { print(s); };
+    shout("hey");
+
+    // Curried: the return type is itself a function type.
+    (int) -> (int) -> int adder = (a) -> (b) -> a + b;
+    print(adder(1)(2));
+
+    // Still expressions, not declarations.
+    int a = 1;
+    int b = 2;
+    print((a) + b);
+    print((a < b) == true);
+}
