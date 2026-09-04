@@ -1,8 +1,8 @@
 # Jux v0.1 Production-Readiness Checklist
 
 **Purpose:** one place to answer "what must ship for v0.1, and where does it
-stand?" — unifying the three independent gap ledgers (`jux-gaps.md` = compiler
-bugs, `plugin-gap.md` = IDE plugin, `Architecture/JUX-GAPS-ROADMAP.md` = spec
+stand?" — unifying the three independent gap ledgers (`docs/internal/jux-gaps.md` = compiler
+bugs, `docs/internal/plugin-gap.md` = IDE plugin, `Architecture/JUX-GAPS-ROADMAP.md` = spec
 gaps) into a single status view. Status reflects the `polymorphism` branch.
 
 **Legend:** ✅ done · ◐ partial · ⛔ open (v0.1 blocking) · ⏭ deferred (post-v0.1).
@@ -56,7 +56,7 @@ gaps) into a single status view. Status reflects the `polymorphism` branch.
 | `juxc` / `jux` CLI, manifest-driven builds, per-module binary metadata + icon | ✅ |
 | LSP server (`juxc-lsp`) — single source of truth | ✅ |
 | IntelliJ plugin: PSI parser, semantic highlighting, formatter, native inspections + quick-fixes, goto, completion, LSP4IJ fallback | ✅ |
-| IntelliJ refactoring (move/rename/extract/inline/change-signature), debugger, test-runner UI | ⏭ | `plugin-gap.md` |
+| IntelliJ refactoring (move/rename/extract/inline/change-signature), debugger, test-runner UI | ⏭ | `docs/internal/plugin-gap.md` |
 | Build system / package manager (`jux.toml`), multi-module workspaces, **path + git deps (GitHub URLs, `jux update`), `--target` cross-compile** | ✅ | §B.2.2; registry deps + `jux.lock` remain post-v0.1 |
 | Testing framework (`@Test` + hooks, `jux.std.testing` assertions, `jux test [pattern] [--release]`, async tests) | ✅ | `JUX-TESTING-ADDENDUM.md`; runner `test_runner` |
 
