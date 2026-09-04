@@ -798,6 +798,35 @@ impl RustEmitter {
                             })
                     })
                     .unwrap_or_default();
+                // **Generic substitution.** A constructor parameter typed as one
+                // of the class's own type params (`Bag<T>::Bag(T item)`) only
+                // says what the slot holds once the call's type arguments are
+                // applied: `new Bag<Animal>(…)` has an `Animal` slot, which for a
+                // polymorphic base or an interface is a `Rc<dyn …>` the argument
+                // must be wrapped into. Without this the param stays the opaque
+                // `T` and no coercion fires.
+                let ctor_param_types: Vec<juxc_ast::TypeRef> = if n.generic_args.is_empty() {
+                    ctor_param_types
+                } else {
+                    let subst = n
+                        .class_name
+                        .segments
+                        .last()
+                        .map(|s| s.text.as_str())
+                        .and_then(|name| self.lookup_class_by_bare_or_fqn(name))
+                        .map(|c| {
+                            c.generic_params
+                                .iter()
+                                .map(|p| p.name.text.clone())
+                                .zip(n.generic_args.iter().cloned())
+                                .collect::<std::collections::HashMap<_, _>>()
+                        })
+                        .unwrap_or_default();
+                    ctor_param_types
+                        .iter()
+                        .map(|t| Self::subst_type_ref(t, &subst))
+                        .collect()
+                };
                 // §G.9.2: foreign-borrow (`&T`) constructor parameters get the
                 // call-site `&` re-added — mirrors the method-call path so a
                 // `Window(&str name, …)` receives `&"…".to_string()` (coerces to

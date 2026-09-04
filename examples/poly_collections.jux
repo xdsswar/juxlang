@@ -1,0 +1,52 @@
+// Collections whose ELEMENT type is polymorphic — an interface or a base class.
+// Both lower to a trait-object element (`Vec<Rc<dyn Speaker>>`), so storing a
+// concrete implementer / subclass wraps it instead of slicing, and reading an
+// element back dispatches to the override.
+
+public interface Speaker {
+    String speak();
+}
+
+public class Bird implements Speaker {
+    @Override public String speak() { return "Tweet"; }
+}
+
+public class Robot implements Speaker {
+    @Override public String speak() { return "Beep"; }
+}
+
+public class Animal {
+    public String name;
+    public Animal(String name) { this.name = name; }
+    public String speak() { return "..."; }
+}
+
+public class Dog extends Animal {
+    public Dog(String name) { super(name); }
+    @Override public String speak() { return "Woof"; }
+}
+
+public class Cat extends Animal {
+    public Cat(String name) { super(name); }
+    @Override public String speak() { return "Meow"; }
+}
+
+public void main() {
+    Vec<Speaker> voices = new Vec<Speaker>();
+    voices.push(new Bird());
+    voices.push(new Robot());
+    for (Speaker s : voices) {
+        print(s.speak());
+    }
+
+    Vec<Animal> zoo = new Vec<Animal>();
+    zoo.push(new Dog("rex"));
+    zoo.push(new Cat("tom"));
+    for (Animal a : zoo) {
+        print(a.name + ": " + a.speak());
+    }
+
+    HashMap<String, Animal> pens = new HashMap<String, Animal>();
+    pens.insert("first", new Dog("fido"));
+    print(pens.len());
+}

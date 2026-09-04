@@ -156,8 +156,9 @@ impl RustEmitter {
         // interface (`Rc<dyn Iface>`) can be downcast / type-tested — one per
         // cast/type-test target some implementer of this interface could also
         // be. Implementing classes override them in `emit_class_trait_impls`.
-        for t in self.interface_hook_targets(&interface.name.text) {
-            self.emit_downcast_hook_sig(&t);
+        let iface_bare = interface.name.text.clone();
+        for t in self.interface_hook_targets(&iface_bare) {
+            self.emit_downcast_hook_sig(&t, &iface_bare);
         }
         self.w.indent_dec();
         self.w.line("}");

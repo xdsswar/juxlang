@@ -1,0 +1,24 @@
+// A method inherited from a GENERIC base that formats a generic value. The
+// `Display` bound the emitted `format!` needs has to reach the subclass's
+// impl too, or the interpolation silently falls back to `Debug` and a
+// `String` prints with quotes around it.
+
+public class Holder<T> {
+    protected T value;
+    public Holder(T value) { this.value = value; }
+    public T get() { return this.value; }
+    public String show() { return $"holding ${this.get()}"; }
+}
+
+public class Loud<T> extends Holder<T> {
+    public Loud(T value) { super(value); }
+    @Override public String show() { return super.show().toUpperCase(); }
+}
+
+public void main() {
+    Holder<String> plain = new Holder<String>("abc");
+    print(plain.show());
+
+    Holder<String> loud = new Loud<String>("abc");
+    print(loud.show());
+}

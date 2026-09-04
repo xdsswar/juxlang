@@ -1,0 +1,47 @@
+// A GENERIC class used as a polymorphic base. `Container<int> b = new Box<int>(7)`
+// with `Box<T> extends Container<T>` lowers to a generic `Kind` trait
+// (`trait ContainerKind<T>`) and a generic trait object
+// (`Rc<dyn ContainerKind<isize>>`), so the base-typed slot dispatches to the
+// subclass override, reads inherited fields, and downcasts back.
+
+public class Container<T> {
+    protected T value;
+    public Container(T v) { this.value = v; }
+    public T get() { return this.value; }
+    public String describe() { return "container"; }
+}
+
+public class Box<T> extends Container<T> {
+    public Box(T v) { super(v); }
+    @Override public String describe() { return "box of " + this.get(); }
+}
+
+// A subclass that PINS the base's parameter — the base slot is the same type.
+public class IntCrate extends Container<int> {
+    public IntCrate(int v) { super(v); }
+    @Override public String describe() { return "crate of " + this.get(); }
+}
+
+public void main() {
+    Container<int> b = new Box<int>(7);
+    print(b.describe());
+    print(b.get());
+
+    Container<int> c = new IntCrate(9);
+    print(c.describe());
+
+    // Downcast and type-test back through the generic base.
+    if (b => Box<int>) {
+        print("b is a Box");
+    }
+    Box<int> back = (Box<int>) b;
+    print(back.get());
+
+    // A collection of the base holds either subclass and dispatches.
+    Vec<Container<int>> all = new Vec<Container<int>>();
+    all.push(new Box<int>(1));
+    all.push(new IntCrate(2));
+    for (Container<int> x : all) {
+        print(x.describe());
+    }
+}

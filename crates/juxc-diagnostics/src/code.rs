@@ -499,15 +499,11 @@ pub enum Code {
     /// defaulted one could never be omitted — move all defaulted parameters to
     /// the end of the list.
     E0467_DefaultParamOrdering,
-    /// E0454 — A **generic class used as a polymorphic base** (Phase-1
-    /// limitation). Assigning a subclass instance into a slot typed as a
-    /// *generic* base **class** (`Container<int> b = new Box<int>(…)` where
-    /// `Box<T> extends Container<T>`) needs generic `Kind` traits and generic
-    /// trait objects (`Rc<dyn ContainerKind<isize>>`) that Phase 1 does not yet
-    /// emit, so the lowering leaks a rustc E0277/E0308. juxc rejects it up front
-    /// with this code. Supported routes: dispatch through a generic **interface**
-    /// (`Container<T>` as `interface`), or use a **non-generic** base class.
-    E0454_GenericBasePolymorphic,
+    /// E0454 — **Retired.** Reserved: a generic class used as a polymorphic
+    /// base was a Phase-1 limitation. Generic `Kind` traits and generic trait
+    /// objects (`Rc<dyn ContainerKind<isize>>`) are emitted now, so
+    /// `Container<int> b = new Box<int>(…)` compiles and dispatches like any
+    /// other base. The number is not reused.
     /// W0457 — A class field forms an **un-annotated reference cycle** that will
     /// leak (§6.5). Classes are `Rc`-refcounted and `Rc` does not collect
     /// cycles, so a strong field whose type transitively references the owning
@@ -795,7 +791,6 @@ impl Code {
             Code::E0465_FinalFieldReassigned     => "E0465",
             Code::E0466_InvalidParamBindingCombo => "E0466",
             Code::E0467_DefaultParamOrdering     => "E0467",
-            Code::E0454_GenericBasePolymorphic   => "E0454",
             Code::W0457_UnannotatedRefCycle      => "W0457",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",
             Code::E0840_ConstEvalLimitExceeded   => "E0840",

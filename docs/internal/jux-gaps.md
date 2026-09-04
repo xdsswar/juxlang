@@ -11,21 +11,19 @@
 | N2 | ✅ Fixed | Generic invariance enforced (mutual-compat on same-name args); covariant upcast now E0410, not a leaked E0308. Runner `generic_invariance`. |
 | N3 | ✅ Fixed | Return-completeness pass → E0460 (`return_check.rs`). Runner `return_paths`. |
 | N4 | ✅ Fixed | Call-position turbofish in the generic-iface forwarding shim. Runner `generic_iface_nullable`. |
-| N5 | ◐ Partial | The **packaged** base-class dispatch half was a distinct bug in `walk_extends_reaches` (FQN vs bare) — **fixed**, runner `poly_base_packaged`. The **generic** base half (a `Container<T>`-typed var holding a `Box<T>`, virtual dispatch + the `T: Display` bound on an inherited generic-returning method) remains a **Phase-1 limitation** — see below. |
+| N5 | ✅ Fixed | Both halves. The **packaged** base-class dispatch half was a distinct bug in `walk_extends_reaches` (FQN vs bare), runner `poly_base_packaged`. The **generic** base half now lowers to generic `Kind` traits (`trait ContainerKind<T>`) and generic trait objects (`Rc<dyn ContainerKind<isize>>`); E0454 is retired and the runner is `generic_base_poly`. |
 | N6 | ✅ Fixed | Nullable generic field from a nullable ctor param no longer double-`Some`. Runner `generic_iface_nullable`. |
 | N7 | ✅ Fixed | `?.` safe-call routes through the stdlib-method mapping. Runner `generic_iface_nullable`. |
 
-**N5 generic-base limitation (deferred, documented).** Making a *generic* class
-(`Container<T>`) a polymorphic base needs generic `Kind` traits
-(`ContainerKind<T>`) and generic trait objects (`Rc<dyn ContainerKind<isize>>`)
-threaded through trait decls, impls, downcast hooks, and the upcast cast — plus a
-cross-class, inherited-method return-type analysis to add `T: Display` when an
-inherited generic-returning method (`this.get()`) is formatted. That's a feature,
-not a bug-fix; it's the open-hierarchy + generics intersection and carries real
-risk to the working monomorphic/sealed dispatch. Use a sealed hierarchy or a
-non-generic base for polymorphism through a base *class* in Phase 1; generic
-dispatch through an **interface** (`Container<int> c = new Box<int>(…)` where
-`Container` is an `interface`) is the supported route.
+**N5 generic-base, resolved.** A *generic* class is a polymorphic base like any
+other: its `Kind` trait carries the class's own type params, subclasses implement
+each ancestor trait with the args their `extends` clause supplies (composed down
+the chain), downcast-hook target types are recovered by inverting that
+substitution, and the `Display` bound an inherited generic-returning method needs
+is derived by scanning ancestors' bodies as well as the class's own. The only
+deliberate restriction left: a subclass whose own params the base cannot pin
+(`Pair<A, B> extends Box<A>`) gets no downcast hook on the base's trait, because
+there is no way to spell its type there.
 
 ## How this was produced
 
