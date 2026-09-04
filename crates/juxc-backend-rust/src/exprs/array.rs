@@ -375,7 +375,7 @@ impl RustEmitter {
             return;
         }
         self.emit_expr(elem);
-        if self.wrapper_value_needs_clone(elem) {
+        if self.wrapper_value_needs_clone(elem) || self.value_place_needs_clone(elem) {
             self.w.push_str(".clone()");
         }
     }

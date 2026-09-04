@@ -843,6 +843,10 @@ impl RustEmitter {
         // var-decl wraps it). Save/restore for nested bodies; the trailing
         // `ref_locals.remove` undoes the per-body additions.
         let prev_forced = std::mem::take(&mut self.forced_cell_locals);
+        // Move-on-last-use: which reads of a local in THIS body still have a
+        // later reader, and so must copy rather than move (see `crate::lastuse`).
+        let prev_non_final =
+            std::mem::replace(&mut self.non_final_uses, crate::lastuse::non_final_local_uses(body));
         let cell_locals = crate::analysis::collect_captured_mutated_locals(body);
         for n in &cell_locals {
             self.ref_locals.insert(n.clone());
@@ -917,6 +921,7 @@ impl RustEmitter {
             self.ref_locals.remove(n);
         }
         self.forced_cell_locals = prev_forced;
+        self.non_final_uses = prev_non_final;
         self.in_lambda_body = prev_lam;
     }
 

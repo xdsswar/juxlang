@@ -1,0 +1,51 @@
+// Java/C# value semantics over Rust ownership. A binding stays readable after
+// it is passed, stored, or put in a collection — the emitter copies at a read
+// that still has a later reader and MOVES at the last one, so the ordinary
+// shape below compiles without the source ever mentioning ownership.
+
+import rust.std.*;
+
+public class Box2 {
+    public String s;
+    public Box2(String s) { this.s = s; }
+}
+
+String echo(String v) {
+    return v;
+}
+
+public void main() {
+    String w = "apple";
+
+    // Function argument, then read again.
+    print(echo(w));
+    print(w);
+
+    // Constructor argument, then read again.
+    Box2 b = new Box2(w);
+    print(b.s + "/" + w);
+
+    // Field store, then read again.
+    String t = "tea";
+    b.s = t;
+    print(b.s + "/" + t);
+
+    // Array literal, then read again.
+    String[] pair = { w, t };
+    print(pair[0] + pair[1] + w + t);
+
+    // Local copy, then read again.
+    String twin = w;
+    print(twin + w);
+
+    // Collection store, then read again.
+    Vec<String> v = new Vec<String>();
+    v.push(w);
+    print(v[0] + w);
+
+    // A map key read in the same statement that stores it.
+    HashMap<String, int> counts = new HashMap<String, int>();
+    counts.insert(w, 1);
+    counts.insert(w, counts[w] + 1);
+    print(counts[w]);
+}
