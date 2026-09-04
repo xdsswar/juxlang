@@ -143,6 +143,12 @@ pub(crate) enum IfaceCoercion {
     /// Source is already an interface value (`Rc<dyn Trait>`) flowing into
     /// another interface slot — clone the `Rc` handle (or move when fresh).
     CloneDyn { clone_first: bool },
+    /// Source is a **polymorphic-base handle** (`Rc<dyn <Base>Kind>`) flowing
+    /// into an interface slot the base implements — a trait upcast. The value is
+    /// already a trait object, so it must NOT be wrapped in a second `Rc`; the
+    /// base's `Kind` trait carries the interface as a supertrait, which is what
+    /// makes `Rc<dyn NodeKind> as Rc<dyn Source>` a plain coercion.
+    UpcastDyn { clone_first: bool },
     /// Source is a concrete subclass value flowing into a slot typed as its
     /// **direct** base class under the non-sealed, non-polymorphic open
     /// hierarchy (e.g. a `BaseErr` into an `Exception` cause slot) — slice it up
@@ -3024,6 +3030,20 @@ impl crate::RustEmitter {
             juxc_tycheck::ty::walk_extends_reaches(src_bare, target_bare, &self.symbols)
         };
         if relates {
+            // A value whose STATIC type is a polymorphic base is already a
+            // `Rc<dyn <Base>Kind>` handle, not a concrete struct — upcast it
+            // through the supertrait rather than boxing it a second time.
+            // A fresh `new Base(...)` is a CONCRETE value, not an existing dyn
+            // handle — it wraps like any other class (the same distinction the
+            // same-name branch above draws).
+            if target_is_iface
+                && self.poly_base_classes.contains(src_bare)
+                && !matches!(expr, Expr::NewObject(_))
+            {
+                return IfaceCoercion::UpcastDyn {
+                    clone_first: expr_is_place(expr),
+                };
+            }
             return IfaceCoercion::WrapClass {
                 clone_first: self.wrapper_value_needs_clone(expr),
             };
@@ -3118,6 +3138,22 @@ impl crate::RustEmitter {
         }
         match coercion {
             IfaceCoercion::None => unreachable!("handled above"),
+            IfaceCoercion::UpcastDyn { clone_first } => {
+                self.w.push('(');
+                self.emit_expr(expr);
+                if clone_first {
+                    self.w.push_str(".clone()");
+                }
+                self.w.push_str(" as ");
+                if nullable {
+                    let mut inner = target_ty.clone();
+                    inner.nullable = false;
+                    self.emit_value_type_as_rust(&inner);
+                } else {
+                    self.emit_value_type_as_rust(target_ty);
+                }
+                self.w.push(')');
+            }
             IfaceCoercion::WrapClass { clone_first } => {
                 // Match the wrapper the value-type emission uses: a FOREIGN
                 // (`@rust`) interface lowers to an owned `Box<dyn …>`, otherwise

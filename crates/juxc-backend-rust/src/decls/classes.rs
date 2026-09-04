@@ -1520,14 +1520,32 @@ impl RustEmitter {
                 .filter_map(|t| t.name.segments.first().map(|s| s.text.clone()))
                 .collect();
             let mut cursor: Option<&juxc_ast::TypeRef> = class_decl.extends.as_ref();
+            // An inherited interface is spelled in the PARENT's type-param
+            // vocabulary: `Node<T> implements Source<T>` reaches a
+            // `Tagged extends Node<Item>` as `Source<T>`, and `T` means nothing
+            // on `Tagged`. Compose each hop's substitution so the interface
+            // arrives instantiated (`Source<Item>`), the same walk the inherited
+            // METHOD copy-down performs on signatures.
+            let mut subst: std::collections::HashMap<String, juxc_ast::TypeRef> =
+                std::collections::HashMap::new();
             while let Some(parent_ref) = cursor {
                 let Some(parent_name) = parent_ref.name.segments.first() else { break };
                 let Some(parent_sig) = self.lookup_class_by_bare_or_fqn(parent_name.text.as_str())
                 else { break };
+                for (param, arg) in parent_sig
+                    .generic_params
+                    .iter()
+                    .zip(parent_ref.generic_args.iter())
+                {
+                    if let Some(arg_ty) = arg.as_type() {
+                        let resolved = substitute_type_ref(arg_ty, &subst);
+                        subst.insert(param.name.text.clone(), resolved);
+                    }
+                }
                 for inherited in &parent_sig.implements {
                     let Some(iface_seg) = inherited.name.segments.first() else { continue };
                     if seen.insert(iface_seg.text.clone()) {
-                        implements.push(inherited.clone());
+                        implements.push(substitute_type_ref(inherited, &subst));
                     }
                 }
                 cursor = parent_sig.extends.as_ref();
@@ -2871,6 +2889,32 @@ impl RustEmitter {
         } else {
             self.w.push_str("std::fmt::Debug");
         }
+        // A polymorphic base that IMPLEMENTS an interface carries it as a
+        // supertrait, so a base-typed value — which is a `Rc<dyn <Base>Kind>`,
+        // not a concrete struct — can be handed to a slot expecting the
+        // interface. Rust's trait upcasting turns that into a plain coercion;
+        // without the supertrait the only lowering left is boxing an already-
+        // boxed value, which is what used to fail.
+        if c_is_poly {
+            let ifaces: Vec<juxc_ast::TypeRef> = class_decl
+                .implements
+                .iter()
+                .filter(|t| {
+                    t.name.segments.last().is_some_and(|s| {
+                        // Foreign (`@rust`) interfaces lower to an owned
+                        // `Box<dyn …>` on a different path; only Jux-internal
+                        // ones participate in the `Kind` supertrait chain.
+                        self.lookup_interface_by_bare_or_fqn(&s.text)
+                            .is_some_and(|(_, i)| !i.is_external)
+                    })
+                })
+                .cloned()
+                .collect();
+            for iface in ifaces {
+                self.w.push_str(" + ");
+                self.emit_type_as_rust(&iface);
+            }
+        }
         let own_methods = if relevant && c_is_poly {
             self.class_introduced_virtual_methods(&class_bare)
         } else {
@@ -3281,15 +3325,33 @@ impl RustEmitter {
             // bare name) still rolls inherited interfaces down to
             // the concrete subclass. Stop at the first missing
             // entry — tycheck already surfaced any broken chain.
+            // An inherited interface is spelled in the PARENT's type-param
+            // vocabulary: `Node<T> implements Source<T>` reaches a
+            // `Tagged extends Node<Item>` as `Source<T>`, and `T` means nothing
+            // on `Tagged`. Compose each hop's substitution so the interface
+            // arrives instantiated (`Source<Item>`) — the same walk the
+            // inherited METHOD copy-down performs on signatures.
+            let mut subst: std::collections::HashMap<String, juxc_ast::TypeRef> =
+                std::collections::HashMap::new();
             let mut cursor: Option<&juxc_ast::TypeRef> = class_decl.extends.as_ref();
             while let Some(parent_ref) = cursor {
                 let Some(parent_name) = parent_ref.name.segments.first() else { break };
                 let Some(parent_sig) = self.lookup_class_by_bare_or_fqn(parent_name.text.as_str())
                 else { break };
+                for (param, arg) in parent_sig
+                    .generic_params
+                    .iter()
+                    .zip(parent_ref.generic_args.iter())
+                {
+                    if let Some(arg_ty) = arg.as_type() {
+                        let resolved = substitute_type_ref(arg_ty, &subst);
+                        subst.insert(param.name.text.clone(), resolved);
+                    }
+                }
                 for inherited in &parent_sig.implements {
                     let Some(iface_seg) = inherited.name.segments.first() else { continue };
                     if seen.insert(iface_seg.text.clone()) {
-                        implements.push(inherited.clone());
+                        implements.push(substitute_type_ref(inherited, &subst));
                     }
                 }
                 cursor = parent_sig.extends.as_ref();

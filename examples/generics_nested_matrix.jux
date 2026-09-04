@@ -1,0 +1,74 @@
+// Generics crossed with everything that composes with them: nesting, generic
+// interfaces, generic bases, an `A & B` intersection bound, and a subclass that
+// pins its generic parent's parameter.
+
+import rust.std.*;
+
+public interface Id { int id(); }
+public interface Label { String label(); }
+
+public interface Source<T> {
+    T take();
+}
+
+public class Item implements Id, Label {
+    private int n;
+    public Item(int n) { this.n = n; }
+    @Override public int id() { return this.n; }
+    @Override public String label() { return "i" + this.n; }
+}
+
+// A generic class with an INTERSECTION bound that also implements a generic
+// interface, and holds a nested container of itself.
+public class Node<T extends Id & Label> implements Source<T> {
+    private T payload;
+    private Vec<Node<T>> kids;
+    public Node(T payload) {
+        this.payload = payload;
+        this.kids = new Vec<Node<T>>();
+    }
+    @Override public T take() { return this.payload; }
+    public void attach(Node<T> kid) { this.kids.push(kid); }
+    public int deep() {
+        int n = 1;
+        for (Node<T> k : this.kids) { n = n + k.deep(); }
+        return n;
+    }
+    public String render() { return this.payload.label() + "/" + this.payload.id(); }
+}
+
+// A subclass that PINS the generic parent's parameter. Its inherited
+// `Source<T>` arrives instantiated as `Source<Item>`, and the override names
+// the bound argument rather than the parameter.
+public class Tagged extends Node<Item> {
+    public Tagged(Item payload) { super(payload); }
+    @Override public Item take() { return super.take(); }
+}
+
+public int idOf(Source<Item> s) { return s.take().id(); }
+
+public void main() {
+    Node<Item> root = new Node<Item>(new Item(1));
+    root.attach(new Node<Item>(new Item(2)));
+    root.attach(new Tagged(new Item(3)));
+    print(root.deep());
+    print(root.render());
+
+    // A polymorphic-base handle handed to an interface slot the base
+    // implements — an upcast, not a second box.
+    print(idOf(root));
+
+    // Nested containers of the generic type.
+    Vec<Source<Item>> sources = new Vec<Source<Item>>();
+    sources.push(root);
+    sources.push(new Tagged(new Item(9)));
+    for (Source<Item> s : sources) {
+        print(s.take().label());
+    }
+
+    HashMap<String, Vec<Node<Item>>> byName = new HashMap<String, Vec<Node<Item>>>();
+    Vec<Node<Item>> row = new Vec<Node<Item>>();
+    row.push(new Node<Item>(new Item(7)));
+    byName.insert("row", row);
+    print(byName["row"][0].render());
+}
