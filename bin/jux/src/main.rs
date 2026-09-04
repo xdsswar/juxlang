@@ -620,38 +620,6 @@ fn run_single_or_project(
     }
 }
 
-/// Minimum-viable subset of `jux.toml`'s `[package]` section per
-/// §B.2.1 — enough to identify the project and pick a binary name.
-/// Fancier knobs (`[lib]`, `[[bin]]`, `[dependencies]`, profiles,
-/// features) land when the dep resolver does; today's project
-/// mode just walks `src/` and compiles everything.
-struct ProjectManifest {
-    name: String,
-}
-
-/// Parse `jux.toml` at `path` into a `ProjectManifest`. Bails with
-/// a clear error when `[package].name` is missing — the spec
-/// requires it.
-fn read_manifest(path: &Path) -> Result<ProjectManifest> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let value: toml::Value = raw
-        .parse()
-        .with_context(|| format!("parsing {} as TOML", path.display()))?;
-    let pkg = value
-        .get("package")
-        .and_then(|v| v.as_table())
-        .with_context(|| format!("{}: missing [package] table", path.display()))?;
-    let name = pkg
-        .get("name")
-        .and_then(|v| v.as_str())
-        .with_context(|| {
-            format!("{}: [package].name is required", path.display())
-        })?
-        .to_string();
-    Ok(ProjectManifest { name })
-}
-
 /// `jux build`/`run`/`check` without an explicit file: project
 /// mode. Reads `./jux.toml`. When the manifest declares a
 /// `[workspace]`, every member is built in dependency order

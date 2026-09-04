@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "Phase 2 — parser for the Jux compiler (per JUX-COMPILER-PIPELINE-ADDENDUM.md §C.2.2)."
 
 [dependencies]

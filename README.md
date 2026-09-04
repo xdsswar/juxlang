@@ -925,8 +925,14 @@ maintaining a large design surface, and I clean them up as I find them.
 ## License & ownership
 
 The code is **free and open for everyone**: open source, use it, learn from it,
-build on it. That said, **I am the sole owner of the Jux language** itself (the
-design, the name, the direction). Distributed under **Apache-2.0**.
+build on it. It is distributed under **Apache-2.0** ([`LICENSE`](LICENSE)) which
+means you can use, modify and redistribute it, including commercially.
+
+What the license does *not* cover is the name. **I am the sole owner of the Jux
+language** itself: the design, the direction, the "Jux" name and the logos. Fork
+the code freely, but please don't ship a fork called "Jux" or use the logos in a
+way that suggests it's the official project. "Based on Jux" or "compatible with
+Jux" is welcome. The full wording is in [`NOTICE`](NOTICE).
 
 ---
 

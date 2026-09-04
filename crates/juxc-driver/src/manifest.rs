@@ -599,7 +599,7 @@ impl Manifest {
         let mut profiles: Vec<ProfileSpec> = Vec::new();
         let order = ["dev", "release", "test", "bench"];
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut push_profile = |name: &str, rp: &RawProfile, profiles: &mut Vec<ProfileSpec>| {
+        let push_profile = |name: &str, rp: &RawProfile, profiles: &mut Vec<ProfileSpec>| {
             profiles.push(ProfileSpec {
                 name: name.to_string(),
                 opt_level: rp.opt_level.clone(),
