@@ -5108,6 +5108,91 @@ impl RustEmitter {
         None
     }
 
+    /// Expand a wildcard import of a **foreign** package (`import rust.std.*;`)
+    /// into one `use <real Rust path>;` line per type the unit actually names.
+    ///
+    /// Foreign packages are a fiction of the stub layer: `rust.std` is not a
+    /// Rust module, it is a flattened `.jux.d` view over `alloc` + `std` whose
+    /// members live at unrelated real paths (`std::collections::HashMap`,
+    /// `std::vec::Vec`). A single-type import already lowers through
+    /// [`Self::external_use_line`] to that real path; a wildcard used to fall
+    /// through to the generic renderer and emit `use rust::std::*;`, which names
+    /// a crate that does not exist — rustc E0433, leaked straight to the user.
+    /// §4.2 of the dossier lists wildcard imports as ordinary Java syntax with
+    /// no foreign carve-out, so the fix is to make them work, not to reject them.
+    ///
+    /// Only types the unit **mentions** are expanded. `rust.std` alone carries
+    /// several hundred declarations, and emitting a `use` for every one of them
+    /// would bury the real imports in noise — the emitted Rust is meant to read
+    /// like something a person wrote. The mention test scans the unit's source
+    /// for the identifier, which over-approximates (a name in a comment counts)
+    /// but never under-approximates, and an unused `use` is harmless under the
+    /// crate's `#![allow(unused_imports)]` banner. With no source attached
+    /// (`lower_with_types`, not a user-facing path) every member is expanded, so
+    /// the output stays correct and only loses its terseness.
+    fn foreign_wildcard_use_lines(&self, spec: &ImportSpec) -> Option<Vec<String>> {
+        let ImportSpec::Path { name, wildcard: true, .. } = spec else {
+            return None;
+        };
+        if name.segments.is_empty() {
+            return None;
+        }
+        let pkg = name
+            .segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+        let prefix = format!("{pkg}.");
+
+        // Identifiers mentioned anywhere in this unit's source, or `None` when
+        // no source is attached (expand everything, see the doc comment).
+        let mentioned: Option<std::collections::HashSet<&str>> =
+            self.source.as_ref().map(|src| ident_words(src.contents()));
+        let mentions = |simple: &str| match &mentioned {
+            Some(set) => set.contains(simple),
+            None => true,
+        };
+
+        let mut lines: Vec<String> = Vec::new();
+        for (fqn, sig) in &self.symbols.classes {
+            if !sig.is_external {
+                continue;
+            }
+            let Some(simple) = fqn.strip_prefix(&prefix) else { continue };
+            // Direct members only — a deeper `rust.std.sync.atomic.X` is not
+            // brought in by `import rust.std.*`, matching Java's one-level rule.
+            if simple.contains('.') || !mentions(simple) {
+                continue;
+            }
+            if let Some(real) = sig.rust_path.as_ref() {
+                lines.push(format!("use {real};"));
+            }
+        }
+        // Foreign free functions carry the same `@rust("…")` mapping, but their
+        // Rust name is snake_case while the stub exposes the Jux spelling, so
+        // they bind under an alias exactly as the single-import path does.
+        for (fqn, sig) in &self.symbols.functions {
+            let Some(simple) = fqn.strip_prefix(&prefix) else { continue };
+            if simple.contains('.') || !mentions(simple) {
+                continue;
+            }
+            if let Some(real) = sig.rust_path.as_ref() {
+                lines.push(format!("use {real} as {simple};"));
+            }
+        }
+        if lines.is_empty() {
+            // Nothing foreign under this path: it is an ordinary Jux package
+            // wildcard, which the generic renderer handles correctly.
+            return None;
+        }
+        // HashMap iteration order is arbitrary; emitted source must be stable
+        // across runs or every rebuild churns the diff.
+        lines.sort();
+        lines.dedup();
+        Some(lines)
+    }
+
     fn emit_imports(&mut self, imports: &[ImportDecl], inside_package_mod: bool) {
         let mut emitted_any = false;
         for import in imports {
@@ -5121,6 +5206,17 @@ impl RustEmitter {
                 if self.emitted_uses_in_module.insert(line.clone()) {
                     self.w.line(&line);
                     emitted_any = true;
+                }
+                continue;
+            }
+            // Same §G.9.2 mapping, one level up: `import rust.std.*;` expands to
+            // the real Rust path of each foreign member the unit names.
+            if let Some(lines) = self.foreign_wildcard_use_lines(&import.spec) {
+                for line in lines {
+                    if self.emitted_uses_in_module.insert(line.clone()) {
+                        self.w.line(&line);
+                        emitted_any = true;
+                    }
                 }
                 continue;
             }
@@ -5489,6 +5585,44 @@ impl RustEmitter {
 /// Pure, side-effect-free, no emitter state read or written; this is
 /// why it lives as a free function next to [`cargo_toml_for`] rather
 /// than as a method on `RustEmitter`.
+/// Split `text` into the set of identifier-shaped words it contains, so a
+/// wildcard import can ask "does this unit mention `HashMap` anywhere?" without
+/// parsing. Words are maximal runs of `[A-Za-z0-9_]` that do not start with a
+/// digit — the same shape a Jux identifier has.
+///
+/// Deliberately crude: it does not know comments from code, and a name inside a
+/// string literal counts as a mention. That direction of error is the safe one —
+/// it can only add a `use` line that goes unused, never drop one that was
+/// needed. See [`RustEmitter::foreign_wildcard_use_lines`].
+fn ident_words(text: &str) -> std::collections::HashSet<&str> {
+    let bytes = text.as_bytes();
+    let mut out = std::collections::HashSet::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c.is_ascii_alphabetic() || c == b'_' {
+            let start = i;
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
+            {
+                i += 1;
+            }
+            out.insert(&text[start..i]);
+        } else if c.is_ascii_alphanumeric() {
+            // A digit-led run (`3rd`, `0xff`) is not an identifier — skip it
+            // whole so its tail isn't mistaken for one.
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
+            {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 fn render_use(spec: &ImportSpec, inside_package_mod: bool) -> Option<String> {
     // When the emitted `use` lands inside a `pub mod a::b { … }`
     // wrapper, an unqualified `use com::lib::Greeter;` would resolve

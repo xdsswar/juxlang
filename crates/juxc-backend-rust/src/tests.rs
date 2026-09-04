@@ -5376,3 +5376,19 @@ fn extern_numeric_call_is_bare() {
     assert!(rust.contains("GetCurrentProcessId()"), "expected bare call: {rust}");
     assert!(!rust.contains("CString::new"), "no marshalling for numeric call: {rust}");
 }
+
+/// `ident_words` backs the "does this unit mention `HashMap`?" test that keeps a
+/// foreign wildcard import from expanding to hundreds of `use` lines. It must
+/// find names in ordinary positions and must not manufacture one out of a
+/// digit-led run, or a wildcard import would emit a `use` for a type nobody
+/// named.
+#[test]
+fn ident_words_finds_identifiers_and_skips_digit_led_runs() {
+    let words = crate::ident_words("Vec<int> v = new HashMap(); let _x0 = 0xff + 3rd;");
+    for w in ["Vec", "int", "v", "new", "HashMap", "_x0"] {
+        assert!(words.contains(w), "expected `{w}` in {words:?}");
+    }
+    // `0xff` and `3rd` are digit-led: neither the whole run nor its tail counts.
+    assert!(!words.contains("xff"), "digit-led run leaked a tail: {words:?}");
+    assert!(!words.contains("rd"), "digit-led run leaked a tail: {words:?}");
+}
