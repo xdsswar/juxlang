@@ -19,8 +19,8 @@ gaps) into a single status view. Status reflects the `polymorphism` branch.
 | Borrow discipline (`Rc<RefCell>` shared-mutable): re-entrancy, wrapped fields, collections, `!!`, for-each, operators, **field-path receivers, async tries, higher-order stdlib calls, observers** | ✅ | N1, G3, H1, H5, H6, H9 + wave-3 S1–S15 (all closed, runner `borrow_stress_wave3`) |
 | `?.` safe-navigation over wrapped classes + multi-level chains | ✅ | H5 |
 | Exceptions: try/catch/finally ordering, chaining, multi-catch, subclass→base cause upcast, `/ 0` → catchable `ArithmeticException`, uncaught-exception report | ✅ | H8, O1–O9 all closed |
-| Diagnostics: juxc catches its own errors (no rustc leaks), 63 E/W codes | ✅ | E0454/E0974, E0705/E0706 added; S16–S18 async-edge leaks closed 2026-06-12 |
-| Generic *class* as a polymorphic base | ⏭ | N5 — rejected cleanly with E0454; use a generic interface |
+| Diagnostics: juxc catches its own errors (no rustc leaks), 63 E/W codes | ✅ | E0974, E0705/E0706 added (E0454 retired — the construct compiles now); S16–S18 async-edge leaks closed 2026-06-12 |
+| Generic *class* as a polymorphic base | ✅ | N5 — generic `Kind` traits + `Rc<dyn ContainerKind<T>>`; E0454 retired |
 | Async edges (un-awaited async → E0705, `Worker.spawn` async lambda → block_on, async-try outer mutation → E0706) + typed ctor overloads (S19) | ✅ | closed 2026-06-12; runner `async_edges` |
 | Observable properties §P: core + ALL follow-ups (computed deps, E0973 gate, bidi unbind, adapter pruning, ctor bind, static props) | ✅ | P1–P7 closed 2026-06-12; runner `observable_props` |
 

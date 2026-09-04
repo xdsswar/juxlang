@@ -4225,10 +4225,26 @@ impl RustEmitter {
             self.emit_expr(arg);
             return;
         }
-        // **Nullable element slot** — storing into a container whose
-        // element type-arg is `T?` (`ArrayList<int?>` → `Vec<Option
-        // <isize>>`): a non-null value lifts into `Some(...)`; a
-        // `null` literal / already-`Option` value passes through.
+        // **Dynamic-dispatch element slot** — a container whose element type
+        // is a Jux interface or a polymorphic base class stores `Rc<dyn …>`
+        // handles (`Vec<Speaker>` → `Vec<Rc<dyn Speaker>>`), so a concrete
+        // implementer / subclass argument has to be WRAPPED on the way in
+        // rather than stored as its own struct. `emit_expr_coerced_to_iface`
+        // also owns the `Some(...)` lift for a nullable dyn slot, so this
+        // returns before the plain nullable path below.
+        if let Some(elem) = self.builtin_arg_elem_type_ref(call, i) {
+            if !matches!(
+                self.iface_coercion_to(&elem, arg),
+                crate::analysis::IfaceCoercion::None,
+            ) {
+                self.emit_expr_coerced_to_iface(&elem, arg);
+                return;
+            }
+        }
+        // **Nullable element slot** — storing into a container whose element
+        // type-arg is `T?` (`ArrayList<int?>` → `Vec<Option<isize>>`): a
+        // non-null value lifts into `Some(...)`; a `null` literal / an
+        // already-`Option` value passes through.
         let wrap_some = self
             .builtin_arg_elem_nullable(call, i)
             && !self.expression_is_already_nullable(arg);
@@ -4258,8 +4274,12 @@ impl RustEmitter {
     /// position per method: list `add`/`set@1`/`insert@1`, set `add`,
     /// map `put@1` (values; keys stay non-null). Non-container shapes
     /// answer `false`.
-    fn builtin_arg_elem_nullable(&self, call: &CallExpr, arg_idx: usize) -> bool {
-        let Expr::Field(f) = call.callee.as_ref() else { return false };
+    fn builtin_arg_elem_ty(
+        &self,
+        call: &CallExpr,
+        arg_idx: usize,
+    ) -> Option<juxc_tycheck::Ty> {
+        let Expr::Field(f) = call.callee.as_ref() else { return None };
         let method = f.field.text.as_str();
         // Receiver type: span-keyed `expr_types` first, then the
         // name-keyed `local_types` fallback (span collisions and
@@ -4294,7 +4314,7 @@ impl RustEmitter {
             Some(juxc_tycheck::Ty::Array { .. }) => match (method, arg_idx) {
                 ("add", 0) | ("push", 0) => 0,
                 ("set", 1) | ("insert", 1) => 0, // (index, value) → element
-                _ => return false,
+                _ => return None,
             },
             Some(juxc_tycheck::Ty::User { name, .. }) => {
                 match name.rsplit('.').next().unwrap_or(name) {
@@ -4302,32 +4322,53 @@ impl RustEmitter {
                         ("add", 0) | ("push", 0) | ("push_back", 0)
                         | ("push_front", 0) => 0,
                         ("set", 1) | ("insert", 1) => 0, // (index, value) → element
-                        _ => return false,
+                        _ => return None,
                     },
                     "HashMap" | "BTreeMap" => match (method, arg_idx) {
                         ("put", 0) | ("insert", 0) => 0, // key slot
                         ("put", 1) | ("insert", 1) => 1, // value slot
-                        _ => return false,
+                        _ => return None,
                     },
                     "HashSet" | "BTreeSet" => match (method, arg_idx) {
                         ("add", 0) | ("insert", 0) => 0,
-                        _ => return false,
+                        _ => return None,
                     },
-                    _ => return false,
+                    _ => return None,
                 }
             }
-            _ => return false,
+            _ => return None,
         };
         match recv_ty {
-            Some(juxc_tycheck::Ty::Array { element, .. }) => {
-                generic_idx == 0 && matches!(*element, juxc_tycheck::Ty::Nullable(_))
+            Some(juxc_tycheck::Ty::Array { element, .. }) if generic_idx == 0 => Some(*element),
+            Some(juxc_tycheck::Ty::User { generic_args, .. }) => {
+                generic_args.get(generic_idx).cloned()
             }
-            Some(juxc_tycheck::Ty::User { generic_args, .. }) => matches!(
-                generic_args.get(generic_idx),
-                Some(juxc_tycheck::Ty::Nullable(_)),
-            ),
-            _ => false,
+            _ => None,
         }
+    }
+
+    /// True when the element slot this argument stores into is **nullable**
+    /// (`ArrayList<int?>` → `Vec<Option<isize>>`), so the value needs a
+    /// `Some(...)` lift.
+    fn builtin_arg_elem_nullable(&self, call: &CallExpr, arg_idx: usize) -> bool {
+        matches!(
+            self.builtin_arg_elem_ty(call, arg_idx),
+            Some(juxc_tycheck::Ty::Nullable(_)),
+        )
+    }
+
+    /// The element slot's type as a [`TypeRef`], for the coercion helpers that
+    /// work on source-level types (`iface_coercion_to`,
+    /// `emit_expr_coerced_to_iface`). `None` for a slot that is not a named
+    /// type — a primitive, an array, a function type — none of which can be a
+    /// dynamic-dispatch slot.
+    fn builtin_arg_elem_type_ref(
+        &self,
+        call: &CallExpr,
+        arg_idx: usize,
+    ) -> Option<juxc_ast::TypeRef> {
+        let ty = self.builtin_arg_elem_ty(call, arg_idx)?;
+        crate::types::ty_to_type_ref(&ty, call.span)
     }
 }
 

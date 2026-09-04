@@ -463,9 +463,9 @@ impl<'a> Parser<'a> {
     /// - the cursor is at `(`,
     /// - the tokens after `(` form a valid type-like sequence —
     ///   either a recognized **primitive type name** (`int`,
-    ///   `long`, `String`, …) optionally with `?`/`[]`/`[N]`, OR
-    ///   any qualified-name carrying an explicit array/nullable
-    ///   marker (`Foo?`, `Foo[]`),
+    ///   `long`, `String`, …) optionally with `<…>`/`?`/`[]`/`[N]`, OR
+    ///   any qualified-name carrying an explicit generic/array/nullable
+    ///   marker (`Box<int>`, `Foo?`, `Foo[]`),
     /// - the matching `)` closes the type cleanly, AND
     /// - the token after `)` can start a unary expression.
     ///
@@ -505,15 +505,22 @@ impl<'a> Parser<'a> {
             multi_segment = true;
             i += 2;
         }
+        // Optional generic args — `(Circle<String>) s`. A balanced, type-only
+        // `<…>` immediately before the closing `)` cannot be read as a
+        // comparison chain (`a < b >` is not an expression), so its presence
+        // makes the cast reading unambiguous, exactly like `?` or `[]`.
+        let mut has_generic = false;
+        if let Some(next) = self.skip_type_args(i) {
+            has_generic = true;
+            i = next;
+        }
         // Optional nullable `?`.
         let mut has_nullable = false;
         if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Question)) {
             has_nullable = true;
             i += 1;
         }
-        // Optional array suffix `[]` or `[N]`. Generic args `<T>`
-        // are skipped: `(List<int>) x` would ambiguate with
-        // comparison chains and isn't worth the complexity yet.
+        // Optional array suffix `[]` or `[N]`.
         let mut has_array = false;
         if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LBracket)) {
             i += 1;
@@ -567,7 +574,7 @@ impl<'a> Parser<'a> {
         if is_known_primitive_type_name(&first_ident) {
             return true;
         }
-        if has_nullable || has_array || multi_segment {
+        if has_nullable || has_array || has_generic || multi_segment {
             return true;
         }
         // Bare single-segment name (`(Dog) x`): a reference cast to a class /
@@ -594,6 +601,57 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Non-consuming scan of a balanced type-argument list starting at
+    /// `tokens[i] == '<'`. Returns the index just past the closing `>`, or
+    /// `None` when the list doesn't balance or contains a token that cannot
+    /// appear inside a type-arg list — in which case the `<` is the
+    /// less-than operator, not the start of type arguments.
+    ///
+    /// Shared by the two places that must decide that question without
+    /// consuming input: the postfix turbofish form (`id<int>(5)`) and the
+    /// C-style cast (`(Circle<String>) s`).
+    fn skip_type_args(&self, mut i: usize) -> Option<usize> {
+        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
+            return None;
+        }
+        i += 1;
+        let mut depth: i32 = 1;
+        // An empty `<>` is not a valid type-arg list — require at least one
+        // type-ish token before the close.
+        let mut saw_inner = false;
+        while depth > 0 {
+            match self.tokens.get(i).map(|t| &t.kind) {
+                Some(TokenKind::Lt) => depth += 1,
+                Some(TokenKind::Gt) => depth -= 1,
+                // A glued `>>` closes two nested lists at once.
+                Some(TokenKind::GtGt) => depth -= 2,
+                // Tokens that legitimately appear inside a type-arg list:
+                // names (`int`, `pkg.Foo`), separators, array markers, the
+                // nullable / wildcard `?`, const-generic literal args
+                // (`cap<8>`, `flag<true>`), and wildcard bounds
+                // (`? extends Shape`, `? super Dog`).
+                Some(TokenKind::Ident(_))
+                | Some(TokenKind::Int(_))
+                | Some(TokenKind::Bool(_))
+                | Some(TokenKind::Dot)
+                | Some(TokenKind::Comma)
+                | Some(TokenKind::LBracket)
+                | Some(TokenKind::RBracket)
+                | Some(TokenKind::Question)
+                | Some(TokenKind::Kw(Keyword::Extends))
+                | Some(TokenKind::Kw(Keyword::Super)) => saw_inner = true,
+                // Anything else (operators, `(`, EOF, …) means this `<` is a
+                // comparison, not a type-arg list.
+                _ => return None,
+            }
+            i += 1;
+            if depth < 0 {
+                return None;
+            }
+        }
+        saw_inner.then_some(i)
+    }
+
     /// Non-consuming lookahead: does the `<` at the cursor begin an
     /// explicit call-site type-argument list, `expr '<' types '>' '('`?
     ///
@@ -608,46 +666,12 @@ impl<'a> Parser<'a> {
     /// Conservative on every uncertainty: returns false so `<` flows
     /// through as a comparison operator.
     pub(crate) fn looks_like_explicit_type_args(&self) -> bool {
-        let mut i = self.pos;
-        if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
+        // `i` lands just past the balanced close; an explicit type-arg list is
+        // only meaningful when a call `(` follows.
+        let Some(i) = self.skip_type_args(self.pos) else {
             return false;
-        }
-        i += 1;
-        let mut depth: i32 = 1;
-        // An empty `<>` is not a valid type-arg list — require at least
-        // one type-ish token before the close.
-        let mut saw_inner = false;
-        while depth > 0 {
-            match self.tokens.get(i).map(|t| &t.kind) {
-                Some(TokenKind::Lt) => depth += 1,
-                Some(TokenKind::Gt) => depth -= 1,
-                // A glued `>>` closes two nested lists at once.
-                Some(TokenKind::GtGt) => depth -= 2,
-                // Tokens that legitimately appear inside a concrete
-                // type-arg list: names (`int`, `pkg.Foo`), separators,
-                // array markers, the nullable `?` suffix, and const-
-                // generic literal args (`cap<8>()`, `flag<true>()`).
-                Some(TokenKind::Ident(_))
-                | Some(TokenKind::Int(_))
-                | Some(TokenKind::Bool(_))
-                | Some(TokenKind::Dot)
-                | Some(TokenKind::Comma)
-                | Some(TokenKind::LBracket)
-                | Some(TokenKind::RBracket)
-                | Some(TokenKind::Question) => saw_inner = true,
-                // Anything else (literals, operators, `(`, EOF, …) means
-                // this `<` is a comparison, not a type-arg list.
-                _ => return false,
-            }
-            i += 1;
-            if depth < 0 {
-                return false;
-            }
-        }
-        // `i` now sits just past the balanced close; an explicit
-        // type-arg list is only meaningful when a call `(` follows.
-        saw_inner
-            && matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen))
+        };
+        matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::LParen))
     }
 
     /// Real-parse path for the C-style cast form once

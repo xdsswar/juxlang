@@ -74,7 +74,67 @@ impl RustEmitter {
         juxc_tycheck::const_eval::eval_const_bool(e, &ctx).ok()
     }
 
+    /// The replacement type for `ty` under the active `Kind`-trait
+    /// substitution, or `None` when nothing applies.
+    ///
+    /// Only a bare, single-segment, argument-less name can *be* a type
+    /// parameter, so anything else is left alone. Decorations on `ty`
+    /// (`T?`, `T[]`) are re-applied by the caller.
+    fn kind_type_subst_for(
+        &self,
+        ty: &juxc_ast::TypeRef,
+    ) -> Option<juxc_ast::TypeRef> {
+        if self.kind_type_subst.is_empty()
+            || ty.fn_shape.is_some()
+            || !ty.generic_args.is_empty()
+            || ty.name.segments.len() != 1
+        {
+            return None;
+        }
+        self.kind_type_subst
+            .get(ty.name.segments[0].text.as_str())
+            .cloned()
+    }
+
+    /// True when class `bare`'s `<Name>Kind` trait is **parameterized** by the
+    /// class's own type params — so every mention of it (a bound, a trait
+    /// object, an impl header) must supply type arguments.
+    ///
+    /// Two shapes produce a generic `Kind`: a class in **bound position**
+    /// (`<V extends Container<? extends K>>`, the method-carrying marker of
+    /// generics Step 7) and a **generic polymorphic base** (or one of its
+    /// subclasses), whose trait carries the base's virtual methods. Every other
+    /// generic class keeps the argument-less empty marker.
+    pub(crate) fn kind_trait_is_generic(&self, bare: &str) -> bool {
+        let Some(sig) = self.lookup_class_by_bare_or_fqn(bare) else {
+            return false;
+        };
+        if sig.generic_params.is_empty() {
+            return false;
+        }
+        self.bound_position_classes.contains(bare) || self.is_dispatch_relevant_class(bare)
+    }
+
     pub(crate) fn emit_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
+        // **Kind-trait type-param substitution.** While a subclass's
+        // `impl <Ancestor>Kind for Sub<U>` block is being emitted, the member
+        // signatures come from the ancestor and name the ancestor's params
+        // (`T`); the impl is generic over the child's (`U`). Rewrite the name
+        // here, once, so every nested emitter inherits it. Only the *head* name
+        // is swapped — `T?` / `T[]` keep their decorations.
+        if let Some(sub) = self.kind_type_subst_for(ty) {
+            let mut rewritten = sub;
+            rewritten.nullable |= ty.nullable;
+            rewritten.array_shape = ty.array_shape.clone().or(rewritten.array_shape);
+            rewritten.ptr_depth = ty.ptr_depth.max(rewritten.ptr_depth);
+            // Clear the map for the recursive call: the replacement is already
+            // in the child's vocabulary, so re-substituting could loop when a
+            // child reuses an ancestor's param name (`Box<T> extends Base<T>`).
+            let saved = std::mem::take(&mut self.kind_type_subst);
+            self.emit_type_as_rust(&rewritten);
+            self.kind_type_subst = saved;
+            return;
+        }
         // Raw pointer `T*` is the OUTERMOST modifier (§5.5 / §A.2.7), peeled
         // first: each `*` level emits a Rust `*mut`, then we recurse on the
         // type with the pointer suffix stripped. So `int*` → `*mut isize`,
@@ -525,7 +585,22 @@ impl RustEmitter {
         if value_polybase {
             self.w.push_str("std::rc::Rc<dyn ");
             self.w.push_str(&path);
-            self.w.push_str("Kind>");
+            self.w.push_str("Kind");
+            // A GENERIC base's `Kind` trait carries the class's own type params
+            // (`trait ContainerKind<T>`), so a `Container<int>` slot is
+            // `Rc<dyn ContainerKind<isize>>`. Non-generic bases emit nothing.
+            let args = ty.generic_args.clone();
+            if !args.is_empty() && last_seg.is_some_and(|s| self.kind_trait_is_generic(s)) {
+                self.w.push('<');
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str(", ");
+                    }
+                    self.emit_generic_arg_type_as_rust(arg);
+                }
+                self.w.push('>');
+            }
+            self.w.push('>');
             return;
         }
         if value_iface {
@@ -592,19 +667,23 @@ impl RustEmitter {
     /// OUTERMOST slot type, so an interface buried in a generic arg slipped
     /// through as a bare trait.
     pub(crate) fn emit_element_type_as_rust(&mut self, ty: &juxc_ast::TypeRef) {
-        // Force value position ONLY for an INTERFACE element, so it lowers to
-        // `Rc<dyn Iface>`. A concrete class element (including a POLYMORPHIC BASE
-        // class) must keep its concrete newtype in the container — forcing value
-        // position there would also trip the poly-base `Rc<dyn …Kind>` wrap
-        // (`emit_type_as_rust`), wrongly turning `Vec<Animal>` into
-        // `Vec<Rc<dyn AnimalKind>>` and breaking `Bag<? super Dog>`-style stores.
-        let is_iface = ty
+        // Force value position for a DYNAMIC-DISPATCH element — an interface
+        // (`Rc<dyn Iface>`) or a polymorphic base class (`Rc<dyn <Name>Kind>`).
+        // Both are containers of *any* implementer / subclass under Java
+        // semantics (`Vec<Animal>` holds `Dog`s and dispatches to their
+        // overrides), so the element slot has to be the trait-object handle,
+        // matching what the declared slot type emits. A concrete leaf class
+        // keeps its own newtype.
+        let is_dyn_elem = ty
             .name
             .segments
             .last()
-            .map(|s| self.lookup_interface_by_bare_or_fqn(&s.text).is_some())
+            .map(|s| {
+                self.lookup_interface_by_bare_or_fqn(&s.text).is_some()
+                    || self.poly_base_classes.contains(&s.text)
+            })
             .unwrap_or(false);
-        if is_iface {
+        if is_dyn_elem {
             let prev = self.in_value_type_position;
             self.in_value_type_position = true;
             self.emit_type_as_rust(ty);
@@ -793,7 +872,7 @@ impl RustEmitter {
             // only ever READ through the bound, so the producer element is the
             // right surface). A consumer wildcard or a bare `?` has no usable
             // element, so we fall back to the empty (argless) marker form.
-            if self.bound_position_classes.contains(head) && !ty.generic_args.is_empty() {
+            if self.kind_trait_is_generic(head) && !ty.generic_args.is_empty() {
                 let elems: Vec<&juxc_ast::TypeRef> = ty
                     .generic_args
                     .iter()
@@ -1175,4 +1254,60 @@ pub(crate) fn jux_primitive_to_rust(t: &juxc_ast::TypeRef) -> Option<&'static st
         "f64"   => "f64",
         _ => return None,
     })
+}
+
+/// Rebuild a source-level [`juxc_ast::TypeRef`] from a checked
+/// [`juxc_tycheck::Ty`].
+///
+/// Type inference erases the syntax, but several emit paths need a `TypeRef`
+/// back — the coercion helpers (`iface_coercion_to`,
+/// `emit_expr_coerced_to_iface`) are written against source types, and a
+/// collection's element slot is only known as a `Ty`. Handles the named and
+/// nullable shapes those helpers can act on; returns `None` for the rest
+/// (arrays, function types, wildcards, `void`), none of which is ever a
+/// dynamic-dispatch slot.
+///
+/// `span` is the requesting expression's — nothing diagnoses a rebuilt type,
+/// so it only has to be in-file.
+pub(crate) fn ty_to_type_ref(
+    ty: &juxc_tycheck::Ty,
+    span: juxc_source::Span,
+) -> Option<juxc_ast::TypeRef> {
+    let named = |name: &str, args: Vec<juxc_ast::GenericArg>, nullable: bool| {
+        Some(juxc_ast::TypeRef {
+            name: juxc_ast::QualifiedName {
+                segments: name
+                    .split('.')
+                    .map(|seg| juxc_ast::Ident { text: seg.to_string(), span })
+                    .collect(),
+                span,
+            },
+            generic_args: args,
+            nullable,
+            array_shape: None,
+            fn_shape: None,
+            ptr_depth: 0,
+            span,
+        })
+    };
+    match ty {
+        juxc_tycheck::Ty::Nullable(inner) => {
+            let mut out = ty_to_type_ref(inner, span)?;
+            out.nullable = true;
+            Some(out)
+        }
+        juxc_tycheck::Ty::String => named("String", Vec::new(), false),
+        juxc_tycheck::Ty::Primitive(p) => {
+            named(juxc_tycheck::ty::primitive_name(*p), Vec::new(), false)
+        }
+        juxc_tycheck::Ty::Param(name) => named(name, Vec::new(), false),
+        juxc_tycheck::Ty::User { name, generic_args } => {
+            let args = generic_args
+                .iter()
+                .map(|a| ty_to_type_ref(a, span).map(juxc_ast::GenericArg::Type))
+                .collect::<Option<Vec<_>>>()?;
+            named(name, args, false)
+        }
+        _ => None,
+    }
 }

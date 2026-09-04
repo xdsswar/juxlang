@@ -1625,6 +1625,50 @@ fn c_style_cast_with_array_marker_on_user_type() {
     assert!(c.ty.array_shape.is_some(), "cast type should carry array shape");
 }
 
+/// A user-named type with **generic arguments** (`(Box<int>) b`) triggers the
+/// cast path: a balanced, type-only `<…>` sitting right before the closing `)`
+/// has no reading as a comparison chain, so the markers are unambiguous the
+/// same way `[]` and `?` are.
+#[test]
+fn c_style_cast_with_generic_args_on_user_type() {
+    let ast = parse_clean("public void main() { print((Box<int>) b); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
+    let Expr::Cast(c) = &call.args[0] else {
+        panic!("generic user type should trigger cast: {:?}", call.args[0]);
+    };
+    assert_eq!(c.ty.name.segments[0].text, "Box");
+    assert_eq!(c.ty.generic_args.len(), 1, "cast type should carry its type args");
+}
+
+/// Nested generic args close on a glued `>>` (`(Vec<Box<int>>) v`) — the
+/// lookahead has to count that token as two closes or the cast is missed.
+#[test]
+fn c_style_cast_with_nested_generic_args() {
+    let ast = parse_clean("public void main() { print((Vec<Box<int>>) v); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
+    let Expr::Cast(c) = &call.args[0] else {
+        panic!("nested generic cast not recognized: {:?}", call.args[0]);
+    };
+    assert_eq!(c.ty.name.segments[0].text, "Vec");
+}
+
+/// The generic-cast lookahead must not swallow a real comparison. `(a < b)` is
+/// a parenthesized comparison, not a cast to `a` — the `<` never balances
+/// before the `)`.
+#[test]
+fn paren_comparison_is_not_read_as_a_generic_cast() {
+    let ast = parse_clean("public void main() { print((a < b) == c); }");
+    let body = body_of(&ast.items[0]);
+    let Stmt::Expr(Expr::Call(call)) = &body.statements[0] else { panic!() };
+    assert!(
+        !matches!(&call.args[0], Expr::Cast(_)),
+        "comparison should not parse as a cast: {:?}",
+        call.args[0],
+    );
+}
+
 /// `(x as int)` and `(int) x` should produce structurally
 /// identical AST: both an `Expr::Cast` with the same target type.
 #[test]

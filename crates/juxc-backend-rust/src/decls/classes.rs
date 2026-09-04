@@ -1759,22 +1759,6 @@ impl RustEmitter {
         }
     }
 
-    /// Compute the set of this class's generic type-parameter names
-    /// that get **formatted** somewhere in its own body — i.e. a value
-    /// of that parameter's type flows into a `$"…${…}…"` interpolation,
-    /// a `print(…)`, or a string-concat (`"…" + x`) position. Those
-    /// params need a `std::fmt::Display` bound on the inherent impl so
-    /// the emitted `format!`/`println!` type-checks (Jux toString /
-    /// interpolation semantics — a generic field is printable iff its
-    /// instantiated type is).
-    ///
-    /// Detection is conservative-by-inclusion but type-driven: we map
-    /// each instance field whose declared type is a single generic
-    /// param to that param, then scan every method / constructor /
-    /// operator body for a format-position read of such a field
-    /// (`this.field`, or a bare `field` reference inside the body).
-    /// Anything we can't resolve simply isn't added — the param keeps
-    /// only its `Clone + Debug` bound, matching the prior behavior.
     /// Type-param names that need a `+ Default` bound on this class's
     /// inherent impl — every param used as the **element of a fixed
     /// array field** (`T[N] storage;`). Constructing such a field
@@ -1816,6 +1800,23 @@ impl RustEmitter {
         defaulted
     }
 
+    /// The class's type parameters that need a `std::fmt::Display` bound on the
+    /// inherent impl — the ones whose values reach a **format position**
+    /// (interpolation, `print(…)`, string concat) somewhere in the class's
+    /// bodies. Jux's `toString`/interpolation semantics render such a value with
+    /// `Display`, so `T` must carry the bound for the emitted `format!` to
+    /// resolve to it rather than falling back to `Debug` (which would print a
+    /// `String` **with quotes**). Purely-stored params keep only `Clone + Debug`.
+    ///
+    /// A parameter's values reach a body two ways, and both count:
+    ///
+    /// - a **field** typed as a bare param (`protected T value;` → `this.value`)
+    /// - a **method** returning a bare param (`public T get()` → `this.get()`)
+    ///
+    /// Both are collected from the class *and its ancestors*, substituted
+    /// through each `extends` hop — `Loud<T> extends Holder<T>` inherits
+    /// `Holder`'s `get()`, and the backend inlines the inherited body into
+    /// `Loud`'s own inherent impl, so `Loud` needs the bound too.
     pub(crate) fn class_displayed_generic_params(
         &self,
         class_decl: &juxc_ast::ClassDecl,
@@ -1829,92 +1830,165 @@ impl RustEmitter {
             .iter()
             .map(|p| p.name.text.as_str())
             .collect();
-        // field name -> generic-param name (only fields typed as a bare
-        // generic param of THIS class).
-        let mut generic_fields: std::collections::HashMap<&str, &str> =
+        // Resolve a type spelled in some ancestor's vocabulary to a bare param
+        // of THIS class, or `None` when it isn't one (a concrete type, a
+        // container, an ancestor param the child pinned to `int`, …).
+        let resolve = |ty: &juxc_ast::TypeRef,
+                       subst: &std::collections::HashMap<String, juxc_ast::TypeRef>|
+         -> Option<String> {
+            if !ty.generic_args.is_empty()
+                || ty.array_shape.is_some()
+                || ty.fn_shape.is_some()
+                || ty.name.segments.len() != 1
+            {
+                return None;
+            }
+            let name = ty.name.segments[0].text.as_str();
+            let mapped = subst.get(name);
+            let head = match mapped {
+                Some(t) if t.generic_args.is_empty() && t.name.segments.len() == 1 => {
+                    t.name.segments[0].text.as_str()
+                }
+                Some(_) => return None,
+                None => name,
+            };
+            param_names.contains(head).then(|| head.to_string())
+        };
+
+        // Member name → the param of THIS class its value has.
+        let mut generic_members: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
-        for field in &class_decl.fields {
-            if let Some(ty) = &field.ty {
-                if ty.array_shape.is_none()
-                    && ty.generic_args.is_empty()
-                    && ty.fn_shape.is_none()
-                    && ty.name.segments.len() == 1
-                {
-                    let seg = ty.name.segments[0].text.as_str();
-                    if param_names.contains(seg) {
-                        generic_fields.insert(field.name.text.as_str(), seg);
+        // Bodies to scan: this class's, plus every ancestor's (their methods
+        // are inlined into this class's inherent impl).
+        let mut bodies: Vec<&juxc_ast::ClassDecl> = vec![class_decl];
+
+        let mut cursor = Some(class_decl.name.text.clone());
+        let mut depth = 0usize;
+        while let Some(name) = cursor {
+            if depth > 64 {
+                break;
+            }
+            let subst = if depth == 0 {
+                std::collections::HashMap::new()
+            } else {
+                self.kind_subst_for_ancestor(&class_decl.name.text, &name)
+            };
+            if let Some(sig) = self.lookup_class_by_bare_or_fqn(&name) {
+                for (fname, field) in &sig.fields {
+                    if let Some(param) = resolve(&field.ty, &subst) {
+                        generic_members.insert(fname.clone(), param);
+                    }
+                }
+                for (mname, m) in &sig.methods {
+                    if let juxc_ast::ReturnType::Type(t) = &m.return_type {
+                        if let Some(param) = resolve(t, &subst) {
+                            generic_members.insert(mname.clone(), param);
+                        }
                     }
                 }
             }
+            if depth > 0 {
+                if let Some(cd) = self.class_ast_by_bare(&name) {
+                    bodies.push(cd);
+                }
+            }
+            cursor = self.direct_parent_bare(&name);
+            depth += 1;
         }
-        if generic_fields.is_empty() {
+        if generic_members.is_empty() {
             return displayed;
         }
-        // Walk every body's format positions.
-        for m in &class_decl.methods {
-            if let Some(body) = &m.body {
-                Self::scan_block_for_displayed_fields(body, &generic_fields, &mut displayed);
+        for cd in bodies {
+            for m in &cd.methods {
+                if let Some(body) = &m.body {
+                    Self::scan_block_for_displayed_fields(body, &generic_members, &mut displayed);
+                }
             }
-        }
-        for ctor in &class_decl.constructors {
-            Self::scan_block_for_displayed_fields(&ctor.body, &generic_fields, &mut displayed);
-        }
-        for op in &class_decl.operators {
-            if let Some(body) = &op.body {
-                Self::scan_block_for_displayed_fields(body, &generic_fields, &mut displayed);
+            for ctor in &cd.constructors {
+                Self::scan_block_for_displayed_fields(
+                    &ctor.body,
+                    &generic_members,
+                    &mut displayed,
+                );
+            }
+            for op in &cd.operators {
+                if let Some(body) = &op.body {
+                    Self::scan_block_for_displayed_fields(body, &generic_members, &mut displayed);
+                }
             }
         }
         displayed
     }
 
-    /// Walk a block looking for **format-position** reads of a
-    /// generic-typed field (see [`Self::class_displayed_generic_params`]).
-    /// Recurses into nested blocks and the format-bearing expression
-    /// shapes (interpolated strings, `print(…)` calls, string concats).
+
+    /// Walk a block looking for **format-position** reads of a generic-typed
+    /// member — a field or a param-returning method (see
+    /// [`Self::class_displayed_generic_params`]). Recurses into nested blocks
+    /// and the format-bearing expression shapes (interpolated strings,
+    /// `print(…)` calls, string concats).
     fn scan_block_for_displayed_fields(
         block: &juxc_ast::Block,
-        generic_fields: &std::collections::HashMap<&str, &str>,
+        generic_members: &std::collections::HashMap<String, String>,
         out: &mut HashSet<String>,
     ) {
         use juxc_ast::{Expr, Stmt};
-        // Record a param as displayed if `e` reads a generic field.
+        // Record a param as displayed if `e` produces a generic member's value.
         fn mark_field_read(
             e: &Expr,
-            generic_fields: &std::collections::HashMap<&str, &str>,
+            generic_members: &std::collections::HashMap<String, String>,
             out: &mut HashSet<String>,
         ) {
             match e {
                 // `this.field`
                 Expr::Field(f) => {
                     if matches!(&*f.object, Expr::This(_)) {
-                        if let Some(param) = generic_fields.get(f.field.text.as_str()) {
-                            out.insert((*param).to_string());
+                        if let Some(param) = generic_members.get(f.field.text.as_str()) {
+                            out.insert(param.clone());
                         }
                     }
-                    mark_field_read(&f.object, generic_fields, out);
+                    mark_field_read(&f.object, generic_members, out);
                 }
                 // bare `field` (implicit this inside the body)
                 Expr::Path(qn)
                     if qn.segments.len() == 1 => {
-                        if let Some(param) = generic_fields.get(qn.segments[0].text.as_str()) {
-                            out.insert((*param).to_string());
+                        if let Some(param) = generic_members.get(qn.segments[0].text.as_str()) {
+                            out.insert(param.clone());
                         }
                     }
+                // `this.get()` / `super.get()` / bare `get()` — a method whose
+                // return type is a bare param produces that param's value just
+                // as a field read does.
+                Expr::Call(c) => {
+                    let name = match &*c.callee {
+                        Expr::Field(f)
+                            if matches!(&*f.object, Expr::This(_) | Expr::Super(_)) =>
+                        {
+                            Some(f.field.text.as_str())
+                        }
+                        Expr::Path(qn) if qn.segments.len() == 1 => {
+                            Some(qn.segments[0].text.as_str())
+                        }
+                        _ => None,
+                    };
+                    if let Some(param) = name.and_then(|n| generic_members.get(n)) {
+                        out.insert(param.clone());
+                    }
+                }
                 _ => {}
             }
         }
         // Scan a single expression for format positions.
         fn scan_expr(
             e: &Expr,
-            generic_fields: &std::collections::HashMap<&str, &str>,
+            generic_members: &std::collections::HashMap<String, String>,
             out: &mut HashSet<String>,
         ) {
             match e {
                 Expr::InterpString(s) => {
                     for seg in &s.segments {
                         if let juxc_ast::InterpSegment::Expr(inner) = seg {
-                            mark_field_read(inner, generic_fields, out);
-                            scan_expr(inner, generic_fields, out);
+                            mark_field_read(inner, generic_members, out);
+                            scan_expr(inner, generic_members, out);
                         }
                     }
                 }
@@ -1923,13 +1997,13 @@ impl RustEmitter {
                     if let Expr::Path(qn) = &*c.callee {
                         if qn.segments.len() == 1 && qn.segments[0].text == "print" {
                             for a in &c.args {
-                                mark_field_read(a, generic_fields, out);
+                                mark_field_read(a, generic_members, out);
                             }
                         }
                     }
-                    scan_expr(&c.callee, generic_fields, out);
+                    scan_expr(&c.callee, generic_members, out);
                     for a in &c.args {
-                        scan_expr(a, generic_fields, out);
+                        scan_expr(a, generic_members, out);
                     }
                 }
                 Expr::Binary(b) => {
@@ -1940,38 +2014,38 @@ impl RustEmitter {
                     let lhs_lit = matches!(&*b.left, Expr::Literal(juxc_ast::Literal::String(_)));
                     let rhs_lit = matches!(&*b.right, Expr::Literal(juxc_ast::Literal::String(_)));
                     if b.op == juxc_ast::BinaryOp::Add && (lhs_lit || rhs_lit) {
-                        mark_field_read(&b.left, generic_fields, out);
-                        mark_field_read(&b.right, generic_fields, out);
+                        mark_field_read(&b.left, generic_members, out);
+                        mark_field_read(&b.right, generic_members, out);
                     }
-                    scan_expr(&b.left, generic_fields, out);
-                    scan_expr(&b.right, generic_fields, out);
+                    scan_expr(&b.left, generic_members, out);
+                    scan_expr(&b.right, generic_members, out);
                 }
-                Expr::Field(f) => scan_expr(&f.object, generic_fields, out),
-                Expr::Unary(u) => scan_expr(&u.operand, generic_fields, out),
+                Expr::Field(f) => scan_expr(&f.object, generic_members, out),
+                Expr::Unary(u) => scan_expr(&u.operand, generic_members, out),
                 _ => {}
             }
         }
         for stmt in &block.statements {
             match stmt {
-                Stmt::Expr(e) => scan_expr(e, generic_fields, out),
-                Stmt::Return(Some(e), _) => scan_expr(e, generic_fields, out),
+                Stmt::Expr(e) => scan_expr(e, generic_members, out),
+                Stmt::Return(Some(e), _) => scan_expr(e, generic_members, out),
                 Stmt::VarDecl(v) => {
                     if let Some(init) = &v.init {
-                        scan_expr(init, generic_fields, out);
+                        scan_expr(init, generic_members, out);
                     }
                 }
-                Stmt::Assign(a) => scan_expr(&a.value, generic_fields, out),
+                Stmt::Assign(a) => scan_expr(&a.value, generic_members, out),
                 Stmt::If(if_stmt) => {
-                    scan_expr(&if_stmt.condition, generic_fields, out);
+                    scan_expr(&if_stmt.condition, generic_members, out);
                     Self::scan_block_for_displayed_fields(
                         &if_stmt.then_block,
-                        generic_fields,
+                        generic_members,
                         out,
                     );
                     if let Some(eb) = if_stmt.else_branch.as_deref() {
                         match eb {
                             juxc_ast::ElseBranch::Block(b) => {
-                                Self::scan_block_for_displayed_fields(b, generic_fields, out);
+                                Self::scan_block_for_displayed_fields(b, generic_members, out);
                             }
                             juxc_ast::ElseBranch::If(inner) => {
                                 let synth = juxc_ast::Block {
@@ -1980,7 +2054,7 @@ impl RustEmitter {
                                 };
                                 Self::scan_block_for_displayed_fields(
                                     &synth,
-                                    generic_fields,
+                                    generic_members,
                                     out,
                                 );
                             }
@@ -1988,16 +2062,152 @@ impl RustEmitter {
                     }
                 }
                 Stmt::While(w) => {
-                    scan_expr(&w.condition, generic_fields, out);
-                    Self::scan_block_for_displayed_fields(&w.body, generic_fields, out);
+                    scan_expr(&w.condition, generic_members, out);
+                    Self::scan_block_for_displayed_fields(&w.body, generic_members, out);
                 }
                 Stmt::ForEach(f) => {
-                    scan_expr(&f.iter, generic_fields, out);
-                    Self::scan_block_for_displayed_fields(&f.body, generic_fields, out);
+                    scan_expr(&f.iter, generic_members, out);
+                    Self::scan_block_for_displayed_fields(&f.body, generic_members, out);
                 }
                 _ => {}
             }
         }
+    }
+
+    /// Build a bare-named [`TypeRef`] for a type-parameter reference (`T`).
+    /// Spans are meaningless here (nothing diagnoses generated types), so the
+    /// declaration's own span is reused.
+    fn param_type_ref(name: &str, span: juxc_source::Span) -> juxc_ast::TypeRef {
+        juxc_ast::TypeRef {
+            name: juxc_ast::QualifiedName {
+                segments: vec![juxc_ast::Ident { text: name.to_string(), span }],
+                span,
+            },
+            generic_args: Vec::new(),
+            nullable: false,
+            array_shape: None,
+            fn_shape: None,
+            ptr_depth: 0,
+            span,
+        }
+    }
+
+    /// Apply a type-parameter substitution to a [`TypeRef`], recursing into
+    /// generic arguments (`List<T>` under `{T → String}` becomes
+    /// `List<String>`). A bare name that isn't in the map is left alone.
+    pub(crate) fn subst_type_ref(
+        ty: &juxc_ast::TypeRef,
+        map: &std::collections::HashMap<String, juxc_ast::TypeRef>,
+    ) -> juxc_ast::TypeRef {
+        if ty.generic_args.is_empty() && ty.name.segments.len() == 1 {
+            if let Some(rep) = map.get(ty.name.segments[0].text.as_str()) {
+                let mut out = rep.clone();
+                out.nullable |= ty.nullable;
+                out.array_shape = ty.array_shape.clone().or(out.array_shape);
+                out.ptr_depth = ty.ptr_depth.max(out.ptr_depth);
+                return out;
+            }
+            return ty.clone();
+        }
+        let mut out = ty.clone();
+        out.generic_args = ty
+            .generic_args
+            .iter()
+            .map(|a| match a {
+                juxc_ast::GenericArg::Type(t) => {
+                    juxc_ast::GenericArg::Type(Self::subst_type_ref(t, map))
+                }
+                other => other.clone(),
+            })
+            .collect();
+        out
+    }
+
+    /// The type arguments `class_bare` supplies to `ancestor_bare`'s `Kind`
+    /// trait, spelled in **`class_bare`'s own** type-param vocabulary.
+    ///
+    /// Walks the `extends` chain composing each hop's substitution, so
+    /// `Box<U> extends Container<U>` yields `[U]` for `Container`, and
+    /// `IntBox extends Container<int>` yields `[int]`. Returns an empty vector
+    /// when the ancestor takes no params, and `None` when the chain never
+    /// reaches it (or a hop's arity disagrees — a malformed `extends` that
+    /// tycheck already rejected).
+    pub(crate) fn ancestor_kind_type_args(
+        &self,
+        class_bare: &str,
+        ancestor_bare: &str,
+    ) -> Option<Vec<juxc_ast::TypeRef>> {
+        let start = self.lookup_class_by_bare_or_fqn(class_bare)?;
+        // Args instantiating the CURSOR class's params, in `class_bare`'s
+        // vocabulary. At the start that's the class's own params, verbatim.
+        let mut cur_args: Vec<juxc_ast::TypeRef> = start
+            .generic_params
+            .iter()
+            .map(|p| Self::param_type_ref(&p.name.text, p.name.span))
+            .collect();
+        let mut cursor = class_bare.to_string();
+        for _ in 0..64 {
+            if cursor == ancestor_bare {
+                return Some(cur_args);
+            }
+            let sig = self.lookup_class_by_bare_or_fqn(&cursor)?;
+            let extends = sig.extends.clone()?;
+            let parent = self.direct_parent_bare(&cursor)?;
+            // `cursor`'s params → the args this level was instantiated with.
+            let map: std::collections::HashMap<String, juxc_ast::TypeRef> = sig
+                .generic_params
+                .iter()
+                .map(|p| p.name.text.clone())
+                .zip(cur_args.iter().cloned())
+                .collect();
+            cur_args = extends
+                .generic_args
+                .iter()
+                .filter_map(|a| a.as_type())
+                .map(|t| Self::subst_type_ref(t, &map))
+                .collect();
+            cursor = parent;
+        }
+        None
+    }
+
+    /// The substitution to install while emitting `ancestor_bare`'s `Kind`
+    /// members inside `class_bare`'s impl block: each of the ancestor's type
+    /// params mapped to the type `class_bare` passes for it.
+    fn kind_subst_for_ancestor(
+        &self,
+        class_bare: &str,
+        ancestor_bare: &str,
+    ) -> std::collections::HashMap<String, juxc_ast::TypeRef> {
+        let Some(args) = self.ancestor_kind_type_args(class_bare, ancestor_bare) else {
+            return std::collections::HashMap::new();
+        };
+        let Some(anc) = self.lookup_class_by_bare_or_fqn(ancestor_bare) else {
+            return std::collections::HashMap::new();
+        };
+        anc.generic_params
+            .iter()
+            .map(|p| p.name.text.clone())
+            .zip(args)
+            .collect()
+    }
+
+    /// Emit `<A, B>` type arguments after a `Kind` trait name, when that
+    /// trait is generic. Each argument goes through the normal type emitter,
+    /// so an active [`RustEmitter::kind_type_subst`] applies.
+    fn emit_kind_trait_args(&mut self, trait_class_bare: &str, args: &[juxc_ast::TypeRef]) {
+        if args.is_empty() || !self.kind_trait_is_generic(trait_class_bare) {
+            return;
+        }
+        self.w.push('<');
+        for (i, a) in args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            let a = juxc_ast::GenericArg::Type(a.clone());
+            self.emit_generic_arg_type_as_rust(&a);
+        }
+        self.w.push('>');
     }
 
     /// The bare name of `class_bare`'s direct `extends` parent, if any.
@@ -2019,7 +2229,7 @@ impl RustEmitter {
     /// it is itself a polymorphic base, or one of its ancestors is. Such a
     /// class needs a **populated** `<Name>Kind` trait + delegating impls so
     /// virtual dispatch works; every other class keeps the empty marker.
-    fn is_dispatch_relevant_class(&self, class_bare: &str) -> bool {
+    pub(crate) fn is_dispatch_relevant_class(&self, class_bare: &str) -> bool {
         if self.poly_base_classes.contains(class_bare) {
             return true;
         }
@@ -2202,6 +2412,9 @@ impl RustEmitter {
                     && parent_base
                         .as_deref()
                         .map_or(true, |p| !self.target_reachable_from_base(p, t))
+                    // Skip a target whose own type params this base can't pin
+                    // (`Pair<A, B> extends Box<A>` leaves `B` free).
+                    && self.hook_target_args(b, t).is_some()
             })
             .cloned()
             .collect();
@@ -2213,7 +2426,11 @@ impl RustEmitter {
     /// `Option<…>` — `Rc<dyn t>` for an interface, `Rc<dyn tKind>` for a
     /// polymorphic-base class, or the bare wrapper newtype `t` for a concrete
     /// (leaf) class. Mirrors value-position emission for a bare `t`.
-    fn emit_hook_target_type(&mut self, t: &str) {
+    fn emit_hook_target_type(&mut self, t: &str, base: &str) {
+        // A generic target's type args, expressed in the OWNING trait's
+        // vocabulary — `__jux_as_Box` on `trait ContainerKind<T>` returns
+        // `Option<Box<T>>`. Empty for a non-generic target.
+        let args = self.hook_target_args(base, t).unwrap_or_default();
         if self.lookup_interface_by_bare_or_fqn(t).is_some() {
             self.w.push_str("std::rc::Rc<dyn ");
             self.w.push_str(t);
@@ -2221,10 +2438,69 @@ impl RustEmitter {
         } else if self.poly_base_classes.contains(t) {
             self.w.push_str("std::rc::Rc<dyn ");
             self.w.push_str(t);
-            self.w.push_str("Kind>");
+            self.w.push_str("Kind");
+            self.emit_kind_trait_args(t, &args);
+            self.w.push('>');
         } else {
             self.w.push_str(t);
+            if !args.is_empty() {
+                self.w.push('<');
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.w.push_str(", ");
+                    }
+                    let a = juxc_ast::GenericArg::Type(a.clone());
+                    self.emit_generic_arg_type_as_rust(&a);
+                }
+                self.w.push('>');
+            }
         }
+    }
+
+    /// The type arguments a downcast target `t` takes when its hook lives on
+    /// base `b`'s `Kind` trait, spelled in **`b`'s** type-param vocabulary.
+    ///
+    /// `Box<U> extends Container<U>` passes `U` to `Container`, so on
+    /// `trait ContainerKind<T>` the target `Box` is `Box<T>` — the inverse of
+    /// the extends substitution. Returns `Some(vec![])` for a non-generic
+    /// target (nothing to spell) and `None` when the target's parameters are
+    /// **not determined** by the base's — `class Pair<A, B> extends Box<A>`
+    /// leaves `B` free, so `Pair` has no expressible hook on `BoxKind<A>` and
+    /// the caller drops it.
+    fn hook_target_args(&self, b: &str, t: &str) -> Option<Vec<juxc_ast::TypeRef>> {
+        // An INTERFACE target isn't a class and carries no args of its own
+        // (generic interfaces are rejected at tycheck), and a non-generic class
+        // target spells itself bare — both are always expressible.
+        let Some(target) = self.lookup_class_by_bare_or_fqn(t) else {
+            return Some(Vec::new());
+        };
+        if target.generic_params.is_empty() {
+            return Some(Vec::new());
+        }
+        // Past here the target IS generic, so the base must be a class whose own
+        // params can pin it; an interface base has none.
+        let base = self.lookup_class_by_bare_or_fqn(b)?;
+        let to_base = self.ancestor_kind_type_args(t, b)?;
+        if to_base.len() != base.generic_params.len() {
+            return None;
+        }
+        // Invert: a base param position filled with one of the target's own
+        // params pins that param to the base's param at the same position.
+        let mut inverse: std::collections::HashMap<&str, juxc_ast::TypeRef> =
+            std::collections::HashMap::new();
+        for (arg, bp) in to_base.iter().zip(&base.generic_params) {
+            if arg.generic_args.is_empty() && arg.name.segments.len() == 1 {
+                let name = arg.name.segments[0].text.as_str();
+                if target.generic_params.iter().any(|p| p.name.text == name) {
+                    inverse.insert(name, Self::param_type_ref(&bp.name.text, bp.name.span));
+                }
+            }
+        }
+        target
+            .generic_params
+            .iter()
+            .map(|p| inverse.get(p.name.text.as_str()).cloned())
+            .collect()
     }
 
     /// The cast / type-test targets reachable from an **interface** source —
@@ -2241,6 +2517,9 @@ impl RustEmitter {
             .filter(|t| {
                 !self.class_is_a(iface_bare, t)
                     && self.target_reachable_from_base(iface_bare, t)
+                    // A generic target has no expressible spelling on a
+                    // (non-generic) interface trait — see `hook_target_args`.
+                    && self.hook_target_args(iface_bare, t).is_some()
             })
             .cloned()
             .collect();
@@ -2250,12 +2529,12 @@ impl RustEmitter {
 
     /// Emit the `__jux_as_<t>(&self) -> Option<…> { None }` hook signature
     /// (default body) on a trait.
-    pub(crate) fn emit_downcast_hook_sig(&mut self, t: &str) {
+    pub(crate) fn emit_downcast_hook_sig(&mut self, t: &str, base: &str) {
         self.w.emit_indent();
         self.w.push_str("fn __jux_as_");
         self.w.push_str(t);
         self.w.push_str("(&self) -> Option<");
-        self.emit_hook_target_type(t);
+        self.emit_hook_target_type(t, base);
         self.w.push_str("> { None }\n");
     }
 
@@ -2263,18 +2542,18 @@ impl RustEmitter {
     /// `Some(self.clone())` for a leaf target, or
     /// `Some(Rc::new(self.clone()) as <target>)` for a trait-object target
     /// (identity-preserving `Rc` bump sharing the inner cell).
-    pub(crate) fn emit_downcast_hook_impl(&mut self, t: &str) {
+    pub(crate) fn emit_downcast_hook_impl(&mut self, t: &str, base: &str) {
         self.w.emit_indent();
         self.w.push_str("fn __jux_as_");
         self.w.push_str(t);
         self.w.push_str("(&self) -> Option<");
-        self.emit_hook_target_type(t);
+        self.emit_hook_target_type(t, base);
         self.w.push_str("> { Some(");
         let is_dyn =
             self.lookup_interface_by_bare_or_fqn(t).is_some() || self.poly_base_classes.contains(t);
         if is_dyn {
             self.w.push_str("std::rc::Rc::new(self.clone()) as ");
-            self.emit_hook_target_type(t);
+            self.emit_hook_target_type(t, base);
         } else {
             self.w.push_str("self.clone()");
         }
@@ -2385,6 +2664,24 @@ impl RustEmitter {
         }
     }
 
+    /// Emit a `Kind` trait's / `Kind` impl's generic parameter list.
+    ///
+    /// Same shape as the class's own inherent impl: `Clone + Debug + 'static`
+    /// plus `Display` for the params whose values reach a format position (see
+    /// [`Self::class_displayed_generic_params`]). The bounds must match,
+    /// because a `Kind` impl body calls straight into the inherent method
+    /// (`fn get(&self) -> T { Holder::get(self) }`) — a weaker bound here would
+    /// fail to satisfy the inherent impl's.
+    fn emit_kind_generic_params(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        let displayed = self.class_displayed_generic_params(class_decl);
+        let params = class_decl.generic_params.clone();
+        self.emit_generic_params_with_clone_bound_plus_display(
+            &params,
+            &displayed,
+            &HashSet::new(),
+        );
+    }
+
     /// Emit a class's marker trait and the transitive marker impls
     /// covering its parent chain.
     ///
@@ -2439,7 +2736,17 @@ impl RustEmitter {
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("trait ");
         self.w.push_str(&class_bare);
-        self.w.push_str("Kind: ");
+        self.w.push_str("Kind");
+        // A generic class's `Kind` trait is parameterized by the class's own
+        // params, so its members can mention them (`fn get(&self) -> T`).
+        // Rust traits stay dyn-compatible with generic *trait* params — only
+        // generic *methods* break object safety — so `dyn ContainerKind<isize>`
+        // is still a valid trait object.
+        let trait_is_generic = self.kind_trait_is_generic(&class_bare);
+        if trait_is_generic {
+            self.emit_kind_generic_params(class_decl);
+        }
+        self.w.push_str(": ");
         // Supertrait: the parent's `Kind` when the parent is itself a
         // polymorphic base (so `dyn ChildKind` can reach inherited methods);
         // `std::fmt::Debug` at the root of the chain (reachable transitively
@@ -2453,6 +2760,13 @@ impl RustEmitter {
         if let Some(parent) = &parent_super {
             self.w.push_str(parent);
             self.w.push_str("Kind");
+            // `trait BoxKind<T>: ContainerKind<T>` — the args this class hands
+            // its parent, read off the `extends` clause.
+            let parent = parent.clone();
+            let args = self
+                .ancestor_kind_type_args(&class_bare, &parent)
+                .unwrap_or_default();
+            self.emit_kind_trait_args(&parent, &args);
         } else {
             self.w.push_str("std::fmt::Debug");
         }
@@ -2494,7 +2808,7 @@ impl RustEmitter {
                 self.emit_kind_trait_method_sig(name, sig);
             }
             for t in &hook_targets {
-                self.emit_downcast_hook_sig(t);
+                self.emit_downcast_hook_sig(t, &class_bare);
             }
             if !accessor_fields.is_empty() {
                 self.emit_accessor_trait_sigs(&class_bare);
@@ -2521,10 +2835,14 @@ impl RustEmitter {
             // `T: Clone`).
             self.w.emit_indent();
             self.w.push_str("impl");
-            self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+            self.emit_kind_generic_params(class_decl);
             self.w.push(' ');
             self.w.push_str(&class_bare);
-            self.w.push_str("Kind for ");
+            self.w.push_str("Kind");
+            if trait_is_generic {
+                self.emit_generic_params_as_args(&class_decl.generic_params);
+            }
+            self.w.push_str(" for ");
             self.w.push_str(&class_bare);
             self.emit_generic_params_as_args(&class_decl.generic_params);
             // Hook overrides this class provides for its OWN Kind trait: the
@@ -2547,7 +2865,7 @@ impl RustEmitter {
                     self.emit_kind_delegating_method(&class_bare, name, sig);
                 }
                 for t in &self_hooks {
-                    self.emit_downcast_hook_impl(t);
+                    self.emit_downcast_hook_impl(t, &class_bare);
                 }
                 if !accessor_fields.is_empty() {
                     self.emit_accessor_impl_methods(&class_bare, &class_bare);
@@ -2579,7 +2897,7 @@ impl RustEmitter {
 
                 self.w.emit_indent();
                 self.w.push_str("impl");
-                self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+                self.emit_kind_generic_params(class_decl);
                 self.w.push(' ');
                 if !ancestor_pkg.is_empty() && ancestor_pkg != child_pkg {
                     self.w.push_str("crate::");
@@ -2589,7 +2907,12 @@ impl RustEmitter {
                     }
                 }
                 self.w.push_str(&ancestor_bare);
-                self.w.push_str("Kind for ");
+                self.w.push_str("Kind");
+                let anc_args = self
+                    .ancestor_kind_type_args(&class_bare, &ancestor_bare)
+                    .unwrap_or_default();
+                self.emit_kind_trait_args(&ancestor_bare, &anc_args);
+                self.w.push_str(" for ");
                 self.w.push_str(&class_bare);
                 self.emit_generic_params_as_args(&class_decl.generic_params);
                 let anc_methods = if self.poly_base_classes.contains(&ancestor_bare) {
@@ -2625,11 +2948,18 @@ impl RustEmitter {
                 } else {
                     self.w.push_str(" {\n");
                     self.w.indent_inc();
+                    // The ancestor's member signatures name the ANCESTOR's type
+                    // params, but this impl block is generic over the CHILD's.
+                    // Install the mapping so every type emitted below is
+                    // rewritten: `fn get(&self) -> T` declared on `Container<T>`
+                    // becomes `fn get(&self) -> U` inside `impl … for Box<U>`.
+                    let subst = self.kind_subst_for_ancestor(&class_bare, &ancestor_bare);
+                    let saved_subst = std::mem::replace(&mut self.kind_type_subst, subst);
                     for (name, sig) in &anc_methods {
                         self.emit_kind_delegating_method(&class_bare, name, sig);
                     }
                     for t in &anc_hooks {
-                        self.emit_downcast_hook_impl(t);
+                        self.emit_downcast_hook_impl(t, &ancestor_bare);
                     }
                     if !anc_accessor_fields.is_empty() {
                         self.emit_accessor_impl_methods(&ancestor_bare, &class_bare);
@@ -2637,6 +2967,7 @@ impl RustEmitter {
                     if anc_observer_sigs {
                         self.emit_observer_impl_methods(&ancestor_bare, &class_bare);
                     }
+                    self.kind_type_subst = saved_subst;
                     self.w.indent_dec();
                     self.w.emit_indent();
                     self.w.push_str("}\n");
@@ -3228,7 +3559,7 @@ impl RustEmitter {
             if let Some(iface_seg) = interface_ty.name.segments.first() {
                 for t in self.interface_hook_targets(&iface_seg.text) {
                     if self.class_is_a(&class_decl.name.text, &t) {
-                        self.emit_downcast_hook_impl(&t);
+                        self.emit_downcast_hook_impl(&t, &iface_seg.text);
                     }
                 }
             }

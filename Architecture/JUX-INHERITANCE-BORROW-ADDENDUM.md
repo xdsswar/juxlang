@@ -193,18 +193,26 @@ Generic types are invariant in their type parameters (§7.8). Variance is expres
 
 The borrow checker treats wildcards as opaque: a `List<? extends Animal>` exposes only the read API, so its inferred mutation summary is the union of read-only methods. This composes with §6.9.3 cleanly because variance and mutability are decided independently.
 
-> **Phase-1 implementation limitation — a *generic class* cannot be a polymorphic
-> base.** Using a generic class as the base of a virtual-dispatch hierarchy
-> (`Container<int> b = new Box<int>(…)` where `class Box<T> extends Container<T>`)
-> requires generic `Kind` traits (`ContainerKind<T>`) and generic trait objects
-> (`Rc<dyn ContainerKind<isize>>`) threaded through the trait decls, impls,
-> downcast hooks and upcast cast — plus inherited-method return-type analysis to
-> add the needed bounds. Phase 1 does not yet emit this, so the compiler **rejects
-> the construct up front with `[E0454]`** rather than leaking a backend error.
-> Supported routes for Phase 1: dispatch through a *generic interface*
-> (`interface Container<T>` — the fully working path), or use a **non-generic**
-> base class. A *non-generic* base with generic *subclasses* is fine; only a
-> generic *base* is deferred. Tracked in `docs/internal/jux-gaps.md` (N5).
+> **A *generic class* may be a polymorphic base.** `Container<int> b = new
+> Box<int>(…)` (with `class Box<T> extends Container<T>`) dispatches virtually
+> like any other base. The lowering parameterizes the base's `Kind` trait by the
+> class's own type params — `trait ContainerKind<T>: Debug { fn get(&self) -> T; }`
+> — so a base-typed slot is the trait object `Rc<dyn ContainerKind<isize>>`.
+> Rust traits stay dyn-compatible with generic *trait* parameters (only generic
+> *methods* break object safety), so downcast hooks, field accessors and the
+> upcast coercion all work unchanged.
+>
+> Each subclass implements its ancestors' traits with the type arguments its
+> `extends` clause supplies, composed down the chain: `Box<U> extends
+> Container<U>` emits `impl<U> ContainerKind<U> for Box<U>`, and `IntBox extends
+> Container<int>` emits `impl ContainerKind<isize> for IntBox`. A subclass whose
+> own parameters the base cannot pin (`class Pair<A, B> extends Box<A>` leaves
+> `B` free) is still constructible and usable; it simply gets no `__jux_as_Pair`
+> downcast hook on `BoxKind<A>`, because there is no way to spell its type there.
+>
+> A method inherited from a generic base that **formats** a generic value
+> (`$"holding ${this.get()}"`) adds the `Display` bound its instantiation needs
+> to the subclass's impl as well, so the inherited body type-checks in both.
 
 ### 6.9.7. Sealed Hierarchies Give Exact Analysis
 

@@ -955,8 +955,8 @@ struct RustEmitter {
     /// Box methods take `&mut self` when they mutate (inline-style), field
     /// access is direct `.0` (Box derefs), and `===` is `std::ptr::eq`.
     pub(crate) box_classes: std::collections::HashSet<String>,
-    /// Bare names of **polymorphic base classes** (non-sealed, non-final,
-    /// non-generic classes extended by ≥1 subclass — see
+    /// Bare names of **polymorphic base classes** (non-sealed, non-final
+    /// classes extended by ≥1 subclass, generic or not — see
     /// [`compute_polymorphic_base_classes`]). A value slot of one of these
     /// types lowers to `Rc<dyn <Name>Kind>` for Stage-2 virtual dispatch, the
     /// `<Name>Kind` trait is populated with the base's virtual methods, and an
@@ -973,6 +973,17 @@ struct RustEmitter {
     /// [`compute_bound_position_classes`]; consulted by
     /// `emit_class_marker_trait` and `emit_bound_type`.
     pub(crate) bound_position_classes: std::collections::HashSet<String>,
+    /// Active **type-parameter substitution** for `Kind`-trait emission.
+    ///
+    /// An ancestor's trait members are spelled in the *ancestor's* type-param
+    /// names (`Container<T>` declares `fn get(&self) -> T`), but a subclass
+    /// impl block is generic over the *subclass's* params
+    /// (`impl<U> ContainerKind<U> for Box<U>`). While such an impl is being
+    /// emitted this maps `T` → the child-vocabulary type the child passes for
+    /// it, and [`RustEmitter::emit_type_as_rust`] rewrites bare references
+    /// accordingly. Empty everywhere else, so non-generic hierarchies are
+    /// untouched.
+    pub(crate) kind_type_subst: std::collections::HashMap<String, juxc_ast::TypeRef>,
     /// Names of **`int`-typed const-generic parameters** in scope —
     /// the `N` of an enclosing `class RingBuffer<T, int N>` or
     /// `fn cap<int N>()`. A bare read of such a name in *value*
@@ -3105,15 +3116,20 @@ pub(crate) fn compute_bound_position_classes(
 }
 
 /// Bare names of every **polymorphic base class** — a class that is extended
-/// by ≥1 other class and is itself non-sealed, non-final, and non-generic.
+/// by ≥1 other class and is itself non-sealed and non-final.
 ///
 /// Stage-2 virtual dispatch lowers a polymorphic base's value slots to
 /// `Rc<dyn <Name>Kind>`: a base-typed reference can hold any subclass instance
 /// and dispatches dynamically through the populated `<Name>Kind` trait. The
-/// exclusions each have their own path or are deferred: a **sealed** base uses
-/// enum + match dispatch (already works); a **final** base can't be extended
-/// (so it's never a base); a **generic** base would need an object-unsafe
-/// `dyn Kind<T>` (deferred with a diagnostic).
+/// two exclusions each have their own path: a **sealed** base uses enum + match
+/// dispatch (already works), and a **final** base can't be extended (so it's
+/// never a base).
+///
+/// A **generic** base is included: its `Kind` trait carries the class's own type
+/// params (`trait ContainerKind<T>: Debug { fn get(&self) -> T; }`) and its value
+/// slots lower to `Rc<dyn ContainerKind<isize>>`. Rust traits are dyn-compatible
+/// with generic *trait* params (only generic *methods* break object safety), so
+/// `Container<int> c = new Box<int>(7)` dispatches like any other base.
 pub(crate) fn compute_polymorphic_base_classes(
     units: &[juxc_ast::CompilationUnit],
 ) -> HashSet<String> {
@@ -3125,11 +3141,7 @@ pub(crate) fn compute_polymorphic_base_classes(
     for unit in units {
         for item in &unit.items {
             if let juxc_ast::TopLevelDecl::Class(cd) = item {
-                if !cd.is_sealed
-                    && cd.permits.is_empty()
-                    && !cd.is_final
-                    && cd.generic_params.is_empty()
-                {
+                if !cd.is_sealed && cd.permits.is_empty() && !cd.is_final {
                     candidate.insert(cd.name.text.clone());
                 }
                 if let Some(parent) = cd
@@ -4141,6 +4153,7 @@ impl RustEmitter {
             box_classes: std::collections::HashSet::new(),
             poly_base_classes: std::collections::HashSet::new(),
             bound_position_classes: std::collections::HashSet::new(),
+            kind_type_subst: std::collections::HashMap::new(),
             const_int_params: std::collections::HashSet::new(),
             out_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),
