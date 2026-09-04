@@ -1709,7 +1709,7 @@ fn rust_path_annotation(annotations: &[juxc_ast::Annotation]) -> Option<String> 
     use juxc_ast::{AnnotationArg, Expr, Literal};
     for ann in annotations {
         let Some(seg) = ann.name.segments.last() else { continue };
-        if seg.text.to_ascii_lowercase() != "rust" {
+        if !seg.text.eq_ignore_ascii_case("rust") {
             continue;
         }
         if let Some(AnnotationArg::Positional(Expr::Literal(Literal::String(s)))) = ann.args.first()
@@ -3232,7 +3232,7 @@ fn insert_class(
                 visibility: prop.visibility,
                 is_static: prop.is_static,
                 is_read_only: prop.setter.is_none(),
-                is_init_only: prop.setter.as_ref().map_or(false, |s| s.is_init),
+                is_init_only: prop.setter.as_ref().is_some_and(|s| s.is_init),
                 setter_visibility,
                 ty: prop.ty.clone(),
                 span: prop.span,
@@ -3790,7 +3790,7 @@ fn check_operator_return_types(
                 ),
             )
             .with_span(op.span)
-            .with_help(&format!(
+            .with_help(format!(
                 "the spec fixes this operator's return type; change the signature to \
                  `{expected} operator {}(...)`",
                 operator_kind_display(op.kind),

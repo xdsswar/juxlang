@@ -84,7 +84,7 @@ fn fold_concat_into_format<'a>(
 /// Returns `None` for every other shape — including `null == null`
 /// (degenerate but harmless: caller falls through to the generic
 /// binary path which emits `None == None`, valid Rust).
-fn match_null_comparison<'a>(b: &'a BinaryExpr) -> Option<(&'a Expr, bool)> {
+fn match_null_comparison(b: &BinaryExpr) -> Option<(&Expr, bool)> {
     let is_eq = match b.op {
         BinaryOp::Eq => true,
         BinaryOp::NotEq => false,

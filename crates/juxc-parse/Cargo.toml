@@ -8,6 +8,9 @@ authors.workspace = true
 repository.workspace = true
 description = "Phase 2 — parser for the Jux compiler (per JUX-COMPILER-PIPELINE-ADDENDUM.md §C.2.2)."
 
+[lints]
+workspace = true
+
 [dependencies]
 juxc-source      = { workspace = true }
 juxc-diagnostics = { workspace = true }

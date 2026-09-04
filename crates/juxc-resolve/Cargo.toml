@@ -8,6 +8,9 @@ authors.workspace = true
 repository.workspace = true
 description = "Phase 4 — name resolution / module linking (per JUX-COMPILER-PIPELINE-ADDENDUM.md §C.2.4)."
 
+[lints]
+workspace = true
+
 [dependencies]
 juxc-source      = { workspace = true }
 juxc-diagnostics = { workspace = true }

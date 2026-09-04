@@ -8,6 +8,9 @@ authors.workspace = true
 repository.workspace = true
 description = "Generates Jux-syntax interface stubs (.jux.d) from foreign APIs — per JUX-BINDGEN-ADDENDUM.md §G."
 
+[lints]
+workspace = true
+
 [dependencies]
 # Typed schema for `rustdoc --output-format json`, the source of truth for a
 # Rust crate's public API (§G.6.1). Only the `ingest` module touches it; the

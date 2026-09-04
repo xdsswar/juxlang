@@ -280,10 +280,10 @@ impl<'a> Parser<'a> {
                     Some(TokenKind::Ident(_)) => Some(i + 1),
                     _ => None,
                 };
-                match after_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind)) {
-                    Some(TokenKind::Kw(Keyword::Operator)) => true,
-                    _ => false,
-                }
+                matches!(
+                    after_type.and_then(|j| self.tokens.get(j).map(|t| &t.kind)),
+                    Some(TokenKind::Kw(Keyword::Operator)),
+                )
             };
             if lookahead_is_operator {
                 if let Some(op) = self.parse_operator_decl(member_vis) {
@@ -1362,17 +1362,6 @@ impl<'a> Parser<'a> {
     }
 
     // ------------------------------------------------------------------
-    // Enum declarations (Turn 1 — §A.2.4 enum-decl subset)
-    // ------------------------------------------------------------------
-
-    /// Parse `enum Name { Variant, Variant(Type, Type), … ; }`.
-    /// Visibility has already been consumed.
-    ///
-    /// **Turn-1 scope**: variants only — no methods, no `@layout`
-    /// annotation, no explicit discriminants (`Foo = 200`), no
-    /// generics. Variants are comma-separated; a trailing comma or
-    /// `;` is tolerated.
-    // ------------------------------------------------------------------
     // Record declarations (Turn 1 — §A.2.4 record-decl subset)
     // ------------------------------------------------------------------
 
@@ -1568,6 +1557,17 @@ impl<'a> Parser<'a> {
         })
     }
 
+    // ------------------------------------------------------------------
+    // Enum declarations (Turn 1 — §A.2.4 enum-decl subset)
+    // ------------------------------------------------------------------
+
+    /// Parse `enum Name { Variant, Variant(Type, Type), … ; }`.
+    /// Visibility has already been consumed.
+    ///
+    /// **Turn-1 scope**: variants only — no methods, no `@layout`
+    /// annotation, no explicit discriminants (`Foo = 200`), no
+    /// generics. Variants are comma-separated; a trailing comma or
+    /// `;` is tolerated.
     pub(crate) fn parse_enum_decl(
         &mut self,
         annotations: Vec<juxc_ast::Annotation>,
@@ -1871,16 +1871,10 @@ impl<'a> Parser<'a> {
             })
             .and_then(|a| {
                 a.args.iter().find_map(|arg| match arg {
-                    juxc_ast::AnnotationArg::Named { name, value }
-                        if name.text.eq_ignore_ascii_case("lib") =>
-                    {
-                        match value {
-                            juxc_ast::Expr::Literal(juxc_ast::Literal::String(s)) => {
-                                Some(s.clone())
-                            }
-                            _ => None,
-                        }
-                    }
+                    juxc_ast::AnnotationArg::Named {
+                        name,
+                        value: juxc_ast::Expr::Literal(juxc_ast::Literal::String(s)),
+                    } if name.text.eq_ignore_ascii_case("lib") => Some(s.clone()),
                     _ => None,
                 })
             })
@@ -2028,7 +2022,7 @@ impl<'a> Parser<'a> {
         i += 1;
         // Result type: `void`, a nominal type (with generics / array / nullable
         // suffixes), or a nested function type.
-        Some(self.scan_type_at(i)?)
+        self.scan_type_at(i)
     }
 
     /// Non-consuming lookahead: return the index just past a **type** starting at

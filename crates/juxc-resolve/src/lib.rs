@@ -1529,7 +1529,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, s)| {
-                let sf = SourceFile::new(&format!("f{i}.jux"), *s);
+                let sf = SourceFile::new(format!("f{i}.jux"), *s);
                 let lex_result = lex(&sf);
                 assert!(lex_result.diagnostics.is_empty(), "lex errors: {:?}", lex_result.diagnostics);
                 let parse_result = parse(&lex_result.tokens);

@@ -1105,7 +1105,7 @@ impl<'a> Parser<'a> {
                 // through the postfix chain (`parse_postfix`).
                 let span = self.peek_span();
                 self.advance();
-                return Some(Expr::This(span));
+                Some(Expr::This(span))
             }
             TokenKind::Kw(Keyword::Super) => {
                 // `super` — superclass-qualified call receiver (§6.9.4). A
@@ -1114,7 +1114,7 @@ impl<'a> Parser<'a> {
                 // `.method(...)` call).
                 let span = self.peek_span();
                 self.advance();
-                return Some(Expr::Super(span));
+                Some(Expr::Super(span))
             }
             TokenKind::Kw(Keyword::If) => {
                 // If-expression (§A.2.9): `if (cond) expr else expr`,
@@ -1143,12 +1143,12 @@ impl<'a> Parser<'a> {
                 }
                 let else_branch = self.parse_expr()?;
                 let end = self.last_consumed_span();
-                return Some(Expr::Ternary(juxc_ast::TernaryExpr {
+                Some(Expr::Ternary(juxc_ast::TernaryExpr {
                     condition: Box::new(condition),
                     then_branch: Box::new(then_branch),
                     else_branch: Box::new(else_branch),
                     span: span.join(end),
-                }));
+                }))
             }
             TokenKind::Kw(Keyword::Try) => {
                 // Try-expression (§X.3.1) — only reached in genuine
@@ -1202,12 +1202,12 @@ impl<'a> Parser<'a> {
                     let _ = self.parse_block();
                 }
                 let end = self.last_consumed_span();
-                return Some(Expr::TryExpr(Box::new(juxc_ast::TryStmt {
+                Some(Expr::TryExpr(Box::new(juxc_ast::TryStmt {
                     body,
                     catches,
                     finally: None,
                     span: start.join(end),
-                })));
+                })))
             }
             TokenKind::Kw(Keyword::Switch) => {
                 // `switch (expr) { case PATTERN -> body; … }` per
@@ -1216,7 +1216,7 @@ impl<'a> Parser<'a> {
                 // statement form (`switch (…) { … }`) — the latter
                 // appears here too and is wrapped by `Stmt::Expr` in
                 // statement-parsing position.
-                return self.parse_switch_expr().map(Expr::Switch);
+                self.parse_switch_expr().map(Expr::Switch)
             }
             TokenKind::Kw(Keyword::New) => {
                 // Three `new …` forms per §A.2.9:
@@ -1366,12 +1366,12 @@ impl<'a> Parser<'a> {
                     inner_sizes.push(Box::new(inner));
                 }
                 let end = self.last_consumed_span();
-                return Some(Expr::NewArray(NewArrayExpr {
+                Some(Expr::NewArray(NewArrayExpr {
                     element_type,
                     size: Box::new(size),
                     inner_sizes,
                     span: start.join(end),
-                }));
+                }))
             }
             TokenKind::Kw(Keyword::Sizeof) => {
                 // `sizeof '(' (type | expression) ')'` per §5.9.

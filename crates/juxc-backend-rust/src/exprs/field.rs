@@ -227,12 +227,17 @@ impl RustEmitter {
         // signature. Falls through to the regular field path
         // when the receiver isn't a class or the name isn't a
         // property.
-        if let Some(recv_ty) = self
+        // Only a user-class receiver can name a property; anything else falls
+        // straight through to the ordinary field path below.
+        let recv_class = self
             .expr_types
             .get(&crate::exprs::expr_span_of(&f.object))
-            .cloned()
-        {
-            if let juxc_tycheck::Ty::User { name, .. } = &recv_ty {
+            .and_then(|t| match t {
+                juxc_tycheck::Ty::User { name, .. } => Some(name.clone()),
+                _ => None,
+            });
+        if let Some(name) = &recv_class {
+            {
                 let bare = name.rsplit('.').next().unwrap_or(name);
                 // Walk the `extends` chain (`symbols.lookup_method`),
                 // not just the receiver's own class — `this.Score`
@@ -1130,7 +1135,7 @@ impl RustEmitter {
                 || self
                     .symbols
                     .find_fqn_by_bare(bare)
-                    .map_or(false, |fqn| self.symbols.records.contains_key(&fqn));
+                    .is_some_and(|fqn| self.symbols.records.contains_key(&fqn));
         }
         false
     }

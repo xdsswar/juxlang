@@ -891,11 +891,11 @@ fn is_ident_continue(b: u8) -> bool {
 
 /// `0..=9`.
 #[inline]
-fn is_dec_digit(b: u8) -> bool { matches!(b, b'0'..=b'9') }
+fn is_dec_digit(b: u8) -> bool { b.is_ascii_digit() }
 
 /// `0..=9` ∪ `a..=f` ∪ `A..=F`.
 #[inline]
-fn is_hex_digit(b: u8) -> bool { matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F') }
+fn is_hex_digit(b: u8) -> bool { b.is_ascii_hexdigit() }
 
 /// `0` or `1`.
 #[inline]

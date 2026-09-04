@@ -827,7 +827,7 @@ fn import_edit(rope: &Rope, fqn: &str) -> Option<TextEdit> {
             let next_blank = text
                 .lines()
                 .nth(p + 1)
-                .map_or(false, |l| l.trim().is_empty());
+                .is_some_and(|l| l.trim().is_empty());
             if next_blank {
                 // The separating blank already exists — drop the import just
                 // below it (joining any existing import block).
@@ -1675,7 +1675,6 @@ impl LanguageServer for Backend {
         // linger. Combined with the stdin-EOF exit in `main`, this guarantees
         // `juxc-lsp` stops whenever the IDE does.
         if let Some(pid) = params.process_id {
-            let pid = pid as u32;
             tokio::spawn(async move {
                 let mut tick = tokio::time::interval(std::time::Duration::from_secs(3));
                 loop {
@@ -2184,7 +2183,7 @@ mod tests {
     use crate::analysis::analyze_workspace;
     use crate::workspace::index_workspace;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn temp_root(tag: &str) -> PathBuf {
         let mut dir = std::env::temp_dir();
@@ -2547,7 +2546,7 @@ mod tests {
 
     /// Analyse `src` as `name` inside `root` and build the cached Document the
     /// completion handler reads — the same construction `refresh` performs.
-    fn doc_for(root: &PathBuf, name: &str, src: &str) -> (Document, Url) {
+    fn doc_for(root: &Path, name: &str, src: &str) -> (Document, Url) {
         let file = root.join(name);
         fs::write(&file, src).unwrap();
         let uri = Url::from_file_path(&file).unwrap();

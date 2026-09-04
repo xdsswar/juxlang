@@ -25,6 +25,25 @@ license = "Apache-2.0"
 repository = "https://github.com/xdsswar/juxlang"
 description = "The Jux compiler and project tool."
 
+# Lint policy for every workspace crate (each member opts in with
+# `lints.workspace = true`). CI gates on this, so an entry here is a deliberate
+# decision rather than a warning nobody reads.
+[workspace.lints.clippy]
+# Comma-separated list parsing is written the same way everywhere in the parser:
+#   loop { let Some(x) = parse() else { break }; push(x); if !eat(Comma) { break } }
+# Clippy prefers `while let`, which forces the terminator check into a different
+# shape and buys nothing. The idiom is uniform across ~9 sites; consistency wins.
+while_let_loop = "allow"
+# Fires on doc-comment list items that wrap without a hanging indent. It is pure
+# formatting, and satisfying it means reflowing hand-written prose across dozens
+# of doc comments. The comments are an asset here; the lint is not.
+doc_lazy_continuation = "allow"
+# The checker's call-argument validation genuinely needs its nine inputs (callee
+# name, params, args, arg names, span, declaring class, and the two halves of the
+# generic substitution). Bundling them into a struct would move the same nine
+# values one indirection away and touch a dozen call sites to satisfy a counter.
+too_many_arguments = "allow"
+
 [workspace.dependencies]
 juxc-source        = { path = "crates/juxc-source",        version = "0.0.1" }
 juxc-diagnostics   = { path = "crates/juxc-diagnostics",   version = "0.0.1" }

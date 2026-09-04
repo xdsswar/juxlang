@@ -338,7 +338,7 @@ fn default_crate_name(inputs: &[PathBuf], first_file: &Path) -> String {
     if out.is_empty() {
         return "jux_emitted".to_string();
     }
-    if out.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+    if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         out.insert(0, '_');
     }
     out

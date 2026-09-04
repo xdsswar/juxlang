@@ -525,6 +525,35 @@ pub(crate) struct PendingCtorBind {
     pub(crate) bidirectional: bool,
 }
 
+/// The observable-property setter that `emit_method` is about to bracket
+/// (§P). Set by the class emitter, taken by `emit_method`, which captures the
+/// old value before the setter body and fires `__obs_<X>_fire` after it.
+///
+/// This was a five-slot tuple whose meaning lived entirely in a comment; every
+/// read site then had to spell `Some((_, _, _, false, _))` and hope. Named
+/// fields say it in the code.
+pub(crate) struct PendingSetterObserver {
+    /// The property being set.
+    pub(crate) prop: String,
+    /// Whether the property's type supports `!=`. Comparable types fire only on
+    /// an actual value change; user-class types (no `PartialEq` on the wrapper)
+    /// fire on every completed set.
+    pub(crate) comparable: bool,
+    /// The COMPUTED properties (§P.1.5) whose getters read this one, each with
+    /// its own comparable flag. The setter recomputes them and fires their
+    /// observers on change.
+    pub(crate) dependents: Vec<(String, bool)>,
+    /// True for a STATIC property setter (P7): the bracket reads through
+    /// `Self::<X>()` and fires the class-scoped `Self::__obs_<X>_fire`, and no
+    /// P2 gate wrapper is emitted -- statics have no binding machinery to guard.
+    pub(crate) is_static: bool,
+    /// `__parent` hops to the property's storage slice: 0 for a class's own
+    /// property, n for an INHERITED setter copy. Java semantics -- a subclass
+    /// setter fires the ancestor-slice observers, and the P2 gate reads
+    /// `__bind_<X>` through the hops.
+    pub(crate) parent_depth: usize,
+}
+
 /// Internal emitter state. Accumulates source text into a [`Writer`]
 /// (auto-indent + buffer) and produces a [`RustCrate`] when
 /// [`RustEmitter::finish`] is called.
@@ -1057,23 +1086,9 @@ struct RustEmitter {
     pub(crate) try_loopctl: Vec<stmts::TryLoopCtl>,
     /// §P observable properties: set just before `emit_method` emits a
     /// synthesized property setter (`__set_<X>`) whose property is
-    /// observable. Carries `(property name, change-comparable?)` —
-    /// `emit_method` takes it and brackets the body with the old/new
-    /// capture and the post-body `__obs_<X>_fire` call. Comparable
-    /// types fire only when `old != now`; non-comparable (user-class)
-    /// types fire on every set. The third slot lists the COMPUTED
-    /// properties (§P.1.5) whose getters read this property — each as
-    /// `(name, change-comparable?)` — so the setter also recomputes
-    /// them and fires their observers on change. The fourth slot is
-    /// `true` for a STATIC property setter (P7): the bracket then
-    /// reads through `Self::<X>()` and fires the class-scoped
-    /// `Self::__obs_<X>_fire`, and no P2 gate wrapper is emitted
-    /// (statics have no binding machinery to guard). The fifth slot
-    /// is the `__parent` hop DEPTH to the property's storage slice —
-    /// 0 for a class's own property, n for an INHERITED setter copy
-    /// (Java semantics: a subclass setter fires the ancestor-slice
-    /// observers; the P2 gate reads `__bind_<X>` through the hops).
-    pub(crate) pending_setter_observer: Option<(String, bool, Vec<(String, bool)>, bool, usize)>,
+    /// observable. `emit_method` takes it and brackets the body with the
+    /// old/new capture and the post-body `__obs_<X>_fire` call.
+    pub(crate) pending_setter_observer: Option<PendingSetterObserver>,
     /// P6 (§P.9): `bind()` calls on a property of `this` inside a
     /// constructor body. While the body runs, `this` is the bare
     /// inner struct (`__self`) — no wrapper handle exists for the
@@ -3591,12 +3606,12 @@ pub(crate) fn collect_extended_class_names(
 /// a field access through `.0.borrow()` would dangle. Mirrors the
 /// early-return guards at the top of `emit_class_decl`.
 pub(crate) fn is_intrinsic_class(pkg: &str, name: &str) -> bool {
-    match (pkg, name) {
-        ("jux.std.io", "File" | "Path" | "Console") => true,
-        ("jux.std.concurrent", "Worker" | "Task" | "AtomicInt" | "AtomicLong") => true,
-        ("jux.std.time", "Clock" | "Instant") => true,
-        _ => false,
-    }
+    matches!(
+        (pkg, name),
+        ("jux.std.io", "File" | "Path" | "Console")
+            | ("jux.std.concurrent", "Worker" | "Task" | "AtomicInt" | "AtomicLong")
+            | ("jux.std.time", "Clock" | "Instant")
+    )
 }
 
 impl RustEmitter {
@@ -4389,7 +4404,7 @@ impl RustEmitter {
                 self.w.push_str("pub mod ");
                 self.w.push_str(name);
                 self.w.push_str(";\n");
-                self.emit_package_files(child, units, sources, &[name.clone()]);
+                self.emit_package_files(child, units, sources, std::slice::from_ref(name));
             }
             return;
         }
@@ -4677,7 +4692,6 @@ impl RustEmitter {
             }
             self.w.indent_dec();
             self.w.line("}");
-            return;
         }
     }
 
@@ -4904,7 +4918,7 @@ impl RustEmitter {
         self.w.push_str(&total.to_string());
         self.w.push_str("] = [");
         for (i, (_, display, _)) in
-            plans.iter().flat_map(|p| p.tests.iter()).enumerate().map(|(i, t)| (i, t))
+            plans.iter().flat_map(|p| p.tests.iter()).enumerate()
         {
             if i > 0 {
                 self.w.push_str(", ");
@@ -5533,18 +5547,18 @@ impl RustEmitter {
                     "    if let Err(__jux_p) = std::panic::catch_unwind(::std::panic::AssertUnwindSafe(__jux_user_main)) {\n",
                 ));
                 for fqn in &throwable_fqns {
-                    let path = match backend_fqn::fqn_package(&fqn) {
+                    let path = match backend_fqn::fqn_package(fqn) {
                         Some(pkg) => format!(
                             "crate::{}::{}",
                             pkg.split('.').collect::<Vec<_>>().join("::"),
-                            backend_fqn::fqn_bare(&fqn),
+                            backend_fqn::fqn_bare(fqn),
                         ),
                         // No-package classes sit at the crate root;
                         // the wrapper also lives in `main.rs`, so the
                         // bare name resolves in both single-file and
                         // split modes (split keeps root-tier units in
                         // main.rs).
-                        None => backend_fqn::fqn_bare(&fqn).to_string(),
+                        None => backend_fqn::fqn_bare(fqn).to_string(),
                     };
                     wrapper.push_str(&format!(
                         concat!(

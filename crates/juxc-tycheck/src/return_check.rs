@@ -133,7 +133,7 @@ fn stmt_has_break(stmt: &Stmt) -> bool {
         Stmt::Try(t) => {
             block_has_break(&t.body)
                 || t.catches.iter().any(|c| block_has_break(&c.body))
-                || t.finally.as_ref().map_or(false, block_has_break)
+                || t.finally.as_ref().is_some_and(block_has_break)
         }
         // Do NOT descend into nested loops / switches — their `break` binds to
         // them, not to the loop we're testing.

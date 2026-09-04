@@ -8,6 +8,9 @@ authors.workspace = true
 repository.workspace = true
 description = "Phases 6–9 — type checking, generic inference, overload resolution (per JUX-COMPILER-PIPELINE-ADDENDUM.md §C.3)."
 
+[lints]
+workspace = true
+
 [dependencies]
 juxc-source      = { workspace = true }
 juxc-diagnostics = { workspace = true }

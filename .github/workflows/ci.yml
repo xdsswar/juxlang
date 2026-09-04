@@ -65,8 +65,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: clippy
-      # Not yet `-D warnings`: the existing lint backlog is style-level and is
-      # being cleared separately. Failing the build on it today would block every
-      # PR for reasons unrelated to that PR.
+      # Gating. The backlog is cleared and the deliberate exceptions live in
+      # `[workspace.lints.clippy]` in the root Cargo.toml, where they can be
+      # read and argued with -- rather than as scattered `#[allow]` attributes.
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --release
+        run: cargo clippy --workspace --all-targets --release -- -D warnings

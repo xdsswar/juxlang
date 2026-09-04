@@ -54,8 +54,8 @@ fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
     match stmt {
         Stmt::Labeled { stmt, .. } => stmt_moves_path(stmt, name),
         Stmt::Expr(e) => expr_moves_path_at_top(e, name),
-        Stmt::VarDecl(v) => v.init.as_ref().map_or(false, |e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
-        Stmt::Return(opt, _) => opt.as_ref().map_or(false, |e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
+        Stmt::VarDecl(v) => v.init.as_ref().is_some_and(|e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
+        Stmt::Return(opt, _) => opt.as_ref().is_some_and(|e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
         Stmt::Assign(a) => {
             is_path_named(&a.value, name)
                 || expr_moves_path_at_top(&a.value, name)
@@ -459,7 +459,7 @@ fn stmt_has_loop_escape(s: &Stmt) -> bool {
                 || t.catches.iter().any(|c| block_has_loop_escape(&c.body))
                 || t.finally
                     .as_ref()
-                    .map(|f| block_has_loop_escape(f))
+                    .map(block_has_loop_escape)
                     .unwrap_or(false)
         }
         Stmt::Unsafe(b) => block_has_loop_escape(b),
@@ -2079,7 +2079,7 @@ impl RustEmitter {
         // Java-style typed local (`int x = 5;`) carries an explicit
         // type annotation; emit it as `let x: T = init;`. The `var`
         // form leaves `ty == None` and we let Rust infer.
-        let declared_nullable = var.ty.as_ref().map_or(false, |t| t.nullable);
+        let declared_nullable = var.ty.as_ref().is_some_and(|t| t.nullable);
         // Inferred nullability for `var` (no explicit type):
         // when the init expression is itself `Option<T>`-shaped
         // (a nullable-returning call, a `?.`-chain, a known
@@ -2089,7 +2089,7 @@ impl RustEmitter {
         let init_is_nullable = var
             .init
             .as_ref()
-            .map_or(false, |e| self.expression_is_already_nullable(e));
+            .is_some_and(|e| self.expression_is_already_nullable(e));
         // A raw-pointer local (`T* p`) is NOT a nullable `Option` slot, even
         // when initialized from `null` (which reads as "already nullable").
         // Misclassifying it would make a later `p = &x` wrap in `Some(...)`
@@ -2524,12 +2524,13 @@ impl RustEmitter {
         // and bindings like any other set. Without this the compound
         // form fell through to the raw wrapper-field write, which both
         // bypassed the setter AND named a nonexistent field (E0609).
-        if a.op.is_some() && self.assign_target_is_property_with_setter(&a.target) {
+        if let Some(op) = a.op.filter(|_| self.assign_target_is_property_with_setter(&a.target))
+        {
             let desugared = AssignStmt {
                 target: a.target.clone(),
                 op: None,
                 value: Expr::Binary(juxc_ast::BinaryExpr {
-                    op: a.op.unwrap(),
+                    op,
                     left: Box::new(a.target.clone()),
                     right: Box::new(a.value.clone()),
                     span: a.span,
@@ -3077,8 +3078,8 @@ impl RustEmitter {
                 // on a weak ref has no meaning — tycheck never produces one).
                 // The RHS is computed into a temp first so any borrow it takes
                 // is released before the `borrow_mut()` for the write.
-                if a.op.is_none() {
-                    if self
+                if a.op.is_none()
+                    && self
                         .wrapper_weak_field_target(&tf.object, &tf.field.text)
                         .is_some()
                     {
@@ -3104,7 +3105,6 @@ impl RustEmitter {
                         self.w.push_str(" = __jux_v; }\n");
                         return;
                     }
-                }
                 // Walk the `__parent` chain to the slot that actually
                 // declares the field — inherited-field writes
                 // (`child.parentField = v`) land deeper in the inner
@@ -3638,7 +3638,7 @@ impl RustEmitter {
             match_simple_not_null_check(&if_stmt.condition).map(|s| s.to_string());
         let was_nullable = cast_name
             .as_ref()
-            .map_or(false, |n| self.nullable_locals.contains(n));
+            .is_some_and(|n| self.nullable_locals.contains(n));
 
         // Type-test smart-cast: `if (x => Dog d) { … }` lowers to
         // `if let Some(d) = x.__jux_as_Dog() { … }` — `d` is a fresh `Dog`

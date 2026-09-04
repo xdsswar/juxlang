@@ -149,10 +149,8 @@ impl crate::RustEmitter {
 /// for anything else. Used by the annotation lowering to pull
 /// `message = "…"` and similar string-arg shapes.
 fn string_literal_text(expr: &juxc_ast::Expr) -> Option<String> {
-    if let juxc_ast::Expr::Literal(lit) = expr {
-        if let juxc_ast::Literal::String(s) = lit {
-            return Some(s.clone());
-        }
+    if let juxc_ast::Expr::Literal(juxc_ast::Literal::String(s)) = expr {
+        return Some(s.clone());
     }
     None
 }

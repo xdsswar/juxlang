@@ -106,7 +106,7 @@ pub(crate) fn computed_prop_deps(class_decl: &ClassDecl, computed: &PropertyDecl
 /// Record `name` as a dependency when it names a settable observable
 /// property (dedup-preserving order).
 fn note_dep(name: &str, settable: &[&str], out: &mut Vec<String>) {
-    if settable.iter().any(|s| *s == name) && !out.iter().any(|d| d == name) {
+    if settable.contains(&name) && !out.iter().any(|d| d == name) {
         out.push(name.to_string());
     }
 }

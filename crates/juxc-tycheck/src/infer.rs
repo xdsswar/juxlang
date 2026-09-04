@@ -1106,15 +1106,15 @@ fn infer_stdlib_method(
             // result type.
             "map" => Some(Ty::Array {
                 element: Box::new(Ty::Unknown),
-                kind: kind.clone(),
+                kind: *kind,
             }),
             "filter" => Some(Ty::Array {
                 element: (*element).clone(),
-                kind: kind.clone(),
+                kind: *kind,
             }),
             "clone" => Some(Ty::Array {
                 element: (*element).clone(),
-                kind: kind.clone(),
+                kind: *kind,
             }),
             _ => None,
         },
@@ -1591,13 +1591,12 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     // String concatenation is symmetric (`"v" + n` AND `n + "v"` are
     // both String, like Java) — the left-type rule below would call
     // `int + String` an int.
-    if matches!(b.op, BinaryOp::Add) {
-        if matches!(left_ty, Ty::String)
-            || matches!(infer_expr(&b.right, env, symbols), Ty::String)
+    if matches!(b.op, BinaryOp::Add)
+        && (matches!(left_ty, Ty::String)
+            || matches!(infer_expr(&b.right, env, symbols), Ty::String))
         {
             return Ty::String;
         }
-    }
     match b.op {
         // `<=>` (§A.4 level 11) always yields int: -1 / 0 / +1.
         // (A user `operator<=>` was already consulted above via the
@@ -2004,7 +2003,7 @@ mod tests {
 
     /// Helper: return the initializer expression of the first VarDecl
     /// found in `block`.
-    fn first_var_init<'a>(block: &'a Block) -> &'a Expr {
+    fn first_var_init(block: &Block) -> &Expr {
         for stmt in &block.statements {
             if let Stmt::VarDecl(v) = stmt {
                 if let Some(init) = &v.init {
