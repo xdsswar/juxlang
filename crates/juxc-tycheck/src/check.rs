@@ -6544,21 +6544,6 @@ impl<'a> Checker<'a> {
         subst_params.extend(method_generic_params.iter().cloned());
     }
 
-    /// Select a constructor overload by **argument count** (§7.3.1):
-    /// the first constructor whose acceptable-count range
-    /// `[required ..= max]` covers `arg_count`. Used by
-    /// [`Self::select_ctor_typed`] as the fast path and kept for
-    /// callers without argument expressions.
-    fn select_ctor_by_count(
-        ctors: &[crate::symbol_table::ConstructorSig],
-        arg_count: usize,
-    ) -> Option<usize> {
-        ctors.iter().position(|c| {
-            let (lo, hi) = crate::symbol_table::ctor_arity_range(&c.params);
-            arg_count >= lo && hi.map_or(true, |h| arg_count <= h)
-        })
-    }
-
     /// Constructor-overload pick, count THEN types (§T.3 applied to
     /// §7.3.1 — S19): when several constructors accept the call's
     /// argument count, score each against the inferred argument types

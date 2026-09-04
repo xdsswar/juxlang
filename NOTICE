@@ -1,0 +1,24 @@
+Jux
+Copyright 2019-2026 XDSSWAR, XTREME SOFTWARE SOLUTIONS
+
+This product includes software developed by XDSSWAR
+(https://github.com/xdsswar/juxlang).
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file
+in the root of this repository for the full license text.
+
+--------------------------------------------------------------------
+
+Name and branding
+
+The Apache-2.0 grant above covers the source code in this repository.
+It is not a grant of trademark rights: the "Jux" name, the language
+design and direction, and the project logos and icons remain the
+property of XDSSWAR / XTREME SOFTWARE SOLUTIONS.
+
+You may freely use, modify, distribute and build on this code under
+Apache-2.0, including in commercial products. Please do not use the
+"Jux" name or the project logos in a way that implies your fork or
+derivative is the official Jux project, or that it is endorsed by it.
+Naming a fork "Jux" is discouraged; saying it is "based on Jux" or
+"compatible with Jux" is welcome.
