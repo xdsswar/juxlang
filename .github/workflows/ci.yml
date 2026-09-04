@@ -1,0 +1,72 @@
+# Build and test Jux on every platform it claims to support.
+#
+# Until this existed, nothing ran the 1100+ tests in this repo automatically and
+# the compiler had only ever been built on Windows -- so "cross-platform" was an
+# intention, not a fact. Keep the matrix honest: if a platform is listed in the
+# README, it belongs here.
+name: CI
+
+on:
+  push:
+    branches: [master, refine]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch makes the in-flight run irrelevant.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Backtraces cost nothing here and turn an opaque CI panic into a fixable one.
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # The end-to-end suite shells out to a real `cargo build` per example, so it
+    # is inherently slow -- but a hang should still not burn a whole hour.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the channel and components; installing through
+      # rustup here just makes the pin take effect on a clean runner.
+      - name: Install the pinned toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Build
+        run: cargo build --workspace --release
+
+      - name: Test
+        run: cargo test --workspace --release
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+      # Not yet `-D warnings`: the existing lint backlog is style-level and is
+      # being cleared separately. Failing the build on it today would block every
+      # PR for reasons unrelated to that PR.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --release
