@@ -254,8 +254,15 @@ impl RustEmitter {
         if wrapper {
             self.w.push_str("write!(f, \"");
             self.w.push_str(class_name);
-            self.w
-                .push_str("@{:p}\", std::rc::Rc::as_ptr(&self.0))\n");
+            // Both handles expose the address of the shared cell; the atomic
+            // one does it as an inherent method rather than `Rc`'s associated fn.
+            if self.sync_classes.contains(class_name) {
+                self.w.push_str("@{:p}\", self.0.as_ptr())
+");
+            } else {
+                self.w.push_str("@{:p}\", std::rc::Rc::as_ptr(&self.0))
+");
+            }
         } else {
             self.w.push_str("write!(f, \"");
             self.w.push_str(class_name);

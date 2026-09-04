@@ -4971,6 +4971,17 @@ impl<'a> Checker<'a> {
                     _ => false,
                 }
             }
+            /// The bare class name a capture's type names, peeling `T?` / `T[]`.
+            fn object_class_name(ty: &Ty) -> Option<String> {
+                match ty {
+                    Ty::User { name, .. } => {
+                        Some(name.rsplit('.').next().unwrap_or(name).to_string())
+                    }
+                    Ty::Nullable(inner) => object_class_name(inner),
+                    Ty::Array { element, .. } => object_class_name(element),
+                    _ => None,
+                }
+            }
             // Runtime handles (Channel, Task) are Arc-backed and
             // Send — they exist to cross task boundaries.
             if self
@@ -4981,16 +4992,21 @@ impl<'a> Checker<'a> {
             {
                 continue;
             }
-            if self.env.lookup(&name).map(is_object_ty).unwrap_or(false) {
+            let Some(ty) = self.env.lookup(&name) else { continue };
+            if !is_object_ty(ty) {
+                continue;
+            }
+            // §18.2: a class whose refcount can be made atomic IS transferable —
+            // the backend's `worker` pass upgrades it instead of refusing. Only
+            // a class holding something that cannot come along is an error, and
+            // the message names that member.
+            let Some(class_bare) = object_class_name(ty) else { continue };
+            if let Some(why) = self.symbols.worker_share_blocker(&class_bare) {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0702_ObjectCapturedBySpawn,
                         format!(
-                            "`{name}` is a class object captured by a `Worker.spawn` \
-                             closure — in Phase 1, objects are `Rc`-backed shared \
-                             references (`!Send`), so sharing one across threads is not \
-                             yet supported; for now pass primitive/String data in and \
-                             return results out",
+                            "`{name}` cannot be captured by a `Worker.spawn` closure: {why}. A class whose members are all shareable is upgraded to an atomic handle automatically; move the unshareable member out, or pass data in and return results out",
                         ),
                     )
                     .with_span(span),
@@ -10249,10 +10265,10 @@ mod tests {
         );
     }
 
-    /// A class object captured by a `Worker.spawn` closure → E0702
-    /// (Rc-backed objects are !Send; rustc E0277 would leak).
+    /// A class whose members are all shareable may cross a worker boundary —
+    /// §18.2 upgrades its refcount to an atomic one rather than refusing.
     #[test]
-    fn object_captured_by_spawn_emits_e0702() {
+    fn shareable_object_captured_by_spawn_is_accepted() {
         let d = run(
             r#"
             public class Counter { public int n; public Counter() { this.n = 0; } }
@@ -10263,8 +10279,39 @@ mod tests {
             "#,
         );
         assert!(
+            !has(&d, code::Code::E0702_ObjectCapturedBySpawn),
+            "a shareable class should cross a worker boundary: {d:?}",
+        );
+    }
+
+    /// A class holding a single-threaded shared reference cannot come along,
+    /// and the diagnostic names the member that blocks it.
+    #[test]
+    fn unshareable_object_captured_by_spawn_emits_e0702() {
+        let d = run(
+            r#"
+            public interface Sink { void write(String s); }
+            public class Service {
+                private Sink out;
+                public Service(Sink out) { this.out = out; }
+                public void go() { this.out.write("x"); }
+            }
+            public class Logger implements Sink {
+                public void write(String s) { print(s); }
+            }
+            public void main() {
+                var svc = new Service(new Logger());
+                var t = Worker.spawn(() -> { svc.go(); return 1; });
+            }
+            "#,
+        );
+        assert!(
             has(&d, code::Code::E0702_ObjectCapturedBySpawn),
-            "expected E0702 for object capture in spawn: {d:?}",
+            "expected E0702 for an unshareable capture: {d:?}",
+        );
+        assert!(
+            d.iter().any(|x| x.message.contains("Service.out")),
+            "the diagnostic should name the blocking member: {d:?}",
         );
     }
 

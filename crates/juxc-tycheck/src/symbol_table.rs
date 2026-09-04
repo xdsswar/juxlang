@@ -304,6 +304,52 @@ impl SymbolTable {
     /// A 64-step recursion cap guards against cycles the build pass
     /// somehow missed (today the build pass doesn't check for cycles at
     /// all — class hierarchies trust the resolver).
+    /// Why class `class_name`'s refcount cannot be made **atomic**, or `None`
+    /// when it can.
+    ///
+    /// `JUX-ASYNC-ADDENDUM.md` §18.2 lists "`class` types whose refcount can be
+    /// made atomic" among the transferable types, so a class captured by a
+    /// `Worker.spawn` closure is upgraded to an `Arc<Mutex<…>>` handle rather
+    /// than refused. This is the exception list: a member that is itself a
+    /// single-threaded shared reference cannot come along, and the returned
+    /// message names it so the diagnostic can say what is in the way.
+    ///
+    /// Shared by the check that reports the capture and the backend pass that
+    /// performs the upgrade, so the two can never disagree about which classes
+    /// are shareable.
+    pub fn worker_share_blocker(&self, class_name: &str) -> Option<String> {
+        let (fqn, class) = self.resolve_class(class_name)?;
+        let bare = fqn.rsplit('.').next().unwrap_or(fqn);
+        if !class.properties.is_empty() {
+            return Some(format!(
+                "`{bare}` has an observable property, and a listener list is not                  shareable across threads",
+            ));
+        }
+        // Deterministic: `fields` is a map, so report the first offender by
+        // name rather than by hash order.
+        let mut fields: Vec<(&String, &FieldSig)> = class.fields.iter().collect();
+        fields.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, f) in fields {
+            let head = f.ty.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+            let why = if f.is_weak {
+                "a weak reference"
+            } else if f.ty.fn_shape.is_some() {
+                "a function value"
+            } else if self.interfaces.contains_key(head)
+                || self
+                    .interfaces
+                    .keys()
+                    .any(|k| k.rsplit('.').next().unwrap_or(k) == head)
+            {
+                "an interface handle, which is a single-threaded shared reference"
+            } else {
+                continue;
+            };
+            return Some(format!("`{bare}.{name}` holds {why}"));
+        }
+        None
+    }
+
     /// Resolve a class by **exact FQN key** or by a unique bare-name suffix.
     /// The two spellings reach the table from different places (an inferred
     /// `Ty::User` carries the FQN, source text carries the bare name), and every

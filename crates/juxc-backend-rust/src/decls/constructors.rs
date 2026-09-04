@@ -773,7 +773,9 @@ impl RustEmitter {
         // interior-mutable rep, plain `Rc::new(..)` for read-only-shared `Rc`, or
         // `Box::new(..)` for the unique-owner `Box` rep.
         let (wrap_open, wrap_close): (&str, &str) =
-            if self.box_classes.contains(&class_decl.name.text) {
+            if self.sync_classes.contains(&class_decl.name.text) {
+                ("crate::JuxSync::new(", ")")
+            } else if self.box_classes.contains(&class_decl.name.text) {
                 ("std::boxed::Box::new(", ")")
             } else if self.refcell_classes.contains(&class_decl.name.text) {
                 ("std::rc::Rc::new(std::cell::RefCell::new(", "))")
@@ -1361,7 +1363,9 @@ impl RustEmitter {
         self.w.line("pub fn new() -> Self {");
         self.w.indent_inc();
         self.emit_static_init_trigger();
-        if self.box_classes.contains(&class_decl.name.text) {
+        if self.sync_classes.contains(&class_decl.name.text) {
+            self.w.line("Self(crate::JuxSync::new(Self::new_inner()))");
+        } else if self.box_classes.contains(&class_decl.name.text) {
             self.w.line("Self(std::boxed::Box::new(Self::new_inner()))");
         } else if self.refcell_classes.contains(&class_decl.name.text) {
             self.w.line("Self(std::rc::Rc::new(std::cell::RefCell::new(Self::new_inner())))");

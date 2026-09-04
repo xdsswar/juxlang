@@ -1,0 +1,69 @@
+// A shared, mutable OBJECT across worker threads.
+//
+// JUX-ASYNC-ADDENDUM §18.2 lists among the transferable types "class types
+// whose refcount can be made atomic; the compiler upgrades the refcount
+// automatically when an instance crosses a worker boundary". That upgrade is
+// what this program relies on: `Registry` and the `Stats` it reaches carry an
+// atomic handle, so three workers pounding the same object see one object, not
+// three copies. Classes that never cross a boundary keep the cheaper
+// single-threaded handle, so nothing else in a program pays for this.
+//
+// The atomicity guarantee is Java's, and stops where Java's does: ONE mutating
+// call on a shared object is atomic, a read-then-write spread across statements
+// (`this.n = this.n + 1`) is not, and races the same way it would in Java.
+// Use the §18.3 synchronization types when you need more.
+
+import rust.std.*;
+
+public class Stats {
+    private Vec<int> seen;
+    public Stats() { this.seen = new Vec<int>(); }
+    public void record() { this.seen.push(1); }
+    public int total() { return this.seen.len(); }
+}
+
+public class Registry {
+    private Stats stats;
+    private Vec<String> log;
+    public Registry(Stats stats) {
+        this.stats = stats;
+        this.log = new Vec<String>();
+    }
+    public void handle(String req) {
+        this.stats.record();
+        this.log.push(req);
+    }
+    public int count() { return this.log.len(); }
+    public int recorded() { return this.stats.total(); }
+}
+
+public int hammer(Registry r, String tag, int n) {
+    int i = 0;
+    while (i < n) {
+        r.handle(tag);
+        i = i + 1;
+    }
+    return n;
+}
+
+public async int run() {
+    Stats s = new Stats();
+    Registry r = new Registry(s);
+    var a = Worker.spawn(() -> hammer(r, "a", 500));
+    var b = Worker.spawn(() -> hammer(r, "b", 500));
+    var c = Worker.spawn(() -> hammer(r, "c", 500));
+    await a;
+    await b;
+    await c;
+    // Every worker's writes are visible here, and to the `Stats` the registry
+    // reaches through a field — the upgrade follows the object graph.
+    print(r.count());
+    print(r.recorded());
+    // The caller's own binding still names the same object the workers used.
+    print(s.total());
+    return r.count();
+}
+
+public void main() {
+    block_on(run());
+}
