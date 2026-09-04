@@ -204,7 +204,7 @@ The borrow checker treats wildcards as opaque: a `List<? extends Animal>` expose
 > Supported routes for Phase 1: dispatch through a *generic interface*
 > (`interface Container<T>` — the fully working path), or use a **non-generic**
 > base class. A *non-generic* base with generic *subclasses* is fine; only a
-> generic *base* is deferred. Tracked in `jux-gaps.md` (N5).
+> generic *base* is deferred. Tracked in `docs/internal/jux-gaps.md` (N5).
 
 ### 6.9.7. Sealed Hierarchies Give Exact Analysis
 

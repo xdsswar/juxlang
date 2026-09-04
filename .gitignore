@@ -1,44 +1,54 @@
-/target
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+# Every `target/` at any depth: the workspace's own, and the one each example
+# and generated Rust crate creates next to itself. This one rule replaces the
+# ~20 hand-added per-example paths that used to live here -- a new example
+# should never require a new ignore entry.
+target/
 Cargo.lock.bak
 *.rs.bk
+
+# Compiler-generated foreign-crate stub caches (`rust.<crate>` deps).
+# Regenerated on build; never checked in.
+.jux-stubs/
+
+# Throwaway binaries some workflows drop at the repo root. The real build
+# output is target/release/.
+/juxc.exe
+/jux.exe
+
+# ---------------------------------------------------------------------------
+# Editor / OS
+# ---------------------------------------------------------------------------
 .idea/
 .vscode/
 *.swp
+*.stackdump
+
+# ---------------------------------------------------------------------------
+# Local working files (not part of the project)
+# ---------------------------------------------------------------------------
+# AI-tooling and scratch notes stay out of the published tree.
 /.claude/
-/examples/target/
-/examples/multifile/target/
-/examples/showcase/target/
-/juxc.exe
-/jux.exe
-/classes-rules.md
-/examples/stress_shop/target/.rust-build/target/
-/examples/stress_bank/target/
-/stderr.txt
-/stdout.txt
-/examples/stress_demo/target/
-/*/target/*
-/examples/stress_shop/target/
-/examples/_stress_async_advanced/target/
-/examples/_stress_async/target/
-/examples/_stress_async_parallel/target/
-/examples/_worker_smoke/target/
-/examples/_stress_workers/target/
-/examples/_sealed/target/
-/examples/_seal_pat/target/
-*/target
-/*/target
-/examples/*/target/
-# Generated foreign-crate stub cache (`rust.<crate>` deps) — regenerated on build.
-.jux-stubs/
-/ide/intellij-plugin/gradle/wrapper/gradle-wrapper.properties
-/ide/intellij-plugin/gradle/
-/ref-only/
-_bugtest/
-/graphify-out/
 /CLAUDE.md
 /next-session.md
-/crm.html
 /optimizations.md
-/ide/intellij-plugin/cli-support-request.md
+/classes-rules.md
+/crm.html
+/out.txt
+/stdout.txt
+/stderr.txt
+/graphify-out/
+/ref-only/
+_bugtest/
+/tmp_bughunt/
+
+# Requests exchanged with the IDE-plugin work; local coordination, not product.
 /ide/request.md
 /ide/bug-request-generics.md
+/ide/intellij-plugin/cli-support-request.md
+
+# The Gradle wrapper itself IS checked in (INSTALL.md tells users to run
+# `./gradlew buildPlugin`, which needs it) -- only Gradle's own caches are not.
+/ide/intellij-plugin/.gradle/
