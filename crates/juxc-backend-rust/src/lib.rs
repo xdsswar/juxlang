@@ -3696,6 +3696,17 @@ impl RustEmitter {
         w.push_str("#![allow(non_camel_case_types)]\n");
         w.push_str("#![allow(non_upper_case_globals)]\n");
         w.push_str("#![allow(clippy::all)]\n\n");
+        // The runtime prelude lives in its own MODULE, re-exported at the crate
+        // root. Emitted user classes land in the crate root too, so a program with
+        // a class named `Vec`, `String`, `Option`, `Clone` or `Sized` would
+        // otherwise shadow the very std names this boilerplate is written against
+        // — a user interface called `Sized` turned `T: ?Sized` into "bound
+        // modifier `?` can only be applied to `Sized`". Inside a module, crate-root
+        // items are not in scope, so the prelude always resolves against std, and
+        // the `pub use` keeps every helper reachable under the bare name emitted
+        // user code uses.
+        w.push_str("pub mod __jux_rt {
+");
         // Prelude: ONE universal value formatter for every interpolation /
         // `print(...)` / string-concat argument. Jux's `$"…${expr}"` needs each
         // value rendered to text, but Rust splits that across two traits: most
@@ -3811,7 +3822,7 @@ impl RustEmitter {
         // weak ref dies and the property prunes it on next fire).
         // INLINE lambdas attach strongly — nothing else holds them,
         // so a weak attach would be dead on arrival.
-        w.push_str("enum JuxObserver<F: ?Sized> {\n");
+        w.push_str("pub enum JuxObserver<F: ?Sized> {\n");
         w.push_str("    Weak(std::rc::Weak<F>),\n");
         w.push_str("    Strong(std::rc::Rc<F>),\n");
         w.push_str("    // A Strong ADAPTER whose real observer lives elsewhere\n");
@@ -3821,7 +3832,7 @@ impl RustEmitter {
         w.push_str("    StrongGuarded(std::rc::Rc<F>, std::rc::Rc<std::cell::Cell<bool>>),\n");
         w.push_str("}\n");
         w.push_str("impl<F: ?Sized> JuxObserver<F> {\n");
-        w.push_str("    fn upgrade(&self) -> Option<std::rc::Rc<F>> {\n");
+        w.push_str("    pub fn upgrade(&self) -> Option<std::rc::Rc<F>> {\n");
         w.push_str("        match self {\n");
         w.push_str("            JuxObserver::Weak(w) => w.upgrade(),\n");
         w.push_str("            JuxObserver::Strong(s) => Some(s.clone()),\n");
@@ -3830,7 +3841,7 @@ impl RustEmitter {
         w.push_str("            }\n");
         w.push_str("        }\n");
         w.push_str("    }\n");
-        w.push_str("    fn is_for(&self, target: &std::rc::Rc<F>) -> bool {\n");
+        w.push_str("    pub fn is_for(&self, target: &std::rc::Rc<F>) -> bool {\n");
         w.push_str("        self.upgrade().map_or(false, |f| std::rc::Rc::ptr_eq(&f, target))\n");
         w.push_str("    }\n");
         w.push_str("}\n");
@@ -3854,7 +3865,7 @@ impl RustEmitter {
         // `MemoryOrder` enum onto Rust's `atomic::Ordering` for the
         // explicit-order overloads of `AtomicInt`/`AtomicLong`.
         // Always emitted (dead_code-allowed) like the other helpers.
-        w.push_str("fn __jux_order(o: crate::jux::std::concurrent::MemoryOrder) -> std::sync::atomic::Ordering {\n");
+        w.push_str("pub fn __jux_order(o: crate::jux::std::concurrent::MemoryOrder) -> std::sync::atomic::Ordering {\n");
         w.push_str("    match o {\n");
         w.push_str("        crate::jux::std::concurrent::MemoryOrder::Relaxed => std::sync::atomic::Ordering::Relaxed,\n");
         w.push_str("        crate::jux::std::concurrent::MemoryOrder::Acquire => std::sync::atomic::Ordering::Acquire,\n");
@@ -3871,7 +3882,7 @@ impl RustEmitter {
         // policy: panic in debug, wrap in release — same as `+`/`-`/`*`.
         // Free fns wrap the trait so call sites emit
         // `crate::__jux_idiv(a, b)` with no trait import needed.
-        w.push_str("trait JuxIntDiv {\n");
+        w.push_str("pub trait JuxIntDiv {\n");
         w.push_str("    fn jux_div(self, rhs: Self) -> Self;\n");
         w.push_str("    fn jux_rem(self, rhs: Self) -> Self;\n");
         w.push_str("}\n");
@@ -3894,8 +3905,8 @@ impl RustEmitter {
         w.push_str("    )*};\n");
         w.push_str("}\n");
         w.push_str("jux_int_div_impl!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);\n");
-        w.push_str("fn __jux_idiv<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_div(b) }\n");
-        w.push_str("fn __jux_irem<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_rem(b) }\n\n");
+        w.push_str("pub fn __jux_idiv<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_div(b) }\n");
+        w.push_str("pub fn __jux_irem<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_rem(b) }\n\n");
         // Async-runtime helper: `__jux_yield_now()` returns a one-
         // shot yielding Future. On first poll it registers a
         // wake-up and returns `Poll::Pending`; on second poll it
@@ -3911,7 +3922,7 @@ impl RustEmitter {
         // runtime cost. Inlining is left to rustc — the body is
         // small and the call site is hot in cooperative
         // workloads.
-        w.push_str("struct __JuxYieldNow(bool);\n");
+        w.push_str("pub struct __JuxYieldNow(bool);\n");
         w.push_str("impl std::future::Future for __JuxYieldNow {\n");
         w.push_str(
             "    type Output = ();\n",
@@ -3928,7 +3939,7 @@ impl RustEmitter {
         w.push_str("        }\n");
         w.push_str("    }\n");
         w.push_str("}\n");
-        w.push_str("fn __jux_yield_now() -> __JuxYieldNow { __JuxYieldNow(false) }\n\n");
+        w.push_str("pub fn __jux_yield_now() -> __JuxYieldNow { __JuxYieldNow(false) }\n\n");
         // Task runtime — per JUX-ASYNC-ADDENDUM v2 §18.1.3/§18.1.4.
         // `spawn(f)` schedules the lambda's body on a global
         // ThreadPool and returns a `JuxTask<T>` handle immediately:
@@ -3944,13 +3955,13 @@ impl RustEmitter {
         // Spawned bodies run on pool threads, so captures must be
         // Send — tycheck's E0702 capture scan enforces the Jux-level
         // rule (no wrapper-class objects).
-        w.push_str("struct JuxTask<T>(Option<futures::future::RemoteHandle<T>>);\n");
+        w.push_str("pub struct JuxTask<T>(Option<futures::future::RemoteHandle<T>>);\n");
         w.push_str("impl<T: 'static> JuxTask<T> {\n");
         w.push_str("    #[allow(non_snake_case)]\n");
-        w.push_str("    fn blockingGet(mut self) -> T {\n");
+        w.push_str("    pub fn blockingGet(mut self) -> T {\n");
         w.push_str("        futures::executor::block_on(self.0.take().expect(\"task already consumed\"))\n");
         w.push_str("    }\n");
-        w.push_str("    fn cancel(mut self) {\n");
+        w.push_str("    pub fn cancel(mut self) {\n");
         w.push_str("        // Dropping the RemoteHandle cancels the remote\n");
         w.push_str("        // computation (the Drop impl would FORGET it).\n");
         w.push_str("        if let Some(h) = self.0.take() {\n");
@@ -3976,9 +3987,9 @@ impl RustEmitter {
         w.push_str("        std::pin::Pin::new(h).poll(cx)\n");
         w.push_str("    }\n");
         w.push_str("}\n");
-        w.push_str("static __JUX_TASK_POOL: std::sync::LazyLock<futures::executor::ThreadPool> =\n");
+        w.push_str("pub static __JUX_TASK_POOL: std::sync::LazyLock<futures::executor::ThreadPool> =\n");
         w.push_str("    std::sync::LazyLock::new(|| futures::executor::ThreadPool::new().expect(\"task pool\"));\n");
-        w.push_str("fn __jux_spawn<T: Send + 'static>(\n");
+        w.push_str("pub fn __jux_spawn<T: Send + 'static>(\n");
         w.push_str("    fut: impl std::future::Future<Output = T> + Send + 'static,\n");
         w.push_str(") -> JuxTask<T> {\n");
         w.push_str("    JuxTask(Some(\n");
@@ -3991,11 +4002,11 @@ impl RustEmitter {
         // when empty and resolves `null` once closed and drained.
         // The handle is Arc-shared and Clone, so it crosses task
         // boundaries (the spawn emission clone-rebinds captures).
-        w.push_str("struct JuxChannelInner<T> {\n");
+        w.push_str("pub struct JuxChannelInner<T> {\n");
         w.push_str("    tx: std::sync::Mutex<Option<futures::channel::mpsc::Sender<T>>>,\n");
         w.push_str("    rx: futures::lock::Mutex<futures::channel::mpsc::Receiver<T>>,\n");
         w.push_str("}\n");
-        w.push_str("struct JuxChannel<T> {\n");
+        w.push_str("pub struct JuxChannel<T> {\n");
         w.push_str("    inner: std::sync::Arc<JuxChannelInner<T>>,\n");
         w.push_str("}\n");
         w.push_str("impl<T> Clone for JuxChannel<T> {\n");
@@ -4004,7 +4015,7 @@ impl RustEmitter {
         w.push_str("    }\n");
         w.push_str("}\n");
         w.push_str("impl<T> JuxChannel<T> {\n");
-        w.push_str("    fn new(capacity: isize) -> Self {\n");
+        w.push_str("    pub fn new(capacity: isize) -> Self {\n");
         w.push_str("        let (tx, rx) = futures::channel::mpsc::channel(capacity.max(1) as usize);\n");
         w.push_str("        JuxChannel {\n");
         w.push_str("            inner: std::sync::Arc::new(JuxChannelInner {\n");
@@ -4013,17 +4024,17 @@ impl RustEmitter {
         w.push_str("            }),\n");
         w.push_str("        }\n");
         w.push_str("    }\n");
-        w.push_str("    async fn send(&self, v: T) {\n");
+        w.push_str("    pub async fn send(&self, v: T) {\n");
         w.push_str("        let tx = self.inner.tx.lock().unwrap().clone();\n");
         w.push_str("        if let Some(mut tx) = tx {\n");
         w.push_str("            let _ = futures::sink::SinkExt::send(&mut tx, v).await;\n");
         w.push_str("        }\n");
         w.push_str("    }\n");
-        w.push_str("    async fn receive(&self) -> Option<T> {\n");
+        w.push_str("    pub async fn receive(&self) -> Option<T> {\n");
         w.push_str("        let mut rx = self.inner.rx.lock().await;\n");
         w.push_str("        futures::stream::StreamExt::next(&mut *rx).await\n");
         w.push_str("    }\n");
-        w.push_str("    fn close(&self) {\n");
+        w.push_str("    pub fn close(&self) {\n");
         w.push_str("        *self.inner.tx.lock().unwrap() = None;\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
@@ -4036,7 +4047,7 @@ impl RustEmitter {
         // leaves `empty()` behind, so the elements flow through the
         // returned stream only (§18.6.5 — a stream is a one-shot
         // sequence and the combinator is its new front).
-        w.push_str("struct JuxStream<T> {\n");
+        w.push_str("pub struct JuxStream<T> {\n");
         w.push_str("    inner: std::rc::Rc<std::cell::RefCell<futures::stream::LocalBoxStream<'static, T>>>,\n");
         w.push_str("}\n");
         w.push_str("impl<T> Clone for JuxStream<T> {\n");
@@ -4045,57 +4056,57 @@ impl RustEmitter {
         w.push_str("    }\n");
         w.push_str("}\n");
         w.push_str("impl<T: Clone + 'static> JuxStream<T> {\n");
-        w.push_str("    fn from_stream(s: futures::stream::LocalBoxStream<'static, T>) -> Self {\n");
+        w.push_str("    pub fn from_stream(s: futures::stream::LocalBoxStream<'static, T>) -> Self {\n");
         w.push_str("        // `fuse` makes exhaustion idempotent (§18.6.2): every\n");
         w.push_str("        // `next()` after the first None resolves None instead of\n");
         w.push_str("        // re-polling the source (`unfold` panics if re-polled).\n");
         w.push_str("        let fused = ::std::boxed::Box::pin(futures::stream::StreamExt::fuse(s));\n");
         w.push_str("        JuxStream { inner: std::rc::Rc::new(std::cell::RefCell::new(fused)) }\n");
         w.push_str("    }\n");
-        w.push_str("    fn of(items: Vec<T>) -> Self {\n");
+        w.push_str("    pub fn of(items: Vec<T>) -> Self {\n");
         w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::iter(items)))\n");
         w.push_str("    }\n");
-        w.push_str("    fn from(items: Vec<T>) -> Self {\n");
+        w.push_str("    pub fn from(items: Vec<T>) -> Self {\n");
         w.push_str("        Self::of(items)\n");
         w.push_str("    }\n");
-        w.push_str("    fn generate(\n");
+        w.push_str("    pub fn generate(\n");
         w.push_str("        f: impl FnMut() -> futures::future::LocalBoxFuture<'static, Option<T>> + 'static,\n");
         w.push_str("    ) -> Self {\n");
         w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::unfold(f, |mut f| async move {\n");
         w.push_str("            f().await.map(|v| (v, f))\n");
         w.push_str("        })))\n");
         w.push_str("    }\n");
-        w.push_str("    async fn next(&self) -> Option<T> {\n");
+        w.push_str("    pub async fn next(&self) -> Option<T> {\n");
         w.push_str("        let mut s = self.inner.borrow_mut();\n");
         w.push_str("        futures::stream::StreamExt::next(&mut *s).await\n");
         w.push_str("    }\n");
-        w.push_str("    fn take_inner(&self) -> futures::stream::LocalBoxStream<'static, T> {\n");
+        w.push_str("    pub fn take_inner(&self) -> futures::stream::LocalBoxStream<'static, T> {\n");
         w.push_str("        std::mem::replace(\n");
         w.push_str("            &mut *self.inner.borrow_mut(),\n");
         w.push_str("            ::std::boxed::Box::pin(futures::stream::empty()),\n");
         w.push_str("        )\n");
         w.push_str("    }\n");
         w.push_str("    #[allow(non_snake_case)]\n");
-        w.push_str("    fn mapAsync<U: Clone + 'static>(&self, f: std::rc::Rc<dyn Fn(T) -> U>) -> JuxStream<U> {\n");
+        w.push_str("    pub fn mapAsync<U: Clone + 'static>(&self, f: std::rc::Rc<dyn Fn(T) -> U>) -> JuxStream<U> {\n");
         w.push_str("        JuxStream::from_stream(::std::boxed::Box::pin(futures::stream::StreamExt::map(\n");
         w.push_str("            self.take_inner(),\n");
         w.push_str("            move |v| f(v),\n");
         w.push_str("        )))\n");
         w.push_str("    }\n");
         w.push_str("    #[allow(non_snake_case)]\n");
-        w.push_str("    fn filterAsync(&self, f: std::rc::Rc<dyn Fn(T) -> bool>) -> JuxStream<T> {\n");
+        w.push_str("    pub fn filterAsync(&self, f: std::rc::Rc<dyn Fn(T) -> bool>) -> JuxStream<T> {\n");
         w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::StreamExt::filter(\n");
         w.push_str("            self.take_inner(),\n");
         w.push_str("            move |v: &T| futures::future::ready(f(v.clone())),\n");
         w.push_str("        )))\n");
         w.push_str("    }\n");
-        w.push_str("    fn take(&self, n: isize) -> JuxStream<T> {\n");
+        w.push_str("    pub fn take(&self, n: isize) -> JuxStream<T> {\n");
         w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::StreamExt::take(self.take_inner(), n.max(0) as usize)))\n");
         w.push_str("    }\n");
-        w.push_str("    fn skip(&self, n: isize) -> JuxStream<T> {\n");
+        w.push_str("    pub fn skip(&self, n: isize) -> JuxStream<T> {\n");
         w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::StreamExt::skip(self.take_inner(), n.max(0) as usize)))\n");
         w.push_str("    }\n");
-        w.push_str("    fn chain(&self, other: JuxStream<T>) -> JuxStream<T> {\n");
+        w.push_str("    pub fn chain(&self, other: JuxStream<T>) -> JuxStream<T> {\n");
         w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::StreamExt::chain(self.take_inner(), other.take_inner())))\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
@@ -4104,7 +4115,7 @@ impl RustEmitter {
         // protected value (`guard.value` reads/writes deref it) and
         // releases on scope exit. Holding a guard across an await is
         // the type's entire point.
-        w.push_str("struct JuxAsyncMutex<T> {\n");
+        w.push_str("pub struct JuxAsyncMutex<T> {\n");
         w.push_str("    inner: std::sync::Arc<futures::lock::Mutex<T>>,\n");
         w.push_str("}\n");
         w.push_str("impl<T> Clone for JuxAsyncMutex<T> {\n");
@@ -4113,10 +4124,10 @@ impl RustEmitter {
         w.push_str("    }\n");
         w.push_str("}\n");
         w.push_str("impl<T> JuxAsyncMutex<T> {\n");
-        w.push_str("    fn new(v: T) -> Self {\n");
+        w.push_str("    pub fn new(v: T) -> Self {\n");
         w.push_str("        JuxAsyncMutex { inner: std::sync::Arc::new(futures::lock::Mutex::new(v)) }\n");
         w.push_str("    }\n");
-        w.push_str("    async fn lock(&self) -> futures::lock::MutexGuard<'_, T> {\n");
+        w.push_str("    pub async fn lock(&self) -> futures::lock::MutexGuard<'_, T> {\n");
         w.push_str("        self.inner.lock().await\n");
         w.push_str("    }\n");
         w.push_str("}\n\n");
@@ -4178,11 +4189,16 @@ impl RustEmitter {
         // computation can panic only if the system clock is
         // before 1970, which we treat as "return 0" to keep the
         // helper total.
-        w.push_str("fn __jux_now_ms() -> i64 {\n");
+        w.push_str("pub fn __jux_now_ms() -> i64 {\n");
         w.push_str(
             "    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)\n",
         );
         w.push_str("}\n\n");
+        w.push_str("}
+");
+        w.push_str("pub use __jux_rt::*;
+
+");
         // Receiver-mutability discovery: every external (stub) method
         // carrying the bindgen `@MutSelf` marker mutates its receiver
         // (the real Rust signature is `&mut self`). Seeding the

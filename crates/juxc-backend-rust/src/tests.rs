@@ -4526,12 +4526,16 @@ fn package_wrapped_main_is_pub() {
     );
 }
 
-/// Without a `package` decl, emission is flat at the crate root —
-/// the historical behavior. No `pub mod`, no shim.
+/// Without a `package` decl, USER emission is flat at the crate root — the
+/// historical behavior. No per-package `pub mod`, no shim. (The runtime
+/// prelude has its own `__jux_rt` module, which is not a package module: it
+/// exists so a user class named `Vec` or `Sized` can't shadow the std names
+/// the boilerplate is written against.)
 #[test]
 fn no_package_keeps_flat_emission() {
     let rust = emit(r#"public void main() { print("hi"); }"#);
-    assert!(!rust.contains("pub mod"), "should be flat: {rust}");
+    let user = &rust[rust.find("pub use __jux_rt::*;").expect("runtime re-export")..];
+    assert!(!user.contains("pub mod"), "should be flat: {rust}");
     assert!(rust.contains("fn main()"), "main at root: {rust}");
 }
 

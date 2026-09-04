@@ -1,0 +1,26 @@
+// User types are free to take names the generated runtime is written against.
+// The runtime lives in its own module, so a class or interface called `Sized`,
+// `Clone`, `Option`, `Send` or `Task` shadows nothing it depends on.
+
+public interface Sized { int size(); }
+public interface Clone { String copyOf(); }
+public class Option { public int v; public Option(int v) { this.v = v; } }
+public class Send { public String go() { return "sent"; } }
+public class Task { public String label() { return "task"; } }
+
+public class Unit implements Sized, Clone {
+    @Override public int size() { return 1; }
+    @Override public String copyOf() { return "dup"; }
+}
+
+public void main() {
+    Option o = new Option(4);
+    print(o.v);
+    print(new Send().go());
+    print(new Task().label());
+    Sized s = new Unit();
+    print(s.size());
+    Clone c = new Unit();
+    print(c.copyOf());
+    print($"interp ${o.v}");
+}

@@ -470,9 +470,14 @@ impl RustEmitter {
                     if i > 0 {
                         self.w.push_str(", ");
                     }
-                    if let juxc_ast::GenericArg::Type(t) = arg {
-                        self.emit_type_as_rust(t);
-                    }
+                    // Through the ELEMENT emitter, not a bare recursion: an
+                    // element is a storage slot, so an interface or a
+                    // polymorphic base in one has to be its `Rc<dyn …>` handle.
+                    // Recursing raw made the answer depend on the ambient
+                    // value-position flag, so a `HashMap<String, Vec<Node>>`
+                    // declared slot and its `new` turbofish disagreed about the
+                    // element two levels down.
+                    self.emit_generic_arg_type_as_rust(arg);
                 }
                 self.w.push('>');
             }
