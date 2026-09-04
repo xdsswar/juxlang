@@ -288,6 +288,31 @@ impl RustEmitter {
             .cloned()
     }
 
+    /// The `__ovK` suffix a `super.<name>(…)` call targets, picked by argument
+    /// count within the enclosing class's merged overload group.
+    ///
+    /// A `super` receiver carries no class type for tycheck's type-based pick,
+    /// so this covers the case its `method_selections` map misses. `None` when
+    /// the name is not overloaded (member 0, plain name) or when the count does
+    /// not single out one member — the emitted name is then the plain one and
+    /// rustc reports the mismatch against a real signature.
+    fn super_overload_suffix(&self, name: &str, arg_count: usize) -> Option<String> {
+        let class = self.enclosing_class.as_deref()?;
+        let merged = self.symbols.merged_method_overloads(class, name);
+        if merged.len() < 2 {
+            return None;
+        }
+        let mut hits = merged
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.params.len() == arg_count);
+        match (hits.next(), hits.next()) {
+            (Some((0, _)), None) => None,
+            (Some((k, _)), None) => Some(format!("__ov{k}")),
+            _ => None,
+        }
+    }
+
     /// Emit a call expression. Special-cases the built-in `print` to
     /// `println!(…)`. Every other callee is emitted verbatim (the
     /// resolver guarantees the name exists).
@@ -340,6 +365,17 @@ impl RustEmitter {
                 self.w.push_str(&alias);
                 self.w.push_str(".__jux_super_");
                 self.w.push_str(&f.field.text);
+                // Which overload of the ancestor's method — the shims carry the
+                // same `__ovK` identity as the members themselves. Prefer
+                // tycheck's recorded pick; fall back to argument count when the
+                // super receiver gave it no class type to resolve against.
+                if let Some(sfx) = self
+                    .pending_method_suffix
+                    .take()
+                    .or_else(|| self.super_overload_suffix(&f.field.text, call.args.len()))
+                {
+                    self.w.push_str(&sfx);
+                }
                 if target_level > 0 {
                     self.w.push_str(&format!("__{target_level}"));
                 }

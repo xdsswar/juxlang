@@ -444,8 +444,6 @@ impl RustEmitter {
         }
         // `static { }` first-use initializer (§S.4.1), if any.
         self.emit_static_init_fn(class_decl);
-        let mut seen_names: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
         for method in &class_decl.methods {
             // Generic class: plain static methods are lifted to free functions
             // (`<Class>_<method>`) AFTER the impl — see
@@ -455,11 +453,13 @@ impl RustEmitter {
             if Self::generic_class_lifts_static(class_decl, method) {
                 continue;
             }
-            let occ = seen_names.entry(method.name.text.clone()).or_insert(0);
-            if *occ > 0 {
-                self.pending_decl_suffix = Some(format!("__ov{occ}"));
+            // Overload identity (§T.3) comes from the MERGED group, so an
+            // override of an inherited overload emits under the same
+            // `__ovK` name its parent's declaration did and a base-typed
+            // call reaches this body.
+            if let Some(k) = self.merged_overload_suffix(&class_decl.name.text, method) {
+                self.pending_decl_suffix = Some(k);
             }
-            *occ += 1;
             // P7: a STATIC observable property's setter gets the
             // observer fire bracket on the inline path too (instance
             // observable props force the wrapper path, but statics
@@ -496,10 +496,12 @@ impl RustEmitter {
         // `self.kind()` finds the parent's abstract stub instead
         // of the subclass override.
         if !class_decl.is_abstract {
-            let mut own_method_names: std::collections::HashSet<String> = class_decl
+            // Keyed by (name, parameter shape): with overloading, redeclaring
+            // `show(int)` must not also suppress the inherited `show()`.
+            let mut own_members: std::collections::HashSet<(String, String)> = class_decl
                 .methods
                 .iter()
-                .map(|m| m.name.text.clone())
+                .map(|m| (m.name.text.clone(), Self::member_shape_key(m)))
                 .collect();
             let mut cursor: Option<juxc_ast::TypeRef> = class_decl.extends.clone();
             while let Some(parent_ref) = cursor {
@@ -522,7 +524,8 @@ impl RustEmitter {
                 let parent_methods = parent.methods.clone();
                 let parent_extends = parent.extends.clone();
                 for m in &parent_methods {
-                    if own_method_names.contains(&m.name.text) {
+                    if own_members.contains(&(m.name.text.clone(), Self::member_shape_key(m)))
+                    {
                         continue; // overridden by this class (or a closer parent)
                     }
                     if m.body.is_none() {
@@ -537,7 +540,12 @@ impl RustEmitter {
                     {
                         continue;
                     }
-                    own_method_names.insert(m.name.text.clone());
+                    own_members.insert((m.name.text.clone(), Self::member_shape_key(m)));
+                    // Inherited member keeps the overload identity it had on the
+                    // ancestor, so a base-typed call still names it.
+                    if let Some(k) = self.merged_overload_suffix(&class_decl.name.text, m) {
+                        self.pending_decl_suffix = Some(k);
+                    }
                     self.emit_method(m);
                 }
                 cursor = parent_extends;
@@ -1040,19 +1048,19 @@ impl RustEmitter {
         }
         // `static { }` first-use initializer (§S.4.1), if any.
         self.emit_static_init_fn(class_decl);
-        let mut seen_names: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
         for method in &class_decl.methods {
             // Generic class: plain static methods lift to free functions after
             // the impl (see `emit_generic_class_static_fns`). Skip here.
             if Self::generic_class_lifts_static(class_decl, method) {
                 continue;
             }
-            let occ = seen_names.entry(method.name.text.clone()).or_insert(0);
-            if *occ > 0 {
-                self.pending_decl_suffix = Some(format!("__ov{occ}"));
+            // Overload identity (§T.3) comes from the MERGED group, so an
+            // override of an inherited overload emits under the same
+            // `__ovK` name its parent's declaration did and a base-typed
+            // call reaches this body.
+            if let Some(k) = self.merged_overload_suffix(&class_decl.name.text, method) {
+                self.pending_decl_suffix = Some(k);
             }
-            *occ += 1;
             // §P setter firing: a synthesized property setter
             // (`__set_<X>` for an observable property `X`) gets an
             // old/new capture around its body and a post-body observer
@@ -1317,10 +1325,13 @@ impl RustEmitter {
     /// (declared two ancestors up) emits
     /// `self.0.borrow().__parent.__parent.name`.
     fn emit_inherited_wrapper_methods(&mut self, class_decl: &juxc_ast::ClassDecl) {
-        let mut own_method_names: std::collections::HashSet<String> = class_decl
+        // Keyed by (name, parameter shape), not name alone: with overloading a
+        // subclass may override `show(int)` while still inheriting `show()`,
+        // and only the member it actually redeclares should be skipped.
+        let mut own_members: std::collections::HashSet<(String, String)> = class_decl
             .methods
             .iter()
-            .map(|m| m.name.text.clone())
+            .map(|m| (m.name.text.clone(), Self::member_shape_key(m)))
             .collect();
         let mut cursor: Option<juxc_ast::TypeRef> = class_decl.extends.clone();
         // **Generic-substitution accumulator (§CR.5.3).** When a child
@@ -1374,7 +1385,7 @@ impl RustEmitter {
             let parent_methods = parent.methods.clone();
             let parent_extends = parent.extends.clone();
             for m in &parent_methods {
-                if own_method_names.contains(&m.name.text) {
+                if own_members.contains(&(m.name.text.clone(), Self::member_shape_key(m))) {
                     continue; // overridden by a closer class
                 }
                 if m.body.is_none() {
@@ -1386,7 +1397,7 @@ impl RustEmitter {
                 {
                     continue; // statics aren't instance methods
                 }
-                own_method_names.insert(m.name.text.clone());
+                own_members.insert((m.name.text.clone(), Self::member_shape_key(m)));
                 // §P + inheritance (Java semantics): a copied
                 // `__set_<X>` of an ANCESTOR's observable property
                 // gets the same fire bracket the ancestor's own
@@ -1429,6 +1440,12 @@ impl RustEmitter {
                 // substitution to the copied method's signature so its
                 // return / param types read in the child's scope. No-op
                 // when `subst` is empty (non-generic parent).
+                // The copied body emits under THIS class's overload identity —
+                // the same merged index the ancestor's own declaration used, so
+                // the inherited member keeps its `__ovK` name.
+                if let Some(k) = self.merged_overload_suffix(&class_decl.name.text, m) {
+                    self.pending_decl_suffix = Some(k);
+                }
                 if subst.is_empty() {
                     self.emit_method(m);
                 } else {
@@ -1670,7 +1687,10 @@ impl RustEmitter {
     fn emit_super_shims(&mut self, class_decl: &juxc_ast::ClassDecl) {
         // Instance methods (with bodies) the class declares — each is a
         // potential `super.<m>()` target.
-        let overridden: std::collections::HashSet<String> = class_decl
+        // Keyed by (name, parameter shape): with overloading, overriding
+        // `tag(int)` needs a shim for the ancestor's `tag(int)` only — the
+        // ancestor's `tag()` is a different member with its own shim.
+        let overridden: std::collections::HashSet<(String, String)> = class_decl
             .methods
             .iter()
             .filter(|m| {
@@ -1680,7 +1700,7 @@ impl RustEmitter {
                         .iter()
                         .any(|mo| matches!(mo, juxc_ast::FnModifier::Static))
             })
-            .map(|m| m.name.text.clone())
+            .map(|m| (m.name.text.clone(), Self::member_shape_key(m)))
             .collect();
         if overridden.is_empty() {
             return;
@@ -1693,7 +1713,7 @@ impl RustEmitter {
         // shim body climbs to level `d + 1` (see `super_shim_depth`), so a 3+
         // level `super.<m>()` chain resolves grandparent→great-grandparent
         // instead of re-entering the same shim (infinite recursion).
-        let mut depth_by_method: std::collections::HashMap<String, usize> =
+        let mut depth_by_method: std::collections::HashMap<(String, String), usize> =
             std::collections::HashMap::new();
         let mut cursor: Option<juxc_ast::TypeRef> = class_decl.extends.clone();
         let mut subst: std::collections::HashMap<String, juxc_ast::TypeRef> =
@@ -1725,7 +1745,8 @@ impl RustEmitter {
                 }
             }
             for m in &parent.methods {
-                if !overridden.contains(&m.name.text) {
+                let member = (m.name.text.clone(), Self::member_shape_key(m));
+                if !overridden.contains(&member) {
                     continue;
                 }
                 if m.body.is_none()
@@ -1737,23 +1758,29 @@ impl RustEmitter {
                     // walking for a concrete body (the depth slot is unused).
                     continue;
                 }
-                let depth = *depth_by_method.get(&m.name.text).unwrap_or(&0);
+                let depth = *depth_by_method.get(&member).unwrap_or(&0);
                 let mut renamed = if subst.is_empty() {
                     m.clone()
                 } else {
                     substitute_fn_signature(m, &subst)
                 };
+                // Overloaded ancestors need one shim per MEMBER, so the shim
+                // name carries the same `__ovK` identity the member emits under
+                // — `super.tag()` and `super.tag(3)` must reach different bodies.
+                let ov = self
+                    .merged_overload_suffix(&class_decl.name.text, m)
+                    .unwrap_or_default();
                 let shim_name = if depth == 0 {
-                    format!("__jux_super_{}", m.name.text)
+                    format!("__jux_super_{}{}", m.name.text, ov)
                 } else {
-                    format!("__jux_super_{}__{}", m.name.text, depth)
+                    format!("__jux_super_{}{}__{}", m.name.text, ov, depth)
                 };
                 renamed.name = juxc_ast::Ident { text: shim_name, span: m.name.span };
                 let prev_depth = self.super_shim_depth;
                 self.super_shim_depth = Some(depth);
                 self.emit_method(&renamed);
                 self.super_shim_depth = prev_depth;
-                depth_by_method.insert(m.name.text.clone(), depth + 1);
+                depth_by_method.insert(member, depth + 1);
             }
             cursor = parent.extends.clone();
         }
@@ -2210,6 +2237,65 @@ impl RustEmitter {
         self.w.push('>');
     }
 
+    /// A method declaration's parameter-shape key — the identity that
+    /// distinguishes one overload from another (`show()` vs `show(int)`).
+    /// Textual, matching how the symbol table keys overload groups.
+    fn member_shape_key(m: &juxc_ast::FnDecl) -> String {
+        m.params
+            .iter()
+            .map(|p| {
+                let mut k = p
+                    .ty
+                    .name
+                    .segments
+                    .iter()
+                    .map(|x| x.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                if p.ty.nullable {
+                    k.push('?');
+                }
+                if p.ty.array_shape.is_some() {
+                    k.push_str("[]");
+                }
+                k
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// The `__ovK` suffix a method declaration emits under, or `None` for the
+    /// group's member 0 (which keeps the plain name).
+    ///
+    /// The index is the method's position in the class's MERGED overload group
+    /// — see [`juxc_tycheck::SymbolTable::merged_method_overloads`]. Using the
+    /// merged index rather than a per-class occurrence count is what lets a
+    /// subclass override one member of an inherited group: the override lands
+    /// on the same emitted name, so a call through the base reaches it.
+    fn merged_overload_suffix(
+        &self,
+        class_bare: &str,
+        method: &juxc_ast::FnDecl,
+    ) -> Option<String> {
+        let sig = self.lookup_class_by_bare_or_fqn(class_bare)?;
+        // Cheap exit for the overwhelmingly common case: the name is declared
+        // once in the whole chain, so it is member 0 under its plain name.
+        if !sig.method_overloads.contains_key(&method.name.text)
+            && self.symbols.merged_method_overloads(class_bare, &method.name.text).len() < 2
+        {
+            return None;
+        }
+        let param_types: Vec<juxc_ast::TypeRef> =
+            method.params.iter().map(|p| p.ty.clone()).collect();
+        match self
+            .symbols
+            .merged_overload_index(class_bare, &method.name.text, &param_types)
+        {
+            Some(0) | None => None,
+            Some(k) => Some(format!("__ov{k}")),
+        }
+    }
+
     /// The bare name of `class_bare`'s direct `extends` parent, if any.
     /// Prefers tycheck's resolved `extends_fqn` (cross-package safe), falling
     /// back to the source `extends` clause's last segment.
@@ -2248,28 +2334,6 @@ impl RustEmitter {
         false
     }
 
-    /// True if any strict ancestor of `class_bare` declares a method named
-    /// `method`. Used to decide which methods a class *introduces* (an
-    /// override re-declares an ancestor's method, so it belongs on the
-    /// introducing ancestor's `Kind` trait, not the override's).
-    fn ancestor_declares_method(&self, class_bare: &str, method: &str) -> bool {
-        let mut cursor = self.direct_parent_bare(class_bare);
-        let mut depth = 0usize;
-        while let Some(name) = cursor {
-            if depth > 64 {
-                return false;
-            }
-            if let Some(s) = self.lookup_class_by_bare_or_fqn(&name) {
-                if s.methods.contains_key(method) {
-                    return true;
-                }
-            }
-            cursor = self.direct_parent_bare(&name);
-            depth += 1;
-        }
-        false
-    }
-
     /// The **introduced virtual methods** of `class_bare` — every non-static
     /// instance method it declares that no ancestor declares. Java dispatches
     /// public, protected, internal AND package-private instance methods
@@ -2280,15 +2344,40 @@ impl RustEmitter {
         let Some(sig) = self.lookup_class_by_bare_or_fqn(class_bare) else {
             return Vec::new();
         };
-        let mut out: Vec<(String, MethodSig)> = sig
+        let parent = self.direct_parent_bare(class_bare);
+        // Every method NAME this class declares. Overloaded names appear in
+        // `method_overloads`; the rest only in `methods`.
+        let mut names: Vec<&String> = sig
             .methods
-            .iter()
-            .filter(|(_, m)| {
-                !m.is_static && !matches!(m.visibility, juxc_ast::Visibility::Private)
-            })
-            .filter(|(name, _)| !self.ancestor_declares_method(class_bare, name))
-            .map(|(n, m)| (n.clone(), m.clone()))
+            .keys()
+            .chain(sig.method_overloads.keys())
             .collect();
+        names.sort();
+        names.dedup();
+        let mut out: Vec<(String, MethodSig)> = Vec::new();
+        for name in names {
+            // The merge only ever replaces or appends, so the parent's group is
+            // a PREFIX of this class's: members at or past the parent's length
+            // are the ones this class introduces, and they belong on its trait.
+            // Anything below that index is an override of an inherited member,
+            // which already has a slot on the ancestor's trait.
+            let merged = self.symbols.merged_method_overloads(class_bare, name);
+            let inherited = parent
+                .as_deref()
+                .map(|p| self.symbols.merged_method_overloads(p, name).len())
+                .unwrap_or(0);
+            for (k, m) in merged.iter().enumerate().skip(inherited) {
+                if m.is_static || matches!(m.visibility, juxc_ast::Visibility::Private) {
+                    continue;
+                }
+                let emitted = if k == 0 {
+                    name.clone()
+                } else {
+                    format!("{name}__ov{k}")
+                };
+                out.push((emitted, m.clone()));
+            }
+        }
         out.sort_by(|a, b| a.0.cmp(&b.0));
         out
     }

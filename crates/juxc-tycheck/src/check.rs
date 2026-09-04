@@ -5544,7 +5544,7 @@ impl<'a> Checker<'a> {
                         ) {
                             Some((k, picked)) => {
                                 self.method_selections.insert(c.span, k);
-                                Some(picked.clone())
+                                Some(picked)
                             }
                             None => self
                                 .symbols
@@ -5785,8 +5785,9 @@ impl<'a> Checker<'a> {
                             self.method_selections.insert(c.span, k);
                             picked
                         }
-                        None => method,
+                        None => method.clone(),
                     };
+                    let method = &method;
                     let params = method.params.clone();
                     let method_generic_params = method.generic_params.clone();
                     let method_vis = method.visibility;

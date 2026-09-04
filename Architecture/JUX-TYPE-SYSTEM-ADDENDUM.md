@@ -143,9 +143,27 @@ The compiler infers `T = Dog` from the source argument; verifies the dest argume
 > counts with identical parameter-type shapes. This is a working
 > subset of the full specificity ordering below (named arguments and
 > generic-candidate ranking still pending). CONSTRUCTORS remain
-> count-selected with disjoint ranges for now. Phase 1 also keeps
-> method overload groups out of inheritance (no overriding into/out
-> of a group) and out of interfaces.
+> count-selected with disjoint ranges for now. Overload groups are still
+> kept out of INTERFACES.
+>
+> **Overloading composes with inheritance.** A subclass may override one
+> member of an inherited group, add a new overload to it, or both. Dispatch
+> identity comes from the **merged group**: each class takes its parent's
+> group and, for each of its own declarations of the name, either REPLACES
+> the member it overrides (same parameter shape) or APPENDS a new one.
+> Because the merge only ever replaces or appends, a parent's group is a
+> prefix of its child's — so an override keeps the index its parent's
+> declaration had, both emit under the same name, and a base-typed call
+> reaches the subclass body. Members past the parent's length are the ones
+> the subclass introduces; those go on the subclass's own dispatch surface,
+> where a base-typed reference correctly cannot see them.
+>
+> A generic base declares `put(T item)` and its override names the bound
+> argument (`put(Object item)`), so the two never match textually. A
+> same-arity member whose declaring class spelled one of ITS type parameters
+> in that position is therefore treated as the overridden one, provided it is
+> the only such candidate — with two same-arity members the declaration
+> appends rather than guess.
 
 When multiple declarations share a name, the resolver picks one. The algorithm runs in compiler phase 8.
 

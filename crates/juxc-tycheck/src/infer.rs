@@ -65,27 +65,22 @@ use crate::ty::{
 /// Returns the group index (drives `name__ovK` emission) and the
 /// picked signature. `None` when the name has no overload group or no
 /// member accepts the count.
-pub(crate) fn select_method_overload_typed<'a>(
-    symbols: &'a SymbolTable,
+pub(crate) fn select_method_overload_typed(
+    symbols: &SymbolTable,
     class_name: &str,
     method_name: &str,
     c: &CallExpr,
     env: &TypeEnv,
-) -> Option<(usize, &'a MethodSig)> {
-    // Same exact-key / unique-suffix class resolution as the
-    // count-based selector.
-    let class = symbols.classes.get(class_name).or_else(|| {
-        if class_name.contains('.') {
-            return None;
-        }
-        let suffix = format!(".{class_name}");
-        let mut hits = symbols.classes.iter().filter(|(k, _)| k.ends_with(&suffix));
-        match (hits.next(), hits.next()) {
-            (Some((_, cl)), None) => Some(cl),
-            _ => None,
-        }
-    })?;
-    let group = class.method_overloads.get(method_name)?;
+) -> Option<(usize, MethodSig)> {
+    // The group is the MERGED one — a subclass dispatches its parent's
+    // overloads too, and an override sits at the index its parent's
+    // declaration had, so the picked index names the right emitted member.
+    let group = symbols.merged_method_overloads(class_name, method_name);
+    if group.len() < 2 {
+        // Not overloaded from here: `lookup_method` resolves it, and index 0
+        // is the plain name.
+        return None;
+    }
     let count = c.args.len();
     let candidates: Vec<(usize, &MethodSig)> = group
         .iter()
@@ -97,7 +92,7 @@ pub(crate) fn select_method_overload_typed<'a>(
         .collect();
     match candidates.len() {
         0 => None,
-        1 => Some(candidates[0]),
+        1 => Some((candidates[0].0, candidates[0].1.clone())),
         _ => {
             let arg_tys: Vec<Ty> =
                 c.args.iter().map(|a| infer_expr(a, env, symbols)).collect();
@@ -125,7 +120,9 @@ pub(crate) fn select_method_overload_typed<'a>(
                     best = Some((score, *k, m));
                 }
             }
-            best.map(|(_, k, m)| (k, m)).or_else(|| Some(candidates[0]))
+            best
+                .map(|(_, k, m)| (k, m.clone()))
+                .or_else(|| Some((candidates[0].0, candidates[0].1.clone())))
         }
     }
 }
@@ -726,7 +723,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                             .map(|(_, m)| m);
                     if let Some(class) = symbols.classes.get(&class_fqn) {
                         if let Some(method) =
-                            picked.or_else(|| class.methods.get(method_name))
+                            picked.or_else(|| class.methods.get(method_name).cloned())
                         {
                             if method.is_static {
                                 return return_type_in_class(
@@ -849,10 +846,11 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 {
                     // Overload-group pick (§T.3, count + types): a
                     // group's members may differ in return type.
-                    let method =
-                        select_method_overload_typed(symbols, name, method_name, c, env)
-                            .map(|(_, m)| m)
-                            .unwrap_or(method);
+                    let method = &select_method_overload_typed(
+                        symbols, name, method_name, c, env,
+                    )
+                    .map(|(_, m)| m)
+                    .unwrap_or_else(|| method.clone());
                     // Lower in the declaring class's generic scope AND the
                     // method's own generic params so both `T get()` (class
                     // param) and `<U> U pick()` (method param) read as
