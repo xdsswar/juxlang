@@ -978,7 +978,13 @@ impl RustEmitter {
         // (escapes-but-unaliased, unique owner) is `Box<..>`.
         let is_box = self.box_classes.contains(&class_decl.name.text);
         let refcell = self.refcell_classes.contains(&class_decl.name.text);
-        let (wrap_open, close): (&str, &str) = if is_box {
+        // A class whose instances cross a worker boundary carries the ATOMIC
+        // handle instead (§18.2) — the same surface, `Send + Sync`.
+        let sync = self.sync_classes.contains(&class_decl.name.text);
+        let (wrap_open, close): (&str, &str) = if sync {
+            ("crate::JuxSync<", ">);
+")
+        } else if is_box {
             ("std::boxed::Box<", ">);\n")
         } else if refcell {
             ("std::rc::Rc<std::cell::RefCell<", ">>);\n")
@@ -1189,9 +1195,15 @@ impl RustEmitter {
                     self.emit_generic_params_as_args(&class_decl.generic_params);
                     self.w.push_str(") -> Self { ");
                     self.w.push_str(parent_bare);
-                    self.w.push_str(
-                        "(std::rc::Rc::new(std::cell::RefCell::new(v.0.borrow().__parent.clone()))) } }\n",
-                    );
+                    // The parent slice takes the PARENT class's handle shape — a shared
+                    // base may be atomic while the child that slices from it is not.
+                    self.w.push_str(if self.sync_classes.contains(parent_bare) {
+                        "(crate::JuxSync::new(v.0.borrow().__parent.clone())) } }
+"
+                    } else {
+                        "(std::rc::Rc::new(std::cell::RefCell::new(v.0.borrow().__parent.clone()))) } }
+"
+                    });
                     self.w.newline();
                 }
             }

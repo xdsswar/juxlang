@@ -351,6 +351,21 @@ impl RustEmitter {
             }
             let left_wrapper = self.receiver_is_wrapper_class(&b.left);
             let right_wrapper = self.receiver_is_wrapper_class(&b.right);
+            // A worker-shared class carries the atomic handle, whose identity
+            // check is an inherent method rather than `Rc`'s associated one.
+            if self.receiver_is_sync_class(&b.left) || self.receiver_is_sync_class(&b.right) {
+                self.emit_expr(&b.left);
+                if left_wrapper {
+                    self.w.push_str(".0");
+                }
+                self.w.push_str(".ptr_eq(&");
+                self.emit_expr(&b.right);
+                if right_wrapper {
+                    self.w.push_str(".0");
+                }
+                self.w.push(')');
+                return;
+            }
             self.w.push_str("std::rc::Rc::ptr_eq(&");
             self.emit_expr(&b.left);
             if left_wrapper {

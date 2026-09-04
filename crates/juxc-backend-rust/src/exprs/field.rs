@@ -885,6 +885,23 @@ impl RustEmitter {
     /// True when `recv`'s class is the `Box` rep (unique owner, `C(Box<C_Inner>)`).
     /// Such a receiver's `.0` is a `Box`, not an `Rc`, so identity (`===`) must
     /// use `std::ptr::eq` rather than `Rc::ptr_eq`.
+    /// True when `recv`'s static class carries the ATOMIC handle (§18.2) — its
+    /// instances cross a worker boundary, so `.0` is a `JuxSync` rather than an
+    /// `Rc<RefCell<…>>`. Only the identity operations need to know: both handles
+    /// answer `borrow` / `borrow_mut` identically.
+    pub(crate) fn receiver_is_sync_class(&self, recv: &Expr) -> bool {
+        if matches!(recv, Expr::This(_)) {
+            return self
+                .enclosing_class
+                .as_deref()
+                .map(|c| self.sync_classes.contains(c))
+                .unwrap_or(false);
+        }
+        self.receiver_class_bare(recv)
+            .map(|bare| self.sync_classes.contains(&bare))
+            .unwrap_or(false)
+    }
+
     pub(crate) fn receiver_is_box_class(&self, recv: &Expr) -> bool {
         if matches!(recv, Expr::This(_)) {
             return self.emitting_wrapper_class

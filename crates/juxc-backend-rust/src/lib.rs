@@ -52,6 +52,7 @@ mod patterns;
 mod sizeof_emit;
 mod stmts;
 mod types;
+mod worker;
 mod writer;
 
 #[cfg(test)]
@@ -260,6 +261,13 @@ pub fn lower_workspace_with_entry(
         .filter(|(_, r)| **r == ClassRep::Box)
         .map(|(n, _)| n.clone())
         .collect();
+    // Classes that cross a worker boundary get the atomic handle (§18.2).
+    // Restricted to wrapper classes: the non-wrapper paths have no `.0` handle
+    // to make atomic in the first place.
+    e.sync_classes = worker::compute_worker_shared_classes(units, expr_types, symbols)
+        .intersection(&e.wrapper_classes)
+        .cloned()
+        .collect();
     // A polymorphic base must also be a WRAPPER class for `Rc<dyn …Kind>`
     // dispatch (populated Kind trait, accessors, etc.) to be sound — the
     // delegations and accessors assume the interior-mutable `self.0` shape.
@@ -425,6 +433,13 @@ pub fn lower_workspace_test(
         .iter()
         .filter(|(_, r)| **r == ClassRep::Box)
         .map(|(n, _)| n.clone())
+        .collect();
+    // Classes that cross a worker boundary get the atomic handle (§18.2).
+    // Restricted to wrapper classes: the non-wrapper paths have no `.0` handle
+    // to make atomic in the first place.
+    e.sync_classes = worker::compute_worker_shared_classes(units, expr_types, symbols)
+        .intersection(&e.wrapper_classes)
+        .cloned()
         .collect();
     // A polymorphic base must also be a WRAPPER class for `Rc<dyn …Kind>`
     // dispatch (populated Kind trait, accessors, etc.) to be sound — the
@@ -994,6 +1009,14 @@ struct RustEmitter {
     /// read and clones only at the reads listed here — the same choice a Rust
     /// programmer makes by hand.
     pub(crate) non_final_uses: std::collections::HashSet<juxc_source::Span>,
+    /// Bare names of classes whose handle is **atomic** — `Arc<Mutex<C_Inner>>`
+    /// instead of `Rc<RefCell<C_Inner>>` — because their instances cross a
+    /// worker boundary (JUX-ASYNC-ADDENDUM §18.2, see [`crate::worker`]).
+    ///
+    /// The reaching sites are unchanged: both handles answer `.borrow()` and
+    /// `.borrow_mut()`, so only the type spelling, the constructor, and the two
+    /// identity operations (`ptr_eq`, `as_ptr`) consult this set.
+    pub(crate) sync_classes: std::collections::HashSet<String>,
     /// Names of **`int`-typed const-generic parameters** in scope —
     /// the `N` of an enclosing `class RingBuffer<T, int N>` or
     /// `fn cap<int N>()`. A bare read of such a name in *value*
@@ -2214,6 +2237,13 @@ pub(crate) enum ClassRep {
     /// `Rc<RefCell<C_Inner>>` — aliased AND mutated: full Java shared-mutation
     /// semantics with statement-scoped runtime borrows (§CR.4.1, NORMATIVE).
     RcRefCell,
+    /// `Arc<Mutex<C_Inner>>` — the same semantics with an ATOMIC refcount and a
+    /// real lock, for a class whose instances cross a worker boundary
+    /// (JUX-ASYNC-ADDENDUM §18.2). The handle is `Send + Sync`, so the object is
+    /// genuinely shared between threads instead of being refused. Only classes
+    /// that actually cross pay for it — atomics and a mutex are real costs and
+    /// most objects never leave their thread.
+    ArcMutex,
 }
 
 impl ClassRep {
@@ -2226,6 +2256,7 @@ impl ClassRep {
             ClassRep::Box => 1,
             ClassRep::Rc => 2,
             ClassRep::RcRefCell => 3,
+            ClassRep::ArcMutex => 4,
         }
     }
 }
@@ -3710,6 +3741,69 @@ impl RustEmitter {
         w.push_str("        (&&$crate::JuxShow(&$v)).jux_show()\n");
         w.push_str("    }};\n");
         w.push_str("}\n\n");
+        // The handle a class whose instances CROSS A WORKER BOUNDARY lowers to
+        // (JUX-ASYNC-ADDENDUM §18.2: "the compiler upgrades the refcount
+        // automatically when an instance crosses a worker boundary"). It mirrors
+        // `Rc<RefCell<T>>`'s surface exactly — `borrow`, `borrow_mut`, `as_ptr`,
+        // `ptr_eq` — with an ATOMIC refcount and a real lock, so every site that
+        // reaches through a class handle is spelled the same whichever tier the
+        // class is on; only the type and the constructor differ.
+        w.push_str("pub struct JuxSync<T: ?Sized>(pub std::sync::Arc<std::sync::Mutex<T>>);
+");
+        w.push_str("impl<T> JuxSync<T> {
+");
+        w.push_str("    pub fn new(value: T) -> Self {
+");
+        w.push_str("        JuxSync(std::sync::Arc::new(std::sync::Mutex::new(value)))
+");
+        w.push_str("    }
+");
+        w.push_str("}
+");
+        w.push_str("impl<T: ?Sized> JuxSync<T> {
+");
+        // A poisoned lock means another thread panicked while holding it. The
+        // object is still there, and Jux has no notion of poisoning, so take the
+        // value back rather than turn every later access into a second panic.
+        w.push_str("    pub fn borrow(&self) -> std::sync::MutexGuard<'_, T> {
+");
+        w.push_str("        self.0.lock().unwrap_or_else(|e| e.into_inner())
+");
+        w.push_str("    }
+");
+        w.push_str("    pub fn borrow_mut(&self) -> std::sync::MutexGuard<'_, T> { self.borrow() }
+");
+        w.push_str("    pub fn as_ptr(&self) -> *const std::sync::Mutex<T> {
+");
+        w.push_str("        std::sync::Arc::as_ptr(&self.0)
+");
+        w.push_str("    }
+");
+        w.push_str("    pub fn ptr_eq(&self, other: &Self) -> bool {
+");
+        w.push_str("        std::sync::Arc::ptr_eq(&self.0, &other.0)
+");
+        w.push_str("    }
+");
+        w.push_str("}
+");
+        w.push_str("impl<T: ?Sized> Clone for JuxSync<T> {
+");
+        w.push_str("    fn clone(&self) -> Self { JuxSync(self.0.clone()) }
+");
+        w.push_str("}
+");
+        w.push_str("impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for JuxSync<T> {
+");
+        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+");
+        w.push_str("        std::fmt::Debug::fmt(&*self.borrow(), f)
+");
+        w.push_str("    }
+");
+        w.push_str("}
+
+");
         // Observable-property observer handle (§P.2/§P.3): one
         // attached observer of a `{ get; set; }` property. NAMED
         // observer variables attach weakly (§P.2.3 — the owner's
@@ -4165,6 +4259,7 @@ impl RustEmitter {
             bound_position_classes: std::collections::HashSet::new(),
             kind_type_subst: std::collections::HashMap::new(),
             non_final_uses: std::collections::HashSet::new(),
+            sync_classes: std::collections::HashSet::new(),
             const_int_params: std::collections::HashSet::new(),
             out_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),
@@ -5168,8 +5263,8 @@ impl RustEmitter {
     /// crate's `#![allow(unused_imports)]` banner. With no source attached
     /// (`lower_with_types`, not a user-facing path) every member is expanded, so
     /// the output stays correct and only loses its terseness.
-    /// True when this unit's source appears to CALL `name` — the identifier
-    /// followed by `(`, allowing whitespace. A lexical test, matched to the
+    /// True when this unit's source appears to CALL `name` UNQUALIFIED — the
+    /// identifier followed by `(`, with no `.` before it. A lexical test, matched to the
     /// lexical `ident_words` mention test it refines; both exist only to keep a
     /// wildcard import from expanding members the file never uses.
     fn source_calls(&self, name: &str) -> bool {
@@ -5186,6 +5281,12 @@ impl RustEmitter {
             from = end;
             // Whole-word only: `copy` must not match inside `copy_all`.
             if at > 0 && is_word(bytes[at - 1]) {
+                continue;
+            }
+            // A QUALIFIED call is somebody else's member — `Worker.spawn(f)`
+            // is not a call to a free `spawn`, and `xs.len()` is not a call to
+            // a free `len`. Only an unqualified call needs the import.
+            if text[..at].trim_end().ends_with('.') {
                 continue;
             }
             if bytes.get(end).is_some_and(|b| is_word(*b)) {
@@ -5256,9 +5357,18 @@ impl RustEmitter {
                 lines.push(format!("use {real} as {simple};"));
             }
         }
-        if lines.is_empty() {
-            // Nothing foreign under this path: it is an ordinary Jux package
-            // wildcard, which the generic renderer handles correctly.
+        // Whether this path names a FOREIGN package is decided by the symbol
+        // table, not by whether the file happened to use any of its members: an
+        // unused `import rust.std.*;` must expand to nothing, NOT fall through
+        // to the generic `use rust::std::*;` (a module that does not exist).
+        let is_foreign = self
+            .symbols
+            .classes
+            .iter()
+            .any(|(fqn, sig)| sig.is_external && fqn.starts_with(&prefix))
+            || self.symbols.functions.keys().any(|fqn| fqn.starts_with(&prefix));
+        if !is_foreign {
+            // An ordinary Jux package wildcard — the generic renderer handles it.
             return None;
         }
         // HashMap iteration order is arbitrary; emitted source must be stable
