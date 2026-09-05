@@ -2744,8 +2744,17 @@ impl<'a> Checker<'a> {
                 // weak slot accepts both a target-class value and `null`, so
                 // its assignability is checked against a NULLABLE view of the
                 // declared type.
+                // A PROPERTY target is likewise a write, not a read. Walking
+                // it as one made a single illegal write report twice: the read
+                // check on the target, and then the setter check below. The
+                // setter check is the precise one — it names the accessor and
+                // its visibility — so the read walk stops at the receiver here,
+                // exactly as it does for a weak field.
                 let weak_target = self.assign_target_is_weak_field(&a.target);
-                if weak_target {
+                // (`weak_target` alone drives the nullable widening below; the
+                // walk decision is the broader "this is a write, not a read".)
+                let write_target = weak_target || self.assign_target_is_property(&a.target);
+                if write_target {
                     if let Expr::Field(f) = &a.target {
                         self.check_expr(&f.object);
                     }
@@ -4080,6 +4089,21 @@ impl<'a> Checker<'a> {
         false
     }
 
+    /// True when an assignment target names a PROPERTY rather than a field.
+    ///
+    /// A property write is enforced by [`Self::check_property_write`], which
+    /// reports the accessor and its visibility (E0970/E0972). Walking the same
+    /// target as a read as well produced a second, vaguer error for one
+    /// mistake.
+    fn assign_target_is_property(&self, target: &juxc_ast::Expr) -> bool {
+        let juxc_ast::Expr::Field(f) = target else { return false };
+        let recv = infer_expr(&f.object, &self.env, self.symbols);
+        let Ty::User { name, .. } = &recv else { return false };
+        self.symbols
+            .lookup_method(name, &f.field.text)
+            .is_some_and(|(m, _)| m.is_property)
+    }
+
     /// When `target` is a **disallowed** write to a `final`/`const` field,
     /// return that field's name to flag (E0465); otherwise `None`.
     ///
@@ -4616,15 +4640,23 @@ impl<'a> Checker<'a> {
                     );
                     return;
                 }
-                // Expression-bodied property — `T name => expr;` —
-                // is stored as a method with `is_property = true`.
-                // From the user's perspective `obj.name` is a
-                // field-shaped read; allow it here so tycheck
-                // doesn't fire E0412.
-                if let Some((method, _decl)) =
-                    self.symbols.lookup_method(name, field_name)
-                {
+                // A property — `T Name { get; set; }` or the
+                // expression-bodied `T Name -> expr;` — is stored as a method
+                // with `is_property = true`. From the user's perspective
+                // `obj.Name` is a field-shaped read, so it lands here rather
+                // than in the field branch above.
+                //
+                // It is still a MEMBER, and its modifier still means something:
+                // this branch used to return without asking, so a `private`
+                // property was readable from anywhere while a `private` field
+                // or method one line away was not. The modifier was simply
+                // ignored for the one member kind whose whole purpose is
+                // controlling access to state.
+                if let Some((method, decl)) = self.symbols.lookup_method(name, field_name) {
                     if method.is_property {
+                        let vis = method.visibility;
+                        let declaring = decl.to_string();
+                        self.check_visibility(vis, &declaring, field_name, "property", f.span);
                         return;
                     }
                 }
@@ -8479,6 +8511,101 @@ mod tests {
             "package b; import a.*; public class U { public int go() { Mod m = new Mod(); return m.x; } }",
         );
         assert!(!has(&d, code::Code::E0416_PackagePrivateAccess), "{d:?}");
+    }
+
+    // --- §M.7.7 property visibility (the read side) ---
+
+    /// Reading a `private` property from outside its class is E0414, exactly
+    /// as reading a `private` field is.
+    ///
+    /// The write side (E0970/E0972) was enforced from the start, and the
+    /// STATIC property read was checked too, but the INSTANCE property read
+    /// returned as soon as it resolved the accessor and never consulted its
+    /// visibility. So `private int Level { get; set; }` was readable from
+    /// anywhere: the modifier compiled, and meant nothing.
+    #[test]
+    fn private_property_read_from_outside_is_e0414() {
+        let d = run(
+            "public class Config { private int Level { get; set; } = 3; }
+             public class U { public int go() { Config c = new Config(); return c.Level; } }",
+        );
+        assert!(has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
+    }
+
+    /// A class reads its OWN private property freely — the check is about
+    /// crossing the class boundary, not about the modifier existing.
+    #[test]
+    fn private_property_read_inside_its_own_class_is_ok() {
+        let d = run(
+            "public class Config { private int Level { get; set; } = 3;
+               public int go() { return Level; } }",
+        );
+        assert!(!has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
+    }
+
+    /// A `public` property stays readable from anywhere; the new check must
+    /// not fire on the ordinary case.
+    #[test]
+    fn public_property_read_from_outside_is_ok() {
+        let d = run(
+            "public class Config { public int Level { get; set; } = 3; }
+             public class U { public int go() { Config c = new Config(); return c.Level; } }",
+        );
+        assert!(!has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
+    }
+
+    /// `protected` reaches a subclass (Java rule) and no further.
+    #[test]
+    fn protected_property_reaches_a_subclass() {
+        let d = run(
+            "public class Base { protected int Level { get; set; } = 3; }
+             public class Sub extends Base { public int go() { return Level; } }",
+        );
+        assert!(!has(&d, code::Code::E0415_ProtectedAccess), "{d:?}");
+    }
+
+    /// The same property from an unrelated class is E0415.
+    #[test]
+    fn protected_property_from_an_unrelated_class_is_e0415() {
+        let d = run(
+            "public class Base { protected int Level { get; set; } = 3; }
+             public class Other { public int go() { Base b = new Base(); return b.Level; } }",
+        );
+        assert!(has(&d, code::Code::E0415_ProtectedAccess), "{d:?}");
+    }
+
+    /// A WRITE to a private property reports once, not twice.
+    ///
+    /// An assignment target is a write, so walking it as an expression would
+    /// add the read-side E0414 on top of the write-side E0972 and report the
+    /// same mistake under two codes. Only the receiver is walked.
+    #[test]
+    fn a_private_property_write_reports_exactly_one_error() {
+        let d = run(
+            "public class Config { private int Level { get; set; } = 3; }
+             public class U { public void go() { Config c = new Config(); c.Level = 9; } }",
+        );
+        let reported: Vec<_> = d
+            .iter()
+            .filter(|x| {
+                matches!(
+                    x.code,
+                    code::Code::E0414_PrivateAccess | code::Code::E0972_PropertyAccessorVisibility
+                )
+            })
+            .collect();
+        assert_eq!(reported.len(), 1, "one mistake, one diagnostic: {reported:?}");
+        assert!(has(&d, code::Code::E0972_PropertyAccessorVisibility), "{d:?}");
+    }
+
+    /// A package-private property does not cross a package boundary.
+    #[test]
+    fn package_private_property_does_not_cross_packages() {
+        let d = run_two(
+            "package a; public class Holder { int Level { get; set; } = 3; }",
+            "package b; import a.*; public class U { public int go() { Holder h = new Holder(); return h.Level; } }",
+        );
+        assert!(has(&d, code::Code::E0416_PackagePrivateAccess), "{d:?}");
     }
 
     /// A `final` LOCAL stays E0464 (binding rule), never E0465 (field rule).
