@@ -107,7 +107,7 @@ object JuxHierarchy {
         for ((ref, _) in supertypeReferences(type)) {
             val args = typeArguments(ref)
             if (args.isEmpty()) continue
-            val superDecl = JuxTypeIndex.findType(type.project, bareTypeName(ref)) ?: continue
+            val superDecl = JuxTypeIndex.findType(ref, bareTypeName(ref)) ?: continue
             val params = typeParameterNames(superDecl)
             val bound = minOf(params.size, args.size)
             for (i in 0 until bound) {
@@ -283,18 +283,20 @@ object JuxHierarchy {
      * The walk resolves type names project-wide through [JuxTypeIndex].
      */
     fun findSuperMethod(type: JuxTypeDeclaration, name: String, arity: Int): PsiElement? {
-        val project = type.project
-        val queue = ArrayDeque(superTypeNames(type))
+        // Each hop resolves FROM the declaration that named the supertype, so a
+        // chain that stays inside one file never leaves it for a same-named
+        // type elsewhere in the project.
+        val queue = ArrayDeque(superTypeNames(type).map { it to type })
         val visited = HashSet<String>()
         while (queue.isNotEmpty()) {
-            val superName = queue.removeFirst()
+            val (superName, owner) = queue.removeFirst()
             if (!visited.add(superName)) continue
-            val superDecl = JuxTypeIndex.findType(project, superName) ?: continue
+            val superDecl = JuxTypeIndex.findType(owner, superName) ?: continue
             for (m in directChildren(superDecl, JuxElementTypes.METHOD_DECLARATION)) {
                 val mName = (m as? JuxNamedElement)?.name ?: continue
                 if (mName == name && arity(m) == arity && isOverridable(m)) return m
             }
-            queue.addAll(superTypeNames(superDecl))
+            queue.addAll(superTypeNames(superDecl).map { it to superDecl })
         }
         return null
     }
@@ -329,7 +331,7 @@ object JuxHierarchy {
                 }
             }
             for (sn in superTypeNames(t)) {
-                JuxTypeIndex.findType(t.project, sn)?.let { queue.add(it) }
+                JuxTypeIndex.findType(t, sn)?.let { queue.add(it) }
             }
         }
         return out

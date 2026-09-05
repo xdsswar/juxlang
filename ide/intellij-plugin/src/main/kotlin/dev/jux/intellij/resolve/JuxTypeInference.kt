@@ -36,14 +36,12 @@ object JuxTypeInference {
      * offers nothing (member completion is the LSP's job for those).
      */
     fun resolveReceiver(receiverWord: String, context: PsiElement): Target? {
-        val project = context.project
-
         // `this` / `super` — the enclosing type, or its extends parent.
         if (receiverWord == "this" || receiverWord == "super") {
             val enclosing = PsiTreeUtil.getParentOfType(context, JuxTypeDeclaration::class.java) ?: return null
             if (receiverWord == "super") {
                 val parentName = JuxHierarchy.superTypeNames(enclosing).firstOrNull() ?: return null
-                val parent = JuxTypeIndex.findType(project, parentName) ?: return null
+                val parent = JuxTypeIndex.findType(context, parentName) ?: return null
                 return Target(parent, isStatic = false)
             }
             return Target(enclosing, isStatic = false)
@@ -53,12 +51,12 @@ object JuxTypeInference {
         val decl = resolveValueDecl(receiverWord, context)
         if (decl != null) {
             val typeName = declaredTypeName(decl) ?: return null
-            val type = JuxTypeIndex.findType(project, typeName) ?: return null
+            val type = JuxTypeIndex.findType(context, typeName) ?: return null
             return Target(type, isStatic = false)
         }
 
         // Otherwise the word may name a TYPE → static-member access.
-        val type = JuxTypeIndex.findType(project, receiverWord) ?: return null
+        val type = JuxTypeIndex.findType(context, receiverWord) ?: return null
         return Target(type, isStatic = true)
     }
 

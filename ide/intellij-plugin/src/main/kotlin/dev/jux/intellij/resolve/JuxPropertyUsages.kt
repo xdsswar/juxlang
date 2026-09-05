@@ -138,7 +138,7 @@ object JuxPropertyUsages {
         val qType = qDecl.node.findChildByType(E.TYPE_REFERENCE)?.psi ?: return null
         // Use the head type name (strip generics/nullability noise).
         val typeName = firstIdentifier(qType)?.text ?: return null
-        val typeDecl = JuxTypeIndex.findType(expr.project, typeName) ?: return null
+        val typeDecl = JuxTypeIndex.findType(expr, typeName) ?: return null
         return propertyMember(typeDecl, nameLeaf.text)
     }
 

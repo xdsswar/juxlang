@@ -48,7 +48,7 @@ class JuxImplementsClauseInspection : LocalInspectionTool() {
 
             val hasExtends = JuxHierarchy.supertypeReferences(type).any { it.second }
             for (ref in refs) {
-                val target = JuxTypeIndex.findType(type.project, JuxHierarchy.bareTypeName(ref)) ?: continue
+                val target = JuxTypeIndex.findType(ref, JuxHierarchy.bareTypeName(ref)) ?: continue
                 if (JuxHierarchy.isInterface(target)) continue
                 val message =
                     "Class '$typeName' cannot implement '${target.name}' because it is " +

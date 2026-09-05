@@ -124,7 +124,7 @@ class JuxReference(element: PsiElement, range: TextRange) :
      */
     private fun resolveCrossFile(): PsiElement? {
         if (element.elementType !== E.TYPE_REFERENCE) return null
-        return JuxTypeIndex.findType(element.project, value)
+        return JuxTypeIndex.findType(element, value)
     }
 
     private fun lookupInScope(scope: PsiElement, name: String, refOffset: Int): PsiElement? {
