@@ -200,7 +200,18 @@ where
     // lowers them — the real Rust std provides the bodies at link time.
     all_sources.extend(stubs::load_std_stub_sources());
     all_sources.extend(sources);
-    let sources = all_sources;
+    // Stamp each file with its position in this list. Every token lexed from it
+    // carries that index in its span, which is what keeps the analysis maps —
+    // all keyed by span — from confusing two files' expressions at the same
+    // byte offset. The order is the same one diagnostics report `file` with.
+    let sources: Vec<SourceFile> = all_sources
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut src)| {
+            src.set_index(i as u32);
+            src
+        })
+        .collect();
 
     // Phase 1+2 per source, then phase 3 against the workspace's wildcard
     // export table — see [`lex_parse_resolve`].
@@ -270,7 +281,18 @@ pub fn compile_workspace_test(sources: Vec<SourceFile>) -> Result<CompileResult>
     let mut all_sources = stdlib::load_std_sources();
     all_sources.extend(stubs::load_std_stub_sources());
     all_sources.extend(sources);
-    let sources = all_sources;
+    // Stamp each file with its position in this list. Every token lexed from it
+    // carries that index in its span, which is what keeps the analysis maps —
+    // all keyed by span — from confusing two files' expressions at the same
+    // byte offset. The order is the same one diagnostics report `file` with.
+    let sources: Vec<SourceFile> = all_sources
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut src)| {
+            src.set_index(i as u32);
+            src
+        })
+        .collect();
     let mut units = lex_parse_resolve(&sources, &mut diagnostics);
     stubs::mark_external_units(&mut units, &sources);
     // Source-layout rule (§B.1), same as the main compile path.
@@ -372,7 +394,18 @@ pub fn check_workspace_with(sources: Vec<SourceFile>, profile: juxc_tycheck::Pro
     // methods in completion/hover, in Jux syntax (§G.10).
     all_sources.extend(stubs::load_std_stub_sources());
     all_sources.extend(sources);
-    let sources = all_sources;
+    // Stamp each file with its position in this list. Every token lexed from it
+    // carries that index in its span, which is what keeps the analysis maps —
+    // all keyed by span — from confusing two files' expressions at the same
+    // byte offset. The order is the same one diagnostics report `file` with.
+    let sources: Vec<SourceFile> = all_sources
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut src)| {
+            src.set_index(i as u32);
+            src
+        })
+        .collect();
 
     // Lex + parse each unit, then resolve against the workspace export
     // table — see [`lex_parse_resolve`]. Each source's diagnostics are

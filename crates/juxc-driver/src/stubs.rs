@@ -623,11 +623,16 @@ mod tests {
     /// is the reminder to regenerate it (see [`VENDORED_RUST_STD`]).
     #[test]
     fn vendored_std_stub_is_current() {
-        assert!(
-            VENDORED_RUST_STD.starts_with(&std_cache_header()),
-            "crates/juxc-driver/stubs/rust-std.jux.d is stale: expected header {:?},              found {:?}. Regenerate it -- see the VENDORED_RUST_STD doc comment.",
-            std_cache_header().trim_end(),
-            VENDORED_RUST_STD.lines().next().unwrap_or(""),
+        // Compare the header LINE, not a prefix of the file: the snapshot is a
+        // checked-in text file, so git may hand it back with CRLF endings on a
+        // Windows checkout and a raw prefix test would fail on the invisible
+        // `` while reporting two identical-looking strings.
+        let want = std_cache_header();
+        let want = want.trim_end();
+        let got = VENDORED_RUST_STD.lines().next().unwrap_or("").trim_end();
+        assert_eq!(
+            got, want,
+            "crates/juxc-driver/stubs/rust-std.jux.d is stale. Regenerate it -- see the VENDORED_RUST_STD doc comment.",
         );
     }
 

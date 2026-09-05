@@ -5194,6 +5194,41 @@ impl RustEmitter {
     /// path is absolute (`std::…`), so no `crate::` prefix applies. Returns
     /// `None` for wildcard/grouped imports, non-external types, or types without
     /// a recorded `@rust` path — those fall through to the ordinary `render_use`.
+    /// The `use` lines an import of FOREIGN (`@rust`) names lowers to, or `None`
+    /// when the import names no foreign item.
+    ///
+    /// The single form (`import rust.std.HashSet;`) is one line; the GROUPED
+    /// form (`import rust.std.{HashMap, HashSet};`) is one per item, each
+    /// resolved exactly as if it had been written on its own. Without this the
+    /// grouped form fell through to the generic renderer and emitted
+    /// `use rust::std::HashMap;` — a module that does not exist — even though
+    /// the README documents that spelling.
+    ///
+    /// A group is taken all-or-nothing: its members share one prefix package, so
+    /// either that package is foreign or it is not, and a partial expansion
+    /// would silently drop the rest.
+    fn external_use_lines(&self, spec: &ImportSpec) -> Option<Vec<String>> {
+        match spec {
+            ImportSpec::Path { .. } => self.external_use_line(spec).map(|l| vec![l]),
+            ImportSpec::Items { prefix, items } => {
+                let lines: Vec<String> = items
+                    .iter()
+                    .filter_map(|item| {
+                        let mut segments = prefix.segments.clone();
+                        segments.push(item.name.clone());
+                        let synthetic = ImportSpec::Path {
+                            name: juxc_ast::QualifiedName { segments, span: prefix.span },
+                            wildcard: false,
+                            alias: item.alias.clone(),
+                        };
+                        self.external_use_line(&synthetic)
+                    })
+                    .collect();
+                (!lines.is_empty() && lines.len() == items.len()).then_some(lines)
+            }
+        }
+    }
+
     fn external_use_line(&self, spec: &ImportSpec) -> Option<String> {
         let ImportSpec::Path { name, wildcard, alias } = spec else {
             return None;
@@ -5403,10 +5438,12 @@ impl RustEmitter {
             // type name resolves to the foreign symbol (`use
             // std::collections::HashSet;`) rather than the non-existent
             // `rust::std::HashSet`.
-            if let Some(line) = self.external_use_line(&import.spec) {
-                if self.emitted_uses_in_module.insert(line.clone()) {
-                    self.w.line(&line);
-                    emitted_any = true;
+            if let Some(lines) = self.external_use_lines(&import.spec) {
+                for line in lines {
+                    if self.emitted_uses_in_module.insert(line.clone()) {
+                        self.w.line(&line);
+                        emitted_any = true;
+                    }
                 }
                 continue;
             }

@@ -595,11 +595,21 @@ var p = new PathBuf();   // lowers to std::path::PathBuf::new()
 p.reserve(16);           // camelCase method maps to the real snake_case one
 ```
 
+The types Rust's own prelude puts in scope everywhere — `Vec`, `String`,
+`HashMap`, `Option` — need no import in Jux either. Anything else is one
+`import rust.std.<Name>;` away, or a group:
+
+```java
+import rust.std.{HashMap, HashSet};
+```
+
 Hover, autocomplete, and go-to-definition over `std` and your project's crates are
 generated **on demand** from the installed toolchain's rustdoc JSON
 (`juxc-bindgen`): nothing is hand-curated, so it tracks whatever Rust version you
 actually have. Collections are Rust's collections under their real names: `Vec`,
-`HashMap`, `HashSet`, `VecDeque`.
+`HashMap`, `HashSet`, `VecDeque`. There is no parallel Jux collection library and
+no Java-style facade over Rust's — `push`, `len` and `insert` are the method names,
+because they are Rust's.
 
 ### Dependencies: crates *and* Jux libraries
 
