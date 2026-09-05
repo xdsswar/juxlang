@@ -61,7 +61,6 @@ object JuxOverrideMembers {
      * OVERRIDE (the inherited body already satisfies the contract).
      */
     fun candidates(type: JuxTypeDeclaration): List<Candidate> {
-        val project = type.project
         val out = ArrayList<Candidate>()
         // name+arity keys — own declarations exclude, and the FIRST (nearest)
         // super declaration wins over farther redeclarations.
@@ -81,7 +80,7 @@ object JuxOverrideMembers {
         // `void test(T t)`, because `T` is excluded from the binding map (it's
         // Box's own param). Substitutions compose down the chain.
         val queue = ArrayDeque<Pair<JuxTypeDeclaration, Map<String, String>>>()
-        seedSupertypes(type, emptyMap(), project, queue)
+        seedSupertypes(type, emptyMap(), queue)
         val visitedTypes = HashSet<String>()
         while (queue.isNotEmpty()) {
             val (decl, subst) = queue.removeFirst()
@@ -97,7 +96,7 @@ object JuxOverrideMembers {
                 val kind = if (JuxHierarchy.hasBody(method)) Kind.OVERRIDE else Kind.IMPLEMENT
                 out.add(Candidate(method, ownerName, sig, kind))
             }
-            seedSupertypes(decl, subst, project, queue)
+            seedSupertypes(decl, subst, queue)
         }
         return out
     }
@@ -110,12 +109,11 @@ object JuxOverrideMembers {
     private fun seedSupertypes(
         type: JuxTypeDeclaration,
         outerSubst: Map<String, String>,
-        project: com.intellij.openapi.project.Project,
         queue: ArrayDeque<Pair<JuxTypeDeclaration, Map<String, String>>>,
     ) {
         val own = JuxHierarchy.typeParameterNames(type).toHashSet()
         for ((ref, _) in JuxHierarchy.supertypeReferences(type)) {
-            val decl = JuxTypeIndex.findType(project, JuxHierarchy.bareTypeName(ref)) ?: continue
+            val decl = JuxTypeIndex.findType(ref, JuxHierarchy.bareTypeName(ref)) ?: continue
             val args = JuxHierarchy.typeArguments(ref)
                 .map { JuxHierarchy.substituteTypeParams(it, outerSubst) }
             val params = JuxHierarchy.typeParameterNames(decl)

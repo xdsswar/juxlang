@@ -51,7 +51,7 @@ class JuxExtendsClauseInspection : LocalInspectionTool() {
                 // Interfaces extend any number of interfaces — only the kind
                 // of each (resolved) entry needs checking.
                 for (ref in refs) {
-                    val parent = JuxTypeIndex.findType(type.project, JuxHierarchy.bareTypeName(ref)) ?: continue
+                    val parent = JuxTypeIndex.findType(ref, JuxHierarchy.bareTypeName(ref)) ?: continue
                     if (!JuxHierarchy.isInterface(parent)) {
                         report(
                             ref,
@@ -67,7 +67,7 @@ class JuxExtendsClauseInspection : LocalInspectionTool() {
             // Single inheritance is structural — entries past the first are
             // wrong no matter what they resolve to.
             for (extra in refs.drop(1)) {
-                val resolved = JuxTypeIndex.findType(type.project, JuxHierarchy.bareTypeName(extra))
+                val resolved = JuxTypeIndex.findType(extra, JuxHierarchy.bareTypeName(extra))
                 val fix = if (resolved != null && JuxHierarchy.isInterface(resolved)) MoveToImplementsFix() else null
                 report(
                     extra,
@@ -78,7 +78,7 @@ class JuxExtendsClauseInspection : LocalInspectionTool() {
             }
 
             val first = refs.first()
-            val parent = JuxTypeIndex.findType(type.project, JuxHierarchy.bareTypeName(first)) ?: continue
+            val parent = JuxTypeIndex.findType(first, JuxHierarchy.bareTypeName(first)) ?: continue
             when {
                 !JuxHierarchy.isClass(parent) -> report(
                     first,

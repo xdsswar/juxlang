@@ -48,6 +48,37 @@ class JuxParsingTest : ParsingTestCase("", "jux", JuxParserDefinition()) {
         assertTrue("parse errors found:\n$failures", failures.isEmpty())
     }
 
+    /**
+     * A keyword is only a keyword where a declaration may begin. In a NAME slot
+     * — after a return type, after a parameter's type — it is the declared name,
+     * and the compiler accepts it (`Parser::parse_decl_name`). `record` is the
+     * one that bites in practice: `public void record()` is ordinary Java-shaped
+     * code, and the IDE used to redden the whole rest of the type body for it.
+     */
+    fun testKeywordSpelledDeclarationNames() {
+        val psi = createPsiFile(
+            "Kw.jux",
+            """
+            public class Stats {
+                private int n;
+                public void record() { this.n = this.n + 1; }
+                public int type(int move) { return move; }
+                public String default() { return "d"; }
+            }
+            """.trimIndent(),
+        )
+        val errors = PsiTreeUtil.collectElementsOfType(psi, PsiErrorElement::class.java)
+        assertTrue(
+            "unexpected parse errors: " + errors.joinToString { "${it.errorDescription} @ ${it.textOffset}" },
+            errors.isEmpty(),
+        )
+        // The names must reach the PSI as names, so Structure View, go-to and
+        // the inspections see them — not as keyword tokens.
+        val methods = PsiTreeUtil.collectElementsOfType(psi, JuxMethodDeclaration::class.java)
+            .mapNotNull { (it as JuxNamedElement).name }
+        assertEquals(listOf("record", "type", "default"), methods)
+    }
+
     /** Validates the named-declaration PSI that Structure View / navigation use. */
     fun testPsiNamesAndMembers() {
         val psi = createPsiFile(

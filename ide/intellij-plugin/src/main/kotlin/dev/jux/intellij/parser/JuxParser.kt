@@ -348,7 +348,7 @@ class JuxParser : PsiParser {
             decl.done(E.CONSTRUCTOR_DECLARATION)
             return
         }
-        b.expectOrError(T.IDENTIFIER, "name expected")
+        b.consumeDeclName("name expected")
         if (b.at(T.LT)) parseTypeParameters(b) // method type params after name
         if (b.at(T.LPAREN)) {
             parseParameterList(b)
@@ -538,7 +538,7 @@ class JuxParser : PsiParser {
         if (b.at(T.IDENTIFIER) && b.tokenText == "out") b.advanceLexer() // contextual param-mode
         b.parseType()
         if (b.at(T.ELLIPSIS)) b.advanceLexer() // `T... name` varargs
-        b.expectOrError(T.IDENTIFIER, "parameter name expected")
+        b.consumeDeclName("parameter name expected")
         if (b.at(T.EQ)) { b.advanceLexer(); b.parseExpression() }
         p.done(E.PARAMETER)
     }

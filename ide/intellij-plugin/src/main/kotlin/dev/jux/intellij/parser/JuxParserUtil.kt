@@ -58,6 +58,54 @@ fun PsiBuilder.consumeMemberName(): Boolean {
     return false
 }
 
+/**
+ * Keywords that can only OPEN a declaration or a statement. They are the one
+ * thing a name slot must NOT swallow: a member left half-written
+ * (`public int` then the next member) would otherwise consume `public` as the
+ * missing name and cascade red through the rest of the type body.
+ */
+val NON_NAME_KEYWORDS: TokenSet = TokenSet.create(
+    T.PUBLIC_KW, T.PRIVATE_KW, T.PROTECTED_KW, T.INTERNAL_KW,
+    T.STATIC_KW, T.ABSTRACT_KW, T.FINAL_KW, T.SEALED_KW, T.CONST_KW,
+    T.CLASS_KW, T.INTERFACE_KW, T.ENUM_KW, T.STRUCT_KW, T.ANNOTATION_KW,
+    T.IMPORT_KW, T.PACKAGE_KW, T.EXTENDS_KW, T.IMPLEMENTS_KW, T.PERMITS_KW,
+    T.THROWS_KW, T.OPERATOR_KW,
+    T.RETURN_KW, T.IF_KW, T.ELSE_KW, T.FOR_KW, T.WHILE_KW, T.DO_KW,
+    T.SWITCH_KW, T.TRY_KW, T.CATCH_KW, T.FINALLY_KW, T.THROW_KW,
+    T.BREAK_KW, T.CONTINUE_KW, T.YIELD_KW,
+    T.VAR_KW, T.VOID_KW, T.NEW_KW, T.THIS_KW, T.SUPER_KW,
+)
+
+/**
+ * Consume a **declaration name** — an identifier, or a keyword used as one.
+ *
+ * Every caller is a name slot that follows a type or return type, so the
+ * grammar is unambiguous there: a keyword can only be the declared name, never
+ * the start of something else. `public void record() { … }` is a method called
+ * `record`, and the compiler accepts it (`Parser::parse_decl_name`) precisely
+ * because `record` is a keyword only where a declaration may begin. The IDE has
+ * to agree, or a file that compiles reads as broken.
+ *
+ * The token is REMAPPED to `IDENTIFIER` before it is consumed, so the rest of
+ * the plugin needs no special case: the PSI finds the name where it always
+ * looks, and the annotator colors `record` as the method name it is rather
+ * than as a keyword.
+ */
+fun PsiBuilder.consumeDeclName(message: String): Boolean {
+    if (at(T.IDENTIFIER)) {
+        advanceLexer()
+        return true
+    }
+    val t = tokenType
+    if (t != null && T.KEYWORDS.contains(t) && !NON_NAME_KEYWORDS.contains(t)) {
+        remapCurrentToken(T.IDENTIFIER)
+        advanceLexer()
+        return true
+    }
+    errorHere(message)
+    return false
+}
+
 /** Emit a zero-width error node at the current position without consuming. */
 fun PsiBuilder.errorHere(message: String) {
     val m = mark()
