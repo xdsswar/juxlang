@@ -2198,6 +2198,20 @@ impl RustEmitter {
                 {
                     self.w.push_str(".clone()");
                 }
+                // **Sealed upcast.** A sealed parent lowers to an enum, so a
+                // subclass initializer has to be wrapped in the matching
+                // variant — `Suit s = new Black();` becomes
+                // `Suit::from(Black::new())`. The return and argument paths
+                // already did this; a local declaration did not, so the most
+                // ordinary use of a sealed hierarchy failed to compile.
+                if !wrap_some
+                    && var
+                        .ty
+                        .as_ref()
+                        .is_some_and(|t| self.expr_needs_sealed_upcast_to(t, init))
+                {
+                    self.w.push_str(".into()");
+                }
                 if let Some(cast) = num_widen {
                     self.w.push_str(" as ");
                     self.w.push_str(cast);

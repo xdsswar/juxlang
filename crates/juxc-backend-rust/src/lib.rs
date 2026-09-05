@@ -3707,7 +3707,18 @@ impl RustEmitter {
         w.push_str("#![allow(non_snake_case)]\n");
         w.push_str("#![allow(non_camel_case_types)]\n");
         w.push_str("#![allow(non_upper_case_globals)]\n");
-        w.push_str("#![allow(clippy::all)]\n\n");
+        w.push_str("#![allow(clippy::all)]\n");
+        // The one lint that stays ON, and promoted to an error. A delegating
+        // body — a trait impl calling the inherent method it wraps, a `Kind`
+        // forwarder, a `super` shim — is self-recursive if and only if the
+        // emitter got a path or a generic bound wrong, and rustc detects that
+        // statically. Left as a warning it is invisible (the crate is
+        // generated; nobody reads its warnings) and the program instead
+        // overflows its stack at runtime, in a build that offers no Jux-level
+        // explanation. As an error it is a juxc bug report at compile time.
+        // User code cannot trip it: the lint fires only when EVERY path
+        // through the function recurses, which no terminating Jux method does.
+        w.push_str("#![deny(unconditional_recursion)]\n\n");
         // The runtime prelude lives in its own MODULE, re-exported at the crate
         // root. Emitted user classes land in the crate root too, so a program with
         // a class named `Vec`, `String`, `Option`, `Clone` or `Sized` would

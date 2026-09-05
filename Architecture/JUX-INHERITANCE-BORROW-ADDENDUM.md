@@ -213,6 +213,27 @@ The borrow checker treats wildcards as opaque: a `List<? extends Animal>` expose
 > A method inherited from a generic base that **formats** a generic value
 > (`$"holding ${this.get()}"`) adds the `Display` bound its instantiation needs
 > to the subclass's impl as well, so the inherited body type-checks in both.
+>
+> Two lowering rules keep the generated hierarchy well-formed, and both are
+> silent-failure hazards rather than compile errors, so they are stated here:
+>
+> 1. **A base's `Kind` trait never redeclares a method its interface declares.**
+>    A polymorphic base that implements an interface carries it as a supertrait
+>    (`trait NodeKind<K, V>: Source<V>`), so a method already on `Source` has a
+>    slot. Declaring it on `NodeKind` as well is legal Rust — a trait may shadow
+>    a supertrait's item — but then a call through the handle matches both and
+>    is ambiguous. The interface's slot is the one that is kept; every concrete
+>    class delegates to the same body from both traits, so dispatch is
+>    unaffected.
+> 2. **Every `impl … for C<T…>` repeats the bounds `C`'s inherent `impl`
+>    carries.** Those bounds are derived, not just written: a type parameter used
+>    as a hash key gains `Eq + Hash`, one that is formatted gains `Display`, one
+>    used as a fixed-array element gains `Default`. If a trait impl declares a
+>    weaker list, the inherent method is out of scope inside it, `C::m(self)`
+>    re-resolves to the trait method the block is defining, and the delegating
+>    body recurses forever — which Rust reports as a lint, not an error. Emitted
+>    crates therefore also carry `#![deny(unconditional_recursion)]`, turning any
+>    future instance of this mistake into a compile-time juxc bug report.
 
 ### 6.9.7. Sealed Hierarchies Give Exact Analysis
 
@@ -335,6 +356,60 @@ public void redrawCircle(Circle c) {
 ```
 
 The cost of polymorphism in the borrow system is conservative widening at call sites whose receiver is the base class. Sealed hierarchies make that widening exact. `final` leaves recover full precision when the receiver type is precise.
+
+---
+
+## §7.4.2 (new) — Abstract Classes and Interface Defaults
+
+Insert after §7.4.1.
+
+An abstract class that `implements` an interface is a full implementer for the
+purpose of *calling* that interface's `default` methods, whether or not it
+writes the interface's required methods itself:
+
+```jux
+public interface Named {
+    String kindOf();                                   // required
+    default String name() { return "<" + this.kindOf() + ">"; }
+}
+
+public abstract class Shape implements Named {
+    protected int sides;
+    public Shape(int sides) { this.sides = sides; }
+    public String describe() { return this.name() + ":" + this.sides; }   // legal
+}
+
+public class Tri extends Shape {
+    public Tri() { super(3); }
+    @Override public String kindOf() { return "tri"; }
+}
+```
+
+`Shape.describe()` calls `name()`, which `Shape` does not declare and does not
+inherit from a class — it comes from the interface. At the point of the call the
+receiver's runtime type is always a concrete subclass, so `kindOf()` resolves
+there. This is Java's rule and Jux keeps it.
+
+**Overriding.** `Tri.kindOf()` carries `@Override` even though the interface it
+satisfies is reached through `Shape`, not through `Tri`'s own `implements`
+clause. Java's "IS-A through the parent" rule applies to interfaces exactly as
+it applies to methods: an `@Override` is valid when *any* ancestor — class or
+interface, at any depth — declares the method. A subclass may also override the
+`default` itself (`Quad.name()`), which wins over the interface body.
+
+**Lowering.** Rust has no partial `impl`, so an abstract class emits
+`impl Iface for AbstractC` with two kinds of member:
+
+- methods it, or a concrete ancestor, writes — delegating to that body, exactly
+  as a concrete class's impl does;
+- methods it leaves to its subclasses — emitted as `unreachable!`.
+
+The unreachable arm is unreachable by construction: an abstract class cannot be
+instantiated, so no value of that Rust type exists to receive the call. Every
+concrete subclass re-emits the whole surface against its own bodies, and a
+base-typed variable is a handle to one of those. Without the impl, the abstract
+class's own methods would have nothing to resolve an interface `default`
+against.
 
 ---
 

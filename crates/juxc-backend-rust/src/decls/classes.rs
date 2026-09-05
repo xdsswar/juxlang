@@ -1506,12 +1506,6 @@ impl RustEmitter {
     /// [`Self::emit_inherited_wrapper_methods`]'s ancestor-walk to skip a
     /// default already inlined as an inherent by a concrete ancestor.
     fn emit_inherited_default_methods(&mut self, class_decl: &juxc_ast::ClassDecl) {
-        // Abstract classes never get an inherent forwarding method — they
-        // carry no concrete `impl Trait for …`, and any concrete subclass
-        // re-runs this walk and emits the forwarder itself.
-        if class_decl.is_abstract {
-            return;
-        }
         // Roll up implemented interfaces: the class's own `implements`
         // clause PLUS interfaces inherited through the `extends` chain
         // (Java's "IS-A through the parent" rule). Identical to the
@@ -2156,15 +2150,36 @@ impl RustEmitter {
                     }
                 }
                 Expr::Binary(b) => {
-                    // String concat — `"…" + x` or `x + "…"`. We can't
-                    // easily know the static type here, so be inclusive:
-                    // if either operand is a string literal, the other
-                    // formatted operand's generic field is displayed.
-                    let lhs_lit = matches!(&*b.left, Expr::Literal(juxc_ast::Literal::String(_)));
-                    let rhs_lit = matches!(&*b.right, Expr::Literal(juxc_ast::Literal::String(_)));
-                    if b.op == juxc_ast::BinaryOp::Add && (lhs_lit || rhs_lit) {
-                        mark_field_read(&b.left, generic_members, out);
-                        mark_field_read(&b.right, generic_members, out);
+                    // A string concat is a `+` CHAIN, not a pair:
+                    // `a + "|" + b + "|" + c` nests left, so testing only the
+                    // two immediate operands marked `a` (next to a literal) and
+                    // missed `b` and `c`. Flatten the whole chain — if any leaf
+                    // is a string literal the chain formats, so every leaf in it
+                    // is a format position.
+                    fn flatten<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+                        match e {
+                            Expr::Binary(b) if b.op == juxc_ast::BinaryOp::Add => {
+                                flatten(&b.left, out);
+                                flatten(&b.right, out);
+                            }
+                            other => out.push(other),
+                        }
+                    }
+                    if b.op == juxc_ast::BinaryOp::Add {
+                        let mut leaves: Vec<&Expr> = Vec::new();
+                        flatten(e, &mut leaves);
+                        let formats = leaves.iter().any(|l| {
+                            matches!(
+                                l,
+                                Expr::Literal(juxc_ast::Literal::String(_))
+                                    | Expr::InterpString(_)
+                            )
+                        });
+                        if formats {
+                            for leaf in &leaves {
+                                mark_field_read(leaf, generic_members, out);
+                            }
+                        }
                     }
                     scan_expr(&b.left, generic_members, out);
                     scan_expr(&b.right, generic_members, out);
@@ -2476,6 +2491,43 @@ impl RustEmitter {
         false
     }
 
+    /// True when an interface this class carries as a `Kind`-trait
+    /// **supertrait** already declares `method_name`.
+    ///
+    /// A polymorphic base's `Kind` trait lists the interfaces the class
+    /// implements as supertraits (see the `c_is_poly` block in
+    /// [`Self::emit_class_decl`]), so `trait NodeKind<K, V>: Source<V>`.
+    /// Declaring `take` on `NodeKind` as well is legal Rust — a trait may
+    /// shadow a supertrait's item — but then `handle.take()` on an
+    /// `Rc<dyn NodeKind<…>>` matches BOTH slots and rustc reports E0034,
+    /// "multiple applicable items in scope", with no way for the call site to
+    /// know which to name.
+    ///
+    /// The interface's slot is the right one to keep: every concrete class in
+    /// the hierarchy emits `impl Iface for C` delegating to the same inherent
+    /// body the `Kind` impl would have called, so virtual dispatch through the
+    /// handle lands on the subclass's override either way.
+    fn kind_supertrait_interface_declares(&self, class_bare: &str, method_name: &str) -> bool {
+        let Some(sig) = self.lookup_class_by_bare_or_fqn(class_bare) else {
+            return false;
+        };
+        let implements = sig.implements.clone();
+        implements.iter().any(|iface_ty| {
+            // The class's own clause, plus everything those interfaces extend —
+            // the supertrait chain reaches all of it.
+            let mut chain = vec![iface_ty.clone()];
+            chain.extend(self.transitive_interface_supers(iface_ty));
+            chain.iter().any(|t| {
+                t.name.segments.last().is_some_and(|seg| {
+                    self.lookup_interface_by_bare_or_fqn(&seg.text)
+                        // Foreign (`@rust`) interfaces are not supertraits of a
+                        // `Kind` trait, so they shadow nothing.
+                        .is_some_and(|(_, i)| !i.is_external && i.methods.contains_key(method_name))
+                })
+            })
+        })
+    }
+
     /// The **introduced virtual methods** of `class_bare` — every non-static
     /// instance method it declares that no ancestor declares. Java dispatches
     /// public, protected, internal AND package-private instance methods
@@ -2517,6 +2569,13 @@ impl RustEmitter {
                 } else {
                     format!("{name}__ov{k}")
                 };
+                // An interface the class implements is already a SUPERTRAIT of
+                // this `Kind` trait, so a method it declares has a slot there
+                // and must not get a second one here — see
+                // [`Self::kind_supertrait_interface_declares`].
+                if self.kind_supertrait_interface_declares(class_bare, &emitted) {
+                    continue;
+                }
                 out.push((emitted, m.clone()));
             }
         }
@@ -2688,7 +2747,7 @@ impl RustEmitter {
     /// `Option<…>` — `Rc<dyn t>` for an interface, `Rc<dyn tKind>` for a
     /// polymorphic-base class, or the bare wrapper newtype `t` for a concrete
     /// (leaf) class. Mirrors value-position emission for a bare `t`.
-    fn emit_hook_target_type(&mut self, t: &str, base: &str) {
+    pub(crate) fn emit_hook_target_type(&mut self, t: &str, base: &str) {
         // A generic target's type args, expressed in the OWNING trait's
         // vocabulary — `__jux_as_Box` on `trait ContainerKind<T>` returns
         // `Option<Box<T>>`. Empty for a non-generic target.
@@ -3109,6 +3168,35 @@ impl RustEmitter {
             self.w.push_str("}\n");
         }
 
+        // **A concrete value converts into a base handle.** `? super Animal`
+        // lifts to a `From<Animal>`-bounded parameter, so a caller passing a
+        // `Vec<Animal>` (element `Rc<dyn AnimalKind>`) needs that conversion to
+        // exist for every class the callee might write. One impl per class in
+        // the hierarchy provides it, and it is the same wrap the ordinary
+        // base-slot coercion performs.
+        if c_is_poly {
+            self.emit_kind_from_impls(&class_bare);
+        }
+        // **A handle to a base behaves as the base.** A polymorphic-base element
+        // lowers to `Rc<dyn <Name>Kind>`, and Rust does not consider that handle
+        // an implementer of `<Name>Kind` — so a bound like `V: AnimalKind`
+        // (which is what `? extends Animal` and `V extends Animal` lift to)
+        // rejected a perfectly ordinary `Box<Dog>`. Forwarding the trait over
+        // `Rc<T>` says what is already true: dereferencing the handle gives
+        // something that implements the trait.
+        //
+        // Skipped when the base has observable properties: their helper
+        // signatures are generated per property and there is no enumeration to
+        // forward from, and a base-typed observer surface is rare enough to
+        // leave on the direct path.
+        if c_is_poly && !has_observer_sigs {
+            self.emit_kind_rc_forwarding_impl(
+                class_decl,
+                &own_methods,
+                &hook_targets,
+                &accessor_fields,
+            );
+        }
         // --- impls ---
         // A dispatch-relevant ABSTRACT class provides no concrete bodies, so it
         // emits NO `impl …Kind for Self` blocks (its populated trait's required
@@ -3271,6 +3359,207 @@ impl RustEmitter {
         self.w.newline();
     }
 
+    /// Emit `impl From<C> for Rc<dyn <Base>Kind>` for the base and every class
+    /// that IS-A it — the conversion a contravariant (`? super`) parameter
+    /// needs, and the same `Rc::new(...) as Rc<dyn …>` wrap a base-typed slot
+    /// performs.
+    fn emit_kind_from_impls(&mut self, base_bare: &str) {
+        // Only non-generic hierarchies: a generic base's handle carries type
+        // arguments the impl would have to thread through, and `? super` over
+        // a generic base is not a shape the language surfaces yet.
+        if self
+            .lookup_class_by_bare_or_fqn(base_bare)
+            .is_some_and(|c| !c.generic_params.is_empty())
+        {
+            return;
+        }
+        let mut subs: Vec<String> = self
+            .symbols
+            .classes
+            .keys()
+            .map(|fqn| fqn.rsplit('.').next().unwrap_or(fqn).to_string())
+            .filter(|c| {
+                self.class_is_a(c, base_bare)
+                    && self
+                        .lookup_class_by_bare_or_fqn(c)
+                        .is_some_and(|s| s.generic_params.is_empty() && !s.is_abstract)
+            })
+            .collect();
+        subs.sort();
+        subs.dedup();
+        for sub in subs {
+            self.w.emit_indent();
+            self.w.push_str("impl From<");
+            self.w.push_str(&to_rust_ident(&sub));
+            self.w.push_str("> for std::rc::Rc<dyn ");
+            self.w.push_str(&to_rust_ident(base_bare));
+            self.w.push_str("Kind> {
+");
+            self.w.indent_inc();
+            self.w.emit_indent();
+            self.w.push_str("fn from(__v: ");
+            self.w.push_str(&to_rust_ident(&sub));
+            self.w.push_str(") -> Self { std::rc::Rc::new(__v) }
+");
+            self.w.indent_dec();
+            self.w.emit_indent();
+            self.w.push_str("}
+");
+        }
+    }
+
+    /// Emit `impl <Name>Kind for Rc<T>` — the forwarding impl that lets a shared
+    /// HANDLE to a polymorphic base satisfy a bound naming that base.
+    ///
+    /// `Rc<dyn AnimalKind>` is the lowering of an `Animal`-typed element, but
+    /// Rust sees it as a smart pointer, not an `AnimalKind`. Forwarding every
+    /// member through the deref makes the handle usable wherever the base is —
+    /// and because the blanket is over any `T: <Name>Kind`, it also covers a
+    /// handle to a SUBCLASS trait (`Rc<dyn DogKind>` satisfies `AnimalKind`
+    /// through `DogKind`'s supertrait).
+    fn emit_kind_rc_forwarding_impl(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+        own_methods: &[(String, MethodSig)],
+        hook_targets: &[String],
+        accessor_fields: &[(String, juxc_ast::TypeRef)],
+    ) {
+        let class_bare = class_decl.name.text.clone();
+        self.w.emit_indent();
+        self.w.push_str("impl<__JuxH: ?core::marker::Sized + ");
+        self.w.push_str(&to_rust_ident(&class_bare));
+        self.w.push_str("Kind");
+        let own_args: Vec<juxc_ast::TypeRef> = class_decl
+            .generic_params
+            .iter()
+            .map(|p| Self::param_type_ref(&p.name.text, p.name.span))
+            .collect();
+        self.emit_kind_trait_args(&class_bare, &own_args);
+        // The class's own params ride along on the impl so a generic `Kind`
+        // trait's arguments stay in scope — with their REAL bounds, since the
+        // forwarded members are typed against them (a `T extends Id & Label`
+        // param whose bound went missing here failed on the first member call).
+        if !class_decl.generic_params.is_empty() {
+            self.w.push_str(", ");
+            let displayed = self.class_displayed_generic_params(class_decl);
+            let defaulted = Self::class_default_bound_params(class_decl);
+            let params = class_decl.generic_params.clone();
+            self.emit_generic_params_bounds_body(&params, &displayed, &defaulted);
+        }
+        self.w.push_str("> ");
+        self.w.push_str(&to_rust_ident(&class_bare));
+        self.w.push_str("Kind");
+        self.emit_kind_trait_args(&class_bare, &own_args);
+        self.w.push_str(" for std::rc::Rc<__JuxH> {
+");
+        self.w.indent_inc();
+        for (name, sig) in own_methods {
+            self.emit_kind_forwarding_method(&class_bare, &own_args, name, sig);
+        }
+        for t in hook_targets {
+            self.w.emit_indent();
+            self.w.push_str("fn __jux_as_");
+            self.w.push_str(t);
+            self.w.push_str("(&self) -> Option<");
+            self.emit_hook_target_type(t, &class_bare);
+            self.w.push_str("> { ");
+            self.emit_forwarding_qualifier(&class_bare, &own_args);
+            self.w.push_str("__jux_as_");
+            self.w.push_str(t);
+            self.w.push_str("(&**self) }
+");
+        }
+        for (name, ty) in accessor_fields {
+            let ty = ty.clone();
+            self.w.emit_indent();
+            self.w.push_str("fn __get_");
+            self.w.push_str(&to_rust_ident(name));
+            self.w.push_str("(&self) -> ");
+            self.emit_value_type_as_rust(&ty);
+            self.w.push_str(" { ");
+            self.emit_forwarding_qualifier(&class_bare, &own_args);
+            self.w.push_str("__get_");
+            self.w.push_str(&to_rust_ident(name));
+            self.w.push_str("(&**self) }
+");
+            self.w.emit_indent();
+            self.w.push_str("fn __set_");
+            self.w.push_str(&to_rust_ident(name));
+            self.w.push_str("(&self, __v: ");
+            self.emit_value_type_as_rust(&ty);
+            self.w.push_str(") { ");
+            self.emit_forwarding_qualifier(&class_bare, &own_args);
+            self.w.push_str("__set_");
+            self.w.push_str(&to_rust_ident(name));
+            self.w.push_str("(&**self, __v) }
+");
+        }
+        self.w.indent_dec();
+        self.w.emit_indent();
+        self.w.push_str("}
+");
+    }
+
+    /// `<__JuxH as XKind<args>>::` — the qualified call prefix a forwarding
+    /// body uses. An unqualified `(**self).m()` is ambiguous whenever the trait
+    /// and one of its supertraits declare the same name, which a class
+    /// implementing an interface with a same-named method routinely produces.
+    fn emit_forwarding_qualifier(&mut self, class_bare: &str, own_args: &[juxc_ast::TypeRef]) {
+        self.w.push_str("<__JuxH as ");
+        self.w.push_str(&to_rust_ident(class_bare));
+        self.w.push_str("Kind");
+        self.emit_kind_trait_args(class_bare, own_args);
+        self.w.push_str(">::");
+    }
+
+    /// One forwarded `Kind` method: same signature, body delegating through the
+    /// deref with an explicit trait qualifier.
+    fn emit_kind_forwarding_method(
+        &mut self,
+        class_bare: &str,
+        own_args: &[juxc_ast::TypeRef],
+        name: &str,
+        sig: &MethodSig,
+    ) {
+        self.w.emit_indent();
+        let is_async = matches!(sig.return_type, ReturnType::AsyncType(_));
+        self.w.push_str("fn ");
+        self.w.push_str(&to_rust_ident(name));
+        self.w.push_str("(&self");
+        for p in &sig.params {
+            self.w.push_str(", ");
+            self.w.push_str(&p.name);
+            self.w.push_str(": ");
+            self.emit_value_type_as_rust(&p.ty);
+        }
+        self.w.push(')');
+        match &sig.return_type {
+            ReturnType::Void => {}
+            ReturnType::Type(t) | ReturnType::AsyncType(t) => {
+                if is_async {
+                    self.w.push_str(
+                        " -> std::pin::Pin<Box<dyn std::future::Future<Output = ",
+                    );
+                    self.emit_return_type_as_rust(t);
+                    self.w.push_str("> + '_>>");
+                } else {
+                    self.w.push_str(" -> ");
+                    self.emit_return_type_as_rust(t);
+                }
+            }
+        }
+        self.w.push_str(" { ");
+        self.emit_forwarding_qualifier(class_bare, own_args);
+        self.w.push_str(&to_rust_ident(name));
+        self.w.push_str("(&**self");
+        for p in &sig.params {
+            self.w.push_str(", ");
+            self.w.push_str(&p.name);
+        }
+        self.w.push_str(") }
+");
+    }
+
     /// Emit a **method-carrying generic marker trait** for a generic class
     /// that appears in bound position (generics Step 7 / gap 1).
     ///
@@ -3315,9 +3604,9 @@ impl RustEmitter {
         self.w.push_str("trait ");
         self.w.push_str(class_bare);
         self.w.push_str("Kind");
-        // Trait generic params = the class's params (with the Clone/Debug tail
-        // so method bodies that `.clone()` a `T` value typecheck).
-        self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+        // Trait generic params = the class's params, carrying the SAME bounds
+        // the inherent impl uses, so the delegating impl below can name them.
+        self.emit_class_impl_generic_params(class_decl);
         self.w.push_str(": std::fmt::Debug {\n");
         self.w.indent_inc();
         for m in &trait_methods {
@@ -3348,7 +3637,7 @@ impl RustEmitter {
         // --- impl<T…> ContainerKind<T…> for Container<T…> { … } ---
         self.w.emit_indent();
         self.w.push_str("impl");
-        self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+        self.emit_class_impl_generic_params(class_decl);
         self.w.push(' ');
         self.w.push_str(class_bare);
         self.w.push_str("Kind");
@@ -3422,6 +3711,26 @@ impl RustEmitter {
             .cloned()
     }
 
+    /// Emit the generic-parameter list for an `impl` header **on this class** -
+    /// exactly the bounds the class's own inherent `impl` block carries.
+    ///
+    /// Every `impl ... for Class<T>` whose bodies call the class's inherent
+    /// methods (`fn take(&self) -> V { Node::<K, V>::take(self) }`) has to
+    /// repeat those bounds. A weaker list is not merely untidy: under it the
+    /// inherent `impl` does not apply, so `Node::<K, V>::take` re-resolves to
+    /// the TRAIT method this very block is defining, and the delegating body
+    /// calls itself forever. rustc reports that as the `unconditional_recursion`
+    /// LINT, not an error, so the program builds and then overflows its stack at
+    /// runtime. Hence: one place to compute the list.
+    pub(crate) fn emit_class_impl_generic_params(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        let displayed = self.class_displayed_generic_params(class_decl);
+        let defaulted = Self::class_default_bound_params(class_decl);
+        let declared = Self::class_declared_types(class_decl);
+        self.collect_key_bound_params(&class_decl.generic_params, declared.iter());
+        let params = class_decl.generic_params.clone();
+        self.emit_generic_params_with_clone_bound_plus_display(&params, &displayed, &defaulted);
+    }
+
     /// Emit one `impl Interface for Class { … delegating methods … }`
     /// block per interface listed in the class's `implements` clause.
     ///
@@ -3439,17 +3748,23 @@ impl RustEmitter {
     /// method order (Rust resolves by name), and a deterministic sort
     /// keeps the emitted output stable across runs.
     pub(crate) fn emit_class_trait_impls(&mut self, class_decl: &juxc_ast::ClassDecl) {
-        // Abstract classes don't emit trait impls — they would
-        // produce an `impl Iface for AbstractC {}` with no method
-        // bodies because the abstract methods have no concrete
-        // implementation here, and rustc would reject the empty
-        // impl with E0046. The trait-impl walk for each concrete
-        // subclass rolls up `extends` so the abstract intermediate
-        // still propagates its `implements` clause down to the
-        // class that actually carries the method bodies.
-        if class_decl.is_abstract {
-            return;
-        }
+        // **An abstract class implements an interface only as far as it can.**
+        // The general rule is E0046: an `impl Iface for AbstractC` that leaves
+        // a required method unwritten does not compile, and an abstract class
+        // is precisely the one that may leave methods unwritten. So the impl is
+        // emitted per interface, and only when every method the interface
+        // REQUIRES already has a body on this class or a concrete ancestor —
+        // the `method_targets` map below decides that, exactly as it does for a
+        // concrete class. An abstract class that satisfies an interface in full
+        // is an ordinary implementer and is treated as one; that is what lets
+        // its own concrete method call an interface DEFAULT (`this.tag()`),
+        // which otherwise had nothing to resolve against.
+        //
+        // Interfaces it cannot satisfy are still propagated: the trait-impl
+        // walk for each concrete subclass rolls up `extends`, so the abstract
+        // intermediate's `implements` clause reaches the class that does carry
+        // the bodies.
+        let abstract_class = class_decl.is_abstract;
         // Concrete classes pick up interfaces from their own
         // `implements` clause AND from every ancestor in the
         // `extends` chain — Java's "an Employee IS-A Payable
@@ -3586,7 +3901,7 @@ impl RustEmitter {
                 // un-implemented and broke F-bounded generic call sites.
                 self.w.emit_indent();
                 self.w.push_str("impl");
-                self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+                self.emit_class_impl_generic_params(class_decl);
                 self.w.push(' ');
                 self.emit_type_as_rust(interface_ty);
                 self.w.push_str(" for ");
@@ -3693,6 +4008,31 @@ impl RustEmitter {
                 // Default interface method that nobody overrides:
                 // skip entry → Rust trait default fires.
             }
+            // **The methods an abstract class leaves to its subclasses.**
+            // `method_targets` holds a target for every method with a body to
+            // reach; a REQUIRED method missing from it is one this class does
+            // not write. Rust has no partial `impl`, so the choice is between
+            // no impl at all — which is what the backend used to do, leaving
+            // the abstract class's OWN methods unable to call an interface
+            // default (`this.name()` → E0599) — and an impl whose unwritten
+            // methods are marked unreachable.
+            //
+            // Unreachable is the truthful one: an abstract class cannot be
+            // instantiated, so no value of this Rust type ever exists to
+            // receive the call. Every concrete subclass re-emits the whole
+            // surface against its own bodies, and a base-typed variable is an
+            // `Rc<dyn …Kind>` pointing at one of those. The stub exists so the
+            // TYPE satisfies the trait, nothing more.
+            let mut abstract_stubs: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            if abstract_class {
+                for (name, sig) in &methods {
+                    if !sig.is_static && sig.is_abstract && !method_targets.contains_key(name) {
+                        abstract_stubs.insert(name.clone());
+                        method_targets.insert(name.clone(), Some(String::new()));
+                    }
+                }
+            }
             methods.retain(|(name, _)| method_targets.contains_key(name));
             if methods.is_empty() {
                 // The class implements the interface entirely via
@@ -3701,7 +4041,7 @@ impl RustEmitter {
                 // trait-dispatch works.
                 self.w.emit_indent();
                 self.w.push_str("impl");
-                self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+                self.emit_class_impl_generic_params(class_decl);
                 self.w.push(' ');
                 self.emit_type_as_rust(interface_ty);
                 self.w.push_str(" for ");
@@ -3712,10 +4052,11 @@ impl RustEmitter {
             }
             self.w.emit_indent();
             self.w.push_str("impl");
-            // The class's own generic params (with the Clone bound)
-            // travel onto the trait impl too — `impl<T: Clone>
-            // Interface for Box<T>`.
-            self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
+            // The class's own generic params travel onto the trait impl -
+            // `impl<T: Clone> Interface for Box<T>` - carrying the SAME bounds
+            // the inherent impl declares, because every method body below
+            // delegates to one of the class's inherent methods.
+            self.emit_class_impl_generic_params(class_decl);
             self.w.push(' ');
             self.emit_type_as_rust(interface_ty);
             self.w.push_str(" for ");
@@ -3800,6 +4141,17 @@ impl RustEmitter {
                     self.w.push_str("Box::pin(async move { ");
                 }
                 match target {
+                    _ if abstract_stubs.contains(method_name.as_str()) => {
+                        // Left abstract here — see `abstract_stubs` above. The
+                        // message names the class and method so a stub that
+                        // somehow DID run reads as a compiler bug, not as a
+                        // user error.
+                        self.w.push_str("unreachable!(\"`");
+                        self.w.push_str(&class_decl.name.text);
+                        self.w.push_str("` is abstract and leaves `");
+                        self.w.push_str(method_name);
+                        self.w.push_str("` to its subclasses\")");
+                    }
                     Some(ref fqn) if !fqn.is_empty() => {
                         // Cross-package: FQN-rooted path, `crate::`
                         // when the FQN has a package portion.

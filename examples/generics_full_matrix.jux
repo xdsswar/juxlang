@@ -1,0 +1,158 @@
+// Generics crossed with everything that composes with them, and inheritance in
+// every permitted shape — all in ONE file, which is itself part of the test:
+// many top-level declarations, forward references between them, and a mutual
+// reference cycle.
+
+import rust.std.*;
+
+// ---- interfaces: extends, diamond, defaults, generic ----------------------
+
+public interface Id { int id(); }
+public interface Named { String name(); }
+public interface IdNamed extends Id, Named {
+    default String tag() { return this.name() + "#" + this.id(); }
+}
+public interface Source<T> { T take(); }
+
+// ---- generic arity 1 / 2 / 3, generic method, const generic ---------------
+
+public class One<A> {
+    public A a;
+    public One(A a) { this.a = a; }
+    public A get() { return this.a; }
+}
+
+public class Three<A, B, C> {
+    public A a; public B b; public C c;
+    public Three(A a, B b, C c) { this.a = a; this.b = b; this.c = c; }
+    public String show() { return this.a + "|" + this.b + "|" + this.c; }
+    public <R> R mapC((C) -> R f) { return f(this.c); }
+}
+
+public class Ring<T, int N> {
+    private T[N] slots;
+    public Ring(T seed) { this.slots = new T[N]; }
+    public int cap() { return N; }
+}
+
+// ---- bounds: single, intersection, F-bounded ------------------------------
+
+public class Item implements IdNamed {
+    private int n;
+    public Item(int n) { this.n = n; }
+    @Override public int id() { return this.n; }
+    @Override public String name() { return "i" + this.n; }
+}
+
+public class Both<T extends Id & Named> {
+    private T v;
+    public Both(T v) { this.v = v; }
+    public String render() { return this.v.name() + "#" + this.v.id(); }
+}
+
+// ---- a generic class that is a polymorphic base, implements a generic
+//      interface, and is keyed by its own parameter -------------------------
+
+public class Node<K, V> implements Source<V> {
+    private HashMap<K, V> byKey;
+    private Vec<Node<K, V>> kids;
+    private V payload;
+    public Node(V payload) {
+        this.payload = payload;
+        this.byKey = new HashMap<K, V>();
+        this.kids = new Vec<Node<K, V>>();
+    }
+    @Override public V take() { return this.payload; }
+    public void index(K k, V v) { this.byKey.insert(k, v); }
+    public void attach(Node<K, V> kid) { this.kids.push(kid); }
+    public int deep() {
+        int n = 1;
+        for (Node<K, V> k : this.kids) { n = n + k.deep(); }
+        return n;
+    }
+    public String kind() { return "Node"; }
+}
+
+// A subclass that PINS both parameters; its inherited `Source<V>` arrives
+// instantiated as `Source<String>`.
+public class Leaf extends Node<int, String> {
+    public Leaf(String payload) { super(payload); }
+    @Override public String kind() { return "Leaf"; }
+    @Override public String take() { return super.take(); }
+}
+
+// ---- inheritance: abstract, 4 levels, multi-interface, final, sealed ------
+
+public abstract class Shape implements IdNamed {
+    protected int n;
+    public Shape(int n) { this.n = n; }
+    public abstract String kindOf();
+    @Override public int id() { return this.n; }
+    @Override public String name() { return this.kindOf(); }
+    public String describe() { return this.tag(); }
+}
+public class Round extends Shape {
+    public Round(int n) { super(n); }
+    @Override public String kindOf() { return "Round"; }
+}
+public class Circle extends Round {
+    public Circle(int n) { super(n); }
+    @Override public String kindOf() { return "Circle"; }
+}
+public final class Dot extends Circle {
+    public Dot(int n) { super(n); }
+    @Override public String kindOf() { return "Dot"; }
+}
+
+public sealed class Suit permits Red, Black { public String colour() { return "?"; } }
+public class Red extends Suit { @Override public String colour() { return "red"; } }
+public class Black extends Suit { @Override public String colour() { return "black"; } }
+
+// ---- wildcards: producer, consumer, unbounded -----------------------------
+
+public class Animal { public String speak() { return "..."; } }
+public class Dog extends Animal { @Override public String speak() { return "Woof"; } }
+
+public String readProducer(One<? extends Animal> b) { return b.get().speak(); }
+public String readAny(One<?> b) { return "any"; }
+public void writeConsumer(Vec<? super Dog> sink) { sink.push(new Dog()); }
+
+// ---- mutual reference between two classes declared in either order --------
+
+public class Ping { public Pong peer; public Ping() { this.peer = new Pong(); }
+    public String go() { return "ping+" + this.peer.tag(); } }
+public class Pong { public String tag() { return "pong"; } }
+
+public void main() {
+    print(new One<int>(1).get());
+    Three<int, String, double> t = new Three<int, String, double>(1, "y", 2.5);
+    print(t.show());
+    print(t.mapC<String>((c) -> "c=" + c));
+    print(new Ring<int, 4>(0).cap());
+    print(new Both<Item>(new Item(4)).render());
+
+    Node<int, String> root = new Node<int, String>("r");
+    root.index(1, "one");
+    root.attach(new Node<int, String>("a"));
+    root.attach(new Leaf("b"));
+    print(root.deep());
+    print(root.kind());
+    Source<String> src = root;
+    print(src.take());
+
+    Shape s = new Dot(7);
+    print(s.describe());
+    Shape r = new Round(1);
+    print(r.describe());
+
+    Suit suit = new Black();
+    print(suit.colour());
+
+    print(readProducer(new One<Dog>(new Dog())));
+    print(readAny(new One<int>(1)));
+    Vec<Animal> pool = new Vec<Animal>();
+    writeConsumer(pool);
+    print(pool[0].speak());
+
+    print(new Ping().go());
+}

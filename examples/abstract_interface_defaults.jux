@@ -1,0 +1,60 @@
+// An abstract class sitting between an interface and its concrete subclasses —
+// every position that combination can put a method in.
+//
+// `Tagged` gives a default (`tag`) built on a required method (`id`). `Base`
+// SATISFIES the interface (it writes `id`) and calls the default from its own
+// concrete method. `Shape` does NOT (it leaves `kindOf` to its subclasses) and
+// still calls the default. Both are legal Java-shaped inheritance, and both
+// used to have nothing to resolve `this.tag()` / `this.name()` against.
+
+public interface Tagged {
+    int id();
+    default String tag() { return "t" + this.id(); }
+}
+
+public abstract class Base implements Tagged {
+    protected int n;
+    public Base(int n) { this.n = n; }
+    @Override public int id() { return this.n; }
+    public String describe() { return this.tag(); }
+}
+
+public class Impl extends Base {
+    public Impl(int n) { super(n); }
+}
+
+public interface Named {
+    String kindOf();
+    default String name() { return "<" + this.kindOf() + ">"; }
+}
+
+public abstract class Shape implements Named {
+    protected int sides;
+    public Shape(int sides) { this.sides = sides; }
+    public String describe() { return this.name() + ":" + this.sides; }
+}
+
+// `kindOf` is annotated `@Override` even though the interface it satisfies is
+// reached through `Shape`, not through this class's own `implements` clause.
+public class Tri extends Shape {
+    public Tri() { super(3); }
+    @Override public String kindOf() { return "tri"; }
+}
+
+public class Quad extends Shape {
+    public Quad() { super(4); }
+    @Override public String kindOf() { return "quad"; }
+    @Override public String name() { return "[" + this.kindOf() + "]"; }
+}
+
+void main() {
+    Base b = new Impl(5);
+    print(b.describe());
+
+    Shape t = new Tri();
+    print(t.describe());
+    print(t.name());
+
+    Shape q = new Quad();
+    print(q.describe());
+}

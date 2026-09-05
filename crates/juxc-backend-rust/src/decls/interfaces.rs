@@ -21,6 +21,93 @@ use crate::RustEmitter;
 use juxc_lex::to_rust_ident;
 
 impl RustEmitter {
+    /// Emit `impl<T: ?Sized + Iface> Iface for Rc<T>` — see the call site.
+    ///
+    /// Every member forwards through the deref. Default bodies forward too
+    /// rather than being inherited: the handle must dispatch to the value
+    /// inside it, not run the interface's own default.
+    fn emit_interface_rc_forwarding_impl(&mut self, interface: &juxc_ast::InterfaceDecl) {
+        let iface_bare = interface.name.text.clone();
+        let methods: Vec<juxc_ast::FnDecl> = interface
+            .methods
+            .iter()
+            .filter(|m| !m.modifiers.iter().any(|x| matches!(x, juxc_ast::FnModifier::Static)))
+            .cloned()
+            .collect();
+        let hooks = self.interface_hook_targets(&iface_bare);
+        self.w.emit_indent();
+        self.w.push_str("impl<__JuxH: ?core::marker::Sized + ");
+        self.w.push_str(&to_rust_ident(&iface_bare));
+        // A GENERIC interface forwards too: it is the supertrait a generic
+        // class's `Kind` trait lists, so the handle has to satisfy it.
+        let params = interface.generic_params.clone();
+        self.emit_generic_params_as_args(&params);
+        if !params.is_empty() {
+            self.w.push_str(", ");
+            let empty = std::collections::HashSet::new();
+            self.emit_generic_params_bounds_body(&params, &empty, &empty);
+        }
+        self.w.push_str("> ");
+        self.w.push_str(&to_rust_ident(&iface_bare));
+        self.emit_generic_params_as_args(&params);
+        self.w.push_str(" for std::rc::Rc<__JuxH> {
+");
+        self.w.indent_inc();
+        for m in &methods {
+            self.w.emit_indent();
+            self.w.push_str("fn ");
+            self.w.push_str(&to_rust_ident(&m.name.text));
+            self.w.push_str("(&self");
+            for p in &m.params {
+                self.w.push_str(", ");
+                self.w.push_str(&to_rust_ident(&p.name.text));
+                self.w.push_str(": ");
+                let ty = p.ty.clone();
+                self.emit_value_type_as_rust(&ty);
+            }
+            self.w.push(')');
+            match &m.return_type {
+                ReturnType::Void => {}
+                ReturnType::Type(t) => {
+                    let t = t.clone();
+                    self.w.push_str(" -> ");
+                    self.emit_return_type_as_rust(&t);
+                }
+                ReturnType::AsyncType(t) => {
+                    let t = t.clone();
+                    self.w
+                        .push_str(" -> std::pin::Pin<Box<dyn std::future::Future<Output = ");
+                    self.emit_return_type_as_rust(&t);
+                    self.w.push_str("> + '_>>");
+                }
+            }
+            self.w.push_str(" { (**self).");
+            self.w.push_str(&to_rust_ident(&m.name.text));
+            self.w.push('(');
+            for (i, p) in m.params.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str(&to_rust_ident(&p.name.text));
+            }
+            self.w.push_str(") }\n");
+        }
+        for t in &hooks {
+            self.w.emit_indent();
+            self.w.push_str("fn __jux_as_");
+            self.w.push_str(t);
+            self.w.push_str("(&self) -> Option<");
+            self.emit_hook_target_type(t, &iface_bare);
+            self.w.push_str("> { (**self).__jux_as_");
+            self.w.push_str(t);
+            self.w.push_str("() }\n");
+        }
+        self.w.indent_dec();
+        self.w.emit_indent();
+        self.w.push_str("}\n");
+        self.w.newline();
+    }
+
     /// Lower a Jux interface to a Rust `trait`. Method signatures
     /// emit directly — `void foo();` becomes `fn foo(&self);` —
     /// and default-bodied methods become `fn foo(&self) { … }`
@@ -181,6 +268,13 @@ impl RustEmitter {
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();
+        // **A handle to an interface behaves as the interface.** An
+        // interface-typed value lowers to `Rc<dyn Iface>`, which Rust sees as a
+        // smart pointer rather than an implementer — so a bound naming the
+        // interface (what `? extends Iface` and `V extends Iface` lift to, and
+        // what a class `Kind` trait lists as a supertrait) rejected it.
+        // Forwarding the trait over `Rc<T>` states what is already true.
+        self.emit_interface_rc_forwarding_impl(interface);
 
         // Static interface methods: free functions named
         // `<Interface>_<method>`. The call-site dispatch in
