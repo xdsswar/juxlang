@@ -1,4 +1,4 @@
-// juxc rust.std stub cache-version 11
+// juxc rust.std stub cache-version 12
 // bindgen — generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
@@ -317,7 +317,7 @@ public class BorrowedHandle {
 }
 
 /** A borrowed socket. */
-@rust("std::os::windows::io::socket::BorrowedSocket")
+@rust("std::task::Wake")
 public class BorrowedSocket {
     public static unsafe Self borrow_raw(RawSocket socket);
     public OwnedSocket try_clone_to_owned() throws Error;
@@ -470,11 +470,11 @@ public class Child {
     public Output wait_with_output() throws Error;
 }
 
-@rust("std::os::unix::process::ChildExt")
+/** Os-specific extensions for [`Child`] */
+@rust("std::os::linux::process::ChildExt")
 public interface ChildExt {
-    public void send_signal(i32 signal) throws Error;
-    public void send_process_group_signal(i32 signal) throws Error;
-    @MutSelf public void kill_process_group() throws Error;
+    public PidFd pidfd() throws Error;
+    public PidFd into_pidfd() throws Self;
 }
 
 /** A handle to a child process's stderr. */
@@ -527,19 +527,10 @@ public class CommandArgs {
 public class CommandEnvs {
 }
 
-/** Unix-specific extensions to the [`process::Command`] builder. */
-@rust("std::os::unix::process::CommandExt")
+/** Os-specific extensions for [`Command`] */
+@rust("std::os::linux::process::CommandExt")
 public interface CommandExt {
-    @MutSelf public Command uid(u32 id);
-    @MutSelf public Command gid(u32 id);
-    @MutSelf public Command groups(u32[] groups);
-    @MutSelf public unsafe Command pre_exec<F>(() -> Result<void> f);
-    @MutSelf public unsafe Command before_exec<F>(() -> Result<void> f);
-    @MutSelf public Error exec();
-    @MutSelf public Command arg0<S>(S arg);
-    @MutSelf public Command process_group(i32 pgroup);
-    @MutSelf public Command chroot<P>(P dir);
-    @MutSelf public Command setsid(bool setsid);
+    @MutSelf public Command create_pidfd(bool val);
 }
 
 /** An iterator over the fully resolved environment variables. */
@@ -583,30 +574,30 @@ public enum Cow<B> {
     Borrowed(B), Owned(Owned)
 }
 
-/** A cursor over a `BTreeSet`. */
+/** A cursor over a `BTreeMap`. */
 @rust("std::collections::Cursor")
-public class Cursor<K> {
-    @MutSelf public K? next();
-    @MutSelf public K? prev();
-    public K? peek_next();
-    public K? peek_prev();
+public class Cursor<K, V> {
+    @MutSelf public Tuple<K, V>? next();
+    @MutSelf public Tuple<K, V>? prev();
+    public Tuple<K, V>? peek_next();
+    public Tuple<K, V>? peek_prev();
 }
 
-/** A cursor over a `BTreeSet` with editing operations. */
+/** A cursor over a `BTreeMap` with editing operations. */
 @rust("std::collections::CursorMut")
-public class CursorMut<K, A> {
-    @MutSelf public T? next();
-    @MutSelf public T? prev();
-    @MutSelf public T? peek_next();
-    @MutSelf public T? peek_prev();
-    public Cursor<T> as_cursor();
-    public unsafe CursorMutKey<T, A> with_mutable_key();
-    @MutSelf public unsafe void insert_after_unchecked(T value);
-    @MutSelf public unsafe void insert_before_unchecked(T value);
-    @MutSelf public void insert_after(T value) throws UnorderedKeyError;
-    @MutSelf public void insert_before(T value) throws UnorderedKeyError;
-    @MutSelf public T? remove_next();
-    @MutSelf public T? remove_prev();
+public class CursorMut<K, V, A> {
+    @MutSelf public Tuple<K, V>? next();
+    @MutSelf public Tuple<K, V>? prev();
+    @MutSelf public Tuple<K, V>? peek_next();
+    @MutSelf public Tuple<K, V>? peek_prev();
+    public Cursor<K, V> as_cursor();
+    public unsafe CursorMutKey<K, V, A> with_mutable_key();
+    @MutSelf public unsafe void insert_after_unchecked(K key, V value);
+    @MutSelf public unsafe void insert_before_unchecked(K key, V value);
+    @MutSelf public void insert_after(K key, V value) throws UnorderedKeyError;
+    @MutSelf public void insert_before(K key, V value) throws UnorderedKeyError;
+    @MutSelf public Tuple<K, V>? remove_next();
+    @MutSelf public Tuple<K, V>? remove_prev();
 }
 
 /** A cursor over a `BTreeMap` with editing operations, and which allows */
@@ -690,12 +681,10 @@ public interface DirEntryExt2 {
 public class Display {
 }
 
-/** A draining iterator for `Vec<T>`. */
-@rust("std::vec::drain::Drain")
+/** A draining iterator over the elements of a `BinaryHeap`. */
+@rust("std::collections::Drain")
 public class Drain<T, A> {
-    public T[] as_slice();
     public A allocator();
-    public void keep_rest();
 }
 
 /** A draining iterator over the elements of a `BinaryHeap`. */
@@ -713,10 +702,10 @@ public const String EXE_SUFFIX;
 public class EncodeWide {
 }
 
-/** A view into a single entry in a set, which may either be vacant or occupied. */
+/** A view into a single entry in a map, which may either be vacant or occupied. */
 @rust("std::collections::Entry")
-public enum Entry<T, A> {
-    Occupied(OccupiedEntry<T, A>), Vacant(VacantEntry<T, A>)
+public enum Entry<K, V, A> {
+    Vacant(VacantEntry<K, V, A>), Occupied(OccupiedEntry<K, V, A>)
 }
 
 /** The error type for I/O operations of the [`Read`], [`Write`], [`Seek`], and */
@@ -773,10 +762,9 @@ public interface ExitStatusExt {
     public i32 into_raw();
 }
 
-/** An iterator which uses a closure to determine if an element should be removed. */
-@rust("std::vec::extract_if::ExtractIf")
-public class ExtractIf<T, F, A> {
-    public A allocator();
+/** This `struct` is created by the [`extract_if`] method on [`BTreeMap`]. */
+@rust("std::collections::ExtractIf")
+public class ExtractIf<K, V, R, F, A> {
 }
 
 public const String FAMILY;
@@ -850,7 +838,7 @@ public interface FileTypeExt {
 }
 
 /** Trait for types that can be converted from a fixed-size byte array with a specified endianness */
-@rust("std::io::FromEndianBytes")
+@rust("std::str::SplitInclusive")
 public interface FromEndianBytes {
 }
 
@@ -1001,8 +989,8 @@ public class HashSet<T, S, A> {
     @MutSelf public T? take<Q>(&Q value);
 }
 
-/** An iterator over incoming connections to a [`UnixListener`]. */
-@rust("std::os::windows::net::listener::Incoming")
+/** An iterator that infinitely [`accept`]s connections on a [`TcpListener`]. */
+@rust("std::net::tcp::Incoming")
 public class Incoming {
 }
 
@@ -1044,9 +1032,10 @@ public class IntoInnerError<W> {
     public Tuple<Error, W> into_parts();
 }
 
-/** An owning iterator over the elements of a `VecDeque`. */
+/** An owning iterator over the elements of a `BinaryHeap`. */
 @rust("std::collections::IntoIter")
 public class IntoIter<T, A> {
+    public A allocator();
 }
 
 @rust("std::collections::IntoIterSorted")
@@ -1100,18 +1089,14 @@ public interface IsTerminal {
     public bool is_terminal();
 }
 
-/** An iterator over the elements of a `VecDeque`. */
+/** An iterator over the elements of a `BinaryHeap`. */
 @rust("std::collections::Iter")
 public class Iter<T> {
-    public Tuple<T[], T[]> as_slices();
 }
 
-/** A mutable iterator over the elements of a `VecDeque`. */
+/** A mutable iterator over the entries of a `BTreeMap`. */
 @rust("std::collections::IterMut")
-public class IterMut<T> {
-    public Tuple<T[], T[]> into_slices();
-    public Tuple<T[], T[]> as_slices();
-    @MutSelf public Tuple<T[], T[]> as_mut_slices();
+public class IterMut<K, V> {
 }
 
 /** Helper trait for [`[T]::join`](slice::join) */
@@ -1243,7 +1228,7 @@ public class MappedRwLockReadGuard<T> {
 }
 
 /** RAII structure used to release the exclusive write access of a lock when */
-@rust("std::sync::poison::rwlock::MappedRwLockWriteGuard")
+@rust("std::sync::nonpoison::rwlock::MappedRwLockWriteGuard")
 public class MappedRwLockWriteGuard<T> {
     public static MappedRwLockWriteGuard<U> map<U, F>(Self orig, (T) -> U f);
     public static MappedRwLockWriteGuard<U> filter_map<U, F>(Self orig, (T) -> U? f) throws Self;
@@ -1269,7 +1254,7 @@ public class Metadata {
 }
 
 /** Windows-specific extensions to [`fs::Metadata`]. */
-@rust("std::os::windows::fs::MetadataExt")
+@rust("std::collections::vec_deque::IterMut")
 public interface MetadataExt {
     public u32 file_attributes();
     public ulong creation_time();
@@ -1282,20 +1267,19 @@ public interface MetadataExt {
     public ulong? change_time();
 }
 
-/** A mutual exclusion primitive useful for protecting shared data */
-@rust("std::sync::poison::mutex::Mutex")
+/** A mutual exclusion primitive useful for protecting shared data that does not keep track of */
+@rust("std::sync::nonpoison::mutex::Mutex")
 public class Mutex<T> {
     public Mutex(T t);
-    public T get_cloned() throws PoisonError<void>;
-    public void set(T value) throws PoisonError<T>;
-    public LockResult<T> replace(T value);
-    public LockResult<MutexGuard<T>> lock();
+    public T get_cloned();
+    public void set(T value);
+    public T replace(T value);
+    public MutexGuard<T> lock();
     public TryLockResult<MutexGuard<T>> try_lock();
-    public bool is_poisoned();
-    public void clear_poison();
-    public LockResult<T> into_inner();
-    @MutSelf public LockResult<T> get_mut();
+    public T into_inner();
+    @MutSelf public T get_mut();
     public T* data_ptr();
+    public R with_mut<F, R>((T) -> R f);
 }
 
 /** An RAII implementation of a "scoped lock" of a mutex. When this structure is */
@@ -1474,11 +1458,10 @@ public class OsString {
     @MutSelf public void truncate(uint len);
 }
 
-/** Platform-specific extensions to [`OsString`]. */
-@rust("std::os::wasi::ffi::os_str::OsStringExt")
+/** Windows-specific extensions to [`OsString`]. */
+@rust("std::os::windows::ffi::OsStringExt")
 public interface OsStringExt {
-    public Self from_vec(List<ubyte> vec);
-    public List<ubyte> into_vec();
+    public Self from_wide(ushort[] wide);
 }
 
 /** The output of a finished process. */
@@ -1769,13 +1752,21 @@ public interface Read {
 public class ReadDir {
 }
 
-/** The receiving half of a oneshot channel. */
-@rust("std::sync::oneshot::Receiver")
+/** The receiving half of Rust's [`channel`] (or [`sync_channel`]) type. */
+@rust("std::sync::mpmc::Receiver")
 public class Receiver<T> {
+    public T try_recv() throws TryRecvError;
     public T recv() throws RecvError;
-    public T try_recv() throws TryRecvError<T>;
-    public T recv_timeout(Duration timeout) throws RecvTimeoutError<T>;
-    public T recv_deadline(Instant deadline) throws RecvTimeoutError<T>;
+    public T recv_timeout(Duration timeout) throws RecvTimeoutError;
+    public T recv_deadline(Instant deadline) throws RecvTimeoutError;
+    public TryIter<T> try_iter();
+    public bool is_empty();
+    public bool is_full();
+    public uint len();
+    public uint? capacity();
+    public bool same_channel(&Receiver<T> other);
+    public Iter<T> iter();
+    public bool is_disconnected();
 }
 
 /** An error returned from the [`recv`] function on a [`Receiver`]. */
@@ -1783,10 +1774,10 @@ public class Receiver<T> {
 public class RecvError {
 }
 
-/** An error returned from the [`recv_timeout`](Receiver::recv_timeout) or */
-@rust("std::sync::oneshot::RecvTimeoutError")
-public enum RecvTimeoutError<T> {
-    Timeout(Receiver<T>), Disconnected
+/** This enumeration is the list of possible errors that made [`recv_timeout`] */
+@rust("std::sync::mpsc::RecvTimeoutError")
+public enum RecvTimeoutError {
+    Timeout, Disconnected
 }
 
 /** A re-entrant mutual exclusion lock */
@@ -1812,22 +1803,22 @@ public class Report<E> {
     public Self show_backtrace(bool show_backtrace);
 }
 
-/** A reader-writer lock */
-@rust("std::sync::poison::rwlock::RwLock")
+/** A reader-writer lock that does not keep track of lock poisoning. */
+@rust("std::sync::nonpoison::rwlock::RwLock")
 public class RwLock<T> {
     public RwLock(T t);
-    public T get_cloned() throws PoisonError<void>;
-    public void set(T value) throws PoisonError<T>;
-    public LockResult<T> replace(T value);
-    public LockResult<RwLockReadGuard<T>> read();
+    public T get_cloned();
+    public void set(T value);
+    public T replace(T value);
+    public RwLockReadGuard<T> read();
     public TryLockResult<RwLockReadGuard<T>> try_read();
-    public LockResult<RwLockWriteGuard<T>> write();
+    public RwLockWriteGuard<T> write();
     public TryLockResult<RwLockWriteGuard<T>> try_write();
-    public bool is_poisoned();
-    public void clear_poison();
-    public LockResult<T> into_inner();
-    @MutSelf public LockResult<T> get_mut();
+    public T into_inner();
+    @MutSelf public T get_mut();
     public T* data_ptr();
+    public R with<F, R>((T) -> R f);
+    public R with_mut<F, R>((T) -> R f);
 }
 
 /** RAII structure used to release the shared read access of a lock when */
@@ -1838,7 +1829,7 @@ public class RwLockReadGuard<T> {
 }
 
 /** RAII structure used to release the exclusive write access of a lock when */
-@rust("std::sync::poison::rwlock::RwLockWriteGuard")
+@rust("std::sync::nonpoison::rwlock::RwLockWriteGuard")
 public class RwLockWriteGuard<T> {
     public static RwLockReadGuard<T> downgrade(Self s);
     public static MappedRwLockWriteGuard<U> map<U, F>(Self orig, (T) -> U f);
@@ -1916,10 +1907,18 @@ public enum SendTimeoutError<T> {
     Timeout(T), Disconnected(T)
 }
 
-/** The sending-half of Rust's asynchronous [`channel`] type. */
-@rust("std::sync::mpsc::Sender")
+/** The sending-half of Rust's synchronous [`channel`] type. */
+@rust("std::sync::mpmc::Sender")
 public class Sender<T> {
-    public void send(T t) throws SendError<T>;
+    public void try_send(T msg) throws TrySendError<T>;
+    public void send(T msg) throws SendError<T>;
+    public void send_timeout(T msg, Duration timeout) throws SendTimeoutError<T>;
+    public void send_deadline(T msg, Instant deadline) throws SendTimeoutError<T>;
+    public bool is_empty();
+    public bool is_full();
+    public uint len();
+    public uint? capacity();
+    public bool same_channel(&Sender<T> other);
     public bool is_disconnected();
 }
 
@@ -1966,8 +1965,8 @@ public class SocketAncillary {
 public class SocketCred {
 }
 
-/** A splicing iterator for `VecDeque`. */
-@rust("std::collections::Splice")
+/** A splicing iterator for `Vec`. */
+@rust("std::vec::Splice")
 public class Splice<I, A> {
 }
 
@@ -2209,7 +2208,7 @@ public interface Termination {
 }
 
 /** ThinBox. */
-@rust("std::boxed::thin::ThinBox")
+@rust("std::boxed::ThinBox")
 public class ThinBox<T> {
     public ThinBox(T value);
     public static Self try_new(T value) throws AllocError;
@@ -2252,20 +2251,20 @@ public interface ToString {
 }
 
 /** An iterator that attempts to yield all pending values for a [`Receiver`], */
-@rust("std::sync::mpsc::TryIter")
+@rust("std::sync::mpmc::TryIter")
 public class TryIter<T> {
 }
 
-/** An enumeration of possible errors associated with a [`TryLockResult`] which */
-@rust("std::sync::poison::TryLockError")
-public enum TryLockError<T> {
-    Poisoned(PoisonError<T>), WouldBlock
+/** An enumeration of possible errors which can occur while trying to acquire a lock */
+@rust("std::fs::TryLockError")
+public enum TryLockError {
+    Error(Error), WouldBlock
 }
 
-/** An error returned from the [`try_recv`](Receiver::try_recv) method. */
-@rust("std::sync::oneshot::TryRecvError")
-public enum TryRecvError<T> {
-    Empty(Receiver<T>), Disconnected
+/** This enumeration is the list of the possible reasons that [`try_recv`] could */
+@rust("std::sync::mpsc::TryRecvError")
+public enum TryRecvError {
+    Empty, Disconnected
 }
 
 /** The error type for `try_reserve` methods. */
@@ -2385,13 +2384,13 @@ public class UnixDatagram {
 }
 
 /** A structure representing a Unix domain socket server. */
-@rust("std::os::windows::net::listener::UnixListener")
+@rust("std::os::unix::net::listener::UnixListener")
 public class UnixListener {
     public static UnixListener bind<P>(P path) throws Error;
     public static UnixListener bind_addr(&SocketAddr socket_addr) throws Error;
     public Tuple<UnixStream, SocketAddr> accept() throws Error;
-    public SocketAddr local_addr() throws Error;
     public UnixListener try_clone() throws Error;
+    public SocketAddr local_addr() throws Error;
     public void set_nonblocking(bool nonblocking) throws Error;
     public Error? take_error() throws Error;
     public Incoming incoming();
@@ -2623,8 +2622,8 @@ public interface Wake {
     public void wake_by_ref();
 }
 
-/** `Weak` is a version of [`Arc`] that holds a non-owning reference to the */
-@rust("std::sync::Weak")
+/** `Weak` is a version of [`Rc`] that holds a non-owning reference to the */
+@rust("std::rc::Weak")
 public class Weak<T, A> {
     public Weak();
     public static Weak<T, A> new_in(A alloc);
@@ -2723,8 +2722,8 @@ public XdgDirsIter config_dirs();
 @rust("std::os::unix::xdg::config_home_dir")
 public PathBuf config_home_dir();
 
-@rust("std::io::copy::copy")
-public ulong copy<R, W>(&R reader, &W writer) throws Error;
+@rust("std::fs::copy")
+public ulong copy<P, Q>(P from, Q to) throws Error;
 
 @rust("std::fs::create_dir")
 public void create_dir<P>(P path) throws Error;
@@ -2965,8 +2964,8 @@ public Metadata symlink_metadata<P>(P path) throws Error;
 @rust("std::os::wasi::fs::symlink_path")
 public void symlink_path<P, U>(P old_path, U new_path) throws Error;
 
-@rust("std::sync::mpsc::sync_channel")
-public Tuple<SyncSender<T>, Receiver<T>> sync_channel<T>(uint bound);
+@rust("std::sync::mpmc::sync_channel")
+public Tuple<Sender<T>, Receiver<T>> sync_channel<T>(uint cap);
 
 @rust("std::alloc::take_alloc_error_hook")
 public (Layout) -> void take_alloc_error_hook();

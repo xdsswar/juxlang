@@ -5,11 +5,11 @@
 //! [`Crate`] and builds the language-agnostic [`StubFile`] that `emit` renders.
 //! The §G.3 Rust→Jux type table lives in [`map_type`].
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rustdoc_types::{
     Crate, Enum, Function, GenericArgs, GenericArg, GenericBound, GenericParamDefKind, Generics,
-    Item, ItemEnum, Path, Struct, StructKind, Type, VariantKind, Visibility, WherePredicate,
+    Id, Item, ItemEnum, Path, Struct, StructKind, Type, VariantKind, Visibility, WherePredicate,
 };
 
 use crate::model::{
@@ -90,15 +90,23 @@ pub fn generate(krate: &Crate, package: &str) -> StubFile {
 }
 
 /// Walk a single crate's index and collect every public, local
-/// (`crate_id == 0`) item as a `(name, StubItem)` pair, **unsorted**. Shared by
-/// [`generate`] (single crate) and [`generate_merged`] (cross-crate dedup) so
-/// the item-selection rules live in exactly one place.
+/// (`crate_id == 0`) item as a `(name, StubItem)` pair, in a **deterministic**
+/// order. Shared by [`generate`] (single crate) and [`generate_merged`]
+/// (cross-crate dedup) so the item-selection rules live in exactly one place.
+///
+/// The order matters for more than tidiness. `generate_merged` keys the stub by
+/// SIMPLE NAME and keeps the first definition, and std ships several items per
+/// name — `FileExt` under `std::os::{unix,wasi,windows}::fs`, one `stat` per
+/// architecture. Walking `krate.index` (a hash map) made the survivor depend on
+/// hash order, so regenerating the vendored `rust.std` surface from the same
+/// rustdoc JSON produced a different file each run: ~32 `@rust` paths moved
+/// between two regenerations. Sorting here fixes the winner.
 fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
     // Every id that is a member of some impl or trait — used to tell a free
     // function (top-level `fn`) apart from a method/associated function.
     let member_ids = collect_member_ids(krate);
 
-    let mut collected: Vec<(String, StubItem)> = Vec::new();
+    let mut collected: Vec<(u32, String, StubItem)> = Vec::new();
 
     for item in krate.index.values() {
         if item.crate_id != 0 {
@@ -108,13 +116,13 @@ fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
 
         match &item.inner {
             ItemEnum::Struct(s) if is_public(&item.visibility) => {
-                collected.push((name.clone(), StubItem::Type(build_struct(krate, name, s, item))));
+                collected.push((item.id.0, name.clone(), StubItem::Type(build_struct(krate, name, s, item))));
             }
             ItemEnum::Enum(e) if is_public(&item.visibility) => {
-                collected.push((name.clone(), StubItem::Type(build_enum(krate, name, e, item))));
+                collected.push((item.id.0, name.clone(), StubItem::Type(build_enum(krate, name, e, item))));
             }
             ItemEnum::Trait(t) if is_public(&item.visibility) => {
-                collected.push((name.clone(), StubItem::Type(build_trait(krate, name, &t.generics, &t.items, item))));
+                collected.push((item.id.0, name.clone(), StubItem::Type(build_trait(krate, name, &t.generics, &t.items, item))));
             }
             ItemEnum::Function(f) if is_public(&item.visibility) && !member_ids.contains(&item.id.0) => {
                 // Free function (§G.5.5). Record its real Rust path so the
@@ -123,10 +131,10 @@ fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
                 let mut sf = map_function(name, f);
                 sf.is_static = false;
                 sf.rust_path = real_rust_path(krate, item);
-                collected.push((name.clone(), StubItem::Function(sf)));
+                collected.push((item.id.0, name.clone(), StubItem::Function(sf)));
             }
             ItemEnum::Constant { type_, const_: _ } if is_public(&item.visibility) => {
-                collected.push((
+                collected.push((item.id.0, 
                     name.clone(),
                     StubItem::Const(StubConst {
                         name: name.clone(),
@@ -143,7 +151,7 @@ fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
                 ));
             }
             ItemEnum::Static(s) if is_public(&item.visibility) => {
-                collected.push((
+                collected.push((item.id.0, 
                     name.clone(),
                     StubItem::Const(StubConst {
                         name: name.clone(),
@@ -158,7 +166,31 @@ fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
         }
     }
 
-    collected
+    // Sort by (name, path-segment count, path): among same-name duplicates the
+    // most general path wins, and ties break lexicographically rather than by
+    // hash order.
+    collected.sort_by(|a, b| {
+        let ka = stub_item_path(&a.2);
+        let kb = stub_item_path(&b.2);
+        a.1.cmp(&b.1)
+            .then_with(|| ka.matches("::").count().cmp(&kb.matches("::").count()))
+            .then_with(|| ka.cmp(kb))
+            // Last resort, for the items rustdoc records no path for (a
+            // `Cursor` exists on both `LinkedList` and `BTreeMap`): the rustdoc
+            // id is intrinsic to the JSON, so it decides the same way every run.
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    collected.into_iter().map(|(_, name, item)| (name, item)).collect()
+}
+
+/// A collected item's recorded Rust path, or the empty string when it has none
+/// — the sort key that makes duplicate-name selection reproducible.
+fn stub_item_path(item: &StubItem) -> &str {
+    match item {
+        StubItem::Type(t) => t.rust_path.as_deref().unwrap_or(""),
+        StubItem::Function(f) => f.rust_path.as_deref().unwrap_or(""),
+        StubItem::Const(_) => "",
+    }
 }
 
 /// Collect every id referenced as a member of an impl block or a trait, so the
@@ -701,11 +733,169 @@ fn is_public(v: &Visibility) -> bool {
 /// the backend can lower a reference to this external type to its true Rust path
 /// (§G.9.2) rather than the flat Jux `rust.std.X` spelling.
 fn real_rust_path(krate: &Crate, item: &Item) -> Option<String> {
-    let summary = krate.paths.get(&item.id)?;
+    let summary = krate.paths.get(&item.id);
+    // The definition path is preferred WHENEVER it is importable — it is the
+    // canonical one, and it distinguishes items that share a simple name across
+    // sibling modules (`std::os::unix::process::ChildExt` vs the `linux` one).
+    // Only when it threads a private module is it unusable, and then the
+    // re-export path is the answer.
+    if let Some(summary) = summary {
+        if !summary.path.is_empty() && definition_path_is_public(krate, &summary.path) {
+            return Some(public_rust_path(&summary.path));
+        }
+    }
+    if let Some(p) = reexport_paths(krate).get(&item.id).cloned() {
+        return Some(p);
+    }
+    let summary = summary?;
     if summary.path.is_empty() {
         return None;
     }
     Some(public_rust_path(&summary.path))
+}
+
+/// True when every module along `path` (all but the final item segment) is a
+/// PUBLIC module of the crate, so the path can be written in a `use`.
+///
+/// `std::io::copy::copy` fails here: `std::io` has a private `mod copy` that
+/// exists only to be re-exported, so the definition path names something the
+/// user cannot import.
+fn definition_path_is_public(krate: &Crate, path: &[String]) -> bool {
+    if path.len() <= 2 {
+        // `crate::Item` — the crate root is always importable.
+        return true;
+    }
+    let modules = public_module_paths(krate);
+    (1..path.len()).all(|end| modules.contains(&public_module_path(&path[..end])))
+}
+
+/// Every public module of the crate, by public path. Memoized alongside the
+/// re-export table — both are whole-crate scans over an index with tens of
+/// thousands of entries.
+fn public_module_paths(krate: &Crate) -> &HashSet<String> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<usize, &'static HashSet<String>>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let key = std::ptr::from_ref(krate) as usize;
+    if let Some(hit) = cache.lock().expect("module cache").get(&key) {
+        return hit;
+    }
+    let mut out: HashSet<String> = HashSet::new();
+    for item in krate.index.values() {
+        if !matches!(item.inner, ItemEnum::Module(_)) || !is_public(&item.visibility) {
+            continue;
+        }
+        if let Some(summary) = krate.paths.get(&item.id) {
+            if !summary.path.is_empty() {
+                out.insert(public_module_path(&summary.path));
+            }
+        }
+    }
+    let built: &'static HashSet<String> = Box::leak(Box::new(out));
+    cache.lock().expect("module cache").insert(key, built);
+    built
+}
+
+/// Normalise a MODULE path. Only the crate-root remap applies: the
+/// `collections` collapse in [`public_rust_path`] is about the *type* being
+/// re-exported at `std::collections::<Type>`, and folding it into a module path
+/// would turn `alloc::collections` into `std::collections::collections`.
+fn public_module_path(path: &[String]) -> String {
+    let mut segs: Vec<String> = path.to_vec();
+    if matches!(segs.first().map(String::as_str), Some("alloc" | "core")) {
+        segs[0] = "std".to_string();
+    }
+    segs.join("::")
+}
+
+/// Item id → the shortest **publicly importable** path, read off the crate's
+/// re-export (`pub use`) statements.
+///
+/// rustdoc's `paths` summary reports where an item is DEFINED, and std defines
+/// plenty of things in private modules that exist only to be re-exported:
+/// `std::io` has a private `mod copy` holding `pub fn copy`, published as
+/// `pub use self::copy::copy;`. The definition path `std::io::copy::copy` names
+/// a private module and does not compile in a `use`. The re-export says the
+/// public name is `std::io::copy`.
+///
+/// Built once per crate and memoized — std has tens of thousands of items and
+/// this runs for each of them.
+///
+/// Not every path is recoverable this way: a glob (`pub use self::x::*;`) names
+/// no individual item, so those fall back to the definition path plus the
+/// [`public_rust_path`] normalisations.
+fn reexport_paths(krate: &Crate) -> &HashMap<Id, String> {
+    // Keyed by crate identity: `generate_merged` ingests several crates in one
+    // process, and each has its own re-export graph.
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<usize, &'static HashMap<Id, String>>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let key = std::ptr::from_ref(krate) as usize;
+    if let Some(hit) = cache.lock().expect("reexport cache").get(&key) {
+        return hit;
+    }
+    let built: &'static HashMap<Id, String> = Box::leak(Box::new(build_reexport_paths(krate)));
+    cache.lock().expect("reexport cache").insert(key, built);
+    built
+}
+
+fn build_reexport_paths(krate: &Crate) -> HashMap<Id, String> {
+    let mut out: HashMap<Id, String> = HashMap::new();
+    for module_item in krate.index.values() {
+        let ItemEnum::Module(m) = &module_item.inner else { continue };
+        if !is_public(&module_item.visibility) {
+            continue;
+        }
+        // Where this module itself lives publicly.
+        let Some(summary) = krate.paths.get(&module_item.id) else { continue };
+        if summary.path.is_empty() {
+            continue;
+        }
+        let module_path = public_module_path(&summary.path);
+        for child in &m.items {
+            let Some(child_item) = krate.index.get(child) else { continue };
+            // Two shapes reach the same conclusion. An explicit `pub use` names
+            // its target; a re-export of a PRIVATE item is instead INLINED by
+            // rustdoc — `std::io`'s private `mod copy` contributes its `pub fn
+            // copy` straight into `std::io`'s item list — and then membership in
+            // a public module IS the public path.
+            let (target, name) = match &child_item.inner {
+                ItemEnum::Use(u) if !u.is_glob => match u.id {
+                    Some(id) => (id, u.name.clone()),
+                    None => continue,
+                },
+                ItemEnum::Struct(_)
+                | ItemEnum::Enum(_)
+                | ItemEnum::Trait(_)
+                | ItemEnum::Function(_)
+                | ItemEnum::TypeAlias(_) => match &child_item.name {
+                    Some(n) if is_public(&child_item.visibility) => {
+                        (child_item.id, n.clone())
+                    }
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            let candidate = format!("{module_path}::{name}");
+            // Shortest wins: `std::io::copy` beats a deeper alias of the same
+            // function, and the result is stable across runs.
+            // Shortest wins, then lexicographic — `std::io::copy` beats a
+            // deeper alias, and the choice between two equally short aliases is
+            // the same on every run (a HashMap-order tie-break would churn the
+            // generated stub).
+            match out.get(&target) {
+                Some(existing)
+                    if (existing.len(), existing.as_str())
+                        <= (candidate.len(), candidate.as_str()) => {}
+                _ => {
+                    out.insert(target, candidate);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Normalise a rustdoc **definition** path to a **publicly-importable** Rust
@@ -762,6 +952,24 @@ mod tests {
             }))
         };
         Type::ResolvedPath(Path { path: path.to_string(), id: Id(0), args })
+    }
+
+    /// A module path keeps its shape — only the defining crate is remapped.
+    /// The `collections` collapse belongs to TYPE paths; applying it to a
+    /// module turned `alloc::collections` into `std::collections::collections`,
+    /// and every type re-exported through it inherited the doubled segment.
+    #[test]
+    fn module_paths_are_not_collection_collapsed() {
+        let segs = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(public_module_path(&segs(&["alloc", "collections"])), "std::collections");
+        assert_eq!(public_module_path(&segs(&["core", "fmt"])), "std::fmt");
+        assert_eq!(public_module_path(&segs(&["std", "io"])), "std::io");
+        // The TYPE rule still collapses, which is what re-exports std types at
+        // `std::collections::<Type>`.
+        assert_eq!(
+            public_rust_path(&segs(&["alloc", "collections", "btree", "map", "BTreeMap"])),
+            "std::collections::BTreeMap",
+        );
     }
 
     #[test]
