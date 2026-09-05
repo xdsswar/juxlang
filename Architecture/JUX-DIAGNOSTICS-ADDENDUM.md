@@ -300,7 +300,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0413`  | `obj.method(...)` / `new T(...)` target doesn't resolve | —                          |
 | `E0414`  | Access to a `private` member from outside the declaring class | —                    |
 | `E0415`  | Access to a `protected` member from outside the extends-chain | ERRATA E4            |
-| `E0416`  | Access to a package-private / `internal` member from outside its package | —         |
+| `E0416`  | Access to a package-private / `internal` member, **or use of a package-private TYPE**, from outside its package | §4.4 |
 | `E0420`  | `class C extends F` where `F` is `final`            | JUX-LANG-V1 §7.4               |
 | `E0421`  | Override of a `final` method                        | JUX-LANG-V1 §7.4.1             |
 | `E0422`  | Sealed class extended outside its `permits` list    | JUX-LANG-V1 §7.4               |
