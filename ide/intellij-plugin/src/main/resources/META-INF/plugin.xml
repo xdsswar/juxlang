@@ -198,6 +198,15 @@
         language="Jux"
         implementationClass="dev.jux.intellij.completion.JuxCompletionContributor"/>
 
+    <!-- Names the engine answering for Jux files (juxc-lsp, or the plugin's own
+         parser and inspections). Two engines with very different depth can serve
+         the same file, and nothing used to say which one you had - so a server
+         that died just looked like the plugin getting worse. -->
+    <statusBarWidgetFactory
+        id="JuxEngineStatus"
+        order="last"
+        implementation="dev.jux.intellij.lsp.JuxEngineStatusBarWidgetFactory"/>
+
     <!-- The toolchain's generated `.jux.d` stubs - the standard library and
          every bound Rust crate - indexed as an external library, discovered on
          the machine rather than described in the plugin. Everything that

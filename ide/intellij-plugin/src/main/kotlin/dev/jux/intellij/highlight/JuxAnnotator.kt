@@ -213,21 +213,13 @@ class JuxAnnotator : Annotator {
         return grand.elementType === E.CALL_EXPRESSION && grand.firstChild === parent
     }
 
-    /** True when [id] sits inside a `set { … }` accessor body (§P.1.4). */
-    private fun isInSetterBody(id: PsiElement): Boolean {
-        var scope: PsiElement? = id.parent
-        while (scope != null) {
-            if (scope.elementType === E.PROPERTY_ACCESSOR) {
-                return scope.firstIdentifierText() == "set"
-            }
-            // A method/class boundary means we left any accessor body.
-            if (scope.elementType === E.METHOD_DECLARATION ||
-                scope.elementType === E.CLASS_BODY
-            ) return false
-            scope = scope.parent
-        }
-        return false
-    }
+    /**
+     * True when [id] sits inside a `set { … }` accessor body (§P.1.4).
+     * Shared with the unresolved-reference inspection so coloring and
+     * resolution cannot disagree about where `value` is bound.
+     */
+    private fun isInSetterBody(id: PsiElement): Boolean =
+        JuxObservableProps.isInSetterBody(id)
 
     /**
      * True when [id] is the *called name* of a call: the callee of a

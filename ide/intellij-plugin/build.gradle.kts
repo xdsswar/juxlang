@@ -57,6 +57,20 @@ val runIdeCommunity by intellijPlatformTesting.runIde.registering {
 
 tasks.test {
     useJUnit()
+
+    // Two test classes read the repository's `examples/` corpus at runtime
+    // (JuxParsingTest, JuxCorpusHighlightingTest) rather than from the module's
+    // own resources, so Gradle cannot see the dependency and happily replays a
+    // cached PASS after the corpus changes. That makes both of them look like
+    // guards while guarding nothing: an example added to reproduce an editor
+    // bug would never actually be run through the annotator.
+    //
+    // Declaring the corpus as an input fixes the caching AND the up-to-date
+    // check. `PathSensitivity.RELATIVE` so a checkout at a different path still
+    // hits the cache.
+    inputs.dir(layout.projectDirectory.dir("../../examples"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("juxExampleCorpus")
 }
 
 intellijPlatform {
@@ -219,6 +233,17 @@ val generateJuxTokens by tasks.registering {
         kw.appendLine("     * resolve type\" over 20 examples that compile.")
         kw.appendLine("     */")
         kw.appendLine(strSet("BUILTINS", strings("builtins")))
+        kw.appendLine()
+        kw.appendLine("    /**")
+        kw.appendLine("     * The annotations the compiler HONORS, without the `@`, spelled as")
+        kw.appendLine("     * the docs and the example corpus write them (names are matched")
+        kw.appendLine("     * case-insensitively, so these are the offer spellings).")
+        kw.appendLine("     *")
+        kw.appendLine("     * Generated from the compiler's own list, which a drift test there")
+        kw.appendLine("     * pins against the call sites that act on each name — so an")
+        kw.appendLine("     * annotation that gains behaviour cannot go missing from the editor.")
+        kw.appendLine("     */")
+        kw.appendLine(strSet("ANNOTATIONS", strings("annotations")))
         kw.appendLine("}")
         pkgDir.resolve("JuxKeywords.kt").writeText(kw.toString())
     }

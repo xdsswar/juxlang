@@ -16,6 +16,7 @@ import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.util.elementType
 import com.intellij.util.ProcessingContext
 import dev.jux.intellij.JuxLanguage
+import dev.jux.intellij.highlight.JuxKeywords
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxFile
 import dev.jux.intellij.psi.JuxNamedElement
@@ -93,6 +94,12 @@ class JuxCompletionContributor : CompletionContributor() {
                     context: ProcessingContext,
                     result: CompletionResultSet,
                 ) {
+                    // A comment is prose. Nothing below belongs there, and this
+                    // has to come first — the interpolation-hole and property
+                    // surfaces below run even under an active LSP, so a guard
+                    // placed after them would still pop a list inside `// …`.
+                    if (isInsideComment(parameters.position)) return
+
                     // Inside a `$"…${ ⟨caret⟩ }…"` interpolation hole the LSP is
                     // blind — the whole literal is one opaque string token to it,
                     // so it never completes there. The plugin therefore OWNS hole
@@ -117,6 +124,13 @@ class JuxCompletionContributor : CompletionContributor() {
                     // serve — toolchain resolvable + session up — so a missing
                     // or broken toolchain never silences the fallback.)
                     if (lspProvidesCompletion(parameters)) return
+
+                    // Inside an `import a.b.<caret>;` path. Must be tested BEFORE
+                    // the member branch: a dotted import path is also "after a
+                    // dot", and routing it to member completion produced an
+                    // empty popup — the receiver `b` resolves to no type, and
+                    // the branch returns having offered nothing at all.
+                    if (addImportPathCompletion(parameters, result)) return
 
                     // After a `.` (member access): offer the receiver's real
                     // members (methods/fields/properties/enum constants of an
@@ -335,6 +349,90 @@ class JuxCompletionContributor : CompletionContributor() {
         return ranked(builder, P_MEMBER)
     }
 
+    // ---- import paths ----------------------------------------------------------
+
+    /**
+     * Completion inside an `import a.b.<caret>;` path: the next package segment,
+     * then the types that package declares. Reports whether it handled the caret.
+     *
+     * The prefix already typed is matched against every package in the project,
+     * so `import demo.` offers `model` (the next segment of `demo.model.core`)
+     * and `import demo.model.` offers that package's types. Types insert bare —
+     * the path is already written, and no `import` line is needed for an import.
+     *
+     * Package names come from the declaring files' `package …;` statements
+     * ([JuxAutoImport.packageOf]), which is the same source auto-import uses, so
+     * the two cannot disagree about where a type lives.
+     */
+    private fun addImportPathCompletion(
+        parameters: CompletionParameters,
+        result: CompletionResultSet,
+    ): Boolean {
+        val prefix = importPathPrefix(parameters) ?: return false
+        val project = parameters.position.project
+        if (com.intellij.openapi.project.DumbService.isDumb(project)) return true
+        val segments = LinkedHashSet<String>()
+        val types = ArrayList<Pair<String, dev.jux.intellij.psi.JuxTypeDeclaration>>()
+        dev.jux.intellij.resolve.JuxTypeIndex.forEachType(
+            project,
+            com.intellij.psi.search.GlobalSearchScope.allScope(project),
+        ) { type ->
+            val pkg = JuxAutoImport.packageOf(type)
+            val name = type.name
+            when {
+                // A type declared exactly in the typed package.
+                pkg == prefix && name != null -> types.add(name to type)
+                // A deeper package: offer only its next segment.
+                pkg.startsWith("$prefix.") ->
+                    segments.add(pkg.removePrefix("$prefix.").substringBefore('.'))
+            }
+        }
+        for (seg in segments) {
+            result.addElement(
+                ranked(
+                    LookupElementBuilder.create(seg).withIcon(AllIcons.Nodes.Package),
+                    P_TYPE,
+                ),
+            )
+        }
+        for ((name, type) in types) {
+            val fromStub = type.containingFile?.name?.endsWith(".jux.d") == true
+            result.addElement(
+                ranked(
+                    LookupElementBuilder.create(name).withIcon(AllIcons.Nodes.Class),
+                    if (fromStub) P_TYPE_LIBRARY else P_TYPE_PROJECT,
+                ),
+            )
+        }
+        return true
+    }
+
+    /**
+     * The already-typed package prefix when the caret sits in an import path —
+     * `import demo.model.<caret>` → `"demo.model"`. `null` when the caret is not
+     * in an `import` statement, so the caller falls through to normal
+     * completion.
+     *
+     * Read off the document rather than the PSI: mid-edit the trailing dot
+     * leaves the import statement unparsed, so there is no reliable
+     * `IMPORT_STATEMENT` node to walk at exactly the moment completion fires.
+     */
+    private fun importPathPrefix(parameters: CompletionParameters): String? {
+        val text = parameters.originalFile.viewProvider.document?.charsSequence ?: return null
+        val caret = parameters.offset
+        // Back to the start of the line.
+        var lineStart = caret
+        while (lineStart > 0 && text[lineStart - 1] != '\n') lineStart--
+        val line = text.subSequence(lineStart, caret).toString().trimStart()
+        if (!line.startsWith("import ")) return null
+        val path = line.removePrefix("import ").trimStart()
+        // Only a path-shaped run qualifies; a grouped or wildcard import is a
+        // different grammar and is left alone.
+        if (path.any { !(it.isLetterOrDigit() || it == '_' || it == '.') }) return null
+        val prefix = path.substringBeforeLast('.', "")
+        return prefix.ifEmpty { null }
+    }
+
     // ---- object members after `.` (in-file type inference) ---------------------
 
     /**
@@ -369,7 +467,7 @@ class JuxCompletionContributor : CompletionContributor() {
             if (!seen.add(name)) continue
             when (m.elementType) {
                 E.METHOD_DECLARATION -> result.addElement(method(named, name))
-                E.FIELD_DECLARATION, E.RECORD_COMPONENT ->
+                E.FIELD_DECLARATION, E.CONST_DECLARATION, E.RECORD_COMPONENT ->
                     result.addElement(declaration(m, name, AllIcons.Nodes.Field, P_MEMBER))
                 E.PROPERTY_DECLARATION ->
                     result.addElement(declaration(m, name, AllIcons.Nodes.Property, P_MEMBER))
@@ -446,9 +544,9 @@ class JuxCompletionContributor : CompletionContributor() {
      * annotation lookups are case-insensitive compiler-side.
      */
     private fun addBuiltinAnnotations(result: CompletionResultSet) {
-        val names = listOf("override", "extern", "export", "layout") +
-            dev.jux.intellij.run.JuxTestDetector.TEST_HOOKS.values
-        for (name in names) {
+        // Generated from the compiler's honored set — the same list juxc-lsp
+        // offers, so `@` means the same thing whether or not a server is up.
+        for (name in JuxKeywords.ANNOTATIONS) {
             result.addElement(
                 ranked(
                     LookupElementBuilder.create(name)
@@ -496,6 +594,28 @@ class JuxCompletionContributor : CompletionContributor() {
             }
         }
         return true
+    }
+
+    /**
+     * The caret sits in a comment — line, block, or doc.
+     *
+     * Completion there offered the full keyword and declaration list, so typing
+     * a note produced a popup over prose. The LSP suppresses this correctly
+     * (`build_completions` returns an empty list for any non-code scan mode),
+     * and the fallback has to agree or the behaviour changes with the server.
+     */
+    private fun isInsideComment(position: PsiElement): Boolean {
+        var e: PsiElement? = position
+        var hops = 0
+        while (e != null && hops < 3) {
+            val t = e.elementType
+            if (t != null && dev.jux.intellij.highlight.JuxTokenTypes.COMMENTS.contains(t)) {
+                return true
+            }
+            e = e.parent
+            hops++
+        }
+        return false
     }
 
     /** The element (or a near ancestor) at the caret is a string/char literal. */
