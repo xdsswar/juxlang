@@ -264,6 +264,65 @@ object JuxHierarchy {
         return list.children.filter { it.node.elementType === JuxElementTypes.RECORD_COMPONENT }
     }
 
+    /**
+     * Whether [member] is reachable from inside [from] — Java's rules.
+     *
+     * `public` always; `private` only within the declaring type; `protected`
+     * there or in a subtype. Package-level and `internal` are treated as
+     * visible, the same call the language server makes
+     * (`intel::member_visible`): the IDE cannot always know the package
+     * relationship, and offering a name that turns out to be unreachable is a
+     * far smaller failure than hiding one that is.
+     *
+     * `from` is null at the top level, where only `public` is reachable.
+     */
+    fun memberVisibleFrom(member: PsiElement, from: JuxTypeDeclaration?): Boolean {
+        val owner = PsiTreeUtil.getParentOfType(member, JuxTypeDeclaration::class.java)
+            ?: return true
+        if (from != null && owner === from) return true
+        if (hasModifier(member, "private")) return false
+        if (hasModifier(member, "protected")) {
+            return from != null && inheritsFrom(from, owner.name)
+        }
+        return true
+    }
+
+    /** True when [type] is, or transitively extends/implements, a type named [ancestor]. */
+    fun inheritsFrom(type: JuxTypeDeclaration, ancestor: String?): Boolean {
+        if (ancestor == null) return false
+        if (type.name == ancestor) return true
+        val queue = ArrayDeque(superTypeNames(type))
+        val seen = HashSet<String>()
+        while (queue.isNotEmpty()) {
+            val name = queue.removeFirst()
+            if (!seen.add(name)) continue
+            if (name == ancestor) return true
+            val decl = JuxTypeIndex.findType(type, name) ?: continue
+            queue.addAll(superTypeNames(decl))
+        }
+        return false
+    }
+
+    /**
+     * Whether a TYPE declared in [type]'s file is nameable from a file in
+     * package [fromPackage].
+     *
+     * §4.4's hierarchy: `public` anywhere; no modifier means "visible within
+     * this package only"; `private` at top level means file-scope. `internal`
+     * is module-scoped, and the IDE has no reliable module identity for a Jux
+     * project, so it is treated as visible — hiding a name that is legal is the
+     * worse of the two errors, and the compiler does not enforce type-level
+     * visibility at all yet.
+     */
+    fun typeVisibleFrom(type: JuxTypeDeclaration, fromPackage: String): Boolean {
+        if (hasModifier(type, "public") || hasModifier(type, "internal")) return true
+        val declaring = dev.jux.intellij.completion.JuxAutoImport.packageOf(type)
+        // A type with no package is at the root, reachable from anywhere; a
+        // file with no package of its own is likewise not fenced out.
+        if (declaring.isEmpty() || fromPackage.isEmpty()) return true
+        return declaring == fromPackage
+    }
+
     /** `static` / `private` / `final` methods can't be overridden. */
     fun isOverridable(m: PsiElement): Boolean {
         val mods = m.node.findChildByType(JuxElementTypes.MODIFIER_LIST)?.psi ?: return true

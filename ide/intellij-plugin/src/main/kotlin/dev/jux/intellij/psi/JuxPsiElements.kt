@@ -279,5 +279,14 @@ class JuxRecordComponent(node: ASTNode) : JuxNamedElementImpl(node) {
     }
 }
 
+/**
+ * A declared type parameter — the `T` of `class Box<T>` or `<T extends Id>`.
+ *
+ * Named so it behaves like the declaration it is: in scope as a type inside the
+ * body, renameable, and reachable by find-usages. Its name is the FIRST
+ * identifier, which is what precedes any bound.
+ */
+class JuxTypeParameter(node: ASTNode) : JuxNamedElementImpl(node)
+
 /** A local variable declaration. */
 class JuxLocalVariable(node: ASTNode) : JuxNamedElementImpl(node)

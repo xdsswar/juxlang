@@ -216,6 +216,21 @@ class JuxCompletionContributor : CompletionContributor() {
                         val name = named.name ?: continue
                         add(declaration(named, name, AllIcons.Nodes.Variable, P_LOCAL), name)
                     }
+                // A loop's own binding, a caught exception, a lambda's
+                // parameters. Each introduces a name for the length of its
+                // construct, and each used to be invisible because the parser
+                // consumed it as raw tokens.
+                E.FOR_EACH_STATEMENT, E.FOR_STATEMENT, E.CATCH_CLAUSE ->
+                    for (child in scope.children) {
+                        if (child.elementType !== E.LOCAL_VARIABLE) continue
+                        val name = (child as? JuxNamedElement)?.name ?: continue
+                        add(declaration(child, name, AllIcons.Nodes.Variable, P_LOCAL), name)
+                    }
+                E.LAMBDA_EXPRESSION ->
+                    for (p in lambdaParameters(scope)) {
+                        val name = (p as? JuxNamedElement)?.name ?: continue
+                        add(declaration(p, name, AllIcons.Nodes.Parameter, P_PARAM), name)
+                    }
                 E.METHOD_DECLARATION, E.CONSTRUCTOR_DECLARATION, E.OPERATOR_DECLARATION ->
                     scope.children.firstOrNull { it.elementType === E.PARAMETER_LIST }
                         ?.children?.forEach { p ->
@@ -237,7 +252,12 @@ class JuxCompletionContributor : CompletionContributor() {
                         )
                     }
                 E.CLASS_BODY ->
-                    for (m in scope.children) {
+                    // The whole member surface, INHERITED included: `shared` and
+                    // `this.shared` are the same reference, and only the second
+                    // used to complete — the walk read this body's own children
+                    // and stopped. Visibility still applies; a `private` member
+                    // of an ancestor is not in scope here.
+                    for (m in enclosingMembers(scope, from = scope.parent)) {
                         val named = m as? JuxNamedElement ?: continue
                         val name = named.name ?: continue
                         when (m.elementType) {
@@ -253,6 +273,18 @@ class JuxCompletionContributor : CompletionContributor() {
                 else -> {}
             }
             scope = scope.parent
+        }
+
+        // Type parameters of every enclosing declaration — `T` is a legal type
+        // inside `class Box<T>`, and inside a generic method's body. Offered
+        // even in a type-only position, which is where they are most used.
+        var typeScope: PsiElement? = parameters.position.parent
+        while (typeScope != null && typeScope !is JuxFile) {
+            for (tp in typeParameters(typeScope)) {
+                val name = (tp as? JuxNamedElement)?.name ?: continue
+                add(declaration(tp, name, AllIcons.Nodes.Class, P_TYPE), name)
+            }
+            typeScope = typeScope.parent
         }
 
         // Tier 4: file-level type names (`Model m = new Model();`) — no import.
@@ -309,6 +341,14 @@ class JuxCompletionContributor : CompletionContributor() {
             val name = type.name
             if (name != null && name !in seen) {
                 val pkg = dev.jux.intellij.completion.JuxAutoImport.packageOf(type)
+                // §4.4: a no-modifier declaration is "visible within this
+                // package only". Offering one across a package boundary put a
+                // name in the popup that the accepting file has no business
+                // writing — and wrote an `import` for it. A modifier the editor
+                // ignores is a comment.
+                if (!dev.jux.intellij.resolve.JuxHierarchy.typeVisibleFrom(type, curPkg)) {
+                    return@forEachType
+                }
                 var b = LookupElementBuilder.create(name).withIcon(AllIcons.Nodes.Class)
                 if (pkg.isNotEmpty()) b = b.withTailText("  ($pkg)", true)
                 // Import only when it lives in a different, named package.
@@ -348,6 +388,36 @@ class JuxCompletionContributor : CompletionContributor() {
         if (returnType != null) builder = builder.withTypeText(returnType, true)
         return ranked(builder, P_MEMBER)
     }
+
+    /**
+     * Every member reachable unqualified from inside a class body: the class's
+     * own, plus everything it inherits that is visible from here.
+     *
+     * [dev.jux.intellij.resolve.JuxHierarchy.allMembers] already walks the
+     * supertype chain; the only thing this adds is the visibility gate and a
+     * graceful answer when the body has no enclosing declaration (a malformed
+     * file mid-edit), where it falls back to the body's own children.
+     */
+    private fun enclosingMembers(classBody: PsiElement, from: PsiElement?): List<PsiElement> {
+        val decl = from as? dev.jux.intellij.psi.JuxTypeDeclaration
+            ?: return classBody.children.toList()
+        return dev.jux.intellij.resolve.JuxHierarchy.allMembers(decl)
+            .filter { dev.jux.intellij.resolve.JuxHierarchy.memberVisibleFrom(it, decl) }
+    }
+
+    /** A lambda's declared parameters, or empty for the bare `x -> …` form. */
+    private fun lambdaParameters(lambda: PsiElement): List<PsiElement> {
+        val list = lambda.children.firstOrNull { it.elementType === E.PARAMETER_LIST }
+        // `x -> …` puts the single PARAMETER directly under the lambda.
+        val direct = lambda.children.filter { it.elementType === E.PARAMETER }
+        return (list?.children?.filter { it.elementType === E.PARAMETER } ?: emptyList()) + direct
+    }
+
+    /** The type parameters [scope] declares, if it declares any. */
+    private fun typeParameters(scope: PsiElement): List<PsiElement> =
+        scope.node.findChildByType(E.TYPE_PARAMETER_LIST)?.psi
+            ?.children?.filter { it.elementType === E.TYPE_PARAMETER }
+            ?: emptyList()
 
     // ---- import paths ----------------------------------------------------------
 
@@ -455,9 +525,17 @@ class JuxCompletionContributor : CompletionContributor() {
         val target = dev.jux.intellij.resolve.JuxTypeInference
             .resolveReceiverExpression(expression, parameters.position) ?: return
         val seen = HashSet<String>()
+        // Where the caret is decides what it may reach: another class's
+        // `private` members are names that do not compile, and offering them
+        // taught the popup to be wrong.
+        val from = PsiTreeUtil.getParentOfType(
+            parameters.position,
+            dev.jux.intellij.psi.JuxTypeDeclaration::class.java,
+        )
         for (m in dev.jux.intellij.resolve.JuxHierarchy.allMembers(target.type)) {
             val named = m as? JuxNamedElement ?: continue
             val name = named.name ?: continue
+            if (!dev.jux.intellij.resolve.JuxHierarchy.memberVisibleFrom(m, from)) continue
             val isEnumConst = m.elementType === E.ENUM_CONSTANT
             val isStatic = isEnumConst ||
                 dev.jux.intellij.resolve.JuxHierarchy.hasModifier(m, "static")

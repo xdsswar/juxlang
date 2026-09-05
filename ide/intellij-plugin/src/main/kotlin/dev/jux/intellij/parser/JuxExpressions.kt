@@ -423,6 +423,37 @@ private fun PsiBuilder.parseArgument() {
 }
 
 /**
+ * A lambda's `( … )` parameter list, as real [E.PARAMETER] nodes.
+ *
+ * It used to be swallowed whole by `skipMatched`, so a lambda parameter existed
+ * nowhere in the PSI: it could not be completed inside its own body, renamed,
+ * or found by usages — and the unused-symbol inspection could not see it
+ * either.
+ *
+ * Both spellings occur: `(a, b)` names only, and `(int a, String b)` typed. A
+ * name followed by `,` or `)` is a bare parameter; anything else means a type
+ * came first. Malformed input is consumed to the closing paren so the
+ * speculative caller can still roll back cleanly.
+ */
+private fun PsiBuilder.parseLambdaParameters() {
+    val list = mark()
+    advanceLexer() // `(`
+    while (!at(T.RPAREN) && !eof()) {
+        val p = mark()
+        if (at(T.IDENTIFIER) && (lookAhead(1) === T.COMMA || lookAhead(1) === T.RPAREN)) {
+            advanceLexer() // bare name
+        } else {
+            parseType()
+            if (at(T.IDENTIFIER)) advanceLexer()
+        }
+        p.done(E.PARAMETER)
+        if (!expect(T.COMMA)) break
+    }
+    expect(T.RPAREN)
+    list.done(E.PARAMETER_LIST)
+}
+
+/**
  * Lambda heads: `x -> …`, `(…) -> …`, optionally `async`-prefixed. Speculative:
  * scans the parameter shape and rolls back if no `->` follows, so an ordinary
  * parenthesized expression is unaffected.
@@ -431,9 +462,17 @@ private fun PsiBuilder.tryParseLambda(): PsiBuilder.Marker? {
     val m = mark()
     if (at(T.ASYNC_KW) && (lookAhead(1) === T.IDENTIFIER || lookAhead(1) === T.LPAREN)) advanceLexer()
     val ok = when {
-        at(T.IDENTIFIER) && lookAhead(1) === T.ARROW -> { advanceLexer(); advanceLexer(); parseLambdaBody(); true }
+        at(T.IDENTIFIER) && lookAhead(1) === T.ARROW -> {
+            // `x -> …`: the single parameter is a binding, so it gets a node.
+            val p = mark()
+            advanceLexer()
+            p.done(E.PARAMETER)
+            advanceLexer()
+            parseLambdaBody()
+            true
+        }
         at(T.LPAREN) -> {
-            skipMatched(T.LPAREN, T.RPAREN)
+            parseLambdaParameters()
             if (at(T.ARROW)) { advanceLexer(); parseLambdaBody(); true } else false
         }
         else -> false
