@@ -136,6 +136,20 @@ class JuxReference(element: PsiElement, range: TextRange) :
                         (child as? JuxNamedElement)?.name == name
                     ) return child
                 }
+            // The bindings a loop, a catch clause or a lambda introduces —
+            // real declarations, so go-to-definition, rename and find-usages
+            // all reach them.
+            E.FOR_EACH_STATEMENT, E.FOR_STATEMENT, E.CATCH_CLAUSE ->
+                scope.children.firstOrNull {
+                    it.elementType === E.LOCAL_VARIABLE && (it as? JuxNamedElement)?.name == name
+                }?.let { return it }
+            E.LAMBDA_EXPRESSION -> {
+                val list = scope.children.firstOrNull { it.elementType === E.PARAMETER_LIST }
+                val params = (list?.children?.toList() ?: emptyList()) + scope.children
+                params.firstOrNull {
+                    it.elementType === E.PARAMETER && (it as? JuxNamedElement)?.name == name
+                }?.let { return it }
+            }
             E.METHOD_DECLARATION, E.CONSTRUCTOR_DECLARATION, E.OPERATOR_DECLARATION ->
                 paramList(scope)?.let { list ->
                     for (p in list.children) {

@@ -77,7 +77,21 @@ object JuxTypeInference {
                             (child as? JuxNamedElement)?.name == name
                         ) return child as JuxNamedElement
                     }
-                E.METHOD_DECLARATION, E.CONSTRUCTOR_DECLARATION, E.OPERATOR_DECLARATION ->
+                // Loop, catch and lambda bindings — see JuxReference for the
+            // matching resolution walk; a receiver named by one of them has to
+            // type-resolve too.
+            E.FOR_EACH_STATEMENT, E.FOR_STATEMENT, E.CATCH_CLAUSE ->
+                scope.children.firstOrNull {
+                    it.elementType === E.LOCAL_VARIABLE && (it as? JuxNamedElement)?.name == name
+                }?.let { return it as JuxNamedElement }
+            E.LAMBDA_EXPRESSION -> {
+                val list = scope.children.firstOrNull { it.elementType === E.PARAMETER_LIST }
+                val params = (list?.children?.toList() ?: emptyList()) + scope.children
+                params.firstOrNull {
+                    it.elementType === E.PARAMETER && (it as? JuxNamedElement)?.name == name
+                }?.let { return it as JuxNamedElement }
+            }
+            E.METHOD_DECLARATION, E.CONSTRUCTOR_DECLARATION, E.OPERATOR_DECLARATION ->
                     scope.children.firstOrNull { it.elementType === E.PARAMETER_LIST }
                         ?.children?.forEach { p ->
                             if (p.elementType === E.PARAMETER && (p as? JuxNamedElement)?.name == name) {

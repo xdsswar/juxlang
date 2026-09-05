@@ -141,31 +141,48 @@ private fun PsiBuilder.parseForStatement() {
     m.done(E.FOR_STATEMENT)
 }
 
+/**
+ * The `for (T item : xs)` binding. The variable gets a real
+ * [E.LOCAL_VARIABLE] node: without one it could not be completed, navigated to,
+ * renamed, or counted as used — the loop variable you just wrote never appeared
+ * in the popup.
+ */
 private fun PsiBuilder.tryForEachHeader(): Boolean {
+    val v = mark()
     while (at(T.FINAL_KW) || at(T.CONST_KW) || atRefKw()) advanceLexer()
     if (at(T.VAR_KW)) advanceLexer() else parseType()
-    if (!at(T.IDENTIFIER)) return false
+    if (!at(T.IDENTIFIER)) {
+        // Not a for-each after all; the caller rolls the whole header back.
+        v.drop()
+        return false
+    }
     advanceLexer() // name
+    v.done(E.LOCAL_VARIABLE)
     return true
 }
 
 private fun PsiBuilder.parseForInit() {
     if (at(T.VAR_KW) || at(T.FINAL_KW) || at(T.CONST_KW) || atRefKw()) {
+        val v = mark()
         while (at(T.FINAL_KW) || at(T.CONST_KW) || atRefKw()) advanceLexer()
         if (at(T.VAR_KW)) advanceLexer() else parseType()
         if (at(T.IDENTIFIER)) advanceLexer()
         if (expect(T.EQ)) parseExpression()
+        v.done(E.LOCAL_VARIABLE)
         return
     }
     // Typed init `int i = 0` (speculative) or expression list.
     val p = mark()
+    val v = mark()
     parseType()
     if (at(T.IDENTIFIER)) {
         advanceLexer()
         if (expect(T.EQ)) parseExpression()
+        v.done(E.LOCAL_VARIABLE)
         p.drop()
         return
     }
+    v.drop()
     p.rollbackTo()
     parseExpression()
     while (at(T.COMMA)) { advanceLexer(); parseExpression() }
@@ -230,10 +247,13 @@ private fun PsiBuilder.parseTryCore(): PsiBuilder.Marker {
         val cm = mark()
         advanceLexer()
         if (expect(T.LPAREN)) {
-            // Multi-catch: `catch (NetError | TimeoutError e)`.
+            // Multi-catch: `catch (NetError | TimeoutError e)`. The caught
+            // value is a binding like any other and gets its own node.
+            val v = mark()
             parseType()
             while (at(T.PIPE)) { advanceLexer(); parseType() }
             expectOrError(T.IDENTIFIER, "exception name expected")
+            v.done(E.LOCAL_VARIABLE)
             expectOrError(T.RPAREN, "')' expected")
         }
         parseBlock()

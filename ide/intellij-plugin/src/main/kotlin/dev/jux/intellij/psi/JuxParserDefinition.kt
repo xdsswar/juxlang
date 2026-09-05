@@ -63,6 +63,10 @@ class JuxParserDefinition : ParserDefinition {
         E.ENUM_CONSTANT -> JuxEnumConstant(node)
         E.PARAMETER -> JuxParameter(node)
         E.RECORD_COMPONENT -> JuxRecordComponent(node)
+        // A type parameter is a declaration: `T` in `class Box<T>` is
+        // renameable, navigable, and a legal type inside the body. It had a
+        // node but no named PSI, so none of that worked.
+        E.TYPE_PARAMETER -> JuxTypeParameter(node)
         E.LOCAL_VARIABLE -> JuxLocalVariable(node)
 
         else -> JuxCompositeElement(node)
