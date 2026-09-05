@@ -86,6 +86,10 @@ impl Profile {
 /// state-machine rewrite (§16.7). A no-op for `Full` / `Embedded`. External
 /// (`.jux.d`) units are skipped, and each diagnostic is tagged with its unit
 /// index (parallel to the driver's `sources`) so the LSP routes it correctly.
+/// Names the language provides itself — `print`, `spawn`, `block_on`, …
+/// Re-exported so the backend can keep a wildcard import from shadowing one.
+pub use check::BUILTINS;
+
 pub fn check_async_profile(units: &[CompilationUnit], profile: Profile) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     if profile != Profile::Core {

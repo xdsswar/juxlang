@@ -1278,16 +1278,16 @@ impl RustEmitter {
     /// out of `Vec<C>` / `[C; N]`, so a value-position use must clone it
     /// (a move would be `E0507 cannot move out of index`).
     fn index_element_is_wrapper_class(&self, array_expr: &Expr) -> bool {
-        let Some(juxc_tycheck::Ty::Array { element, .. }) =
-            self.expr_types.get(&expr_span_of(array_expr))
-        else {
+        let Some(container) = self.expr_types.get(&expr_span_of(array_expr)) else {
             return false;
         };
-        if let juxc_tycheck::Ty::User { name, .. } = element.as_ref() {
-            let bare = name.rsplit('.').next().unwrap_or(name);
-            return self.wrapper_classes.contains(bare);
+        match indexed_element_ty(container) {
+            Some(juxc_tycheck::Ty::User { name, .. }) => {
+                let bare = name.rsplit('.').next().unwrap_or(&name);
+                self.wrapper_classes.contains(bare)
+            }
+            _ => false,
         }
-        false
     }
 
     /// Resolve the [`juxc_ast::ClassDecl`] (from `class_asts`) a
@@ -1988,4 +1988,26 @@ pub(crate) fn numeric_constant(type_name: &str, field: &str) -> Option<String> {
         _ => return None,
     };
     Some(format!("{rust_ty}::{rust_const}"))
+}
+
+/// The element type an index read yields, for either container shape.
+///
+/// A Jux array is `Ty::Array`, but a `rust.std` container is a `Ty::User` whose
+/// element sits in a generic argument — `Vec<T>` and `VecDeque<T>` at 0, a map
+/// at 1 (indexing a map yields its VALUE). Only understanding the array shape
+/// meant a `Vec<UserClass>` field indexed and returned moved out of the vector
+/// (rustc E0507) because the share-clone never fired.
+pub(crate) fn indexed_element_ty(container: &juxc_tycheck::Ty) -> Option<juxc_tycheck::Ty> {
+    match container {
+        juxc_tycheck::Ty::Array { element, .. } => Some((**element).clone()),
+        juxc_tycheck::Ty::User { name, generic_args } => {
+            match name.rsplit('.').next().unwrap_or(name) {
+                "Vec" | "VecDeque" | "HashSet" | "BTreeSet" => generic_args.first().cloned(),
+                "HashMap" | "BTreeMap" => generic_args.get(1).cloned(),
+                _ => None,
+            }
+        }
+        juxc_tycheck::Ty::Nullable(inner) => indexed_element_ty(inner),
+        _ => None,
+    }
 }

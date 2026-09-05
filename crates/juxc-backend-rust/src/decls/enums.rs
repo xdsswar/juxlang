@@ -299,6 +299,24 @@ impl RustEmitter {
             // enum needs `T: Clone` anyway.
             let displayed = self.enum_displayed_generic_params(enum_decl);
             let params = enum_decl.generic_params.clone();
+            // Same key-bound rule as a class: a variant payload or method
+            // signature that keys a map by a type param needs `Eq + Hash`
+            // (or `Ord`) on the impl.
+            let declared: Vec<juxc_ast::TypeRef> = enum_decl
+                .variants
+                .iter()
+                .flat_map(|v| v.payload.iter().map(|p| p.ty.clone()))
+                .chain(enum_decl.methods.iter().flat_map(|m| {
+                    m.params.iter().map(|p| p.ty.clone()).chain(
+                        match &m.return_type {
+                            juxc_ast::ReturnType::Type(t)
+                            | juxc_ast::ReturnType::AsyncType(t) => Some(t.clone()),
+                            juxc_ast::ReturnType::Void => None,
+                        },
+                    )
+                }))
+                .collect();
+            self.collect_key_bound_params(&params, declared.iter());
             self.emit_generic_params_with_clone_bound_plus_display(
                 &params,
                 &displayed,

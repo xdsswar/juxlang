@@ -1,0 +1,98 @@
+// async, worker threads and generics in one program — the combinations that
+// each work alone but have to compose:
+//
+//   * an `async` method on an INTERFACE, called through a `Rc<dyn …>` value;
+//   * an `async` method overridden down an inheritance chain and dispatched
+//     through a base-typed reference;
+//   * a generic class keyed by one of its own type parameters;
+//   * a worker capturing a loop variable that the loop also reassigns;
+//   * a channel carried across a cooperative `spawn` and awaited from both
+//     ends.
+
+import rust.std.*;
+
+public interface Fetcher<T> {
+    async T get();
+    String label();
+}
+
+public class Constant<T> implements Fetcher<T> {
+    private T v;
+    public Constant(T v) { this.v = v; }
+    @Override public async T get() { return this.v; }
+    @Override public String label() { return "const"; }
+}
+
+// A generic class whose type parameter is a map KEY — Rust puts `Eq + Hash` on
+// the container's methods, so the impl needs the bound.
+public class Registry<K, V> {
+    private HashMap<K, V> map;
+    public Registry() { this.map = new HashMap<K, V>(); }
+    public void put(K k, V v) { this.map.insert(k, v); }
+    public int size() { return this.map.len(); }
+}
+
+public class Source {
+    public async int value() { return 1; }
+    public String tag() { return "Source"; }
+}
+
+public class Doubled extends Source {
+    @Override public async int value() { return await super.value() * 2; }
+    @Override public String tag() { return "Doubled"; }
+}
+
+public int work(int n) { return n * n; }
+
+public async int sumFetchers(Fetcher<int> a, Fetcher<int> b) {
+    return await a.get() + await b.get();
+}
+
+public async int throughBase(Source s) {
+    return await s.value();
+}
+
+public async int pipeline(int n) {
+    Channel<int> ch = new Channel<int>(2);
+    Registry<int, int> reg = new Registry<int, int>();
+    var producer = spawn(produce(ch, n));
+    int count = await drain(ch, reg);
+    await producer;
+    return count + reg.size();
+}
+
+public async int produce(Channel<int> ch, int n) {
+    int i = 0;
+    while (i < n) {
+        // The worker takes `i` by value; the loop keeps reassigning it.
+        var w = Worker.spawn(() -> work(i));
+        await ch.send(await w);
+        i = i + 1;
+    }
+    ch.close();
+    return n;
+}
+
+public async int drain(Channel<int> ch, Registry<int, int> reg) {
+    int count = 0;
+    int? v = await ch.receive();
+    while (v != null) {
+        reg.put(count, v!!);
+        count = count + 1;
+        v = await ch.receive();
+    }
+    return count;
+}
+
+public void main() {
+    Fetcher<int> x = new Constant<int>(3);
+    Fetcher<int> y = new Constant<int>(4);
+    print(x.label());
+    print(block_on(sumFetchers(x, y)));
+
+    Source s = new Doubled();
+    print(s.tag());
+    print(block_on(throughBase(s)));
+
+    print(block_on(pipeline(4)));
+}

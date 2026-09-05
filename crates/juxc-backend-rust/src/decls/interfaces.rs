@@ -76,16 +76,16 @@ impl RustEmitter {
                 continue;
             }
             self.w.emit_indent();
-            // `async T` interface methods become `async fn` on the
-            // trait. Rust supports async fns in traits since 1.75
-            // (stabilized RFC 3185), so this lowers directly without
-            // needing `#[async_trait]` shims. The default-body and
-            // signature-only paths both honor the prefix the same way.
-            if matches!(method.return_type, ReturnType::AsyncType(_)) {
-                self.w.push_str("async fn ");
-            } else {
-                self.w.push_str("fn ");
-            }
+            // An `async T` interface method lowers to a plain `fn` returning a
+            // BOXED future, not to Rust's `async fn` in a trait. Rust has had
+            // the latter since 1.75, but a trait carrying one is not
+            // dyn-compatible — and a Jux interface exists to be a `Rc<dyn
+            // Trait>` value, so `async fn` made every async interface unusable
+            // (rustc E0038). The boxed form is what `#[async_trait]` produces,
+            // and what the spec's "async interface methods work the same way
+            // as their sync counterparts" requires.
+            let is_async = matches!(method.return_type, ReturnType::AsyncType(_));
+            self.w.push_str("fn ");
             self.w.push_str(&to_rust_ident(&method.name.text));
             self.emit_generic_params(&method.generic_params);
             // `&self` — interface methods take a shared receiver so the
@@ -113,10 +113,13 @@ impl RustEmitter {
                     self.emit_return_type_as_rust(t);
                 }
                 ReturnType::AsyncType(t) => {
-                    // `async T` → `async fn (...) -> T`. The keyword
-                    // was already prepended above.
-                    self.w.push_str(" -> ");
+                    // `-> Pin<Box<dyn Future<Output = T> + '_>>`. The `'_` ties
+                    // the future to the `&self` borrow, which is what a method
+                    // reading its receiver needs.
+                    self.w
+                        .push_str(" -> std::pin::Pin<Box<dyn std::future::Future<Output = ");
                     self.emit_return_type_as_rust(t);
+                    self.w.push_str("> + '_>>");
                 }
             }
             // Two shapes: abstract signature (`;`) vs. default
@@ -128,6 +131,14 @@ impl RustEmitter {
             if let Some(body) = &method.body {
                 self.w.push_str(" {\n");
                 self.w.indent_inc();
+                // A default body for an async method IS the future the boxed
+                // signature promises.
+                if is_async {
+                    self.w.emit_indent();
+                    self.w.push_str("Box::pin(async move {
+");
+                    self.w.indent_inc();
+                }
                 // `&self` in the interface trait method maps to
                 // the Rust `self` keyword as the implicit
                 // receiver; set the alias so `this` in the body
@@ -147,6 +158,12 @@ impl RustEmitter {
                 self.current_return_type = saved_return;
                 self.enclosing_interface = prev_iface;
                 self.this_alias = prev_alias;
+                if is_async {
+                    self.w.indent_dec();
+                    self.w.emit_indent();
+                    self.w.push_str("})
+");
+                }
                 self.w.indent_dec();
                 self.w.line("}");
             } else {

@@ -1034,6 +1034,17 @@ impl RustEmitter {
             // A param used as a fixed-array-field element (`T[N]`)
             // needs `Default` for the `from_fn` construction — see
             // `class_default_bound_params`.
+            // A param used as a HASH-MAP / SET key needs `Eq + Hash`, and one
+            // used as a B-TREE key needs `Ord`. Rust puts those bounds on the
+            // container's own methods, so a generic class holding a
+            // `HashMap<K, V>` failed at the first lookup with a raw rustc
+            // "the trait bound `K: Eq` is not satisfied".
+            if self.hash_key_params.contains(&p.name.text) {
+                self.w.push_str(" + std::cmp::Eq + std::hash::Hash");
+            }
+            if self.ord_key_params.contains(&p.name.text) {
+                self.w.push_str(" + std::cmp::Ord");
+            }
             if default_params.contains(&p.name.text) {
                 self.w.push_str(" + Default");
             }

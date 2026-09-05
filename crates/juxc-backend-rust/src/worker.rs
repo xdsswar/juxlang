@@ -109,7 +109,7 @@ fn worker_capture_class_names(
     let mut out: HashSet<String> = HashSet::new();
     walk_unit_exprs(units, &mut |e| {
         let Expr::Call(c) = e else { return };
-        if !callee_is_worker_spawn(&c.callee) {
+        if !is_worker_spawn_callee(&c.callee) {
             return;
         }
         let Some(Expr::Lambda(l)) = c.args.first() else { return };
@@ -134,7 +134,7 @@ fn worker_capture_class_names(
 }
 
 /// `Worker.spawn` — the one call form that starts another OS thread (§18.2).
-fn callee_is_worker_spawn(callee: &Expr) -> bool {
+pub(crate) fn is_worker_spawn_callee(callee: &Expr) -> bool {
     let Expr::Field(f) = callee else { return false };
     f.field.text == "spawn"
         && matches!(
