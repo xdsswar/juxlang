@@ -352,6 +352,17 @@ The visibility rules form a strict hierarchy from least to most restrictive:
 
 For top-level (non-class) declarations: `private` means file-scope.
 
+These apply to the **type itself**, not only to its members: naming, importing
+or instantiating a type declared without `public` from another package is
+**E0416**, the same as reaching a package-private member. A modifier the
+compiler ignores is a comment.
+
+> **`internal` is not yet enforced.** It is scoped to the MODULE, and the
+> checker has no module identity — a workspace's members are compiled into one
+> symbol table. Rejecting code the specification allows is the worse of the two
+> errors, so an `internal` type is treated as visible until modules are
+> modelled. `public` and the no-modifier default behave exactly as described.
+
 ---
 
 ## 5. Type System

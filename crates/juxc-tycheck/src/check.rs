@@ -2141,6 +2141,68 @@ impl<'a> Checker<'a> {
         self.env.pop_scope();
     }
 
+    /// **E0416 for TYPES** — a type declared without `public` is visible only
+    /// inside its own package (§4.4), exactly as in Java.
+    ///
+    /// Member-level visibility was already enforced (E0414/E0415/E0416), but
+    /// the TYPE itself was not: a package-private helper could be named,
+    /// imported and instantiated from any other package, so the modifier on the
+    /// declaration meant nothing. A modifier the compiler ignores is a comment.
+    ///
+    /// `internal` is exempt. The spec scopes it to the MODULE, and the checker
+    /// has no module identity — a workspace's members compile together into one
+    /// symbol table. Treating it as package-private would reject code the spec
+    /// allows, which is the worse of the two errors, so it stays visible until
+    /// modules are modelled.
+    ///
+    /// Only single-segment names are checked. A written FQN (`a.b.C`) is
+    /// deliberate and rare, and resolving one here would duplicate the import
+    /// machinery for no gain.
+    fn check_type_visibility(&mut self, tref: &TypeRef) {
+        self.check_type_name_visibility(&tref.name, tref.span);
+    }
+
+    /// [`Self::check_type_visibility`] for a bare name — `new X(…)` carries a
+    /// [`QualifiedName`] rather than a full type reference.
+    fn check_type_name_visibility(&mut self, name: &juxc_ast::QualifiedName, span: juxc_source::Span) {
+        if name.segments.len() != 1 {
+            return;
+        }
+        let bare = &name.segments[0].text;
+        let Some((fqn, sig)) = self.symbols.resolve_class(bare) else {
+            return;
+        };
+        if !matches!(sig.visibility, juxc_ast::Visibility::Package) {
+            return;
+        }
+        // Same package — including the "no package at all" case, where every
+        // declaration shares one root scope.
+        if sig.package.as_slice() == self.env.current_package.as_slice() {
+            return;
+        }
+        let declaring = if sig.package.is_empty() {
+            "the root package".to_string()
+        } else {
+            format!("`{}`", sig.package.join("."))
+        };
+        let here = if self.env.current_package.is_empty() {
+            "the root package".to_string()
+        } else {
+            format!("`{}`", self.env.current_package.join("."))
+        };
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0416_PackagePrivateAccess,
+                format!(
+                    "cannot use package-private type `{fqn}` from {here} — it is declared in \
+                     {declaring} without `public`, so it is visible only inside that \
+                     package (§4.4). Mark the declaration `public` to export it",
+                ),
+            )
+            .with_span(span),
+        );
+    }
+
     /// **E0417 (J4)** — validate that every bare type name appearing in a
     /// signature position (a parameter, return, or field type) resolves to a
     /// real type. The motivating case: a class that `implements Holder<Object>`
@@ -2175,6 +2237,8 @@ impl<'a> Checker<'a> {
         if tref.const_literal_text().is_some() {
             return;
         }
+        // A resolvable head still has to be REACHABLE from here.
+        self.check_type_visibility(tref);
         if self.sig_head_unresolved(tref, extra) {
             let bare = &tref.name.segments[0].text;
             self.diagnostics.push(
@@ -2610,6 +2674,7 @@ impl<'a> Checker<'a> {
                     self.check_iface_value_type(t);
                     self.check_wildcard_storage_type(t);
                     self.check_fixed_array_size_in_type(t);
+                    self.check_type_visibility(t);
                 }
                 // If both a declared type and an initializer are
                 // present, the two must be compatible. Otherwise the
@@ -6101,6 +6166,8 @@ impl<'a> Checker<'a> {
         // the symbol table keys classes by FQN, so the old
         // bare-last-segment lookup silently skipped constructor
         // checking in any file with a `package` declaration.
+        // Instantiating a type is naming it: the same package rule applies.
+        self.check_type_name_visibility(&n.class_name, n.span);
         let class_name = crate::infer::resolve_class_name(&n.class_name, &self.env, self.symbols);
         if class_name.is_empty() {
             return;
@@ -8350,6 +8417,68 @@ mod tests {
     fn non_final_field_reassign_is_ok() {
         let d = run("public class C { int x = 0; public void m() { x = 5; } }");
         assert!(!has(&d, code::Code::E0465_FinalFieldReassigned), "{d:?}");
+    }
+
+    // --- §4.4 type-level visibility (E0416 for TYPES) ---
+
+    /// Two units, so a package boundary actually exists.
+    fn run_two(a: &str, b: &str) -> Vec<Diagnostic> {
+        let units: Vec<juxc_ast::CompilationUnit> = [a, b]
+            .iter()
+            .map(|src| {
+                let sf = SourceFile::new("t.jux", *src);
+                let lexed = lex(&sf);
+                assert!(lexed.diagnostics.is_empty(), "lex: {:?}", lexed.diagnostics);
+                let parsed = parse(&lexed.tokens);
+                assert!(parsed.diagnostics.is_empty(), "parse: {:?}", parsed.diagnostics);
+                parsed.ast
+            })
+            .collect();
+        crate::typecheck_workspace(&units).diagnostics
+    }
+
+    /// A type declared without `public` is visible only inside its own package
+    /// (§4.4), exactly as in Java. Member visibility was already enforced; the
+    /// TYPE was not, so the modifier on the declaration meant nothing.
+    #[test]
+    fn package_private_type_is_not_visible_across_packages() {
+        let d = run_two(
+            "package a; class Hidden { public int x = 1; }",
+            "package b; import a.*; public class U { public int go() { Hidden h = new Hidden(); return h.x; } }",
+        );
+        assert!(has(&d, code::Code::E0416_PackagePrivateAccess), "{d:?}");
+    }
+
+    /// The same declaration is fine from inside its own package.
+    #[test]
+    fn package_private_type_is_visible_in_its_own_package() {
+        let d = run_two(
+            "package a; class Hidden { public int x = 1; }",
+            "package a; public class U { public int go() { Hidden h = new Hidden(); return h.x; } }",
+        );
+        assert!(!has(&d, code::Code::E0416_PackagePrivateAccess), "{d:?}");
+    }
+
+    /// `public` exports it, which is the whole point of writing the modifier.
+    #[test]
+    fn public_type_crosses_a_package_boundary() {
+        let d = run_two(
+            "package a; public class Shown { public int y = 2; }",
+            "package b; import a.*; public class U { public int go() { Shown s = new Shown(); return s.y; } }",
+        );
+        assert!(!has(&d, code::Code::E0416_PackagePrivateAccess), "{d:?}");
+    }
+
+    /// `internal` is MODULE-scoped and the checker has no module identity, so
+    /// it is deliberately exempt: rejecting code the spec allows is the worse
+    /// of the two errors. This pins that as a decision rather than an oversight.
+    #[test]
+    fn internal_type_is_exempt_until_modules_are_modelled() {
+        let d = run_two(
+            "package a; internal class Mod { public int x = 1; }",
+            "package b; import a.*; public class U { public int go() { Mod m = new Mod(); return m.x; } }",
+        );
+        assert!(!has(&d, code::Code::E0416_PackagePrivateAccess), "{d:?}");
     }
 
     /// A `final` LOCAL stays E0464 (binding rule), never E0465 (field rule).
