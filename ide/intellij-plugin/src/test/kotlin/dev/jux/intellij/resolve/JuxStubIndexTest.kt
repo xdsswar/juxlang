@@ -80,6 +80,31 @@ class JuxStubIndexTest : BasePlatformTestCase() {
         )
     }
 
+    fun testStubMembersComplete() {
+        addCrateStub()
+        myFixture.configureByText(
+            "c.jux",
+            """
+            import rust.demo.*;
+            void main() { Widget w = new Widget(); w.<caret> }
+            """.trimIndent(),
+        )
+        val offered = myFixture.completeBasic()?.map { it.lookupString } ?: emptyList()
+        assertTrue("expected the stub's members among $offered", offered.containsAll(listOf("width", "resize")))
+    }
+
+    fun testRecordComponentsCompleteAsMembers() {
+        myFixture.configureByText(
+            "d.jux",
+            """
+            public record Pt(int x, int y) { }
+            void main() { Pt p = new Pt(1, 2); p.<caret> }
+            """.trimIndent(),
+        )
+        val offered = myFixture.completeBasic()?.map { it.lookupString } ?: emptyList()
+        assertTrue("record components should complete as members: $offered", offered.containsAll(listOf("x", "y")))
+    }
+
     /** Discovery must never throw on a machine with no toolchain installed. */
     fun testDiscoveryIsSafeWithNoToolchain() {
         val roots = JuxStubRoots.externalRoots()

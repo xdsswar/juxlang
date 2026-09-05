@@ -44,7 +44,12 @@ class JuxManifestChangeListener(private val project: Project) : BulkFileListener
         if (project.isDisposed) return
         LOG.info("Re-discovering Jux dependencies: restarting juxc-lsp + refreshing daemon")
         JuxLspState.refresh(project)
-        DaemonCodeAnalyzer.getInstance(project).restart("jux.toml dependencies changed")
+        // The no-argument `restart()` — the `restart(Object)` overload that
+        // takes a reason string only exists from 2025.3, and calling it on an
+        // older IDE is a `NoSuchMethodError` at runtime rather than a build
+        // error, since the plugin compiles against the newest SDK. The reason
+        // string was for the log, which the line above already carries.
+        DaemonCodeAnalyzer.getInstance(project).restart()
     }
 
     internal companion object {

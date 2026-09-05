@@ -342,10 +342,15 @@ class JuxCompletionContributor : CompletionContributor() {
      * in-file/project type ([dev.jux.intellij.resolve.JuxTypeInference]) and
      * offer its members — methods, fields, properties, enum constants —
      * including inherited ones (via [dev.jux.intellij.resolve.JuxHierarchy]),
-     * filtered by static vs instance access. This is the IDE-side stand-in for
-     * the LSP's type-aware member list; it covers user-defined project types.
-     * Rust std / crate members still need the LSP (its stub index), which is
-     * why the fallback never claims to be exhaustive after a dot.
+     * filtered by static vs instance access.
+     *
+     * This covers the standard library and bound crates too: their generated
+     * `.jux.d` stubs are indexed as an external library
+     * ([dev.jux.intellij.resolve.JuxLibraryRootsProvider]), so `Vec` and
+     * `minifb::Window` resolve like any other declaration and their real
+     * members are what gets offered. The LSP still gives a better list when it
+     * is running — it knows inferred types, not just declared ones — which is
+     * why this stands down entirely while a server is attached.
      */
     private fun addMemberCompletion(parameters: CompletionParameters, result: CompletionResultSet) {
         val word = wordBeforeDot(parameters) ?: return
@@ -364,7 +369,7 @@ class JuxCompletionContributor : CompletionContributor() {
             if (!seen.add(name)) continue
             when (m.elementType) {
                 E.METHOD_DECLARATION -> result.addElement(method(named, name))
-                E.FIELD_DECLARATION ->
+                E.FIELD_DECLARATION, E.RECORD_COMPONENT ->
                     result.addElement(declaration(m, name, AllIcons.Nodes.Field, P_MEMBER))
                 E.PROPERTY_DECLARATION ->
                     result.addElement(declaration(m, name, AllIcons.Nodes.Property, P_MEMBER))
