@@ -11,6 +11,7 @@ use crate::analysis::{
 };
 use crate::stmts::stmt_span;
 use crate::RustEmitter;
+use juxc_lex::to_rust_ident;
 
 /// True when `init_expr` is a single-segment path expression whose
 /// name equals `field_name`. Used by `Self { … }` emission to pick
@@ -276,7 +277,7 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.w.push_str(&param.name.text);
+            self.w.push_str(&to_rust_ident(&param.name.text));
             self.w.push_str(": ");
             self.emit_value_type_as_rust(&param.ty);
         }
@@ -398,7 +399,7 @@ impl RustEmitter {
                 continue;
             }
             self.w.emit_indent();
-            self.w.push_str(&field.name.text);
+            self.w.push_str(&to_rust_ident(&field.name.text));
             self.w.push_str(": ");
             // `ref` field (§M.13): seed a fresh shared cell around the
             // default value — ctor-body assignments store through it.
@@ -650,7 +651,7 @@ impl RustEmitter {
             // shared cell — the same-name shorthand can't apply (the
             // param is the VALUE, the field is the cell).
             if field.is_ref {
-                self.w.push_str(&field.name.text);
+                self.w.push_str(&to_rust_ident(&field.name.text));
                 self.w.push_str(": std::rc::Rc::new(std::cell::RefCell::new(");
                 if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
                     self.emit_ctor_field_init(field.ty.as_ref(), init_expr);
@@ -674,19 +675,19 @@ impl RustEmitter {
             // Idiomatic Rust; identical semantics.
             if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
                 if init_is_same_named_ident(init_expr, &field.name.text) {
-                    self.w.push_str(&field.name.text);
+                    self.w.push_str(&to_rust_ident(&field.name.text));
                     self.w.push_str(",\n");
                     continue;
                 }
-                self.w.push_str(&field.name.text);
+                self.w.push_str(&to_rust_ident(&field.name.text));
                 self.w.push_str(": ");
                 self.emit_ctor_field_init(field.ty.as_ref(), init_expr);
             } else if let Some(default) = &field.default {
-                self.w.push_str(&field.name.text);
+                self.w.push_str(&to_rust_ident(&field.name.text));
                 self.w.push_str(": ");
                 self.emit_ctor_field_init(field.ty.as_ref(), default);
             } else {
-                self.w.push_str(&field.name.text);
+                self.w.push_str(&to_rust_ident(&field.name.text));
                 self.w.push_str(": ");
                 // No assignment and no source default — fall back to
                 // the type's natural default. Generic-typed fields
@@ -761,7 +762,7 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.w.push_str(&param.name.text);
+            self.w.push_str(&to_rust_ident(&param.name.text));
             self.w.push_str(": ");
             self.emit_value_type_as_rust(&param.ty);
         }
@@ -792,7 +793,7 @@ impl RustEmitter {
                 if i > 0 {
                     self.w.push_str(", ");
                 }
-                self.w.push_str(&param.name.text);
+                self.w.push_str(&to_rust_ident(&param.name.text));
             }
             self.w.push_str(")");
             self.w.push_str(wrap_close);
@@ -811,7 +812,7 @@ impl RustEmitter {
                 if i > 0 {
                     self.w.push_str(", ");
                 }
-                self.w.push_str(&param.name.text);
+                self.w.push_str(&to_rust_ident(&param.name.text));
                 self.w.push_str(".clone()");
             }
             self.w.push_str(")");
@@ -919,7 +920,7 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.w.push_str(&param.name.text);
+            self.w.push_str(&to_rust_ident(&param.name.text));
             self.w.push_str(": ");
             self.emit_value_type_as_rust(&param.ty);
         }
@@ -1037,7 +1038,7 @@ impl RustEmitter {
                     continue;
                 }
                 self.w.emit_indent();
-                self.w.push_str(&field.name.text);
+                self.w.push_str(&to_rust_ident(&field.name.text));
                 self.w.push_str(": ");
                 // `ref` field (§M.13): seed a fresh shared cell.
                 if field.is_ref {
@@ -1182,7 +1183,7 @@ impl RustEmitter {
             first = false;
             // `ref` field (§M.13): wrap into a fresh shared cell.
             if field.is_ref {
-                self.w.push_str(&field.name.text);
+                self.w.push_str(&to_rust_ident(&field.name.text));
                 self.w.push_str(": std::rc::Rc::new(std::cell::RefCell::new(");
                 if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
                     self.emit_ctor_field_init(field.ty.as_ref(), init_expr);
@@ -1201,18 +1202,18 @@ impl RustEmitter {
             }
             if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
                 if init_is_same_named_ident(init_expr, &field.name.text) {
-                    self.w.push_str(&field.name.text);
+                    self.w.push_str(&to_rust_ident(&field.name.text));
                     continue;
                 }
-                self.w.push_str(&field.name.text);
+                self.w.push_str(&to_rust_ident(&field.name.text));
                 self.w.push_str(": ");
                 self.emit_ctor_field_init(field.ty.as_ref(), init_expr);
             } else if let Some(default) = &field.default {
-                self.w.push_str(&field.name.text);
+                self.w.push_str(&to_rust_ident(&field.name.text));
                 self.w.push_str(": ");
                 self.emit_ctor_field_init(field.ty.as_ref(), default);
             } else {
-                self.w.push_str(&field.name.text);
+                self.w.push_str(&to_rust_ident(&field.name.text));
                 self.w.push_str(": ");
                 self.emit_field_storage_default(field);
             }
@@ -1275,7 +1276,7 @@ impl RustEmitter {
         if let Some(parent_ty) = &class_decl.extends {
             if let Some(seg) = parent_ty.name.segments.first() {
                 self.w.push_str(" __parent: ");
-                self.w.push_str(&seg.text);
+                self.w.push_str(&to_rust_ident(&seg.text));
                 let sfx = self.ctor_overload_suffix(&seg.text, 0);
                 self.w.push_str("::new_inner");
                 self.w.push_str(&sfx);
@@ -1293,7 +1294,7 @@ impl RustEmitter {
                 self.w.push_str(", ");
             }
             first = false;
-            self.w.push_str(&field.name.text);
+            self.w.push_str(&to_rust_ident(&field.name.text));
             self.w.push_str(": ");
             // `ref` field (§M.13): seed a fresh shared cell around the
             // default value — ctor-body assignments store through it.
@@ -1418,7 +1419,7 @@ impl RustEmitter {
                 // bare identifier and let Rust infer the generic args
                 // from the `__parent` field's declared type.
                 if let Some(seg) = parent_ty.name.segments.first() {
-                    self.w.push_str(&seg.text);
+                    self.w.push_str(&to_rust_ident(&seg.text));
                 }
                 self.w.push_str("::new(),\n");
             }
@@ -1428,7 +1429,7 @@ impl RustEmitter {
                 continue;
             }
             self.w.emit_indent();
-            self.w.push_str(&field.name.text);
+            self.w.push_str(&to_rust_ident(&field.name.text));
             self.w.push_str(": ");
             // `ref` field (§M.13): seed a fresh shared cell around the
             // default value — ctor-body assignments store through it.

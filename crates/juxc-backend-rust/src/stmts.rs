@@ -11,6 +11,7 @@ use juxc_tycheck::Ty;
 
 use crate::exprs::expr_span_of;
 use crate::RustEmitter;
+use juxc_lex::to_rust_ident;
 
 /// True when `e` is the AST `null` literal — used to decide
 /// whether a value flowing into a nullable slot needs the
@@ -835,7 +836,7 @@ impl RustEmitter {
         if binder_mut {
             self.w.push_str("mut ");
         }
-        self.w.push_str(&clause.name.text);
+        self.w.push_str(&to_rust_ident(&clause.name.text));
         self.w.push_str(" = (*__jux_boxed)");
         for _ in 0..slice_depth {
             self.w.push_str(".__parent");
@@ -1323,9 +1324,9 @@ impl RustEmitter {
             for name in &names {
                 self.w.emit_indent();
                 self.w.push_str("let ");
-                self.w.push_str(name);
+                self.w.push_str(&to_rust_ident(name));
                 self.w.push_str(" = ");
-                self.w.push_str(name);
+                self.w.push_str(&to_rust_ident(name));
                 self.w.push_str(".clone();\n");
             }
         }
@@ -1635,7 +1636,7 @@ impl RustEmitter {
                 self.w.push_str(": ");
             }
             self.w.push_str("while let Some(");
-            self.w.push_str(&f.var_name.text);
+            self.w.push_str(&to_rust_ident(&f.var_name.text));
             self.w.push_str(") = __jux_stream.next().await {\n");
             self.w.indent_inc();
             // Register the loop variable's element type (the stream's
@@ -1721,7 +1722,7 @@ impl RustEmitter {
         }
         if matches!(&f.iter, Expr::Range(_)) {
             self.w.push_str("for ");
-            self.w.push_str(&f.var_name.text);
+            self.w.push_str(&to_rust_ident(&f.var_name.text));
             self.w.push_str(" in ");
             self.emit_expr(&f.iter);
             self.w.push_str(" {\n");
@@ -1762,7 +1763,7 @@ impl RustEmitter {
 ");
                 self.w.emit_indent();
                 self.w.push_str("while let Some(");
-                self.w.push_str(&f.var_name.text);
+                self.w.push_str(&to_rust_ident(&f.var_name.text));
                 self.w.push_str(") = __jux_it.next() {
 ");
                 self.w.indent_inc();
@@ -1851,7 +1852,7 @@ impl RustEmitter {
         if element_is_copy && iter_is_place {
             self.w.push('&');
         }
-        self.w.push_str(&f.var_name.text);
+        self.w.push_str(&to_rust_ident(&f.var_name.text));
         self.w.push_str(" in ");
         if iter_is_place {
             if element_is_copy {
@@ -1998,7 +1999,7 @@ impl RustEmitter {
                 }
             }
             self.w.push_str("let ");
-            self.w.push_str(&var.name.text);
+            self.w.push_str(&to_rust_ident(&var.name.text));
             self.w.push_str(" = ");
             let init_is_ref = matches!(
                 var.init.as_ref(),
@@ -2008,7 +2009,7 @@ impl RustEmitter {
             );
             if init_is_ref {
                 if let Some(Expr::Path(qn)) = &var.init {
-                    self.w.push_str(&qn.segments[0].text);
+                    self.w.push_str(&to_rust_ident(&qn.segments[0].text));
                     self.w.push_str(".clone()");
                 }
             } else {
@@ -2079,7 +2080,7 @@ impl RustEmitter {
         if self.mutated_in_fn.contains(&var.name.text) || external_local {
             self.w.push_str("mut ");
         }
-        self.w.push_str(&var.name.text);
+        self.w.push_str(&to_rust_ident(&var.name.text));
         // Java-style typed local (`int x = 5;`) carries an explicit
         // type annotation; emit it as `let x: T = init;`. The `var`
         // form leaves `ty == None` and we let Rust infer.
@@ -2738,7 +2739,7 @@ impl RustEmitter {
                     if let Some(slot_ty) = tl_field {
                         self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                         self.w.push('_');
-                        self.w.push_str(&tf.field.text);
+                        self.w.push_str(&to_rust_ident(&tf.field.text));
                         self.w.push_str(".with(|__s| { *__s.borrow_mut() ");
                         if let Some(op) = a.op {
                             self.w.push_str(op.as_rust_str());
@@ -2791,7 +2792,7 @@ impl RustEmitter {
                     if let Some(slot_ty) = tl {
                         self.w.push_str(&class_name);
                         self.w.push('_');
-                        self.w.push_str(name);
+                        self.w.push_str(&to_rust_ident(name));
                         self.w.push_str(".with(|__s| { *__s.borrow_mut() ");
                         if let Some(op) = a.op {
                             self.w.push_str(op.as_rust_str());
@@ -2924,7 +2925,7 @@ impl RustEmitter {
                     }
                 }
                 self.w.push('.');
-                self.w.push_str(&tf.field.text);
+                self.w.push_str(&to_rust_ident(&tf.field.text));
                 self.w.push_str(".borrow_mut() ");
                 if let Some(op) = a.op {
                     self.w.push_str(op.as_rust_str());
@@ -2947,7 +2948,7 @@ impl RustEmitter {
                 self.w.push_str("{ let __jux_v = ");
                 self.emit_assign_rhs(&a.value);
                 self.w.push_str("; *");
-                self.w.push_str(&name);
+                self.w.push_str(&to_rust_ident(&name));
                 self.w.push_str(".borrow_mut() ");
                 if let Some(op) = a.op {
                     self.w.push_str(op.as_rust_str());
@@ -3052,13 +3053,13 @@ impl RustEmitter {
                             let field = tf.field.text.clone();
                             self.emit_expr(&tf.object);
                             self.w.push_str(".__set_");
-                            self.w.push_str(&field);
+                            self.w.push_str(&to_rust_ident(&field));
                             self.w.push('(');
                             if let Some(op) = a.op {
                                 // Read-modify-write: `r.__get_f() OP value`.
                                 self.emit_expr(&tf.object);
                                 self.w.push_str(".__get_");
-                                self.w.push_str(&field);
+                                self.w.push_str(&to_rust_ident(&field));
                                 self.w.push_str("() ");
                                 self.w.push_str(op.as_rust_str());
                                 self.w.push(' ');
@@ -3112,7 +3113,7 @@ impl RustEmitter {
                             self.w.push_str(".__parent");
                         }
                         self.w.push('.');
-                        self.w.push_str(&tf.field.text);
+                        self.w.push_str(&to_rust_ident(&tf.field.text));
                         self.w.push_str(" = __jux_v; }\n");
                         return;
                     }
@@ -3166,7 +3167,7 @@ impl RustEmitter {
                     self.w.push_str(".__parent");
                 }
                 self.w.push('.');
-                self.w.push_str(&tf.field.text);
+                self.w.push_str(&to_rust_ident(&tf.field.text));
                 if let Some(op) = a.op {
                     self.w.push(' ');
                     self.w.push_str(op.as_rust_str());
@@ -3207,7 +3208,7 @@ impl RustEmitter {
                         self.w.push_str(".__parent");
                     }
                     self.w.push('.');
-                    self.w.push_str(&af.field.text);
+                    self.w.push_str(&to_rust_ident(&af.field.text));
                     self.w.push_str("[__jux_i]");
                     if let Some(op) = a.op {
                         self.w.push(' ');
@@ -3620,7 +3621,7 @@ impl RustEmitter {
             .map(|s| s.text.clone())
             .unwrap_or_default();
         self.w.push_str("let Some(");
-        self.w.push_str(&binder.text);
+        self.w.push_str(&to_rust_ident(&binder.text));
         self.w.push_str(") = ");
         let src = self.cast_source_bare(&t.value);
         // A dynamic-dispatch source narrows via its runtime hook — UNLESS the
@@ -3670,9 +3671,9 @@ impl RustEmitter {
             self.w.push_str(" {\n");
         } else if let Some(name) = &cast_name {
             self.w.push_str("if let Some(");
-            self.w.push_str(name);
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str(") = ");
-            self.w.push_str(name);
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str(" {\n");
         } else {
             self.w.push_str("if ");

@@ -3492,7 +3492,7 @@ fn insert_record(
         RecordSig {
             visibility: record_decl.visibility,
             generic_params: record_decl.generic_params.clone(),
-            implements: Vec::new(), // records don't carry implements yet; parser drops the clause
+            implements: record_decl.implements.clone(),
             components: record_decl
                 .components
                 .iter()

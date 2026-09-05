@@ -840,6 +840,12 @@ A few notes:
    - Ambiguity falls back to parenthesized expression with a warning suggesting the user prefer `as` for clarity (`W0304`).
    - The cast form `(T) expr` and the operator form `expr as T` produce identical semantics. Pick whichever reads better at the call site.
 
+### A.4.1.1. Rust Reserved Words Are Not Jux Reserved Words
+
+Jux lowers to Rust, but Rust's keyword list is not part of Jux's surface. A name like `type`, `match`, `loop`, `box`, `mod`, `impl`, `trait`, `macro`, `dyn`, `let`, `fn`, `where` or `priv` is an ordinary identifier in Java, C# and TypeScript, and it is an ordinary identifier in Jux: the backend emits it as a Rust raw identifier (`r#loop`).
+
+The exceptions are the four Rust cannot escape — `r#self`, `r#Self`, `r#crate` and `r#super` are all rejected by rustc — so `self`, `Self`, `crate` and `super` cannot be Jux declaration names and get `E0305`. Jux's OWN keywords (`unsafe`, `yield`, `type` in a type-alias position, `move`, `ref`, …) are of course still reserved where the grammar reserves them.
+
 ### A.4.2. Reserved-but-Unused Productions
 
 The grammar reserves space for the following without granting them current meaning:

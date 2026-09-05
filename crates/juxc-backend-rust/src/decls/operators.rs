@@ -12,6 +12,7 @@ use juxc_ast::{OperatorDecl, OperatorKind, ReturnType};
 use crate::analysis::{body_writes_to_this, collect_mutated_names};
 use crate::decls::synthetic_op_method_name;
 use crate::RustEmitter;
+use juxc_lex::to_rust_ident;
 
 impl RustEmitter {
     /// Emit one operator-overload body as an inherent method on the
@@ -72,7 +73,7 @@ impl RustEmitter {
         }
         for param in &op.params {
             self.w.push_str(", ");
-            self.w.push_str(&param.name.text);
+            self.w.push_str(&to_rust_ident(&param.name.text));
             self.w.push_str(": ");
             self.emit_value_type_as_rust(&param.ty);
         }

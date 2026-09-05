@@ -233,7 +233,7 @@ fn walk_block(b: &Block, sink: &mut dyn FnMut(&Expr)) {
     }
 }
 
-fn walk_stmt(s: &Stmt, sink: &mut dyn FnMut(&Expr)) {
+pub(crate) fn walk_stmt(s: &Stmt, sink: &mut dyn FnMut(&Expr)) {
     match s {
         Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e, _) => walk_expr(e, sink),
         Stmt::VarDecl(v) => {
@@ -298,7 +298,7 @@ fn walk_stmt(s: &Stmt, sink: &mut dyn FnMut(&Expr)) {
     }
 }
 
-fn walk_expr(e: &Expr, sink: &mut dyn FnMut(&Expr)) {
+pub(crate) fn walk_expr(e: &Expr, sink: &mut dyn FnMut(&Expr)) {
     sink(e);
     match e {
         Expr::Call(c) => {

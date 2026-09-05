@@ -1404,13 +1404,12 @@ impl<'a> Parser<'a> {
         }
         self.expect(&TokenKind::RParen, "')' to close record header");
 
-        // Optional `implements …` clause — Turn 1 parses and discards.
+        // Optional `implements …` clause (grammar §A.2.5).
+        let mut implements = Vec::new();
         if self.eat_kw(Keyword::Implements) {
-            // Consume a comma-separated type list, ignore for now.
             loop {
-                if self.parse_type_ref().is_none() {
-                    break;
-                }
+                let Some(ty) = self.parse_type_ref() else { break };
+                implements.push(ty);
                 if !self.eat(&TokenKind::Comma) {
                     break;
                 }
@@ -1550,6 +1549,7 @@ impl<'a> Parser<'a> {
             name,
             generic_params,
             components,
+            implements,
             operators,
             methods,
             static_fields,

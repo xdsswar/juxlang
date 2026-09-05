@@ -40,6 +40,7 @@ use std::collections::{HashMap, HashSet};
 use juxc_ast::{CompilationUnit, ImportDecl, ImportSpec, QualifiedName, ReturnType, TopLevelDecl};
 use juxc_source::{SourceFile, Span};
 use juxc_tycheck::{SymbolTable, Ty};
+use juxc_lex::to_rust_ident;
 
 mod analysis;
 mod backend_fqn;
@@ -4537,7 +4538,7 @@ impl RustEmitter {
             for (name, child) in &tree.children {
                 self.w.emit_indent();
                 self.w.push_str("pub mod ");
-                self.w.push_str(name);
+                self.w.push_str(&to_rust_ident(name));
                 self.w.push_str(";\n");
                 self.emit_package_files(child, units, sources, std::slice::from_ref(name));
             }
@@ -4550,7 +4551,7 @@ impl RustEmitter {
         for (name, child) in &tree.children {
             self.w.emit_indent();
             self.w.push_str("pub mod ");
-            self.w.push_str(name);
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str(" {\n");
             self.w.indent_inc();
             let saved_uses = std::mem::take(&mut self.emitted_uses_in_module);
@@ -4683,7 +4684,7 @@ impl RustEmitter {
         for (name, child) in &node.children {
             self.w.emit_indent();
             self.w.push_str("pub mod ");
-            self.w.push_str(name);
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str(" {\n");
             self.w.indent_inc();
             let saved_uses = std::mem::take(&mut self.emitted_uses_in_module);
@@ -5559,7 +5560,7 @@ impl RustEmitter {
             self.emit_visibility(decl.visibility);
         }
         self.w.push_str("const ");
-        self.w.push_str(&decl.name.text);
+        self.w.push_str(&to_rust_ident(&decl.name.text));
         self.w.push_str(": ");
         // Const-context emission. Jux `String` → Rust `&'static str`
         // here, since `String::new`/`.to_string` aren't const fns.
@@ -5597,7 +5598,7 @@ impl RustEmitter {
             self.emit_visibility(alias.visibility);
         }
         self.w.push_str("type ");
-        self.w.push_str(&alias.name.text);
+        self.w.push_str(&to_rust_ident(&alias.name.text));
         self.emit_generic_params(&alias.generic_params);
         self.w.push_str(" = ");
         self.emit_type_as_rust(&alias.target);

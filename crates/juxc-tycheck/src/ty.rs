@@ -1502,6 +1502,27 @@ pub fn class_implements_interface(
     symbols: &SymbolTable,
 ) -> bool {
     let target = bare_type_name(target_iface);
+    // A RECORD may implement an interface too (§7.6), and records live in
+    // their own table — without this a `Point p = new Pt(1, 2);` where
+    // `record Pt(...) implements Point` was rejected as a type mismatch.
+    // Records have no `extends`, so there is no chain to climb.
+    let record = symbols.records.get(child_name).or_else(|| {
+        let bare = bare_type_name(child_name);
+        symbols
+            .records
+            .iter()
+            .find(|(k, _)| bare_type_name(k) == bare)
+            .map(|(_, r)| r)
+    });
+    if let Some(rec) = record {
+        for iface_ref in &rec.implements {
+            if let Some(seg) = iface_ref.name.segments.last() {
+                if interface_extends_reaches(&seg.text, target, symbols) {
+                    return true;
+                }
+            }
+        }
+    }
     let mut cursor = symbols.classes.get(child_name);
     let mut depth = 0usize;
     while let Some(class) = cursor {

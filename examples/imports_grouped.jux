@@ -1,0 +1,40 @@
+// Every import shape the grammar allows, together in one file: a single name,
+// a group, a group with per-item aliases, and a wildcard — over a FOREIGN
+// package, where each name has to resolve to its real Rust path rather than the
+// flat `rust.std.X` spelling.
+
+import rust.std.PathBuf;
+import rust.std.{HashMap, HashSet};
+import rust.std.{VecDeque};
+import rust.std.{BTreeMap as SortedMap, BTreeSet as SortedSet};
+import rust.std.*;
+
+public void main() {
+    HashMap<String, int> m = new HashMap<String, int>();
+    m.insert("a", 1);
+
+    HashSet<int> s = new HashSet<int>();
+    s.insert(2);
+
+    VecDeque<int> q = new VecDeque<int>();
+    q.push_back(3);
+
+    // Aliased through the group — the alias is the name in scope.
+    SortedMap<String, int> sorted = new SortedMap<String, int>();
+    sorted.insert("b", 4);
+    SortedSet<int> uniq = new SortedSet<int>();
+    uniq.insert(5);
+
+    PathBuf p = new PathBuf();
+
+    // Reached through the wildcard, and through the prelude.
+    Vec<int> v = new Vec<int>();
+    v.push(6);
+
+    print(m.len());
+    print(s.len());
+    print(q.len());
+    print(sorted.len());
+    print(uniq.len());
+    print(v.len());
+}

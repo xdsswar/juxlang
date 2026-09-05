@@ -9,6 +9,7 @@ use juxc_ast::ArrayDim;
 
 use crate::analysis::is_jux_string_type;
 use crate::RustEmitter;
+use juxc_lex::to_rust_ident;
 
 impl RustEmitter {
     /// Map a Jux [`TypeRef`] onto its Rust spelling.
@@ -764,7 +765,7 @@ impl RustEmitter {
     /// `const_generic_params` tracking). `bool` maps to itself.
     fn emit_const_generic_param_decl(&mut self, p: &juxc_ast::TypeParam) {
         self.w.push_str("const ");
-        self.w.push_str(&p.name.text);
+        self.w.push_str(&to_rust_ident(&p.name.text));
         self.w.push_str(": ");
         let value_ty = p
             .const_ty
@@ -792,7 +793,7 @@ impl RustEmitter {
             if p.is_const() {
                 self.emit_const_generic_param_decl(p);
             } else {
-                self.w.push_str(&p.name.text);
+                self.w.push_str(&to_rust_ident(&p.name.text));
             }
         }
         self.w.push('>');
@@ -814,7 +815,7 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.w.push_str(&p.name.text);
+            self.w.push_str(&to_rust_ident(&p.name.text));
         }
         self.w.push('>');
     }
@@ -935,7 +936,7 @@ impl RustEmitter {
                 self.emit_const_generic_param_decl(p);
                 continue;
             }
-            self.w.push_str(&p.name.text);
+            self.w.push_str(&to_rust_ident(&p.name.text));
             self.w.push_str(": ");
             // User bounds first, then the implicit Clone tail. Clone
             // is needed by our auto-`.clone()` injection on generic
@@ -1016,7 +1017,7 @@ impl RustEmitter {
                 self.emit_const_generic_param_decl(p);
                 continue;
             }
-            self.w.push_str(&p.name.text);
+            self.w.push_str(&to_rust_ident(&p.name.text));
             self.w.push_str(": ");
             let user_bounds: Vec<juxc_ast::TypeRef> = p.bounds.clone();
             for bound in &user_bounds {

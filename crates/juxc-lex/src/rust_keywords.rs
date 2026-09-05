@@ -25,14 +25,28 @@ pub const RUST_KEYWORDS: &[&str] = &[
     "while", "yield",
     // `self` and `Self` are reserved too. They are NOT valid Jux keywords
     // (Jux uses `this`), so the parser accepts them as ordinary identifiers —
-    // which means a user CAN write `public int self() {}`. Unlike every other
-    // keyword they cannot be `r#`-escaped at lowering (`r#self` is illegal
-    // Rust), so the ONLY safe handling is for the resolver to reject them here
-    // with E0305 ("rename it"). Without them in this list a `self`/`Self`
-    // method name leaked to emission as `pub fn self` → a raw rustc parse error
-    // (the very leak `to_rust_ident`'s doc-comment claims the resolver catches).
+    // which means a user CAN write `public int self() {}`. See
+    // [`NON_ESCAPABLE_RUST_KEYWORDS`] for why those four are the only ones the
+    // resolver still refuses.
     "self", "Self",
 ];
+
+/// The Rust keywords that **cannot** be written as raw identifiers: `r#self`,
+/// `r#Self`, `r#crate` and `r#super` are all rejected by rustc.
+///
+/// Every other reserved word survives lowering as `r#name`, so a Jux program is
+/// free to use it. That matters more than it sounds: `type`, `match`, `move`,
+/// `box`, `loop`, `impl`, `mod`, `ref` and `final` are perfectly ordinary names
+/// in Java or C#, and refusing them would be Rust's implementation detail
+/// leaking into Jux's surface. Only this handful has no escape, so only this
+/// handful is reserved.
+pub const NON_ESCAPABLE_RUST_KEYWORDS: &[&str] = &["self", "Self", "crate", "super"];
+
+/// True when `name` is a Rust reserved word with no raw-identifier form, and so
+/// cannot be used as a Jux declaration name at all.
+pub fn is_non_escapable_rust_keyword(name: &str) -> bool {
+    NON_ESCAPABLE_RUST_KEYWORDS.contains(&name)
+}
 
 /// True when `name` is a Rust reserved word (see [`RUST_KEYWORDS`]).
 pub fn is_rust_keyword(name: &str) -> bool {
@@ -42,12 +56,11 @@ pub fn is_rust_keyword(name: &str) -> bool {
 /// Wrap a Jux identifier in Rust's `r#` raw-identifier syntax if it would
 /// otherwise collide with a Rust reserved word.
 ///
-/// Two narrow exceptions: `self` and `Self` cannot become raw identifiers in
-/// Rust at all, so they pass through unchanged — letting rustc surface its
-/// native error if they ever slip into emitter output (the resolver should
-/// already have caught the user-source case).
+/// The four in [`NON_ESCAPABLE_RUST_KEYWORDS`] pass through unchanged — Rust
+/// has no raw form for them — letting rustc surface its native error if one
+/// ever slips into emitter output. The resolver rejects those in user source.
 pub fn to_rust_ident(name: &str) -> String {
-    if name == "self" || name == "Self" {
+    if is_non_escapable_rust_keyword(name) {
         return name.to_string();
     }
     if is_rust_keyword(name) {

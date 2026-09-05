@@ -1,0 +1,22 @@
+// A record may implement an interface (grammar §A.2.5). Its components double
+// as the interface's accessors, and a record value flows into an
+// interface-typed slot like any other implementer.
+public interface Point { int x(); int y(); }
+public record Pt(int x, int y) implements Point {
+    public int dist2() { return this.x * this.x + this.y * this.y; }
+}
+public record Named(String name, Pt at) {}
+void main() {
+    Pt p = new Pt(3, 4);
+    print(p.dist2());
+    print(p.x + p.y);
+    Point q = new Pt(1, 2);
+    print(q.x() + q.y());
+    Named n = new Named("a", p);
+    print(n.name + n.at.dist2());
+    Vec<Pt> pts = new Vec<Pt>();
+    pts.push(new Pt(1, 1));
+    pts.push(p);
+    print(pts.len());
+    print(pts[1].dist2());
+}

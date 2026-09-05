@@ -514,20 +514,25 @@ impl Resolver {
         }
     }
 
-    /// Emit `E0305_RustKeywordIdentifier` when a user-declared `name` is a Rust
-    /// reserved word (see [`juxc_lex::is_rust_keyword`]). No-op in a foreign
-    /// stub. The keyword list is shared with the backend's `r#` escaping, so the
-    /// two can never disagree about what needs reserving.
+    /// Emit `E0305_RustKeywordIdentifier` when a user-declared `name` is one of
+    /// the four Rust keywords with no raw-identifier form. No-op in a foreign
+    /// stub.
+    ///
+    /// Every other Rust reserved word is fine as a Jux name: the backend
+    /// `r#`-escapes it on the way out. `type`, `match`, `move`, `box`, `loop`,
+    /// `impl` and `ref` are ordinary identifiers in Java and C#, and refusing
+    /// them would be Rust's implementation detail leaking into Jux's surface.
+    /// Only `self`, `Self`, `crate` and `super` have no escape (see
+    /// `juxc_lex::NON_ESCAPABLE_RUST_KEYWORDS`), so only those are reserved.
     fn reject_rust_keyword(&mut self, name: &str, span: Span) {
-        if self.foreign || !juxc_lex::is_rust_keyword(name) {
+        if self.foreign || !juxc_lex::is_non_escapable_rust_keyword(name) {
             return;
         }
         self.diagnostics.push(
             Diagnostic::error(
                 code::Code::E0305_RustKeywordIdentifier,
                 format!(
-                    "`{name}` is a Rust reserved word and can't be used as a Jux \
-                     name (Jux lowers to Rust); rename it",
+                    "`{name}` can't be used as a Jux name: it is one of the four Rust reserved words with no escaped form, and Jux lowers to Rust. Every other reserved word is fine — rename this one",
                 ),
             )
             .with_span(span),
@@ -1678,13 +1683,12 @@ mod tests {
         );
     }
 
-    /// A user declaration named after a **Rust** keyword (here a free function
-    /// `impl`, and a local `match`) is rejected with `E0305` — the lowered Rust
-    /// would collide. Both names are plain identifiers in Jux (Jux has no `impl`
-    /// / `match` keyword), so they parse cleanly and the resolver is what flags
-    /// them.
+    /// A user declaration named after an ESCAPABLE Rust keyword is fine — `impl`
+    /// and `match` are ordinary identifiers in Java and C#, and the backend
+    /// emits them as `r#impl` / `r#match`. Refusing them would leak Rust's
+    /// reserved-word list into Jux's surface.
     #[test]
-    fn rust_keyword_user_name_emits_e0305() {
+    fn escapable_rust_keyword_user_name_is_accepted() {
         let src = r#"
             public void impl() {
                 var match = 1;
@@ -1696,7 +1700,26 @@ mod tests {
             .iter()
             .filter(|d| d.code == code::Code::E0305_RustKeywordIdentifier)
             .count();
-        assert!(hits >= 2, "expected E0305 for `impl` and `match`, got: {diags:?}");
+        assert_eq!(hits, 0, "`impl` / `match` are escapable, got: {diags:?}");
+    }
+
+    /// The four Rust keywords with no raw-identifier form still are rejected —
+    /// `r#crate` and `r#self` are not valid Rust, so there is nothing to emit.
+    #[test]
+    fn non_escapable_rust_keyword_user_name_emits_e0305() {
+        let src = r#"
+            public void crate() {
+                var x = 1;
+                print(x);
+            }
+        "#;
+        let diags = resolve(&parse_clean(src)).diagnostics;
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0305_RustKeywordIdentifier),
+            "expected E0305 for `crate`, got: {diags:?}",
+        );
     }
 
     /// A name that is NOT a Rust keyword (an ordinary `camelCase` Jux method /

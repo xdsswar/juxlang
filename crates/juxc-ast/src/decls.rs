@@ -231,6 +231,10 @@ pub struct RecordDecl {
     /// Header components in source order — each becomes a struct
     /// field and a canonical-constructor parameter.
     pub components: Vec<RecordComponent>,
+    /// Interfaces the record implements (grammar §A.2.5
+    /// `( 'implements' type-list )?`). A record has no `extends` — it is
+    /// implicitly final — so this is its whole supertype list.
+    pub implements: Vec<TypeRef>,
     /// Operator-override declarations inside the record body, in
     /// source order. Each entry can be a real override (custom body)
     /// or a `= delete;` suppression per §O.3.4 — `is_deleted` on the

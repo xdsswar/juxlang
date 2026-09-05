@@ -10,6 +10,7 @@ use juxc_ast::{Block, FnDecl, ReturnType, Stmt};
 use crate::analysis::collect_mutated_names;
 use crate::stmts::stmt_span;
 use crate::RustEmitter;
+use juxc_lex::to_rust_ident;
 
 /// True when the function carries one of the §TS.1 testing-framework
 /// annotations (`@Test` / `@BeforeAll` / `@BeforeEach` / `@AfterEach` /
@@ -98,13 +99,13 @@ impl RustEmitter {
         for f in &block.fns {
             self.w.emit_indent();
             self.w.push_str("pub fn ");
-            self.w.push_str(&f.name.text);
+            self.w.push_str(&to_rust_ident(&f.name.text));
             self.w.push('(');
             for (i, p) in f.params.iter().enumerate() {
                 if i > 0 {
                     self.w.push_str(", ");
                 }
-                self.w.push_str(&p.name.text);
+                self.w.push_str(&to_rust_ident(&p.name.text));
                 self.w.push_str(": ");
                 // An `out T` parameter (§M.4) is a place the C callee writes
                 // through, so it crosses as `*mut <T>` (the call site passes
@@ -320,7 +321,7 @@ impl RustEmitter {
         } else if is_args_main {
             self.w.push_str("__jux_args_main");
         } else {
-            self.w.push_str(&fn_decl.name.text);
+            self.w.push_str(&to_rust_ident(&fn_decl.name.text));
         }
         // Use the combined generics list so synthetic params land on
         // the signature. `<__W0: AnimalKind + Clone, …>` is emitted
@@ -371,7 +372,7 @@ impl RustEmitter {
             {
                 self.w.push_str("mut ");
             }
-            self.w.push_str(&param.name.text);
+            self.w.push_str(&to_rust_ident(&param.name.text));
             self.w.push_str(": ");
             if param.is_out {
                 self.w.push_str("&mut "); // `out T` (§M.4) lowers to `&mut T`
@@ -695,7 +696,7 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.w.push_str(&p.name.text);
+            self.w.push_str(&to_rust_ident(&p.name.text));
             self.w.push_str(": ");
             if type_ref_is_string(&p.ty) {
                 self.w.push_str("*const core::ffi::c_char");
@@ -726,7 +727,7 @@ impl RustEmitter {
         // Call the real Jux fn by name, forwarding every parameter.
         self.w.emit_indent();
         if matches!(fn_decl.return_type, ReturnType::Void) {
-            self.w.push_str(&fn_decl.name.text);
+            self.w.push_str(&to_rust_ident(&fn_decl.name.text));
         } else {
             self.w.push_str(&format!("let __r = {}", fn_decl.name.text));
         }
@@ -735,7 +736,7 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.w.push_str(&p.name.text);
+            self.w.push_str(&to_rust_ident(&p.name.text));
         }
         self.w.push_str(");\n");
         // Outbound: String return → leaked `*const c_char`; otherwise pass `__r`.
