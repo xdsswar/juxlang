@@ -39,9 +39,23 @@ object JuxLspState {
      * unit-test mode (no server is ever started there), so IDE-side fallbacks
      * stay exercised by the test fixture.
      */
+    /**
+     * Test-only override of [isServing]; `null` asks the real clients.
+     *
+     * Without it the serving branch was unreachable in CI — the fixture never
+     * starts a server, so `isServing` short-circuited to `false` and every test
+     * exercised the fallback. That left the stand-down itself, and the two
+     * surfaces that deliberately run THROUGH it (interpolation holes and the §P
+     * property members), covered by nothing at all: the configuration most
+     * users are actually in was the one configuration never tested.
+     */
+    @get:org.jetbrains.annotations.TestOnly
+    @set:org.jetbrains.annotations.TestOnly
+    var servingOverride: Boolean? = null
+
     fun isServing(project: Project): Boolean {
         val app = ApplicationManager.getApplication()
-        if (app.isUnitTestMode) return false
+        if (app.isUnitTestMode) return servingOverride ?: false
 
         // Native client: only when OUR provider is registered AND a Jux server
         // session is actually up. (A registered Jux provider implies the
@@ -87,7 +101,9 @@ object JuxLspState {
      */
     fun engine(project: Project): Engine {
         val app = ApplicationManager.getApplication()
-        if (app.isUnitTestMode) return Engine.FALLBACK
+        if (app.isUnitTestMode) {
+            return if (servingOverride == true) Engine.NATIVE_LSP else Engine.FALLBACK
+        }
 
         val nativeRegistered = NATIVE_LSP_EP.extensionsIfPointIsRegistered
             .any { it.javaClass.name == JUX_NATIVE_PROVIDER }
