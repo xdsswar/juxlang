@@ -451,9 +451,9 @@ class JuxCompletionContributor : CompletionContributor() {
      * why this stands down entirely while a server is attached.
      */
     private fun addMemberCompletion(parameters: CompletionParameters, result: CompletionResultSet) {
-        val word = wordBeforeDot(parameters) ?: return
+        val expression = receiverExpressionBeforeDot(parameters) ?: return
         val target = dev.jux.intellij.resolve.JuxTypeInference
-            .resolveReceiver(word, parameters.position) ?: return
+            .resolveReceiverExpression(expression, parameters.position) ?: return
         val seen = HashSet<String>()
         for (m in dev.jux.intellij.resolve.JuxHierarchy.allMembers(target.type)) {
             val named = m as? JuxNamedElement ?: continue
@@ -687,7 +687,47 @@ class JuxCompletionContributor : CompletionContributor() {
         return text.subSequence(i, offset).toString()
     }
 
+    /**
+     * The whole receiver EXPRESSION before the `.` the caret follows —
+     * `n.make()!!.leaf`, `xs[0]`, `(n.leaf)` — or null when there is no
+     * receiver there.
+     *
+     * Scans backwards tracking bracket depth, so a chain, an index read or a
+     * parenthesized expression comes back whole. [wordBeforeDot] takes only the
+     * last identifier, which is why every one of those shapes used to resolve
+     * to nothing.
+     */
+    private fun receiverExpressionBeforeDot(parameters: CompletionParameters): String? {
+        val text = parameters.editor.document.charsSequence
+        var i = parameters.offset - 1
+        while (i >= 0 && (text[i].isLetterOrDigit() || text[i] == '_')) i--
+        while (i >= 0 && text[i].isWhitespace()) i--
+        if (i < 0 || text[i] != '.') return null
+        // `?.` — the dot is part of a safe call; keep the `?` in the expression
+        // so the resolver sees the nullable step.
+        val end = i
+        var j = i - 1
+        var depth = 0
+        while (j >= 0) {
+            val c = text[j]
+            when {
+                c == ')' || c == ']' -> { depth++; j-- }
+                c == '(' || c == '[' -> {
+                    if (depth == 0) break
+                    depth--
+                    j--
+                }
+                depth > 0 -> j--
+                c.isLetterOrDigit() || c == '_' || c == '.' || c == '!' || c == '?' -> j--
+                else -> break
+            }
+        }
+        val expr = text.subSequence(j + 1, end).toString().trim()
+        return expr.ifEmpty { null }
+    }
+
     /** The identifier word immediately before the `.` the caret follows, or null. */
+    @Suppress("unused")
     private fun wordBeforeDot(parameters: CompletionParameters): String? {
         val text = parameters.editor.document.charsSequence
         var i = parameters.offset - 1
