@@ -244,6 +244,24 @@ object JuxHierarchy {
         return body.children.filter { it.node.elementType == et }
     }
 
+    /**
+     * A record's component names — `record Pt(int x, int y)` → `["x", "y"]`.
+     * Empty for every other kind of declaration.
+     *
+     * Components ARE the record's accessors: `record Pt(int x, int y)
+     * implements Point` satisfies `interface Point { int x(); int y(); }`
+     * without declaring a method, which is the point of the form. Anything
+     * asking "does this type provide a no-argument member named x?" has to
+     * count them, or it reports a record that compiles as unimplemented.
+     */
+    fun recordComponentNames(type: JuxTypeDeclaration): List<String> {
+        val list = type.node.findChildByType(JuxElementTypes.RECORD_COMPONENT_LIST)?.psi
+            ?: return emptyList()
+        return list.children
+            .filter { it.node.elementType === JuxElementTypes.RECORD_COMPONENT }
+            .mapNotNull { (it as? JuxNamedElement)?.name }
+    }
+
     /** `static` / `private` / `final` methods can't be overridden. */
     fun isOverridable(m: PsiElement): Boolean {
         val mods = m.node.findChildByType(JuxElementTypes.MODIFIER_LIST)?.psi ?: return true

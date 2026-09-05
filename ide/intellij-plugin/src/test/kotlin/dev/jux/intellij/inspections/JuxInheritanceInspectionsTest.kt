@@ -160,11 +160,11 @@ class JuxInheritanceInspectionsTest : BasePlatformTestCase() {
     fun testUnresolvedSupertypesStaySilent() {
         val d = highlightDescriptions(
             """
-            public class Reader extends BufReader implements Display {
+            public class Reader extends NoSuchBase implements NoSuchIface {
             }
             """.trimIndent(),
         )
-        assertFalse(d.any { it.contains("E042") || it.contains("E0429") })
+        assertFalse("unexpected: $d", d.any { it.contains("E042") || it.contains("E0429") })
     }
 
     // ---- implements clause -------------------------------------------------------

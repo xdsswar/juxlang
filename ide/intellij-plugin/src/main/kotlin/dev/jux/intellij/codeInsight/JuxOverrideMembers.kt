@@ -69,6 +69,12 @@ object JuxOverrideMembers {
             val name = (m as? JuxNamedElement)?.name ?: continue
             seen.add("$name/${JuxHierarchy.arity(m)}")
         }
+        // A record's COMPONENTS are its accessors, so a component named `x`
+        // satisfies an interface's `int x();` with no method declared — see
+        // [JuxHierarchy.recordComponentNames].
+        for (component in JuxHierarchy.recordComponentNames(type)) {
+            seen.add("$component/0")
+        }
 
         // Walk the supertype chain as (declaration, type-param → concrete-arg)
         // frames, emitting each inherited method's signature with the

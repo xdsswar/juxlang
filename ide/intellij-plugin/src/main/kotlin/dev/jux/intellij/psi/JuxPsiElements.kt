@@ -259,5 +259,25 @@ class JuxParameter(node: ASTNode) : JuxNamedElementImpl(node) {
     }
 }
 
+/**
+ * One component of a record header — `record Pt(int x, int y)`.
+ *
+ * A component is simultaneously the record's field and its accessor, so it is
+ * a named element: go-to-definition, rename and find-usages all land on it,
+ * and the structure view lists it. Its name is the last identifier, after the
+ * type (same shape as [JuxParameter]).
+ */
+class JuxRecordComponent(node: ASTNode) : JuxNamedElementImpl(node) {
+    override fun getNameIdentifier(): PsiElement? {
+        var last: PsiElement? = null
+        var child: PsiElement? = firstChild
+        while (child != null) {
+            if (child.elementType == JuxTokenTypes.IDENTIFIER) last = child
+            child = child.nextSibling
+        }
+        return last
+    }
+}
+
 /** A local variable declaration. */
 class JuxLocalVariable(node: ASTNode) : JuxNamedElementImpl(node)
