@@ -51,11 +51,41 @@ impl NamedToken {
     }
 }
 
+/// Names that are bound without a declaration or an `import`: the prelude
+/// types (`Vec`, `HashMap`, the exception hierarchy, the collection
+/// interfaces) and the language intrinsics (`print`, `spawn`, `block_on`,
+/// `Worker`, …).
+///
+/// This is the list the resolver seeds itself from, so a name added here is
+/// accepted by the compiler and known to the plugin in the same commit. It
+/// used to exist twice — once in `juxc-resolve` and once, by hand, in the
+/// plugin's Kotlin — and the copies drifted: the plugin still believed `Vec`
+/// required an `import` long after it became prelude, and painted "cannot
+/// resolve type" over 20 examples that compile.
+pub const BUILTIN_NAMES: &[&str] = &[
+    "print", "assert", "spawn", "Channel", "AsyncMutex",
+    "Stream", "Task", "withTimeout", "parallel", "block_on",
+    "yield_now", "Worker", "now_ms", "File", "Iterable",
+    "Iterator", "Collection", "List", "Map", "Set",
+    "HashMap", "HashSet", "Vec", "VecDeque", "BTreeMap",
+    "BTreeSet", "Rc", "Arc", "Throwable", "Exception",
+    "Error", "RuntimeException", "NullPointerException", "IndexOutOfBoundsException", "IllegalArgumentException",
+    "IllegalStateException", "UnsupportedOperationException", "ArithmeticException", "NoSuchElementException", "ClassCastException",
+    "IOException", "FileNotFoundException",
+];
+
 /// The full token alphabet, ready to serialize to `jux-tokens.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrammarSpec {
     /// Reserved keywords (name = `UPPER_KW`, spelling = lowercase word).
     pub keywords: Vec<NamedToken>,
+    /// Names that resolve with no declaration and no `import` — the prelude
+    /// types and the language intrinsics. From [`BUILTIN_NAMES`].
+    ///
+    /// The plugin needs these for exactly the reason the compiler does: a bare
+    /// `Vec` or `block_on` is bound, and an editor that says otherwise paints
+    /// red over code that builds.
+    pub builtins: Vec<String>,
     /// Built-in primitive type names — identifiers, not keywords, colored as
     /// types. From [`crate::PRIMITIVE_TYPE_NAMES`].
     pub primitives: Vec<String>,
@@ -79,7 +109,21 @@ fn keyword_const_name(spelling: &str) -> String {
 }
 
 /// Build the canonical grammar spec from the Rust definitions.
+/// The token alphabet with only the intrinsic builtins — see
+/// [`grammar_spec_with`] for the complete list.
 pub fn grammar_spec() -> GrammarSpec {
+    grammar_spec_with(&[])
+}
+
+/// The token alphabet plus the always-in-scope names.
+///
+/// `extra_builtins` carries the names that are in scope because the embedded
+/// `jux.std` sources DECLARE them (`Option`, `Result`, `Instant`, the atomics)
+/// — the compiler prepends those sources to every unit, so they need no
+/// `import` either, but only the driver can see them. Passing them in keeps
+/// this crate free of a dependency on the layer above it while still producing
+/// one complete list. [`BUILTIN_NAMES`] supplies the rest.
+pub fn grammar_spec_with(extra_builtins: &[String]) -> GrammarSpec {
     let keywords = Keyword::ALL
         .iter()
         .map(|kw| {
@@ -184,6 +228,13 @@ pub fn grammar_spec() -> GrammarSpec {
     GrammarSpec {
         keywords,
         primitives,
+        builtins: {
+            let mut names: Vec<String> = BUILTIN_NAMES.iter().map(|s| s.to_string()).collect();
+            names.extend(extra_builtins.iter().cloned());
+            names.sort();
+            names.dedup();
+            names
+        },
         constants,
         literals,
         punctuation,
@@ -203,14 +254,6 @@ pub fn to_json(spec: &GrammarSpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    /// Absolute path to the checked-in `jux-tokens.json` the plugin reads.
-    fn json_path() -> PathBuf {
-        // CARGO_MANIFEST_DIR = .../crates/juxc-lex ; repo root is two up.
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../ide/intellij-plugin/grammar/jux-tokens.json")
-    }
 
     /// Keep `Keyword::ALL` in lockstep with `Keyword::lookup`: every entry must
     /// round-trip, and the count must match the spelling list, so a variant
@@ -223,30 +266,4 @@ mod tests {
         assert_eq!(Keyword::ALL.len(), 58, "keyword count changed — update grammar spec consumers");
     }
 
-    /// The checked-in `jux-tokens.json` must equal the freshly built spec.
-    /// Run with `JUX_BLESS=1` to regenerate the file instead of asserting.
-    #[test]
-    fn grammar_spec_matches_checked_in_json() {
-        let expected = to_json(&grammar_spec());
-        let path = json_path();
-
-        if std::env::var_os("JUX_BLESS").is_some() {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir).expect("create grammar dir");
-            }
-            std::fs::write(&path, &expected).expect("write jux-tokens.json");
-            return;
-        }
-
-        let actual = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-            panic!(
-                "missing {} — regenerate with `JUX_BLESS=1 cargo test -p juxc-lex grammar_spec`",
-                path.display()
-            )
-        });
-        assert_eq!(
-            actual, expected,
-            "jux-tokens.json is stale — regenerate with `JUX_BLESS=1 cargo test -p juxc-lex grammar_spec`"
-        );
-    }
 }

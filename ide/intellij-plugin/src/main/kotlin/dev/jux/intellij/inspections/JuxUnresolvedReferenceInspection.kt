@@ -41,7 +41,7 @@ import dev.jux.intellij.resolve.JuxTypeIndex
  *  - its first letter is lowercase — a bare *Capitalized* name may be a
  *    type-as-value or an unimported std singleton, which the LSP owns;
  *  - it is not a keyword / primitive / literal constant nor a built-in global
- *    ([JuxKeywords] + [BUILTIN_GLOBALS]);
+ *    ([JuxKeywords] + [BUILTIN_NAMES]);
  *  - it is **not introduced as a binding anywhere in the file** — every binding
  *    occurrence (declaration / parameter / `for` var / `catch` var / lambda
  *    param / destructuring / pattern) is an identifier sitting in a *non-
@@ -123,7 +123,7 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         if (name.isEmpty() || name == "_") return false
         if (!name[0].isLowerCase()) return false
         if (name in JuxKeywords.KEYWORDS || name in JuxKeywords.PRIMITIVES ||
-            name in JuxKeywords.CONSTANTS || name in BUILTIN_GLOBALS
+            name in JuxKeywords.CONSTANTS || name in BUILTIN_NAMES
         ) return false
         if (name in definedNames || name in importedNames || name in projectNames) return false
         return !isBlind(element)
@@ -131,7 +131,7 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
 
     /**
      * Type gate (`TYPE_REFERENCE`): mirrors the value gate but keeps capitalized
-     * names (types usually are) and adds the always-in-scope [STD_PRELUDE_TYPES]
+     * names (types usually are) and adds the always-in-scope [BUILTIN_NAMES]
      * — the `jux.std` `java.lang`-style prelude (`Map`, `List`, `Throwable`, …)
      * the compiler prepends to every unit. Type parameters and in-file types are
      * already covered by [definedNames]; `rust.std` types (`Vec`, `Box`, …) need
@@ -150,7 +150,7 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         if (name.isEmpty() || name == "_") return false
         if (element.text.substringBefore('<').contains('.')) return false // qualified → LSP
         if (name in JuxKeywords.KEYWORDS || name in JuxKeywords.PRIMITIVES ||
-            name == "observer" || name in STD_PRELUDE_TYPES
+            name == "observer" || name in BUILTIN_NAMES
         ) return false
         if (name in definedNames || name in importedNames || name in projectNames) return false
         return !isBlind(element)
@@ -202,12 +202,12 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
 
     /**
      * The type name closest to [name] by edit distance (≤ 2): project-wide type
-     * declarations plus the [STD_PRELUDE_TYPES]. Null when nothing is close.
+     * declarations plus the [BUILTIN_NAMES]. Null when nothing is close.
      */
     private fun nearestTypeName(element: PsiElement, name: String): String? {
         val candidates = LinkedHashSet<String>()
         candidates.addAll(JuxTypeIndex.allTypeNames(element.project))
-        candidates.addAll(STD_PRELUDE_TYPES)
+        candidates.addAll(BUILTIN_NAMES)
         candidates.remove(name)
         return candidates
             .map { it to levenshtein(name, it) }
@@ -293,37 +293,33 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         )
 
         /**
-         * The `jux.std` prelude types the compiler prepends to every unit, so
-         * they resolve unqualified `java.lang`-style (see `juxc-driver`'s
-         * `stdlib` loader / `stdlib_embedded`). Mirrors the public type
-         * declarations there — keep in sync if that surface changes. Deliberately
-         * excludes `rust.std`-only types (`Vec`, `Box`, `Rc`, …): those require an
-         * `import`, so an unqualified use of them is a real error.
+         * Names that resolve with no declaration and no `import`.
+         *
+         * [JuxKeywords.BUILTINS] is GENERATED from the list the compiler's
+         * resolver seeds itself with (`juxc_lex::grammar_spec::BUILTIN_NAMES`),
+         * so the editor and the compiler cannot disagree about what is bound.
+         * The two used to be separate hand-written lists and drifted: this one
+         * still said `Vec` needed an `import` long after it became prelude, and
+         * painted "cannot resolve type" over 20 examples that build.
+         *
+         * The few entries below are IDE-side only — they are not resolver
+         * builtins because the compiler handles them structurally rather than
+         * as names: `this`/`super`/`self` are keywords or receivers, `it` is
+         * the implicit lambda parameter, `Object`/`Self` are type sugar, and
+         * the `panic!`-family macros lower straight to Rust.
          */
-        val STD_PRELUDE_TYPES = setOf(
-            "String", "Object", "Self",
-            "ArrayList", "Collection", "HashMap", "HashSet", "Deque",
-            "Iterable", "Iterator", "List", "Map", "Set",
-            "MemoryOrder", "AtomicInt", "AtomicLong", "Worker",
-            "Option", "Result", "Clock", "Instant", "File", "Path", "Console",
-            "Throwable", "Error", "Exception", "RuntimeException",
-            "ArithmeticException", "ClassCastException", "FileNotFoundException",
-            "IllegalArgumentException", "IllegalStateException",
-            "IndexOutOfBoundsException", "IOException", "NoSuchElementException",
-            "NullPointerException", "TimeoutException", "CancellationException",
-            "UnsupportedOperationException",
+        val EXTRA_BUILTINS = setOf(
+            // Receivers and the implicit lambda parameter: the compiler binds
+            // these structurally, so they never appear in a name list.
+            "this", "super", "self", "it", "Self",
+            // `delete` is contextual on both sides — the compiler's lexer has
+            // no DELETE_KW either. It appears as `operator string() = delete;`
+            // (§O.3.4 suppression) and as `delete ptr;` (unsafe pointers).
+            "delete",
         )
 
-        /**
-         * Unqualified names that resolve outside the file with no `import` — the
-         * Phase-1 prelude / intrinsics. Over-inclusion is the safe direction (it
-         * only suppresses a diagnostic), so this errs broad.
-         */
-        val BUILTIN_GLOBALS = setOf(
-            "print", "println", "eprint", "eprintln", "format",
-            "panic", "todo", "unreachable", "assert", "assert_eq", "debug_assert",
-            "this", "super", "self", "it",
-        )
+        /** Every name that is in scope everywhere — generated plus IDE-side. */
+        val BUILTIN_NAMES: Set<String> = JuxKeywords.BUILTINS + EXTRA_BUILTINS
 
         /** Ancestor node kinds whose identifier leaves the resolver can't see into. */
         val BLIND_ANCESTORS = setOf(E.PATTERN, E.ANNOTATION, E.WHERE_CLAUSE)

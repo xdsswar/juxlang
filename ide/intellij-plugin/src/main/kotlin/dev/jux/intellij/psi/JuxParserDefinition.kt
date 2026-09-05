@@ -62,6 +62,7 @@ class JuxParserDefinition : ParserDefinition {
 
         E.ENUM_CONSTANT -> JuxEnumConstant(node)
         E.PARAMETER -> JuxParameter(node)
+        E.RECORD_COMPONENT -> JuxRecordComponent(node)
         E.LOCAL_VARIABLE -> JuxLocalVariable(node)
 
         else -> JuxCompositeElement(node)

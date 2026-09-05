@@ -556,9 +556,29 @@ class JuxParser : PsiParser {
     private fun parseTypeList(b: PsiBuilder) = b.parseTypeList()
     private fun parseTypeParameters(b: PsiBuilder) = b.parseTypeParameters()
 
+    /**
+     * `'(' ( record-component ( ',' record-component )* )? ')'` where
+     * `record-component = annotation* type identifier` (§A.2.5).
+     *
+     * Each component gets its own node rather than being swallowed as an
+     * opaque run: a record's components ARE its accessors and its fields, so
+     * without them the IDE cannot navigate to `p.x`, rename a component, list
+     * one in the structure view, or tell that `record Pt(int x, int y)
+     * implements Point` already satisfies `int x();`.
+     */
     private fun parseRecordComponents(b: PsiBuilder) {
         val m = b.mark()
-        b.skipMatched(T.LPAREN, T.RPAREN)
+        b.expectOrError(T.LPAREN, "'(' expected")
+        while (!b.at(T.RPAREN) && !b.eof()) {
+            val c = b.mark()
+            parseAnnotations(b)
+            b.parseType()
+            if (b.at(T.ELLIPSIS)) b.advanceLexer()
+            b.consumeDeclName("component name expected")
+            c.done(E.RECORD_COMPONENT)
+            if (!b.expect(T.COMMA)) break
+        }
+        b.expectOrError(T.RPAREN, "')' expected")
         m.done(E.RECORD_COMPONENT_LIST)
     }
 

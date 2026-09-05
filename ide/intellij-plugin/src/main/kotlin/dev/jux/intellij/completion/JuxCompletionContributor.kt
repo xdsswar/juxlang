@@ -41,7 +41,11 @@ import javax.swing.Icon
  *  2. members of the enclosing class — fields, properties, methods,
  *  3. position-legal keywords ([JuxKeywordContext] — `class` is never offered
  *     inside a method body, `return` never at the top level),
- *  4. file-level type names.
+ *  4. type names — this file's first, then the rest of the project's, then
+ *     the toolchain's standard library and bound crates (the generated `.jux.d`
+ *     stubs `JuxLibraryRootsProvider` indexes). Each of the three is a distinct
+ *     tier, so `Vec` is always offered but never outranks a type the user
+ *     wrote.
  *
  * Nothing else is offered: locals of OTHER methods and members of OTHER
  * classes are unreachable from the caret and would only be noise. After a
@@ -57,6 +61,23 @@ class JuxCompletionContributor : CompletionContributor() {
         const val P_MEMBER = 80.0
         const val P_KEYWORD = 60.0
         const val P_TYPE = 50.0
+
+        /**
+         * A type declared in another file of the PROJECT — one the user wrote,
+         * so it outranks anything from a library but not what is in front of
+         * them.
+         */
+        const val P_TYPE_PROJECT = 45.0
+
+        /**
+         * A type from a generated `.jux.d` stub: the standard library, or a
+         * bound Rust crate. Real and worth offering — that is the point of
+         * indexing the toolchain's stubs — but a `Window` the user declared is
+         * far likelier to be the one they mean than `minifb`'s, so the whole
+         * library surface sits below the project's. Ranked last rather than
+         * hidden: `Vec` and `HashMap` are typed constantly.
+         */
+        const val P_TYPE_LIBRARY = 40.0
 
         /** Cap on the backward scan in [isTypeOnlyContext] (keeps it O(1)-ish). */
         const val MAX_LOOKBACK = 240
@@ -254,10 +275,12 @@ class JuxCompletionContributor : CompletionContributor() {
             }
         }
 
-        // Tier 4b: project-wide types from OTHER files — discoverable here with
-        // auto-import on accept. This is what lets cross-file types show up
-        // without the LSP; the slightly-lower priority keeps in-file names on
-        // top. (Rust std / crate types come from the LSP's stub index.)
+        // Tier 4b/4c: types from OTHER files — the project's own, then the
+        // toolchain's. Auto-import on accept. This is what lets cross-file and
+        // standard-library types show up without the LSP; the descending
+        // priorities keep in-file names on top, then the user's other files,
+        // then the generated `.jux.d` stubs (`JuxLibraryRootsProvider` puts the
+        // installed toolchain's std and bound crates into `allScope`).
         val project = parameters.position.project
         // The project type index reads FileTypeIndex, which throws
         // IndexNotReadyException during indexing (dumb mode). Completion can fire
@@ -280,7 +303,10 @@ class JuxCompletionContributor : CompletionContributor() {
                         dev.jux.intellij.completion.JuxAutoImport.handler("$pkg.$name", name),
                     )
                 }
-                add(ranked(b, P_TYPE - 5.0), name)
+                // A stub declares a foreign API rather than user code, and
+                // its file says so: the compiler writes every one as `.jux.d`.
+                val fromStub = type.containingFile?.name?.endsWith(".jux.d") == true
+                add(ranked(b, if (fromStub) P_TYPE_LIBRARY else P_TYPE_PROJECT), name)
             }
         }
     }

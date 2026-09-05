@@ -308,115 +308,15 @@ impl Resolver {
     /// pushed when we enter a function body.
     fn new() -> Self {
         let mut builtins = HashSet::new();
-        // The milestone-1 built-in. Eventually this will be supplanted by
-        // `import std.io.print;` and removed from here.
-        builtins.insert("print");
-        // `assert(cond)` / `assert(cond, message)` — language builtin
-        // (§S.7.2). Checked in debug builds, elided in release
-        // (lowers to Rust's `debug_assert!`).
-        builtins.insert("assert");
-        // `spawn(f)` — schedule async work on the event loop,
-        // returning a Task<T> handle (JUX-ASYNC v2 §18.1.3).
-        builtins.insert("spawn");
-        // `Channel<T>` — the async-runtime channel type (§18.3);
-        // lowers to the emitted JuxChannel helper, no Jux class.
-        builtins.insert("Channel");
-        // `AsyncMutex<T>` — await-friendly mutual exclusion (§18.3).
-        builtins.insert("AsyncMutex");
-        // `Stream<T>` — async streams (§18.6); lowers to the emitted
-        // JuxStream helper, no Jux class.
-        builtins.insert("Stream");
-        // `Task.all/race/delay` static helpers (§18.1.4).
-        builtins.insert("Task");
-        // `withTimeout(ms, f)` — §18.1.9 timeout combinator.
-        builtins.insert("withTimeout");
-        // Async-runtime builtin per JUX-ASYNC-ADDENDUM-v2: `parallel`
-        // takes N async expressions and concurrently awaits them
-        // all, returning a tuple of their results. Lowers to
-        // `async { futures::join!(...) }` at the backend — i.e. a
-        // Future, so the user always writes `await parallel(...)`
-        // inside async code or `block_on(parallel(...))` from sync
-        // code. Phase-1 stand-in for the spec's
-        // `std.async.parallel` import.
-        builtins.insert("parallel");
-        // `block_on(future)` — drive a Future to completion from a
-        // synchronous context, returning the future's resolved
-        // value. Lowers to `futures::executor::block_on(...)`. Lets
-        // users keep a plain `void main()` and reach into async
-        // helpers without making the entry point itself async.
-        builtins.insert("block_on");
-        // `yield_now()` — cooperative suspension point. Lowers to
-        // a one-shot Pending future that returns Ready on the
-        // second poll. Awaiting this in the middle of an async
-        // function gives the executor a chance to make progress
-        // on sibling futures inside the same `parallel(...)` /
-        // `join!` group — proves the cooperative-interleaving
-        // behavior `parallel(...)` advertises.
-        builtins.insert("yield_now");
-        // `Worker` — opaque host-side handle to the worker thread
-        // pool. The only operation today is `Worker.spawn(closure)`,
-        // which runs the closure on a real OS thread and returns
-        // a `Task<T>` (a Future yielding T). Per JUX-ASYNC-ADDENDUM
-        // §18.2 this is the path to TRUE multi-core parallelism —
-        // `parallel(...)` is cooperative concurrency on one
-        // thread, `Worker.spawn` is real preemptive parallelism on
-        // many threads.
-        builtins.insert("Worker");
-        // `now_ms()` — monotonic clock reading in milliseconds.
-        // Lowers to the emitted `__jux_now_ms()` helper which
-        // calls `std::time::SystemTime::now()` and returns the
-        // milliseconds since the UNIX epoch as `long`. Used to
-        // self-measure timing in benchmarks / stress tests
-        // (e.g. proving Worker.spawn yields wall-clock speedup).
-        builtins.insert("now_ms");
-        // `File` — stdlib I/O host per JUX-CORE-LIB-ADDENDUM.
-        // Backend recognizes `File.readText(path)` and
-        // `File.writeText(path, body)` and lowers to `std::fs::*`.
-        builtins.insert("File");
-        // `jux.std` types — auto-resolvable bare names so user
-        // code doesn't have to `import jux.std.collections.…` for
-        // every reference. Mirrors Java's implicit `java.lang.*`
-        // visibility. The list is hardcoded against what the
-        // stdlib actually ships; adding a new stdlib type means
-        // adding a line here.
-        //
-        // Collection INTERFACES (the only `jux.std.collections` types that
-        // remain — the concrete `ArrayList`/`HashMap`/`HashSet`/`Deque` Java
-        // facade was removed in favour of consuming `rust.std` verbatim).
-        builtins.insert("Iterable");
-        builtins.insert("Iterator");
-        builtins.insert("Collection");
-        builtins.insert("List");
-        builtins.insert("Map");
-        builtins.insert("Set");
-        // `rust.std` collections are Jux's std (same names as Rust), reachable by
-        // bare name with no `import` (the tycheck side seeds the matching
-        // `rust.std.<T>` FQN, see `RUST_STD_PRELUDE`). `HashMap`/`HashSet` now
-        // resolve here too (the jux.std facade that used to claim those bare
-        // names is gone); `Vec` replaces the old `ArrayList`.
-        builtins.insert("HashMap");
-        builtins.insert("HashSet");
-        builtins.insert("Vec");
-        builtins.insert("VecDeque");
-        builtins.insert("BTreeMap");
-        builtins.insert("BTreeSet");
-        builtins.insert("Rc");
-        builtins.insert("Arc");
-        // Exceptions.
-        builtins.insert("Throwable");
-        builtins.insert("Exception");
-        builtins.insert("Error");
-        builtins.insert("RuntimeException");
-        builtins.insert("NullPointerException");
-        builtins.insert("IndexOutOfBoundsException");
-        builtins.insert("IllegalArgumentException");
-        builtins.insert("IllegalStateException");
-        builtins.insert("UnsupportedOperationException");
-        builtins.insert("ArithmeticException");
-        builtins.insert("NoSuchElementException");
-        builtins.insert("ClassCastException");
-        builtins.insert("IOException");
-        builtins.insert("FileNotFoundException");
+        // Prelude types and language intrinsics — `print`, `spawn`,
+        // `block_on`, `Vec`, `HashMap`, the exception hierarchy. The
+        // authoritative list lives in `juxc_lex::grammar_spec` so the IntelliJ
+        // plugin can be GENERATED from it rather than keeping a hand-written
+        // Kotlin copy, which is what let the two drift (the plugin still
+        // believed `Vec` needed an `import` long after it became prelude).
+        for name in juxc_lex::grammar_spec::BUILTIN_NAMES {
+            builtins.insert(*name);
+        }
         Self {
             builtins,
             user_names: HashSet::new(),
