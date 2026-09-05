@@ -18,6 +18,7 @@
 use juxc_ast::ReturnType;
 
 use crate::RustEmitter;
+use juxc_lex::to_rust_ident;
 
 impl RustEmitter {
     /// Lower a Jux interface to a Rust `trait`. Method signatures
@@ -31,7 +32,7 @@ impl RustEmitter {
         self.w.emit_indent();
         self.emit_visibility(interface.visibility);
         self.w.push_str("trait ");
-        self.w.push_str(&interface.name.text);
+        self.w.push_str(&to_rust_ident(&interface.name.text));
         // Generic params follow without bounds — the trait doesn't
         // imply `Clone` itself; implementing types pick up bounds as
         // needed on their own impls.
@@ -85,7 +86,7 @@ impl RustEmitter {
             } else {
                 self.w.push_str("fn ");
             }
-            self.w.push_str(&method.name.text);
+            self.w.push_str(&to_rust_ident(&method.name.text));
             self.emit_generic_params(&method.generic_params);
             // `&self` — interface methods take a shared receiver so the
             // interface can be used as a `dyn` value type (`Rc<dyn Trait>`,
@@ -100,7 +101,7 @@ impl RustEmitter {
             self.w.push_str("(&self");
             for param in &method.params {
                 self.w.push_str(", ");
-                self.w.push_str(&param.name.text);
+                self.w.push_str(&to_rust_ident(&param.name.text));
                 self.w.push_str(": ");
                 self.emit_value_type_as_rust(&param.ty);
             }
@@ -188,16 +189,16 @@ impl RustEmitter {
             } else {
                 self.w.push_str("fn ");
             }
-            self.w.push_str(&interface.name.text);
+            self.w.push_str(&to_rust_ident(&interface.name.text));
             self.w.push('_');
-            self.w.push_str(&method.name.text);
+            self.w.push_str(&to_rust_ident(&method.name.text));
             self.emit_generic_params(&method.generic_params);
             self.w.push('(');
             for (i, param) in method.params.iter().enumerate() {
                 if i > 0 {
                     self.w.push_str(", ");
                 }
-                self.w.push_str(&param.name.text);
+                self.w.push_str(&to_rust_ident(&param.name.text));
                 self.w.push_str(": ");
                 self.emit_value_type_as_rust(&param.ty);
             }
@@ -244,9 +245,9 @@ impl RustEmitter {
             self.w.emit_indent();
             self.emit_visibility(interface.visibility);
             self.w.push_str("const ");
-            self.w.push_str(&interface.name.text);
+            self.w.push_str(&to_rust_ident(&interface.name.text));
             self.w.push('_');
-            self.w.push_str(&field.name.text);
+            self.w.push_str(&to_rust_ident(&field.name.text));
             self.w.push_str(": ");
             self.emitting_const_context = true;
             self.emit_field_type_as_rust(&juxc_tycheck::resolved_field_type(field));

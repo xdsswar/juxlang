@@ -35,7 +35,10 @@ use juxc_source::{SourceFile, Span};
 pub mod grammar_spec;
 pub mod rust_keywords;
 pub mod token;
-pub use rust_keywords::{is_rust_keyword, to_rust_ident, RUST_KEYWORDS};
+pub use rust_keywords::{
+    is_non_escapable_rust_keyword, is_rust_keyword, to_rust_ident, NON_ESCAPABLE_RUST_KEYWORDS,
+    RUST_KEYWORDS,
+};
 pub use token::{Keyword, Token, TokenKind};
 
 /// Jux's blessed primitive type names, per `JUX-LANG-V1.md` §5.

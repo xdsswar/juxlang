@@ -5,6 +5,7 @@
 //! Split out from `lib.rs` during the action-focused module
 //! reorganization. Behavior is identical to the original methods.
 
+use juxc_lex::to_rust_ident;
 use juxc_ast::{Expr, QualifiedName, SizeOfExpr};
 
 use crate::analysis::{starts_with_uppercase, try_flatten_dotted_path};
@@ -114,12 +115,12 @@ impl RustEmitter {
                 // Rust resolve it (works for user types, errors if the
                 // name is actually a variable misnamed PascalCase).
                 self.w.push_str("std::mem::size_of::<");
-                self.w.push_str(name);
+                self.w.push_str(&to_rust_ident(name));
                 self.w.push_str(">()");
             } else {
                 // Lowercase → value form.
                 self.w.push_str("std::mem::size_of_val(&");
-                self.w.push_str(name);
+                self.w.push_str(&to_rust_ident(name));
                 self.w.push(')');
             }
             return;

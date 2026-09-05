@@ -10,6 +10,7 @@ use juxc_ast::OperatorKind;
 
 use crate::analysis::{field_supports_copy, field_supports_eq, field_supports_hash};
 use crate::backend_fqn::to_rust_ident;
+use std::collections::HashSet;
 
 /// The C repr type for a `@layout(c, repr = "…")` enum (§L.1.3), or `None` when
 /// the enum is not a C enum. `@layout(c)` with no explicit `repr` defaults to
@@ -87,6 +88,117 @@ pub(crate) fn is_recursive_enum_slot(slot_ty: &juxc_ast::TypeRef, enum_name: &st
 use crate::RustEmitter;
 
 impl RustEmitter {
+
+    /// The enum's type parameters that need a `std::fmt::Display` bound —
+    /// those whose values reach a **format position** in one of its methods.
+    ///
+    /// The class version of this reads fields; an enum's values arrive instead
+    /// through a `switch (this)` pattern binder, so this maps each binder to
+    /// the variant payload it destructures and marks the parameter when that
+    /// binder is formatted. Without it, `case Result.Err(var e) -> "err:" + e`
+    /// resolved to `Debug` and printed a `String` with quotes around it —
+    /// wrong output, not an error.
+    fn enum_displayed_generic_params(
+        &self,
+        enum_decl: &juxc_ast::EnumDecl,
+    ) -> HashSet<String> {
+        let mut displayed: HashSet<String> = HashSet::new();
+        if enum_decl.generic_params.is_empty() {
+            return displayed;
+        }
+        let params: HashSet<&str> = enum_decl
+            .generic_params
+            .iter()
+            .map(|p| p.name.text.as_str())
+            .collect();
+        // Binder name → the enum type param it is bound to, across every
+        // `case Variant(var x)` in the enum's own bodies. A binder for a
+        // payload of a concrete type contributes nothing.
+        let mut binders: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for m in &enum_decl.methods {
+            let Some(body) = &m.body else { continue };
+            Self::collect_enum_pattern_binders(body, enum_decl, &params, &mut binders);
+        }
+        if binders.is_empty() {
+            return displayed;
+        }
+        for m in &enum_decl.methods {
+            if let Some(body) = &m.body {
+                Self::scan_block_for_displayed_fields(body, &binders, &mut displayed);
+            }
+        }
+        displayed
+    }
+
+    /// Walk an enum method body for `case <Variant>(var x)` patterns, recording
+    /// each binder that destructures a payload typed as one of the enum's own
+    /// parameters.
+    fn collect_enum_pattern_binders(
+        block: &juxc_ast::Block,
+        enum_decl: &juxc_ast::EnumDecl,
+        params: &HashSet<&str>,
+        out: &mut std::collections::HashMap<String, String>,
+    ) {
+        use juxc_ast::{Expr, Pattern, Stmt};
+        fn from_pattern(
+            p: &Pattern,
+            enum_decl: &juxc_ast::EnumDecl,
+            params: &HashSet<&str>,
+            out: &mut std::collections::HashMap<String, String>,
+        ) {
+            let Pattern::EnumVariant { path, args, .. } = p else { return };
+            let Some(variant_name) = path.segments.last() else { return };
+            let Some(variant) = enum_decl
+                .variants
+                .iter()
+                .find(|v| v.name.text == variant_name.text)
+            else {
+                return;
+            };
+            for (arg, payload) in args.iter().zip(&variant.payload) {
+                let Pattern::Bind(name) = arg else { continue };
+                if payload.ty.generic_args.is_empty()
+                    && payload.ty.array_shape.is_none()
+                    && payload.ty.name.segments.len() == 1
+                {
+                    let head = payload.ty.name.segments[0].text.as_str();
+                    if params.contains(head) {
+                        out.insert(name.text.clone(), head.to_string());
+                    }
+                }
+            }
+        }
+        fn scan_expr(
+            e: &Expr,
+            enum_decl: &juxc_ast::EnumDecl,
+            params: &HashSet<&str>,
+            out: &mut std::collections::HashMap<String, String>,
+        ) {
+            if let Expr::Switch(sw) = e {
+                for arm in &sw.arms {
+                    from_pattern(&arm.pattern, enum_decl, params, out);
+                    match &arm.body {
+                        juxc_ast::SwitchBody::Expr(b) => scan_expr(b, enum_decl, params, out),
+                        juxc_ast::SwitchBody::Block(b) => {
+                            RustEmitter::collect_enum_pattern_binders(b, enum_decl, params, out)
+                        }
+                    }
+                }
+            }
+        }
+        for stmt in &block.statements {
+            match stmt {
+                Stmt::Expr(e) | Stmt::Return(Some(e), _) => scan_expr(e, enum_decl, params, out),
+                Stmt::VarDecl(v) => {
+                    if let Some(init) = &v.init {
+                        scan_expr(init, enum_decl, params, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
     /// Emit a Jux enum declaration as a Rust `pub enum` with auto-derives
     /// and a hand-written `Display` impl per `JUX-LANG-V1.md` §7.7.2:
     /// `"VariantName"` for unit variants, `"VariantName(v1, v2, …)"`
@@ -125,7 +237,7 @@ impl RustEmitter {
         self.w.emit_indent();
         self.emit_visibility(enum_decl.visibility);
         self.w.push_str("enum ");
-        self.w.push_str(&enum_decl.name.text);
+        self.w.push_str(&to_rust_ident(&enum_decl.name.text));
         // `enum Name<T, U>` — generic parameters per §A.2.4.
         self.emit_generic_params(&enum_decl.generic_params);
         self.w.push_str(" {\n");
@@ -133,7 +245,7 @@ impl RustEmitter {
         self.w.indent_inc();
         for variant in &enum_decl.variants {
             self.w.emit_indent();
-            self.w.push_str(&variant.name.text);
+            self.w.push_str(&to_rust_ident(&variant.name.text));
             if !variant.payload.is_empty() {
                 self.w.push('(');
                 for (i, slot) in variant.payload.iter().enumerate() {
@@ -185,9 +297,15 @@ impl RustEmitter {
             // bodies clone the receiver for `switch (this)` dispatch
             // (owned payload binders), and derived `Clone` on the
             // enum needs `T: Clone` anyway.
-            self.emit_generic_params_with_clone_bound(&enum_decl.generic_params);
+            let displayed = self.enum_displayed_generic_params(enum_decl);
+            let params = enum_decl.generic_params.clone();
+            self.emit_generic_params_with_clone_bound_plus_display(
+                &params,
+                &displayed,
+                &HashSet::new(),
+            );
             self.w.push(' ');
-            self.w.push_str(&enum_decl.name.text);
+            self.w.push_str(&to_rust_ident(&enum_decl.name.text));
             self.emit_generic_params_as_args(&enum_decl.generic_params);
             self.w.push_str(" {\n");
             for op in &enum_decl.operators {
@@ -260,7 +378,7 @@ impl RustEmitter {
     fn emit_enum_auto_display(&mut self, enum_decl: &juxc_ast::EnumDecl) {
         self.w.emit_indent();
         self.w.push_str("impl std::fmt::Display for ");
-        self.w.push_str(&enum_decl.name.text);
+        self.w.push_str(&to_rust_ident(&enum_decl.name.text));
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.w.line("fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {");
@@ -269,9 +387,9 @@ impl RustEmitter {
         self.w.indent_inc();
         for variant in &enum_decl.variants {
             self.w.emit_indent();
-            self.w.push_str(&enum_decl.name.text);
+            self.w.push_str(&to_rust_ident(&enum_decl.name.text));
             self.w.push_str("::");
-            self.w.push_str(&variant.name.text);
+            self.w.push_str(&to_rust_ident(&variant.name.text));
 
             // Build the destructure bindings and the format spec /
             // argument list in one pass. Synthesized positional
@@ -293,11 +411,11 @@ impl RustEmitter {
             self.w.push_str(" => ");
             if n == 0 {
                 self.w.push_str("write!(f, \"");
-                self.w.push_str(&variant.name.text);
+                self.w.push_str(&to_rust_ident(&variant.name.text));
                 self.w.push_str("\"),\n");
             } else {
                 self.w.push_str("write!(f, \"");
-                self.w.push_str(&variant.name.text);
+                self.w.push_str(&to_rust_ident(&variant.name.text));
                 self.w.push('(');
                 for (i, slot) in variant.payload.iter().enumerate() {
                     if i > 0 {
@@ -400,7 +518,7 @@ impl crate::RustEmitter {
         } else {
             self.w.push_str("pub fn ");
         }
-        self.w.push_str(&method.name.text);
+        self.w.push_str(&to_rust_ident(&method.name.text));
         self.w.push('(');
         if !is_static {
             self.w.push_str("&self");
@@ -409,7 +527,7 @@ impl crate::RustEmitter {
             if i > 0 || !is_static {
                 self.w.push_str(", ");
             }
-            self.w.push_str(&param.name.text);
+            self.w.push_str(&to_rust_ident(&param.name.text));
             self.w.push_str(": ");
             self.emit_value_type_as_rust(&param.ty);
         }

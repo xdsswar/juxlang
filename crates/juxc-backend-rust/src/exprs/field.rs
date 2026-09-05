@@ -7,6 +7,7 @@ use juxc_tycheck::Ty;
 
 use crate::exprs::{expr_span_of, ty_kind_from_ref_with_params};
 use crate::RustEmitter;
+use juxc_lex::to_rust_ident;
 
 impl RustEmitter {
     pub(crate) fn emit_field(&mut self, f: &FieldExpr) {
@@ -146,7 +147,7 @@ impl RustEmitter {
                     if accessor_ok {
                         self.emit_expr(&f.object);
                         self.w.push_str(".__get_");
-                        self.w.push_str(&f.field.text);
+                        self.w.push_str(&to_rust_ident(&f.field.text));
                         if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                         self.w.push_str("()");
                         return;
@@ -260,7 +261,7 @@ impl RustEmitter {
                 if is_property {
                     self.emit_expr(&f.object);
                     self.w.push('.');
-                    self.w.push_str(&f.field.text);
+                    self.w.push_str(&to_rust_ident(&f.field.text));
                         if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                     self.w.push_str("()");
                     return;
@@ -300,7 +301,7 @@ impl RustEmitter {
                 if self.symbols.enums.contains_key(bare) {
                     self.w.push_str(bare);
                     self.w.push_str("::");
-                    self.w.push_str(&f.field.text);
+                    self.w.push_str(&to_rust_ident(&f.field.text));
                         if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                     return;
                 }
@@ -318,7 +319,7 @@ impl RustEmitter {
                             if self.symbols.enums.contains_key(fqn) {
                                 self.w.push_str(bare);
                                 self.w.push_str("::");
-                                self.w.push_str(&f.field.text);
+                                self.w.push_str(&to_rust_ident(&f.field.text));
                         if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                                 return;
                             }
@@ -360,7 +361,7 @@ impl RustEmitter {
                             if let Some(real) = real {
                                 self.w.push_str(&real);
                                 self.w.push_str("::");
-                                self.w.push_str(&f.field.text);
+                                self.w.push_str(&to_rust_ident(&f.field.text));
                                 if let Some(sfx) = &method_suffix {
                                     self.w.push_str(sfx);
                                 }
@@ -385,7 +386,7 @@ impl RustEmitter {
                         self.w.push_str(bare);
                     }
                     self.w.push_str("::");
-                    self.w.push_str(&f.field.text);
+                    self.w.push_str(&to_rust_ident(&f.field.text));
                     if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                     return;
                 }
@@ -425,7 +426,7 @@ impl RustEmitter {
                     if is_static_prop {
                         self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                         self.w.push_str("::");
-                        self.w.push_str(&f.field.text);
+                        self.w.push_str(&to_rust_ident(&f.field.text));
                         if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                         self.w.push_str("()");
                         return;
@@ -445,7 +446,7 @@ impl RustEmitter {
                         if field.is_final && !self.final_static_needs_runtime_init(&field.ty) {
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                             self.w.push_str("::");
-                            self.w.push_str(&f.field.text);
+                            self.w.push_str(&to_rust_ident(&f.field.text));
                         if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                             return;
                         }
@@ -479,7 +480,7 @@ impl RustEmitter {
                             }
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                             self.w.push('_');
-                            self.w.push_str(&f.field.text);
+                            self.w.push_str(&to_rust_ident(&f.field.text));
                         if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                             self.w.push_str(".with(|__s| __s.borrow().clone())");
                             if has_si {
@@ -491,7 +492,7 @@ impl RustEmitter {
                             self.w.push('*');
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                             self.w.push('_');
-                            self.w.push_str(&f.field.text);
+                            self.w.push_str(&to_rust_ident(&f.field.text));
                         if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                             self.w.push_str(".lock().unwrap()");
                         } else {
@@ -505,7 +506,7 @@ impl RustEmitter {
                             }
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                             self.w.push('_');
-                            self.w.push_str(&f.field.text);
+                            self.w.push_str(&to_rust_ident(&f.field.text));
                         if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                             self.w.push_str(".lock().unwrap().clone()");
                             if has_si {
@@ -527,7 +528,7 @@ impl RustEmitter {
                 {
                     self.emit_fqn_path_in_rust(&iface_fqn, qn.segments.len() > 1);
                     self.w.push('_');
-                    self.w.push_str(&f.field.text);
+                    self.w.push_str(&to_rust_ident(&f.field.text));
                         if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
                     return;
                 }
@@ -611,7 +612,7 @@ impl RustEmitter {
             }
         }
         self.w.push('.');
-        self.w.push_str(&f.field.text);
+        self.w.push_str(&to_rust_ident(&f.field.text));
                         if let Some(sfx) = &method_suffix { self.w.push_str(sfx); }
         // `ref` field READ (§M.13): the slot is a shared cell — a
         // value-position read clones the VALUE out (statement-scoped
@@ -810,13 +811,13 @@ impl RustEmitter {
         if is_final && !final_runtime && !is_thread_local {
             self.w.push_str(class_name);
             self.w.push_str("::");
-            self.w.push_str(field_name);
+            self.w.push_str(&to_rust_ident(field_name));
             return;
         }
         if is_thread_local {
             self.w.push_str(class_name);
             self.w.push('_');
-            self.w.push_str(field_name);
+            self.w.push_str(&to_rust_ident(field_name));
             self.w.push_str(".with(|__s| __s.borrow().clone())");
             return;
         }
@@ -824,12 +825,12 @@ impl RustEmitter {
             self.w.push('*');
             self.w.push_str(class_name);
             self.w.push('_');
-            self.w.push_str(field_name);
+            self.w.push_str(&to_rust_ident(field_name));
             self.w.push_str(".lock().unwrap()");
         } else {
             self.w.push_str(class_name);
             self.w.push('_');
-            self.w.push_str(field_name);
+            self.w.push_str(&to_rust_ident(field_name));
             self.w.push_str(".lock().unwrap().clone()");
         }
     }
@@ -1398,7 +1399,7 @@ impl RustEmitter {
         } else {
             self.w.push_str("__t.");
         }
-        self.w.push_str(&f.field.text);
+        self.w.push_str(&to_rust_ident(&f.field.text));
         self.w.push_str(".clone())");
     }
 

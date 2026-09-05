@@ -21,6 +21,7 @@ use juxc_ast::{BinaryOp, Expr};
 use juxc_tycheck::Ty;
 
 use crate::RustEmitter;
+use juxc_lex::to_rust_ident;
 
 pub(crate) mod array;
 pub(crate) mod binary;
@@ -204,7 +205,7 @@ impl RustEmitter {
                     && !self.current_fn_params.contains(&qn.segments[0].text)
                 {
                     self.w.push_str("self.");
-                    self.w.push_str(&qn.segments[0].text);
+                    self.w.push_str(&to_rust_ident(&qn.segments[0].text));
                     return;
                 }
                 // **`ref` binding read** (§M.13): a value-position read
@@ -216,7 +217,7 @@ impl RustEmitter {
                     && !self.emitting_lvalue
                     && self.ref_locals.contains(&qn.segments[0].text)
                 {
-                    self.w.push_str(&qn.segments[0].text);
+                    self.w.push_str(&to_rust_ident(&qn.segments[0].text));
                     self.w.push_str(".borrow().clone()");
                     return;
                 }
@@ -234,10 +235,10 @@ impl RustEmitter {
                     let name = &qn.segments[0].text;
                     if self.emitting_lvalue {
                         self.w.push('*');
-                        self.w.push_str(name);
+                        self.w.push_str(&to_rust_ident(name));
                     } else {
                         self.w.push_str("(*");
-                        self.w.push_str(name);
+                        self.w.push_str(&to_rust_ident(name));
                         self.w.push(')');
                     }
                     return;
@@ -270,7 +271,7 @@ impl RustEmitter {
                         || self.local_types.iter().any(|s| s.contains_key(name));
                     if !shadowed {
                         self.w.push('(');
-                        self.w.push_str(name);
+                        self.w.push_str(&to_rust_ident(name));
                         self.w.push_str(" as isize)");
                         return;
                     }
@@ -330,7 +331,7 @@ impl RustEmitter {
                             if let Some(alias) = self.this_alias.clone() {
                                 self.w.push_str(&alias);
                                 self.w.push('.');
-                                self.w.push_str(&name);
+                                self.w.push_str(&to_rust_ident(&name));
                                 self.w.push_str("()");
                                 return;
                             }
@@ -343,7 +344,7 @@ impl RustEmitter {
                 let path = qn
                     .segments
                     .iter()
-                    .map(|i| i.text.as_str())
+                    .map(|i| to_rust_ident(&i.text))
                     .collect::<Vec<_>>()
                     .join("::");
                 self.w.push_str(&path);
@@ -1152,7 +1153,7 @@ impl RustEmitter {
                     if i > 0 {
                         self.w.push_str("::");
                     }
-                    self.w.push_str(&seg.text);
+                    self.w.push_str(&to_rust_ident(&seg.text));
                 }
             }
             self.w.push_str("::new(");
@@ -1217,7 +1218,7 @@ impl RustEmitter {
                 if i > 0 {
                     self.w.push_str("::");
                 }
-                self.w.push_str(&seg.text);
+                self.w.push_str(&to_rust_ident(&seg.text));
             }
             for i in 0..arity {
                 self.w.push_str(", ");
@@ -1245,19 +1246,19 @@ impl RustEmitter {
                     if i > 0 {
                         self.w.push_str("::");
                     }
-                    self.w.push_str(&seg.text);
+                    self.w.push_str(&to_rust_ident(&seg.text));
                 }
                 self.w.push('_');
-                self.w.push_str(&m.member.text);
+                self.w.push_str(&to_rust_ident(&m.member.text));
             } else {
                 for (i, seg) in m.receiver.segments.iter().enumerate() {
                     if i > 0 {
                         self.w.push_str("::");
                     }
-                    self.w.push_str(&seg.text);
+                    self.w.push_str(&to_rust_ident(&seg.text));
                 }
                 self.w.push_str("::");
-                self.w.push_str(&m.member.text);
+                self.w.push_str(&to_rust_ident(&m.member.text));
             }
             self.w.push('(');
             for i in 0..arity {
@@ -1269,7 +1270,7 @@ impl RustEmitter {
             self.w.push(')');
         } else {
             self.w.push_str("__r.");
-            self.w.push_str(&m.member.text);
+            self.w.push_str(&to_rust_ident(&m.member.text));
             self.w.push('(');
             for i in 0..arity {
                 if i > 0 {
@@ -1398,7 +1399,7 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.w.push_str(&p.name.text);
+            self.w.push_str(&to_rust_ident(&p.name.text));
             if let Some(t) = &p.ty {
                 self.w.push_str(": ");
                 self.emit_type_as_rust(t);
@@ -1464,6 +1465,39 @@ impl RustEmitter {
     /// the caller's `Rc` handle, killing the binding for code after the
     /// lambda (rustc E0382) — Java closures capture the reference, not
     /// the variable.
+    /// True when `l`'s body reads `this` AND the enclosing class is a wrapper
+    /// (`Rc`-handle) class — the case where the capture must be an owned clone
+    /// of the handle rather than a borrow of `&self`.
+    ///
+    /// A non-wrapper class has no handle to clone, so it keeps the borrow: such
+    /// a closure cannot escape the method anyway.
+    fn lambda_captures_this(&self, l: &juxc_ast::LambdaExpr) -> bool {
+        if !self.emitting_wrapper_class {
+            return false;
+        }
+        fn in_expr(e: &juxc_ast::Expr) -> bool {
+            let mut found = false;
+            crate::worker::walk_expr(e, &mut |inner| {
+                if matches!(inner, juxc_ast::Expr::This(_)) {
+                    found = true;
+                }
+            });
+            found
+        }
+        match &l.body {
+            juxc_ast::LambdaBody::Expr(e) => in_expr(e),
+            juxc_ast::LambdaBody::Block(b) => b.statements.iter().any(|s| {
+                let mut found = false;
+                crate::worker::walk_stmt(s, &mut |inner| {
+                    if matches!(inner, juxc_ast::Expr::This(_)) {
+                        found = true;
+                    }
+                });
+                found
+            }),
+        }
+    }
+
     fn collect_wrapper_captures(&self, l: &juxc_ast::LambdaExpr) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1539,16 +1573,36 @@ impl RustEmitter {
         // it gives the bare closure the same share-on-capture semantics.
         let bare = std::mem::take(&mut self.lambda_bare_target);
         let captures = self.collect_wrapper_captures(l);
-        if !captures.is_empty() {
+        // **`this` captured by a lambda shares the handle too.** A closure that
+        // reads `this` would otherwise borrow `&self`, and returning it from a
+        // method is then a lifetime error ("returning this value requires that
+        // `'1` must outlive `'static`") — the closure outlives the borrow. A
+        // wrapper class is an `Rc` handle, so binding a clone before the closure
+        // and moving THAT in gives the same object with an owned capture, which
+        // is what Java's `this` capture means.
+        let capture_this = self.lambda_captures_this(l);
+        let brace = !captures.is_empty() || capture_this;
+        if brace {
             self.w.push_str("{ ");
             for name in &captures {
                 self.w.push_str("let ");
-                self.w.push_str(name);
+                self.w.push_str(&to_rust_ident(name));
                 self.w.push_str(" = ");
-                self.w.push_str(name);
+                self.w.push_str(&to_rust_ident(name));
+                self.w.push_str(".clone(); ");
+            }
+            if capture_this {
+                let outer = self.this_alias.as_deref().unwrap_or("self").to_string();
+                self.w.push_str("let __jux_this = ");
+                self.w.push_str(&outer);
                 self.w.push_str(".clone(); ");
             }
         }
+        let prev_this = if capture_this {
+            self.this_alias.replace("__jux_this".to_string())
+        } else {
+            self.this_alias.clone()
+        };
         if bare {
             self.w.push_str("move ");
         } else {
@@ -1559,7 +1613,7 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.w.push_str(&p.name.text);
+            self.w.push_str(&to_rust_ident(&p.name.text));
             if let Some(t) = &p.ty {
                 self.w.push_str(": ");
                 self.emit_type_as_rust(t);
@@ -1615,11 +1669,14 @@ impl RustEmitter {
         for n in &shadowed_refs {
             self.ref_locals.insert(n.clone());
         }
+        if capture_this {
+            self.this_alias = prev_this;
+        }
         // Close the `Rc::new(` wrapper — skipped for a bare closure.
         if !bare {
             self.w.push(')');
         }
-        if !self.collect_wrapper_captures(l).is_empty() {
+        if brace {
             self.w.push_str(" }");
         }
         self.in_try_closure = prev_try;
@@ -1952,7 +2009,7 @@ impl RustEmitter {
             if i > 0 || leading_comma {
                 self.w.push_str(", ");
             }
-            self.w.push_str(name);
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str(": ");
             self.emit_value_type_as_rust(tref);
         }
@@ -1971,9 +2028,9 @@ impl RustEmitter {
             if i > 0 || leading_comma {
                 self.w.push_str(", ");
             }
-            self.w.push_str(name);
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str(": ");
-            self.w.push_str(name);
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str(".clone()");
         }
     }
@@ -1997,7 +2054,7 @@ impl RustEmitter {
         } else {
             self.w.push_str(" fn ");
         }
-        self.w.push_str(&method.name.text);
+        self.w.push_str(&to_rust_ident(&method.name.text));
         // Receiver kind follows the impl target: an interface trait
         // method is `&self` (the Stage-1 dispatch flip — the impl must
         // match the trait signature exactly, rustc E0053); a
@@ -2007,7 +2064,7 @@ impl RustEmitter {
             .push_str(if receiver_mut { "(&mut self" } else { "(&self" });
         for param in &method.params {
             self.w.push_str(", ");
-            self.w.push_str(&param.name.text);
+            self.w.push_str(&to_rust_ident(&param.name.text));
             self.w.push_str(": ");
             self.emit_value_type_as_rust(&param.ty);
         }

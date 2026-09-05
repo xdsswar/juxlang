@@ -1,0 +1,44 @@
+// Rust reserves words that are ordinary names in Java, C# and TypeScript —
+// `type`, `match`, `loop`, `box`, `mod`, `impl`, `trait`, `macro`. A Jux
+// program may use them: the backend emits them as Rust raw identifiers.
+//
+// Only the four Rust cannot escape at all (`self`, `Self`, `crate`, `super`)
+// are reserved, and those get their own diagnostic.
+
+public class Match {
+    public int loop;
+    public Match(int loop) { this.loop = loop; }
+    public int box() { return this.loop; }
+    public String trait() { return "t"; }
+}
+
+public interface Union {
+    int mod();
+}
+
+public class Impl implements Union {
+    @Override public int mod() { return 9; }
+}
+
+int fn(int let, int dyn) {
+    return let + dyn;
+}
+
+public void main() {
+    Match m = new Match(3);
+    print(m.box());
+    print(m.trait());
+    print(m.loop);
+    print(fn(4, 5));
+
+    Union u = new Impl();
+    print(u.mod());
+
+    int macro = 2;
+    int become = 3;
+    print(macro + become);
+
+    Vec<int> priv = new Vec<int>();
+    priv.push(7);
+    print(priv[0]);
+}

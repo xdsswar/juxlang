@@ -7,6 +7,7 @@ use juxc_ast::Literal;
 
 use crate::analysis::pattern_has_parens;
 use crate::RustEmitter;
+use juxc_lex::to_rust_ident;
 
 impl RustEmitter {
     /// Lower a `switch` expression to a Rust `match`. The same node
@@ -307,7 +308,7 @@ impl RustEmitter {
                         self.w.push_str("::");
                     }
                 }
-                self.w.push_str(&name.text);
+                self.w.push_str(&to_rust_ident(&name.text));
             }
             juxc_ast::Pattern::Range { start, end, inclusive, .. } => {
                 // Rust supports `start..=end` and `start..end` in
@@ -340,13 +341,13 @@ impl RustEmitter {
                     // No sealed parent — emit as a bare bind.
                     // (Rust will fail to type-check; the diagnostic
                     // points at the source.)
-                    self.w.push_str(&binder.text);
+                    self.w.push_str(&to_rust_ident(&binder.text));
                 } else {
                     self.w.push_str(&parent_bare);
                     self.w.push_str("::");
-                    self.w.push_str(&type_name.text);
+                    self.w.push_str(&to_rust_ident(&type_name.text));
                     self.w.push('(');
-                    self.w.push_str(&binder.text);
+                    self.w.push_str(&to_rust_ident(&binder.text));
                     self.w.push(')');
                 }
             }

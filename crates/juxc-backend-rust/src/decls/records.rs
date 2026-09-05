@@ -9,6 +9,7 @@ use crate::analysis::{
     field_supports_copy, field_supports_display, field_supports_eq, field_supports_hash,
 };
 use crate::RustEmitter;
+use juxc_lex::to_rust_ident;
 
 impl RustEmitter {
     /// Emit a Jux record declaration as a Rust `pub struct` with the
@@ -48,7 +49,7 @@ impl RustEmitter {
         self.w.emit_indent();
         self.emit_visibility(record_decl.visibility);
         self.w.push_str("struct ");
-        self.w.push_str(&record_decl.name.text);
+        self.w.push_str(&to_rust_ident(&record_decl.name.text));
         self.emit_generic_params(&record_decl.generic_params);
         self.w.push_str(" {\n");
         self.w.indent_inc();
@@ -59,7 +60,7 @@ impl RustEmitter {
             // (Rust public fields are the simplest analog; auto-accessor
             // methods would be polish-only.)
             self.w.push_str("pub ");
-            self.w.push_str(&comp.name.text);
+            self.w.push_str(&to_rust_ident(&comp.name.text));
             self.w.push_str(": ");
             self.emit_field_type_as_rust(&comp.ty);
             self.w.push_str(",\n");
@@ -73,7 +74,7 @@ impl RustEmitter {
         self.w.push_str("impl");
         self.emit_generic_params_with_clone_bound(&record_decl.generic_params);
         self.w.push(' ');
-        self.w.push_str(&record_decl.name.text);
+        self.w.push_str(&to_rust_ident(&record_decl.name.text));
         self.emit_generic_params_as_args(&record_decl.generic_params);
         self.w.push_str(" {\n");
         self.w.indent_inc();
@@ -83,7 +84,7 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.w.push_str(&comp.name.text);
+            self.w.push_str(&to_rust_ident(&comp.name.text));
             self.w.push_str(": ");
             // Post Fix 1 Jux `String` lowers to owned Rust `String`
             // in every position — params included. Field init below
@@ -101,7 +102,7 @@ impl RustEmitter {
             // each component to its own name — so the branch is
             // unconditional here.
             self.w.emit_indent();
-            self.w.push_str(&comp.name.text);
+            self.w.push_str(&to_rust_ident(&comp.name.text));
             self.w.push_str(",\n");
         }
         self.w.indent_dec();
@@ -136,6 +137,11 @@ impl RustEmitter {
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();
+        // `record Pt(int x, int y) implements Point` — one delegating trait
+        // impl per interface, exactly like a class's. A record's components
+        // already emit as public fields AND as accessor methods, so the
+        // delegation targets the inherent method the interface names.
+        self.emit_record_trait_impls(record_decl);
         // Module-scope mutable statics for the record's non-final
         // static fields.
         for field in &record_decl.static_fields {
@@ -190,6 +196,99 @@ impl RustEmitter {
     /// record. Format mirrors §O.3.1's example: `"Name(field: value,
     /// other: value)"`. Empty-component records emit `"Name()"`.
     ///
+    /// Emit one delegating `impl <Iface> for <Record>` per interface the record
+    /// declares (grammar §A.2.5 allows `implements` on a record; a record has no
+    /// `extends`, so this is its whole supertype list).
+    ///
+    /// Two shapes satisfy an interface method. A method the record DECLARES
+    /// delegates to the inherent one. A no-argument method whose name matches a
+    /// COMPONENT is the record's accessor — records expose components as public
+    /// fields, so the impl reads the field. Anything else is left to the
+    /// interface's own default body.
+    fn emit_record_trait_impls(&mut self, record_decl: &juxc_ast::RecordDecl) {
+        for interface_ty in &record_decl.implements {
+            let Some(iface_name) = interface_ty.name.segments.last() else { continue };
+            let Some((_, iface)) = self.lookup_interface_by_bare_or_fqn(&iface_name.text) else {
+                continue;
+            };
+            // `implements Holder<int>` binds the interface's params to the
+            // record's arguments; installing it as the Kind substitution makes
+            // every type emitted below read in the record's vocabulary.
+            let subst: std::collections::HashMap<String, juxc_ast::TypeRef> = iface
+                .generic_params
+                .iter()
+                .zip(interface_ty.generic_args.iter())
+                .filter_map(|(p, a)| a.as_type().map(|t| (p.name.text.clone(), t.clone())))
+                .collect();
+            let mut methods: Vec<(String, juxc_tycheck::symbol_table::MethodSig)> = iface
+                .methods
+                .iter()
+                .map(|(n, m)| (n.clone(), m.clone()))
+                .collect();
+            methods.sort_by(|a, b| a.0.cmp(&b.0));
+
+            self.w.emit_indent();
+            self.w.push_str("impl");
+            self.emit_generic_params_with_clone_bound(&record_decl.generic_params);
+            self.w.push(' ');
+            self.emit_type_as_rust(interface_ty);
+            self.w.push_str(" for ");
+            self.w.push_str(&to_rust_ident(&record_decl.name.text));
+            self.emit_generic_params_as_args(&record_decl.generic_params);
+
+            let saved = std::mem::replace(&mut self.kind_type_subst, subst);
+            let provided: Vec<(String, juxc_tycheck::symbol_table::MethodSig)> = methods
+                .into_iter()
+                .filter(|(name, sig)| {
+                    record_decl.methods.iter().any(|m| &m.name.text == name)
+                        || (sig.params.is_empty()
+                            && record_decl.components.iter().any(|c| &c.name.text == name))
+                })
+                .collect();
+            if provided.is_empty() {
+                self.w.push_str(" {}
+
+");
+            } else {
+                self.w.push_str(" {
+");
+                self.w.indent_inc();
+                for (name, sig) in &provided {
+                    if record_decl.methods.iter().any(|m| &m.name.text == name) {
+                        self.emit_kind_delegating_method(&record_decl.name.text, name, sig);
+                    } else {
+                        self.emit_record_component_accessor(name, sig);
+                    }
+                }
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push_str("}
+
+");
+            }
+            self.kind_type_subst = saved;
+        }
+    }
+
+    /// `fn x(&self) -> isize { self.x.clone() }` — an interface accessor
+    /// satisfied by a record component of the same name. The clone keeps the
+    /// record's own copy intact for a non-`Copy` component; for a `Copy` one it
+    /// is free.
+    fn emit_record_component_accessor(&mut self, name: &str, sig: &juxc_tycheck::symbol_table::MethodSig) {
+        self.w.emit_indent();
+        self.w.push_str("fn ");
+        self.w.push_str(&to_rust_ident(name));
+        self.w.push_str("(&self)");
+        if let juxc_ast::ReturnType::Type(t) = &sig.return_type {
+            self.w.push_str(" -> ");
+            self.emit_return_type_as_rust(t);
+        }
+        self.w.push_str(" { self.");
+        self.w.push_str(&to_rust_ident(name));
+        self.w.push_str(".clone() }
+");
+    }
+
     /// Called by [`Self::emit_record_decl`] only when
     /// [`field_supports_display`] returns true for every component AND
     /// the record has no generic parameters — keeps the emitted Rust
@@ -213,7 +312,7 @@ impl RustEmitter {
 
         self.w.emit_indent();
         self.w.push_str("impl std::fmt::Display for ");
-        self.w.push_str(name);
+        self.w.push_str(&to_rust_ident(name));
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.w.line("fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {");

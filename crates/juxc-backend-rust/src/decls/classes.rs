@@ -11,6 +11,7 @@ use juxc_tycheck::symbol_table::MethodSig;
 
 use crate::analysis::{body_writes_to_this, collect_mutated_names};
 use crate::RustEmitter;
+use juxc_lex::to_rust_ident;
 
 impl RustEmitter {
     /// Emit a Jux class declaration as a Rust `pub struct` plus an
@@ -179,7 +180,7 @@ impl RustEmitter {
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("struct ");
-        self.w.push_str(&class_decl.name.text);
+        self.w.push_str(&to_rust_ident(&class_decl.name.text));
         // The struct's own type params carry `Clone + Debug` (the `#[derive]`
         // above needs them, and a generic field `Box<T>` propagates Box's own
         // `T: Clone + Debug` bound) — same as the wrapper-inner struct and every
@@ -224,7 +225,7 @@ impl RustEmitter {
             }
             self.w.emit_indent();
             self.emit_visibility(field.visibility);
-            self.w.push_str(&field.name.text);
+            self.w.push_str(&to_rust_ident(&field.name.text));
             self.w.push_str(": ");
             let fty = juxc_tycheck::resolved_field_type(field);
             // §P.2: `observer<T>` fields — arity-aware lowering, same
@@ -279,10 +280,10 @@ impl RustEmitter {
             self.w.push_str("impl");
             self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
             self.w.push_str(" std::fmt::Debug for ");
-            self.w.push_str(&class_decl.name.text);
+            self.w.push_str(&to_rust_ident(&class_decl.name.text));
             self.emit_generic_params_as_args(&class_decl.generic_params);
             self.w.push_str(" { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, \"");
-            self.w.push_str(&class_decl.name.text);
+            self.w.push_str(&to_rust_ident(&class_decl.name.text));
             self.w.push_str("\") } }\n");
         }
         self.w.newline();
@@ -321,7 +322,7 @@ impl RustEmitter {
                         self.w.push_str("impl");
                         self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
                         self.w.push_str(" From<");
-                        self.w.push_str(&class_decl.name.text);
+                        self.w.push_str(&to_rust_ident(&class_decl.name.text));
                         self.emit_generic_params_as_args(&class_decl.generic_params);
                         self.w.push_str("> for ");
                         // Route through the type emitter (NOT the bare
@@ -331,7 +332,7 @@ impl RustEmitter {
                         // Exception`, same as the Deref target below.
                         self.emit_type_as_rust(parent_ty);
                         self.w.push_str(" { fn from(v: ");
-                        self.w.push_str(&class_decl.name.text);
+                        self.w.push_str(&to_rust_ident(&class_decl.name.text));
                         self.emit_generic_params_as_args(&class_decl.generic_params);
                         self.w.push_str(") -> Self { v.__parent } }\n");
                     }
@@ -359,7 +360,7 @@ impl RustEmitter {
             self.w.push_str("impl");
             self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
             self.w.push_str(" std::ops::Deref for ");
-            self.w.push_str(&class_decl.name.text);
+            self.w.push_str(&to_rust_ident(&class_decl.name.text));
             self.emit_generic_params_as_args(&class_decl.generic_params);
             self.w.push_str(" {\n");
             self.w.indent_inc();
@@ -376,7 +377,7 @@ impl RustEmitter {
             self.w.push_str("impl");
             self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
             self.w.push_str(" std::ops::DerefMut for ");
-            self.w.push_str(&class_decl.name.text);
+            self.w.push_str(&to_rust_ident(&class_decl.name.text));
             self.emit_generic_params_as_args(&class_decl.generic_params);
             self.w.push_str(" {\n");
             self.w.indent_inc();
@@ -410,7 +411,7 @@ impl RustEmitter {
             &defaulted,
         );
         self.w.push(' ');
-        self.w.push_str(&class_decl.name.text);
+        self.w.push_str(&to_rust_ident(&class_decl.name.text));
         self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(" {\n");
 
@@ -866,7 +867,7 @@ impl RustEmitter {
                 // `pub` for the same cross-package reach as the plain
                 // class shape (catch upcasts, subclass chains).
                 self.w.push_str("pub __parent: ");
-                self.w.push_str(&seg.text);
+                self.w.push_str(&to_rust_ident(&seg.text));
                 self.w.push_str("_Inner");
                 // Thread the parent's generic args onto its inner type
                 // (`extends Container<int>` → `__parent: Container_Inner<isize>`).
@@ -887,7 +888,7 @@ impl RustEmitter {
             }
             self.w.emit_indent();
             self.emit_visibility(field.visibility);
-            self.w.push_str(&field.name.text);
+            self.w.push_str(&to_rust_ident(&field.name.text));
             self.w.push_str(": ");
             let fty = juxc_tycheck::resolved_field_type(field);
             // §P.2: `observer<T>` fields. The Rust shape depends on the
@@ -961,7 +962,7 @@ impl RustEmitter {
             self.w.push_str(&inner);
             self.emit_generic_params_as_args(&class_decl.generic_params);
             self.w.push_str(" { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, \"");
-            self.w.push_str(name);
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str("\") } }\n");
         }
         self.w.newline();
@@ -995,7 +996,7 @@ impl RustEmitter {
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("struct ");
-        self.w.push_str(name);
+        self.w.push_str(&to_rust_ident(name));
         self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
         // The newtype's single field carries the SAME visibility as the struct.
         // A `public` class is consumed from OTHER crates (a workspace path
@@ -1027,7 +1028,7 @@ impl RustEmitter {
             &defaulted,
         );
         self.w.push(' ');
-        self.w.push_str(name);
+        self.w.push_str(&to_rust_ident(name));
         self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(" {\n");
 
@@ -1185,13 +1186,13 @@ impl RustEmitter {
                     self.w.push_str("impl");
                     self.emit_generic_params_with_clone_bound(&class_decl.generic_params);
                     self.w.push_str(" From<");
-                    self.w.push_str(name);
+                    self.w.push_str(&to_rust_ident(name));
                     self.emit_generic_params_as_args(&class_decl.generic_params);
                     self.w.push_str("> for ");
                     self.w.push_str(parent_bare);
                     self.emit_parent_newtype_generic_args(parent_ty);
                     self.w.push_str(" { fn from(v: ");
-                    self.w.push_str(name);
+                    self.w.push_str(&to_rust_ident(name));
                     self.emit_generic_params_as_args(&class_decl.generic_params);
                     self.w.push_str(") -> Self { ");
                     self.w.push_str(parent_bare);
@@ -1660,7 +1661,7 @@ impl RustEmitter {
                     self.w.push_str("async ");
                 }
                 self.w.push_str("fn ");
-                self.w.push_str(name);
+                self.w.push_str(&to_rust_ident(name));
                 self.w.push_str("(&self");
                 for param in &sig.params {
                     self.w.push_str(", ");
@@ -1688,7 +1689,7 @@ impl RustEmitter {
                 self.w.push_str("<Self as ");
                 self.emit_type_as_rust(interface_ty);
                 self.w.push_str(">::");
-                self.w.push_str(name);
+                self.w.push_str(&to_rust_ident(name));
                 self.w.push_str("(self");
                 for param in &sig.params {
                     self.w.push_str(", ");
@@ -1983,7 +1984,7 @@ impl RustEmitter {
     /// [`Self::class_displayed_generic_params`]). Recurses into nested blocks
     /// and the format-bearing expression shapes (interpolated strings,
     /// `print(…)` calls, string concats).
-    fn scan_block_for_displayed_fields(
+    pub(crate) fn scan_block_for_displayed_fields(
         block: &juxc_ast::Block,
         generic_members: &std::collections::HashMap<String, String>,
         out: &mut HashSet<String>,
@@ -2079,6 +2080,26 @@ impl RustEmitter {
                 }
                 Expr::Field(f) => scan_expr(&f.object, generic_members, out),
                 Expr::Unary(u) => scan_expr(&u.operand, generic_members, out),
+                // A `switch` EXPRESSION's arms are where an enum method does
+                // its formatting (`case Err(var e) -> "err:" + e`), so the
+                // walk has to descend into them.
+                Expr::Switch(sw) => {
+                    scan_expr(&sw.scrutinee, generic_members, out);
+                    for arm in &sw.arms {
+                        if let Some(g) = &arm.guard {
+                            scan_expr(g, generic_members, out);
+                        }
+                        match &arm.body {
+                            juxc_ast::SwitchBody::Expr(b) => {
+                                mark_field_read(b, generic_members, out);
+                                scan_expr(b, generic_members, out);
+                            }
+                            juxc_ast::SwitchBody::Block(b) => {
+                                RustEmitter::scan_block_for_displayed_fields(b, generic_members, out);
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -2421,7 +2442,7 @@ impl RustEmitter {
         self.w.emit_indent();
         let is_async = matches!(sig.return_type, ReturnType::AsyncType(_));
         self.w.push_str(if is_async { "async fn " } else { "fn " });
-        self.w.push_str(name);
+        self.w.push_str(&to_rust_ident(name));
         self.w.push_str("(&self");
         for p in &sig.params {
             self.w.push_str(", ");
@@ -2447,11 +2468,11 @@ impl RustEmitter {
     /// inlining pass copied the ancestor body into its inherent impl. Naming
     /// the inherent path explicitly (`Class::name`) resolves ahead of this
     /// trait method, so it never recurses.
-    fn emit_kind_delegating_method(&mut self, recv_class_bare: &str, name: &str, sig: &MethodSig) {
+    pub(crate) fn emit_kind_delegating_method(&mut self, recv_class_bare: &str, name: &str, sig: &MethodSig) {
         self.w.emit_indent();
         let is_async = matches!(sig.return_type, ReturnType::AsyncType(_));
         self.w.push_str(if is_async { "async fn " } else { "fn " });
-        self.w.push_str(name);
+        self.w.push_str(&to_rust_ident(name));
         self.w.push_str("(&self");
         for p in &sig.params {
             self.w.push_str(", ");
@@ -2470,7 +2491,7 @@ impl RustEmitter {
         self.w.push_str(" { ");
         self.w.push_str(recv_class_bare);
         self.w.push_str("::");
-        self.w.push_str(name);
+        self.w.push_str(&to_rust_ident(name));
         self.w.push_str("(self");
         for p in &sig.params {
             self.w.push_str(", ");
@@ -2735,13 +2756,13 @@ impl RustEmitter {
         for (name, ty) in self.class_accessor_fields(owner_bare) {
             self.w.emit_indent();
             self.w.push_str("fn __get_");
-            self.w.push_str(&name);
+            self.w.push_str(&to_rust_ident(&name));
             self.w.push_str("(&self) -> ");
             self.emit_value_type_as_rust(&ty);
             self.w.push_str(";\n");
             self.w.emit_indent();
             self.w.push_str("fn __set_");
-            self.w.push_str(&name);
+            self.w.push_str(&to_rust_ident(&name));
             self.w.push_str("(&self, __v: ");
             self.emit_value_type_as_rust(&ty);
             self.w.push_str(");\n");
@@ -2757,7 +2778,7 @@ impl RustEmitter {
             // getter — clone out of the borrow guard before it drops.
             self.w.emit_indent();
             self.w.push_str("fn __get_");
-            self.w.push_str(&name);
+            self.w.push_str(&to_rust_ident(&name));
             self.w.push_str("(&self) -> ");
             self.emit_value_type_as_rust(&ty);
             self.w.push_str(" { self.0.borrow()");
@@ -2765,12 +2786,12 @@ impl RustEmitter {
                 self.w.push_str(".__parent");
             }
             self.w.push('.');
-            self.w.push_str(&name);
+            self.w.push_str(&to_rust_ident(&name));
             self.w.push_str(".clone() }\n");
             // setter — scoped `borrow_mut()` write.
             self.w.emit_indent();
             self.w.push_str("fn __set_");
-            self.w.push_str(&name);
+            self.w.push_str(&to_rust_ident(&name));
             self.w.push_str("(&self, __v: ");
             self.emit_value_type_as_rust(&ty);
             self.w.push_str(") { self.0.borrow_mut()");
@@ -2778,7 +2799,7 @@ impl RustEmitter {
                 self.w.push_str(".__parent");
             }
             self.w.push('.');
-            self.w.push_str(&name);
+            self.w.push_str(&to_rust_ident(&name));
             self.w.push_str(" = __v; }\n");
         }
     }
@@ -3180,11 +3201,11 @@ impl RustEmitter {
         for m in &trait_methods {
             self.w.emit_indent();
             self.w.push_str("fn ");
-            self.w.push_str(&m.name.text);
+            self.w.push_str(&to_rust_ident(&m.name.text));
             self.w.push_str("(&self");
             for p in &m.params {
                 self.w.push_str(", ");
-                self.w.push_str(&p.name.text);
+                self.w.push_str(&to_rust_ident(&p.name.text));
                 self.w.push_str(": ");
                 self.emit_value_type_as_rust(&p.ty);
             }
@@ -3218,11 +3239,11 @@ impl RustEmitter {
         for m in &trait_methods {
             self.w.emit_indent();
             self.w.push_str("fn ");
-            self.w.push_str(&m.name.text);
+            self.w.push_str(&to_rust_ident(&m.name.text));
             self.w.push_str("(&self");
             for p in &m.params {
                 self.w.push_str(", ");
-                self.w.push_str(&p.name.text);
+                self.w.push_str(&to_rust_ident(&p.name.text));
                 self.w.push_str(": ");
                 self.emit_value_type_as_rust(&p.ty);
             }
@@ -3245,11 +3266,11 @@ impl RustEmitter {
             }
             self.emit_generic_params_as_args(&class_decl.generic_params);
             self.w.push_str("::");
-            self.w.push_str(&m.name.text);
+            self.w.push_str(&to_rust_ident(&m.name.text));
             self.w.push_str("(self");
             for p in &m.params {
                 self.w.push_str(", ");
-                self.w.push_str(&p.name.text);
+                self.w.push_str(&to_rust_ident(&p.name.text));
             }
             self.w.push_str(") }\n");
         }
@@ -3447,7 +3468,7 @@ impl RustEmitter {
                 self.w.push(' ');
                 self.emit_type_as_rust(interface_ty);
                 self.w.push_str(" for ");
-                self.w.push_str(&class_decl.name.text);
+                self.w.push_str(&to_rust_ident(&class_decl.name.text));
                 self.emit_generic_params_as_args(&class_decl.generic_params);
                 self.w.push_str(" {}\n\n");
                 continue;
@@ -3562,7 +3583,7 @@ impl RustEmitter {
                 self.w.push(' ');
                 self.emit_type_as_rust(interface_ty);
                 self.w.push_str(" for ");
-                self.w.push_str(&class_decl.name.text);
+                self.w.push_str(&to_rust_ident(&class_decl.name.text));
                 self.emit_generic_params_as_args(&class_decl.generic_params);
                 self.w.push_str(" {}\n\n");
                 continue;
@@ -3576,7 +3597,7 @@ impl RustEmitter {
             self.w.push(' ');
             self.emit_type_as_rust(interface_ty);
             self.w.push_str(" for ");
-            self.w.push_str(&class_decl.name.text);
+            self.w.push_str(&to_rust_ident(&class_decl.name.text));
             self.emit_generic_params_as_args(&class_decl.generic_params);
             self.w.push_str(" {\n");
             self.w.indent_inc();
@@ -3593,7 +3614,7 @@ impl RustEmitter {
                     self.w.push_str("async ");
                 }
                 self.w.push_str("fn ");
-                self.w.push_str(method_name);
+                self.w.push_str(&to_rust_ident(method_name));
                 // Match the interface's declared receiver: `&self`
                 // (stage-1 dispatch). The implementer is a forced wrapper
                 // class whose inherent method is also `&self` (mutation via
@@ -3669,7 +3690,7 @@ impl RustEmitter {
                             fqn.split('.').collect::<Vec<_>>().join("::");
                         self.w.push_str(&parent_path);
                         self.w.push_str("::");
-                        self.w.push_str(method_name);
+                        self.w.push_str(&to_rust_ident(method_name));
                         self.w.push_str("(self");
                         for param in &method.params {
                             self.w.push_str(", ");
@@ -3689,7 +3710,7 @@ impl RustEmitter {
                         // path resolves to the inherent impl ahead of
                         // the trait, so this delegates without
                         // recursing.
-                        self.w.push_str(&class_decl.name.text);
+                        self.w.push_str(&to_rust_ident(&class_decl.name.text));
                         // Turbofish in **call** position — `Box::<T>::get(self)`.
                         // The leading `::` is required: `Box<T>::get` parses as
                         // chained comparison operators ("comparison operators
@@ -3700,7 +3721,7 @@ impl RustEmitter {
                         }
                         self.emit_generic_params_as_args(&class_decl.generic_params);
                         self.w.push_str("::");
-                        self.w.push_str(method_name);
+                        self.w.push_str(&to_rust_ident(method_name));
                         self.w.push_str("(self");
                         for param in &method.params {
                             self.w.push_str(", ");
@@ -3813,7 +3834,7 @@ impl RustEmitter {
         } else {
             self.w.push_str("static ");
         }
-        self.w.push_str(&field.name.text);
+        self.w.push_str(&to_rust_ident(&field.name.text));
         self.w.push_str(": ");
         // `const`/`static` slots can't run `.to_string()` at init
         // time, so the const-context flag asks both the type
@@ -3998,7 +4019,7 @@ impl RustEmitter {
             self.w.push_str("pub static ");
             self.w.push_str(class_name);
             self.w.push('_');
-            self.w.push_str(&field.name.text);
+            self.w.push_str(&to_rust_ident(&field.name.text));
             self.w.push_str(": std::cell::RefCell<");
             self.emit_field_type_as_rust(&juxc_tycheck::resolved_field_type(field));
             self.w.push_str("> = std::cell::RefCell::new(");
@@ -4022,7 +4043,7 @@ impl RustEmitter {
         self.w.push_str("pub static ");
         self.w.push_str(class_name);
         self.w.push('_');
-        self.w.push_str(&field.name.text);
+        self.w.push_str(&to_rust_ident(&field.name.text));
         self.w.push_str(": std::sync::LazyLock<std::sync::Mutex<");
         // Field-position type mapping (`String` → owned `String`) —
         // we want the inner storage to own its data, just like a
@@ -4156,9 +4177,9 @@ impl RustEmitter {
             self.w.push_str("unsafe ");
         }
         self.w.push_str("fn ");
-        self.w.push_str(&class_decl.name.text);
+        self.w.push_str(&to_rust_ident(&class_decl.name.text));
         self.w.push('_');
-        self.w.push_str(&method.name.text);
+        self.w.push_str(&to_rust_ident(&method.name.text));
         // The free function carries ONLY the method's own generics (plus any
         // wildcard lifts) — never the class's params, which is the whole point.
         let mut in_scope = crate::collect_type_param_names(&method.generic_params);
@@ -4187,7 +4208,7 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            self.w.push_str(&param.name.text);
+            self.w.push_str(&to_rust_ident(&param.name.text));
             self.w.push_str(": ");
             self.emit_value_type_as_rust(&lifted_param_tys[i]);
         }
@@ -4328,7 +4349,7 @@ impl RustEmitter {
             self.w.push_str("unsafe ");
         }
         self.w.push_str("fn ");
-        self.w.push_str(&method.name.text);
+        self.w.push_str(&to_rust_ident(&method.name.text));
         if p2_setter {
             self.w.push_str("_raw");
         }
@@ -4385,7 +4406,7 @@ impl RustEmitter {
             {
                 self.w.push_str("mut ");
             }
-            self.w.push_str(&param.name.text);
+            self.w.push_str(&to_rust_ident(&param.name.text));
             self.w.push_str(": ");
             if param.is_out {
                 self.w.push_str("&mut "); // `out T` (§M.4) lowers to `&mut T`
@@ -4587,7 +4608,7 @@ impl RustEmitter {
             // inherent-method-shadowing-via-Deref behavior.
             self.w.emit_indent();
             self.w.push_str("unimplemented!(\"abstract method ");
-            self.w.push_str(&method.name.text);
+            self.w.push_str(&to_rust_ident(&method.name.text));
         if let Some(sfx) = self.pending_decl_suffix.take() { self.w.push_str(&sfx); }
             self.w.push_str("\")\n");
         }
@@ -4674,15 +4695,15 @@ impl RustEmitter {
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("enum ");
-        self.w.push_str(&class_decl.name.text);
+        self.w.push_str(&to_rust_ident(&class_decl.name.text));
         self.emit_generic_params(&class_decl.generic_params);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         for permitted in &class_decl.permits {
             self.w.emit_indent();
-            self.w.push_str(&permitted.text);
+            self.w.push_str(&to_rust_ident(&permitted.text));
             self.w.push('(');
-            self.w.push_str(&permitted.text);
+            self.w.push_str(&to_rust_ident(&permitted.text));
             self.w.push_str("),\n");
         }
         self.w.indent_dec();
@@ -4695,14 +4716,14 @@ impl RustEmitter {
         for permitted in &class_decl.permits {
             self.w.emit_indent();
             self.w.push_str("impl From<");
-            self.w.push_str(&permitted.text);
+            self.w.push_str(&to_rust_ident(&permitted.text));
             self.w.push_str("> for ");
-            self.w.push_str(&class_decl.name.text);
+            self.w.push_str(&to_rust_ident(&class_decl.name.text));
             self.emit_generic_params_as_args(&class_decl.generic_params);
             self.w.push_str(" { fn from(v: ");
-            self.w.push_str(&permitted.text);
+            self.w.push_str(&to_rust_ident(&permitted.text));
             self.w.push_str(") -> Self { Self::");
-            self.w.push_str(&permitted.text);
+            self.w.push_str(&to_rust_ident(&permitted.text));
             self.w.push_str("(v) } }\n");
         }
         // Marker trait `<Name>Kind` — emitted to match the
@@ -4714,15 +4735,15 @@ impl RustEmitter {
         self.w.emit_indent();
         self.emit_visibility(class_decl.visibility);
         self.w.push_str("trait ");
-        self.w.push_str(&class_decl.name.text);
+        self.w.push_str(&to_rust_ident(&class_decl.name.text));
         self.w.push_str("Kind {}\n");
         // The enum itself satisfies its own marker — keeps the
         // bound `T: LightKind` usable with a value of type Light.
         self.w.emit_indent();
         self.w.push_str("impl ");
-        self.w.push_str(&class_decl.name.text);
+        self.w.push_str(&to_rust_ident(&class_decl.name.text));
         self.w.push_str("Kind for ");
-        self.w.push_str(&class_decl.name.text);
+        self.w.push_str(&to_rust_ident(&class_decl.name.text));
         self.emit_generic_params_as_args(&class_decl.generic_params);
         self.w.push_str(" {}\n");
         self.w.newline();
@@ -4748,7 +4769,7 @@ impl RustEmitter {
             self.w.push_str("impl");
             self.emit_generic_params(&class_decl.generic_params);
             self.w.push(' ');
-            self.w.push_str(&class_decl.name.text);
+            self.w.push_str(&to_rust_ident(&class_decl.name.text));
             self.emit_generic_params_as_args(&class_decl.generic_params);
             self.w.push_str(" {\n");
             for field in &class_decl.fields {
@@ -4793,7 +4814,7 @@ impl RustEmitter {
             self.w.push_str("impl");
             self.emit_generic_params(&class_decl.generic_params);
             self.w.push(' ');
-            self.w.push_str(&class_decl.name.text);
+            self.w.push_str(&to_rust_ident(&class_decl.name.text));
             self.emit_generic_params_as_args(&class_decl.generic_params);
             self.w.push_str(" {\n");
             self.w.indent_inc();
@@ -4836,12 +4857,12 @@ impl RustEmitter {
         } else {
             self.w.push_str("fn ");
         }
-        self.w.push_str(&method.name.text);
+        self.w.push_str(&to_rust_ident(&method.name.text));
         if let Some(sfx) = self.pending_decl_suffix.take() { self.w.push_str(&sfx); }
         self.w.push_str("(&self");
         for param in &method.params {
             self.w.push_str(", ");
-            self.w.push_str(&param.name.text);
+            self.w.push_str(&to_rust_ident(&param.name.text));
             self.w.push_str(": ");
             self.emit_value_type_as_rust(&param.ty);
         }
@@ -4864,18 +4885,18 @@ impl RustEmitter {
         self.w.indent_inc();
         for permitted in &class_decl.permits {
             self.w.emit_indent();
-            self.w.push_str(&class_decl.name.text);
+            self.w.push_str(&to_rust_ident(&class_decl.name.text));
             self.w.push_str("::");
-            self.w.push_str(&permitted.text);
+            self.w.push_str(&to_rust_ident(&permitted.text));
             self.w.push_str("(__variant) => __variant.");
-            self.w.push_str(&method.name.text);
+            self.w.push_str(&to_rust_ident(&method.name.text));
         if let Some(sfx) = self.pending_decl_suffix.take() { self.w.push_str(&sfx); }
             self.w.push('(');
             for (i, param) in method.params.iter().enumerate() {
                 if i > 0 {
                     self.w.push_str(", ");
                 }
-                self.w.push_str(&param.name.text);
+                self.w.push_str(&to_rust_ident(&param.name.text));
             }
             self.w.push(')');
             // Async dispatch needs `.await` on each arm so the

@@ -118,7 +118,7 @@ impl crate::RustEmitter {
                                 }
                             }
                             juxc_ast::AnnotationArg::Named { name, value } => {
-                                self.w.push_str(&name.text);
+                                self.w.push_str(&to_rust_ident(&name.text));
                                 self.w.push_str(" = ");
                                 if let Some(text) = string_literal_text(value) {
                                     self.w.push('"');

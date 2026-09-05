@@ -2,6 +2,7 @@
 //! Each is short enough on its own that grouping them keeps related
 //! "operator-shaped but not arithmetic" lowerings near each other.
 
+use juxc_lex::to_rust_ident;
 use juxc_ast::{CastExpr, Expr, RangeExpr, UnaryExpr};
 
 use crate::exprs::UNARY_PREC;
@@ -354,7 +355,7 @@ impl RustEmitter {
         // 1. Hoist side-effecting sub-parts into temps (single-eval).
         for (name, expr) in &hoists {
             self.w.push_str("let ");
-            self.w.push_str(name);
+            self.w.push_str(&to_rust_ident(name));
             self.w.push_str(" = ");
             self.emit_expr(expr);
             self.w.push_str("; ");

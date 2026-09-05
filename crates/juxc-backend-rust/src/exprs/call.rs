@@ -8,6 +8,7 @@ use juxc_ast::{BinaryExpr, CallExpr, Expr, Literal};
 use crate::analysis::is_string_literal;
 use crate::exprs::ArgRef;
 use crate::RustEmitter;
+use juxc_lex::to_rust_ident;
 
 /// How a single foreign-call argument crosses the C boundary (§L.7).
 #[derive(Clone, Copy)]
@@ -364,7 +365,7 @@ impl RustEmitter {
                 let target_level = self.super_shim_depth.map_or(0, |d| d + 1);
                 self.w.push_str(&alias);
                 self.w.push_str(".__jux_super_");
-                self.w.push_str(&f.field.text);
+                self.w.push_str(&to_rust_ident(&f.field.text));
                 // Which overload of the ancestor's method — the shims carry the
                 // same `__ovK` identity as the members themselves. Prefer
                 // tycheck's recorded pick; fall back to argument count when the
@@ -411,7 +412,7 @@ impl RustEmitter {
                             self.w.push_str(".__parent");
                         }
                         self.w.push('.');
-                        self.w.push_str(&wf.field.text);
+                        self.w.push_str(&to_rust_ident(&wf.field.text));
                         self.w.push_str(".upgrade().map(");
                         self.w.push_str(&target);
                         self.w.push(')');
@@ -428,7 +429,7 @@ impl RustEmitter {
                 if let Expr::Path(qn) = getf.object.as_ref() {
                     if qn.segments.len() == 1 {
                         if let Some(cls) = self.weak_params.get(&qn.segments[0].text).cloned() {
-                            self.w.push_str(&qn.segments[0].text);
+                            self.w.push_str(&to_rust_ident(&qn.segments[0].text));
                             self.w.push_str(".upgrade().map(");
                             self.w.push_str(&cls);
                             self.w.push(')');
@@ -572,7 +573,7 @@ impl RustEmitter {
                                 self.w.push_str(" { ");
                                 for (i, arg) in call.args.iter().enumerate() {
                                     if let Some(Some(n)) = call.arg_names.get(i) {
-                                        self.w.push_str(&n.text);
+                                        self.w.push_str(&to_rust_ident(&n.text));
                                         self.w.push_str(": ");
                                         self.emit_expr(arg);
                                         self.w.push_str(", ");
@@ -796,9 +797,9 @@ impl RustEmitter {
                     self.w.push_str("crate::__jux_spawn({ ");
                     for name in &rebinds {
                         self.w.push_str("let ");
-                        self.w.push_str(name);
+                        self.w.push_str(&to_rust_ident(name));
                         self.w.push_str(" = ");
-                        self.w.push_str(name);
+                        self.w.push_str(&to_rust_ident(name));
                         self.w.push_str(".clone(); ");
                     }
                     self.w.push_str("async move { ");
@@ -993,9 +994,9 @@ impl RustEmitter {
                         self.w.push_str("{ ");
                         for name in &rebinds {
                             self.w.push_str("let ");
-                            self.w.push_str(name);
+                            self.w.push_str(&to_rust_ident(name));
                             self.w.push_str(" = ");
-                            self.w.push_str(name);
+                            self.w.push_str(&to_rust_ident(name));
                             self.w.push_str(".clone(); ");
                         }
                     }
@@ -1235,7 +1236,7 @@ impl RustEmitter {
                 if let Some(class_name) = as_static_on {
                     self.w.push_str(&class_name);
                     self.w.push_str("::");
-                    self.w.push_str(name);
+                    self.w.push_str(&to_rust_ident(name));
                     if let Some(sfx) = self.pending_method_suffix.take() {
                         self.w.push_str(&sfx);
                     }
@@ -1256,7 +1257,7 @@ impl RustEmitter {
                     let alias = self.this_alias.as_deref().unwrap_or("self");
                     self.w.push_str(alias);
                     self.w.push('.');
-                    self.w.push_str(name);
+                    self.w.push_str(&to_rust_ident(name));
                     if let Some(sfx) = self.pending_method_suffix.take() {
                         self.w.push_str(&sfx);
                     }
@@ -1310,7 +1311,7 @@ impl RustEmitter {
                             // companion definition site.
                             self.w.push_str(iface_name);
                             self.w.push('_');
-                            self.w.push_str(&f.field.text);
+                            self.w.push_str(&to_rust_ident(&f.field.text));
                             self.w.push('(');
                             let prev = self.emitting_format_arg;
                             self.emitting_format_arg = false;
@@ -1373,7 +1374,7 @@ impl RustEmitter {
                         }
                         // Free-fn form joins with `_`; associated form with `::`.
                         self.w.push_str(if lift_to_free_fn { "_" } else { "::" });
-                        self.w.push_str(&f.field.text);
+                        self.w.push_str(&to_rust_ident(&f.field.text));
                         if let Some(sfx) = self.pending_method_suffix.take() {
                             self.w.push_str(&sfx);
                         }
@@ -2078,7 +2079,7 @@ impl RustEmitter {
                 if qn.segments.len() == 1
                     && self.ref_locals.contains(&qn.segments[0].text)
                 {
-                    self.w.push_str(&qn.segments[0].text);
+                    self.w.push_str(&to_rust_ident(&qn.segments[0].text));
                     self.w.push_str(".clone()");
                     return;
                 }
@@ -2498,17 +2499,17 @@ impl RustEmitter {
                 self.w.push_str("crate::JuxStream::generate({ ");
                 for name in &rebinds {
                     self.w.push_str("let ");
-                    self.w.push_str(name);
+                    self.w.push_str(&to_rust_ident(name));
                     self.w.push_str(" = ");
-                    self.w.push_str(name);
+                    self.w.push_str(&to_rust_ident(name));
                     self.w.push_str(".clone(); ");
                 }
                 self.w.push_str("move || { ");
                 for name in &rebinds {
                     self.w.push_str("let ");
-                    self.w.push_str(name);
+                    self.w.push_str(&to_rust_ident(name));
                     self.w.push_str(" = ");
-                    self.w.push_str(name);
+                    self.w.push_str(&to_rust_ident(name));
                     self.w.push_str(".clone(); ");
                 }
                 // Fully-qualified `Box` — a user `class Box` at the
@@ -2795,7 +2796,7 @@ impl RustEmitter {
             self.emitting_format_arg = prev_args_fmt;
         }
         self.w.push_str("__jux_recv.");
-        self.w.push_str(&callee.field.text);
+        self.w.push_str(&to_rust_ident(&callee.field.text));
         if let Some(sfx) = self.pending_method_suffix.take() {
             self.w.push_str(&sfx);
         }
@@ -2933,7 +2934,7 @@ impl RustEmitter {
         if !handled {
             // Plain user-method (or unknown receiver): emit `__t.method(args)`.
             self.w.push_str("__t.");
-            self.w.push_str(&callee.field.text);
+            self.w.push_str(&to_rust_ident(&callee.field.text));
             self.w.push('(');
             let prev = self.emitting_format_arg;
             self.emitting_format_arg = false;
