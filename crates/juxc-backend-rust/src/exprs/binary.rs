@@ -240,6 +240,33 @@ impl RustEmitter {
         if let Some(Ty::Primitive(p)) = self.expr_types.get(&expr_span_of(e)) {
             return Some(*p);
         }
+        // A bare name inside a method can be an implicit `this.field`, and a
+        // field read carries no `expr_types` entry of its own. Without this
+        // the operand looked untyped, promotion was skipped for the whole
+        // expression, and a mixed-signedness pair reached rustc unchanged:
+        // `s.len() - pos` emitted `usize - isize` and failed to compile, while
+        // the same expression with a LOCAL on the right worked. Walk the
+        // enclosing class's `extends` chain, as an inherited field is bare too.
+        if let Expr::Path(qn) = e {
+            if qn.segments.len() == 1 {
+                let bare = qn.segments[0].text.as_str();
+                let mut cursor = self.enclosing_class.clone();
+                while let Some(class_name) = cursor {
+                    let Some(sig) = self.lookup_class_by_bare_or_fqn(&class_name) else {
+                        break;
+                    };
+                    if let Some(field) = sig.fields.get(bare) {
+                        let ty = field.ty.clone();
+                        return self.type_ref_primitive(&ty);
+                    }
+                    cursor = sig
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last())
+                        .map(|s| s.text.clone());
+                }
+            }
+        }
         literal_numeric_ty(e)
     }
 

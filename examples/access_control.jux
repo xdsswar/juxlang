@@ -19,13 +19,9 @@
 // wants that state public: exactly the shape rule 1 exists for.
 public class Parser {
     private String source;
-    private int total;
     private int consumed = 0;
 
-    public Parser(String source) {
-        this.source = source;
-        this.total = 11;
-    }
+    public Parser(String source) { this.source = source; }
 
     // Nested, and reaching into its owner's privates.
     public class Cursor {
@@ -33,7 +29,7 @@ public class Parser {
 
         // Reads the owner's `private source` and `private consumed`.
         public int remaining(Parser p) {
-            return p.total - position - p.consumed;
+            return p.source.len() - position - p.consumed;
         }
 
         public void advance(int n) { position = position + n; }
