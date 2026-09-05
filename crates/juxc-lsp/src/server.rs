@@ -379,6 +379,268 @@ fn receiver_type_by_reparse(
         .map(|(_, t)| t.clone())
 }
 
+/// The callee of the call whose `(` sits at `open_paren`, as (name, parameter
+/// list) pairs — one per overload a constructor set provides, otherwise one.
+///
+/// Shared by signature help and named-argument completion, which ask the same
+/// question about the same position: what does the thing being called take?
+/// Keeping one answer means the popup and the parameter hints cannot disagree.
+fn callee_overloads(
+    doc: &Document,
+    text: &str,
+    open_paren: usize,
+) -> Vec<(String, Vec<juxc_tycheck::symbol_table::ParamSig>)> {
+    let bytes = text.as_bytes();
+    let mut name_end = open_paren;
+    while name_end > 0 && (bytes[name_end - 1] as char).is_ascii_whitespace() {
+        name_end -= 1;
+    }
+    let name_start = ident_start_before(text, name_end);
+    let callee = &text[name_start..name_end];
+    if callee.is_empty() {
+        return Vec::new();
+    }
+
+    if is_new_context(text, name_start) {
+        // `new X(…)` — every constructor of class `X`.
+        return match intel::resolve_type(&doc.symbols, callee) {
+            Some(intel::Resolved::Class(_, sig)) if !sig.constructors.is_empty() => sig
+                .constructors
+                .iter()
+                .map(|c| (callee.to_string(), c.params.clone()))
+                .collect(),
+            // A class with no explicit constructor → a single no-arg form.
+            Some(intel::Resolved::Class(_, _)) => vec![(callee.to_string(), Vec::new())],
+            _ => Vec::new(),
+        };
+    }
+    if let Some(dot) = receiver_dot_before(text, name_start) {
+        // `recv.method(…)` — resolve the receiver's type, then the method.
+        return match doc.type_ending_at(dot) {
+            Some(recv_ty) => match intel::resolve_member(&doc.symbols, recv_ty, callee) {
+                Some(intel::Resolved::Method(_, sig)) => {
+                    vec![(callee.to_string(), sig.params.clone())]
+                }
+                _ => Vec::new(),
+            },
+            None => Vec::new(),
+        };
+    }
+    // Free function call.
+    match intel::resolve_function(&doc.symbols, callee) {
+        Some(intel::Resolved::Function(_, sig)) => vec![(callee.to_string(), sig.params.clone())],
+        _ => Vec::new(),
+    }
+}
+
+/// `name: ` completions for the parameters of the call the caret sits in.
+///
+/// Jux takes named arguments (`greet(who: "a", times: 2)`), and nothing offered
+/// the names — so using the form meant reading the signature elsewhere first,
+/// which is most of the reason to have named arguments in the first place.
+///
+/// Parameters already written in this call are dropped, so the list shrinks as
+/// it is used. These are ADDED to the ordinary completion rather than replacing
+/// it: an argument position legitimately takes a value too, and an exclusive
+/// branch here would hide every local the user might want to pass.
+fn named_argument_items(doc: &Document, text: &str, offset: usize) -> Vec<CompletionItem> {
+    let Some((open_paren, _)) = find_enclosing_call(text, offset) else {
+        return Vec::new();
+    };
+    // Only at the START of an argument: once a `:` or any expression character
+    // has been typed, the caret is in a value, not a label.
+    let arg_text = &text[open_paren + 1..offset];
+    let current = arg_text.rsplit(',').next().unwrap_or("");
+    if !current.trim_start().chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return Vec::new();
+    }
+    // Names already used in this call — a label written once is spent.
+    let used: std::collections::HashSet<&str> = arg_text
+        .split(',')
+        .filter_map(|a| a.split_once(':').map(|(n, _)| n.trim()))
+        .collect();
+
+    let mut items: Vec<CompletionItem> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (_, params) in callee_overloads(doc, text, open_paren) {
+        for p in params {
+            if used.contains(p.name.as_str()) || !seen.insert(p.name.clone()) {
+                continue;
+            }
+            items.push(CompletionItem {
+                label: format!("{}:", p.name),
+                kind: Some(CompletionItemKind::FIELD),
+                detail: Some(intel::render_type(&p.ty)),
+                insert_text: Some(format!("{}: ", p.name)),
+                // Above locals: at the head of an argument the parameter's own
+                // name is the most specific thing that can go there.
+                sort_text: Some(format!("00_{}", p.name)),
+                ..Default::default()
+            });
+        }
+    }
+    items
+}
+
+/// When the identifier starting at `ident_start` follows a `case` keyword
+/// inside a `switch (…) { … }`, the byte offset just past that switch's
+/// SCRUTINEE expression — the input to the same type lookup member completion
+/// uses.
+///
+/// `case Color.| ` already worked: the `Color.` is an ordinary static receiver.
+/// What did not was the far more useful bare `case |`, which offered the
+/// generic statement bag and left the user to remember both the enum's name and
+/// its variants — precisely the two things the compiler already knows here.
+///
+/// The scan is textual, in two steps, and gives up rather than guessing:
+/// backwards from the caret the previous word must be `case`; then backwards
+/// again to the `{` that opens the switch body, requiring `)` immediately
+/// before it, and the matching `(` is found by depth. A `;` or a nested body
+/// ends the search, so a `case` in an unrelated construct cannot reach out to a
+/// distant `switch`.
+fn switch_scrutinee_before(text: &str, ident_start: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+
+    // Step 1: the word immediately before the caret must be `case`.
+    let mut i = ident_start.min(bytes.len());
+    while i > 0 && (bytes[i - 1] as char).is_ascii_whitespace() {
+        i -= 1;
+    }
+    let word_end = i;
+    while i > 0 && is_ident_byte(bytes[i - 1]) {
+        i -= 1;
+    }
+    if &text[i..word_end] != "case" {
+        return None;
+    }
+
+    // Step 2: back to the `{` that opens the enclosing switch body.
+    let mut depth = 0i32;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b'}' => depth += 1,
+            b'{' => {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+            }
+            // A statement terminator at this level means the `case` is not
+            // inside a switch body we can read.
+            b';' if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    if i == 0 || bytes[i] != b'{' {
+        return None;
+    }
+
+    // Step 3: `{` must be preceded by the switch header's `)`.
+    let mut j = i;
+    while j > 0 && (bytes[j - 1] as char).is_ascii_whitespace() {
+        j -= 1;
+    }
+    if j == 0 || bytes[j - 1] != b')' {
+        return None;
+    }
+    let scrutinee_end = j - 1;
+
+    // Step 4: the matching `(`, then the `switch` keyword before it.
+    let mut k = scrutinee_end;
+    let mut paren = 0i32;
+    while k > 0 {
+        k -= 1;
+        match bytes[k] {
+            b')' => paren += 1,
+            b'(' => {
+                if paren == 0 {
+                    break;
+                }
+                paren -= 1;
+            }
+            _ => {}
+        }
+    }
+    if bytes.get(k) != Some(&b'(') {
+        return None;
+    }
+    let mut w = k;
+    while w > 0 && (bytes[w - 1] as char).is_ascii_whitespace() {
+        w -= 1;
+    }
+    let kw_end = w;
+    while w > 0 && is_ident_byte(bytes[w - 1]) {
+        w -= 1;
+    }
+    if &text[w..kw_end] != "switch" {
+        return None;
+    }
+    Some(scrutinee_end)
+}
+
+/// Completions for a bare `case |`: the scrutinee's enum variants, written the
+/// way a pattern has to be written — qualified, `Color.Red`.
+///
+/// Empty when the scrutinee is not an enum (a `switch` over a string or an int
+/// has nothing to enumerate), which lets the caller fall through to the general
+/// bag rather than showing an empty popup.
+fn case_pattern_items(
+    doc: &Document,
+    ws: &Workspace,
+    uri: &Url,
+    text: &str,
+    scrutinee_end: usize,
+) -> Vec<CompletionItem> {
+    // The same type lookup member completion uses: the largest cached span
+    // ending at the scrutinee, then a mid-edit reparse as the fallback (the
+    // switch body is usually being typed, so the cache can be a keystroke old).
+    let ty = match doc.type_ending_at(scrutinee_end).cloned() {
+        Some(t) => t,
+        None => match receiver_type_by_reparse(
+            text,
+            scrutinee_end,
+            scrutinee_end,
+            ws.root.as_deref(),
+            uri,
+        ) {
+            Some(t) => t,
+            None => return Vec::new(),
+        },
+    };
+    let juxc_tycheck::Ty::User { name, .. } = ty else {
+        return Vec::new();
+    };
+    let Some(en) = doc.symbols.enums.get(name.as_str()).or_else(|| {
+        let bare = name.rsplit('.').next().unwrap_or(name.as_str());
+        doc.symbols
+            .enums
+            .iter()
+            .find(|(k, _)| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+            .map(|(_, v)| v)
+    }) else {
+        return Vec::new();
+    };
+    let bare = name.rsplit('.').next().unwrap_or(name.as_str()).to_string();
+    let mut variants: Vec<&String> = en.variants.keys().collect();
+    variants.sort();
+    variants
+        .into_iter()
+        .map(|v| {
+            let label = format!("{bare}.{v}");
+            CompletionItem {
+                label: label.clone(),
+                kind: Some(CompletionItemKind::ENUM_MEMBER),
+                detail: Some(bare.clone()),
+                // Every variant is equally likely, so one flat tier; the
+                // client's prefix matching does the rest.
+                sort_text: Some(format!("0_{label}")),
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
 /// True when the identifier starting at `ident_start` is preceded directly by
 /// `@` — an annotation name.
 ///
@@ -1283,6 +1545,15 @@ fn build_completions(doc: &Document, ws: &Workspace, uri: &Url, offset: usize) -
     let member_start = ident_start_before(&text, offset);
     let typed_prefix = text[member_start..offset].to_string();
 
+    // `case |` — the scrutinee's own variants, exclusively. See
+    // `switch_scrutinee_before`.
+    if let Some(recv_end) = switch_scrutinee_before(&text, member_start) {
+        let items = case_pattern_items(doc, ws, uri, &text, recv_end);
+        if !items.is_empty() {
+            return items;
+        }
+    }
+
     // `@|` — an annotation name, exclusively. `@` is one of this server's
     // trigger characters, so every `@` the user types asks for completion; with
     // no branch here it fell through to the general bag and offered keywords and
@@ -1305,6 +1576,10 @@ fn build_completions(doc: &Document, ws: &Workspace, uri: &Url, offset: usize) -
 
     let mut items: Vec<CompletionItem> = Vec::new();
     let cur_pkg = current_package(&text);
+
+    // `f(|` — the callee's parameter names, as `name:` labels. Added rather
+    // than exclusive: an argument position takes a value too.
+    items.extend(named_argument_items(doc, &text, offset));
 
     // Scope-aware names — the things the user most likely wants to type:
     // locals + parameters first, then the enclosing class's own members
@@ -2109,35 +2384,10 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
-        // Classify the call shape from what precedes the callee name.
-        let signatures: Vec<SignatureInformation> = if is_new_context(&text, name_start) {
-            // `new X(…)` — every constructor of class `X`.
-            match intel::resolve_type(&doc.symbols, callee) {
-                Some(intel::Resolved::Class(_, sig)) if !sig.constructors.is_empty() => sig
-                    .constructors
-                    .iter()
-                    .map(|c| signature_info(callee, &c.params))
-                    .collect(),
-                // A class with no explicit constructor → a single no-arg form.
-                Some(intel::Resolved::Class(_, _)) => vec![signature_info(callee, &[])],
-                _ => Vec::new(),
-            }
-        } else if let Some(dot) = receiver_dot_before(&text, name_start) {
-            // `recv.method(…)` — resolve the receiver's type, then the method.
-            match doc.type_ending_at(dot) {
-                Some(recv_ty) => match intel::resolve_member(&doc.symbols, recv_ty, callee) {
-                    Some(intel::Resolved::Method(_, sig)) => vec![signature_info(callee, &sig.params)],
-                    _ => Vec::new(),
-                },
-                None => Vec::new(),
-            }
-        } else {
-            // Free function call.
-            match intel::resolve_function(&doc.symbols, callee) {
-                Some(intel::Resolved::Function(_, sig)) => vec![signature_info(callee, &sig.params)],
-                _ => Vec::new(),
-            }
-        };
+        let signatures: Vec<SignatureInformation> = callee_overloads(&doc, &text, open_paren)
+            .iter()
+            .map(|(name, params)| signature_info(name, params))
+            .collect();
 
         if signatures.is_empty() {
             return Ok(None);
@@ -2700,7 +2950,44 @@ mod tests {
 
     /// Methods insert a parameter snippet — the caret lands on the first
     /// argument, IntelliJ-style.
+     /// Jux takes named arguments, and nothing offered the names -- so using the
+    /// form meant reading the signature somewhere else first, which is most of
+    /// the reason to have named arguments at all.
     #[test]
+    fn call_offers_parameter_names() {
+        let root = temp_root("named_args");
+        let src = "public void greet(String who, int times) { }
+                   public void run() { greet( }
+";
+        let (doc, uri) = doc_for(&root, "Named.jux", src);
+        let offset = src.find("greet( ").unwrap() + "greet(".len();
+        let items = build_completions(&doc, &Workspace::default(), &uri, offset);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"who:"), "parameter labels offered: {labels:?}");
+        assert!(labels.contains(&"times:"), "parameter labels offered: {labels:?}");
+        // Added, not exclusive: an argument slot legitimately takes a value.
+        assert!(items.len() > 2, "the general list is still there: {}", items.len());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A label written once is spent -- the list shrinks as the call is filled
+    /// in, so what is left is exactly what is still missing.
+    #[test]
+    fn a_used_parameter_name_is_not_offered_again() {
+        let root = temp_root("named_args_used");
+        let src = "public void greet(String who, int times) { }
+                   public void run() { greet(who: \"a\",  }
+";
+        let (doc, uri) = doc_for(&root, "Named2.jux", src);
+        let offset = src.find("\"a\", ").unwrap() + "\"a\", ".len();
+        let items = build_completions(&doc, &Workspace::default(), &uri, offset);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"times:"), "the remaining label: {labels:?}");
+        assert!(!labels.contains(&"who:"), "the spent label is gone: {labels:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+   #[test]
     fn method_completion_inserts_param_snippet() {
         let root = temp_root("param_snippet");
         let src = "public class Greeter {\n\
@@ -2728,7 +3015,65 @@ mod tests {
 
     /// `private` members are hidden outside their class; `protected` members
     /// show for subclasses (and same package) only.
+     /// A bare `case |` offers the scrutinee's own variants, qualified the way a
+    /// pattern must be written.
+    ///
+    /// `case Color.|` always worked -- that is an ordinary static receiver. The
+    /// far more useful bare form offered the generic statement bag, leaving the
+    /// user to remember both the enum's name and its variants, which is exactly
+    /// what the compiler already knows at that position.
     #[test]
+    fn case_offers_the_scrutinee_variants() {
+        let root = temp_root("case_variants");
+        let src = "public enum Color { Red, Green, Blue }
+                   public void run(Color c) {
+                       switch (c) {
+                           case 
+                       }
+                   }
+";
+        let (doc, uri) = doc_for(&root, "Case.jux", src);
+        let offset = src.find("case ").unwrap() + "case ".len();
+        let items = build_completions(&doc, &Workspace::default(), &uri, offset);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        for v in ["Color.Red", "Color.Green", "Color.Blue"] {
+            assert!(labels.contains(&v), "qualified variant `{v}` offered: {labels:?}");
+        }
+        // Exclusively: a keyword here would push the variants down for nothing.
+        assert!(!labels.contains(&"return"), "no statement keywords: {labels:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A `switch` over something with no variants must fall through to the
+    /// normal completion rather than showing an empty popup.
+    #[test]
+    fn case_over_a_non_enum_falls_through() {
+        let root = temp_root("case_non_enum");
+        let src = "public void run(String s) {
+                       switch (s) {
+                           case 
+                       }
+                   }
+";
+        let (doc, uri) = doc_for(&root, "CaseS.jux", src);
+        let offset = src.find("case ").unwrap() + "case ".len();
+        let items = build_completions(&doc, &Workspace::default(), &uri, offset);
+        assert!(!items.is_empty(), "a non-enum scrutinee keeps the general list");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The scrutinee scan must not reach out of its construct: a `case` that is
+    /// not inside a `switch (...) { }` finds nothing.
+    #[test]
+    fn case_scan_stays_inside_its_switch() {
+        assert_eq!(switch_scrutinee_before("case ", 5), None);
+        assert_eq!(switch_scrutinee_before("var x = 1; case ", 16), None);
+        // A real one resolves to the byte just past the scrutinee.
+        let t = "switch (c) { case ";
+        assert_eq!(switch_scrutinee_before(t, t.len()), Some(t.find(')').unwrap()));
+    }
+
+   #[test]
     fn member_visibility_is_enforced() {
         let root = temp_root("visibility");
         fs::write(
