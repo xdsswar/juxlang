@@ -293,7 +293,15 @@ object JuxHierarchy {
         return list.children.count { it.elementType === JuxElementTypes.PARAMETER }
     }
 
-    /** True when the method node carries a body (`{…}` block or `= expr` form). */
+    /**
+     * True when the method node carries a body.
+     *
+     * A `{ … }` block is the only method-body form Jux has: the compiler
+     * rejects `int f() = expr;` outright, and the expression-bodied form
+     * (`String Name -> "n";`) belongs to PROPERTIES, which are a different node
+     * and are not asked this question. (The parser is lenient about `= expr;`
+     * so a half-typed member recovers, but that is recovery, not a body.)
+     */
     fun hasBody(m: PsiElement): Boolean =
         m.node.findChildByType(JuxElementTypes.CODE_BLOCK) != null
 
@@ -369,6 +377,10 @@ object JuxHierarchy {
         JuxElementTypes.METHOD_DECLARATION,
         JuxElementTypes.PROPERTY_DECLARATION,
         JuxElementTypes.FIELD_DECLARATION,
+        // A `const` member is reached through its type exactly as a static
+        // field is (`Limits.MAX`); leaving it out meant it completed as a bare
+        // name inside the class but vanished after a dot.
+        JuxElementTypes.CONST_DECLARATION,
         JuxElementTypes.ENUM_CONSTANT,
     )
 }

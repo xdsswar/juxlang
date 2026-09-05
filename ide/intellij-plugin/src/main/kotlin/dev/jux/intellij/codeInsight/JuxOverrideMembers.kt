@@ -75,6 +75,15 @@ object JuxOverrideMembers {
         for (component in JuxHierarchy.recordComponentNames(type)) {
             seen.add("$component/0")
         }
+        // A PROPERTY is an accessor too: `interface Named { String Name(); }` is
+        // satisfied by `public String Name -> "n";` in any of the four property
+        // forms, with no method declared — the compiler accepts it. Counting
+        // only methods reported such a class as unimplemented, an ERROR on code
+        // that builds.
+        for (p in JuxHierarchy.directChildren(type, JuxElementTypes.PROPERTY_DECLARATION)) {
+            val name = (p as? JuxNamedElement)?.name ?: continue
+            seen.add("$name/0")
+        }
 
         // Walk the supertype chain as (declaration, type-param → concrete-arg)
         // frames, emitting each inherited method's signature with the

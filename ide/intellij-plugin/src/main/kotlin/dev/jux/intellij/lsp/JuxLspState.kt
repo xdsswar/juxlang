@@ -52,10 +52,55 @@ object JuxLspState {
 
         // LSP4IJ path: registrations exist exactly when the plugin is installed
         // and enabled (and then our lsp4ij.xml loaded too). Require the user's
-        // toggle on AND a real juxc-lsp binary.
+        // toggle on, a real juxc-lsp binary, AND a live session — presence is
+        // not service. Without the last check a server that failed to start or
+        // crashed still read as serving, and since the fallback completion and
+        // the `juxc --check` annotator both stand down on this flag, the editor
+        // went silent with no diagnostics and no completion at all.
         if (LSP4IJ_SERVER_EP.extensionsIfPointIsRegistered.isEmpty()) return false
         if (!JuxLspCommandLine.isResolvable()) return false
-        return PropertiesComponent.getInstance(project).getBoolean(LSP4IJ_ENABLED_KEY, true)
+        if (!PropertiesComponent.getInstance(project).getBoolean(LSP4IJ_ENABLED_KEY, true)) {
+            return false
+        }
+        return dev.jux.intellij.lsp4ij.JuxLsp4ijStatus.isActive(project)
+    }
+
+    /** Which client, if any, is answering for this project. */
+    enum class Engine {
+        /** The platform's own LSP client (IDEA Ultimate, or free mode 2025.2+). */
+        NATIVE_LSP,
+
+        /** The LSP4IJ plugin hosting the same `juxc-lsp` process. */
+        LSP4IJ,
+
+        /** No server: the plugin's own parser, inspections and completion. */
+        FALLBACK,
+    }
+
+    /**
+     * The engine currently serving [project] — what [isServing] decides, but
+     * named, so the editor can say which one answered.
+     *
+     * Nothing used to surface this. When a server dies the only symptom is that
+     * features quietly get worse, which is indistinguishable from the plugin
+     * being bad; see [dev.jux.intellij.lsp.JuxEngineStatusBarWidget].
+     */
+    fun engine(project: Project): Engine {
+        val app = ApplicationManager.getApplication()
+        if (app.isUnitTestMode) return Engine.FALLBACK
+
+        val nativeRegistered = NATIVE_LSP_EP.extensionsIfPointIsRegistered
+            .any { it.javaClass.name == JUX_NATIVE_PROVIDER }
+        if (nativeRegistered && JuxNativeLspStatus.isActive(project)) return Engine.NATIVE_LSP
+
+        if (LSP4IJ_SERVER_EP.extensionsIfPointIsRegistered.isNotEmpty() &&
+            JuxLspCommandLine.isResolvable() &&
+            PropertiesComponent.getInstance(project).getBoolean(LSP4IJ_ENABLED_KEY, true) &&
+            dev.jux.intellij.lsp4ij.JuxLsp4ijStatus.isActive(project)
+        ) {
+            return Engine.LSP4IJ
+        }
+        return Engine.FALLBACK
     }
 
     /**

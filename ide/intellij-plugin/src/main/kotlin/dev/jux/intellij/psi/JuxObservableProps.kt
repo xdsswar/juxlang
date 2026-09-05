@@ -1,5 +1,9 @@
 package dev.jux.intellij.psi
 
+import com.intellij.psi.PsiElement
+import com.intellij.psi.util.elementType
+import dev.jux.intellij.highlight.JuxTokenTypes
+
 /**
  * Shared vocabulary of the observable-property surface (§P,
  * `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md`). None of these are lexer keywords —
@@ -31,4 +35,42 @@ object JuxObservableProps {
 
     /** The implicit setter parameter (§P.1.4 — contextual, C# convention). */
     const val SETTER_VALUE = "value"
+
+    /**
+     * True when [element] sits inside a `set { … }` accessor body, where
+     * [SETTER_VALUE] is bound.
+     *
+     * `value` is contextual: inside a setter it is the implicit parameter
+     * holding the value being assigned, and everywhere else — including inside
+     * a GETTER, which the compiler rejects with E0301 — it is an ordinary
+     * identifier. Every feature that treats it specially has to agree on that
+     * boundary, or the editor colors it as a parameter while the inspection
+     * calls it unresolved. So the boundary lives here, once.
+     */
+    fun isInSetterBody(element: PsiElement): Boolean {
+        var scope: PsiElement? = element.parent
+        while (scope != null) {
+            if (scope.elementType === JuxElementTypes.PROPERTY_ACCESSOR) {
+                return firstIdentifierText(scope) in setOf("set")
+            }
+            // A method or class boundary means we left any accessor body.
+            if (scope.elementType === JuxElementTypes.METHOD_DECLARATION ||
+                scope.elementType === JuxElementTypes.CLASS_BODY
+            ) {
+                return false
+            }
+            scope = scope.parent
+        }
+        return false
+    }
+
+    /** The text of [scope]'s first direct IDENTIFIER child — an accessor's kind. */
+    private fun firstIdentifierText(scope: PsiElement): String? {
+        var c: PsiElement? = scope.firstChild
+        while (c != null) {
+            if (c.elementType === JuxTokenTypes.IDENTIFIER) return c.text
+            c = c.nextSibling
+        }
+        return null
+    }
 }

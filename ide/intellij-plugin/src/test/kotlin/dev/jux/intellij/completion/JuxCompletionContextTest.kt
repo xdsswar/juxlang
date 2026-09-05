@@ -336,7 +336,15 @@ class JuxCompletionContextTest : BasePlatformTestCase() {
             void f() {}
             """.trimIndent(),
         )
-        assertContainsElements(items, "override", "Test", "BeforeEach", "AfterEach", "BeforeAll", "AfterAll")
+        // The list is generated from the compiler's honored set, so it is the
+        // same one juxc-lsp offers. Spellings follow the docs and the corpus
+        // (`@Override` outnumbers `@override` twenty to one); names match
+        // case-insensitively either way.
+        assertContainsElements(
+            items,
+            "Override", "Test", "BeforeEach", "AfterEach", "BeforeAll", "AfterAll",
+            "extern", "export", "layout",
+        )
         // Only the builtin annotations belong after `@` — no keywords/types.
         assertDoesntContain(items, "class", "public", "return")
     }

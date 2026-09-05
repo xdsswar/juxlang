@@ -20,6 +20,7 @@ import dev.jux.intellij.highlight.JuxTokenTypes
 import dev.jux.intellij.psi.JuxElementFactory
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxFile
+import dev.jux.intellij.psi.JuxObservableProps
 import dev.jux.intellij.psi.JuxNamedElement
 import dev.jux.intellij.resolve.JuxReference
 import dev.jux.intellij.resolve.JuxTypeIndex
@@ -124,6 +125,13 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         if (!name[0].isLowerCase()) return false
         if (name in JuxKeywords.KEYWORDS || name in JuxKeywords.PRIMITIVES ||
             name in JuxKeywords.CONSTANTS || name in BUILTIN_NAMES
+        ) return false
+        // `value` is the implicit setter parameter (§P.1.4) — bound inside a
+        // `set { … }` body and an ordinary name everywhere else. The annotator
+        // already colors it as a parameter there; without this the inspection
+        // painted the same token red.
+        if (name == JuxObservableProps.SETTER_VALUE &&
+            JuxObservableProps.isInSetterBody(element)
         ) return false
         if (name in definedNames || name in importedNames || name in projectNames) return false
         return !isBlind(element)
