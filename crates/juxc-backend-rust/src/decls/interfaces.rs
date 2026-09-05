@@ -44,8 +44,12 @@ impl RustEmitter {
         self.emit_generic_params_as_args(&params);
         if !params.is_empty() {
             self.w.push_str(", ");
+            // The trait's own `Display` bounds come along: the impl has to
+            // satisfy `Store<T>`, and `Store` declares `T: Display` when a
+            // default body formats a `T`.
+            let displayed = self.interface_displayed_generic_params(interface);
             let empty = std::collections::HashSet::new();
-            self.emit_generic_params_bounds_body(&params, &empty, &empty);
+            self.emit_generic_params_bounds_body(&params, &displayed, &empty);
         }
         self.w.push_str("> ");
         self.w.push_str(&to_rust_ident(&iface_bare));
@@ -108,6 +112,115 @@ impl RustEmitter {
         self.w.newline();
     }
 
+    /// The type parameters of `interface` whose values reach a **format
+    /// position** inside one of its `default` method bodies.
+    ///
+    /// `default String describe() { return "store of " + this.load(); }` on
+    /// `interface Store<T>` formats a `T`, so the emitted `format!` needs
+    /// `T: Display` — and the body is emitted on the TRAIT, so the bound has to
+    /// be on the trait. This is the interface counterpart of
+    /// [`Self::class_displayed_generic_params`] and reuses its body scan.
+    ///
+    /// Interfaces this one `extends` are included: `interface Loud<T> extends
+    /// Store<T>` inherits the default, so it inherits the bound. The walk is
+    /// depth-limited and cycle-guarded, and maps each hop's arguments back to
+    /// this interface's own parameter names, so `Loud<V> extends Store<V>`
+    /// marks `V`.
+    pub(crate) fn interface_displayed_generic_params(
+        &self,
+        interface: &juxc_ast::InterfaceDecl,
+    ) -> std::collections::HashSet<String> {
+        let mut out: std::collections::HashSet<String> = std::collections::HashSet::new();
+        if interface.generic_params.is_empty() {
+            return out;
+        }
+        let own: std::collections::HashSet<String> = interface
+            .generic_params
+            .iter()
+            .map(|p| p.name.text.clone())
+            .collect();
+        // (interface, param-name → this interface's param name) pairs to scan.
+        let identity: std::collections::HashMap<String, String> =
+            own.iter().map(|p| (p.clone(), p.clone())).collect();
+        let mut queue: Vec<(juxc_ast::InterfaceDecl, std::collections::HashMap<String, String>)> =
+            vec![(interface.clone(), identity)];
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut depth = 0usize;
+        while let Some((decl, subst)) = queue.pop() {
+            if depth > 64 {
+                break;
+            }
+            depth += 1;
+            if !seen.insert(decl.name.text.clone()) {
+                continue;
+            }
+            // A method returning a bare type param makes `this.m()` a read of
+            // that param's value — the same rule the class scan uses for a
+            // generic field or a param-returning method.
+            let mut generic_members: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for m in &decl.methods {
+                let juxc_ast::ReturnType::Type(t) = &m.return_type else { continue };
+                if !t.generic_args.is_empty()
+                    || t.array_shape.is_some()
+                    || t.fn_shape.is_some()
+                    || t.name.segments.len() != 1
+                {
+                    continue;
+                }
+                if let Some(mapped) = subst.get(t.name.segments[0].text.as_str()) {
+                    generic_members.insert(m.name.text.clone(), mapped.clone());
+                }
+            }
+            if !generic_members.is_empty() {
+                for m in &decl.methods {
+                    if let Some(body) = &m.body {
+                        Self::scan_block_for_displayed_fields(body, &generic_members, &mut out);
+                    }
+                }
+            }
+            // Compose this hop's arguments into the substitution and continue
+            // up the `extends` chain.
+            for parent_ref in &decl.extends {
+                let Some(seg) = parent_ref.name.segments.last() else { continue };
+                let Some(parent) = self.interface_ast_by_bare(&seg.text) else { continue };
+                let mut next: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
+                for (param, arg) in parent.generic_params.iter().zip(parent_ref.generic_args.iter())
+                {
+                    let Some(arg_ty) = arg.as_type() else { continue };
+                    if arg_ty.generic_args.is_empty() && arg_ty.name.segments.len() == 1 {
+                        if let Some(mapped) = subst.get(arg_ty.name.segments[0].text.as_str()) {
+                            next.insert(param.name.text.clone(), mapped.clone());
+                        }
+                    }
+                }
+                if !next.is_empty() {
+                    queue.push((parent.clone(), next));
+                }
+            }
+        }
+        out.retain(|p| own.contains(p));
+        out
+    }
+
+    /// The interface AST for a bare name, matched exactly or by FQN suffix —
+    /// the [`Self::interface_asts`] counterpart of `class_ast_by_bare`.
+    pub(crate) fn interface_ast_by_bare(&self, bare: &str) -> Option<&juxc_ast::InterfaceDecl> {
+        if let Some(d) = self.interface_asts.get(bare) {
+            return Some(d);
+        }
+        let suffix = format!(".{bare}");
+        let mut hits = self
+            .interface_asts
+            .iter()
+            .filter(|(k, _)| k.ends_with(&suffix));
+        match (hits.next(), hits.next()) {
+            (Some((_, d)), None) => Some(d),
+            _ => None,
+        }
+    }
+
     /// Lower a Jux interface to a Rust `trait`. Method signatures
     /// emit directly — `void foo();` becomes `fn foo(&self);` —
     /// and default-bodied methods become `fn foo(&self) { … }`
@@ -120,10 +233,14 @@ impl RustEmitter {
         self.emit_visibility(interface.visibility);
         self.w.push_str("trait ");
         self.w.push_str(&to_rust_ident(&interface.name.text));
-        // Generic params follow without bounds — the trait doesn't
-        // imply `Clone` itself; implementing types pick up bounds as
-        // needed on their own impls.
-        self.emit_generic_params(&interface.generic_params);
+        // Generic params follow without bounds — the trait doesn't imply
+        // `Clone` itself; implementing types pick up bounds as needed on their
+        // own impls. The one exception is `Display`: a DEFAULT method body
+        // lives on the trait, so a `T` value it formats needs the bound HERE,
+        // where the `format!` is emitted. Same rule as a generic class's
+        // inherent impl, and the same scan behind it.
+        let displayed = self.interface_displayed_generic_params(interface);
+        self.emit_generic_params_with_display(&interface.generic_params, &displayed);
         // `: std::fmt::Debug` supertrait — interface values lower to
         // `Rc<dyn Trait>`, which is held in `#[derive(Clone, Debug)]`
         // structs (wrapper-class fields, holders). `dyn Trait` is only

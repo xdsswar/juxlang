@@ -2460,6 +2460,18 @@ impl RustEmitter {
             other => other,
         };
         let Expr::Field(rf) = recv else { return None };
+        // **A method that MUTATES the receiver is never hoisted.** The hoist
+        // binds the receiver by value, which for a wrapper field means a clone:
+        // the mutation would land on the copy and be dropped at the `;`, and
+        // binding out of the `RefMut` does not even compile (E0507). Nor is
+        // there anything to protect against — the hoist exists so a RE-ENTRANT
+        // Jux method cannot find the object already borrowed, and a foreign
+        // container's `&mut self` method (`get_mut`, `push`, `insert`) runs no
+        // Jux code. Such a call stays in place, reading its field through
+        // `borrow_mut()`.
+        if self.callee_mutates_external_receiver(cf) {
+            return None;
+        }
         if self.receiver_is_wrapper_class(&rf.object)
             && self
                 .wrapper_field_parent_depth(&rf.object, &rf.field.text)
@@ -2469,6 +2481,29 @@ impl RustEmitter {
         } else {
             None
         }
+    }
+
+    /// True when `callee` names a method on an EXTERNAL (`rust.<crate>` stub)
+    /// receiver whose real Rust signature takes `&mut self` — discovered from
+    /// the stub's `@MutSelf` marker, never a name list. See
+    /// [`Self::external_method_mutates_receiver`].
+    fn callee_mutates_external_receiver(&self, callee: &juxc_ast::FieldExpr) -> bool {
+        let Some(juxc_tycheck::ty::Ty::User { name, .. }) = self
+            .expr_types
+            .get(&crate::exprs::expr_span_of(&callee.object))
+            .cloned()
+            .map(crate::exprs::field::strip_nullable)
+        else {
+            return false;
+        };
+        let is_external = self
+            .symbols
+            .classes
+            .get(&name)
+            .or_else(|| self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(&name)))
+            .map(|c| c.is_external)
+            .unwrap_or(false);
+        is_external && self.external_method_mutates_receiver(&name, &callee.field.text)
     }
 
     /// Emit a `Stream.<ctor>` static (§18.6.4):

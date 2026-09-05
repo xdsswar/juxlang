@@ -292,13 +292,24 @@ pub fn lower_workspace_with_entry(
             .unwrap_or_default();
         let pkg_str = pkg.join(".");
         for item in &unit.items {
-            if let juxc_ast::TopLevelDecl::Class(cd) = item {
-                let fqn = if pkg_str.is_empty() {
-                    cd.name.text.clone()
-                } else {
-                    format!("{pkg_str}.{}", cd.name.text)
-                };
-                e.class_asts.insert(fqn, cd.clone());
+            match item {
+                juxc_ast::TopLevelDecl::Class(cd) => {
+                    let fqn = if pkg_str.is_empty() {
+                        cd.name.text.clone()
+                    } else {
+                        format!("{pkg_str}.{}", cd.name.text)
+                    };
+                    e.class_asts.insert(fqn, cd.clone());
+                }
+                juxc_ast::TopLevelDecl::Interface(id) => {
+                    let fqn = if pkg_str.is_empty() {
+                        id.name.text.clone()
+                    } else {
+                        format!("{pkg_str}.{}", id.name.text)
+                    };
+                    e.interface_asts.insert(fqn, id.clone());
+                }
+                _ => {}
             }
         }
     }
@@ -465,13 +476,24 @@ pub fn lower_workspace_test(
             .unwrap_or_default();
         let pkg_str = pkg.join(".");
         for item in &unit.items {
-            if let juxc_ast::TopLevelDecl::Class(cd) = item {
-                let fqn = if pkg_str.is_empty() {
-                    cd.name.text.clone()
-                } else {
-                    format!("{pkg_str}.{}", cd.name.text)
-                };
-                e.class_asts.insert(fqn, cd.clone());
+            match item {
+                juxc_ast::TopLevelDecl::Class(cd) => {
+                    let fqn = if pkg_str.is_empty() {
+                        cd.name.text.clone()
+                    } else {
+                        format!("{pkg_str}.{}", cd.name.text)
+                    };
+                    e.class_asts.insert(fqn, cd.clone());
+                }
+                juxc_ast::TopLevelDecl::Interface(id) => {
+                    let fqn = if pkg_str.is_empty() {
+                        id.name.text.clone()
+                    } else {
+                        format!("{pkg_str}.{}", id.name.text)
+                    };
+                    e.interface_asts.insert(fqn, id.clone());
+                }
+                _ => {}
             }
         }
     }
@@ -939,6 +961,16 @@ struct RustEmitter {
     /// when called on a Player, rather than Entity's abstract
     /// stub via Deref).
     pub(crate) class_asts: std::collections::HashMap<String, juxc_ast::ClassDecl>,
+    /// Interface declarations by FQN — the `class_asts` of interfaces,
+    /// populated in the same pre-pass.
+    ///
+    /// The symbol table carries an interface's SIGNATURES but not its default
+    /// method BODIES, and a bound derived from what a body does (a `T` that
+    /// reaches a format position needs `Display`) can only be read off the AST.
+    /// A default body also has to be scanned from the interfaces that EXTEND
+    /// the one declaring it, so the map has to be keyed, not just the interface
+    /// currently being emitted.
+    pub(crate) interface_asts: std::collections::HashMap<String, juxc_ast::InterfaceDecl>,
     /// Bare names of classes lowered to the **shared-mutation wrapper
     /// shape** — `pub struct C(Rc<RefCell<C_Inner>>)` — per the
     /// class-representation addendum's Phase A (§CR.4.1 / §CR.6). A
@@ -4290,6 +4322,7 @@ impl RustEmitter {
             split_files: None,
             anonymous_class_counter: 0,
             class_asts: std::collections::HashMap::new(),
+            interface_asts: std::collections::HashMap::new(),
             wrapper_classes: std::collections::HashSet::new(),
             class_reps: std::collections::HashMap::new(),
             refcell_classes: std::collections::HashSet::new(),
@@ -4422,13 +4455,24 @@ impl RustEmitter {
                 self.downcast_targets.insert(t);
             }
             for item in &unit.items {
-                if let TopLevelDecl::Class(cd) = item {
-                    let fqn = if pkg_str.is_empty() {
-                        cd.name.text.clone()
-                    } else {
-                        format!("{pkg_str}.{}", cd.name.text)
-                    };
-                    self.class_asts.insert(fqn, cd.clone());
+                match item {
+                    TopLevelDecl::Class(cd) => {
+                        let fqn = if pkg_str.is_empty() {
+                            cd.name.text.clone()
+                        } else {
+                            format!("{pkg_str}.{}", cd.name.text)
+                        };
+                        self.class_asts.insert(fqn, cd.clone());
+                    }
+                    TopLevelDecl::Interface(id) => {
+                        let fqn = if pkg_str.is_empty() {
+                            id.name.text.clone()
+                        } else {
+                            format!("{pkg_str}.{}", id.name.text)
+                        };
+                        self.interface_asts.insert(fqn, id.clone());
+                    }
+                    _ => {}
                 }
             }
         }

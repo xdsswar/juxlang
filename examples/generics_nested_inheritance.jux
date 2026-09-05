@@ -1,0 +1,104 @@
+// Generics crossed with the shapes the first matrix did not reach, and the
+// nesting that comes with them.
+//
+//  - a generic INTERFACE whose default method formats its own type parameter
+//  - a generic ABSTRACT class implementing it, and a subclass that pins it
+//  - an interface extending a generic interface with a concrete argument
+//  - genuinely nested generics in a field, a parameter and a return type
+//  - a generic method with its own bounded parameter inside a generic class
+//  - overriding an inherited generic method, and reaching the base with `super`
+//  - a static method on a generic class
+//  - two interfaces on one class, one of them generic
+//  - `? super` against a class with a generic base
+
+import rust.std.*;
+
+public interface Store<T> {
+    T load();
+    void save(T v);
+    default String describe() { return "store of " + this.load(); }
+}
+
+public interface Countable { int count(); }
+
+// An interface that extends a GENERIC one with a concrete argument.
+public interface TextStore extends Store<String> {
+    default String shout() { return this.load() + "!"; }
+}
+
+// A generic abstract class implementing a generic interface, leaving `load` open.
+public abstract class BaseStore<T> implements Store<T>, Countable {
+    protected Vec<T> items;
+    public BaseStore() { this.items = new Vec<T>(); }
+    @Override public void save(T v) { this.items.push(v); }
+    @Override public int count() { return this.items.len(); }
+    // Calls the interface default from the abstract level.
+    public String report() { return this.describe() + " x" + this.count(); }
+}
+
+// Pins T, and implements the interface that extends `Store<String>`.
+public class Notes extends BaseStore<String> implements TextStore {
+    @Override public String load() { return this.items.len() > 0 ? this.items[0] : "-"; }
+}
+
+// Nested generics everywhere.
+public class Index<K, V> {
+    private HashMap<K, Vec<V>> buckets;
+    public Index() { this.buckets = new HashMap<K, Vec<V>>(); }
+    public void add(K k, V v) {
+        if (!this.buckets.contains_key(k)) { this.buckets.insert(k, new Vec<V>()); }
+        this.buckets.get_mut(k)!!.push(v);
+    }
+    public int sizeOf(K k) {
+        return this.buckets.contains_key(k) ? this.buckets.get(k)!!.len() : 0;
+    }
+    // A generic method with its own bounded parameter, inside a generic class.
+    public <R extends Countable> int total(R r) { return r.count(); }
+    // A static method on a generic class.
+    public static String label() { return "Index"; }
+}
+
+// A generic base whose method a subclass overrides.
+public class Holder<T> {
+    protected T value;
+    public Holder(T value) { this.value = value; }
+    public T get() { return this.value; }
+    public String show() { return "H(" + this.get() + ")"; }
+}
+
+public class LoudHolder<T> extends Holder<T> {
+    public LoudHolder(T value) { super(value); }
+    @Override public String show() { return super.show() + "!"; }
+}
+
+public void fill(Vec<? super Notes> sink) { sink.push(new Notes()); }
+
+void main() {
+    Notes n = new Notes();
+    n.save("alpha");
+    n.save("beta");
+    print(n.report());
+    print(n.shout());
+    print(n.describe());
+
+    Store<String> s = n;
+    print(s.load());
+    TextStore t = n;
+    print(t.shout());
+
+    Index<String, int> idx = new Index<String, int>();
+    idx.add("a", 1);
+    idx.add("a", 2);
+    idx.add("b", 3);
+    print(idx.sizeOf("a"));
+    print(idx.sizeOf("z"));
+    print(idx.total<Notes>(n));
+    print(Index.label());
+
+    Holder<int> h = new LoudHolder<int>(9);
+    print(h.show());
+
+    Vec<Notes> pool = new Vec<Notes>();
+    fill(pool);
+    print(pool.len());
+}

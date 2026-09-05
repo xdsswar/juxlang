@@ -2029,6 +2029,37 @@ impl RustEmitter {
                         }
                     }
                 }
+                // **A Display bound travels in through an interface too.** An
+                // interface whose DEFAULT body formats its own `T` declares
+                // `trait Store<T: Display>`, so a class writing
+                // `implements Store<V>` cannot satisfy that trait unless `V`
+                // carries the bound as well. Map the interface's bounded
+                // positions back through the arguments this class (or an
+                // ancestor, in its own vocabulary) supplied.
+                for iface_ty in &sig.implements {
+                    let Some(seg) = iface_ty.name.segments.last() else { continue };
+                    let Some(iface_decl) = self.interface_ast_by_bare(&seg.text) else {
+                        continue;
+                    };
+                    let iface_decl = iface_decl.clone();
+                    let bounded = self.interface_displayed_generic_params(&iface_decl);
+                    if bounded.is_empty() {
+                        continue;
+                    }
+                    for (p, a) in iface_decl
+                        .generic_params
+                        .iter()
+                        .zip(iface_ty.generic_args.iter())
+                    {
+                        if !bounded.contains(&p.name.text) {
+                            continue;
+                        }
+                        let Some(arg_ty) = a.as_type() else { continue };
+                        if let Some(mine) = resolve(arg_ty, &subst) {
+                            displayed.insert(mine);
+                        }
+                    }
+                }
             }
             if depth > 0 {
                 if let Some(cd) = self.class_ast_by_bare(&name) {

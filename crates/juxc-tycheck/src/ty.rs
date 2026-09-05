@@ -740,19 +740,28 @@ pub fn lower_member_type_in_method(
 ///
 /// `params` is the declaring type's generic-parameter list in declaration
 /// order. `args` is the receiver's `generic_args` (in matching position).
-/// Substitution is a no-op when:
+/// Binding is POSITIONAL, so fewer arguments than parameters still binds the
+/// ones that were written: argument `i` always belongs to parameter `i`, and a
+/// parameter past the end simply stays a `Ty::Param`.
 ///
-/// - `params` is empty (non-generic declaration), or
-/// - `params.len() != args.len()` (receiver written as a raw type, e.g.
-///   `new Box(...)`) — leaving `Ty::Param(...)` in place lets the
-///   wildcard rule in `compatible` keep accepting calls; tightening this
-///   is a later phase's job.
+/// That case is not exotic — it is how every Rust container with a defaulted
+/// parameter arrives. `HashMap<K, V, S = RandomState, A = Global>` reaches the
+/// stub with FOUR parameters while Jux source says `HashMap<String, Vec<int>>`.
+/// Requiring equal lengths made every such receiver forget its arguments, so
+/// `m.get(k)` inferred `Unknown` instead of `Vec<int>?` and everything
+/// downstream that reads a type — the `T?` nullable ladder, `!!`, the
+/// `uint`→`int` widening on `.len()` — silently stopped applying. The failure
+/// surfaced as raw rustc errors in the emitted crate, one layer too late.
+///
+/// Substitution is still a no-op when `params` is empty (non-generic
+/// declaration) or when there are MORE arguments than parameters, which is a
+/// real mismatch rather than an omission.
 ///
 /// `ty` is returned by-value (cloned where necessary). Variants without
 /// nested types (`Primitive`, `String`, `Void`, `Unknown`) clone
 /// trivially; nested forms (`Array`, `User`) recurse.
 pub fn substitute(ty: &Ty, params: &[TypeParam], args: &[Ty]) -> Ty {
-    if params.is_empty() || params.len() != args.len() {
+    if params.is_empty() || args.is_empty() || args.len() > params.len() {
         return ty.clone();
     }
     substitute_inner(ty, params, args)
@@ -767,7 +776,10 @@ fn substitute_inner(ty: &Ty, params: &[TypeParam], args: &[Ty]) -> Ty {
             // Linear scan — params lists are tiny (< 5 in practice).
             for (i, p) in params.iter().enumerate() {
                 if p.name.text == *name {
-                    return args[i].clone();
+                    // A parameter past the last written argument keeps its
+                    // name: a defaulted Rust parameter the Jux source never
+                    // spelled has no type to substitute in.
+                    return args.get(i).cloned().unwrap_or_else(|| ty.clone());
                 }
             }
             // Param mentioned in the signature but not in the declaring

@@ -373,6 +373,28 @@ or arity mismatch it simply learns nothing (lenient); only a genuine **conflict*
 `Pair<int, String>`) gives up and falls back to explicit annotation (§T.4.5).
 Phase 1 performs no least-upper-bound widening.
 
+### T.4.7.1. Partially-Written Argument Lists Still Bind
+
+Type-argument binding is **positional**, so writing fewer arguments than a type
+declares binds the ones that were written: argument `i` belongs to parameter `i`,
+and a parameter past the end stays unbound.
+
+This is not a leniency for sloppy source; it is how a foreign generic with
+DEFAULTED parameters arrives. Rust's `HashMap<K, V, S = RandomState, A = Global>`
+reaches the compiler with four parameters, and Jux source names two:
+
+```jux
+HashMap<String, Vec<int>> m = new HashMap<String, Vec<int>>();
+Vec<int> b = m.get("a")!!;     // K = String, V = Vec<int>; S and A stay unbound
+```
+
+Requiring an exact count made such a receiver forget its arguments entirely, so
+`m.get(k)` inferred nothing and every rule keyed on the inferred type — the `T?`
+nullable ladder, `!!`, the `uint` → `int` widening on `.len()` — silently stopped
+applying. The failure then surfaced from the Rust compiler rather than from Jux.
+
+More arguments than parameters is still a mismatch and binds nothing.
+
 ### T.4.8. Lowering to Rust (informative)
 
 The generics surface lowers to Rust generics. The mapping is the identity where

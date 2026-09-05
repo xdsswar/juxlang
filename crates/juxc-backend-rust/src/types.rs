@@ -799,6 +799,37 @@ impl RustEmitter {
         self.w.push('>');
     }
 
+    /// Like [`Self::emit_generic_params`] but adds `+ std::fmt::Display` to
+    /// each param named in `displayed` — `<T: std::fmt::Display, U>`.
+    ///
+    /// Used on an interface's trait header, where a `default` body's `format!`
+    /// is emitted and so the bound has to hold. Nothing else is added: a trait
+    /// implies neither `Clone` nor `Debug` of its parameters.
+    pub(crate) fn emit_generic_params_with_display(
+        &mut self,
+        params: &[juxc_ast::TypeParam],
+        displayed: &std::collections::HashSet<String>,
+    ) {
+        if params.is_empty() {
+            return;
+        }
+        self.w.push('<');
+        for (i, p) in params.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            if p.is_const() {
+                self.emit_const_generic_param_decl(p);
+                continue;
+            }
+            self.w.push_str(&to_rust_ident(&p.name.text));
+            if displayed.contains(&p.name.text) {
+                self.w.push_str(": std::fmt::Display");
+            }
+        }
+        self.w.push('>');
+    }
+
     /// Emit generic parameters as **type arguments** — `<T, U>` —
     /// used on the `impl<T, U> Name<T, U>` header where the params
     /// declared in the impl header are referenced as args on the
