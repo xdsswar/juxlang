@@ -518,6 +518,15 @@ impl RustEmitter {
             // Raw-pointer params (§L.6): reset + seed so `p == null` lowers to
             // the `*mut T` `is_null()` test.
             self.seed_pointer_params(&fn_decl.params);
+            // Params get their OWN `local_types` scope, dropped after the
+            // body. Without it they were inserted into the base scope and
+            // never removed, so every function's params accumulated there for
+            // the rest of the emit: a later method with a same-named param
+            // read the EARLIER function's type for that name. A field access
+            // on it then silently skipped the `.0.borrow()` rewrite and
+            // emitted a plain `c.field` against a newtype — action at a
+            // distance from an unrelated method that merely reused a name.
+            self.local_types.push(std::collections::HashMap::new());
             // Register each parameter's type in `local_types` so name-keyed
             // receiver resolution works on params too — wrapper-class field
             // access (`s.field`), stdlib-dispatch, and enum-switch scrutinee
@@ -536,11 +545,22 @@ impl RustEmitter {
                     && p.ty.generic_args.is_empty()
                     && p.ty.name.segments.len() == 1
                     && generic_param_names.contains(p.ty.name.segments[0].text.as_str());
-                let ty = if bare_generic {
+                let mut ty = if bare_generic {
                     juxc_tycheck::Ty::Param(p.ty.name.segments[0].text.clone())
                 } else {
                     juxc_tycheck::ty_from_ref_in_env(&p.ty, &self.symbols)
                 };
+                // `ty_from_ref_in_env` has no enclosing-class context, so a
+                // param typed by a BARE nested type would be recorded under
+                // the unlifted name (`Entry`, not `Registry__Entry`) — a name
+                // no registered class matches. Lift it here so what this map
+                // holds is a resolvable class name for every consumer, not
+                // only the receiver decisions that re-lift on read.
+                if let juxc_tycheck::Ty::User { name, .. } = &mut ty {
+                    if let Some(lifted) = self.enclosing_nested_type(name) {
+                        *name = lifted;
+                    }
+                }
                 // Register `User` (wrapper-class resolution) and `Param`
                 // (generic-value `.clone()` decisions) params; both are consulted
                 // name-keyed when `expr_types` is unreliable.
@@ -590,6 +610,7 @@ impl RustEmitter {
                     .collect(),
             );
             self.emit_fn_body(body, &fn_decl.return_type);
+            self.local_types.pop();
             self.byref_param_names = prev_byref;
             self.out_params = prev_out;
             self.const_int_params = prev_const_ints;
@@ -837,6 +858,17 @@ impl RustEmitter {
         // anonymous-class method nested inside a lambda doesn't
         // inherit inference-typed channels (S9).
         let prev_lam = std::mem::take(&mut self.in_lambda_body);
+        // Every body gets its OWN `local_types` scope. Body statements emit at
+        // whatever scope is current, so without this a body's locals were
+        // inserted into the base scope and never removed: a later function or
+        // method that reused a name read the EARLIER body's type for it.
+        //
+        // The failure is action at a distance. A `Cursor c` local in one
+        // method made a `Connection c` parameter in a method emitted LATER
+        // resolve as `Cursor`, so its field read skipped the `.0.borrow()`
+        // rewrite and emitted a plain `c.timeout` against a newtype. Moving
+        // either method above the other made it compile again.
+        self.local_types.push(std::collections::HashMap::new());
         // FnMut / mutable-capture closures: a local that is captured by a closure
         // AND reassigned must lower to an `Rc<RefCell<T>>` shared cell. Compute
         // the set for this body and register it in `ref_locals` (so reads/writes
@@ -923,6 +955,7 @@ impl RustEmitter {
         }
         self.forced_cell_locals = prev_forced;
         self.non_final_uses = prev_non_final;
+        self.local_types.pop();
         self.in_lambda_body = prev_lam;
     }
 
@@ -995,8 +1028,13 @@ impl RustEmitter {
                 } else {
                     None
                 };
+                let widen_inner =
+                    widen.is_some() && crate::exprs::cast_needs_inner_parens(expr);
                 if widen.is_some() {
                     self.w.push('(');
+                    if widen_inner {
+                        self.w.push('(');
+                    }
                 }
                 self.emit_expr(expr);
                 self.emitting_nullable_target = prev_nullable_target;
@@ -1014,6 +1052,9 @@ impl RustEmitter {
                     self.w.push_str(".into()");
                 }
                 if let Some(cast) = widen {
+                    if widen_inner {
+                        self.w.push(')');
+                    }
                     self.w.push_str(" as ");
                     self.w.push_str(cast);
                     self.w.push(')');

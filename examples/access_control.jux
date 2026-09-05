@@ -1,0 +1,103 @@
+// Access control, JLS §6.6 rules.
+//
+// The two rules this file pins down are the ones Jux read differently from
+// Java, in both cases making a modifier MORE restrictive than Java defines it:
+//
+//   1. `private` is scoped to the enclosing TOP LEVEL class (§6.6.1), so a
+//      nested class and its owner see each other's private members, and so do
+//      two nested classes under the same owner. Scoping it to the immediately
+//      declaring class meant a nested helper could not touch the state it
+//      exists to manage, and the only way out was to widen the field: the rule
+//      pushed authors away from encapsulation rather than toward it.
+//
+//   2. `protected` also grants package access (§6.6.1), so a same-package peer
+//      reaches a protected member without being a subclass. Treating it as
+//      subclass-only made `protected` NARROWER than writing no modifier at
+//      all, which no reader would expect.
+
+// A parser with a nested lexer. Both hold state the other needs, and neither
+// wants that state public: exactly the shape rule 1 exists for.
+public class Parser {
+    private String source;
+    private int total;
+    private int consumed = 0;
+
+    public Parser(String source) {
+        this.source = source;
+        this.total = 11;
+    }
+
+    // Nested, and reaching into its owner's privates.
+    public class Cursor {
+        private int position = 0;
+
+        // Reads the owner's `private source` and `private consumed`.
+        public int remaining(Parser p) {
+            return p.total - position - p.consumed;
+        }
+
+        public void advance(int n) { position = position + n; }
+    }
+
+    // And the owner reaching back into the nested type's private, which is
+    // the same rule in the other direction.
+    public int positionOf(Cursor c) { return c.position; }
+
+    public int run() {
+        Cursor c = new Cursor();
+        c.advance(3);
+        consumed = 1;
+        int left = c.remaining(this);
+        int at = positionOf(c);
+        return left * 100 + at;
+    }
+}
+
+// Two nested types under one owner are inside the same top-level body, so
+// they see each other too.
+public class Registry {
+    public class Entry {
+        private int weight = 4;
+    }
+
+    public class Auditor {
+        public int weigh(Entry e) { return e.weight; }
+    }
+
+    public int audit() {
+        Entry e = new Entry();
+        Auditor a = new Auditor();
+        return a.weigh(e);
+    }
+}
+
+// Rule 2: `protected` reaches a same-package peer that is not a subclass.
+// Everything in a file without a `package` line shares the default package.
+public class Connection {
+    protected int timeout = 30;
+    protected int budget() { return timeout * 2; }
+}
+
+// Not a subclass. Same package, so both members are reachable.
+public class Pool {
+    public int total(Connection c) { return c.timeout + c.budget(); }
+}
+
+// A subclass keeps the access it has always had, which is what `protected`
+// is for in the first place.
+public class RetryingConnection extends Connection {
+    public int doubled() { return timeout + budget(); }
+}
+
+void main() {
+    Parser p = new Parser("hello world");
+    print(p.run());
+
+    print(new Registry().audit());
+
+    Connection c = new Connection();
+    print(new Pool().total(c));
+
+    RetryingConnection r = new RetryingConnection();
+    print(r.doubled());
+}

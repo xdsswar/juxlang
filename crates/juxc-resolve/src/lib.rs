@@ -839,6 +839,30 @@ impl Resolver {
                 member_names.insert(p.name.text.clone());
             }
         }
+        // **Nested type names are bare inside their owner** (§M.9). The parser
+        // lifts `class Inner` inside `Outer` to a top-level `Outer__Inner`, so
+        // the bare `Inner` in `new Inner()` matched no registered name and
+        // raised E0301 — a nested class could not be constructed from inside
+        // the class that owns it, even though `Inner i;` in type position
+        // resolved fine.
+        //
+        // The owner chain is walked outward, mirroring tycheck's
+        // `enclosing_nested_type`, so a sibling nested type and a deeper
+        // level (`A__B__C` seeing `A`'s nested types) resolve the same way.
+        let mut owner: Option<&str> = Some(class_decl.name.text.as_str());
+        while let Some(s) = owner {
+            let prefix = format!("{s}__");
+            for known in &self.user_names {
+                if let Some(bare) = known.strip_prefix(&prefix) {
+                    // Only the immediate level: `A__B__C` is `B`'s nested
+                    // type, not `A`'s, and reaching it needs `B.C`.
+                    if !bare.contains("__") {
+                        member_names.insert(bare.to_string());
+                    }
+                }
+            }
+            owner = s.rsplit_once("__").map(|(outer, _)| outer);
+        }
         // Helper closure: predeclared class-member names land in an
         // outer scope so a local/param of the same name shadows them
         // in the inner scope without firing

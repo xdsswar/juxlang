@@ -1350,6 +1350,13 @@ pub(crate) fn resolve_class_name(
             // Direct hit: the bare name is itself a registered FQN
             // (no-package class, or same-unit declaration).
             bare.clone()
+        } else if let Some(nested) = crate::ty::enclosing_nested_type(bare, env, symbols) {
+            // §M.9 enclosing-class fallback, in the same position the TYPE
+            // path applies it: `new Inner()` written inside `Outer` names
+            // `Outer__Inner`. Without this, `Inner i = new Inner();` resolved
+            // its declared type but not its constructor, so a nested class
+            // could not be built from inside the class that owns it.
+            nested
         } else if let Some(fqn) =
             symbols.find_fqn_by_bare_in(bare, &env.current_package.join("."))
         {

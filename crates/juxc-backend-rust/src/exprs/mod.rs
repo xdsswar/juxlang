@@ -513,9 +513,25 @@ impl RustEmitter {
                     self.w.push(')');
                     return;
                 }
-                let (path, prepend_crate) = if let Some(real) =
-                    self.external_class_real_path(&n.class_name)
-                {
+                // §M.9 enclosing-class fallback, the emission half of the rule
+                // tycheck applies: a bare `new Inner()` written inside `Outer`
+                // builds the lifted `Outer__Inner`. The owner chain is walked
+                // outward so a sibling nested type and a deeper level resolve
+                // the same way.
+                //
+                // Checked BEFORE the foreign-stub path because a nested type
+                // shadows an import, the `rust.std` prelude included: a
+                // `class Entry` nested in `Registry` must build
+                // `Registry__Entry`, never `std::collections::Entry`.
+                let lifted_nested = if n.class_name.segments.len() == 1 {
+                    self.enclosing_nested_type(&n.class_name.segments[0].text)
+                } else {
+                    None
+                };
+                let shadows_an_import = lifted_nested.is_some();
+                let (path, prepend_crate) = if let Some(lifted) = lifted_nested {
+                    (lifted, false)
+                } else if let Some(real) = self.external_class_real_path(&n.class_name) {
                     (real, false)
                 } else if n.class_name.segments.len() == 1 {
                     let bare = n.class_name.segments[0].text.as_str();
@@ -641,6 +657,10 @@ impl RustEmitter {
                 // exposed as a member. Only fires for external (`@rust`) types
                 // with no zero-arg constructor; user classes keep their `::new`.
                 let foreign_default_ctor = n.args.is_empty()
+                    // A nested type shadows the import it collides with (see
+                    // `lifted_nested` above), so it is a USER class no matter
+                    // what a same-named stub says: it keeps `::new`.
+                    && !shadows_an_import
                     && self.external_class_real_path(&n.class_name).is_some()
                     && !n
                         .class_name
@@ -2270,6 +2290,34 @@ pub(crate) fn ty_kind_from_ref_with_params(
             generic_args: Vec::new(),
         }
     }
+}
+
+/// True when a numeric-widening `… as T` must parenthesise its operand.
+///
+/// Rust's `as` binds tighter than every binary operator, so appending the cast
+/// to an already-emitted expression attaches it to the RIGHTMOST operand
+/// instead of the whole thing: `a - b as isize` is `a - (b as isize)`, which
+/// is the wrong value where it type-checks at all, and a hard error the moment
+/// the two sides differ in signedness — the shape `s.len() - 2` produces.
+///
+/// Only the forms that bind LOOSER than `as` need the extra pair. A path, a
+/// literal, a call, a field read, an index, a `this` and the rest are all
+/// tighter, and wrapping those would only add noise to the emitted Rust.
+///
+/// Unary operators are deliberately absent: Rust binds `-`, `!`, `*` and `&`
+/// tighter than `as`, so `-x as isize` already means `(-x) as isize`.
+pub(crate) fn cast_needs_inner_parens(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Binary(_)
+            | Expr::Ternary(_)
+            | Expr::Elvis(_)
+            | Expr::Range(_)
+            | Expr::Lambda(_)
+            | Expr::Switch(_)
+            | Expr::TypeTest(_)
+            | Expr::Cast(_)
+    )
 }
 
 /// The exact Rust spelling of a tycheck [`juxc_tycheck::Primitive`].

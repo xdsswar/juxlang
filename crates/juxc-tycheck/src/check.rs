@@ -3948,30 +3948,24 @@ impl<'a> Checker<'a> {
     ) -> bool {
         use juxc_ast::Visibility;
         let accessor = self.env.current_class.as_deref();
+        // The same ladder [`Self::check_visibility`] applies to reads, so an
+        // accessor that can SEE a member can also write it when the setter's
+        // own visibility permits. Keeping the two in step matters: a nested
+        // class that could read its owner's private property but not write it
+        // would be an inconsistency with no rule behind it.
         match vis {
             Visibility::Public => true,
-            Visibility::Private => accessor == Some(declaring_class),
-            Visibility::Protected => accessor.is_some_and(|a| {
-                a == declaring_class
-                    || crate::ty::walk_extends_reaches(a, declaring_class, self.symbols)
-            }),
-            Visibility::Package | Visibility::Internal => {
-                let declaring_pkg: &[String] = self
-                    .symbols
-                    .classes
-                    .get(declaring_class)
-                    .map(|c| c.package.as_slice())
-                    .unwrap_or(&[]);
-                // Top-level code (`accessor == None`) and classes the
-                // table can't resolve still belong to the UNIT's
-                // package — fall back to it so a free `main()` can
-                // reach package-private members of its own package.
-                let accessor_pkg: &[String] = accessor
-                    .and_then(|name| self.symbols.classes.get(name))
-                    .map(|c| c.package.as_slice())
-                    .unwrap_or(&self.env.current_package);
-                declaring_pkg == accessor_pkg
+            Visibility::Private => {
+                accessor.is_some_and(|a| self.shares_top_level_owner(a, declaring_class))
             }
+            Visibility::Protected => {
+                accessor.is_some_and(|a| {
+                    a == declaring_class
+                        || crate::ty::walk_extends_reaches(a, declaring_class, self.symbols)
+                        || self.shares_top_level_owner(a, declaring_class)
+                }) || self.same_package_as(declaring_class)
+            }
+            Visibility::Package | Visibility::Internal => self.same_package_as(declaring_class),
         }
     }
 
@@ -4229,6 +4223,55 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// The enclosing TOP LEVEL type of `name`, for the JLS §6.6.1 `private`
+    /// rule.
+    ///
+    /// A nested type is lifted to a flat name joined with `__` during
+    /// parsing (`compilation.rs`: `Config` inside `HttpServer` becomes
+    /// `HttpServer__Config`, recursively for deeper levels), which is the
+    /// same convention `ty::resolve` walks outward. So the top-level owner
+    /// is the segment before the FIRST `__`.
+    ///
+    /// A top-level type whose own name contains `__` would be
+    /// indistinguishable, so the prefix is only believed when it names a
+    /// type that actually exists; otherwise the name is already top-level.
+    fn top_level_owner<'n>(&self, name: &'n str) -> &'n str {
+        match name.split_once("__") {
+            Some((outer, _)) if self.symbols.is_type_name(outer) => outer,
+            _ => name,
+        }
+    }
+
+    /// True when two type names live under the same top-level type — either
+    /// because they are the same type, or because one nests inside the other,
+    /// or because both nest under a common owner.
+    fn shares_top_level_owner(&self, a: &str, b: &str) -> bool {
+        a == b || self.top_level_owner(a) == self.top_level_owner(b)
+    }
+
+    /// True when the access site is in the same package as `declaring_class`.
+    ///
+    /// Both packages come from `ClassSig::package`, stamped from each unit's
+    /// `package foo.bar;` line during `build_workspace`. Top-level code (no
+    /// current class) still belongs to its UNIT's package, so a free `main()`
+    /// reaches package-private members of its own package.
+    fn same_package_as(&self, declaring_class: &str) -> bool {
+        let declaring_pkg: &[String] = self
+            .symbols
+            .classes
+            .get(declaring_class)
+            .map(|c| c.package.as_slice())
+            .unwrap_or(&[]);
+        let accessor_pkg: &[String] = self
+            .env
+            .current_class
+            .as_deref()
+            .and_then(|name| self.symbols.classes.get(name))
+            .map(|c| c.package.as_slice())
+            .unwrap_or(&self.env.current_package);
+        declaring_pkg == accessor_pkg
+    }
+
     fn check_visibility(
         &mut self,
         vis: juxc_ast::Visibility,
@@ -4242,7 +4285,12 @@ impl<'a> Checker<'a> {
         let allowed_code = match vis {
             Visibility::Public => return,
             Visibility::Private => {
-                if accessor == Some(declaring_class) {
+                // JLS §6.6.1: `private` access is scoped to the body of the
+                // enclosing TOP LEVEL class, not to the immediately declaring
+                // one. So a nested class and its owner see each other's
+                // privates, in both directions, and so do two nested classes
+                // under the same owner.
+                if accessor.is_some_and(|a| self.shares_top_level_owner(a, declaring_class)) {
                     return;
                 }
                 code::Code::E0414_PrivateAccess
@@ -4251,33 +4299,23 @@ impl<'a> Checker<'a> {
                 if accessor.is_some_and(|a| {
                     a == declaring_class
                         || crate::ty::walk_extends_reaches(a, declaring_class, self.symbols)
+                        // Nesting reaches further than `protected` does, so
+                        // anything `private` would allow is allowed here too.
+                        || self.shares_top_level_owner(a, declaring_class)
                 }) {
+                    return;
+                }
+                // JLS §6.6.1: `protected` also grants package access. A peer
+                // in the same package that is NOT a subclass still reaches
+                // the member — `protected` is strictly wider than
+                // package-private, never narrower.
+                if self.same_package_as(declaring_class) {
                     return;
                 }
                 code::Code::E0415_ProtectedAccess
             }
             Visibility::Package | Visibility::Internal => {
-                // Compare the declaring class's package against the
-                // accessor's. Both come from `ClassSig::package`,
-                // which is stamped from each unit's `package foo.bar;`
-                // line during `build_workspace`. Same-package access
-                // (including the no-package "everything at crate
-                // root" case) is allowed.
-                let declaring_pkg: &[String] = self
-                    .symbols
-                    .classes
-                    .get(declaring_class)
-                    .map(|c| c.package.as_slice())
-                    .unwrap_or(&[]);
-                // Top-level code (`accessor == None`) still belongs to
-                // the UNIT's package — fall back to it so a free
-                // `main()` reaches package-private members of its own
-                // package.
-                let accessor_pkg: &[String] = accessor
-                    .and_then(|name| self.symbols.classes.get(name))
-                    .map(|c| c.package.as_slice())
-                    .unwrap_or(&self.env.current_package);
-                if declaring_pkg == accessor_pkg {
+                if self.same_package_as(declaring_class) {
                     return;
                 }
                 code::Code::E0416_PackagePrivateAccess
@@ -8513,6 +8551,104 @@ mod tests {
         assert!(!has(&d, code::Code::E0416_PackagePrivateAccess), "{d:?}");
     }
 
+    // --- JLS §6.6.1 access control: nesting and `protected` ---
+
+    /// A nested class reads its owner's `private` member.
+    ///
+    /// JLS §6.6.1 scopes `private` to the body of the enclosing TOP LEVEL
+    /// class, not to the immediately declaring one. Jux scoped it to the
+    /// declaring class, so a nested helper could not touch the state it exists
+    /// to help with, and the only way out was to widen the field: the rule
+    /// pushed authors AWAY from encapsulation.
+    #[test]
+    fn a_nested_class_reads_its_owners_private() {
+        let d = run(
+            "public class Outer { private int secret = 7;\n\
+               public class Inner { public int go(Outer o) { return o.secret; } } }",
+        );
+        assert!(!has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
+    }
+
+    /// And the owner reads the nested class's `private` member — the rule is
+    /// symmetric in Java, both bodies being inside the same top-level class.
+    #[test]
+    fn an_owner_reads_its_nested_classs_private() {
+        let d = run(
+            "public class Outer { public int go(Inner i) { return i.hidden; }\n\
+               public class Inner { private int hidden = 5; } }",
+        );
+        assert!(!has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
+    }
+
+    /// Two nested types under one owner are also within the same top-level
+    /// body, so they see each other.
+    #[test]
+    fn sibling_nested_classes_see_each_others_privates() {
+        let d = run(
+            "public class Outer {\n\
+               public class A { private int x = 1; }\n\
+               public class B { public int go(A a) { return a.x; } } }",
+        );
+        assert!(!has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
+    }
+
+    /// The boundary that still holds: two UNRELATED top-level classes.
+    #[test]
+    fn unrelated_top_level_classes_still_cannot_read_privates() {
+        let d = run(
+            "public class A { private int x = 1; }\n\
+             public class B { public int go(A a) { return a.x; } }",
+        );
+        assert!(has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
+    }
+
+    /// JLS §6.6.1: `protected` ALSO grants package access. A same-package peer
+    /// that is not a subclass still reaches the member, because `protected` is
+    /// strictly wider than package-private, never narrower. Jux treated it as
+    /// subclass-only, making `protected` narrower than writing nothing.
+    #[test]
+    fn protected_reaches_a_same_package_non_subclass() {
+        let d = run_two(
+            "package a; public class Base { protected int v = 4; }",
+            "package a; public class Peer { public int go() { Base b = new Base(); return b.v; } }",
+        );
+        assert!(!has(&d, code::Code::E0415_ProtectedAccess), "{d:?}");
+    }
+
+    /// Across a package boundary, a non-subclass is still shut out.
+    #[test]
+    fn protected_does_not_reach_another_package() {
+        let d = run_two(
+            "package a; public class Base { protected int v = 4; }",
+            "package b; import a.*; public class Peer { public int go() { Base b = new Base(); return b.v; } }",
+        );
+        assert!(has(&d, code::Code::E0415_ProtectedAccess), "{d:?}");
+    }
+
+    /// A subclass in another package keeps its access, which is the case
+    /// `protected` exists for.
+    #[test]
+    fn protected_still_reaches_a_subclass_in_another_package() {
+        let d = run_two(
+            "package a; public class Base { protected int v = 4; }",
+            "package b; import a.*; public class Sub extends Base { public int go() { return v; } }",
+        );
+        assert!(!has(&d, code::Code::E0415_ProtectedAccess), "{d:?}");
+    }
+
+    /// Writes follow the reads. A nested class that can READ its owner's
+    /// private property must be able to write it too, or the two halves of
+    /// the same rule disagree.
+    #[test]
+    fn a_nested_class_writes_its_owners_private_property() {
+        let d = run(
+            "public class Outer { private int Level { get; set; } = 1;\n\
+               public class Inner { public void go(Outer o) { o.Level = 9; } } }",
+        );
+        assert!(!has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
+        assert!(!has(&d, code::Code::E0972_PropertyAccessorVisibility), "{d:?}");
+    }
+
     // --- §M.7.7 property visibility (the read side) ---
 
     /// Reading a `private` property from outside its class is E0414, exactly
@@ -8567,9 +8703,11 @@ mod tests {
     /// The same property from an unrelated class is E0415.
     #[test]
     fn protected_property_from_an_unrelated_class_is_e0415() {
-        let d = run(
-            "public class Base { protected int Level { get; set; } = 3; }
-             public class Other { public int go() { Base b = new Base(); return b.Level; } }",
+        // In ANOTHER package: per JLS §6.6.1 `protected` also grants package
+        // access, so an unrelated peer in the SAME package reaches it legally.
+        let d = run_two(
+            "package a; public class Base { protected int Level { get; set; } = 3; }",
+            "package b; import a.*; public class Other { public int go() { Base b = new Base(); return b.Level; } }",
         );
         assert!(has(&d, code::Code::E0415_ProtectedAccess), "{d:?}");
     }
@@ -9855,26 +9993,36 @@ mod tests {
         );
     }
 
-    /// Calling a protected method from an unrelated class fires E0415.
+    /// Calling a protected method from an unrelated class in ANOTHER package
+    /// fires E0415.
+    ///
+    /// The package matters: per JLS §6.6.1, `protected` also grants package
+    /// access, so an unrelated peer sharing the package reaches it legally.
+    /// This test used to assert on two unpackaged classes, which put them in
+    /// the same (default) package and therefore asserted the opposite of the
+    /// Java rule.
     #[test]
-    fn protected_method_from_unrelated_class_emits_e0415() {
-        let d = run(
-            r#"
-            public class Base {
-                protected void secret() {}
-            }
-            public class Other {
-                public void touch(Base b) { b.secret(); }
-            }
-            public void main() {
-                var o = new Other();
-                o.touch(new Base());
-            }
-            "#,
+    fn protected_method_from_unrelated_class_in_another_package_emits_e0415() {
+        let d = run_two(
+            "package a; public class Base { protected void secret() {} }",
+            "package b; import a.*; public class Other { public void touch(Base b) { b.secret(); } }",
         );
         assert!(
             d.iter().any(|d| d.code == code::Code::E0415_ProtectedAccess),
             "expected E0415, got: {d:?}",
+        );
+    }
+
+    /// The same call from a peer in the SAME package is legal (§6.6.1).
+    #[test]
+    fn protected_method_from_a_same_package_peer_is_ok() {
+        let d = run_two(
+            "package a; public class Base { protected void secret() {} }",
+            "package a; public class Other { public void touch(Base b) { b.secret(); } }",
+        );
+        assert!(
+            !d.iter().any(|d| d.code == code::Code::E0415_ProtectedAccess),
+            "same-package access is legal: {d:?}",
         );
     }
 
