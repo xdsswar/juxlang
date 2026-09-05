@@ -3527,6 +3527,27 @@ pub(crate) struct WildcardLifter {
     in_scope_params: std::collections::HashSet<String>,
 }
 
+/// The synthetic `From<B>` bound a `? super B` wildcard lifts to.
+///
+/// Spelled as an ordinary [`TypeRef`] named `From` with `B` as its argument:
+/// the bound emitter does not know `From` as a Jux type, so it passes straight
+/// through to Rust's prelude `From`, and `B` lowers through the normal element
+/// rules.
+fn from_bound(b: &TypeRef) -> TypeRef {
+    TypeRef {
+        name: QualifiedName {
+            segments: vec![Ident { text: "From".to_string(), span: Span::DUMMY }],
+            span: Span::DUMMY,
+        },
+        generic_args: vec![juxc_ast::GenericArg::Type(b.clone())],
+        nullable: false,
+        array_shape: None,
+        fn_shape: None,
+        ptr_depth: 0,
+        span: Span::DUMMY,
+    }
+}
+
 impl WildcardLifter {
     pub(crate) fn new(in_scope_params: std::collections::HashSet<String>) -> Self {
         Self {
@@ -3602,9 +3623,16 @@ impl WildcardLifter {
         let bounds: Vec<TypeRef> = match bound {
             None => Vec::new(),
             Some(WildcardBound::Extends(b)) => vec![b.clone()],
-            // `? super B` is contravariant — see the doc comment: an
-            // unbounded param is the sound pass-through lowering.
-            Some(WildcardBound::Super(_)) => Vec::new(),
+            // `? super B` is contravariant: the caller supplies a container of
+            // SOME supertype of `B`, and the callee's job is to write `B`s into
+            // it. Rust cannot say "supertype of B", but it can say the one thing
+            // the callee actually needs — `From<B>`, i.e. a `B` converts into
+            // whatever the element turns out to be. The store site emits
+            // `.into()` and the backend emits the `From` impls that make the
+            // conversion exist (a subclass into its base's handle). An
+            // unbounded param was the old pass-through lowering, which accepted
+            // the argument but made writing through it impossible.
+            Some(WildcardBound::Super(b)) => vec![from_bound(b)],
         };
         let ident = Ident {
             text: name.clone(),

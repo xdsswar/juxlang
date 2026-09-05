@@ -861,6 +861,20 @@ impl RustEmitter {
         // (`Id`, `Comparable<K>`, `Entity<E>`). So do in-scope type-param bounds
         // (handled/expanded by the method-generic emitter before reaching here).
         let head = ty.name.segments.last().map(|s| s.text.as_str());
+        // The synthetic `From<B>` bound a `? super B` wildcard lifts to (see
+        // `WildcardLift::synthesize`). Its argument names the CONCRETE class the
+        // callee writes, not that class's element form — the store site hands
+        // over a concrete value and lets `.into()` reach whatever the caller's
+        // element turned out to be.
+        if head == Some("From") && ty.generic_args.len() == 1 {
+            if let Some(arg) = ty.generic_args[0].as_type() {
+                let arg = arg.clone();
+                self.w.push_str("From<");
+                self.emit_type_as_rust(&arg);
+                self.w.push('>');
+                return;
+            }
+        }
         let is_class_bound = ty.array_shape.is_none()
             && head
                 .map(|h| self.lookup_class_by_bare_or_fqn(h).is_some())
@@ -1008,6 +1022,36 @@ impl RustEmitter {
             return;
         }
         self.w.push('<');
+        self.emit_generic_params_bounds_body(params, display_params, default_params);
+        self.w.push('>');
+    }
+
+    /// The comma-separated BODY of a generic-parameter list — everything
+    /// [`Self::emit_generic_params_with_clone_bound_plus_display`] puts between
+    /// the angle brackets, without the brackets.
+    ///
+    /// Callers that need to place another parameter alongside the declaration's
+    /// own (the `Rc<T>` forwarding impls, which introduce a handle parameter)
+    /// use this so the real bounds — user-written ones, `Display`, the key
+    /// bounds — are not silently dropped.
+    pub(crate) fn emit_generic_params_bounds_body(
+        &mut self,
+        params: &[juxc_ast::TypeParam],
+        display_params: &std::collections::HashSet<String>,
+        default_params: &std::collections::HashSet<String>,
+    ) {
+        if params.is_empty() {
+            return;
+        }
+        self.emit_generic_params_bounds_inner(params, display_params, default_params);
+    }
+
+    fn emit_generic_params_bounds_inner(
+        &mut self,
+        params: &[juxc_ast::TypeParam],
+        display_params: &std::collections::HashSet<String>,
+        default_params: &std::collections::HashSet<String>,
+    ) {
         for (i, p) in params.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
@@ -1049,7 +1093,6 @@ impl RustEmitter {
                 self.w.push_str(" + Default");
             }
         }
-        self.w.push('>');
     }
 
     /// Like [`Self::emit_type_as_rust`] but for **class-field type

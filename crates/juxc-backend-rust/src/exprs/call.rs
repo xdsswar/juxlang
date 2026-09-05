@@ -4319,6 +4319,18 @@ impl RustEmitter {
         // rather than stored as its own struct. `emit_expr_coerced_to_iface`
         // also owns the `Some(...)` lift for a nullable dyn slot, so this
         // returns before the plain nullable path below.
+        // **Contravariant element slot** (`Vec<? super Dog>`): the element type
+        // is whatever supertype the caller chose, known here only as a
+        // `From<Dog>`-bounded parameter. `.into()` performs the conversion Rust
+        // then resolves from the bound.
+        if self.builtin_arg_elem_is_super_wildcard(call, i) {
+            self.emit_expr(arg);
+            if self.wrapper_value_needs_clone(arg) || self.value_place_needs_clone(arg) {
+                self.w.push_str(".clone()");
+            }
+            self.w.push_str(".into()");
+            return;
+        }
         if let Some(elem) = self.builtin_arg_elem_type_ref(call, i) {
             if !matches!(
                 self.iface_coercion_to(&elem, arg),
@@ -4441,6 +4453,19 @@ impl RustEmitter {
         matches!(
             self.builtin_arg_elem_ty(call, arg_idx),
             Some(juxc_tycheck::Ty::Nullable(_)),
+        )
+    }
+
+    /// True when the element slot this argument stores into is a
+    /// **contravariant** wildcard (`Vec<? super Dog>`).
+    ///
+    /// Its concrete type is the caller's choice, so the callee cannot name it;
+    /// it is only known through the `From<Dog>` bound the wildcard lift puts on
+    /// the synthetic parameter. The store therefore goes through `.into()`.
+    fn builtin_arg_elem_is_super_wildcard(&self, call: &CallExpr, arg_idx: usize) -> bool {
+        matches!(
+            self.builtin_arg_elem_ty(call, arg_idx),
+            Some(juxc_tycheck::Ty::Wildcard(juxc_tycheck::ty::Wildcard::Super(_))),
         )
     }
 

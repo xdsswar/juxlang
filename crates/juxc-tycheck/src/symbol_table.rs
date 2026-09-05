@@ -2179,6 +2179,65 @@ pub(crate) fn is_layout_c_annotation(annotations: &[juxc_ast::Annotation]) -> bo
     })
 }
 
+/// True when `iface_key` — or any interface it transitively `extends` —
+/// declares `method_name`.
+///
+/// Java lets `@Override` mark a method that implements an interface method,
+/// including one inherited through the interface hierarchy: a class
+/// `implements AB` where `interface AB extends A, B` is overriding `A`'s
+/// method just as much as `AB`'s own. Checking only the directly-named
+/// interfaces rejected that as E0426.
+fn interface_chain_declares(table: &SymbolTable, iface_key: &str, method_name: &str) -> bool {
+    let mut stack = vec![iface_key.to_string()];
+    let mut seen: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    while let Some(name) = stack.pop() {
+        let key = if table.interfaces.contains_key(&name) {
+            name.clone()
+        } else {
+            match table.interfaces.keys().find(|fqn| fqn_bare(fqn) == name) {
+                Some(k) => k.clone(),
+                None => continue,
+            }
+        };
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let Some(iface) = table.interfaces.get(&key) else { continue };
+        if iface.methods.contains_key(method_name) {
+            return true;
+        }
+        for parent in &iface.extends {
+            if let Some(seg) = parent.name.segments.last() {
+                stack.push(seg.text.clone());
+            }
+        }
+    }
+    false
+}
+
+/// True when any interface `class_sig` names in its own `implements` clause —
+/// or anything those interfaces transitively extend — declares `method_name`.
+///
+/// Resolves each clause entry by bare name against the workspace table: an
+/// interface named `Bar` declared in `pkg` is keyed `pkg.Bar`, and the grammar
+/// doesn't yet allow `implements pkg.Bar`, so bare-name matching is exact.
+fn class_implements_declare(table: &SymbolTable, class_sig: &ClassSig, method_name: &str) -> bool {
+    class_sig.implements.iter().any(|impl_ty| {
+        let Some(seg) = impl_ty.name.segments.last() else { return false };
+        let bare = seg.text.as_str();
+        let key = if table.interfaces.contains_key(bare) {
+            bare.to_string()
+        } else {
+            match table.interfaces.keys().find(|fqn| fqn_bare(fqn) == bare) {
+                Some(k) => k.clone(),
+                None => return false,
+            }
+        };
+        interface_chain_declares(table, &key, method_name)
+    })
+}
+
 /// Verify every method annotated with `@Override` actually
 /// overrides a method from an ancestor class. Fires E0426 when
 /// no matching method exists in the extends chain.
@@ -2191,42 +2250,21 @@ fn check_override_annotations(
             if !has_annotation(&method.annotations, "override") {
                 continue;
             }
-            let mut found = false;
-
             // Check the implemented interfaces first — Java's
             // `@Override` is valid on a method that satisfies an
             // interface contract, not just one that shadows a
             // superclass method.
-            for impl_ty in &child.implements {
-                let Some(seg) = impl_ty.name.segments.last() else { continue };
-                let bare = seg.text.as_str();
-                // Try the FQN'd lookup via the workspace: an
-                // interface named `Bar` declared in `pkg` is keyed
-                // `pkg.Bar`. Bare-name match is enough since the
-                // grammar doesn't yet allow `implements pkg.Bar`
-                // and bare imports route through the unit's
-                // resolver before reaching this table.
-                let key = if table.interfaces.contains_key(bare) {
-                    bare.to_string()
-                } else {
-                    table
-                        .interfaces
-                        .keys()
-                        .find(|fqn| fqn_bare(fqn) == bare)
-                        .cloned()
-                        .unwrap_or_default()
-                };
-                if let Some(iface) = table.interfaces.get(&key) {
-                    if iface.methods.contains_key(method_name) {
-                        found = true;
-                        break;
-                    }
-                }
-            }
+            let mut found = class_implements_declare(table, child, method_name);
 
             // Walk the extends chain looking for the same-named
             // method. Reuses the same FQN-aware cursor pattern as
             // `check_final_method_overrides`.
+            //
+            // Each ancestor's `implements` clause counts too: an abstract
+            // `Shape implements Named` leaves `kindOf()` to its subclasses, and
+            // `Tri extends Shape` overriding it IS satisfying `Named` — Java's
+            // "IS-A through the parent" rule reaches interfaces exactly as it
+            // reaches methods.
             let mut cursor: Option<&str> = if found {
                 None
             } else {
@@ -2248,7 +2286,9 @@ fn check_override_annotations(
                 let Some(ancestor) = table.classes.get(ancestor_name) else {
                     break;
                 };
-                if ancestor.methods.contains_key(method_name) {
+                if ancestor.methods.contains_key(method_name)
+                    || class_implements_declare(table, ancestor, method_name)
+                {
                     found = true;
                     break;
                 }
