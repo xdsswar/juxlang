@@ -27,16 +27,30 @@ class JuxCorpusHighlightingTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
+        // Every inspection the plugin ships. Only ERROR severity is asserted
+        // below, but running all of them over 230 real files is also the only
+        // broad check that none of them throws on shapes the tests do not
+        // enumerate — an inspection that crashes takes the whole daemon pass
+        // with it, so the user sees no highlighting at all rather than a bug.
         myFixture.enableInspections(
             JuxAbstractNotImplementedInspection(),
             JuxAccessorVisibilityInspection(),
+            JuxBindTypeMismatchInspection(),
+            JuxBoundPropertyAssignmentInspection(),
             JuxExtendsClauseInspection(),
             JuxImplementsClauseInspection(),
             JuxInheritedTypeParamInspection(),
             JuxMisplacedAccessorBlockInspection(),
+            JuxMissingOverrideInspection(),
+            JuxPropertyNamingInspection(),
+            JuxPropertyNeverObservedInspection(),
             JuxRedundantSemicolonInspection(),
+            JuxSetterEarlyReturnInspection(),
+            JuxTestAnnotationPlacementInspection(),
             JuxUnreachableCodeInspection(),
             JuxUnresolvedReferenceInspection(),
+            JuxUnusedImportInspection(),
+            JuxUnusedLocalSymbolInspection(),
         )
     }
 

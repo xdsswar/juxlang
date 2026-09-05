@@ -254,12 +254,14 @@ object JuxHierarchy {
      * asking "does this type provide a no-argument member named x?" has to
      * count them, or it reports a record that compiles as unimplemented.
      */
-    fun recordComponentNames(type: JuxTypeDeclaration): List<String> {
+    fun recordComponentNames(type: JuxTypeDeclaration): List<String> =
+        recordComponents(type).mapNotNull { (it as? JuxNamedElement)?.name }
+
+    /** The RECORD_COMPONENT nodes of a record header, in declaration order. */
+    fun recordComponents(type: JuxTypeDeclaration): List<PsiElement> {
         val list = type.node.findChildByType(JuxElementTypes.RECORD_COMPONENT_LIST)?.psi
             ?: return emptyList()
-        return list.children
-            .filter { it.node.elementType === JuxElementTypes.RECORD_COMPONENT }
-            .mapNotNull { (it as? JuxNamedElement)?.name }
+        return list.children.filter { it.node.elementType === JuxElementTypes.RECORD_COMPONENT }
     }
 
     /** `static` / `private` / `final` methods can't be overridden. */
@@ -347,6 +349,13 @@ object JuxHierarchy {
                     val key = if (et === JuxElementTypes.METHOD_DECLARATION) "$name/${arity(m)}()" else name
                     if (seen.add(key)) out.add(m)
                 }
+            }
+            // A record's components are its fields AND its accessors, so they
+            // belong in the member list `p.<caret>` completes from — the body
+            // walk above cannot see them, since they live in the header.
+            for (c in recordComponents(t)) {
+                val name = (c as? JuxNamedElement)?.name ?: continue
+                if (seen.add(name)) out.add(c)
             }
             for (sn in superTypeNames(t)) {
                 JuxTypeIndex.findType(t, sn)?.let { queue.add(it) }
