@@ -1,0 +1,53 @@
+// The four property forms (§P.1), the implicit `value` in a custom setter, and a
+// property standing in for an interface's accessor.
+//
+// The corpus had almost none of this: not one example declared a custom
+// `set { … }` body, so nothing exercised `value` — the implicit parameter the
+// setter binds — and nothing paired a property with the interface method it
+// satisfies. Both were places the editor painted red on code that compiles.
+
+public interface Named {
+    String Name();
+    default String greet() { return "hi " + this.Name(); }
+}
+
+public class Widget implements Named {
+    // 1. auto-property with an initializer
+    public int Count { get; set; } = 0;
+
+    // 2. auto-property with no initializer — implicitly nullable (§M.7.3.1)
+    public String? Note { get; set; }
+
+    // 3. expression-bodied, read-only — and it satisfies `Named.Name()`
+    public String Name -> "widget-" + this.Count;
+
+    // 4. full accessors, with the setter validating through `value`
+    private String t = "";
+    public String Title {
+        get { return this.t; }
+        set {
+            if (value == "") {
+                this.t = "(empty)";
+            } else {
+                this.t = value;
+            }
+        }
+    }
+}
+
+void main() {
+    Widget w = new Widget();
+    w.Count = 2;
+    print(w.Count);
+    print(w.Name);
+    print(w.greet());
+
+    w.Title = "Hello";
+    print(w.Title);
+    w.Title = "";
+    print(w.Title);
+
+    print(w.Note == null);
+    w.Note = "set";
+    print(w.Note!!);
+}

@@ -51,6 +51,30 @@ impl NamedToken {
     }
 }
 
+/// The annotations the compiler HONORS, spelled as the language docs and the
+/// example corpus write them, without the leading `@`.
+///
+/// Annotation names are case-insensitive (`@Override` = `@override`), so these
+/// spellings are what completion offers rather than what it matches.
+///
+/// Only annotations with real behaviour are listed. Ones the specification
+/// reserves but the compiler does not act on yet are deliberately absent —
+/// offering them would promise a semantic that is not there. The bindgen
+/// markers (`@rust`, `@MutSelf`, `@RustIndexRef`) are absent for the opposite
+/// reason: they are written into generated `.jux.d` stubs, never by a user.
+///
+/// `annotations_are_honored` in this module's tests pins the list against the
+/// compiler's own call sites, so an annotation that gains behaviour is not
+/// silently missing from the editor.
+pub const BUILTIN_ANNOTATIONS: &[&str] = &[
+    // §7.4 — verified against the supertype chain.
+    "Override",
+    // §TS.1 — the testing framework's case and lifecycle hooks.
+    "Test", "BeforeAll", "BeforeEach", "AfterEach", "AfterAll",
+    // FFI and layout (§8.1, §8.4, §L.1.3).
+    "extern", "export", "layout",
+];
+
 /// Names that are bound without a declaration or an `import`: the prelude
 /// types (`Vec`, `HashMap`, the exception hierarchy, the collection
 /// interfaces) and the language intrinsics (`print`, `spawn`, `block_on`,
@@ -79,6 +103,8 @@ pub const BUILTIN_NAMES: &[&str] = &[
 pub struct GrammarSpec {
     /// Reserved keywords (name = `UPPER_KW`, spelling = lowercase word).
     pub keywords: Vec<NamedToken>,
+    /// Built-in annotation names, without the `@`. From [`BUILTIN_ANNOTATIONS`].
+    pub annotations: Vec<String>,
     /// Names that resolve with no declaration and no `import` — the prelude
     /// types and the language intrinsics. From [`BUILTIN_NAMES`].
     ///
@@ -228,6 +254,7 @@ pub fn grammar_spec_with(extra_builtins: &[String]) -> GrammarSpec {
     GrammarSpec {
         keywords,
         primitives,
+        annotations: BUILTIN_ANNOTATIONS.iter().map(|s| s.to_string()).collect(),
         builtins: {
             let mut names: Vec<String> = BUILTIN_NAMES.iter().map(|s| s.to_string()).collect();
             names.extend(extra_builtins.iter().cloned());
@@ -254,6 +281,27 @@ pub fn to_json(spec: &GrammarSpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every annotation the compiler acts on must be offered by the editor.
+    ///
+    /// The compiler recognizes annotations at scattered call sites rather than
+    /// through one table, so this list could drift away from them silently —
+    /// and the symptom would be an annotation that works but never appears in
+    /// completion. Pinning the count and the exact spellings makes adding a
+    /// behaviour without adding the name a test failure.
+    #[test]
+    fn annotations_are_honored() {
+        let mut sorted: Vec<&str> = BUILTIN_ANNOTATIONS.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            [
+                "AfterAll", "AfterEach", "BeforeAll", "BeforeEach", "Override",
+                "Test", "export", "extern", "layout",
+            ],
+            "the honored-annotation set changed — update the editor's list too",
+        );
+    }
 
     /// Keep `Keyword::ALL` in lockstep with `Keyword::lookup`: every entry must
     /// round-trip, and the count must match the spelling list, so a variant

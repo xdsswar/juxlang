@@ -379,6 +379,35 @@ fn receiver_type_by_reparse(
         .map(|(_, t)| t.clone())
 }
 
+/// True when the identifier starting at `ident_start` is preceded directly by
+/// `@` — an annotation name.
+///
+/// Deliberately no whitespace skip: `@ Test` is not annotation syntax, and
+/// treating it as such would offer annotations after every stray `@`.
+fn at_sign_before(text: &str, ident_start: usize) -> bool {
+    ident_start > 0 && text.as_bytes()[ident_start - 1] == b'@'
+}
+
+/// Annotation-name completions.
+///
+/// Only the built-ins: the compiler does not parse a user `annotation`
+/// declaration at all (it is a reserved form), so there is nothing else that
+/// could legally follow an `@`. The list is generated from the compiler's own
+/// [`juxc_lex::grammar_spec::BUILTIN_ANNOTATIONS`], so an annotation that gains
+/// behaviour cannot go missing here; a drift test in that module pins it.
+fn annotation_items() -> Vec<CompletionItem> {
+    juxc_lex::grammar_spec::BUILTIN_ANNOTATIONS
+        .iter()
+        .map(|name| CompletionItem {
+            label: (*name).to_string(),
+            kind: Some(CompletionItemKind::KEYWORD),
+            detail: Some("built-in annotation".to_string()),
+            sort_text: Some(format!("0_{name}")),
+            ..Default::default()
+        })
+        .collect()
+}
+
 /// True when the identifier starting at `ident_start` sits in the **type
 /// position of a `new <Type>` expression** — the nearest word before it
 /// (skipping whitespace) is the `new` keyword. In that position completion
@@ -1253,6 +1282,16 @@ fn build_completions(doc: &Document, ws: &Workspace, uri: &Url, offset: usize) -
     // The partial word being completed.
     let member_start = ident_start_before(&text, offset);
     let typed_prefix = text[member_start..offset].to_string();
+
+    // `@|` — an annotation name, exclusively. `@` is one of this server's
+    // trigger characters, so every `@` the user types asks for completion; with
+    // no branch here it fell through to the general bag and offered keywords and
+    // locals. The IntelliJ plugin has an annotation list of its own, but it
+    // stands down entirely while this server is serving, so `@` offered nothing
+    // useful in the one configuration most users run.
+    if at_sign_before(&text, member_start) {
+        return annotation_items();
+    }
 
     // `<receiver>.` — member completion, exclusively.
     if let Some(recv_end) = receiver_dot_before(&text, member_start) {
@@ -2733,7 +2772,49 @@ mod tests {
     }
 
     /// No completions inside strings, comments, or char literals.
+     /// `@` is one of the server's trigger characters, so every `@` typed asks
+    /// this server for completion. With no branch for it the caret fell through
+    /// to the general bag and the user saw keywords, locals and type names —
+    /// never an annotation. The IntelliJ plugin has a list of its own but stands
+    /// down whenever this server is serving, which is the configuration most
+    /// users run, so `@` effectively had no completion at all.
     #[test]
+    fn at_sign_offers_annotations_only() {
+        let root = temp_root("annotations");
+        let src = "public class C {\n    @Ov\n    public void m() { }\n}\n";
+        let (doc, uri) = doc_for(&root, "A.jux", src);
+        let offset = src.find("@Ov").unwrap() + 3;
+        let items = build_completions(&doc, &Workspace::default(), &uri, offset);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+
+        assert!(labels.contains(&"Override"), "expected the annotations: {labels:?}");
+        assert!(labels.contains(&"Test"), "expected the test hooks: {labels:?}");
+        assert!(labels.contains(&"layout"), "expected the layout annotation: {labels:?}");
+        // Exclusively: a keyword or a type name after `@` is never legal.
+        assert!(
+            !labels.contains(&"class") && !labels.contains(&"public"),
+            "no keywords after `@`: {labels:?}",
+        );
+        assert_eq!(
+            labels.len(),
+            juxc_lex::grammar_spec::BUILTIN_ANNOTATIONS.len(),
+            "the list is exactly the compiler's honored set: {labels:?}",
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `@` only means an annotation when it is directly against the name —
+    /// `@ Test` is not annotation syntax, and treating a stray `@` as one would
+    /// replace the normal completion list.
+    #[test]
+    fn a_detached_at_sign_is_not_an_annotation() {
+        assert!(at_sign_before("@Over", 1));
+        assert!(!at_sign_before("@ Over", 2));
+        assert!(!at_sign_before("Over", 0));
+        assert!(!at_sign_before("a.Over", 2));
+    }
+
+   #[test]
     fn no_completions_inside_strings_or_comments() {
         assert_eq!(analyze_context("var s = \"hel").1, ScanMode::Str { interp: false });
         assert_eq!(analyze_context("/* doc ").1, ScanMode::BlockComment);

@@ -233,6 +233,17 @@
       "spelling": "yield"
     }
   ],
+  "annotations": [
+    "Override",
+    "Test",
+    "BeforeAll",
+    "BeforeEach",
+    "AfterEach",
+    "AfterAll",
+    "extern",
+    "export",
+    "layout"
+  ],
   "builtins": [
     "Arc",
     "ArithmeticException",
