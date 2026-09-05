@@ -1018,6 +1018,17 @@ struct RustEmitter {
     /// `.borrow_mut()`, so only the type spelling, the constructor, and the two
     /// identity operations (`ptr_eq`, `as_ptr`) consult this set.
     pub(crate) sync_classes: std::collections::HashSet<String>,
+    /// Type-parameter names of the declaration currently being emitted that are
+    /// used as a **hash-keyed** container's key (`HashMap<K, V>`, `HashSet<K>`)
+    /// and therefore need `Eq + Hash`, and as a **B-tree** key
+    /// (`BTreeMap`/`BTreeSet`) and therefore need `Ord`.
+    ///
+    /// Rust attaches those bounds to the container's methods rather than its
+    /// type, so a generic class merely HOLDING a `HashMap<K, V>` compiles until
+    /// the first lookup and then fails with a raw rustc trait-bound error.
+    /// Populated per declaration by `collect_key_bound_params`.
+    pub(crate) hash_key_params: std::collections::HashSet<String>,
+    pub(crate) ord_key_params: std::collections::HashSet<String>,
     /// Names of **`int`-typed const-generic parameters** in scope —
     /// the `N` of an enclosing `class RingBuffer<T, int N>` or
     /// `fn cap<int N>()`. A bare read of such a name in *value*
@@ -4277,6 +4288,8 @@ impl RustEmitter {
             kind_type_subst: std::collections::HashMap::new(),
             non_final_uses: std::collections::HashSet::new(),
             sync_classes: std::collections::HashSet::new(),
+            hash_key_params: std::collections::HashSet::new(),
+            ord_key_params: std::collections::HashSet::new(),
             const_int_params: std::collections::HashSet::new(),
             out_params: std::collections::HashSet::new(),
             current_type_params: std::collections::HashSet::new(),
@@ -5403,6 +5416,12 @@ impl RustEmitter {
         for (fqn, sig) in &self.symbols.functions {
             let Some(simple) = fqn.strip_prefix(&prefix) else { continue };
             if simple.contains('.') || !mentions(simple) || !self.source_calls(simple) {
+                continue;
+            }
+            // A wildcard must never rebind a name the LANGUAGE provides.
+            // `import rust.std.*;` in a file that calls the built-in `spawn(…)`
+            // would otherwise bind `std`'s unrelated thread `spawn` over it.
+            if juxc_tycheck::BUILTINS.contains(&simple) {
                 continue;
             }
             if let Some(real) = sig.rust_path.as_ref() {

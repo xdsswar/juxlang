@@ -255,7 +255,9 @@ public interface Cache {
 }
 ```
 
-The `() async -> String` lambda type denotes "a lambda that may suspend and produces a `String`."
+The `() async -> String` lambda type denotes "a lambda that may suspend and produces a `String`.
+
+**How it lowers.** An `async` method on an interface — or on a polymorphic base class, which generates the same kind of trait — becomes a plain `fn` returning a boxed future (`Pin<Box<dyn Future<Output = T> + '_>>`), not Rust's `async fn` in a trait. Rust has had the latter since 1.75, but a trait carrying one is not *dyn-compatible*, and a Jux interface exists to be a `Rc<dyn Trait>` value. The boxed form is what `#[async_trait]` produces. Callers are unaffected: `await x.get()` reads the same either way, and an override that awaits `super` composes down an inheritance chain."
 
 #### 18.1.6. The One Borrow Rule
 
@@ -448,6 +450,8 @@ Transferable types are:
 **How the class upgrade works.** A class whose instances cross a worker boundary lowers to an atomic handle (`Arc<Mutex<…>>`) instead of the default single-threaded one (`Rc<RefCell<…>>`). The upgrade follows the object graph: a class reached through a shared class's field is upgraded with it, since the payload of a shareable handle must itself be shareable. Whole `extends` components move together, because a subclass and its base share one storage layout. Classes that never cross a boundary keep the cheaper handle, so a program pays for atomicity only where it actually shares.
 
 The guarantee is **Java's, and stops where Java's does**: one mutating call on a shared object is atomic, and a read-then-write spread across statements (`this.n = this.n + 1`) is not — it races exactly as the same code would in Java. Reach for §18.3's synchronization types when you need more.
+
+**Captures are by value.** A worker closure takes a copy of each captured local at the spawn point. That matters for a local the surrounding code also reassigns — a loop counter, say. Such a local would ordinarily be promoted to a shared cell so a closure observes later writes, but a worker runs on another thread, where that sharing is exactly what the transferable rule forbids; the value is read out at the boundary instead. A worker capture therefore never forces the promotion, which also keeps the enclosing `async` function sendable.
 
 When the compiler rejects a capture, the diagnostic names the offending value and points to the alternative (e.g., "wrap in `AtomicShared<T>`" or "send by value"). A class is rejected only when it holds something that cannot come along — an interface handle, a closure, a weak reference, or an observable property's listener list, each of which is a single-threaded shared reference — and the message names that member. The terms `Send` and `Sync` never appear in error messages or in the user-visible type system.
 

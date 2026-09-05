@@ -771,13 +771,34 @@ impl RustEmitter {
                 // locals rebind (primitives are Copy; body-local
                 // names aren't in scope here).
                 let mut rebinds: Vec<String> = Vec::new();
-                if let Some(Expr::Lambda(l)) = call.args.first() {
-                    let mut names: Vec<String> = Vec::new();
-                    crate::exprs::collect_bare_names_in_lambda(l, &mut |n| {
-                        if !names.iter().any(|x| x == n) {
-                            names.push(n.to_string());
-                        }
-                    });
+                // The argument is usually a lambda (`spawn(() -> …)`) but may
+                // be an async CALL written directly (`spawn(produce(ch, 5))`).
+                // Both capture their free names into the task, so both need the
+                // rebind — without it the direct-call form moved the channel
+                // and the caller's next use was a rustc "borrow of moved value".
+                let mut names: Vec<String> = Vec::new();
+                match call.args.first() {
+                    Some(Expr::Lambda(l)) => {
+                        crate::exprs::collect_bare_names_in_lambda(l, &mut |n| {
+                            if !names.iter().any(|x| x == n) {
+                                names.push(n.to_string());
+                            }
+                        });
+                    }
+                    Some(other) => {
+                        crate::worker::walk_expr(other, &mut |e| {
+                            if let Expr::Path(qn) = e {
+                                if qn.segments.len() == 1
+                                    && !names.contains(&qn.segments[0].text)
+                                {
+                                    names.push(qn.segments[0].text.clone());
+                                }
+                            }
+                        });
+                    }
+                    None => {}
+                }
+                {
                     for name in names {
                         let known = self
                             .local_types
@@ -969,6 +990,12 @@ impl RustEmitter {
                     // — rebinding `let x = x.clone();` in a wrapper
                     // block hands the closure its own handle.
                     let mut rebinds: Vec<String> = Vec::new();
+                    // A local that a closure captures AND something reassigns
+                    // lives in an `Rc<RefCell<…>>` cell (the FnMut rule). That
+                    // cell is `!Send`, so a worker cannot take it — but the
+                    // worker only wants the VALUE, so read it out of the cell
+                    // before the closure and hand over the plain value.
+                    let mut cell_rebinds: Vec<String> = Vec::new();
                     if let Some(Expr::Lambda(l)) = call.args.first() {
                         let mut names: Vec<String> = Vec::new();
                         crate::exprs::collect_bare_names_in_lambda(l, &mut |n| {
@@ -977,6 +1004,10 @@ impl RustEmitter {
                             }
                         });
                         for name in names {
+                            if self.ref_locals.contains(&name) {
+                                cell_rebinds.push(name);
+                                continue;
+                            }
                             let known = self
                                 .local_types
                                 .iter()
@@ -990,7 +1021,7 @@ impl RustEmitter {
                         }
                     }
                     self.w.push_str("crate::Worker::spawn(");
-                    if !rebinds.is_empty() {
+                    if !rebinds.is_empty() || !cell_rebinds.is_empty() {
                         self.w.push_str("{ ");
                         for name in &rebinds {
                             self.w.push_str("let ");
@@ -999,6 +1030,18 @@ impl RustEmitter {
                             self.w.push_str(&to_rust_ident(name));
                             self.w.push_str(".clone(); ");
                         }
+                        for name in &cell_rebinds {
+                            self.w.push_str("let ");
+                            self.w.push_str(&to_rust_ident(name));
+                            self.w.push_str(" = ");
+                            self.w.push_str(&to_rust_ident(name));
+                            self.w.push_str(".borrow().clone(); ");
+                        }
+                    }
+                    // Inside the closure the rebound name is a plain value, not
+                    // a cell, so reads must not go through `.borrow()` again.
+                    for name in &cell_rebinds {
+                        self.ref_locals.remove(name);
                     }
                     let prev = self.emitting_format_arg;
                     self.emitting_format_arg = false;
@@ -1013,7 +1056,10 @@ impl RustEmitter {
                             _ => self.emit_expr(arg),
                         }
                     }
-                    if !rebinds.is_empty() {
+                    for name in &cell_rebinds {
+                        self.ref_locals.insert(name.clone());
+                    }
+                    if !rebinds.is_empty() || !cell_rebinds.is_empty() {
                         self.w.push_str(" }");
                     }
                     self.emitting_format_arg = prev;

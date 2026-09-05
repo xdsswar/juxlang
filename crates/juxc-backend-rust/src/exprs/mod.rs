@@ -2522,6 +2522,16 @@ pub(crate) fn collect_lambda_referenced_names(
         match e {
             Expr::Lambda(l) => f(l),
             Expr::Call(c) => {
+                // A `Worker.spawn` closure runs on ANOTHER THREAD, so it takes
+                // its captures by value — the emitter reads each one out at the
+                // spawn point. Such a capture must not force the local into a
+                // shared `Rc<RefCell<…>>` cell: the cell is `!Send`, so it
+                // would make both the closure and any enclosing async function
+                // unsendable, for sharing that cannot happen across the
+                // boundary anyway (§18.2 — pass data in, return results out).
+                if crate::worker::is_worker_spawn_callee(&c.callee) {
+                    return;
+                }
                 lam_expr(&c.callee, f);
                 for a in &c.args {
                     lam_expr(a, f);

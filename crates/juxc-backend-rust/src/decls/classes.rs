@@ -405,6 +405,8 @@ impl RustEmitter {
         // pick up the bound; purely-stored params keep `Clone + Debug`.
         let displayed = self.class_displayed_generic_params(class_decl);
         let defaulted = Self::class_default_bound_params(class_decl);
+        let declared = Self::class_declared_types(class_decl);
+        self.collect_key_bound_params(&class_decl.generic_params, declared.iter());
         self.emit_generic_params_with_clone_bound_plus_display(
             &class_decl.generic_params,
             &displayed,
@@ -1022,6 +1024,8 @@ impl RustEmitter {
         // params keep only `Clone + Debug`.
         let displayed = self.class_displayed_generic_params(class_decl);
         let defaulted = Self::class_default_bound_params(class_decl);
+        let declared = Self::class_declared_types(class_decl);
+        self.collect_key_bound_params(&class_decl.generic_params, declared.iter());
         self.emit_generic_params_with_clone_bound_plus_display(
             &class_decl.generic_params,
             &displayed,
@@ -1858,6 +1862,93 @@ impl RustEmitter {
         defaulted
     }
 
+    /// Record which of `params` are used as a container KEY, so the emitted
+    /// impl carries the bound Rust's container methods require: `Eq + Hash` for
+    /// a `HashMap`/`HashSet` key, `Ord` for a `BTreeMap`/`BTreeSet` key.
+    ///
+    /// `types` is every type the declaration mentions in a storage or signature
+    /// position; the walk recurses into generic arguments, so a
+    /// `Vec<HashMap<K, V>>` field pins `K` just as a bare `HashMap<K, V>` does.
+    /// Call it before emitting an impl header and [`Self::clear_key_bound_params`]
+    /// after.
+    pub(crate) fn collect_key_bound_params<'a>(
+        &mut self,
+        params: &[juxc_ast::TypeParam],
+        types: impl Iterator<Item = &'a juxc_ast::TypeRef>,
+    ) {
+        // Cleared on entry, so the previous declaration's sets never leak into
+        // this one — every impl header collects before it emits.
+        self.hash_key_params.clear();
+        self.ord_key_params.clear();
+        if params.is_empty() {
+            return;
+        }
+        let names: std::collections::HashSet<&str> =
+            params.iter().map(|p| p.name.text.as_str()).collect();
+        fn walk(
+            ty: &juxc_ast::TypeRef,
+            names: &std::collections::HashSet<&str>,
+            hash: &mut std::collections::HashSet<String>,
+            ord: &mut std::collections::HashSet<String>,
+        ) {
+            let head = ty.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+            // The key is argument 0 for every keyed container Jux surfaces.
+            let sink = match head {
+                "HashMap" | "HashSet" => Some(false),
+                "BTreeMap" | "BTreeSet" => Some(true),
+                _ => None,
+            };
+            if let Some(is_ord) = sink {
+                if let Some(key) = ty.generic_args.first().and_then(|a| a.as_type()) {
+                    if key.generic_args.is_empty() && key.name.segments.len() == 1 {
+                        let k = key.name.segments[0].text.as_str();
+                        if names.contains(k) {
+                            if is_ord {
+                                ord.insert(k.to_string());
+                            } else {
+                                hash.insert(k.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            for arg in &ty.generic_args {
+                if let Some(inner) = arg.as_type() {
+                    walk(inner, names, hash, ord);
+                }
+            }
+        }
+        let mut hash = std::collections::HashSet::new();
+        let mut ord = std::collections::HashSet::new();
+        for ty in types {
+            walk(ty, &names, &mut hash, &mut ord);
+        }
+        self.hash_key_params = hash;
+        self.ord_key_params = ord;
+    }
+
+    /// Every type a class mentions in a storage or signature position — field
+    /// types, method parameter and return types, constructor parameter types.
+    /// The input to [`Self::collect_key_bound_params`].
+    pub(crate) fn class_declared_types(
+        class_decl: &juxc_ast::ClassDecl,
+    ) -> Vec<juxc_ast::TypeRef> {
+        let mut out: Vec<juxc_ast::TypeRef> = Vec::new();
+        out.extend(class_decl.fields.iter().filter_map(|f| f.ty.clone()));
+        for m in &class_decl.methods {
+            out.extend(m.params.iter().map(|p| p.ty.clone()));
+            if let juxc_ast::ReturnType::Type(t) | juxc_ast::ReturnType::AsyncType(t) =
+                &m.return_type
+            {
+                out.push(t.clone());
+            }
+        }
+        for c in &class_decl.constructors {
+            out.extend(c.params.iter().map(|p| p.ty.clone()));
+        }
+        out
+    }
+
     /// The class's type parameters that need a `std::fmt::Display` bound on the
     /// inherent impl — the ones whose values reach a **format position**
     /// (interpolation, `print(…)`, string concat) somewhere in the class's
@@ -2440,8 +2531,12 @@ impl RustEmitter {
     /// method's signature exactly.
     fn emit_kind_trait_method_sig(&mut self, name: &str, sig: &MethodSig) {
         self.w.emit_indent();
+        // An `async` virtual method lowers to a plain `fn` returning a BOXED
+        // future, never Rust's `async fn` in a trait: that form is not
+        // dyn-compatible, and a polymorphic base's whole purpose is to be a
+        // `Rc<dyn <Name>Kind>` value. Same rule as an interface's async method.
         let is_async = matches!(sig.return_type, ReturnType::AsyncType(_));
-        self.w.push_str(if is_async { "async fn " } else { "fn " });
+        self.w.push_str("fn ");
         self.w.push_str(&to_rust_ident(name));
         self.w.push_str("(&self");
         for p in &sig.params {
@@ -2454,8 +2549,16 @@ impl RustEmitter {
         match &sig.return_type {
             ReturnType::Void => {}
             ReturnType::Type(t) | ReturnType::AsyncType(t) => {
-                self.w.push_str(" -> ");
-                self.emit_return_type_as_rust(t);
+                if is_async {
+                    self.w.push_str(
+                        " -> std::pin::Pin<Box<dyn std::future::Future<Output = ",
+                    );
+                    self.emit_return_type_as_rust(t);
+                    self.w.push_str("> + '_>>");
+                } else {
+                    self.w.push_str(" -> ");
+                    self.emit_return_type_as_rust(t);
+                }
             }
         }
         self.w.push_str(";\n");
@@ -2468,10 +2571,17 @@ impl RustEmitter {
     /// inlining pass copied the ancestor body into its inherent impl. Naming
     /// the inherent path explicitly (`Class::name`) resolves ahead of this
     /// trait method, so it never recurses.
-    pub(crate) fn emit_kind_delegating_method(&mut self, recv_class_bare: &str, name: &str, sig: &MethodSig) {
+    pub(crate) fn emit_kind_delegating_method(
+        &mut self,
+        recv_class_bare: &str,
+        name: &str,
+        sig: &MethodSig,
+    ) {
         self.w.emit_indent();
+        // Matches the trait's boxed-future shape (see
+        // [`Self::emit_kind_trait_method_sig`]).
         let is_async = matches!(sig.return_type, ReturnType::AsyncType(_));
-        self.w.push_str(if is_async { "async fn " } else { "fn " });
+        self.w.push_str("fn ");
         self.w.push_str(&to_rust_ident(name));
         self.w.push_str("(&self");
         for p in &sig.params {
@@ -2484,11 +2594,23 @@ impl RustEmitter {
         match &sig.return_type {
             ReturnType::Void => {}
             ReturnType::Type(t) | ReturnType::AsyncType(t) => {
-                self.w.push_str(" -> ");
-                self.emit_return_type_as_rust(t);
+                if is_async {
+                    self.w.push_str(
+                        " -> std::pin::Pin<Box<dyn std::future::Future<Output = ",
+                    );
+                    self.emit_return_type_as_rust(t);
+                    self.w.push_str("> + '_>>");
+                } else {
+                    self.w.push_str(" -> ");
+                    self.emit_return_type_as_rust(t);
+                }
             }
         }
         self.w.push_str(" { ");
+        // An async delegate returns the boxed future the trait promises.
+        if is_async {
+            self.w.push_str("Box::pin(async move { ");
+        }
         self.w.push_str(recv_class_bare);
         self.w.push_str("::");
         self.w.push_str(&to_rust_ident(name));
@@ -2499,7 +2621,7 @@ impl RustEmitter {
         }
         self.w.push(')');
         if is_async {
-            self.w.push_str(".await");
+            self.w.push_str(".await })");
         }
         self.w.push_str(" }\n");
     }
@@ -3603,16 +3725,11 @@ impl RustEmitter {
             self.w.indent_inc();
             for (method_name, method) in &methods {
                 self.w.emit_indent();
-                // `async fn` rollup: the trait method may have been
-                // declared `async T` — re-emit the keyword on the
-                // delegating impl so the trait/impl signatures stay
-                // structurally aligned. The body is a plain
-                // synchronous call into the inherent method, so the
-                // future the trait method returns just awaits to
-                // the inherent's value.
-                if matches!(method.return_type, ReturnType::AsyncType(_)) {
-                    self.w.push_str("async ");
-                }
+                // An `async T` trait method is declared on the trait as a plain
+                // `fn` returning a BOXED future (an `async fn` would make the
+                // trait non-dyn-compatible, and a Jux interface exists to be a
+                // `Rc<dyn Trait>`), so the impl matches that shape rather than
+                // re-emitting `async`.
                 self.w.push_str("fn ");
                 self.w.push_str(&to_rust_ident(method_name));
                 // Match the interface's declared receiver: `&self`
@@ -3649,13 +3766,13 @@ impl RustEmitter {
                         self.emit_return_type_as_rust(&subst);
                     }
                     ReturnType::AsyncType(t) => {
-                        // `async T` trait method → `async fn (...) -> T`.
-                        // The `async` keyword sat in front of `fn`
-                        // earlier in this loop; here we only need the
-                        // return-type tail.
-                        self.w.push_str(" -> ");
+                        // Matches the trait's boxed-future signature.
+                        self.w.push_str(
+                            " -> std::pin::Pin<Box<dyn std::future::Future<Output = ",
+                        );
                         let subst = substitute_type_ref(t, &type_subst);
                         self.emit_return_type_as_rust(&subst);
+                        self.w.push_str("> + '_>>");
                     }
                 }
                 // Delegating body. Two shapes per the method_targets
@@ -3679,6 +3796,9 @@ impl RustEmitter {
                 // method header was emitted as `async fn`, so the
                 // `.await` is legal here.
                 let is_async = matches!(method.return_type, ReturnType::AsyncType(_));
+                if is_async {
+                    self.w.push_str("Box::pin(async move { ");
+                }
                 match target {
                     Some(ref fqn) if !fqn.is_empty() => {
                         // Cross-package: FQN-rooted path, `crate::`
@@ -3732,6 +3852,9 @@ impl RustEmitter {
                             self.w.push_str(".await");
                         }
                     }
+                }
+                if is_async {
+                    self.w.push_str(" })");
                 }
                 self.w.push('\n');
                 self.w.indent_dec();
