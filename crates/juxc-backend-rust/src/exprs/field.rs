@@ -1829,7 +1829,7 @@ fn receiver_needs_parens(e: &Expr) -> bool {
 
 /// Unwrap one layer of `T?` so a nullable receiver (`PathBuf?`) resolves to its
 /// underlying user type for the §G.9.2 external-member check.
-fn strip_nullable(ty: Ty) -> Ty {
+pub(crate) fn strip_nullable(ty: Ty) -> Ty {
     match ty {
         Ty::Nullable(inner) => *inner,
         other => other,

@@ -330,6 +330,20 @@ held across a method call or across statements**.
 - A method body borrows `self` per field-access, not once for the whole method,
   so calling another method on `this` mid-body can't double-borrow.
 
+**Exception — a foreign container's own mutator.** The read rule above says
+`a.f.g()` pulls `f` out of the borrow before calling `g`. That is exactly wrong
+when `g` MUTATES `f`: `this.buckets.get_mut(k)`, `this.items.push(v)`,
+`this.map.insert(k, v)`. Pulling the field out clones it, so the mutation lands
+on a copy that is dropped at the end of the statement, and the call is silently a
+no-op. Such a call is therefore emitted in place, reading its field through
+`borrow_mut()`.
+
+There is nothing to protect against in doing so. The rule exists because a
+re-entrant Jux method can find the object already borrowed; a foreign container's
+`&mut self` method runs no Jux code and cannot re-enter. Which foreign methods
+take `&mut self` is DISCOVERED from the crate's own documentation (the `@MutSelf`
+marker on the generated stub), never from a list of method names.
+
 This is the single discipline that keeps shared mutation sound without surfacing
 Rust borrow panics to the Jux user. It is the deliberate, bounded cost of
 Java-faithful shared mutation; the escape-analysis selector (which demotes
