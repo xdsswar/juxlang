@@ -5821,6 +5821,16 @@ impl RustEmitter {
             for (from, to) in [
                 ("\nfn main() {\n", "\nfn __jux_user_main() {\n"),
                 ("\npub fn main() {\n", "\npub fn __jux_user_main() {\n"),
+                // The shape a PACKAGE-LESS program emits. Missing it meant
+                // neither layer was installed for the most common small-program
+                // shape: every CAUGHT exception printed Rust's own
+                // "thread 'main' panicked ... Box<dyn Any>" to stderr, and an
+                // UNCAUGHT one printed that instead of the exception's type and
+                // message. Both looked like the runtime falling over.
+                (
+                    "\npub(crate) fn main() {\n",
+                    "\npub(crate) fn __jux_user_main() {\n",
+                ),
             ] {
                 if source.contains(from) {
                     source = source.replace(from, to);
