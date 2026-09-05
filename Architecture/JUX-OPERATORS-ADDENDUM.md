@@ -116,6 +116,41 @@ If a class defines `operator==`, the compiler **requires** it to also define `op
 
 Records/structs/enums never trigger this — auto-derivation produces a consistent pair.
 
+### O.2.8. Operator Visibility
+
+An operator declaration must be `public`. `private`, `protected`, `internal` and
+package-private are rejected at the declaration with `E0932` ("an operator must be
+`public`; `<vis>` is not a visibility an operator can have").
+
+The reason is that an operator is not addressed by name. `a + b` carries no
+receiver whose visibility could be consulted, and the whole point of the
+`where T has operator+` constraint (§O.5) is that any caller holding a `T` may
+use it. A non-public operator therefore has no meaning to enforce: either it is
+reachable through `+` from everywhere, which is what `public` says, or the
+operator is unusable, which is what omitting it says. There is no third
+behaviour for the modifier to select.
+
+This is the same rule C# settles on for its operator overloads, and it is a
+declaration-site rule on purpose: rejecting the modifier where it is written
+points at the mistake, where a use-site error would point at arithmetic that
+looks correct.
+
+Ordinary members are unaffected. A type is free to keep its state and its named
+methods private and still expose `operator+`, which is the normal shape:
+
+```jux
+public record Amount(int cents) {
+    private int scaled() { return cents * 100; }        // private, fine
+    public Amount operator+(Amount o) {                  // must be public
+        return new Amount(cents + o.cents);
+    }
+}
+```
+
+`operator string() = delete` and the other `= delete` forms (§O.3.4) are
+suppressions rather than declarations and carry no visibility of their own.
+
+
 ---
 
 ## §O.3 — Auto-Derivation for Value Types

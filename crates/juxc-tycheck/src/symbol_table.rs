@@ -3401,6 +3401,7 @@ fn insert_class(
     check_cmp_individual_conflict(&class_ops, "class", &class_decl.name.text, diagnostics);
     // §O.2.1/§O.2.2: fixed return types for ==, <=>, hash, string, etc.
     check_operator_return_types(&class_ops, "class", &class_decl.name.text, diagnostics);
+    check_operator_visibility(&class_ops, "class", &class_decl.name.text, diagnostics);
     // §O.2.1: individual ordering operators (<, <=, >, >=) must be
     // declared as a complete set or not at all.
     check_individual_ordering_completeness(
@@ -3507,6 +3508,7 @@ fn insert_record(
     check_eq_hash_pairing(&record_ops, "record", &record_decl.name.text, diagnostics);
     check_cmp_individual_conflict(&record_ops, "record", &record_decl.name.text, diagnostics);
     check_operator_return_types(&record_ops, "record", &record_decl.name.text, diagnostics);
+    check_operator_visibility(&record_ops, "record", &record_decl.name.text, diagnostics);
     check_individual_ordering_completeness(
         &record_ops,
         "record",
@@ -3609,6 +3611,7 @@ fn insert_enum(
     check_eq_hash_pairing(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
     check_cmp_individual_conflict(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
     check_operator_return_types(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
+    check_operator_visibility(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
     check_individual_ordering_completeness(
         &enum_ops,
         "enum",
@@ -4212,6 +4215,61 @@ fn check_cmp_individual_conflict(
     }
 }
 
+/// Enforce operator visibility per `JUX-OPERATORS-ADDENDUM.md` §O.2.8: an
+/// operator declaration must be `public`. Emits `E0932_OperatorNotPublic`
+/// anchored at the offending declaration.
+///
+/// An operator is the one member that is never addressed by name. `a + b`
+/// names no receiver whose visibility could be consulted, and the
+/// `where T has operator+` constraint (§O.5) promises the operator to every
+/// holder of a `T`. So a narrower modifier selects no behaviour the language
+/// can honour: before this check, `private Amount operator+(Amount)` compiled
+/// and then worked from anywhere, which is the worst of both readings.
+///
+/// The rejection is at the declaration rather than the use, because a use-site
+/// error would point at arithmetic that looks perfectly correct.
+///
+/// `= delete;` forms are suppressions, not declarations (§O.3.4), so they carry
+/// no visibility of their own and are skipped.
+fn check_operator_visibility(
+    operators: &[&juxc_ast::OperatorDecl],
+    kind_label: &str,
+    decl_name: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for op in operators {
+        if op.is_deleted || matches!(op.visibility, Visibility::Public) {
+            continue;
+        }
+        // The two cases read very differently to the author: one wrote the
+        // wrong modifier, the other wrote none at all and inherited the
+        // package-private default. Say which happened.
+        let (written, help) = match op.visibility {
+            Visibility::Package => (
+                "no visibility modifier, so it is package-private",
+                "write `public` on the operator; members default to \
+                 package-private, and an operator cannot",
+            ),
+            Visibility::Private => ("`private`", "change `private` to `public`"),
+            Visibility::Protected => ("`protected`", "change `protected` to `public`"),
+            Visibility::Internal => ("`internal`", "change `internal` to `public`"),
+            Visibility::Public => unreachable!("filtered above"),
+        };
+        diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0932_OperatorNotPublic,
+                format!(
+                    "operator `{}` on {kind_label} `{decl_name}` has {written}; \
+                     an operator must be `public`",
+                    operator_kind_display(op.kind),
+                ),
+            )
+            .with_span(op.span)
+            .with_help(help),
+        );
+    }
+}
+
 /// Enforce the `==` / `hash` pairing rule per `JUX-OPERATORS-ADDENDUM.md`
 /// §O.2.7: if a class/record/enum defines `operator==`, it must also
 /// define `operator hash`. Emits `E0931_EqWithoutHash` anchored at the
@@ -4680,6 +4738,118 @@ mod tests {
     // ----------------------------------------------------------------
     // E0931 — `==` / `hash` pairing rule (§O.2.7)
     // ----------------------------------------------------------------
+
+    // ---- §O.2.8 operator visibility (E0932) ----
+
+    /// A `private` operator is rejected at the declaration.
+    ///
+    /// It used to compile and then work from anywhere: `a + b` names no
+    /// receiver whose visibility could be consulted, so the modifier selected
+    /// no behaviour at all.
+    #[test]
+    fn private_operator_emits_e0932() {
+        let (_table, diags) = build_table(
+            r#"
+            public class Amount {
+                public int v;
+                public Amount(int v) { this.v = v; }
+                private Amount operator+(Amount o) { return new Amount(v + o.v); }
+            }
+            "#,
+        );
+        assert!(diags.iter().any(|d| d.code == code::Code::E0932_OperatorNotPublic), "{diags:?}");
+    }
+
+    /// So is one written with no modifier at all, which inherits the
+    /// package-private default every other member has.
+    #[test]
+    fn operator_without_a_modifier_emits_e0932() {
+        let (_table, diags) = build_table(
+            r#"
+            public class Amount {
+                public int v;
+                public Amount(int v) { this.v = v; }
+                Amount operator+(Amount o) { return new Amount(v + o.v); }
+            }
+            "#,
+        );
+        assert!(diags.iter().any(|d| d.code == code::Code::E0932_OperatorNotPublic), "{diags:?}");
+    }
+
+    /// `protected` is no better: a subclass gets no privileged `+`.
+    #[test]
+    fn protected_operator_emits_e0932() {
+        let (_table, diags) = build_table(
+            r#"
+            public class Amount {
+                public int v;
+                public Amount(int v) { this.v = v; }
+                protected Amount operator+(Amount o) { return new Amount(v + o.v); }
+            }
+            "#,
+        );
+        assert!(diags.iter().any(|d| d.code == code::Code::E0932_OperatorNotPublic), "{diags:?}");
+    }
+
+    /// The ordinary shape stays clean, on every declaring kind.
+    #[test]
+    fn public_operators_are_ok_on_class_record_and_enum() {
+        let (_table, diags) = build_table(
+            r#"
+            public class C {
+                public int v;
+                public C(int v) { this.v = v; }
+                public C operator+(C o) { return new C(v + o.v); }
+            }
+            public record R(int v) {
+                public R operator+(R o) { return new R(v + o.v); }
+            }
+            public enum E {
+                A, B;
+                public String operator string() { return "e"; }
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0932_OperatorNotPublic),
+            "{diags:?}",
+        );
+    }
+
+    /// A private ordinary METHOD alongside a public operator is untouched —
+    /// the rule is about operators, not about the type keeping secrets.
+    #[test]
+    fn a_private_method_beside_a_public_operator_is_fine() {
+        let (_table, diags) = build_table(
+            r#"
+            public record Amount(int cents) {
+                private int scaled() { return cents * 100; }
+                public Amount operator+(Amount o) { return new Amount(cents + o.cents); }
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0932_OperatorNotPublic),
+            "{diags:?}",
+        );
+    }
+
+    /// `= delete;` is a suppression (§O.3.4), not a declaration, so it carries
+    /// no visibility of its own and must not trip the rule.
+    #[test]
+    fn a_deleted_operator_is_not_subject_to_the_visibility_rule() {
+        let (_table, diags) = build_table(
+            r#"
+            public record OpaqueToken(String secret) {
+                String operator string() = delete;
+            }
+            "#,
+        );
+        assert!(
+            !diags.iter().any(|d| d.code == code::Code::E0932_OperatorNotPublic),
+            "{diags:?}",
+        );
+    }
 
     /// A class with `operator==` but no `operator hash` fires E0931.
     #[test]

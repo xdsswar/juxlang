@@ -667,6 +667,18 @@ pub enum Code {
     /// the pairing rule a build-time error rather than a runtime
     /// surprise.
     E0931_EqWithoutHash,
+    /// E0932 — A non-`public` operator declaration. Per
+    /// `JUX-OPERATORS-ADDENDUM.md` §O.2.8, an operator must be
+    /// `public`.
+    ///
+    /// An operator is not addressed by name: `a + b` carries no
+    /// receiver whose visibility could be consulted, and a
+    /// `where T has operator+` constraint promises the operator to
+    /// every holder of a `T`. So a narrower modifier selects no
+    /// behaviour the language can honour, and this is a
+    /// declaration-site rejection rather than a use-site one so the
+    /// error lands on the modifier that is wrong.
+    E0932_OperatorNotPublic,
     /// E0935 — Call to a `delete`d operator. Per
     /// `JUX-OPERATORS-ADDENDUM.md` §O.3.4, a record/struct/enum can
     /// suppress an auto-derived operator with `operator <op>(...) = delete;`.
@@ -812,6 +824,7 @@ impl Code {
             Code::E0510_DiscriminantOutsideCEnum => "E0510",
             Code::E0930_OperatorConflict         => "E0930",
             Code::E0931_EqWithoutHash            => "E0931",
+            Code::E0932_OperatorNotPublic        => "E0932",
             Code::E0935_DeletedOperator          => "E0935",
             Code::E0970_PropertyNotWritable      => "E0970",
             Code::E0972_PropertyAccessorVisibility => "E0972",
