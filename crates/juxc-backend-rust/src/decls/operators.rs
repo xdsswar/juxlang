@@ -388,6 +388,22 @@ impl RustEmitter {
         self.w.newline();
     }
 
+    /// True when an operator's operand type is the receiver's own type, so the
+    /// Rust trait's default `Rhs = Self` already says it.
+    ///
+    /// Deliberately strict: only a bare, single-segment, non-nullable,
+    /// non-array, non-function name equal to the class counts. Anything else —
+    /// including a generic spelling of the same class — gets the type argument
+    /// written out, which is always correct even where it was not required.
+    fn op_param_is_self(class_name: &str, ty: &juxc_ast::TypeRef) -> bool {
+        ty.name.segments.len() == 1
+            && ty.name.segments[0].text == class_name
+            && ty.generic_args.is_empty()
+            && ty.array_shape.is_none()
+            && ty.fn_shape.is_none()
+            && !ty.nullable
+    }
+
     /// Binary operator wrapper: `impl <Trait> for Class { type Output = R;
     /// fn <method>(self, rhs: U) -> Self::Output { self.__op_*(rhs) } }`.
     ///
@@ -406,6 +422,25 @@ impl RustEmitter {
         self.w.emit_indent();
         self.w.push_str("impl ");
         self.w.push_str(trait_path);
+        // **The operand type is the trait's type argument.** Rust's `std::ops`
+        // traits default `Rhs = Self`, so an operator over the receiver's own
+        // type needs nothing written — but a SCALAR operand (`Vec2 operator
+        // *(double k)`, the canonical case in any vector or matrix code) is
+        // `Mul<f64>`. Emitting a bare `impl Mul for Vec2` while writing
+        // `fn mul(self, rhs: f64)` is E0053: the signature does not match the
+        // trait it claims to implement, and the whole crate fails to build.
+        //
+        // Omitted only where the operand really is the receiver's bare type, so
+        // the common same-type operator keeps reading as idiomatic Rust.
+        let rhs_is_self = rhs_ty.is_some_and(|p| Self::op_param_is_self(class_name, &p.ty));
+        if !rhs_is_self {
+            if let Some(p) = rhs_ty {
+                self.w.push('<');
+                let ty = p.ty.clone();
+                self.emit_value_type_as_rust(&ty);
+                self.w.push('>');
+            }
+        }
         self.w.push_str(" for ");
         self.w.push_str(class_name);
         self.w.push_str(" {\n");

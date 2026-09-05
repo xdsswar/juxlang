@@ -1,0 +1,46 @@
+// A binary operator whose OPERAND type differs from the receiver's.
+//
+// Rust's `std::ops` traits default their operand to `Self`, so a same-type
+// operator needs nothing said: `impl Add for Vec2`. A scalar one does —
+// `Vec2 operator *(double k)` is `impl Mul<f64> for Vec2`. The type argument
+// was never emitted, so the impl claimed `Mul<Vec2>` while writing
+// `fn mul(self, rhs: f64)`; rustc rejected the mismatch (E0053) and the whole
+// crate failed to build. Scaling a vector is the first thing anyone writes
+// with operator overloading.
+
+public class Vec2 {
+    public double x;
+    public double y;
+    public Vec2(double x, double y) { this.x = x; this.y = y; }
+
+    // Same-type operands: the trait's default operand still applies.
+    public Vec2 operator +(Vec2 o) { return new Vec2(this.x + o.x, this.y + o.y); }
+    public Vec2 operator -(Vec2 o) { return new Vec2(this.x - o.x, this.y - o.y); }
+
+    // Scalar operands: a different type on each side.
+    public Vec2 operator *(double k) { return new Vec2(this.x * k, this.y * k); }
+    public Vec2 operator /(double k) { return new Vec2(this.x / k, this.y / k); }
+
+    public bool operator ==(Vec2 o) { return this.x == o.x && this.y == o.y; }
+    public int operator hash() { return (int)(this.x) * 31 + (int)(this.y); }
+    public String operator string() { return "(" + this.x + ", " + this.y + ")"; }
+}
+
+// An integer-scaled counter, to pin a second operand type in the same program.
+public class Ticks {
+    public int n;
+    public Ticks(int n) { this.n = n; }
+    public Ticks operator *(int k) { return new Ticks(this.n * k); }
+    public String operator string() { return "t" + this.n; }
+}
+
+void main() {
+    Vec2 a = new Vec2(1.0, 2.0);
+    Vec2 b = new Vec2(3.0, 4.0);
+    print(a + b);
+    print((a + b) - a);
+    print(a * 2.0);
+    print(b / 2.0);
+    print((a + b) - b == a);
+    print(new Ticks(3) * 4);
+}
