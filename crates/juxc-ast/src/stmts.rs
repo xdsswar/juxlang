@@ -212,6 +212,13 @@ pub struct IfStmt {
 
 /// What follows an `else`: either another `if` (for `else if` chains)
 /// or a plain `{ … }` block.
+///
+/// The `If` variant is much larger than `Block`, which the size lint flags.
+/// Boxing it would buy nothing: the enum is only ever held as
+/// `Option<Box<ElseBranch>>` (see [`IfStmt::else_branch`]), so it already sits
+/// behind one indirection and a second would cost an allocation per `else if`
+/// for no saving.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum ElseBranch {
     /// `else if (…) { … }` — chained condition.

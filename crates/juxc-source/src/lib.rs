@@ -29,6 +29,10 @@ pub struct SourceFile {
     /// `line_starts[i]` is the byte offset just past the `i`th `\n`. Built
     /// once in [`SourceFile::new`] so [`SourceFile::line_col`] is O(log n).
     line_starts: Vec<usize>,
+    /// This file's position in the compilation's source list. Stamped onto
+    /// every token span so spans from different files can never collide as map
+    /// keys (see [`Span::file`]). `0` unless the driver sets it.
+    index: u32,
 }
 
 impl SourceFile {
@@ -40,7 +44,20 @@ impl SourceFile {
     pub fn new(path: impl Into<PathBuf>, contents: impl Into<String>) -> Self {
         let contents = contents.into();
         let line_starts = compute_line_starts(&contents);
-        Self { path: path.into(), contents, line_starts }
+        Self { path: path.into(), contents, line_starts, index: 0 }
+    }
+
+    /// This file's index in the compilation's source list — the value stamped
+    /// into [`Span::file`] for every token lexed from it.
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+
+    /// Set the file's index. The driver calls this once, in the same order it
+    /// reports diagnostics with, so a span's `file` and a diagnostic's `file`
+    /// agree.
+    pub fn set_index(&mut self, index: u32) {
+        self.index = index;
     }
 
     /// Path used for diagnostic rendering.
@@ -97,12 +114,29 @@ fn compute_line_starts(s: &str) -> Vec<usize> {
 /// `start <= end` is a debug-mode invariant. `start == end` is legal and
 /// denotes an empty span (used for "this token is missing" diagnostics
 /// that need to point at a specific byte without highlighting any).
+/// **Why the file tag.** A span is the key of every analysis map the compiler
+/// hands to the backend — inferred types, overload picks, argument coercions.
+/// A workspace compiles many files at once (a program always includes the
+/// embedded `jux.std` sources) and offsets restart at zero in each one, so two
+/// unrelated expressions at the same byte range in different files collided as
+/// keys: the last one written won and the other was miscompiled. The symptom
+/// was suitably spooky — adding a comment line to YOUR file changed the code
+/// generated for a std file.
+///
+/// The tag participates in identity ([`PartialEq`], [`Hash`]) and nothing else.
+/// [`Span::start`] and [`Span::end`] remain offsets into their own file, so
+/// every consumer that slices source text or computes a line/column is
+/// unaffected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     /// Inclusive start, byte offset into the source file.
     pub start: u32,
     /// Exclusive end, byte offset into the source file.
     pub end: u32,
+    /// Which file this span indexes into — the [`SourceFile`]'s position in
+    /// the compilation's source list, the same index diagnostics carry. `0`
+    /// for a single-file compilation and for synthesized spans.
+    pub file: u32,
 }
 
 impl Span {
@@ -110,12 +144,20 @@ impl Span {
     /// correspond to any source text (auto-derived methods, implicit
     /// returns, etc.). The diagnostics renderer treats `DUMMY` as a
     /// signal to omit the carets / location pointer.
-    pub const DUMMY: Span = Span { start: 0, end: 0 };
+    pub const DUMMY: Span = Span { start: 0, end: 0, file: 0 };
 
-    /// Construct a span. Panics in debug builds if `start > end`.
+    /// Construct a span in file `0` — the single-file case, and the default
+    /// for synthesized nodes. Panics in debug builds if `start > end`.
     pub fn new(start: u32, end: u32) -> Self {
         debug_assert!(start <= end, "Span start must be <= end");
-        Self { start, end }
+        Self { start, end, file: 0 }
+    }
+
+    /// Construct a span in a specific file. The lexer stamps every token this
+    /// way; the parser propagates it through [`Self::join`].
+    pub fn in_file(start: u32, end: u32, file: u32) -> Self {
+        debug_assert!(start <= end, "Span start must be <= end");
+        Self { start, end, file }
     }
 
     /// Byte length of the span. Zero for empty spans.
@@ -134,13 +176,55 @@ impl Span {
     /// last children (e.g. a function decl spans from its `public`/return
     /// type to its closing brace).
     pub fn join(self, other: Span) -> Span {
-        Span { start: self.start.min(other.start), end: self.end.max(other.end) }
+        // Keeps a real file over a synthesized one: the parser always joins
+        // spans from the file it is parsing, and a `DUMMY` operand (file 0)
+        // must not drag the result back to file 0.
+        let file = if self.file != 0 { self.file } else { other.file };
+        Span { start: self.start.min(other.start), end: self.end.max(other.end), file }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two files' spans at the SAME byte range are distinct keys. Every
+    /// analysis map the compiler hands the backend is keyed by span, and a
+    /// workspace always compiles several files at once, so without this two
+    /// unrelated expressions collided and one of them was miscompiled.
+    #[test]
+    fn spans_from_different_files_are_distinct() {
+        use std::collections::HashMap;
+        let a = Span::in_file(10, 20, 0);
+        let b = Span::in_file(10, 20, 1);
+        assert_ne!(a, b, "same offsets in different files must not be equal");
+        let mut map: HashMap<Span, &str> = HashMap::new();
+        map.insert(a, "file 0");
+        map.insert(b, "file 1");
+        assert_eq!(map.len(), 2, "one span must not evict the other");
+        assert_eq!(map[&a], "file 0");
+        assert_eq!(map[&b], "file 1");
+    }
+
+    /// The file tag is identity only — offsets stay relative to their own
+    /// file, so line/column and snippet extraction are untouched.
+    #[test]
+    fn the_file_tag_does_not_disturb_offsets() {
+        let s = Span::in_file(4, 9, 7);
+        assert_eq!(s.start, 4);
+        assert_eq!(s.end, 9);
+        assert_eq!(s.len(), 5);
+    }
+
+    /// Joining keeps the real file rather than falling back to a synthesized
+    /// operand's file 0.
+    #[test]
+    fn join_keeps_the_real_file() {
+        let real = Span::in_file(10, 20, 3);
+        assert_eq!(real.join(Span::DUMMY).file, 3);
+        assert_eq!(Span::DUMMY.join(real).file, 3);
+        assert_eq!(real.join(Span::in_file(30, 40, 3)), Span::in_file(10, 40, 3));
+    }
 
     /// Sanity test: line_col matches what a human would count on a
     /// multi-line source with a blank line in the middle.

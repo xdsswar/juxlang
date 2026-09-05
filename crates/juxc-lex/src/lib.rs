@@ -84,7 +84,7 @@ pub struct LexResult {
 /// This is the public entry point for Phase 1. EOF is always the last token,
 /// even if there were diagnostics — downstream phases can rely on it.
 pub fn lex(source: &SourceFile) -> LexResult {
-    let mut lexer = Lexer::new(source.contents());
+    let mut lexer = Lexer::new(source.contents(), source.index());
     lexer.run();
     LexResult { tokens: lexer.tokens, diagnostics: lexer.diagnostics }
 }
@@ -107,15 +107,19 @@ struct Lexer<'a> {
     tokens: Vec<Token>,
     /// Diagnostics emitted so far.
     diagnostics: Vec<Diagnostic>,
+    /// The source file's index in the compilation, stamped onto every token
+    /// span. Offsets restart at zero in each file, so this is what keeps two
+    /// files' spans distinct as analysis-map keys (see [`Span::file`]).
+    file: u32,
 }
 
 impl<'a> Lexer<'a> {
     /// Construct a fresh lexer over `src`. Skips a leading UTF-8 BOM if
     /// present (§A.1.1: `source-file = utf8-bom? token*`).
-    fn new(src: &'a str) -> Self {
+    fn new(src: &'a str, file: u32) -> Self {
         let bytes = src.as_bytes();
         let pos = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) { 3 } else { 0 };
-        Self { bytes, pos, tokens: Vec::new(), diagnostics: Vec::new() }
+        Self { bytes, pos, tokens: Vec::new(), diagnostics: Vec::new(), file }
     }
 
     /// Main loop: skip trivia, lex one token, repeat until EOF is emitted.
@@ -870,7 +874,10 @@ impl<'a> Lexer<'a> {
     /// Push a token covering `[start, end)`.
     #[inline]
     fn emit(&mut self, kind: TokenKind, start: usize, end: usize) {
-        self.tokens.push(Token { kind, span: Span::new(start as u32, end as u32) });
+        self.tokens.push(Token {
+            kind,
+            span: Span::in_file(start as u32, end as u32, self.file),
+        });
     }
 }
 

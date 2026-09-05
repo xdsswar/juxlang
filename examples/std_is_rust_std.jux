@@ -1,0 +1,37 @@
+// Rust's `std` IS the Jux `std`. There is no parallel Jux collection library to
+// learn, and no Java-style facade over it: the types are Rust's, under Rust's
+// names, with Rust's method names.
+//
+// The prelude types — the ones Rust itself puts in scope everywhere — need no
+// import. Anything else is one `import rust.std.<Name>;` away.
+
+import rust.std.{BTreeMap, VecDeque};
+
+public void main() {
+    // No import needed for these.
+    Vec<int> v = new Vec<int>();
+    v.push(3);
+    v.push(1);
+    v.push(2);
+    print(v.len());
+    print(v[0]);
+
+    HashMap<String, int> ages = new HashMap<String, int>();
+    ages.insert("ada", 36);
+    print(ages.len());
+    print(ages["ada"]);
+
+    String s = "hello";
+    print(s.len());
+
+    // Imported by name, same as any other std type.
+    VecDeque<int> q = new VecDeque<int>();
+    q.push_back(1);
+    q.push_front(0);
+    print(q.len());
+
+    BTreeMap<String, int> sorted = new BTreeMap<String, int>();
+    sorted.insert("b", 2);
+    sorted.insert("a", 1);
+    print(sorted.len());
+}
