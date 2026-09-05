@@ -941,18 +941,22 @@ impl RustEmitter {
                 //
                 // 1. **Direct value** (`return "hi";`,
                 //    `return name;`) — outer `Some(...)` wrap.
-                // 2. **Switch expression** (`return switch (x) {
-                //    case A -> "warm"; case B -> null; }`) — outer
-                //    wrap would force every arm to produce the
-                //    same non-`Option<T>` type, but `null` doesn't
-                //    fit `T`. Set the
-                //    `emitting_nullable_target` flag so the
-                //    switch emitter wraps each arm body
-                //    individually (`A => Some(...), B => None`),
-                //    and skip the outer wrap.
+                // 2. **Multi-armed value** — a switch expression
+                //    (`return switch (x) { case A -> "warm"; case B ->
+                //    null; }`) or a ternary (`return has ? value :
+                //    fallback;`). An outer wrap would force every arm
+                //    to the same non-`Option<T>` type, which `null`
+                //    does not fit and an arm that is ALREADY nullable
+                //    does not either. Set the
+                //    `emitting_nullable_target` flag so the switch /
+                //    ternary emitter wraps each arm individually
+                //    (`A => Some(...), B => None`), skipping arms that
+                //    are already `Option`-shaped, and skip the outer
+                //    wrap.
                 let wrap_some = self.return_wants_some_wrap(expr);
                 let wrap_upcast = self.return_needs_sealed_upcast(expr);
-                let is_switch = matches!(expr, juxc_ast::Expr::Switch(_));
+                let is_switch = self.return_type_is_nullable()
+                    && matches!(expr, juxc_ast::Expr::Switch(_) | juxc_ast::Expr::Ternary(_));
                 // Interface return slot — same coercion the non-tail `return`
                 // arm applies: wrap a class value in `Rc<dyn Trait>` / clone a
                 // dyn handle. Mirrored here so trailing-return elision doesn't
@@ -978,7 +982,7 @@ impl RustEmitter {
                     self.w.push_str("Some(");
                 }
                 let prev_nullable_target = self.emitting_nullable_target;
-                if wrap_some && is_switch {
+                if is_switch {
                     self.emitting_nullable_target = true;
                 }
                 // Numeric widening on a trailing (elided) return — same as the

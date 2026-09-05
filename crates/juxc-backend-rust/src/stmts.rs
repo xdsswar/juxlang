@@ -308,12 +308,18 @@ impl RustEmitter {
     /// meaning the value flowing through `return …` is a `T`
     /// that needs the `Some(...)` lift to match the `Option<T>`
     /// declared return type.
-    pub(crate) fn return_wants_some_wrap(&self, expr: &Expr) -> bool {
-        let returns_nullable = match &self.current_return_type {
+    /// True when the function being emitted returns `T?` — the `Option<T>`
+    /// shape every `return` in it has to produce.
+    pub(crate) fn return_type_is_nullable(&self) -> bool {
+        match &self.current_return_type {
             Some(juxc_ast::ReturnType::Type(t)) => t.nullable,
             Some(juxc_ast::ReturnType::AsyncType(t)) => t.nullable,
             _ => false,
-        };
+        }
+    }
+
+    pub(crate) fn return_wants_some_wrap(&self, expr: &Expr) -> bool {
+        let returns_nullable = self.return_type_is_nullable();
         // An expression that is *already* `Option`-shaped (`return
         // this.nullableField;`, `return maybeX();`, `return nullableLocal;`)
         // flows back unchanged — wrapping it would yield `Some(Some(...))`.
@@ -570,10 +576,20 @@ impl RustEmitter {
                         }
                         _ => None,
                     };
+                    // **A multi-armed value carries the wrap into its ARMS.**
+                    // `return cond ? value : maybeNull;` has one arm that is
+                    // already `Option`-shaped and one that is not, so a single
+                    // `Some(...)` around the whole expression is wrong on
+                    // whichever side it does not fit. The ternary and switch
+                    // emitters already wrap per arm and skip arms that are
+                    // already nullable — hand them the target instead.
+                    let arm_wrap = self.return_type_is_nullable()
+                        && ret_iface_ty.is_none()
+                        && matches!(e, Expr::Ternary(_) | Expr::Switch(_));
                     // A nullable dyn return (`Animal? f() { return new Dog(); }`)
                     // is `Some`-wrapped INSIDE the coercion helper — don't add a
                     // second `Some(...)` here.
-                    let do_some = wrap_some && ret_iface_ty.is_none();
+                    let do_some = wrap_some && ret_iface_ty.is_none() && !arm_wrap;
                     if do_some {
                         self.w.push_str("Some(");
                     }
@@ -594,7 +610,12 @@ impl RustEmitter {
                         if widen.is_some() {
                             self.w.push('(');
                         }
+                        let prev_nullable_target = self.emitting_nullable_target;
+                        if arm_wrap {
+                            self.emitting_nullable_target = true;
+                        }
                         self.emit_expr(e);
+                        self.emitting_nullable_target = prev_nullable_target;
                         // **Wrapper-class share-on-return (§CR.4.1).** A
                         // `return <wrapped place>;` (a `Path`/`this` local or
                         // an `xs[i]` index read of a wrapped class) must hand

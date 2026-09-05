@@ -1428,6 +1428,10 @@ impl<'a> Parser<'a> {
         let mut static_fields: Vec<juxc_ast::FieldDecl> = Vec::new();
         if self.eat(&TokenKind::LBrace) {
             while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+                // `record-member = annotation* ( function-decl | static-init-block )`
+                // (§A.2.5). A record may implement an interface, so its methods
+                // carry `@Override` exactly as a class's do.
+                let member_annotations = self.parse_annotations();
                 let member_vis = self.parse_visibility();
                 // Member-shape lookahead: walk past modifiers and
                 // the return type, then probe what follows. Three
@@ -1498,7 +1502,9 @@ impl<'a> Parser<'a> {
                         // modifiers + initializer); reject any
                         // non-static result so the "no instance
                         // fields" rule still bites.
-                        if let Some(field) = self.parse_field_decl(Vec::new(), member_vis) {
+                        if let Some(field) =
+                            self.parse_field_decl(member_annotations.clone(), member_vis)
+                        {
                             if !field.is_static {
                                 self.diagnostics.push(
                                     Diagnostic::error(
@@ -1518,7 +1524,9 @@ impl<'a> Parser<'a> {
                         // Method shape: `[modifiers] returnType
                         // methodName(params) { ... }`. Reuses the
                         // class fn-decl parser unchanged.
-                        if let Some(m) = self.parse_fn_decl(Vec::new(), member_vis) {
+                        if let Some(m) =
+                            self.parse_fn_decl(member_annotations.clone(), member_vis)
+                        {
                             methods.push(m);
                         }
                     }
@@ -1579,6 +1587,9 @@ impl<'a> Parser<'a> {
         // Optional generic parameters per §A.2.4 — `enum Cow<B>`,
         // `enum Entry<K, V, A>`. Variant payloads may reference them.
         let generic_params = self.parse_generic_params();
+        // `( 'implements' type-list )?` (§A.2.5). An enum is implicitly final
+        // and has no `extends`, so interfaces are its only supertypes.
+        let implements = self.parse_implements_clause();
         self.expect(&TokenKind::LBrace, "'{' to start enum body");
 
         let mut variants = Vec::new();
@@ -1605,6 +1616,10 @@ impl<'a> Parser<'a> {
         let mut constants: Vec<juxc_ast::FieldDecl> = Vec::new();
         if self.eat(&TokenKind::Semicolon) {
             while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+                // `enum-member = annotation* ( function-decl | const-decl )`
+                // (§A.2.5). An enum may implement an interface, so its methods
+                // carry `@Override` too.
+                let member_annotations = self.parse_annotations();
                 let member_vis = self.parse_visibility();
                 // Reuse the class/record member-lookahead: after
                 // visibility + modifiers + return type, expect
@@ -1642,7 +1657,9 @@ impl<'a> Parser<'a> {
                     // implicitly static (interface-constant rules).
                     // `parse_field_decl` consumes the modifier itself
                     // and records is_final; we force is_static below.
-                    if let Some(mut field) = self.parse_field_decl(Vec::new(), member_vis) {
+                    if let Some(mut field) =
+                        self.parse_field_decl(member_annotations.clone(), member_vis)
+                    {
                         field.is_static = true;
                         field.is_final = true;
                         constants.push(field);
@@ -1651,7 +1668,9 @@ impl<'a> Parser<'a> {
                     // Enum METHOD (§A.2.5) — same shape as a class
                     // method; `this` is the enum value (typically
                     // dispatched with `switch (this)`).
-                    if let Some(m) = self.parse_fn_decl(Vec::new(), member_vis) {
+                    if let Some(m) =
+                        self.parse_fn_decl(member_annotations.clone(), member_vis)
+                    {
                         methods.push(m);
                     } else {
                         // Recovery: skip to the closing brace so one
@@ -1671,6 +1690,7 @@ impl<'a> Parser<'a> {
             visibility,
             name,
             generic_params,
+            implements,
             variants,
             operators,
             methods,

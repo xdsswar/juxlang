@@ -1500,8 +1500,9 @@ fn bare_type_name(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or(name)
 }
 
-/// True iff class `child_name` — or any of its superclasses — implements
-/// interface `target_iface`, following interface-extends chains
+/// True iff `child_name` — a class and any of its superclasses, a record, or
+/// an enum — implements interface `target_iface`, following interface-extends
+/// chains
 /// transitively (`class C implements A`, `interface A extends B` ⟹
 /// `C <: B`). Matches on bare names (see [`bare_type_name`]).
 ///
@@ -1528,6 +1529,26 @@ pub fn class_implements_interface(
     });
     if let Some(rec) = record {
         for iface_ref in &rec.implements {
+            if let Some(seg) = iface_ref.name.segments.last() {
+                if interface_extends_reaches(&seg.text, target, symbols) {
+                    return true;
+                }
+            }
+        }
+    }
+    // An ENUM may implement an interface as well (§A.2.5) and lives in its own
+    // table. Like a record it is implicitly final with no `extends`, so its
+    // clause is the whole supertype list.
+    let enum_sig = symbols.enums.get(child_name).or_else(|| {
+        let bare = bare_type_name(child_name);
+        symbols
+            .enums
+            .iter()
+            .find(|(k, _)| bare_type_name(k) == bare)
+            .map(|(_, e)| e)
+    });
+    if let Some(en) = enum_sig {
+        for iface_ref in &en.implements {
             if let Some(seg) = iface_ref.name.segments.last() {
                 if interface_extends_reaches(&seg.text, target, symbols) {
                     return true;

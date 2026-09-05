@@ -368,7 +368,8 @@ record-decl       = visibility? 'record' identifier generic-params?
                     record-body?
 record-component-list = record-component ( ',' record-component )*
 record-component  = annotation* type identifier
-record-body       = '{' ( function-decl | static-init-block )* '}'
+record-body       = '{' record-member* '}'
+record-member     = annotation* ( function-decl | static-init-block )
 
 enum-decl         = visibility? 'enum' identifier generic-params?
                     ( 'implements' type-list )?
@@ -377,7 +378,7 @@ enum-variant-list = enum-variant ( ',' enum-variant )* ','?
 enum-variant      = identifier ( '(' record-component-list ')' )?       -- payload variant
                   | identifier '=' const-expr                              -- explicit discriminator (no payload)
                   | identifier                                              -- bare variant
-enum-member       = function-decl | const-decl
+enum-member       = annotation* ( function-decl | const-decl )
 ```
 
 Enum variants are **comma-separated** inside the body. The `case` keyword does **not** appear in enum declarations — it stays reserved for `switch` patterns. A semicolon separates the variant list from any methods/constants that follow; if the enum has no methods, the trailing semicolon is optional.

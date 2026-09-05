@@ -1039,6 +1039,10 @@ pub struct RecordComponentSig {
 pub struct EnumSig {
     /// Enum visibility.
     pub visibility: Visibility,
+    /// Interfaces this enum implements (§A.2.5). An enum has no `extends`, so
+    /// this is its whole supertype list — the same role
+    /// [`RecordSig::implements`] plays for records.
+    pub implements: Vec<TypeRef>,
     /// Variants indexed by name. Duplicate variant names emit `E0403`.
     pub variants: HashMap<String, VariantSig>,
     /// Operator-override declarations on the enum body, indexed by
@@ -3615,6 +3619,7 @@ fn insert_enum(
         fqn,
         EnumSig {
             visibility: enum_decl.visibility,
+            implements: enum_decl.implements.clone(),
             variants,
             operators,
             methods: enum_decl

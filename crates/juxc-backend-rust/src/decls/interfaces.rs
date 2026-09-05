@@ -54,8 +54,7 @@ impl RustEmitter {
         self.w.push_str("> ");
         self.w.push_str(&to_rust_ident(&iface_bare));
         self.emit_generic_params_as_args(&params);
-        self.w.push_str(" for std::rc::Rc<__JuxH> {
-");
+        self.w.push_str(" for std::rc::Rc<__JuxH> {\n");
         self.w.indent_inc();
         for m in &methods {
             self.w.emit_indent();
