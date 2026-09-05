@@ -641,6 +641,53 @@ fn case_pattern_items(
         .collect()
 }
 
+/// The capability set this server advertises.
+///
+/// Extracted from `initialize` so it can be ASSERTED. Nothing used to check it:
+/// a provider dropped in a refactor would compile, ship, and simply make the
+/// feature stop existing in every editor at once, with no test and no error —
+/// the client just never asks again.
+fn server_capabilities() -> ServerCapabilities {
+    ServerCapabilities {
+        // Full-document sync keeps the skeleton simple: each change
+        // ships the whole buffer. Incremental sync is a later
+        // optimization (§L.5).
+        text_document_sync: Some(TextDocumentSyncCapability::Kind(
+            TextDocumentSyncKind::FULL,
+        )),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        completion_provider: Some(CompletionOptions {
+            // `.` member access, `:` path, `@` annotation (§L.5).
+            trigger_characters: Some(vec![".".into(), ":".into(), "@".into()]),
+            // Doc comments attach lazily via `completionItem/resolve`
+            // — only the highlighted item pays the declaring-file read.
+            resolve_provider: Some(true),
+            ..Default::default()
+        }),
+        // Parameter info: when the caret is inside a call's `( … )`, show
+        // the callee's signature with the active parameter highlighted —
+        // re-triggered on `(` and each `,` (IntelliJ-style).
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".into(), ",".into()]),
+            retrigger_characters: Some(vec![",".into()]),
+            work_done_progress_options: Default::default(),
+        }),
+        // Auto-import quick-fixes for unresolved-but-known types
+        // (FEATURE 3). Advertised as a simple boolean provider; the
+        // handler filters to the import action itself.
+        code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+        // Goto-definition: jump to a type / function / const / alias
+        // declaration anywhere in the workspace — including into a
+        // generated `rust.std` / crate `.jux.d` stub (§L.5).
+        definition_provider: Some(OneOf::Left(true)),
+        // Document symbols: an outline of the open file's declarations
+        // (types + their members, functions, consts) for the editor's
+        // breadcrumbs / symbol picker (§L.5).
+        document_symbol_provider: Some(OneOf::Left(true)),
+        ..Default::default()
+    }
+}
+
 /// True when the identifier starting at `ident_start` is preceded directly by
 /// `@` — an annotation name.
 ///
@@ -2018,44 +2065,7 @@ impl LanguageServer for Backend {
                 name: "juxc-lsp".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
-            capabilities: ServerCapabilities {
-                // Full-document sync keeps the skeleton simple: each change
-                // ships the whole buffer. Incremental sync is a later
-                // optimization (§L.5).
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
-                )),
-                hover_provider: Some(HoverProviderCapability::Simple(true)),
-                completion_provider: Some(CompletionOptions {
-                    // `.` member access, `:` path, `@` annotation (§L.5).
-                    trigger_characters: Some(vec![".".into(), ":".into(), "@".into()]),
-                    // Doc comments attach lazily via `completionItem/resolve`
-                    // — only the highlighted item pays the declaring-file read.
-                    resolve_provider: Some(true),
-                    ..Default::default()
-                }),
-                // Parameter info: when the caret is inside a call's `( … )`, show
-                // the callee's signature with the active parameter highlighted —
-                // re-triggered on `(` and each `,` (IntelliJ-style).
-                signature_help_provider: Some(SignatureHelpOptions {
-                    trigger_characters: Some(vec!["(".into(), ",".into()]),
-                    retrigger_characters: Some(vec![",".into()]),
-                    work_done_progress_options: Default::default(),
-                }),
-                // Auto-import quick-fixes for unresolved-but-known types
-                // (FEATURE 3). Advertised as a simple boolean provider; the
-                // handler filters to the import action itself.
-                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
-                // Goto-definition: jump to a type / function / const / alias
-                // declaration anywhere in the workspace — including into a
-                // generated `rust.std` / crate `.jux.d` stub (§L.5).
-                definition_provider: Some(OneOf::Left(true)),
-                // Document symbols: an outline of the open file's declarations
-                // (types + their members, functions, consts) for the editor's
-                // breadcrumbs / symbol picker (§L.5).
-                document_symbol_provider: Some(OneOf::Left(true)),
-                ..Default::default()
-            },
+            capabilities: server_capabilities(),
         })
     }
 
@@ -3064,7 +3074,51 @@ mod tests {
 
     /// The scrutinee scan must not reach out of its construct: a `case` that is
     /// not inside a `switch (...) { }` finds nothing.
+     /// Every provider this server advertises, pinned.
+    ///
+    /// The set was asserted nowhere, so a provider dropped in a refactor would
+    /// compile, ship, and make the feature stop existing in every editor at
+    /// once -- silently, because a client simply never asks again for something
+    /// the server did not advertise. This is the cheapest possible guard
+    /// against the most expensive kind of regression.
     #[test]
+    fn the_advertised_capabilities_are_the_expected_set() {
+        let caps = server_capabilities();
+
+        assert!(caps.hover_provider.is_some(), "hover");
+        assert!(caps.definition_provider.is_some(), "goto-definition");
+        assert!(caps.document_symbol_provider.is_some(), "document symbols");
+        assert!(caps.code_action_provider.is_some(), "code actions (auto-import)");
+        assert_eq!(
+            caps.text_document_sync,
+            Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+            "full-document sync",
+        );
+
+        let completion = caps.completion_provider.expect("completion");
+        assert_eq!(
+            completion.trigger_characters,
+            Some(vec![".".to_string(), ":".to_string(), "@".to_string()]),
+            "the `@` trigger is what makes annotation completion reachable at all",
+        );
+        assert_eq!(completion.resolve_provider, Some(true), "lazy doc comments");
+
+        let sig = caps.signature_help_provider.expect("signature help");
+        assert_eq!(
+            sig.trigger_characters,
+            Some(vec!["(".to_string(), ",".to_string()]),
+        );
+
+        // Not advertised, and deliberately so: a handler exists for none of
+        // these, and advertising one would make the editor ask and get nothing.
+        assert!(caps.references_provider.is_none(), "references: no handler yet");
+        assert!(caps.rename_provider.is_none(), "rename: no handler yet");
+        assert!(caps.document_formatting_provider.is_none(), "formatting: no handler yet");
+        assert!(caps.semantic_tokens_provider.is_none(), "semantic tokens: no handler yet");
+        assert!(caps.inlay_hint_provider.is_none(), "inlay hints: no handler yet");
+    }
+
+   #[test]
     fn case_scan_stays_inside_its_switch() {
         assert_eq!(switch_scrutinee_before("case ", 5), None);
         assert_eq!(switch_scrutinee_before("var x = 1; case ", 16), None);
