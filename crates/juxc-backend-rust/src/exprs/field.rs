@@ -772,6 +772,30 @@ impl RustEmitter {
     /// `emit_call` level (`emit_safe_method_call`).
     /// Emit a bare reference to a static field of the enclosing
     /// class. Mirrors the explicit-`Class.field` branch in
+    /// §M.9 enclosing-class fallback: the lifted name of a nested type
+    /// referred to by its BARE name from inside the type that owns it.
+    ///
+    /// `class Inner` inside `Outer` is lifted by the parser to a top-level
+    /// `Outer__Inner`, so a bare `new Inner()` has to be re-mangled here or it
+    /// emits `Inner::new()` against a type Rust has never heard of. The owner
+    /// chain is walked outward, innermost first, mirroring tycheck's
+    /// `enclosing_nested_type` so both halves agree on which type is named.
+    pub(crate) fn enclosing_nested_type(&self, bare: &str) -> Option<String> {
+        let mut scope: Option<&str> = self.enclosing_class.as_deref();
+        while let Some(s) = scope {
+            let candidate = format!("{s}__{bare}");
+            if self.lookup_class_by_bare_or_fqn(&candidate).is_some()
+                || self.symbols.records.contains_key(&candidate)
+                || self.symbols.enums.contains_key(&candidate)
+                || self.symbols.interfaces.contains_key(&candidate)
+            {
+                return Some(candidate);
+            }
+            scope = s.rsplit_once("__").map(|(outer, _)| outer);
+        }
+        None
+    }
+
     /// [`Self::emit_field`] but takes the class name and field
     /// metadata directly because the caller (in `Expr::Path`
     /// emission) has already resolved both.
@@ -939,16 +963,35 @@ impl RustEmitter {
                     .rev()
                     .find_map(|scope| scope.get(bare))
                 {
-                    return Some(name.rsplit('.').next().unwrap_or(name).to_string());
+                    return Some(self.lift_nested_class_name(name));
                 }
             }
         }
         match self.expr_types.get(&expr_span_of(recv)) {
             Some(juxc_tycheck::Ty::User { name, .. }) => {
-                Some(name.rsplit('.').next().unwrap_or(name).to_string())
+                Some(self.lift_nested_class_name(name))
             }
             _ => None,
         }
+    }
+
+    /// The bare class name of a resolved type, with a BARE nested-type name
+    /// lifted to the `Owner__Name` form the emitter registers under.
+    ///
+    /// Some type sources have no enclosing-class context — a parameter's type
+    /// goes through `ty_from_ref_in_env`, which cannot know it is being read
+    /// inside `Registry` — so they hand back the unlifted `Entry`. That name
+    /// matches no registered class, so every receiver decision keyed off it
+    /// answered "not a wrapper class" and a field read emitted as a plain
+    /// `e.weight` against a newtype. Lifting here covers every caller at once,
+    /// rather than at each place a type name is produced.
+    fn lift_nested_class_name(&self, name: &str) -> String {
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        if self.lookup_class_by_bare_or_fqn(bare).is_some() {
+            return bare.to_string();
+        }
+        self.enclosing_nested_type(bare)
+            .unwrap_or_else(|| bare.to_string())
     }
 
     /// Return how many `__parent` hops separate the wrapper class that

@@ -463,7 +463,21 @@ impl RustEmitter {
         // module path (which doesn't exist). Placed AFTER `jux_primitive_to_rust`
         // so names that are also Jux primitives (`String`, …) keep their
         // primitive lowering. Generic args recurse so they get their own mapping.
-        if let Some(real) = self.external_class_real_path(&ty.name) {
+        // A nested type declared in the enclosing class SHADOWS an import,
+        // including the implicit `rust.std` prelude — the Java shadowing rule.
+        // Without this the foreign-stub path below won every time, so a
+        // `class Entry` nested in `Registry` emitted
+        // `std::collections::Entry`: naming a nested type after anything in
+        // the prelude (`Entry`, `Cursor`, `Range`) produced Rust that named
+        // the wrong type entirely.
+        let shadowed_by_nested_type = ty.name.segments.len() == 1
+            && self
+                .enclosing_nested_type(&ty.name.segments[0].text)
+                .is_some();
+        if let Some(real) = self
+            .external_class_real_path(&ty.name)
+            .filter(|_| !shadowed_by_nested_type)
+        {
             self.w.push_str(&real);
             if !ty.generic_args.is_empty() {
                 self.w.push('<');
@@ -494,25 +508,12 @@ impl RustEmitter {
         // visibility.
         let path = if ty.name.segments.len() == 1 {
             let bare = ty.name.segments[0].text.as_str();
-            let mut resolved_path: Option<String> = None;
             // §M.9 enclosing-class fallback: a bare `Config` inside
             // `HttpServer` (or a sibling nested type) names the
             // lifted `HttpServer__Config`. Walk the owner chain
             // outward; the lifted sibling lives in the same module,
             // so the mangled bare name resolves directly.
-            if let Some(enclosing) = self.enclosing_class.clone() {
-                let mut scope: Option<&str> = Some(enclosing.as_str());
-                while let Some(s) = scope {
-                    let candidate = format!("{s}__{bare}");
-                    if self.lookup_class_by_bare_or_fqn(&candidate).is_some()
-                        || self.symbols.records.contains_key(&candidate)
-                    {
-                        resolved_path = Some(candidate);
-                        break;
-                    }
-                    scope = s.rsplit_once("__").map(|(outer, _)| outer);
-                }
-            }
+            let mut resolved_path: Option<String> = self.enclosing_nested_type(bare);
             if resolved_path.is_none() {
             if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
                 if fqn.contains('.') {

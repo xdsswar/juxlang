@@ -607,8 +607,16 @@ impl RustEmitter {
                         } else {
                             None
                         };
+                        // `as` binds tighter than every binary operator, so a
+                        // widened binary expression needs its own parens or the
+                        // cast lands on the right operand alone.
+                        let widen_inner =
+                            widen.is_some() && crate::exprs::cast_needs_inner_parens(e);
                         if widen.is_some() {
                             self.w.push('(');
+                            if widen_inner {
+                                self.w.push('(');
+                            }
                         }
                         let prev_nullable_target = self.emitting_nullable_target;
                         if arm_wrap {
@@ -636,6 +644,9 @@ impl RustEmitter {
                             self.w.push_str(".into()");
                         }
                         if let Some(cast) = widen {
+                            if widen_inner {
+                                self.w.push(')');
+                            }
                             self.w.push_str(" as ");
                             self.w.push_str(cast);
                             self.w.push(')');
@@ -2194,8 +2205,13 @@ impl RustEmitter {
                         .and_then(|t| self.type_ref_primitive(t))
                         .and_then(|target| self.numeric_widen_to(init, target))
                 };
+                let widen_inner =
+                    num_widen.is_some() && crate::exprs::cast_needs_inner_parens(init);
                 if num_widen.is_some() {
                     self.w.push('(');
+                    if widen_inner {
+                        self.w.push('(');
+                    }
                 }
                 self.emit_expr(init);
                 self.restore_array_target(saved_array_target);
@@ -2234,6 +2250,9 @@ impl RustEmitter {
                     self.w.push_str(".into()");
                 }
                 if let Some(cast) = num_widen {
+                    if widen_inner {
+                        self.w.push(')');
+                    }
                     self.w.push_str(" as ");
                     self.w.push_str(cast);
                     self.w.push(')');
@@ -3313,8 +3332,13 @@ impl RustEmitter {
                 self.operand_primitive(&a.target)
                     .and_then(|target| self.numeric_widen_to(&a.value, target))
             };
+            let widen_inner =
+                num_widen.is_some() && crate::exprs::cast_needs_inner_parens(&a.value);
             if num_widen.is_some() {
                 self.w.push('(');
+                if widen_inner {
+                    self.w.push('(');
+                }
             }
             self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
             // Wrapper-class share-on-assign (§CR.4.1): when the RHS is a
@@ -3338,6 +3362,9 @@ impl RustEmitter {
                 }
             }
             if let Some(cast) = num_widen {
+                if widen_inner {
+                    self.w.push(')');
+                }
                 self.w.push_str(" as ");
                 self.w.push_str(cast);
                 self.w.push(')');

@@ -553,23 +553,16 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
         // resolves to the lifted `HttpServer__Config`. Walk the
         // owner chain outward: current class first, then each
         // `__`-prefix of it, so the innermost declaration wins.
-        if let Some(current) = &env.current_class {
-            let mut scope: Option<&str> = Some(current.as_str());
-            while let Some(s) = scope {
-                let candidate = format!("{s}__{bare}");
-                if symbols.is_type_name(&candidate) {
-                    let generic_args = t
-                        .generic_args
-                        .iter()
-                        .map(|g| lower_generic_arg(g, env, symbols))
-                        .collect();
-                    return Ty::User {
-                        name: candidate,
-                        generic_args,
-                    };
-                }
-                scope = s.rsplit_once("__").map(|(outer, _)| outer);
-            }
+        if let Some(candidate) = enclosing_nested_type(bare, env, symbols) {
+            let generic_args = t
+                .generic_args
+                .iter()
+                .map(|g| lower_generic_arg(g, env, symbols))
+                .collect();
+            return Ty::User {
+                name: candidate,
+                generic_args,
+            };
         }
         // Implicit auto-import: walk every known FQN looking for one whose last
         // segment matches `bare`, preferring this unit's package so a bare name
@@ -1425,6 +1418,33 @@ pub fn is_subtype(child: &Ty, parent: &Ty, symbols: &SymbolTable) -> bool {
         ) => k1 == k2 && is_subtype(e1, e2, symbols),
         _ => false,
     }
+}
+
+/// §M.9 enclosing-class fallback: resolve a BARE nested-type name written
+/// from inside its owner (or from a sibling nested type) to the lifted
+/// `Owner__Name` form the parser registered.
+///
+/// The owner chain is walked outward, current class first and then each
+/// `__`-prefix of it, so the innermost declaration wins the name.
+///
+/// Both a type position (`Inner i;`) and a construction (`new Inner()`) must
+/// agree on this, so they share one implementation: they did not, and the
+/// mismatch made a nested class impossible to instantiate from inside its own
+/// owner even though declaring a variable of it worked.
+pub(crate) fn enclosing_nested_type(
+    bare: &str,
+    env: &TypeEnv,
+    symbols: &SymbolTable,
+) -> Option<String> {
+    let mut scope: Option<&str> = env.current_class.as_deref();
+    while let Some(s) = scope {
+        let candidate = format!("{s}__{bare}");
+        if symbols.is_type_name(&candidate) {
+            return Some(candidate);
+        }
+        scope = s.rsplit_once("__").map(|(outer, _)| outer);
+    }
+    None
 }
 
 /// True iff `child`'s class-extends chain (transitively) reaches

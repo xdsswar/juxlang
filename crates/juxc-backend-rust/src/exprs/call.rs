@@ -2251,8 +2251,12 @@ impl RustEmitter {
                     .and_then(|t| self.type_ref_primitive(t))
                     .and_then(|target| self.numeric_widen_to(arg, target))
             };
+            let widen_inner = num_widen.is_some() && crate::exprs::cast_needs_inner_parens(arg);
             if num_widen.is_some() {
                 self.w.push('(');
+                if widen_inner {
+                    self.w.push('(');
+                }
             }
             self.emit_arg_with_nullable_wrap(arg, nullable);
             // **Wrapper-class share-on-pass (§CR.4.1).** A wrapped
@@ -2275,6 +2279,9 @@ impl RustEmitter {
                 self.w.push_str(".clone()");
             }
             if let Some(cast) = num_widen {
+                if widen_inner {
+                    self.w.push(')');
+                }
                 self.w.push_str(" as ");
                 self.w.push_str(cast);
                 self.w.push(')');
