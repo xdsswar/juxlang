@@ -198,6 +198,13 @@
         language="Jux"
         implementationClass="dev.jux.intellij.completion.JuxCompletionContributor"/>
 
+    <!-- Postfix templates (`expr.if`, `expr.var`, ...). A separate extension
+         point from completion, so these keep working while juxc-lsp serves
+         everything else - depth the user gets in every configuration. -->
+    <codeInsight.template.postfixTemplateProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.templates.JuxPostfixTemplateProvider"/>
+
     <!-- Names the engine answering for Jux files (juxc-lsp, or the plugin's own
          parser and inspections). Two engines with very different depth can serve
          the same file, and nothing used to say which one you had - so a server
