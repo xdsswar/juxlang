@@ -2134,6 +2134,33 @@ print(Planet.Earth.surfaceGravity());    // 9.802...
 
 This is the same shape as Java's enum-with-fields, but with all the extra power of payload-carrying variants.
 
+#### 7.7.4.1. Enums May Implement Interfaces
+
+An enum carries an `implements` clause exactly as a class or a record does
+(grammar §A.2.5). It has no `extends` — an enum is implicitly sealed (§7.7.6) —
+so interfaces are its whole supertype list.
+
+```java
+public interface Keyed { String key(); }
+
+public enum Level implements Keyed {
+    Low,
+    High;
+
+    @Override public String key() {
+        return switch (this) { case Level.Low -> "low"; case Level.High -> "high"; };
+    }
+}
+
+Keyed k = Level.Low;      // an enum value flows into an interface slot
+print(k.key());           // low
+```
+
+The enum's own methods satisfy the interface; a method it does not declare falls
+back to the interface's `default` body. As with any implementer, `@Override` on
+the member is the annotation that says so, and record and enum members carry
+annotations for exactly this reason.
+
 #### 7.7.5. Recursive Enums
 
 A variant payload may name the enum itself, giving the classic sum-of-products tree (arithmetic expressions, JSON, parse trees). This works directly, with no special syntax:

@@ -246,12 +246,9 @@ impl RustEmitter {
                 })
                 .collect();
             if provided.is_empty() {
-                self.w.push_str(" {}
-
-");
+                self.w.push_str(" {}\n\n");
             } else {
-                self.w.push_str(" {
-");
+                self.w.push_str(" {\n");
                 self.w.indent_inc();
                 for (name, sig) in &provided {
                     if record_decl.methods.iter().any(|m| &m.name.text == name) {
@@ -262,9 +259,7 @@ impl RustEmitter {
                 }
                 self.w.indent_dec();
                 self.w.emit_indent();
-                self.w.push_str("}
-
-");
+                self.w.push_str("}\n\n");
             }
             self.kind_type_subst = saved;
         }

@@ -1,0 +1,127 @@
+// Generics and inheritance crossed with the other DECLARATION KINDS.
+//
+//  - a record and an enum implementing an interface (§A.2.5 allows `implements`
+//    on both), each with an `@Override` annotation on the member
+//  - a generic record
+//  - an F-bounded parameter (`T extends Ranked<T>`)
+//  - one class implementing two generic interfaces, each fed by a different
+//    parameter, one of them contributing a default method
+//  - three levels of container nesting, mutated through the middle level
+//  - a nullable generic returned from a conditional whose other arm is not
+//  - a generic method alongside a concrete overload of the same name
+//  - a lambda whose parameter and result are the caller's type parameters
+
+import rust.std.*;
+
+public interface Keyed<K> { K key(); }
+public interface Labelled<L> {
+    L label();
+    default String describeLabel() { return "L=" + this.label(); }
+}
+
+// Two generic interfaces on one class, each fed by a different parameter.
+public class Pair<A, B> implements Keyed<A>, Labelled<B> {
+    private A a;
+    private B b;
+    public Pair(A a, B b) { this.a = a; this.b = b; }
+    @Override public A key() { return this.a; }
+    @Override public B label() { return this.b; }
+}
+
+// A record implementing a generic interface with a concrete argument.
+public record Tag(String name, int weight) implements Keyed<String> {
+    @Override public String key() { return this.name; }
+}
+
+// A generic record.
+public record Cell<T>(T value) {
+    public String show() { return "cell(" + this.value + ")"; }
+}
+
+// An enum implementing a generic interface.
+public enum Level implements Keyed<String> {
+    Low,
+    High;
+
+    @Override public String key() {
+        return switch (this) {
+            case Level.Low -> "low";
+            case Level.High -> "high";
+        };
+    }
+}
+
+// An F-bounded parameter: the bound mentions the parameter itself.
+public interface Ranked<T> { int compareRank(T other); }
+public class Best<T extends Ranked<T>> {
+    private Vec<T> items;
+    public Best() { this.items = new Vec<T>(); }
+    public void offer(T v) { this.items.push(v); }
+    public int betterCount(T pivot) {
+        int n = 0;
+        for (T it : this.items) { if (it.compareRank(pivot) > 0) { n = n + 1; } }
+        return n;
+    }
+}
+public class Score implements Ranked<Score> {
+    public int v;
+    public Score(int v) { this.v = v; }
+    @Override public int compareRank(Score other) { return this.v - other.v; }
+}
+
+// Three levels of container nesting, plus a nullable generic inside one.
+public class Deep<T> {
+    private HashMap<String, Vec<Vec<T>>> grid;
+    public Deep() { this.grid = new HashMap<String, Vec<Vec<T>>>(); }
+    public void seed(String k) {
+        Vec<Vec<T>> rows = new Vec<Vec<T>>();
+        rows.push(new Vec<T>());
+        this.grid.insert(k, rows);
+    }
+    public void put(String k, T v) { this.grid.get_mut(k)!![0].push(v); }
+    public int rowLen(String k) { return this.grid.get(k)!![0].len(); }
+    // A generic value that may be absent, in a nested position.
+    public T? firstOr(String k, T? fallback) {
+        return this.grid.contains_key(k) && this.grid.get(k)!![0].len() > 0
+            ? this.grid.get(k)!![0][0]
+            : fallback;
+    }
+}
+
+// A generic method alongside a concrete overload of the same name.
+public class Show {
+    public <T> String render(T v) { return "T:" + v; }
+    public String render(String s) { return "S:" + s; }
+}
+
+// A lambda whose parameter and result are the caller's type parameters.
+public <X, Y> Y applyTo(X x, (X) -> Y f) { return f(x); }
+
+void main() {
+    Pair<int, String> p = new Pair<int, String>(1, "one");
+    print(p.key());
+    print(p.describeLabel());
+
+    Tag t = new Tag("t", 3);
+    print(t.key());
+    print(new Cell<int>(5).show());
+    print(Level.High.key());
+
+    Best<Score> best = new Best<Score>();
+    best.offer(new Score(1));
+    best.offer(new Score(9));
+    print(best.betterCount(new Score(4)));
+
+    Deep<String> d = new Deep<String>();
+    d.seed("r");
+    d.put("r", "x");
+    print(d.rowLen("r"));
+    print(d.firstOr("r", "none"));
+    print(d.firstOr("zz", "none"));
+
+    Show s = new Show();
+    print(s.render(7));
+    print(s.render("hi"));
+
+    print(applyTo<int, String>(3, (n) -> "n=" + n));
+}

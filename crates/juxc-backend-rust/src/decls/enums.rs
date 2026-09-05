@@ -345,6 +345,9 @@ impl RustEmitter {
             self.w.newline();
         }
 
+        // `impl <Iface> for <Enum>` per interface the enum declares (§A.2.5).
+        self.emit_enum_trait_impls(enum_decl);
+
         // Auto `Display` — mirrors Java's `enum.name()`. Skipped when:
         //   - the enum has no variants (uninhabited; can't be
         //     instantiated, so emitting `match self {}` would
@@ -382,6 +385,67 @@ impl RustEmitter {
         // class-level emitter pattern is shared.
         for op in &enum_decl.operators {
             self.emit_operator_trait_impl(&enum_decl.name.text, op);
+        }
+    }
+
+    /// Emit one delegating `impl <Iface> for <Enum>` per interface the enum
+    /// declares (§A.2.5 allows `implements` on an enum; an enum is implicitly
+    /// final and has no `extends`, so this is its whole supertype list).
+    ///
+    /// The shape is the record's ([`Self::emit_record_trait_impls`]) minus the
+    /// component-accessor case: an enum has no components, so a method the enum
+    /// declares delegates to the inherent one and anything else is left to the
+    /// interface's own default body.
+    fn emit_enum_trait_impls(&mut self, enum_decl: &juxc_ast::EnumDecl) {
+        for interface_ty in &enum_decl.implements {
+            let Some(iface_name) = interface_ty.name.segments.last() else { continue };
+            let Some((_, iface)) = self.lookup_interface_by_bare_or_fqn(&iface_name.text) else {
+                continue;
+            };
+            // `implements Keyed<String>` binds the interface's params to the
+            // enum's arguments; installing it as the Kind substitution makes
+            // every type emitted below read in the enum's vocabulary.
+            let subst: std::collections::HashMap<String, juxc_ast::TypeRef> = iface
+                .generic_params
+                .iter()
+                .zip(interface_ty.generic_args.iter())
+                .filter_map(|(p, a)| a.as_type().map(|t| (p.name.text.clone(), t.clone())))
+                .collect();
+            let mut methods: Vec<(String, juxc_tycheck::symbol_table::MethodSig)> = iface
+                .methods
+                .iter()
+                .filter(|(_, m)| !m.is_static)
+                .map(|(n, m)| (n.clone(), m.clone()))
+                .collect();
+            methods.sort_by(|a, b| a.0.cmp(&b.0));
+
+            self.w.emit_indent();
+            self.w.push_str("impl");
+            self.emit_generic_params_with_clone_bound(&enum_decl.generic_params);
+            self.w.push(' ');
+            self.emit_type_as_rust(interface_ty);
+            self.w.push_str(" for ");
+            self.w.push_str(&to_rust_ident(&enum_decl.name.text));
+            self.emit_generic_params_as_args(&enum_decl.generic_params);
+
+            let saved = std::mem::replace(&mut self.kind_type_subst, subst);
+            let provided: Vec<(String, juxc_tycheck::symbol_table::MethodSig)> = methods
+                .into_iter()
+                .filter(|(name, _)| enum_decl.methods.iter().any(|m| &m.name.text == name))
+                .collect();
+            if provided.is_empty() {
+                self.w.push_str(" {}\n\n");
+            } else {
+                self.w.push_str(" {\n");
+                self.w.indent_inc();
+                for (name, sig) in &provided {
+                    self.emit_kind_delegating_method(&enum_decl.name.text, name, sig);
+                }
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push_str("}\n\n");
+            }
+            self.kind_type_subst = saved;
         }
     }
 

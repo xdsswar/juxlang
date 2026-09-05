@@ -294,6 +294,11 @@ pub struct EnumDecl {
     /// `K, V` in `enum Entry<K, V>`. Empty for a non-generic enum. Payload types
     /// of the variants may reference these parameters (`Borrowed(B)`).
     pub generic_params: Vec<TypeParam>,
+    /// Interfaces the enum implements (grammar §A.2.5
+    /// `( 'implements' type-list )?`). An enum has no `extends` — it is
+    /// implicitly final — so this is its whole supertype list. Same shape as
+    /// [`RecordDecl::implements`].
+    pub implements: Vec<TypeRef>,
     /// Variant declarations in source order. Order determines auto-
     /// derived ordinal values when those land.
     pub variants: Vec<EnumVariant>,
