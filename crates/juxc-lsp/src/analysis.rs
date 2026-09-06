@@ -62,6 +62,52 @@ pub struct Analysis {
 /// from disk. The whole set is checked together via `check_workspace`, and the
 /// returned diagnostics — tagged with a `file` index — are grouped by URI and
 /// resolved against the *right* file's text (not always the open rope).
+/// The directory whose `.jux` files form ONE compilation unit set for `file`.
+///
+/// A Jux project is delimited by a `jux.toml`, exactly as `jux build` decides
+/// it — not by whatever folder the editor was opened on. Returns:
+///
+/// - the nearest ancestor holding a `jux.toml`, widened to an enclosing
+///   `[workspace]` root when there is one, so a member still sees the sibling
+///   packages it depends on;
+/// - `None` when no manifest governs the file, meaning it is a standalone
+///   program and must be analysed alone.
+///
+/// The walk never goes above `ide_root`, so a stray `jux.toml` further up the
+/// filesystem cannot pull in unrelated trees.
+fn project_scope(ide_root: &Path, file: Option<&Path>) -> Option<PathBuf> {
+    let file = file?;
+    let mut package: Option<PathBuf> = None;
+    let mut dir = file.parent();
+    while let Some(d) = dir {
+        if d.join("jux.toml").is_file() {
+            package = Some(d.to_path_buf());
+            break;
+        }
+        if d == ide_root {
+            break;
+        }
+        dir = d.parent();
+    }
+    let package = package?;
+
+    // A workspace member is compiled with its siblings, so widen to the
+    // workspace root when an ancestor declares `[workspace] members`.
+    let mut ancestor = package.parent();
+    while let Some(a) = ancestor {
+        let declares_workspace = juxc_driver::Manifest::load(a)
+            .is_some_and(|m| !m.workspace_members.is_empty());
+        if declares_workspace {
+            return Some(a.to_path_buf());
+        }
+        if a == ide_root {
+            break;
+        }
+        ancestor = a.parent();
+    }
+    Some(package)
+}
+
 pub fn analyze_workspace(root: &Path, uri: &Url, rope: &Rope) -> Analysis {
     // The open document's filesystem path (used to override its on-disk text).
     let open_path: Option<PathBuf> = uri.to_file_path().ok();
@@ -71,7 +117,20 @@ pub fn analyze_workspace(root: &Path, uri: &Url, rope: &Rope) -> Analysis {
     // `workspace::index_workspace`'s `overrides` handling.
     let mut sources: Vec<SourceFile> = Vec::new();
     let mut saw_open = false;
-    for path in scan_jux_files(root) {
+    // Only the files of the open document's OWN project are one compilation
+    // unit set. The editor hands us the folder it was opened on, which is not
+    // a Jux project boundary: pointed at a repository that holds many
+    // standalone programs, sweeping every `.jux` beneath it put 243 `main`
+    // functions in one flat namespace and reported each of them as declared
+    // more than once -- on files the CLI compiles cleanly.
+    let scope = project_scope(root, open_path.as_deref());
+    let scanned: Vec<PathBuf> = match &scope {
+        Some(dir) => scan_jux_files(dir),
+        // No manifest governs this file, so it is a program on its own —
+        // which is exactly how `juxc <file>` treats it.
+        None => open_path.clone().into_iter().collect(),
+    };
+    for path in scanned {
         if open_path.as_deref() == Some(path.as_path()) {
             sources.push(SourceFile::new(path, rope.to_string()));
             saw_open = true;
@@ -91,7 +150,7 @@ pub fn analyze_workspace(root: &Path, uri: &Url, rope: &Rope) -> Analysis {
 
     // The language profile from the project's `jux.toml [build] profile` drives
     // profile rules in the editor (e.g. `jux-core` rejects `async`, E0701).
-    let profile = juxc_driver::Manifest::load(root)
+    let profile = juxc_driver::Manifest::load(scope.as_deref().unwrap_or(root))
         .map(|m| m.profile)
         .unwrap_or_default();
     analyze_sources(uri, rope, sources, profile)
@@ -220,11 +279,68 @@ mod tests {
     /// Create a unique temp directory for one test run. Avoids pulling in a
     /// `tempfile` dev-dependency: we just stamp the dir with the process id +
     /// a per-test tag and clean it up at the end.
+    /// A folder of standalone programs is not one compilation unit set.
+    ///
+    /// The editor hands the analyser whichever folder it was opened on. Point
+    /// it at a repository holding many independent `.jux` programs and every
+    /// one of their `main` functions -- and every same-named class -- landed in
+    /// one flat namespace, so each was reported as "declared more than once at
+    /// the top level" on a file the CLI compiles cleanly.
+    ///
+    /// No manifest governs these files, so each is its own program.
+    #[test]
+    fn sibling_programs_without_a_manifest_do_not_collide() {
+        let root = temp_root("no_manifest_siblings");
+        // Explicitly NOT a project: drop the manifest temp_root writes.
+        let _ = fs::remove_file(root.join("jux.toml"));
+        fs::write(root.join("a.jux"), "public void main() { print(1); }").unwrap();
+        fs::write(root.join("b.jux"), "public void main() { print(2); }").unwrap();
+
+        let uri = Url::from_file_path(root.join("a.jux")).unwrap();
+        let rope = Rope::from_str("public void main() { print(1); }");
+        let analysis = analyze_workspace(&root, &uri, &rope);
+
+        let here = analysis.diagnostics_by_uri.get(&uri).cloned().unwrap_or_default();
+        assert!(
+            here.is_empty(),
+            "a standalone program must not collide with its neighbours: {here:?}",
+        );
+    }
+
+    /// The other half: files that DO share a manifest are one project, so a
+    /// genuine duplicate is still reported.
+    #[test]
+    fn a_real_duplicate_inside_one_project_is_still_reported() {
+        let root = temp_root("manifest_duplicate");
+        fs::write(root.join("a.jux"), "public void main() { print(1); }").unwrap();
+        fs::write(root.join("b.jux"), "public void main() { print(2); }").unwrap();
+
+        let uri = Url::from_file_path(root.join("a.jux")).unwrap();
+        let rope = Rope::from_str("public void main() { print(1); }");
+        let analysis = analyze_workspace(&root, &uri, &rope);
+
+        let any = analysis
+            .diagnostics_by_uri
+            .values()
+            .any(|ds| ds.iter().any(|d| d.message.contains("more than once")));
+        assert!(any, "two `main`s in ONE project is a real duplicate and must be reported");
+    }
+
     fn temp_root(tag: &str) -> PathBuf {
         let mut dir = std::env::temp_dir();
         dir.push(format!("juxc_lsp_test_{}_{}", std::process::id(), tag));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp root");
+        // A multi-file Jux PROJECT is delimited by its manifest, the same
+        // way `jux build` decides it — and these fixtures are projects:
+        // they check cross-file resolution. Without one the analyser
+        // (correctly) treats each file as a standalone program, which is
+        // what a folder of unrelated examples is.
+        fs::write(dir.join("jux.toml"), "[package]
+name = \"test\"
+version = \"0.1.0\"
+")
+            .expect("write test manifest");
         dir
     }
 
