@@ -1,0 +1,121 @@
+// Five Java rules that Jux got wrong, each of which produced either a wrong
+// diagnostic or a program that silently did the wrong thing.
+//
+//  1. A type declared here SHADOWS a `.*` import (JLS 6.4.1 / 7.5.2). This
+//     file's own `Box<T>` wins over `rust.std.Box`.
+//  2. A `private` nested class is ordinary Java, not a top-level visibility
+//     error.
+//  3. An `internal` field is reachable through a polymorphic base — only a
+//     `private` one is not.
+//  4. `map.get(k)!!.push(v)` mutates the map, as `map.get(k).add(v)` does in
+//     Java. It used to push onto a discarded clone.
+//  5. A `sealed` base may carry state and a static initializer.
+
+import rust.std.*;
+
+// (1) Shadows `rust.std.Box`.
+public class Box<T> {
+    private T value;
+    public Box(T value) { this.value = value; }
+    public T get() { return this.value; }
+}
+
+public class Registry {
+    private HashMap<String, Vec<int>> table;
+    internal int tag;
+
+    public Registry() {
+        this.table = new HashMap<String, Vec<int>>();
+        this.tag = 7;
+    }
+
+    // (2) A private nested class, reaching its owner's private members —
+    //     `private` is TOP-LEVEL scoped.
+    private class Counter {
+        private int n;
+        public Counter() { this.n = 0; }
+        public void bump() { this.n = this.n + 1; }
+        public int ownersTag(Registry r) { return r.tag; }
+    }
+
+    public void add(String key, int value) {
+        if (!this.table.contains_key(key)) {
+            this.table.insert(key, new Vec<int>());
+        }
+        // (4) Mutating through the map's own getter.
+        this.table.get(key)!!.push(value);
+    }
+
+    public int sizeOf(String key) {
+        if (!this.table.contains_key(key)) { return 0; }
+        return this.table.get(key)!!.len();
+    }
+
+    public int counted() {
+        var c = new Counter();
+        c.bump();
+        c.bump();
+        // Each read taken into its own local first. A returned expression that
+        // still holds a borrow on a local object when that local's destructor
+        // runs is a separate, open bug (rustc E0597) and is not what this
+        // example is about.
+        int n = c.n;
+        int own = c.ownersTag(this);
+        return n + own;
+    }
+}
+
+// (5) A sealed base WITH state and a static initializer. The enum lowering has
+//     nowhere to keep the parent's fields, so this hierarchy takes the ordinary
+//     polymorphic-base representation instead — `sealed` still restricts who
+//     may extend, which is what it is for.
+public abstract sealed class Shape permits Circle, Square {
+    protected static int made = 0;
+    public static final String KIND = "shape";
+    protected final int id;
+
+    static { made = 100; }
+
+    public Shape(int id) { this.id = id; }
+    public abstract int area();
+    public final String tag() { return KIND + "#" + this.id; }
+}
+
+public final class Circle extends Shape {
+    private final int r;
+    public Circle(int r) { super(1); this.r = r; }
+    @Override public int area() { return 3 * this.r * this.r; }
+}
+
+public final class Square extends Shape {
+    private final int s;
+    public Square(int s) { super(2); this.s = s; }
+    @Override public int area() { return this.s * this.s; }
+}
+
+// (3) An `internal` field read through a base-typed reference. `Registry` is
+//     not polymorphic, so this reads the plain field; `Shape` below is, and its
+//     `protected` members are reached through the generated accessors.
+public int tagOf(Registry r) { return r.tag; }
+
+public void main() {
+    var b = new Box<int>(42);
+    print(b.get());
+
+    var reg = new Registry();
+    reg.add("a", 1);
+    reg.add("a", 2);
+    reg.add("b", 3);
+    print(reg.sizeOf("a"));
+    print(reg.sizeOf("b"));
+    print(reg.sizeOf("z"));
+    print(reg.counted());
+    print(tagOf(reg));
+
+    Shape c = new Circle(2);
+    Shape q = new Square(3);
+    print(c.area());
+    print(q.area());
+    print(c.tag());
+    print(Shape.made);
+}

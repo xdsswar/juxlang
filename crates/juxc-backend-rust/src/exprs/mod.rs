@@ -57,7 +57,22 @@ impl RustEmitter {
             return None;
         }
         let fqn = if class_name.segments.len() == 1 {
-            self.symbols.find_fqn_by_bare(&class_name.segments[0].text)?
+            let bare = &class_name.segments[0].text;
+            // A type the PROGRAM declares shadows a foreign one of the same
+            // name (JLS 6.4.1 — a declaration in the compilation unit beats a
+            // type-import-on-demand, and `rust.std` reaches user code that way
+            // or through the auto-prelude).
+            //
+            // `find_fqn_by_bare` is a global suffix scan with no unit context,
+            // so without this a program that declares its own `Box` emitted
+            // `std::boxed::Box` for it — the type checker having already
+            // resolved the same name to the user's class. The two disagreeing
+            // is worse than either being wrong alone: the errors land in the
+            // generated Rust, naming methods the user never wrote.
+            if self.bare_name_is_user_type(bare) {
+                return None;
+            }
+            self.symbols.find_fqn_by_bare(bare)?
         } else {
             class_name
                 .segments
@@ -92,6 +107,23 @@ impl RustEmitter {
             }
         }
         None
+    }
+
+    /// Whether `bare` names a type this program declares, rather than one it
+    /// borrows from a foreign crate.
+    ///
+    /// Registered under the bare name means "declared with no package", which
+    /// is the shape a single-file program and the whole example corpus take.
+    /// The `is_external` flag distinguishes a real declaration from a generated
+    /// `.jux.d` stub entry that happens to sit at the top level.
+    pub(crate) fn bare_name_is_user_type(&self, bare: &str) -> bool {
+        if let Some(sig) = self.symbols.classes.get(bare) {
+            return !sig.is_external;
+        }
+        if let Some(sig) = self.symbols.enums.get(bare) {
+            return !sig.is_external;
+        }
+        self.symbols.records.contains_key(bare) || self.symbols.interfaces.contains_key(bare)
     }
 
     /// True when `ty` (after unwrapping `T?`) is an external (`rust.std` / crate)

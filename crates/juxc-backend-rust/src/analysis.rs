@@ -2858,7 +2858,7 @@ impl crate::RustEmitter {
         // Sealed parent: arg must be in the explicit `permits`
         // list. The `From<Sub> for Sealed` impl wraps the
         // subclass into the matching enum variant.
-        if parent_class.is_sealed {
+        if crate::decls::classes::sealed_lowers_to_enum(parent_class) {
             return parent_class.permits.iter().any(|p| p.as_str() == arg_bare);
         }
         // Non-sealed open parent: the auto-emitted
@@ -3091,7 +3091,7 @@ impl crate::RustEmitter {
         // built-in `Exception` base, an external stub) is fine: the slicing
         // `From<Sub> for Parent` was still generated on the subclass side.
         if let Some(c) = self.lookup_class_by_bare_or_fqn(target_bare) {
-            if c.is_sealed {
+            if crate::decls::classes::sealed_lowers_to_enum(c) {
                 return false;
             }
         }

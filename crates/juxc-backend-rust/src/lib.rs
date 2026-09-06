@@ -1429,7 +1429,13 @@ pub(crate) fn compute_wrapper_classes(
             return false;
         };
         decls.iter().all(|(cd, pkg)| {
-            if cd.is_sealed || !cd.permits.is_empty() {
+            // Only a sealed class that actually becomes an ENUM is unwrappable
+            // — the variant IS the representation. A sealed class with state
+            // keeps the ordinary wrapper, and needs it: excluding it here sent
+            // it down the legacy value-class path, where an abstract method
+            // stayed an `unimplemented!()` stub and calling it through a
+            // parent-typed reference panicked instead of dispatching.
+            if crate::decls::classes::sealed_decl_lowers_to_enum(cd) {
                 return false;
             }
             // A `@layout(c) struct` is a C-compatible VALUE type (§L.1.2): it
@@ -1458,7 +1464,11 @@ pub(crate) fn compute_wrapper_classes(
             {
                 let parent_sealed = by_name
                     .get(&parent)
-                    .map(|ds| ds.iter().any(|(pcd, _)| pcd.is_sealed))
+                    .map(|ds| {
+                        ds.iter().any(|(pcd, _)| {
+                            crate::decls::classes::sealed_decl_lowers_to_enum(pcd)
+                        })
+                    })
                     .unwrap_or(true); // unseen parent → treat as unsafe
                 if parent_sealed {
                     return false;
@@ -3226,7 +3236,11 @@ pub(crate) fn compute_polymorphic_base_classes(
     for unit in units {
         for item in &unit.items {
             if let juxc_ast::TopLevelDecl::Class(cd) = item {
-                if !cd.is_sealed && cd.permits.is_empty() && !cd.is_final {
+                // Sealed excludes only when it truly becomes an enum; a
+                // sealed base WITH state keeps `Rc<dyn …Kind>` and must be a
+                // candidate, or its `Kind` trait carries no methods and a call
+                // through a parent-typed reference hits the abstract stub.
+                if !crate::decls::classes::sealed_decl_lowers_to_enum(cd) && !cd.is_final {
                     candidate.insert(cd.name.text.clone());
                 }
                 if let Some(parent) = cd
@@ -5454,6 +5468,15 @@ impl RustEmitter {
             if simple.contains('.') || !mentions(simple) {
                 continue;
             }
+            // A name the PROGRAM declares shadows the imported one (JLS 6.4.1),
+            // so importing it would be wrong even if Rust allowed it — and Rust
+            // does not: `use std::boxed::Box;` beside the user's own
+            // `pub struct Box` is E0255, "the name `Box` is defined multiple
+            // times". The type checker already resolves the name to the user's
+            // class, so emitting this `use` made the two disagree.
+            if self.bare_name_is_user_type(simple) {
+                continue;
+            }
             if let Some(real) = sig.rust_path.as_ref() {
                 lines.push(format!("use {real};"));
             }
@@ -5477,6 +5500,11 @@ impl RustEmitter {
             // `import rust.std.*;` in a file that calls the built-in `spawn(…)`
             // would otherwise bind `std`'s unrelated thread `spawn` over it.
             if juxc_tycheck::BUILTINS.contains(&simple) {
+                continue;
+            }
+            // Nor a name the program declares: `use … as Name;` beside the
+            // user's own `pub struct Name` is the same E0255 collision.
+            if self.bare_name_is_user_type(simple) {
                 continue;
             }
             if let Some(real) = sig.rust_path.as_ref() {

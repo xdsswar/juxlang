@@ -4638,18 +4638,34 @@ impl<'a> Checker<'a> {
                     // **Field access through a polymorphic-base reference.**
                     // The receiver lowers to a `Rc<dyn …Kind>` trait object
                     // that can't expose struct fields directly — a generated
-                    // `__get_<f>` / `__set_<f>` accessor handles **public /
-                    // protected** fields (so those are allowed). A **private**
-                    // field has no accessor and is unreachable through a base
-                    // reference → E0437. `this` (concrete self) and concrete
-                    // receivers are unaffected.
+                    // `__get_<f>` / `__set_<f>` accessor stands in. Only a
+                    // **private** field lacks one, so only private is E0437.
+                    // `this` (concrete self) and concrete receivers are
+                    // unaffected.
+                    //
+                    // The allowed set is `!Private` and not an explicit list,
+                    // because that is exactly the gate the BACKEND uses when it
+                    // decides to emit the accessor (`exprs/field.rs`, and the
+                    // field-hook gate in `decls/classes.rs`). Spelled as
+                    // `Public | Protected` this check was the stricter of the
+                    // two, and an `internal` or package-private field was
+                    // rejected here — reported as "private", which it is not —
+                    // even though the accessor it needs was being generated.
+                    // Whether the *caller* may see the field is a separate
+                    // question, answered by the E0414/E0415/E0416 ladder below.
                     let recv_bare = name.rsplit('.').next().unwrap_or(name);
                     if !matches!(f.object.as_ref(), Expr::This(_))
                         && self.poly_bases.contains(recv_bare)
                     {
                         use juxc_ast::Visibility;
-                        if matches!(field.visibility, Visibility::Public | Visibility::Protected) {
-                            // Allowed — the backend rewrites to the accessor.
+                        if !matches!(field.visibility, Visibility::Private) {
+                            // An accessor exists; fall through to the ordinary
+                            // visibility ladder rather than returning, so a
+                            // field the caller genuinely cannot see is still
+                            // reported with the right code and wording.
+                            let vis = field.visibility;
+                            let declaring = declaring_class.to_string();
+                            self.check_visibility(vis, &declaring, field_name, "field", f.span);
                             return;
                         }
                         self.diagnostics.push(
@@ -10267,6 +10283,74 @@ mod tests {
             "#,
         );
         assert!(has(&d, code::Code::E0437_FieldThroughPolymorphicBase), "expected E0437: {d:?}");
+    }
+
+    /// An `internal` field through a polymorphic base is NOT private: the
+    /// backend generates the `__get_<f>` accessor for every non-private field,
+    /// so refusing it here made this check stricter than the code it guards —
+    /// and it said "private field" about a field that is not private.
+    #[test]
+    fn internal_field_through_polymorphic_base_is_allowed() {
+        let d = run(
+            r#"
+            public class Animal { internal String name; public Animal(String n){ this.name = n; } public String speak(){ return "..."; } }
+            public class Dog extends Animal { public Dog(String n){ super(n); } public String speak(){ return "woof"; } }
+            public void main() { Animal a = new Dog("Rex"); print(a.name); }
+            "#,
+        );
+        assert!(
+            !has(&d, code::Code::E0437_FieldThroughPolymorphicBase),
+            "an internal field has an accessor: {d:?}",
+        );
+    }
+
+    /// The same for a package-private field (no modifier at all).
+    #[test]
+    fn package_private_field_through_polymorphic_base_is_allowed() {
+        let d = run(
+            r#"
+            public class Animal { String name; public Animal(String n){ this.name = n; } public String speak(){ return "..."; } }
+            public class Dog extends Animal { public Dog(String n){ super(n); } public String speak(){ return "woof"; } }
+            public void main() { Animal a = new Dog("Rex"); print(a.name); }
+            "#,
+        );
+        assert!(
+            !has(&d, code::Code::E0437_FieldThroughPolymorphicBase),
+            "a package-private field has an accessor: {d:?}",
+        );
+    }
+
+    /// A `private` NESTED class is ordinary Java. Nested types are lifted to a
+    /// flat `Owner__Name` before the top-level visibility check runs, so every
+    /// one of them used to arrive there looking top-level and got E0432.
+    #[test]
+    fn private_nested_class_is_not_a_top_level_visibility_error() {
+        let d = run(
+            r#"
+            public class Registry {
+                private int tag;
+                public Registry() { this.tag = 1; }
+                private class Counter {
+                    private int n;
+                    public Counter() { this.n = 0; }
+                }
+            }
+            public void main() { var r = new Registry(); }
+            "#,
+        );
+        assert!(
+            !has(&d, code::Code::E0432_InvalidTopLevelVisibility),
+            "a private nested class is legal: {d:?}",
+        );
+    }
+
+    /// A genuinely top-level `private` class is still rejected — the fix must
+    /// not have turned the rule off.
+    #[test]
+    fn private_top_level_class_still_emits_e0432() {
+        let d = run("private class Hidden { }
+public void main() { }");
+        assert!(has(&d, code::Code::E0432_InvalidTopLevelVisibility), "expected E0432: {d:?}");
     }
 
     /// Reading a PUBLIC field through a polymorphic-base reference is allowed

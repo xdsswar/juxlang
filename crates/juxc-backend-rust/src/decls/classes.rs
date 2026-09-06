@@ -97,7 +97,27 @@ impl RustEmitter {
         // `match self { Shape::Circle(c) => c.describe(), … }`,
         // and each subclass picks up the inherited body through
         // the existing method-inlining pass.
-        if class_decl.is_sealed && !class_decl.permits.is_empty() {
+        // …but ONLY when the sealed parent carries no state of its own.
+        //
+        // The enum form has no place to keep the parent's fields: a variant
+        // wraps the SUBCLASS struct, and a subclass of a sealed parent skips
+        // the `__parent` field precisely because it is a variant (see the
+        // `parent_is_sealed` check below). So a sealed base with a field, an
+        // init block or a static block emitted Rust that did not compile —
+        // `no field 'id' on type '&Circle'`, and a call to a `__static_init`
+        // the enum never had. Every sealed base in the corpus is stateless,
+        // which is why the shape went unnoticed.
+        //
+        // A stateful one falls back to the ordinary polymorphic-base lowering
+        // (`Rc<dyn ShapeKind>`), which already handles inherited fields,
+        // statics and static blocks. `sealed` still restricts who may extend —
+        // that is a tycheck rule (E0422) and is unaffected by the choice of
+        // representation. What is given up is enum-shaped exhaustive matching
+        // for that hierarchy, which is a fair trade against not compiling.
+        let lowers_to_enum = self
+            .lookup_class_by_bare_or_fqn(&class_decl.name.text)
+            .is_some_and(sealed_lowers_to_enum);
+        if lowers_to_enum {
             self.emit_sealed_enum(class_decl);
             return;
         }
@@ -199,12 +219,17 @@ impl RustEmitter {
         // — there's no struct to embed. Skip the `__parent` field
         // and the Deref impls (those are only meaningful for the
         // value-class hierarchy).
+        // Only a parent that ACTUALLY lowered to an enum makes this class one
+        // of its variants. Asking `is_sealed` alone was the same drift in
+        // reverse: a subclass of a stateful sealed parent skipped `__parent`
+        // while the parent had emitted an ordinary struct, so the inherited
+        // fields existed nowhere.
         let parent_is_sealed = class_decl
             .extends
             .as_ref()
             .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare).map(|c| c.is_sealed))
-            .unwrap_or(false);
+            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare))
+            .is_some_and(sealed_lowers_to_enum);
         if let Some(parent_ty) = &class_decl.extends {
             if !parent_is_sealed {
                 self.w.emit_indent();
@@ -5622,4 +5647,49 @@ pub(crate) fn substitute_type_ref(
         ptr_depth: ty.ptr_depth,
         span: ty.span,
     }
+}
+
+/// Whether a sealed class is lowered to a **Rust enum** of its permitted
+/// subclasses, rather than to the ordinary polymorphic-base representation.
+///
+/// The enum form gives a sealed hierarchy exhaustive `match` dispatch and
+/// carries a subclass's identity through a parent-typed slot. What it has no
+/// room for is the PARENT's own state: a variant wraps the subclass struct,
+/// and a subclass of an enum-lowered parent deliberately has no `__parent`
+/// field, so an inherited field would live nowhere. A sealed base that
+/// declares a field, a property or a static initializer therefore falls back
+/// to `Rc<dyn …Kind>`, which already handles all three.
+///
+/// `sealed` still restricts who may extend either way — that is a tycheck rule
+/// (E0422) and has nothing to do with the representation.
+///
+/// This must be the single answer to the question: the parent decides how to
+/// emit itself and every subclass decides whether it is a variant, and if the
+/// two disagree the emitted crate does not compile.
+pub(crate) use juxc_tycheck::symbol_table::sealed_lowers_to_enum;
+
+/// [`sealed_lowers_to_enum`] asked of the AST declaration, for the passes that
+/// run before a [`juxc_tycheck::symbol_table::ClassSig`] is in hand.
+///
+/// A property lowers to a field, so it counts as state here exactly as it does
+/// in the signature.
+pub(crate) fn sealed_decl_lowers_to_enum(cd: &juxc_ast::ClassDecl) -> bool {
+    sealed_enum_rule(
+        cd.is_sealed,
+        !cd.permits.is_empty(),
+        !(cd.fields.is_empty() && cd.properties.is_empty()),
+        !cd.static_init_blocks.is_empty(),
+    )
+}
+
+/// The rule [`sealed_lowers_to_enum`] applies, spelled over the four facts that
+/// decide it, so the AST view above cannot answer differently from the
+/// signature view in tycheck.
+fn sealed_enum_rule(
+    is_sealed: bool,
+    has_permits: bool,
+    has_fields: bool,
+    has_static_init: bool,
+) -> bool {
+    is_sealed && has_permits && !has_fields && !has_static_init
 }
