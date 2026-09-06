@@ -257,6 +257,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | Code     | Description                                         | Source                        |
 |----------|-----------------------------------------------------|-------------------------------|
 | `E0200`  | Unexpected token                                     | Generic parse error            |
+| `E0201`  | Expression or type nesting exceeds the depth limit    | Grammar §A.2                   |
 | `E0210`  | `super(...)` or `this(...)` not first statement      | Grammar §A.2.4                 |
 | `E0211`  | Constructor missing required `super(...)` call      | Grammar §A.2.4                 |
 | `E0212`  | Varargs (`T...`) parameter is not the last parameter | Entry Points §E (varargs) |
@@ -285,6 +286,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0324`  | `@entry` function's signature incompatible with its symbol's ABI *(reserved)* | Entry Points §E.6 |
 | `E0325`  | `freestanding = true` but no `@entry` function declared *(reserved)* | Entry Points §E.6 |
 | `E0326`  | A class member named `main` with an entry-shaped signature is not `static` | Entry Points §E.1.2.2 |
+| `E0305`  | Identifier is a Rust keyword and cannot be lowered    | Bindgen §G.2                   |
 
 ### Type Checking (`E0400–E0499`)
 
@@ -347,6 +349,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0472`  | Missing required annotation parameter *(reserved)*   | Annotations §A.13              |
 | `E0473`  | Annotation is not `@Repeatable` but appears more than once *(reserved)* | Annotations §A.13 |
 | `E0474`  | Wrong type for annotation parameter *(reserved)*     | Annotations §A.13              |
+| `E0417`  | Unknown type name in a type position                  | Type system §T.1               |
 
 > **Collision history (resolved 2026-06-12):** the inference-failure
 > diagnostic ("generic type inference has no solution", §T.4.2) originally
@@ -357,7 +360,12 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 > during the generics wave, so the catalog's own §T.4.2 reservation was
 > used instead.)
 
-### Borrow Checker (`E0500–E0599`)
+### Borrow Checker, `unsafe` and FFI (`E0500–E0599`)
+
+The band opened as the borrow checker's, and `E0500`–`E0505` are still
+reserved for it. `E0506` onward are the `unsafe` / C-interop checks, which
+landed here first and cannot be moved: §D.5.1 forbids reassigning a published
+code, and all of `E0506`–`E0510` are emitted today.
 
 | Code     | Description                                                | Source                         |
 |----------|------------------------------------------------------------|--------------------------------|
@@ -368,6 +376,10 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0504`  | Use after move                                              | Lowering §C.6.1                |
 | `E0505`  | Cannot hold exclusive borrow across `await`                  | Async §18.1.6                 |
 | `E0506`  | `unsafe` operation outside `unsafe` block                    | Layout-ABI §L.5.2              |
+| `E0507`  | `delete` is not a Jux keyword — use a `drop { }` block       | Missing-defs §M (drop blocks)  |
+| `E0508`  | Type has no stable C representation in an FFI signature      | Layout-ABI §L.4                |
+| `E0509`  | `@layout(c)` on a non-aggregate (use a `struct`)             | Layout-ABI §L.1.2              |
+| `E0510`  | Explicit discriminant outside a C enum                       | Layout-ABI §L.2                |
 
 ### Lowering (`E0600–E0699`)
 
@@ -391,6 +403,10 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0721`  | Multi-catch types must be unrelated                         | Exceptions §X.3.6              |
 | `E0730`  | `?` operator's enclosing function has incompatible return    | Exceptions §X.4.1              |
 | `E0731`  | `?` requires explicit error-type conversion                 | Exceptions §X.4.3              |
+| `E0703`  | `for await` requires an async context                       | Async §18.6                    |
+| `E0704`  | `for await` requires a `Stream<T>` (and a stream requires `for await`) | Async §18.6         |
+| `E0705`  | Async call is never awaited                                 | Async §18.1.2                  |
+| `E0706`  | Async `try` mutates a local captured from outside it        | Async §18.1.6                  |
 
 ### Const Evaluation (`E0800–E0899`)
 
@@ -415,6 +431,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0910`  | `init` block escapes `this`                                  | Missing-defs §M.1.3            |
 | `E0930`  | Conflicting operator declarations (`<=>` plus an individual ordering operator); also: auto-derive cannot satisfy required interface | Operators §O.2.1 / §O.5.1 |
 | `E0931`  | `operator==` defined without `operator hash`                 | Operators §O.2.7               |
+| `E0932`  | An operator must be `public`                                 | Operators §O.2.8               |
 | `E0935`  | Call to a `delete`d operator                                 | Operators §O.3.4               |
 | `E0940`  | Out-parameter not assigned on every path                    | Missing-defs §M.4.2            |
 | `E0942`  | `out` argument is not an assignable place                   | Missing-defs §M.4.2            |
