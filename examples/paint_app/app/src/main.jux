@@ -1,0 +1,155 @@
+// paint.app — a real desktop paint program.
+//
+// Exercises, on purpose, the parts of the language a real app leans on:
+// a sealed tool hierarchy WITH state, a generic bounded undo stack, records,
+// nullable drag state, interface default methods, `=>` type tests, closures
+// over a Vec, and heap framebuffers.
+import paint.ui.Canvas;
+import paint.ui.Point;
+import paint.ui.Tool;
+import paint.ui.Brush;
+import paint.ui.Eraser;
+import paint.ui.LineTool;
+import paint.ui.RectTool;
+import paint.ui.FillTool;
+import paint.ui.History;
+
+import rust.minifb.Window;
+import rust.minifb.WindowOptions;
+import rust.minifb.MouseMode;
+import rust.minifb.MouseButton;
+import rust.minifb.Key;
+import rust.std.*;
+
+const int W = 720;
+const int H = 480;
+const int BAR = 96;             // left toolbar width
+const u32 PAPER = (u32) 0x00FFFFFF;
+const u32 CHROME = (u32) 0x00202430;
+
+/// The palette, as a plain heap vector of ARGB swatches.
+public Vec<u32> palette() {
+    var p = new Vec<u32>();
+    p.push((u32) 0x00000000);
+    p.push((u32) 0x00D64545);
+    p.push((u32) 0x002E7D32);
+    p.push((u32) 0x001565C0);
+    p.push((u32) 0x00F9A825);
+    p.push((u32) 0x006A1B9A);
+    return p;
+}
+
+/// The tools, in toolbar order. Returned as the BASE type so the whole app
+/// works through `Tool` and virtual dispatch picks the override.
+public Vec<Tool> tools() {
+    var t = new Vec<Tool>();
+    t.push(new Brush(2));
+    t.push(new LineTool(1));
+    t.push(new RectTool(1));
+    t.push(new FillTool());
+    t.push(new Eraser(4, PAPER));
+    return t;
+}
+
+public void main() {
+    var canvas = new Canvas(W, H);
+    canvas.clear(PAPER);
+
+    var tl = tools();
+    var pal = palette();
+    var undo = new History<Canvas>(12);
+
+    int toolIdx = 0;
+    int colorIdx = 1;
+    Point? dragFrom = null;
+    bool prevDown = false;
+    int strokes = 0;
+
+    var opts = new WindowOptions();
+    var window = new Window("Jux Paint", (uint) W, (uint) H, opts);
+    window.set_target_fps(60);
+
+    print("Jux Paint — pick a tool on the left, drag to draw. U undoes, C clears, Esc quits.");
+
+    while (window.is_open()) {
+        if (window.is_key_down(Key.Escape)) { return; }
+
+        // ---- keyboard ----
+        if (window.is_key_down(Key.C)) {
+            undo.push(canvas.snapshot());
+            canvas.clear(PAPER);
+        }
+        if (window.is_key_down(Key.U)) {
+            Canvas? prev = undo.pop();
+            if (prev != null) { canvas.blit(prev!!); }
+        }
+
+        // ---- mouse ----
+        bool down = window.get_mouse_down(MouseButton.Left);
+        var mp = window.get_mouse_pos(MouseMode.Clamp);
+        int mx = 0;
+        int my = 0;
+        if (mp != null) {
+            var (fx, fy) = mp!!;
+            mx = (int) fx;
+            my = (int) fy;
+        }
+
+        Tool active = tl[toolIdx];
+
+        if (down && !prevDown) {
+            // Press: either hit the toolbar, or begin a stroke.
+            if (mx < BAR) {
+                int row = my / 40;
+                if (row < tl.len()) {
+                    toolIdx = row;
+                    print("tool: " + tl[row].name() + " " + tl[row].tag());
+                } else {
+                    int swatch = (my - tl.len() * 40) / 28;
+                    if (swatch >= 0 && swatch < pal.len()) { colorIdx = swatch; }
+                }
+            } else {
+                undo.push(canvas.snapshot());
+                dragFrom = new Point(mx, my);
+                if (active.continuous()) {
+                    active.apply(canvas, dragFrom!!, dragFrom!!, pal[colorIdx]);
+                }
+            }
+        } else if (down && prevDown && dragFrom != null) {
+            // Drag: a continuous tool paints every frame and re-anchors.
+            if (active.continuous()) {
+                Point here = new Point(mx, my);
+                active.apply(canvas, dragFrom!!, here, pal[colorIdx]);
+                dragFrom = here;
+            }
+        } else if (!down && prevDown && dragFrom != null) {
+            // Release: a shape tool commits once, from anchor to release point.
+            if (!active.continuous()) {
+                active.apply(canvas, dragFrom!!, new Point(mx, my), pal[colorIdx]);
+            }
+            dragFrom = null;
+            strokes = strokes + 1;
+        }
+        prevDown = down;
+
+        // ---- chrome ----
+        canvas.fillRect(0, 0, BAR, H, CHROME);
+        for (int i = 0; i < tl.len(); i++) {
+            u32 face = (u32) 0x00404860;
+            if (i == toolIdx) { face = (u32) 0x0090A0C0; }
+            canvas.fillRect(8, 8 + i * 40, BAR - 16, 32, face);
+            canvas.strokeRect(8, 8 + i * 40, BAR - 16, 32, (u32) 0x00FFFFFF);
+        }
+        int palTop = tl.len() * 40 + 8;
+        for (int i = 0; i < pal.len(); i++) {
+            canvas.fillRect(8, palTop + i * 28, BAR - 16, 22, pal[i]);
+            u32 edge = (u32) 0x00808080;
+            if (i == colorIdx) { edge = (u32) 0x00FFFFFF; }
+            canvas.strokeRect(8, palTop + i * 28, BAR - 16, 22, edge);
+        }
+
+        window.update_with_buffer(canvas.buf, (uint) W, (uint) H);
+    }
+
+    print("strokes drawn: " + strokes + ", undo depth left: " + undo.depth());
+}
