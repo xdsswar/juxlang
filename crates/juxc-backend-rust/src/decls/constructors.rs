@@ -368,8 +368,11 @@ impl RustEmitter {
             .extends
             .as_ref()
             .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare).map(|c| c.is_sealed))
-            .unwrap_or(false);
+            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare))
+            // The parent is a variant-carrying enum only when it actually
+            // lowered to one; `is_sealed` alone let a stateful sealed parent
+            // emit an ordinary struct while its subclasses skipped `__parent`.
+            .is_some_and(crate::decls::classes::sealed_lowers_to_enum);
         if let Some(parent_ty) = &class_decl.extends {
             if !parent_is_sealed {
                 let super_args = extract_super_args(ctor);
@@ -593,8 +596,11 @@ impl RustEmitter {
             .extends
             .as_ref()
             .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare).map(|c| c.is_sealed))
-            .unwrap_or(false);
+            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare))
+            // The parent is a variant-carrying enum only when it actually
+            // lowered to one; `is_sealed` alone let a stateful sealed parent
+            // emit an ordinary struct while its subclasses skipped `__parent`.
+            .is_some_and(crate::decls::classes::sealed_lowers_to_enum);
         // Inherited parent — emit the `__parent` slot first, before
         // the class's own fields, matching the struct declaration's
         // field order.
@@ -1405,8 +1411,11 @@ impl RustEmitter {
             .extends
             .as_ref()
             .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare).map(|c| c.is_sealed))
-            .unwrap_or(false);
+            .and_then(|bare| self.lookup_class_by_bare_or_fqn(bare))
+            // The parent is a variant-carrying enum only when it actually
+            // lowered to one; `is_sealed` alone let a stateful sealed parent
+            // emit an ordinary struct while its subclasses skipped `__parent`.
+            .is_some_and(crate::decls::classes::sealed_lowers_to_enum);
         // Inherited parent — invoke the parent's zero-arg constructor.
         // For parents whose ctor takes arguments, the user MUST declare
         // an explicit constructor with `super(args);`; the synthetic

@@ -3540,6 +3540,22 @@ impl RustEmitter {
         let Expr::Field(f) = &*call.callee else {
             return false;
         };
+        // **Mutating a collection reached through `get(…)!!`.**
+        // `map.get(k)!!.push(v)` is the Java idiom (`map.get(k).add(v)`), and
+        // it silently did nothing: a reference getter lowers to
+        // `.get(k).cloned()` on the read path, so the `push` landed on a
+        // temporary clone that was dropped at the end of the statement. No
+        // warning, no error — the program just lost the write.
+        //
+        // A read still wants that clone (a Jux `T?` is an owned `Option<V>`);
+        // only this shape, where the unwrapped value is the RECEIVER of a
+        // mutating method, needs the `_mut` getter and no clone.
+        if self.emit_mut_through_option_get(call, method, &f.object) {
+            if method == "pop" && call.args.is_empty() {
+                self.w.push_str(".unwrap()");
+            }
+            return true;
+        }
         self.emit_stdlib_receiver(&f.object);
         self.w.push('.');
         self.w.push_str(method);
@@ -3553,6 +3569,92 @@ impl RustEmitter {
         if method == "pop" && call.args.is_empty() {
             self.w.push_str(".unwrap()");
         }
+        true
+    }
+
+    /// Emit `recv.get(k)!!.<mutator>(args)` as
+    /// `recv.get_mut(&(k)).unwrap_or_else(|| panic!(…)).<mutator>(args)`.
+    ///
+    /// Returns `false` (and emits nothing) unless `receiver` is exactly a
+    /// `!!` over one of the reference getters on a `rust.std` collection, so
+    /// every other shape falls through to the paths that already handle it.
+    ///
+    /// The `_mut` getter is the whole point: `get` hands back `Option<&V>`,
+    /// which the read path clones into an owned `Option<V>` to match Jux's
+    /// `T?`. Mutating that clone compiles and does nothing. `get_mut` yields
+    /// `Option<&mut V>`, and the mutation lands in the collection.
+    fn emit_mut_through_option_get(
+        &mut self,
+        call: &CallExpr,
+        method: &str,
+        receiver: &Expr,
+    ) -> bool {
+        // Must be `<something>!!`.
+        let Expr::NotNullAssert(inner, _) = receiver else {
+            return false;
+        };
+        // …over a call…
+        let Expr::Call(get_call) = &**inner else {
+            return false;
+        };
+        let Expr::Field(get_field) = &*get_call.callee else {
+            return false;
+        };
+        // …to one of the reference getters…
+        let getter = get_field.field.text.as_str();
+        let Some(mut_getter) = mut_getter_for(getter) else {
+            return false;
+        };
+        // …on a `rust.std` collection. The type comes from the same two places
+        // the caller reads it from: a declared local, else the recorded span.
+        let inner_recv = &get_field.object;
+        let inner_ty = match &**inner_recv {
+            Expr::Path(qn) if qn.segments.len() == 1 => self
+                .local_types
+                .iter()
+                .rev()
+                .find_map(|scope| scope.get(qn.segments[0].text.as_str()).cloned()),
+            _ => None,
+        }
+        .or_else(|| {
+            self.expr_types
+                .get(&crate::exprs::expr_span_of(inner_recv))
+                .cloned()
+        });
+        let Some(juxc_tycheck::Ty::User { name, .. }) = inner_ty else {
+            return false;
+        };
+        let bare = name.rsplit('.').next().unwrap_or(&name);
+        if !name.starts_with("rust.std")
+            || !matches!(
+                bare,
+                "Vec" | "HashMap" | "HashSet" | "VecDeque" | "BTreeMap" | "BTreeSet",
+            )
+        {
+            return false;
+        }
+
+        self.emit_stdlib_receiver(&get_field.object);
+        self.w.push('.');
+        self.w.push_str(mut_getter);
+        self.w.push('(');
+        // `get_mut(k)` borrows its key; the positional getters take no argument.
+        if getter == "get" && !get_call.args.is_empty() {
+            self.w.push_str("&(");
+            self.emit_call_args(get_call);
+            self.w.push(')');
+        }
+        self.w.push(')');
+        // The same panic text the generic `!!` lowering uses, so a missing key
+        // reports identically however it was reached.
+        self.w.push_str(
+            ".unwrap_or_else(|| panic!(\"NullPointerException: `!!` asserted on a null value\"))",
+        );
+        self.w.push('.');
+        self.w.push_str(method);
+        self.w.push('(');
+        self.emit_call_args(call);
+        self.w.push(')');
         true
     }
 
@@ -4568,6 +4670,24 @@ pub(crate) fn literal_numeric_ty(e: &Expr) -> Option<juxc_tycheck::Primitive> {
                 l
             })
         }
+        _ => None,
+    }
+}
+
+/// The `&mut`-yielding twin of a `rust.std` reference getter, or `None` when
+/// the method is not one of them.
+///
+/// `HashMap`/`BTreeMap` have `get_mut`; `Vec`/`VecDeque` have `get_mut` plus
+/// the positional `first_mut`/`last_mut`/`front_mut`/`back_mut`. A set has no
+/// mutable getter at all (its elements are its keys), which `get` on a
+/// `HashSet` correctly does not reach here for.
+fn mut_getter_for(getter: &str) -> Option<&'static str> {
+    match getter {
+        "get" => Some("get_mut"),
+        "first" => Some("first_mut"),
+        "last" => Some("last_mut"),
+        "front" => Some("front_mut"),
+        "back" => Some("back_mut"),
         _ => None,
     }
 }

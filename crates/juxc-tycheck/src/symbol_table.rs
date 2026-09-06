@@ -1821,6 +1821,20 @@ fn seed_unqualified_from_import(
         ImportSpec::Path { name, wildcard: true, .. } => {
             // `import a.b.*;` — every FQN under `a.b.` (single segment
             // remaining) joins the unqualified set.
+            //
+            // **`or_insert`, not `insert`.** A type-import-on-demand is the
+            // WEAKEST way a simple name can be bound (JLS 6.4.1, 7.5.2): it is
+            // shadowed by a type declared in this compilation unit, by a
+            // same-package sibling, and by a single-type import. Those are all
+            // seeded before this runs, so declining to overwrite is exactly the
+            // Java rule.
+            //
+            // With a plain `insert`, a file that declared its own `Box` and
+            // also wrote `import rust.std.*;` lost its own class: every use
+            // resolved to `rust.std.Box`, and the errors that followed
+            // ("no method `get` on type `rust.std.Box`", and type arguments
+            // substituted against the wrong parameter list) pointed anywhere
+            // but at the import.
             let prefix = name
                 .segments
                 .iter()
@@ -1831,7 +1845,7 @@ fn seed_unqualified_from_import(
             for fqn in all_fqns {
                 if let Some(rest) = fqn.strip_prefix(&pat) {
                     if !rest.contains('.') {
-                        out.insert(rest.to_string(), (*fqn).clone());
+                        out.entry(rest.to_string()).or_insert_with(|| (*fqn).clone());
                     }
                 }
             }
@@ -2619,6 +2633,29 @@ fn implements_provides_default(
     false
 }
 
+/// Whether a sealed class is lowered to a **Rust enum** of its permitted
+/// subclasses, rather than to the polymorphic-base representation.
+///
+/// The enum form gives a sealed hierarchy exhaustive `match` dispatch and
+/// carries a subclass's identity through a parent-typed slot. What it has no
+/// room for is the PARENT's own state: a variant wraps the subclass struct, and
+/// a subclass of an enum-lowered parent has no `__parent` field, so an
+/// inherited field would live nowhere. A sealed base that declares a field or a
+/// static initializer therefore keeps the ordinary polymorphic-base lowering,
+/// which already handles inherited fields, statics and virtual dispatch.
+///
+/// `sealed` still restricts who may extend either way — that is E0422, and has
+/// nothing to do with the representation.
+///
+/// This lives here, beside the signature it reads, because BOTH crates decide
+/// on it: tycheck to know which classes are polymorphic bases, and the backend
+/// to choose an emission for the parent, each subclass, each constructor and
+/// each upcast. Every one of those has to give the same answer or the emitted
+/// crate does not compile.
+pub fn sealed_lowers_to_enum(sig: &ClassSig) -> bool {
+    sig.is_sealed && !sig.permits.is_empty() && sig.fields.is_empty() && !sig.has_static_init
+}
+
 /// Bare names of every **polymorphic base class** — a non-sealed, non-final,
 /// non-generic class extended by ≥1 other class. Mirrors the backend's
 /// `compute_polymorphic_base_classes`: these are the classes whose value slots
@@ -2629,8 +2666,12 @@ pub fn polymorphic_base_bare_names(table: &SymbolTable) -> std::collections::Has
     let mut extended: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (fqn, sig) in &table.classes {
         let bare = fqn.rsplit('.').next().unwrap_or(fqn).to_string();
-        if !sig.is_sealed && sig.permits.is_empty() && !sig.is_final && sig.generic_params.is_empty()
-        {
+        // A sealed class is excluded only when it actually becomes an ENUM.
+        // A sealed base WITH state keeps the `Rc<dyn …Kind>` representation and
+        // must be listed here, or its `Kind` trait is emitted with no methods
+        // and a call through a parent-typed reference reaches the abstract
+        // `unimplemented!()` stub instead of the override.
+        if !sealed_lowers_to_enum(sig) && !sig.is_final && sig.generic_params.is_empty() {
             candidate.insert(bare);
         }
         let parent_bare = sig
@@ -3141,17 +3182,26 @@ fn check_method_modifier_combinations(
 }
 
 /// Top-level types may only be `public` or package-private
-/// (no modifier). Nested types — when Jux gets them — can use
-/// the narrower modifiers, but at the unit's top level
-/// `private` and `protected` are nonsense: nothing can name the
-/// type from outside the file where it was declared. Fires
-/// **E0432**.
+/// (no modifier): at the unit's top level `private` and
+/// `protected` are nonsense, because nothing can name the type
+/// from outside the file where it was declared. Fires **E0432**.
+///
+/// A **nested** type is exempt, and Java makes `private class
+/// Ledger { … }` inside a class the ordinary way to write a
+/// helper nobody else should see. Nested types are lifted at
+/// parse time to a flat `Owner__Name` in this same table (see
+/// `juxc_parse::compilation::collect_nested_flat`), so without
+/// [`is_lifted_nested_type`] every one of them arrives here
+/// looking top-level and a legal private helper is rejected.
 fn check_top_level_visibility(
     table: &SymbolTable,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     use juxc_ast::Visibility;
     for (name, class) in &table.classes {
+        if is_lifted_nested_type(name, table) {
+            continue;
+        }
         match class.visibility {
             Visibility::Private | Visibility::Protected => {
                 diagnostics.push(
@@ -3169,6 +3219,9 @@ fn check_top_level_visibility(
         }
     }
     for (name, iface) in &table.interfaces {
+        if is_lifted_nested_type(name, table) {
+            continue;
+        }
         match iface.visibility {
             Visibility::Private | Visibility::Protected => {
                 diagnostics.push(
@@ -3185,6 +3238,21 @@ fn check_top_level_visibility(
             _ => {}
         }
     }
+}
+
+/// Whether `name` is a nested type that the parser lifted to the
+/// unit's top level.
+///
+/// Nesting is encoded in the name: `Outer__Inner`, and one more
+/// `__Deeper` per level. Splitting at the LAST separator and
+/// asking whether the prefix is itself a known type answers the
+/// question at any depth — `A__B__C` is nested because `A__B` is
+/// a type — while an ordinary class that merely contains a double
+/// underscore in its own name is not mistaken for one, since its
+/// prefix names nothing.
+fn is_lifted_nested_type(name: &str, table: &SymbolTable) -> bool {
+    name.rsplit_once("__")
+        .is_some_and(|(owner, _)| table.is_type_name(owner))
 }
 
 /// Helper: human-readable visibility name for diagnostics.
