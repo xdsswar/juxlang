@@ -4272,6 +4272,72 @@ impl<'a> Checker<'a> {
         declaring_pkg == accessor_pkg
     }
 
+    /// JLS §6.6.2.1 — the qualifier rule for `protected` across a package
+    /// boundary.
+    ///
+    /// Inside a subclass `S` of `C` declared in a DIFFERENT package from `C`, a
+    /// `protected` INSTANCE member of `C` may only be reached through a
+    /// qualifier whose static type is `S` or a subclass of `S`. So `this.m` and
+    /// `s.m` for an `s` typed `S` are fine, while `c.m` for a `c` typed `C` is
+    /// not — even though `S` inherits `m`.
+    ///
+    /// `protected` means "code responsible for the implementation of this
+    /// object", and a subclass is responsible for instances of ITSELF, not for
+    /// an arbitrary sibling subclass that merely shares `C` as an ancestor.
+    ///
+    /// Deliberately narrow, because it is a TIGHTENING: same-package access is
+    /// untouched (there `protected` already grants package access), `this` and
+    /// `super` are untouched, and a static member has no receiver to be
+    /// responsible for.
+    fn check_protected_qualifier(
+        &mut self,
+        vis: juxc_ast::Visibility,
+        declaring_class: &str,
+        member_name: &str,
+        member_kind: &str,
+        qualifier_ty: &str,
+        through_this: bool,
+        access_span: juxc_source::Span,
+    ) {
+        use juxc_ast::Visibility;
+        if !matches!(vis, Visibility::Protected) || through_this {
+            return;
+        }
+        // Same package: `protected` grants package access, so the qualifier
+        // does not matter.
+        if self.same_package_as(declaring_class) {
+            return;
+        }
+        let Some(accessor) = self.env.current_class.clone() else { return };
+        // Only inside a subclass. Anywhere else the ordinary ladder has
+        // already rejected the access, and reporting twice helps nobody.
+        let in_subclass = accessor != declaring_class
+            && crate::ty::walk_extends_reaches(&accessor, declaring_class, self.symbols);
+        if !in_subclass {
+            return;
+        }
+        let qualifier = qualifier_ty.rsplit('.').next().unwrap_or(qualifier_ty);
+        let accessor_bare = accessor.rsplit('.').next().unwrap_or(&accessor);
+        if qualifier == accessor_bare
+            || crate::ty::walk_extends_reaches(qualifier, &accessor, self.symbols)
+        {
+            return;
+        }
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0415_ProtectedAccess,
+                format!(
+                    "protected {member_kind} `{member_name}` of `{declaring_class}` cannot be \
+                     reached through a `{qualifier}` — `{accessor_bare}` is in a different \
+                     package, so it may only use a qualifier typed `{accessor_bare}` or a \
+                     subclass of it (JLS 6.6.2.1)",
+                ),
+            )
+            .with_span(access_span)
+            .with_help("access it through `this`, or hold the value at the subclass type"),
+        );
+    }
+
     fn check_visibility(
         &mut self,
         vis: juxc_ast::Visibility,
@@ -4666,6 +4732,19 @@ impl<'a> Checker<'a> {
                             let vis = field.visibility;
                             let declaring = declaring_class.to_string();
                             self.check_visibility(vis, &declaring, field_name, "field", f.span);
+                            // Same JLS 6.6.2.1 rule as the concrete path. A
+                            // polymorphic base is exactly where this bites:
+                            // `other.tag` on a base-typed sibling is the
+                            // shape the rule exists to reject.
+                            self.check_protected_qualifier(
+                                vis,
+                                &declaring,
+                                field_name,
+                                "field",
+                                name,
+                                matches!(f.object.as_ref(), Expr::This(_)),
+                                f.span,
+                            );
                             return;
                         }
                         self.diagnostics.push(
@@ -4690,6 +4769,18 @@ impl<'a> Checker<'a> {
                         &declaring,
                         field_name,
                         "field",
+                        f.span,
+                    );
+                    // JLS 6.6.2.1 — across a package boundary a subclass may
+                    // only reach an inherited `protected` member through a
+                    // qualifier typed as itself.
+                    self.check_protected_qualifier(
+                        vis,
+                        &declaring,
+                        field_name,
+                        "field",
+                        name,
+                        matches!(f.object.as_ref(), Expr::This(_)),
                         f.span,
                     );
                     return;
@@ -10270,6 +10361,61 @@ mod tests {
     // ----------------------------------------------------------------
     // Stage-2 deferred-case diagnostics (E0437 / E0438)
     // ----------------------------------------------------------------
+
+    /// JLS 6.6.2.1: across a package boundary, a subclass may reach an
+    /// inherited `protected` member only through a qualifier typed as itself.
+    /// A sibling subclass typed as the BASE is not permitted, even though the
+    /// accessor inherits the member.
+    #[test]
+    fn protected_through_a_base_qualifier_across_packages_is_e0415() {
+        let d = run_two(
+            "package base;
+public class C { protected int tag; public C() { this.tag = 0; } }",
+            "package sub;
+import base.C;
+public class S extends C { public int peek(C other) { return other.tag; } }",
+        );
+        assert!(has(&d, code::Code::E0415_ProtectedAccess), "expected E0415: {d:?}");
+    }
+
+    /// The same access through `this` is exactly what `protected` is for.
+    #[test]
+    fn protected_through_this_across_packages_is_allowed() {
+        let d = run_two(
+            "package base;
+public class C { protected int tag; public C() { this.tag = 0; } }",
+            "package sub;
+import base.C;
+public class S extends C { public int peek() { return this.tag; } }",
+        );
+        assert!(!has(&d, code::Code::E0415_ProtectedAccess), "`this` is always permitted: {d:?}");
+    }
+
+    /// A qualifier typed as the SUBCLASS is permitted.
+    #[test]
+    fn protected_through_a_subclass_qualifier_is_allowed() {
+        let d = run_two(
+            "package base;
+public class C { protected int tag; public C() { this.tag = 0; } }",
+            "package sub;
+import base.C;
+public class S extends C { public int peek(S other) { return other.tag; } }",
+        );
+        assert!(!has(&d, code::Code::E0415_ProtectedAccess), "a qualifier typed S is permitted: {d:?}");
+    }
+
+    /// Same PACKAGE is unaffected — there `protected` already grants package
+    /// access, so the qualifier rule does not apply at all.
+    #[test]
+    fn protected_through_a_base_qualifier_in_one_package_is_allowed() {
+        let d = run_two(
+            "package one;
+public class C { protected int tag; public C() { this.tag = 0; } }",
+            "package one;
+public class S extends C { public int peek(C other) { return other.tag; } }",
+        );
+        assert!(!has(&d, code::Code::E0415_ProtectedAccess), "same package is unaffected: {d:?}");
+    }
 
     /// Reading a PRIVATE field through a polymorphic-base reference → E0437
     /// (no accessor is generated for private fields).

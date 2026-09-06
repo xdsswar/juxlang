@@ -840,3 +840,45 @@ impl std::fmt::Display for Code {
         f.write_str(self.as_str())
     }
 }
+
+#[cfg(test)]
+mod catalog_tests {
+    /// Every code the compiler can emit must appear in the spec catalog.
+    ///
+    /// This file's own header says allocating a number is a SPEC change —
+    /// §D.4 first, then the enum. Twelve codes had gone the other way and were
+    /// emitted to users while documented nowhere, which also left
+    /// `juxc explain` and the docs URL every diagnostic prints with nothing to
+    /// point at. Nothing enforced the rule, so this does.
+    ///
+    /// The list is read out of THIS file's `as_str` arms rather than from a
+    /// hand-kept array, so a new variant is covered the moment it is written.
+    #[test]
+    fn every_code_is_in_the_spec_catalog() {
+        let source = include_str!("code.rs");
+        let catalog = include_str!("../../../Architecture/JUX-DIAGNOSTICS-ADDENDUM.md");
+
+        let mut emitted: Vec<String> = Vec::new();
+        for line in source.lines() {
+            // `Code::E0432_InvalidTopLevelVisibility => "E0432",`
+            let Some((_, rest)) = line.split_once("=> \"") else { continue };
+            let Some((code, _)) = rest.split_once('"') else { continue };
+            let is_code = code.len() == 5
+                && matches!(code.as_bytes()[0], b'E' | b'W')
+                && code[1..].bytes().all(|b| b.is_ascii_digit());
+            if is_code {
+                emitted.push(code.to_string());
+            }
+        }
+        assert!(emitted.len() > 50, "the arm scan found almost nothing — did the format change?");
+
+        let missing: Vec<&String> = emitted
+            .iter()
+            .filter(|code| !catalog.contains(&format!("`{code}`")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "emitted but absent from JUX-DIAGNOSTICS-ADDENDUM.md §D.4: {missing:?}",
+        );
+    }
+}

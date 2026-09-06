@@ -247,7 +247,7 @@ fn cached_or_generated_std_stub() -> anyhow::Result<Option<SourceFile>> {
         if let Some(parent) = cache.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(cache, &text);
+        let _ = write_atomic(cache, &text);
     }
     let path = cache.unwrap_or_else(|| PathBuf::from("rust.std.jux.d"));
     Ok(Some(SourceFile::new(path, text)))
@@ -347,6 +347,28 @@ fn rustc_sysroot(toolchain: Option<&str>) -> Option<PathBuf> {
     }
 }
 
+/// Write `contents` to `path` so a concurrent reader never sees a partial file.
+///
+/// The stub caches are shared: an editor's language server and a CLI build can
+/// regenerate the same path at the same time, and a plain `fs::write` truncates
+/// first, so a reader in that window gets a half-written stub and reports
+/// nonsense about the standard library. Writing beside the target and renaming
+/// makes the swap atomic — a reader sees either the old file or the new one.
+///
+/// Surfaced as flaky tests first: two driver tests failed on the run right
+/// after a cache-version bump (when the multi-megabyte regeneration actually
+/// happens) and passed on every run after.
+fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    std::fs::write(&tmp, contents)?;
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
 /// Read the [`STD_MERGE_CRATES`] JSON from `json_dir`, merge them into one
 /// `rust.std` stub via [`juxc_bindgen`], and return the rendered `.jux.d` text
 /// (prefixed with the [`std_cache_header`] version marker). `Ok(None)` when a
@@ -502,7 +524,7 @@ pub fn resolve_crate_stub(
     if let Some(parent) = cache.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&cache, stub)?;
+    write_atomic(&cache, &stub)?;
     Ok(cache)
 }
 

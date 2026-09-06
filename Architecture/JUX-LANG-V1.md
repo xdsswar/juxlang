@@ -352,6 +352,20 @@ The visibility rules form a strict hierarchy from least to most restrictive:
 
 For top-level (non-class) declarations: `private` means file-scope.
 
+**`protected` across a package boundary (JLS §6.6.2.1).** Inside a subclass
+`S` of `C`, when `S` is in a DIFFERENT package from `C`, a `protected`
+*instance* member of `C` may only be reached through a qualifier whose static
+type is `S` or a subclass of `S`. `this.m`, an unqualified `m`, and `s.m` for
+an `s` typed `S` are all fine; `c.m` for a `c` typed `C` is not, even though
+`S` inherits `m`.
+
+The rule exists because `protected` says "code responsible for the
+implementation of this object", and a subclass is only responsible for
+instances of ITSELF — not for an arbitrary sibling subclass that merely shares
+`C` as an ancestor. Same-package access is unaffected, since `protected`
+already grants package access there, and `static` members are unaffected
+because they have no receiver to be responsible for. Violations are `E0415`.
+
 These apply to the **type itself**, not only to its members: naming, importing
 or instantiating a type declared without `public` from another package is
 **E0416**, the same as reaching a package-private member. A modifier the
