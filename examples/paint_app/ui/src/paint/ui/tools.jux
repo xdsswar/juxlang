@@ -1,0 +1,111 @@
+// paint.ui — the tool hierarchy and a generic undo stack.
+package paint.ui;
+
+import rust.std.*;
+
+/// Anything the toolbar can paint.
+public interface Paintable {
+    /// The tool's name, shown in the status line.
+    String name();
+    /// Apply the tool between two drag points.
+    void apply(Canvas c, Point from, Point to, u32 color);
+    /// Whether a drag paints continuously (brush) or only on release (shapes).
+    default bool continuous() { return true; }
+}
+
+/// A sealed hierarchy WITH state on the base: `radius` and a shared id counter
+/// live here, and every subclass inherits them.
+public abstract sealed class Tool implements Paintable permits Brush, Eraser, LineTool, RectTool, FillTool {
+    protected static int made = 0;
+    public static final String FAMILY = "tool";
+    protected final int id;
+    protected int radius;
+
+    static { made = 0; }
+
+    public Tool(int radius) {
+        this.radius = radius;
+        made = made + 1;
+        this.id = made;
+    }
+
+    public int slot() { return this.id; }
+    public int nib() { return this.radius; }
+    public void widen(int by) { this.radius = this.radius + by; }
+    public final String tag() { return FAMILY + "#" + this.id; }
+}
+
+public final class Brush extends Tool {
+    public Brush(int radius) { super(radius); }
+    @Override public String name() { return "Brush"; }
+    @Override public void apply(Canvas c, Point from, Point to, u32 color) {
+        c.line(from, to, this.radius, color);
+    }
+}
+
+public final class Eraser extends Tool {
+    private u32 paper;
+    public Eraser(int radius, u32 paper) { super(radius); this.paper = paper; }
+    @Override public String name() { return "Eraser"; }
+    @Override public void apply(Canvas c, Point from, Point to, u32 color) {
+        c.line(from, to, this.radius + 2, this.paper);
+    }
+}
+
+public final class LineTool extends Tool {
+    public LineTool(int radius) { super(radius); }
+    @Override public String name() { return "Line"; }
+    @Override public bool continuous() { return false; }
+    @Override public void apply(Canvas c, Point from, Point to, u32 color) {
+        c.line(from, to, this.radius, color);
+    }
+}
+
+public final class RectTool extends Tool {
+    public RectTool(int radius) { super(radius); }
+    @Override public String name() { return "Rect"; }
+    @Override public bool continuous() { return false; }
+    @Override public void apply(Canvas c, Point from, Point to, u32 color) {
+        int x = from.x;
+        if (to.x < x) { x = to.x; }
+        int y = from.y;
+        if (to.y < y) { y = to.y; }
+        int w = abs(to.x - from.x);
+        int h = abs(to.y - from.y);
+        c.strokeRect(x, y, w, h, color);
+    }
+}
+
+public final class FillTool extends Tool {
+    public FillTool() { super(0); }
+    @Override public String name() { return "Fill"; }
+    @Override public bool continuous() { return false; }
+    @Override public void apply(Canvas c, Point from, Point to, u32 color) {
+        c.floodFill(to.x, to.y, color);
+    }
+}
+
+/// A generic LIFO stack with a bounded depth — the undo history.
+public class History<T> {
+    private Vec<T> items;
+    private int limit;
+
+    public History(int limit) {
+        this.items = new Vec<T>();
+        this.limit = limit;
+    }
+
+    public int depth() { return this.items.len(); }
+    public bool isEmpty() { return this.items.len() == 0; }
+
+    public void push(T value) {
+        if (this.items.len() >= this.limit) { this.items.remove(0); }
+        this.items.push(value);
+    }
+
+    /// The most recent entry, or null when there is nothing to undo.
+    public T? pop() {
+        if (this.items.len() == 0) { return null; }
+        return this.items.pop();
+    }
+}

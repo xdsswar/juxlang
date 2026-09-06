@@ -10,9 +10,11 @@ import rust.std.Vec;
 public class Stack<T> {
     private Vec<T> data = new Vec<T>();
     public void push(T v) { this.data.push(v); }
-    // This `pop()` returns T directly (the inner `this.data.pop()` is the real
-    // Vec::pop that legitimately needs the unwrap).
-    public T pop() { return this.data.pop(); }
+    // This `pop()` returns T directly. The inner `rust.std.Vec::pop()` is
+    // declared `T?` by the scanned stub, so the unwrap is written HERE, in the
+    // source, rather than injected by the backend behind the type checker's
+    // back. `isEmpty()` is checked by the caller before every pop.
+    public T pop() { return this.data.pop()!!; }
     public bool isEmpty() { return this.data.len() == 0; }
 }
 

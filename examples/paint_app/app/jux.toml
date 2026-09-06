@@ -1,0 +1,11 @@
+[package]
+name = "paint.app"
+version = "0.1.0"
+
+[[bin]]
+name = "paint"
+path = "src/main.jux"
+
+[dependencies]
+"paint.ui" = { path = "../ui" }
+"rust.minifb" = "0.27"

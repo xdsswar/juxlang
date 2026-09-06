@@ -1949,6 +1949,23 @@ impl RustEmitter {
 /// call site can borrow exactly the arguments the real signature borrows —
 /// discovered from the library, never a hand-written list of borrowing methods.
 impl super::super::RustEmitter {
+    /// The scanned signature of `type_name::method`, when the stub declares
+    /// one.
+    ///
+    /// A `Some` answer means bindgen read this method out of rustdoc, so its
+    /// declared return and parameter types ARE the truth and the backend must
+    /// not second-guess them.
+    pub(crate) fn external_method_sig(
+        &self,
+        type_name: &str,
+        method: &str,
+    ) -> Option<&juxc_tycheck::symbol_table::MethodSig> {
+        let class = self.symbols.classes.get(type_name).or_else(|| {
+            self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
+        })?;
+        class.methods.get(method)
+    }
+
     pub(crate) fn external_param_is_by_ref(
         &self,
         type_name: &str,

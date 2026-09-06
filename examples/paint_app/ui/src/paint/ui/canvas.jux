@@ -1,0 +1,121 @@
+// paint.ui — the drawing surface and the text renderer.
+package paint.ui;
+
+import rust.std.*;
+
+/// A point on the canvas. A `record` because it is a value with no identity.
+public record Point(int x, int y) {
+    public int manhattanTo(Point other) {
+        int dx = this.x - other.x;
+        int dy = this.y - other.y;
+        return abs(dx) + abs(dy);
+    }
+}
+
+/// Absolute value — `int` is signed and platform-sized.
+public int abs(int v) {
+    if (v < 0) { return 0 - v; }
+    return v;
+}
+
+/// An ARGB software canvas backed by a flat row-major heap buffer.
+public class Canvas {
+    public u32[] buf;
+    public int w;
+    public int h;
+
+    public Canvas(int w, int h) {
+        this.w = w;
+        this.h = h;
+        this.buf = new u32[w * h];
+    }
+
+    public void clear(u32 color) {
+        int n = this.w * this.h;
+        for (int i = 0; i < n; i++) { this.buf[i] = color; }
+    }
+
+    /// Write one pixel, ignoring anything outside the surface.
+    public void px(int x, int y, u32 color) {
+        if (x < 0 || x >= this.w || y < 0 || y >= this.h) { return; }
+        this.buf[y * this.w + x] = color;
+    }
+
+    public u32 at(int x, int y) {
+        if (x < 0 || x >= this.w || y < 0 || y >= this.h) { return (u32) 0; }
+        return this.buf[y * this.w + x];
+    }
+
+    public void fillRect(int x, int y, int rw, int rh, u32 color) {
+        for (int yy = y; yy < y + rh; yy++) {
+            for (int xx = x; xx < x + rw; xx++) { this.px(xx, yy, color); }
+        }
+    }
+
+    public void strokeRect(int x, int y, int rw, int rh, u32 color) {
+        this.fillRect(x, y, rw, 1, color);
+        this.fillRect(x, y + rh - 1, rw, 1, color);
+        this.fillRect(x, y, 1, rh, color);
+        this.fillRect(x + rw - 1, y, 1, rh, color);
+    }
+
+    /// A filled disc — the brush nib.
+    public void disc(int cx, int cy, int r, u32 color) {
+        for (int dy = 0 - r; dy <= r; dy++) {
+            for (int dx = 0 - r; dx <= r; dx++) {
+                if (dx * dx + dy * dy <= r * r) { this.px(cx + dx, cy + dy, color); }
+            }
+        }
+    }
+
+    /// Bresenham's line, so a fast drag leaves no gaps.
+    public void line(Point a, Point b, int r, u32 color) {
+        int x0 = a.x;
+        int y0 = a.y;
+        int dx = abs(b.x - x0);
+        int dy = 0 - abs(b.y - y0);
+        int sx = -1;
+        if (x0 < b.x) { sx = 1; }
+        int sy = -1;
+        if (y0 < b.y) { sy = 1; }
+        int err = dx + dy;
+        while (true) {
+            this.disc(x0, y0, r, color);
+            if (x0 == b.x && y0 == b.y) { return; }
+            int e2 = 2 * err;
+            if (e2 >= dy) { err = err + dy; x0 = x0 + sx; }
+            if (e2 <= dx) { err = err + dx; y0 = y0 + sy; }
+        }
+    }
+
+    /// Scanline flood fill from a seed, replacing the contiguous region of the
+    /// seed's original color. Iterative, with an explicit stack — a recursive
+    /// fill overflows on a full-window region.
+    public void floodFill(int sx, int sy, u32 color) {
+        u32 target = this.at(sx, sy);
+        if (target == color) { return; }
+        var stack = new Vec<Point>();
+        stack.push(new Point(sx, sy));
+        while (stack.len() > 0) {
+            Point p = stack.pop()!!;   // len() > 0 was just checked
+            if (this.at(p.x, p.y) != target) { continue; }
+            this.px(p.x, p.y, color);
+            if (p.x > 0) { stack.push(new Point(p.x - 1, p.y)); }
+            if (p.x < this.w - 1) { stack.push(new Point(p.x + 1, p.y)); }
+            if (p.y > 0) { stack.push(new Point(p.x, p.y - 1)); }
+            if (p.y < this.h - 1) { stack.push(new Point(p.x, p.y + 1)); }
+        }
+    }
+
+    /// Copy another canvas over this one (used to restore an undo snapshot).
+    public void blit(Canvas src) {
+        int n = this.w * this.h;
+        for (int i = 0; i < n; i++) { this.buf[i] = src.buf[i]; }
+    }
+
+    public Canvas snapshot() {
+        var c = new Canvas(this.w, this.h);
+        c.blit(this);
+        return c;
+    }
+}

@@ -1677,21 +1677,30 @@ impl RustEmitter {
         self.emitting_format_arg = prev;
         self.w.push(')');
 
-        // Phase-1 workaround: Rust's `Vec::pop` returns `Option<T>` but
-        // Jux doesn't yet have an `Option` type, so Jux user code uses
-        // `var top = stack.pop();` expecting a `T`-typed value. We
-        // bridge that by appending `.unwrap()` here — pop on an empty
-        // Vec then panics, which mirrors Java's `NoSuchElementException`
-        // shape. Remove this special case once `Option<T>` lands and
-        // pop can return `T?` directly.
+        // A Jux ARRAY's `pop()` returns `T`, while the Rust `Vec::pop` it
+        // lowers to returns `Option<T>` — so the array intrinsic bridges the
+        // two with an `.unwrap()` (empty-pop then panics, which is the shape
+        // of Java's `NoSuchElementException`).
         //
-        // This is EXCLUSIVELY the `Vec::pop` intrinsic: a user-defined class
-        // with its own `pop()` method returns its declared type directly, so
-        // appending `.unwrap()` there would call it on the user's return value
-        // (e.g. `String::unwrap`, which does not exist — a leaked rustc E0599).
-        // Gate on the receiver NOT being a user class.
+        // It applies ONLY where nothing better is known. A method the scan
+        // declares is authoritative: `rust.std.Vec` reports
+        // `@MutSelf public T? pop();`, the type checker types the call `T?`
+        // from that same signature, and adding an `.unwrap()` on top made the
+        // backend disagree with the checker — `v.pop()!!` emitted
+        // `v.pop().unwrap().unwrap_or_else(…)`, a double unwrap that does not
+        // compile. A user class with its own `pop()` is likewise left alone,
+        // or the `.unwrap()` would land on the user's return value.
+        //
+        // So: ask the scan first, and bridge only the intrinsic it says
+        // nothing about.
         if let Expr::Field(f) = &*call.callee {
             if f.field.text == "pop" && call.args.is_empty() {
+                let scanned = match self.receiver_ty_of(&f.object) {
+                    Some(juxc_tycheck::Ty::User { name, .. }) => {
+                        self.external_method_sig(&name, "pop").is_some()
+                    }
+                    _ => false,
+                };
                 // `class_asts` is keyed by FQN (`x4.Stack`); the receiver bare
                 // name matches a user class when it equals some key's last
                 // segment.
@@ -1702,7 +1711,7 @@ impl RustEmitter {
                             .keys()
                             .any(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
                     });
-                if !receiver_is_user_class {
+                if !receiver_is_user_class && !scanned {
                     self.w.push_str(".unwrap()");
                 }
             }
@@ -2824,9 +2833,20 @@ impl RustEmitter {
             self.w.push_str(&i.to_string());
         }
         self.w.push(')');
+        // The array `pop()` bridge, under the same rule as `emit_call`: a
+        // method the scan declares carries its own return type (`T?`), so only
+        // the intrinsic the scan says nothing about is unwrapped here.
         if let Expr::Field(f) = &*call.callee {
             if f.field.text == "pop" && call.args.is_empty() {
-                self.w.push_str(".unwrap()");
+                let scanned = match self.receiver_ty_of(&f.object) {
+                    Some(juxc_tycheck::Ty::User { name, .. }) => {
+                        self.external_method_sig(&name, "pop").is_some()
+                    }
+                    _ => false,
+                };
+                if !scanned {
+                    self.w.push_str(".unwrap()");
+                }
             }
         }
         self.w.push_str(" }");
@@ -3551,9 +3571,8 @@ impl RustEmitter {
         // only this shape, where the unwrapped value is the RECEIVER of a
         // mutating method, needs the `_mut` getter and no clone.
         if self.emit_mut_through_option_get(call, method, &f.object) {
-            if method == "pop" && call.args.is_empty() {
-                self.w.push_str(".unwrap()");
-            }
+            // No `pop` bridge: this rewrite only fires on a scanned collection,
+            // whose declared `T? pop()` is what the type checker used.
             return true;
         }
         self.emit_stdlib_receiver(&f.object);
@@ -3571,13 +3590,10 @@ impl RustEmitter {
             _ => self.emit_call_args(call),
         }
         self.w.push(')');
-        // Same `Vec::pop -> .unwrap()` Phase-1 bridge as the generic call tail
-        // (`emit_call`): Rust's `Vec::pop` yields `Option<T>` but a Jux `pop()`
-        // returns `T`. This path is EXCLUSIVELY raw-Vec mutating methods, so the
-        // receiver is always a real Vec — no user-`pop()` ambiguity to guard.
-        if method == "pop" && call.args.is_empty() {
-            self.w.push_str(".unwrap()");
-        }
+        // No `pop` bridge here. This path is exclusively raw mutating methods
+        // on a SCANNED collection, and the scan declares
+        // `@MutSelf public T? pop();` — the type checker types the call from
+        // that signature, so unwrapping behind its back made the two disagree.
         true
     }
 
