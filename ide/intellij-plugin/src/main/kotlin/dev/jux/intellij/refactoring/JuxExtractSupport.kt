@@ -5,6 +5,8 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxNamedElement
+import dev.jux.intellij.resolve.JuxHierarchy
+import dev.jux.intellij.resolve.JuxTypeInference
 
 /**
  * The analysis every Jux extract-style refactoring shares: find the expression
@@ -184,6 +186,76 @@ internal object JuxExtractSupport {
             else -> null
         }
     }
+
+    /**
+     * The type an extracted expression should be **declared** with, or null
+     * when it genuinely cannot be read off the source.
+     *
+     * [inferTypeText] answers for literals and `new T(...)`; this adds the
+     * shapes that make up most real constants: a name whose declaration is in
+     * scope, a call whose return type is written down, a member access, a cast,
+     * and parentheses around any of them. Generic arguments come through
+     * whole — `Map<String, Leaf>`, not `Map` — because a field declaration has
+     * to spell the type out.
+     *
+     * Anything left (arithmetic, a ternary, a chain through a `var`) still
+     * yields null and the handler refuses, because a guessed type in a field
+     * declaration does not surface as a question, it compiles into a different
+     * program.
+     */
+    fun declaredTypeText(expression: PsiElement): String? {
+        inferTypeText(expression)?.let { return it }
+        val text = when (expression.node?.elementType) {
+            E.PARENTHESIZED_EXPRESSION -> innerExpression(expression)?.let { declaredTypeText(it) }
+            // A cast is the one shape that states its own type outright.
+            E.CAST_EXPRESSION -> expression.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
+            E.REFERENCE_EXPRESSION ->
+                JuxTypeInference.writtenTypeTextOf(expression.text.trim(), expression)
+
+            E.CALL_EXPRESSION -> calleeTypeText(expression)
+            E.FIELD_ACCESS_EXPRESSION -> memberTypeText(expression)
+            else -> null
+        }
+        // `void` is a return type, not a type a value can have.
+        return text?.takeIf { it.isNotBlank() && it != "void" }
+    }
+
+    /** The return type of the method a call expression names. */
+    private fun calleeTypeText(call: PsiElement): String? {
+        val callee = call.firstChild ?: return null
+        return when (callee.node?.elementType) {
+            // `recv.m(…)` — the member's own first TYPE_REFERENCE is its return type.
+            E.FIELD_ACCESS_EXPRESSION -> memberTypeText(callee)
+            // A bare `m(…)`: a member of the enclosing type, or a free function.
+            else -> {
+                val name = callee.text.trim()
+                val onType = JuxHierarchy.enclosingType(call)
+                    ?.let { JuxTypeInference.memberTypeTextOf(it, name) }
+                onType ?: freeFunctionTypeText(call, name)
+            }
+        }
+    }
+
+    /** The declared type of `recv.member`, resolving `recv` in this file. */
+    private fun memberTypeText(access: PsiElement): String? {
+        val member = access.lastChild?.text?.trim() ?: return null
+        val receiver = access.firstChild?.text?.trim() ?: return null
+        val owner = JuxTypeInference.resolveReceiverExpression(receiver, access)?.type ?: return null
+        return JuxTypeInference.memberTypeTextOf(owner, member)
+    }
+
+    /** The return type of a top-level function declared in the same file. */
+    private fun freeFunctionTypeText(context: PsiElement, name: String): String? =
+        context.containingFile?.children
+            ?.firstOrNull {
+                it.node?.elementType === E.METHOD_DECLARATION &&
+                    (it as? JuxNamedElement)?.name == name
+            }
+            ?.let { JuxHierarchy.returnTypeText(it) }
+
+    /** The expression inside a parenthesized expression, if any. */
+    private fun innerExpression(parens: PsiElement): PsiElement? =
+        parens.children.firstOrNull { it.node?.elementType in EXPRESSION_KINDS }
 
     /**
      * A name like [base] that nothing in [scope] already declares.
