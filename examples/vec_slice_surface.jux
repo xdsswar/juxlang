@@ -16,4 +16,17 @@ public void main() {
     words.push("alpha");
     bool hasAlpha = words.contains("alpha");
     print($"hasAlpha=${hasAlpha}\n");
+
+    // Ordering and search, also from the slice surface. Rust's stable `sort`
+    // is absent from the rustdoc JSON the stub is generated from, so
+    // `sort_unstable` is the discoverable one -- and it is the exact Rust
+    // name, which is the rule for the std surface.
+    var nums = new Vec<int>();
+    nums.push(30); nums.push(10); nums.push(20);
+    nums.sort_unstable();
+    print($"sorted=${nums.first()!!},${nums.last()!!}\n");
+    int at = nums.binary_search(20);
+    print($"binarySearch20=${at}\n");
+    var slot = nums.get(0);
+    print($"get0=${slot!!}\n");
 }
