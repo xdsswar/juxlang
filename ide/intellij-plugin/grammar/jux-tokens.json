@@ -313,6 +313,7 @@
     "double",
     "char",
     "String",
+    "string",
     "i8",
     "u8",
     "i16",

@@ -970,25 +970,34 @@ fn expr_contains_await(e: &Expr) -> bool {
     }
 }
 
-/// Known mutating methods on `Vec` (and similar Rust containers).
-/// Hardcoded for Phase 1; a real type table would derive this from
-/// the receiver's type signature.
+/// Method names that mutate their receiver and have NO scanned signature to
+/// ask.
+///
+/// Two groups, and neither is `rust.std`:
+///
+///   - the Jux **array** intrinsics. `int[] xs; xs.push(7);` is Jux's own
+///     surface, not a `rust.std.Vec` method call, so nothing in the stub
+///     describes it.
+///   - the `jux.std` collection **facade** (`add`/`put`/`set`, the `Deque`
+///     mutators) — Jux spellings with no Rust counterpart. These go away with
+///     the facade itself.
+///
+/// The `rust.std` mutators are deliberately absent: they carry the bindgen
+/// `@MutSelf` marker, and `extern_mut_methods` collects every one of them from
+/// the symbol table, which the same callers already consult through
+/// `user_mut`. Naming them here too would be a second answer free to fall
+/// behind the library — so a new `Vec` method must never be added below.
 pub(crate) fn is_mutating_method(name: &str) -> bool {
     matches!(
         name,
+        // Jux array intrinsics.
         "push" | "pop" | "clear" | "insert" | "remove" | "extend" | "truncate"
         | "swap" | "reverse" | "sort"
-        // Jux-spec method names: List<T> and Map<K, V> both
-        // mutate through `add`/`put` and various others. Listing
-        // them here lets `let` → `let mut` promotion kick in for
-        // `var xs = new List<int>(); xs.add(1);` without forcing
-        // the user to write a manual `mut` annotation.
+        // jux.std facade.
         | "add" | "put" | "set"
-        // Deque<T> mutators (VecDeque-backed).
         | "addFirst" | "addLast" | "removeFirst" | "removeLast"
     )
 }
-
 /// Walk down a (possibly index-chained) lvalue expression to find its
 /// underlying variable name. Returns `None` for shapes the parser
 /// shouldn't produce as an lvalue.

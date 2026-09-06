@@ -26,8 +26,18 @@ impl<'a> Parser<'a> {
         if !self.enter_nesting() {
             return None;
         }
-        let out = self.parse_type_ref_inner();
+        let mut out = self.parse_type_ref_inner();
         self.leave_nesting();
+        // `String` and `string` are the SAME type (§5.5), as in C#. Canonicalise
+        // to `String` at the one place every type position funnels through, so
+        // nothing downstream has to know there are two spellings: the type
+        // checker, the backend and every diagnostic keep comparing against a
+        // single name, and `typeof` echoes `String` whichever was written.
+        if let Some(t) = out.as_mut() {
+            if t.name.segments.len() == 1 && t.name.segments[0].text == "string" {
+                t.name.segments[0].text = "String".to_string();
+            }
+        }
         out
     }
 

@@ -1238,12 +1238,12 @@ impl RustEmitter {
             // array is a `Vec`/`[T; N]`. Both are `Clone` whenever their element
             // is, which every Jux value type is.
             Some(juxc_tycheck::Ty::String) | Some(juxc_tycheck::Ty::Array { .. }) => true,
-            Some(juxc_tycheck::Ty::User { name, .. }) => {
-                matches!(
-                    name.rsplit('.').next().unwrap_or(name),
-                    "Vec" | "VecDeque" | "HashMap" | "BTreeMap" | "HashSet" | "BTreeSet",
-                )
-            }
+            // A scanned type answers for itself: bindgen records `@RustClone`
+            // from the type's real `Clone` impl, so a newly bound crate's
+            // collection shares by clone without being named here. The list
+            // this replaces covered exactly the six `rust.std` containers and
+            // nothing else.
+            Some(juxc_tycheck::Ty::User { name, .. }) => self.class_is_rust_clone(name),
             _ => false,
         }
     }
@@ -1955,6 +1955,12 @@ impl super::super::RustEmitter {
     /// A `Some` answer means bindgen read this method out of rustdoc, so its
     /// declared return and parameter types ARE the truth and the backend must
     /// not second-guess them.
+    /// Whether the scanned type `name` implements Rust `Clone`.
+    pub(crate) fn class_is_rust_clone(&self, name: &str) -> bool {
+        self.lookup_class_by_bare_or_fqn(name.rsplit('.').next().unwrap_or(name))
+            .is_some_and(|sig| sig.annotations.iter().any(annotation_is_rust_clone))
+    }
+
     pub(crate) fn external_method_sig(
         &self,
         type_name: &str,
@@ -1980,6 +1986,13 @@ impl super::super::RustEmitter {
             .and_then(|m| m.params.get(idx))
             .is_some_and(|p| p.is_ref)
     }
+}
+
+/// True when an annotation names the bindgen `@RustClone` marker — the Rust
+/// type implements `Clone`, read from its real trait impls.
+pub(crate) fn annotation_is_rust_clone(a: &juxc_ast::Annotation) -> bool {
+    a.name.segments.len() == 1
+        && a.name.segments[0].text.eq_ignore_ascii_case("rustclone")
 }
 
 /// True when an annotation names the bindgen `@MutSelf` marker

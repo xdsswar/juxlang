@@ -84,6 +84,11 @@ pub struct StubType {
     /// annotation so the backend lowers `xs[k]` to `xs[&(k)]` instead
     /// of the sequence form `xs[(k) as usize]`.
     pub index_ref: bool,
+    /// Whether the Rust type implements `Clone` (discovered from its real
+    /// trait impls, never from a name list). Rendered as the `@RustClone`
+    /// class annotation. The backend needs it to decide whether a field read
+    /// can share by cloning rather than moving out.
+    pub is_clone: bool,
 }
 
 impl StubType {
@@ -100,6 +105,7 @@ impl StubType {
             doc: None,
             rust_path: None,
             index_ref: false,
+            is_clone: false,
         }
     }
 }

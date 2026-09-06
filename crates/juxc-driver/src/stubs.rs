@@ -68,7 +68,7 @@ const STD_POOL_CRATES: &[&str] = &["core"];
 /// Bump to invalidate previously-cached generated `rust.std` stubs when the
 /// bindgen surface or the merge set changes. Embedded in the cache header and
 /// checked on load.
-const STD_STUB_CACHE_VERSION: u32 = 15;
+const STD_STUB_CACHE_VERSION: u32 = 16;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
 /// last-resort fallback.
