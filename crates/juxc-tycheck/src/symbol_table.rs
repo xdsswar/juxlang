@@ -713,6 +713,15 @@ impl SymbolTable {
 /// Signature of a top-level class declaration.
 #[derive(Debug, Clone)]
 pub struct ClassSig {
+    /// Source-order annotation list, exactly as [`MethodSig::annotations`]
+    /// carries a method's.
+    ///
+    /// A generated `.jux.d` stub puts real information here — `@RustIndexRef`
+    /// records that the Rust type indexes by reference, for instance. Without
+    /// it the backend could only reach a class-level annotation through the
+    /// AST, which holds USER classes only, so every question about a scanned
+    /// type fell back to a hardcoded list of type names.
+    pub annotations: Vec<juxc_ast::Annotation>,
     /// Source visibility (`public`, `private`, etc.).
     pub visibility: Visibility,
     /// Dotted path of the package this class lives in (empty when the
@@ -3504,6 +3513,7 @@ fn insert_class(
     table.classes.insert(
         fqn,
         ClassSig {
+            annotations: class_decl.annotations.clone(),
             visibility: class_decl.visibility,
             package: package.to_vec(),
             is_abstract: class_decl.is_abstract,
