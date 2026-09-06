@@ -821,29 +821,47 @@ impl RustEmitter {
                 _ => e,
             }
         }
-        // Only a field/index READ leaves a borrow temporary.
-        if !matches!(e, juxc_ast::Expr::Field(_) | juxc_ast::Expr::Index(_)) {
-            return false;
-        }
-        let r = root(e);
-        let juxc_ast::Expr::Path(qn) = r else {
-            return false;
+        // Whether THIS expression is a field/index read whose receiver chain
+        // bottoms out in an owned wrapper-class local or parameter.
+        let reads_owned_wrapper = |e: &juxc_ast::Expr| -> bool {
+            // Only a field/index READ leaves a borrow temporary.
+            if !matches!(e, juxc_ast::Expr::Field(_) | juxc_ast::Expr::Index(_)) {
+                return false;
+            }
+            let r = root(e);
+            let juxc_ast::Expr::Path(qn) = r else {
+                return false;
+            };
+            if qn.segments.len() != 1 {
+                return false;
+            }
+            // `this`/`self` roots are `&self` references, not owned block
+            // bindings — their borrows are safe as elided tails. Only an owned
+            // local/param can hit the drop-order E0597. Resolve the root's type
+            // via the span-keyed `expr_types` map (local_types isn't populated
+            // yet — the elision decision runs BEFORE the body statements emit).
+            let Some(juxc_tycheck::Ty::User { name: tn, .. }) =
+                self.expr_types.get(&crate::exprs::expr_span_of(r))
+            else {
+                return false;
+            };
+            let bare = tn.rsplit('.').next().unwrap_or(tn);
+            self.wrapper_classes.contains(bare)
         };
-        if qn.segments.len() != 1 {
-            return false;
-        }
-        // `this`/`self` roots are `&self` references, not owned block bindings —
-        // their borrows are safe as elided tails. Only an owned local/param can
-        // hit the drop-order E0597. Resolve the root's type via the span-keyed
-        // `expr_types` map (local_types isn't populated yet — the elision
-        // decision runs BEFORE the body statements emit).
-        let Some(juxc_tycheck::Ty::User { name: tn, .. }) =
-            self.expr_types.get(&crate::exprs::expr_span_of(r))
-        else {
-            return false;
-        };
-        let bare = tn.rsplit('.').next().unwrap_or(tn);
-        self.wrapper_classes.contains(bare)
+
+        // The read can sit ANYWHERE in the returned expression, not just at its
+        // root. `return c.n;` was caught, `return c.n + 10;` was not — a
+        // `Binary` at the top, so the check gave up before looking inside — and
+        // the elided tail left the `Ref` alive past `c`'s drop. Any operand,
+        // argument or branch that reads through a borrow is enough to keep the
+        // explicit `return`.
+        let mut found = false;
+        crate::worker::walk_expr(e, &mut |sub| {
+            if !found && reads_owned_wrapper(sub) {
+                found = true;
+            }
+        });
+        found
     }
 
     pub(crate) fn emit_fn_body_at(&mut self, body: &Block, return_type: &ReturnType) {

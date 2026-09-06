@@ -1,4 +1,4 @@
-//! End-to-end guard for five Java rules Jux used to get wrong. Each one either
+//! End-to-end guard for six Java rules Jux used to get wrong. Each one either
 //! produced a wrong diagnostic on legal code or, worse, compiled and silently
 //! did the wrong thing.
 //!
@@ -54,6 +54,12 @@ fn java_parity_rules_hold_end_to_end() {
             // two bumps plus the owner's tag of 7. The class itself was
             // rejected as a top-level `private` type (E0432), because nested
             // types are lifted to a flat `Owner__Name` before the check ran.
+            //
+            // Its `return` also reads a field off a LOCAL object inside a
+            // larger expression. The elided-tail form left that borrow alive
+            // past the local's drop (rustc E0597); the guard against it only
+            // looked at the top of the returned expression, so `c.n` was
+            // caught and `c.n + f(...)` was not.
             "9",
             // An `internal` field read from outside. It was reported as a
             // "private field" (E0437) even though the accessor it needs was
