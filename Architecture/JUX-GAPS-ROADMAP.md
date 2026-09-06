@@ -104,36 +104,27 @@ Lowering policy (§16.7):
 
 ---
 
-### 1.3. Collections
+### 1.3. Collections — ✅ RESOLVED (superseded design)
 
-**Priority:** Blocking
-**Size:** M (~400 lines)
-**Blocks:** Almost every code example in the dossier.
+**Superseded.** This section proposed seven Java-shaped types (`List<T>`,
+`Map<K, V>`, `Set<T>`, `LinkedList`, `SortedMap`, …) with hand-specced public
+APIs. That is NOT what was built, and is not what will be: the standard library
+IS Rust's standard library (§19), so the collections are `Vec`, `HashMap`,
+`HashSet`, `VecDeque`, `BTreeMap` and `BTreeSet` under their real Rust names,
+with their real Rust methods — discovered from rustdoc by `juxc bindgen`, never
+restated in a spec table that would immediately drift from the library.
 
-Required:
+The open question this section flagged — *"Are `List`, `Map`, `Set` always
+mutable, or do we have `ImmutableList<T>`?"* — was the wrong question, because
+it assumed the facade. The question that actually mattered was **value or
+reference semantics**, and it is answered in `JUX-LANG-V1.md` §6.5.1: a
+collection is a REFERENCE, like a class instance. Assignment aliases, a getter
+hands back the real collection, and `clone()` is the only thing that copies.
 
-- `List<T>` — already referenced. Mutable, growable, indexed.
-- `Map<K, V>` — hash map. `K` must be `Hashable`.
-- `Set<T>` — hash set. `T` must be `Hashable`.
-- `Deque<T>` — double-ended queue.
-- `LinkedList<T>` — for cases where `List<T>` is wrong (rare).
-- `SortedMap<K, V>` / `SortedSet<T>` — tree-backed.
-- `RingBuffer<T, N>` — already mentioned in §5.5; needs the full API.
-
-Iterator protocol (depends on §1.1):
-
-- Every collection implements `Iterable<T>`.
-- `for (var x : collection)` desugars to iterator calls.
-- Combinators (`map`, `filter`, `reduce`, `take`, `skip`, `chain`, `zip`, `flatten`, `groupBy`) defined on `Iterable<T>` via default methods.
-
-Mutability question to resolve:
-
-- Are `List`, `Map`, `Set` always mutable, or do we have `ImmutableList<T>` etc.? Recommendation: single mutable type per shape, with `.toImmutable()` returning a frozen view. Matches Kotlin. Avoids the Java `List<T>` vs `ImmutableList<T>` confusion.
-
-**Recommended approach:** Write addendum §19.3 — "Collections." Spec the seven collection types with their full public API. Phase 1 implements each as a thin wrapper over a Rust counterpart (`Vec`, `HashMap`, `HashSet`, `VecDeque`, `BTreeMap`, `BTreeSet`).
+What remains of this section is the `jux.std` facade's removal, tracked with
+the rest of the std work rather than here.
 
 ---
-
 ### 1.4. Strings, I/O, Time
 
 **Priority:** Blocking
