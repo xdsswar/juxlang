@@ -279,6 +279,33 @@ mod tests {
     /// Create a unique temp directory for one test run. Avoids pulling in a
     /// `tempfile` dev-dependency: we just stamp the dir with the process id +
     /// a per-test tag and clean it up at the end.
+    /// The reported case, against the REAL repository layout.
+    ///
+    /// `examples/animals.jux` declares one `main` and `juxc --check` accepts
+    /// it, but the editor showed "`main` is declared more than once at the top
+    /// level" — because the analyser had swept all 243 sibling example
+    /// programs into one unit set. Nothing between the file and the repository
+    /// root carries a `jux.toml`, so it is a program on its own.
+    #[test]
+    fn a_repo_example_is_analysed_as_its_own_program() {
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("repo root resolves from crates/juxc-lsp")
+            .to_path_buf();
+        let file = repo.join("examples").join("animals.jux");
+        let text = fs::read_to_string(&file).expect("read animals.jux");
+
+        let uri = Url::from_file_path(&file).unwrap();
+        let analysis = analyze_workspace(&repo, &uri, &Rope::from_str(&text));
+
+        let here = analysis.diagnostics_by_uri.get(&uri).cloned().unwrap_or_default();
+        assert!(
+            here.is_empty(),
+            "animals.jux compiles cleanly on the CLI and must be clean here too: {here:?}",
+        );
+    }
+
     /// A folder of standalone programs is not one compilation unit set.
     ///
     /// The editor hands the analyser whichever folder it was opened on. Point
