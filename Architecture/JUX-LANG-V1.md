@@ -473,9 +473,17 @@ switch (shape) {
 
 ### 5.5. Special Types
 
+**`String` and `string` are the same type.** Either spelling declares a UTF-8
+string, exactly as C# treats `String`/`string`; there is no conversion between
+them because there is nothing to convert. `string` is a primitive type name
+like `int`, so it is not an identifier and cannot be shadowed by a
+declaration. Diagnostics and `typeof` echo the canonical `String`, so a
+message never depends on which spelling the author used.
+
 | Type                | Description                                     | Available in |
 |---------------------|-------------------------------------------------|--------------|
 | `String`            | UTF-8 string (reference type, immutable)        | full, embedded |
+| `string`            | Alias for `String` — the two are the SAME type   | full, embedded |
 | `T?`                | Nullable T (T or null)                          | all profiles |
 | `T[]`               | Array of T, size set at construction            | all profiles |
 | `T[N]`              | Array of T with statically-known size N         | all profiles |

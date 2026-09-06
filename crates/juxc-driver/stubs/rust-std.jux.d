@@ -1,4 +1,4 @@
-// juxc rust.std stub cache-version 15
+// juxc rust.std stub cache-version 16
 // bindgen — generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
@@ -7,11 +7,13 @@ public const String ARCH;
 
 /** An error returned by [`LocalKey::try_with`](struct.LocalKey.html#method.try_with). */
 @rust("std::thread::local::AccessError")
+@RustClone
 public class AccessError {
 }
 
 /** An iterator over [`Path`] and its ancestors. */
 @rust("std::path::Ancestors")
+@RustClone
 public class Ancestors {
 }
 
@@ -29,6 +31,7 @@ public enum AncillaryError {
 
 /** A thread-safe reference-counting pointer. 'Arc' stands for 'Atomically */
 @rust("std::sync::Arc")
+@RustClone
 public class Arc<T, A> {
     public Arc(T data);
     public static T new_cyclic<F>((Weak<T>) -> T data_fn);
@@ -145,6 +148,7 @@ public interface AsciiExt {
 /** An ordered map based on a [B-Tree]. */
 @rust("std::collections::BTreeMap")
 @RustIndexRef
+@RustClone
 public class BTreeMap<K, V, A> {
     public BTreeMap();
     @MutSelf public void clear();
@@ -188,6 +192,7 @@ public class BTreeMap<K, V, A> {
 
 /** An ordered set based on a B-Tree. */
 @rust("std::collections::BTreeSet")
+@RustClone
 public class BTreeSet<T, A> {
     public BTreeSet();
     public static Set<T> new_in(A alloc);
@@ -268,6 +273,7 @@ public class BarrierWaitResult {
 
 /** A priority queue implemented with a binary heap. */
 @rust("std::collections::BinaryHeap")
+@RustClone
 public class BinaryHeap<T, A> {
     public BinaryHeap();
     public static BinaryHeap<T> with_capacity(uint capacity);
@@ -304,6 +310,7 @@ public class BinaryHeap<T, A> {
 
 /** A borrowed file descriptor. */
 @rust("std::os::fd::owned::BorrowedFd")
+@RustClone
 public class BorrowedFd {
     public static unsafe Self borrow_raw(RawFd fd);
     public OwnedFd try_clone_to_owned() throws Error;
@@ -311,6 +318,7 @@ public class BorrowedFd {
 
 /** A borrowed handle. */
 @rust("std::os::windows::io::handle::BorrowedHandle")
+@RustClone
 public class BorrowedHandle {
     public static unsafe Self borrow_raw(RawHandle handle);
     public OwnedHandle try_clone_to_owned() throws Error;
@@ -318,6 +326,7 @@ public class BorrowedHandle {
 
 /** A borrowed socket. */
 @rust("std::task::Wake")
+@RustClone
 public class BorrowedSocket {
     public static unsafe Self borrow_raw(RawSocket socket);
     public OwnedSocket try_clone_to_owned() throws Error;
@@ -325,6 +334,7 @@ public class BorrowedSocket {
 
 /** A pointer type that uniquely owns a heap allocation of type `T`. */
 @rust("std::boxed::Box")
+@RustClone
 public class Box<T, A> {
     public Box(T x);
     public T downcast<T>() throws Self;
@@ -431,15 +441,13 @@ public class Builder {
 
 /** A wrapper for `Vec<u8>` representing a human-readable string that's conventionally, but not */
 @rust("std::bstr::ByteString")
+@RustClone
 public class ByteString {
-    @MutSelf public void push(T value);
-    @MutSelf public T push_mut(T value);
     @MutSelf public void dedup();
     @MutSelf public void resize(uint new_len, T value);
     @MutSelf public void extend_from_slice(T[] other);
     @MutSelf public void extend_from_within<R>(R src);
-    @MutSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
-    @MutSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
+    public List<T> into_flattened();
     public Tuple<T*, uint, uint, A> into_raw_parts_with_alloc();
     public Tuple<NonNull<T>, uint, uint, A> into_parts_with_alloc();
     public uint capacity();
@@ -489,7 +497,10 @@ public class ByteString {
     public Tuple<T*, uint, uint> into_raw_parts();
     public Tuple<NonNull<T>, uint, uint> into_parts();
     public T[] const_make_global();
-    public List<T> into_flattened();
+    @MutSelf public void push(T value);
+    @MutSelf public T push_mut(T value);
+    @MutSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
+    @MutSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
 }
 
 /** An iterator over `u8` values of a reader. */
@@ -499,6 +510,7 @@ public class Bytes<R> {
 
 /** A type representing an owned, C-compatible, nul-terminated string with no nul bytes in the */
 @rust("std::ffi::c_str::CString")
+@RustClone
 public class CString {
     public CString(T t) throws NulError;
     public static unsafe Self from_vec_unchecked(List<ubyte> v);
@@ -612,6 +624,7 @@ public enum Component {
 
 /** An iterator over the [`Component`]s of a [`Path`]. */
 @rust("std::path::Components")
+@RustClone
 public class Components {
     public Path as_path();
 }
@@ -642,6 +655,7 @@ public enum Cow<B> {
 
 /** A cursor over a `BTreeMap`. */
 @rust("std::collections::Cursor")
+@RustClone
 public class Cursor<K, V> {
     @MutSelf public Tuple<K, V>? next();
     @MutSelf public Tuple<K, V>? prev();
@@ -690,12 +704,14 @@ public const String DLL_SUFFIX;
 
 /** The default [`Hasher`] used by [`RandomState`]. */
 @rust("std::hash::random::DefaultHasher")
+@RustClone
 public class DefaultHasher {
     public DefaultHasher();
 }
 
 /** A lazy iterator producing elements in the difference of `BTreeSet`s. */
 @rust("std::collections::Difference")
+@RustClone
 public class Difference<T, A> {
 }
 
@@ -765,6 +781,7 @@ public const String EXE_SUFFIX;
 
 /** Iterator returned by [`OsStrExt::encode_wide`]. */
 @rust("std::os::windows::ffi::EncodeWide")
+@RustClone
 public class EncodeWide {
 }
 
@@ -791,6 +808,7 @@ public class Error {
 
 /** This type represents the status code the current process can return */
 @rust("std::process::ExitCode")
+@RustClone
 public class ExitCode {
     public never exit_process();
 }
@@ -803,6 +821,7 @@ public interface ExitCodeExt {
 
 /** Describes the result of a process after it has terminated. */
 @rust("std::process::ExitStatus")
+@RustClone
 public class ExitStatus {
     public void exit_ok() throws ExitStatusError;
     public bool success();
@@ -811,6 +830,7 @@ public class ExitStatus {
 
 /** Describes the result of a process after it has failed */
 @rust("std::process::ExitStatusError")
+@RustClone
 public class ExitStatusError {
     public i32? code();
     public NonZero<i32>? code_nonzero();
@@ -874,6 +894,7 @@ public interface FileExt {
 
 /** Representation of the various timestamps on a file. */
 @rust("std::fs::FileTimes")
+@RustClone
 public class FileTimes {
     public FileTimes();
     public Self set_accessed(SystemTime t);
@@ -888,6 +909,7 @@ public interface FileTimesExt {
 
 /** A structure representing a type of file with accessors for each file type. */
 @rust("std::fs::FileType")
+@RustClone
 public class FileType {
     public bool is_dir();
     public bool is_file();
@@ -933,6 +955,7 @@ public class FromUtf16Error {
 
 /** A possible error value when converting a `String` from a UTF-8 byte vector. */
 @rust("std::string::FromUtf8Error")
+@RustClone
 public class FromUtf8Error {
     public ubyte[] as_bytes();
     public String into_utf8_lossy();
@@ -942,6 +965,7 @@ public class FromUtf8Error {
 
 /** An error indicating that a nul byte was not in the expected position. */
 @rust("std::ffi::c_str::FromVecWithNulError")
+@RustClone
 public class FromVecWithNulError {
     public ubyte[] as_bytes();
     public List<ubyte> into_bytes();
@@ -949,6 +973,7 @@ public class FromVecWithNulError {
 
 /** The global memory allocator. */
 @rust("std::alloc::Global")
+@RustClone
 public class Global {
 }
 
@@ -972,6 +997,7 @@ public class HandleOrNull {
 /** A [hash map] implemented with quadratic probing and SIMD lookup. */
 @rust("std::collections::HashMap")
 @RustIndexRef
+@RustClone
 public class HashMap<K, V, S, A> {
     public HashMap();
     public static Map<K, V> with_capacity(uint capacity);
@@ -1015,6 +1041,7 @@ public class HashMap<K, V, S, A> {
 
 /** A [hash set] implemented as a `HashMap` where the value is `()`. */
 @rust("std::collections::HashSet")
+@RustClone
 public class HashSet<T, S, A> {
     public HashSet();
     public static Set<T> with_capacity(uint capacity);
@@ -1062,6 +1089,7 @@ public class Incoming {
 
 /** A measurement of a monotonically nondecreasing clock. */
 @rust("std::time::Instant")
+@RustClone
 public class Instant {
     public static Instant now();
     public Duration duration_since(Instant earlier);
@@ -1074,11 +1102,13 @@ public class Instant {
 
 /** A lazy iterator producing elements in the intersection of `BTreeSet`s. */
 @rust("std::collections::Intersection")
+@RustClone
 public class Intersection<T, A> {
 }
 
 /** An iterator over the [`char`]s of a string. */
 @rust("std::string::IntoChars")
+@RustClone
 public class IntoChars {
     public String as_str();
     public String into_string();
@@ -1100,11 +1130,13 @@ public class IntoInnerError<W> {
 
 /** An owning iterator over the elements of a `BinaryHeap`. */
 @rust("std::collections::IntoIter")
+@RustClone
 public class IntoIter<T, A> {
     public A allocator();
 }
 
 @rust("std::collections::IntoIterSorted")
+@RustClone
 public class IntoIterSorted<T, A> {
     public A allocator();
 }
@@ -1134,6 +1166,7 @@ public interface IntoRawSocket {
 
 /** An error indicating invalid UTF-8 when converting a [`CString`] into a [`String`]. */
 @rust("std::ffi::c_str::IntoStringError")
+@RustClone
 public class IntoStringError {
     public CString into_cstring();
     public Utf8Error utf8_error();
@@ -1146,6 +1179,7 @@ public class IntoValues<K, V, A> {
 
 /** This is the error type used by [`HandleOrInvalid`] when attempting to */
 @rust("std::os::windows::io::handle::InvalidHandleError")
+@RustClone
 public class InvalidHandleError {
 }
 
@@ -1157,6 +1191,7 @@ public interface IsTerminal {
 
 /** An iterator over the elements of a `BinaryHeap`. */
 @rust("std::collections::Iter")
+@RustClone
 public class Iter<T> {
 }
 
@@ -1193,6 +1228,7 @@ public class JoinPathsError {
 
 /** An iterator over the keys of a `BTreeMap`. */
 @rust("std::collections::Keys")
+@RustClone
 public class Keys<K, V> {
 }
 
@@ -1224,6 +1260,7 @@ public class Lines<B> {
 
 /** A doubly-linked list with owned nodes. */
 @rust("std::collections::LinkedList")
+@RustClone
 public class LinkedList<T, A> {
     public LinkedList();
     @MutSelf public void append(&Self other);
@@ -1307,6 +1344,7 @@ public class Messages {
 
 /** Metadata information about a file. */
 @rust("std::fs::Metadata")
+@RustClone
 public class Metadata {
     public FileType file_type();
     public bool is_dir();
@@ -1362,6 +1400,7 @@ public class NormalizeError {
 
 /** An error indicating that an interior nul byte was found. */
 @rust("std::ffi::c_str::NulError")
+@RustClone
 public class NulError {
     public uint nul_position();
     public List<ubyte> into_vec();
@@ -1369,6 +1408,7 @@ public class NulError {
 
 /** This is the error type used by [`HandleOrNull`] when attempting to convert */
 @rust("std::os::windows::io::handle::NullHandleError")
+@RustClone
 public class NullHandleError {
 }
 
@@ -1423,6 +1463,7 @@ public class Once {
 
 /** A synchronization primitive which can nominally be written to only once. */
 @rust("std::sync::once_lock::OnceLock")
+@RustClone
 public class OnceLock<T> {
     public OnceLock();
     public T? get();
@@ -1446,6 +1487,7 @@ public class OnceState {
 
 /** Options and flags which can be used to configure how a file is opened. */
 @rust("std::fs::OpenOptions")
+@RustClone
 public class OpenOptions {
     public OpenOptions();
     @MutSelf public Self read(bool read);
@@ -1472,6 +1514,7 @@ public interface OpenOptionsExt2 {
 
 /** Borrowed reference to an OS string (see [`OsString`]). */
 @rust("std::ffi::os_str::OsStr")
+@RustClone
 public class OsStr {
     public OsStr(&S s);
     public static unsafe Self from_encoded_bytes_unchecked(ubyte[] bytes);
@@ -1503,6 +1546,7 @@ public interface OsStrExt {
 
 /** A type that can represent owned, mutable platform-native strings, but is */
 @rust("std::ffi::os_str::OsString")
+@RustClone
 public class OsString {
     public OsString();
     public static unsafe Self from_encoded_bytes_unchecked(List<ubyte> bytes);
@@ -1549,6 +1593,7 @@ public interface OsStringExt {
 
 /** The output of a finished process. */
 @rust("std::process::Output")
+@RustClone
 public class Output {
     public ExitStatus status;
     public List<ubyte> stdout;
@@ -1585,6 +1630,7 @@ public class PanicHookInfo {
 
 /** A slice of a path (akin to [`str`]). */
 @rust("std::path::Path")
+@RustClone
 public class Path {
     public Path(&S s);
     public OsStr as_os_str();
@@ -1634,6 +1680,7 @@ public class Path {
 
 /** An owned, mutable path (akin to [`String`]). */
 @rust("std::path::PathBuf")
+@RustClone
 public class PathBuf {
     public PathBuf();
     public static PathBuf with_capacity(uint capacity);
@@ -1712,6 +1759,7 @@ public class PeekMut<T, A> {
 
 /** Representation of the various permissions on a file. */
 @rust("std::fs::Permissions")
+@RustClone
 public class Permissions {
     public bool readonly();
     @MutSelf public void set_readonly(bool readonly);
@@ -1762,6 +1810,7 @@ public enum Prefix {
 
 /** A structure wrapping a Windows path prefix as well as its unparsed string */
 @rust("std::path::PrefixComponent")
+@RustClone
 public class PrefixComponent {
     public Prefix kind();
     public OsStr as_os_str();
@@ -1775,6 +1824,7 @@ public class ProcThreadAttributeList {
 
 /** Builder for constructing a [`ProcThreadAttributeList`]. */
 @rust("std::os::windows::process::ProcThreadAttributeListBuilder")
+@RustClone
 public class ProcThreadAttributeListBuilder {
     public Self attribute<T>(uint attribute, &T value);
     public unsafe Self raw_attribute<T>(uint attribute, T* value_ptr, uint value_size);
@@ -1783,12 +1833,14 @@ public class ProcThreadAttributeListBuilder {
 
 /** `RandomState` is the default state for [`HashMap`] types. */
 @rust("std::hash::random::RandomState")
+@RustClone
 public class RandomState {
     public RandomState();
 }
 
 /** An iterator over a sub-range of entries in a `BTreeMap`. */
 @rust("std::collections::Range")
+@RustClone
 public class Range<K, V> {
 }
 
@@ -1799,6 +1851,7 @@ public class RangeMut<K, V> {
 
 /** A single-threaded reference-counting pointer. 'Rc' stands for 'Reference */
 @rust("std::rc::Rc")
+@RustClone
 public class Rc<T, A> {
     public Rc(T value);
     public static T new_cyclic<F>((Weak<T>) -> T data_fn);
@@ -1879,6 +1932,7 @@ public class ReadDir {
 
 /** The receiving half of Rust's [`channel`] (or [`sync_channel`]) type. */
 @rust("std::sync::mpmc::Receiver")
+@RustClone
 public class Receiver<T> {
     public T try_recv() throws TryRecvError;
     public T recv() throws RecvError;
@@ -1896,6 +1950,7 @@ public class Receiver<T> {
 
 /** An error returned from the [`recv`] function on a [`Receiver`]. */
 @rust("std::sync::mpsc::RecvError")
+@RustClone
 public class RecvError {
 }
 
@@ -2023,6 +2078,7 @@ public enum SeekFrom {
 
 /** An error returned from the [`Sender::send`] or [`SyncSender::send`] */
 @rust("std::sync::mpsc::SendError")
+@RustClone
 public class SendError<T> {
 }
 
@@ -2034,6 +2090,7 @@ public enum SendTimeoutError<T> {
 
 /** The sending-half of Rust's synchronous [`channel`] type. */
 @rust("std::sync::mpmc::Sender")
+@RustClone
 public class Sender<T> {
     public void try_send(T msg) throws TrySendError<T>;
     public void send(T msg) throws SendError<T>;
@@ -2059,6 +2116,7 @@ public class Socket {
 
 /** An address associated with a Unix socket. */
 @rust("std::os::unix::net::addr::SocketAddr")
+@RustClone
 public class SocketAddr {
     public static SocketAddr from_pathname<P>(P path) throws Error;
     public bool is_unnamed();
@@ -2087,6 +2145,7 @@ public class SocketAncillary {
 }
 
 @rust("std::os::unix::net::ancillary::SocketCred")
+@RustClone
 public class SocketCred {
 }
 
@@ -2179,6 +2238,7 @@ public class StdoutLock {
 
 /** A UTF-8–encoded, growable string. */
 @rust("std::string::String")
+@RustClone
 public class String {
     public String();
     public static String with_capacity(uint capacity);
@@ -2228,17 +2288,6 @@ public class String {
     @MutSelf public void replace_last<P>(P from, &String to);
     public String into_boxed_str();
     public String leak();
-    public ubyte[] into_boxed_bytes();
-    public String replace<P>(P from, &String to);
-    public String replacen<P>(P pat, &String to, uint count);
-    public String to_lowercase();
-    public String word_to_titlecase();
-    public String to_uppercase();
-    public String to_casefold_unnormalized();
-    public String into_string();
-    public String repeat(uint n);
-    public String to_ascii_uppercase();
-    public String to_ascii_lowercase();
     public bool is_char_boundary(uint index);
     public uint floor_char_boundary(uint index);
     public uint ceil_char_boundary(uint index);
@@ -2311,20 +2360,34 @@ public class String {
     public EscapeDefault escape_default();
     public EscapeUnicode escape_unicode();
     public Range<uint>? substr_range(&String substr);
+    public ubyte[] into_boxed_bytes();
+    public String replace<P>(P from, &String to);
+    public String replacen<P>(P pat, &String to, uint count);
+    public String to_lowercase();
+    public String word_to_titlecase();
+    public String to_uppercase();
+    public String to_casefold_unnormalized();
+    public String into_string();
+    public String repeat(uint n);
+    public String to_ascii_uppercase();
+    public String to_ascii_lowercase();
 }
 
 /** An error returned from [`Path::strip_prefix`] if the prefix was not found. */
 @rust("std::path::StripPrefixError")
+@RustClone
 public class StripPrefixError {
 }
 
 /** A lazy iterator producing elements in the symmetric difference of `BTreeSet`s. */
 @rust("std::collections::SymmetricDifference")
+@RustClone
 public class SymmetricDifference<T> {
 }
 
 /** The sending-half of Rust's synchronous [`sync_channel`] type. */
 @rust("std::sync::mpsc::SyncSender")
+@RustClone
 public class SyncSender<T> {
     public void send(T t) throws SendError<T>;
     public void try_send(T t) throws TrySendError<T>;
@@ -2332,16 +2395,19 @@ public class SyncSender<T> {
 
 /** The default memory allocator provided by the operating system. */
 @rust("std::alloc::System")
+@RustClone
 public class System {
 }
 
 /** The system random number generator. */
 @rust("std::random::SystemRng")
+@RustClone
 public class SystemRng {
 }
 
 /** A measurement of the system clock, useful for talking to */
 @rust("std::time::SystemTime")
+@RustClone
 public class SystemTime {
     public static SystemTime now();
     public Duration duration_since(SystemTime earlier) throws SystemTimeError;
@@ -2355,6 +2421,7 @@ public class SystemTime {
 
 /** An error returned from the `duration_since` and `elapsed` methods on */
 @rust("std::time::SystemTimeError")
+@RustClone
 public class SystemTimeError {
     public Duration duration();
 }
@@ -2425,6 +2492,7 @@ public class ThinBox<T> {
 
 /** A handle to a thread. */
 @rust("std::thread::thread::Thread")
+@RustClone
 public class Thread {
     public void unpark();
     public ThreadId id();
@@ -2435,6 +2503,7 @@ public class Thread {
 
 /** A unique identifier for a running thread. */
 @rust("std::thread::id::ThreadId")
+@RustClone
 public class ThreadId {
     public NonZero<ulong> as_u64();
 }
@@ -2477,6 +2546,7 @@ public enum TryRecvError {
 
 /** The error type for `try_reserve` methods. */
 @rust("std::collections::TryReserveError")
+@RustClone
 public class TryReserveError {
     public TryReserveErrorKind kind();
 }
@@ -2533,6 +2603,7 @@ public class UdpSocket {
 
 /** A lazy iterator producing elements in the union of `BTreeSet`s. */
 @rust("std::collections::Union")
+@RustClone
 public class Union<T> {
 }
 
@@ -2635,6 +2706,7 @@ public class UnixStream {
 
 /** Error type returned by [`CursorMut::insert_before`] and */
 @rust("std::collections::UnorderedKeyError")
+@RustClone
 public class UnorderedKeyError {
 }
 
@@ -2649,6 +2721,7 @@ public class VacantEntry<K, V, A> {
 
 /** An iterator over the values of a `BTreeMap`. */
 @rust("std::collections::Values")
+@RustClone
 public class Values<K, V> {
 }
 
@@ -2675,6 +2748,7 @@ public class VarsOs {
 
 /** A contiguous growable array type, written as `Vec<T>`, short for 'vector'. */
 @rust("std::vec::Vec")
+@RustClone
 public class Vec<T, A> {
     public Vec();
     public static Self with_capacity(uint capacity);
@@ -2745,20 +2819,20 @@ public class Vec<T, A> {
     @MutSelf public void dedup();
     @MutSelf public Splice<IntoIter, A> splice<R, I>(R range, I replace_with);
     @MutSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
-    public T[] as_flattened();
-    @MutSelf public T[] as_flattened_mut();
+    public String as_str();
+    public ubyte[] as_bytes();
     @MutSelf public void sort_floats();
     @MutSelf public Tuple<Self, MaybeUninit<U>[], Self> align_to_uninit_mut<U>();
-    public bool is_ascii();
-    public Char[]? as_ascii();
-    public unsafe Char[] as_ascii_unchecked();
-    public bool eq_ignore_ascii_case(ubyte[] other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
-    public EscapeAscii escape_ascii();
-    public ubyte[] trim_ascii_start();
-    public ubyte[] trim_ascii_end();
-    public ubyte[] trim_ascii();
+    @MutSelf public T[] write_copy_of_slice(T[] src);
+    @MutSelf public T[] write_clone_of_slice(T[] src);
+    @MutSelf public T[] write_filled(T value);
+    @MutSelf public T[] write_with<F>((uint) -> T f);
+    @MutSelf public Tuple<T[], MaybeUninit<T>[]> write_iter<I>(I it);
+    @MutSelf public MaybeUninit<ubyte>[] as_bytes_mut();
+    @MutSelf public unsafe void assume_init_drop();
+    public unsafe T[] assume_init_ref();
+    @MutSelf public unsafe T[] assume_init_mut();
+    public Utf8Chunks utf8_chunks();
     public T? first();
     @MutSelf public T? first_mut();
     public Tuple<T, T[]>? split_first();
@@ -2874,22 +2948,23 @@ public class Vec<T, A> {
     @MutSelf public Output[] get_disjoint_mut<I>(I[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
     public Range<uint>? subslice_range(T[] subslice);
-    @MutSelf public T[] write_copy_of_slice(T[] src);
-    @MutSelf public T[] write_clone_of_slice(T[] src);
-    @MutSelf public T[] write_filled(T value);
-    @MutSelf public T[] write_with<F>((uint) -> T f);
-    @MutSelf public Tuple<T[], MaybeUninit<T>[]> write_iter<I>(I it);
-    public MaybeUninit<ubyte>[] as_bytes();
-    @MutSelf public MaybeUninit<ubyte>[] as_bytes_mut();
-    @MutSelf public unsafe void assume_init_drop();
-    public unsafe T[] assume_init_ref();
-    @MutSelf public unsafe T[] assume_init_mut();
-    public String as_str();
-    public Utf8Chunks utf8_chunks();
+    public bool is_ascii();
+    public Char[]? as_ascii();
+    public unsafe Char[] as_ascii_unchecked();
+    public bool eq_ignore_ascii_case(ubyte[] other);
+    @MutSelf public void make_ascii_uppercase();
+    @MutSelf public void make_ascii_lowercase();
+    public EscapeAscii escape_ascii();
+    public ubyte[] trim_ascii_start();
+    public ubyte[] trim_ascii_end();
+    public ubyte[] trim_ascii();
+    public T[] as_flattened();
+    @MutSelf public T[] as_flattened_mut();
 }
 
 /** A double-ended queue implemented with a growable ring buffer. */
 @rust("std::collections::VecDeque")
+@RustClone
 public class VecDeque<T, A> {
     public VecDeque();
     @MutSelf public ExtractIf<T, F, A> extract_if<F, R>(R range, (T) -> bool filter);
@@ -2960,6 +3035,7 @@ public class VecDeque<T, A> {
 
 /** A type indicating whether a timed wait on a condition variable returned */
 @rust("std::sync::WaitTimeoutResult")
+@RustClone
 public class WaitTimeoutResult {
     public bool timed_out();
 }
@@ -2973,6 +3049,7 @@ public interface Wake {
 
 /** `Weak` is a version of [`Rc`] that holds a non-owning reference to the */
 @rust("std::rc::Weak")
+@RustClone
 public class Weak<T, A> {
     public Weak();
     public static Weak<T, A> new_in(A alloc);
@@ -3014,6 +3091,7 @@ public class WriterPanicked {
 
 /** An iterator that produces directory paths from XDG environment configuration. */
 @rust("std::os::unix::xdg::XdgDirsIter")
+@RustClone
 public class XdgDirsIter {
 }
 

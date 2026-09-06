@@ -65,6 +65,10 @@ fn render_type(out: &mut String, t: &StubType) {
         let _ = writeln!(out, "@RustIndexRef");
     }
 
+    if t.is_clone {
+        let _ = writeln!(out, "@RustClone");
+    }
+
     let keyword = match t.kind {
         TypeKind::Class => "class",
         TypeKind::Interface => "interface",

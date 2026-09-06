@@ -353,6 +353,7 @@ fn build_struct(krate: &Crate, name: &str, s: &Struct, item: &Item, pool: &Inher
     st.doc = first_doc_line(item);
     st.rust_path = real_rust_path(krate, item);
     st.index_ref = has_ref_index_impl(krate, &s.impls);
+    st.is_clone = implements_trait(krate, &s.impls, "Clone");
     st
 }
 
@@ -665,6 +666,22 @@ fn has_ref_index_impl(krate: &Crate, impls: &[rustdoc_types::Id]) -> bool {
                     Some(GenericArg::Type(Type::BorrowedRef { .. }))
                 )
         )
+    })
+}
+
+/// Does this type implement `trait_name`? DISCOVERED from its real trait
+/// impls, so the answer tracks the library rather than a list of type names.
+///
+/// Synthetic impls are excluded: rustdoc emits those for auto traits
+/// (`Send`/`Sync`), which are not what any caller here is asking about.
+fn implements_trait(krate: &Crate, impls: &[rustdoc_types::Id], trait_name: &str) -> bool {
+    impls.iter().any(|id| {
+        let Some(item) = krate.index.get(id) else { return false };
+        let ItemEnum::Impl(im) = &item.inner else { return false };
+        if im.is_synthetic || im.is_negative {
+            return false;
+        }
+        im.trait_.as_ref().is_some_and(|tr| last_segment(&tr.path) == trait_name)
     })
 }
 

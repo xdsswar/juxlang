@@ -63,6 +63,11 @@ pub const PRIMITIVE_TYPE_NAMES: &[&str] = &[
     "float", "double",
     "char",
     "String",
+    // C#-style lower-case alias. `String` and `string` are the SAME type
+    // (§5.5); the canonical spelling is `String`, which is what diagnostics
+    // and `typeof` echo. Listed here so `string` lexes as a primitive TYPE
+    // name rather than an ordinary identifier.
+    "string",
     "i8", "u8",
     "i16", "u16",
     "i32", "u32",
