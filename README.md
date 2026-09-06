@@ -780,7 +780,7 @@ cd ide/intellij-plugin
 ```
 
 The first build downloads the IntelliJ Platform and a JDK 21 toolchain
-automatically. The result is `build/distributions/jux-intellij-0.0.2.zip`. Then in
+automatically. The result is `build/distributions/jux-intellij-0.0.3.zip`. Then in
 your IDE:
 
 **Settings/Preferences > Plugins > gear icon > Install Plugin from Disk...**, pick

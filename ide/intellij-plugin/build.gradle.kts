@@ -85,6 +85,12 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.0.3</h3>
+            <p>Language sync.</p>
+            <ul>
+              <li><b>string</b> is now recognised as a primitive type name, the same type as <b>String</b> (C#-style). Highlighting, completion and the type checker all treat the two spellings as one.</li>
+            </ul>
+
             <h3>0.0.2</h3>
             <p>The everyday editor actions, and a real Refactor menu.</p>
             <ul>
