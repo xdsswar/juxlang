@@ -112,6 +112,34 @@ object JuxTypeInference {
     }
 
     /**
+     * The type TEXT written for the value [name] denotes here — the declared
+     * type of a local, parameter, field or property, generic arguments and all.
+     *
+     * [resolveReceiver] answers with a resolved [JuxTypeDeclaration], which is
+     * what member completion needs but throws away everything a *declaration*
+     * needs: `int` and `String` resolve to no declaration at all, and
+     * `Map<String, Leaf>` collapses to `Map`. A refactoring that has to WRITE a
+     * type needs the text the author would have written.
+     *
+     * Null for a `var` local, whose type was never written down.
+     */
+    fun writtenTypeTextOf(name: String, context: PsiElement): String? {
+        val decl = resolveValueDecl(name, context) ?: return null
+        return (decl as PsiElement).node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
+    }
+
+    /**
+     * The type TEXT of [member] as seen on [ownerType] — a field or property's
+     * declared type, or a method's return type (the same first TYPE_REFERENCE
+     * child either way).
+     */
+    fun memberTypeTextOf(ownerType: JuxTypeDeclaration, member: String): String? {
+        val decl = JuxHierarchy.allMembers(ownerType)
+            .firstOrNull { (it as? JuxNamedElement)?.name == member } ?: return null
+        return decl.node.findChildByType(E.TYPE_REFERENCE)?.text?.trim()
+    }
+
+    /**
      * A written type with its arguments — `Vec<Leaf>` → `("Vec", ["Leaf"])`.
      *
      * The resolver has to carry the arguments, not just the resolved

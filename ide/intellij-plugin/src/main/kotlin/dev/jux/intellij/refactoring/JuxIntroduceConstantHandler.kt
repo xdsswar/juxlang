@@ -14,7 +14,6 @@ import com.intellij.refactoring.util.CommonRefactoringUtil
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxFieldDeclaration
 import dev.jux.intellij.psi.JuxFile
-import dev.jux.intellij.resolve.JuxTypeInference
 
 /**
  * Introduce Constant (`Ctrl+Alt+C`) — turn the selected expression into a
@@ -80,14 +79,9 @@ class JuxIntroduceConstantHandler : RefactoringActionHandler {
     /** Not reachable: the action is offered in an editor, never over a tree selection. */
     override fun invoke(project: Project, elements: Array<out PsiElement>, dataContext: DataContext?) = Unit
 
-    /**
-     * The written type of the expression: read off the source when it is a
-     * literal or a `new T(...)`, otherwise resolved through the same in-file
-     * inference member completion uses.
-     */
+    /** The written type of the expression, or null when it cannot be read. */
     private fun typeOf(expression: PsiElement): String? =
-        JuxExtractSupport.inferTypeText(expression)
-            ?: JuxTypeInference.resolveReceiverExpression(expression.text, expression)?.type?.name
+        JuxExtractSupport.declaredTypeText(expression)
 
     /**
      * Where a new field goes: after the last existing field or constant, so the
