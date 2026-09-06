@@ -55,13 +55,11 @@ public class Registry {
         var c = new Counter();
         c.bump();
         c.bump();
-        // Each read taken into its own local first. A returned expression that
-        // still holds a borrow on a local object when that local's destructor
-        // runs is a separate, open bug (rustc E0597) and is not what this
-        // example is about.
-        int n = c.n;
-        int own = c.ownersTag(this);
-        return n + own;
+        // Returned as one expression on purpose: the value reads a field off
+        // a LOCAL object, so the elided tail would leave a borrow alive past
+        // that local's drop (rustc E0597). The emitter keeps the explicit
+        // `return` for exactly this shape.
+        return c.n + c.ownersTag(this);
     }
 }
 
