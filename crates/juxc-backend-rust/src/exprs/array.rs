@@ -11,18 +11,20 @@ impl RustEmitter {
     /// `@RustIndexRef` marker off the class AST — discovered from the
     /// library's real trait impls, never a name list.
     pub(crate) fn class_indexes_by_ref(&self, bare: &str) -> bool {
-        self.class_ast_by_bare(bare)
-            .map(|cd| {
-                cd.annotations.iter().any(|a| {
-                    a.name.segments.len() == 1
-                        && a.name.segments[0]
-                            .text
-                            .eq_ignore_ascii_case("rustindexref")
-                })
-            })
-            .unwrap_or(false)
+        // A USER class carries the marker on its AST…
+        if let Some(cd) = self.class_ast_by_bare(bare) {
+            if cd.annotations.iter().any(is_index_ref) {
+                return true;
+            }
+        }
+        // …and a SCANNED class carries it on its signature. The AST map holds
+        // user classes only, so without this half every question about a
+        // `rust.std` type missed and the caller fell back to naming the two
+        // types it knew about — which is how `HashMap`/`BTreeMap` came to be
+        // hardcoded next to a marker that already said the same thing.
+        self.lookup_class_by_bare_or_fqn(bare)
+            .is_some_and(|sig| sig.annotations.iter().any(is_index_ref))
     }
-
     /// Lower `arr[index]` to Rust `arr[index_as_usize]`.
     ///
     /// Rust requires `usize` for array/slice/Vec indexing. Jux's
@@ -64,7 +66,6 @@ impl RustEmitter {
             Some(juxc_tycheck::Ty::User { name, .. }) => {
                 let bare = name.rsplit('.').next().unwrap_or(name);
                 self.class_indexes_by_ref(bare)
-                    || matches!(bare, "HashMap" | "BTreeMap")
             }
             _ => false,
         };
@@ -379,4 +380,12 @@ impl RustEmitter {
             self.w.push_str(".clone()");
         }
     }
+}
+
+/// True when an annotation is the bindgen `@RustIndexRef` marker — the type
+/// indexes by reference (`&map[k]`), which bindgen reads from its real trait
+/// impls. Annotations are case-insensitive per the Jux rules.
+fn is_index_ref(a: &juxc_ast::Annotation) -> bool {
+    a.name.segments.len() == 1
+        && a.name.segments[0].text.eq_ignore_ascii_case("rustindexref")
 }
