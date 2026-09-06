@@ -133,7 +133,7 @@ juxc hello.jux --run
 ### Option A — use the prebuilt zip
 
 If you have the built artifact at
-`ide/intellij-plugin/build/distributions/jux-intellij-0.0.1.zip`, skip to
+`ide/intellij-plugin/build/distributions/jux-intellij-0.0.2.zip`, skip to
 **Install in the IDE** below.
 
 ### Option B — build the plugin
@@ -145,7 +145,7 @@ cd ide/intellij-plugin
 
 The first build downloads the IntelliJ Platform and (via the foojay resolver) a
 **JDK 21** toolchain — no manual JDK install needed. The result is
-`build/distributions/jux-intellij-0.0.1.zip`.
+`build/distributions/jux-intellij-0.0.2.zip`.
 
 > The plugin builds with **Gradle 9.1** and targets **JDK 21 bytecode**, which
 > loads cleanly in IntelliJ's JBR. See `ide/intellij-plugin/README.md` for the
@@ -154,7 +154,7 @@ The first build downloads the IntelliJ Platform and (via the foojay resolver) a
 ### Install in the IDE
 
 1. **Settings/Preferences → Plugins → ⚙ (gear) → Install Plugin from Disk…**
-2. Select `jux-intellij-0.0.1.zip`.
+2. Select `jux-intellij-0.0.2.zip`.
 3. **Restart the IDE.**
 
 ---

@@ -1,0 +1,12 @@
+<idea-plugin>
+  <!-- Loaded only when the bundled Spellchecker plugin
+       (com.intellij.spellchecker) is enabled. It ships with every IDE we
+       target, but it CAN be switched off in Settings | Plugins, and a hard
+       dependency would then stop the whole Jux plugin from loading — a
+       missing typo warning is not worth losing the language support over. -->
+  <extensions defaultExtensionNs="com.intellij">
+    <spellchecker.support
+        language="Jux"
+        implementationClass="dev.jux.intellij.editor.JuxSpellcheckingStrategy"/>
+  </extensions>
+</idea-plugin>

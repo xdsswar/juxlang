@@ -37,11 +37,42 @@
       <li><b>Go to Declaration</b>, <b>Find Usages</b>, and <b>Rename</b> for
         in-file declarations; cross-file and Rust-std symbols resolve through the
         language server</li>
-      <li>Java-like editor behaviour: smart Enter, <b>Auto-Indent</b>
+      <li>Java-like editor behaviour: <b>Complete Current Statement</b>
+        (<code>Ctrl+Shift+Enter</code>) closes brackets, adds the missing
+        <code>;</code> or opens a <code>{ }</code> body; <b>Auto-Indent</b>
         (<code>Ctrl+Alt+I</code>), auto-closing quotes/brackets, and line/block
         comment toggling</li>
+      <li><b>Parameter Info</b> (<code>Ctrl+P</code>) for calls and constructors,
+        listing every overload with the active parameter in bold</li>
+      <li><b>Surround With</b> (<code>Ctrl+Alt+T</code>) — <code>if</code>,
+        <code>while</code>, <code>for</code>, <code>try/catch</code>,
+        <code>unsafe { }</code> and more, plus <code>(expr)</code> /
+        <code>!(expr)</code> over a selected expression</li>
+      <li><b>Move Statement Up/Down</b>
+        (<code>Ctrl+Shift+Up</code>/<code>Down</code>) — moves whole statements
+        and whole members, and will not lift one out of its block</li>
+      <li><b>Type Hierarchy</b> (<code>Ctrl+H</code>) with supertype, subtype and
+        combined views</li>
+      <li><b>Spellchecking</b> of comments, plain strings and declaration names
+        (interpolation holes stay code, not prose)</li>
       <li><b>Optimize Imports</b> (<code>Ctrl+Alt+O</code>) — removes unused and
         duplicate imports and sorts the rest, just like Java</li>
+    </ul>
+
+    <h3>Refactoring</h3>
+    <ul>
+      <li><b>Extract Variable</b> (<code>Ctrl+Alt+V</code>) — hoists the selected
+        expression into a <code>var</code>, replaces every occurrence, and opens
+        an in-place rename</li>
+      <li><b>Introduce Constant</b> (<code>Ctrl+Alt+C</code>) — a
+        <code>private static final</code> field on the enclosing type, with the
+        type read off the source</li>
+      <li><b>Inline Variable</b> (<code>Ctrl+Alt+N</code>) — with guards against
+        reassignment and side effects, and parentheses where precedence needs
+        them</li>
+      <li><b>Safe Delete</b> for any declaration, listing the usages that would
+        break before anything is removed</li>
+      <li><b>Rename</b>, in place for locals and parameters</li>
     </ul>
 
     <h3>Code Generation (Alt+Insert)</h3>
@@ -114,6 +145,11 @@
        on IDEs where lsp.xml also loaded, the factory disables itself so only
        one juxc-lsp runs (native wins). -->
   <depends optional="true" config-file="lsp4ij.xml">com.redhat.devtools.lsp4ij</depends>
+
+  <!-- Spellchecking for comments, plain strings and declaration names. Bundled
+       in every target IDE but disableable, so this stays optional: losing typo
+       warnings must never cost the user their language support. -->
+  <depends optional="true" config-file="spellchecker.xml">com.intellij.modules.spellchecker</depends>
 
   <extensions defaultExtensionNs="com.intellij">
     <!-- `extensions="jux"` matches user sources; `patterns="*.jux.d"` matches
@@ -263,6 +299,13 @@
         language="Jux"
         implementationClass="dev.jux.intellij.hints.JuxInlayHintsProvider"/>
 
+    <!-- Parameter Info (Ctrl+P): the signature of the call the caret is inside,
+         active parameter in bold. Jux overloads on parameter TYPES, so every
+         same-named candidate is offered and the arrows page between them. -->
+    <codeInsight.parameterInfo
+        language="Jux"
+        implementationClass="dev.jux.intellij.codeInsight.JuxParameterInfoHandler"/>
+
     <!-- Live templates (psvm, sout, fore, ifn, tryc, cls, …) — the Java-IDE
          abbreviation-expand-on-Tab experience. The context type gates them to
          Jux code (not comments/strings); the set ships in liveTemplates/Jux.xml. -->
@@ -302,6 +345,54 @@
     <typedHandler
         implementation="dev.jux.intellij.editor.JuxTypedHandler"
         id="juxInterpString"/>
+
+    <!-- The Refactor menu. `lang.refactoringSupport` is the gate: without it
+         the platform greys out Extract Variable, Introduce Constant and Safe
+         Delete no matter which handlers are registered. -->
+    <lang.refactoringSupport
+        language="Jux"
+        implementationClass="dev.jux.intellij.refactoring.JuxRefactoringSupportProvider"/>
+    <!-- Inline Variable (Ctrl+Alt+N). Refuses when the local is reassigned or
+         its initializer has side effects; parenthesizes when substituting. -->
+    <inlineActionHandler
+        implementation="dev.jux.intellij.refactoring.JuxInlineVariableHandler"/>
+    <!-- Safe Delete: usages come from the same reference search as Find Usages,
+         so the conflicts dialog lists exactly what Alt+F7 would have shown. -->
+    <refactoring.safeDeleteProcessor
+        implementation="dev.jux.intellij.refactoring.JuxSafeDeleteProcessor"/>
+
+    <!-- Type Hierarchy (Ctrl+H): supertypes, subtypes, or both, over the same
+         JuxTypeIndex / JuxSubtypes indexes that drive the gutter icons. -->
+    <typeHierarchyProvider
+        language="Jux"
+        implementationClass="dev.jux.intellij.resolve.hierarchy.JuxTypeHierarchyProvider"/>
+
+    <!-- Complete Current Statement (Ctrl+Shift+Enter): close open brackets,
+         give a header its `{ }`, or terminate the statement — then move on. -->
+    <lang.smartEnterProcessor
+        language="Jux"
+        implementationClass="dev.jux.intellij.editor.JuxSmartEnterProcessor"/>
+
+    <!-- Move Statement Up/Down (Ctrl+Shift+Up/Down): whole statements inside a
+         block, whole members inside a type body. Refuses to leave the block. -->
+    <statementUpDownMover
+        implementation="dev.jux.intellij.editor.JuxStatementMover"/>
+
+    <!-- The breadcrumb trail under the editor (`Parser > Cursor > advance()`).
+         Declarations only: including blocks turns the trail into `if > for > if`
+         and pushes the enclosing class off the left edge. -->
+    <breadcrumbsInfoProvider
+        implementation="dev.jux.intellij.editor.JuxBreadcrumbsProvider"/>
+
+    <!-- Surround With (Ctrl+Alt+T): the Java templates spelled in Jux, over
+         whole statements, plus `(expr)` / `!(expr)` over one expression. Each
+         writes text and reformats rather than splicing PSI. -->
+    <lang.surroundDescriptor
+        language="Jux"
+        implementationClass="dev.jux.intellij.codeInsight.surround.JuxStatementSurroundDescriptor"/>
+    <lang.surroundDescriptor
+        language="Jux"
+        implementationClass="dev.jux.intellij.codeInsight.surround.JuxExpressionSurroundDescriptor"/>
 
     <!-- Optimize Imports (Ctrl+Alt+O): drop unused / duplicate imports and sort
          the survivors, Java-style. The keybinding is the platform default. -->
