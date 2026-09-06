@@ -3560,7 +3560,16 @@ impl RustEmitter {
         self.w.push('.');
         self.w.push_str(method);
         self.w.push('(');
-        self.emit_call_args(call);
+        // Borrow whichever arguments the real Rust signature borrows. A map's
+        // `get_mut(&Q key)` is the case that surfaced this: the stub records
+        // the `&`, and without honouring it the emitted call passed an owned
+        // `String` where `&Q` was expected.
+        match self.receiver_ty_of(&f.object) {
+            Some(juxc_tycheck::Ty::User { name, .. }) => {
+                self.emit_foreign_call_args(call, &name, method)
+            }
+            _ => self.emit_call_args(call),
+        }
         self.w.push(')');
         // Same `Vec::pop -> .unwrap()` Phase-1 bridge as the generic call tail
         // (`emit_call`): Rust's `Vec::pop` yields `Option<T>` but a Jux `pop()`
@@ -3600,13 +3609,9 @@ impl RustEmitter {
         let Expr::Field(get_field) = &*get_call.callee else {
             return false;
         };
-        // …to one of the reference getters…
+        // …to some getter, on a receiver whose type comes from the same two
+        // places the caller reads it from: a declared local, else the span.
         let getter = get_field.field.text.as_str();
-        let Some(mut_getter) = mut_getter_for(getter) else {
-            return false;
-        };
-        // …on a `rust.std` collection. The type comes from the same two places
-        // the caller reads it from: a declared local, else the recorded span.
         let inner_recv = &get_field.object;
         let inner_ty = match &**inner_recv {
             Expr::Path(qn) if qn.segments.len() == 1 => self
@@ -3624,26 +3629,31 @@ impl RustEmitter {
         let Some(juxc_tycheck::Ty::User { name, .. }) = inner_ty else {
             return false;
         };
-        let bare = name.rsplit('.').next().unwrap_or(&name);
-        if !name.starts_with("rust.std")
-            || !matches!(
-                bare,
-                "Vec" | "HashMap" | "HashSet" | "VecDeque" | "BTreeMap" | "BTreeSet",
-            )
-        {
+        // The mutable twin is DERIVED from Rust's own `_mut` naming convention
+        // and then VERIFIED against the scanned surface: the rewrite happens
+        // only if the receiver's type really declares `<getter>_mut` taking
+        // `&mut self`, which bindgen records as `@MutSelf` from rustdoc.
+        //
+        // That one check replaces two hardcoded lists this function used to
+        // carry — a get/first/last/front/back → `_mut` table, and a
+        // `"Vec" | "HashMap" | …` type list. Both would have gone stale the
+        // moment Rust's std grew a method or a type; asking the stub cannot.
+        // It is also stricter: a type with a `get()` and no `get_mut()` is
+        // correctly left alone instead of being rewritten into a method that
+        // does not exist.
+        let mut_getter = format!("{getter}_mut");
+        if !self.external_method_mutates_receiver(&name, &mut_getter) {
             return false;
         }
 
         self.emit_stdlib_receiver(&get_field.object);
         self.w.push('.');
-        self.w.push_str(mut_getter);
+        self.w.push_str(&mut_getter);
         self.w.push('(');
-        // `get_mut(k)` borrows its key; the positional getters take no argument.
-        if getter == "get" && !get_call.args.is_empty() {
-            self.w.push_str("&(");
-            self.emit_call_args(get_call);
-            self.w.push(')');
-        }
+        // The getter's own arguments, borrowed per the stub — a map key is
+        // `&Q`, and the positional getters (`first_mut`, `back_mut`, …) take
+        // none at all, which falls out of the same loop.
+        self.emit_foreign_call_args(get_call, &name, &mut_getter);
         self.w.push(')');
         // The same panic text the generic `!!` lowering uses, so a missing key
         // reports identically however it was reached.
@@ -3688,6 +3698,15 @@ impl RustEmitter {
     /// methods that need `&mut` on the underlying `Vec`/`HashMap`/`HashSet`/
     /// `VecDeque`. Read-only methods (`size`, `get`, `contains`, `keys`, …)
     /// answer `false`. Drives the gap-N1 borrow_mut routing.
+    ///
+    /// **Asks the stub first.** bindgen records the real Rust `&mut self`
+    /// receiver as `@MutSelf` on every generated `.jux.d` method (348 of them
+    /// across today's `rust.std` surface, `Vec::push` among them), so the
+    /// answer tracks the library: a method Rust adds, renames or changes the
+    /// receiver of is picked up by regenerating the stub, with no edit here.
+    /// The name lists below are the fallback for a stub cache generated before
+    /// the marker existed — they are not the source of truth, and a new library
+    /// method must never be added to them.
     fn collection_method_mutates(&self, recv_ty: &juxc_tycheck::Ty, method: &str) -> bool {
         match recv_ty {
             juxc_tycheck::Ty::Array { .. } => matches!(
@@ -3695,6 +3714,10 @@ impl RustEmitter {
                 "add" | "set" | "remove" | "insert" | "clear" | "reverse" | "sort"
             ),
             juxc_tycheck::Ty::User { name, .. } => {
+                // Discovered answer first — see the doc comment above.
+                if self.external_method_mutates_receiver(name, method) {
+                    return true;
+                }
                 // The rust.std collections carry their verbatim Rust mutating
                 // method names — a wrapper-field receiver reads through
                 // `borrow_mut()` rather than the clone-hoist (which would mutate
@@ -4445,6 +4468,49 @@ impl RustEmitter {
         self.emitting_format_arg = prev;
     }
 
+    /// Emit a foreign method's arguments, borrowing exactly the ones its real
+    /// signature borrows.
+    ///
+    /// bindgen records a Rust `&` parameter as `is_ref` on the generated stub
+    /// (`@MutSelf public V? get_mut<Q>(&Q key);`), so which arguments need `&`
+    /// is DISCOVERED from the library rather than listed here. A hand-written
+    /// rule would have to name every borrowing method of every container and
+    /// would go stale the moment one is added.
+    fn emit_foreign_call_args(&mut self, call: &CallExpr, recv_type: &str, method: &str) {
+        let prev = self.emitting_format_arg;
+        self.emitting_format_arg = false;
+        for (i, arg) in call.args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            let by_ref = self.external_param_is_by_ref(recv_type, method, i);
+            if by_ref {
+                self.w.push_str("&(");
+            }
+            self.emit_collection_arg(call, i, arg);
+            if by_ref {
+                self.w.push(')');
+            }
+        }
+        self.emitting_format_arg = prev;
+    }
+
+    /// The type of a receiver expression, from the two places the emitter
+    /// records it: a declared local, else the span-keyed inference map.
+    fn receiver_ty_of(&self, receiver: &Expr) -> Option<juxc_tycheck::Ty> {
+        match receiver {
+            Expr::Path(qn) if qn.segments.len() == 1 => self
+                .local_types
+                .iter()
+                .rev()
+                .find_map(|scope| scope.get(qn.segments[0].text.as_str()).cloned()),
+            _ => None,
+        }
+        .or_else(|| {
+            self.expr_types.get(&crate::exprs::expr_span_of(receiver)).cloned()
+        })
+    }
+
     /// Emit ONE builtin-container argument with its element coercion
     /// ladder: nullable `Some(…)` wrap and wrapper share-`.clone()`. Shared
     /// by `emit_call_args` and the arg-hoisting path so both produce the
@@ -4674,20 +4740,3 @@ pub(crate) fn literal_numeric_ty(e: &Expr) -> Option<juxc_tycheck::Primitive> {
     }
 }
 
-/// The `&mut`-yielding twin of a `rust.std` reference getter, or `None` when
-/// the method is not one of them.
-///
-/// `HashMap`/`BTreeMap` have `get_mut`; `Vec`/`VecDeque` have `get_mut` plus
-/// the positional `first_mut`/`last_mut`/`front_mut`/`back_mut`. A set has no
-/// mutable getter at all (its elements are its keys), which `get` on a
-/// `HashSet` correctly does not reach here for.
-fn mut_getter_for(getter: &str) -> Option<&'static str> {
-    match getter {
-        "get" => Some("get_mut"),
-        "first" => Some("first_mut"),
-        "last" => Some("last_mut"),
-        "front" => Some("front_mut"),
-        "back" => Some("back_mut"),
-        _ => None,
-    }
-}

@@ -1942,6 +1942,29 @@ impl RustEmitter {
     }
 }
 
+/// Whether the stub declares parameter `idx` of `type_name::method` as a Rust
+/// reference (`&Q key`).
+///
+/// bindgen carries the `&` through from rustdoc into `ParamSig::is_ref`, so a
+/// call site can borrow exactly the arguments the real signature borrows —
+/// discovered from the library, never a hand-written list of borrowing methods.
+impl super::super::RustEmitter {
+    pub(crate) fn external_param_is_by_ref(
+        &self,
+        type_name: &str,
+        method: &str,
+        idx: usize,
+    ) -> bool {
+        let class = self.symbols.classes.get(type_name).or_else(|| {
+            self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
+        });
+        class
+            .and_then(|c| c.methods.get(method))
+            .and_then(|m| m.params.get(idx))
+            .is_some_and(|p| p.is_ref)
+    }
+}
+
 /// True when an annotation names the bindgen `@MutSelf` marker
 /// (annotations are case-insensitive per the Jux rules).
 pub(crate) fn annotation_is_mut_self(a: &juxc_ast::Annotation) -> bool {
