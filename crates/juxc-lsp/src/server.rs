@@ -2489,6 +2489,16 @@ mod tests {
         dir.push(format!("juxc_lsp_srv_test_{}_{}", std::process::id(), tag));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp root");
+        // A multi-file Jux PROJECT is delimited by its manifest, the same
+        // way `jux build` decides it — and these fixtures are projects:
+        // they check cross-file resolution. Without one the analyser
+        // (correctly) treats each file as a standalone program, which is
+        // what a folder of unrelated examples is.
+        fs::write(dir.join("jux.toml"), "[package]
+name = \"test\"
+version = \"0.1.0\"
+")
+            .expect("write test manifest");
         dir
     }
 
