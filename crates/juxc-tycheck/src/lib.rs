@@ -239,10 +239,29 @@ pub fn typecheck(unit: &CompilationUnit) -> TypeCheckResult {
 /// occurrence.
 pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     let mut tc = TypeChecker::new();
-    // `build_workspace` may emit cross-unit symbol-table diagnostics
-    // (e.g. a duplicate declaration spanning two units) that can't be
-    // cleanly attributed to a single source; those stay `file: None`.
+    // `build_workspace` emits the cross-unit symbol-table diagnostics —
+    // duplicate declarations, the inheritance rules (final/sealed/abstract),
+    // E0429 abstract-not-implemented, the operator rules (E0930/E0931/E0932),
+    // and the W0457 reference-cycle warning.
+    //
+    // Every one of them carries a real span, but `Diagnostic::error` starts
+    // `file` at `None` and nothing here ever set it — and the LSP drops a
+    // diagnostic with no file (`juxc-lsp/src/analysis.rs`). So all of them
+    // errored on the CLI while the editor showed a clean file, which is the
+    // worst shape this can fail in: the build stops and the IDE says nothing.
+    //
+    // A span already knows its file (`Span::file`, stamped by the lexer), and
+    // the driver guarantees a span's file index and a diagnostic's agree — it
+    // calls `Source::set_index` in the same order it reports with. So the
+    // attribution is just a projection, with no plumbing through the symbol
+    // table. A diagnostic with no span at all still has nothing to attribute
+    // to and correctly stays `None`.
     let symbols = symbol_table::build_workspace(units, &mut tc.diagnostics);
+    for d in &mut tc.diagnostics {
+        if d.file.is_none() {
+            d.file = d.primary_span.map(|s| s.file as usize);
+        }
+    }
     // The unit index here is the SAME index the driver uses for its
     // `sources` list (stdlib units first, then user units, in order).
     // We tag each unit's diagnostics with that index via a length-delta:
@@ -523,6 +542,65 @@ mod tests {
         let parse_result = parse(&lex_result.tokens);
         assert!(parse_result.diagnostics.is_empty(), "parse errors: {:?}", parse_result.diagnostics);
         typecheck(&parse_result.ast).diagnostics.len()
+    }
+
+    /// Drive lex → parse → `typecheck_workspace` over one unit and return the
+    /// diagnostics, so a test can inspect their attribution.
+    fn workspace_diagnostics(src: &str) -> Vec<juxc_diagnostics::Diagnostic> {
+        let sf = SourceFile::new("test.jux", src);
+        let lex_result = lex(&sf);
+        assert!(lex_result.diagnostics.is_empty(), "lex errors: {:?}", lex_result.diagnostics);
+        let parse_result = parse(&lex_result.tokens);
+        assert!(parse_result.diagnostics.is_empty(), "parse errors: {:?}", parse_result.diagnostics);
+        typecheck_workspace(&[parse_result.ast]).diagnostics
+    }
+
+    /// Every diagnostic that points at a source must say WHICH source.
+    ///
+    /// The language server drops any diagnostic whose `file` is `None`, so an
+    /// unattributed one errors on the CLI and is invisible in the editor —
+    /// the build stops and the IDE shows a clean file. The symbol-table pass
+    /// (duplicate declarations, the inheritance rules, the operator rules,
+    /// W0457) emitted its whole set that way.
+    #[test]
+    fn symbol_table_diagnostics_are_attributed_to_their_file() {
+        // `E0420` — extending a `final` class. Raised by `build_workspace`,
+        // which is the pass that never set `file`.
+        let diagnostics = workspace_diagnostics(
+            "public final class Locked { }
+public class Sub extends Locked { }
+public void main() { }",
+        );
+        assert!(!diagnostics.is_empty(), "expected a diagnostic for extending a final class");
+        for d in &diagnostics {
+            if d.primary_span.is_some() {
+                assert!(
+                    d.file.is_some(),
+                    "diagnostic {:?} points at a source but names no file, so the LSP drops it: {}",
+                    d.code,
+                    d.message,
+                );
+            }
+        }
+    }
+
+    /// The file a diagnostic names must be the file its span came from.
+    #[test]
+    fn diagnostic_file_agrees_with_its_span() {
+        let diagnostics = workspace_diagnostics(
+            "public final class Locked { }
+public class Sub extends Locked { }
+public void main() { }",
+        );
+        for d in &diagnostics {
+            if let (Some(span), Some(file)) = (d.primary_span, d.file) {
+                assert_eq!(
+                    span.file as usize, file,
+                    "diagnostic {:?} names file {file} but its span is in file {}",
+                    d.code, span.file,
+                );
+            }
+        }
     }
 
     /// `void main()` is the canonical entry form.

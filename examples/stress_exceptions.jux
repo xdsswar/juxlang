@@ -5,14 +5,17 @@ public class IOException extends Exception {
     public IOException(String message) { super(message); }
 }
 
-public void risky(int n) {
+public void risky(int n) throws IOException {
     if (n < 0) {
         throw new IOException($"negative input: ${n}");
     }
     print($"risky(${n}) ok");
 }
 
-public void main() {
+// `main` declares the checked exception rather than catching it: cases 1 and 3
+// below are deliberately `try`/`finally` with NO `catch`, which does not handle
+// the exception -- so it propagates, exactly as in Java.
+public void main() throws IOException {
     // 1. No throw — try body completes, finally runs.
     try {
         risky(7);

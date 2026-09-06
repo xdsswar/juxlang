@@ -32,6 +32,7 @@ Cargo.lock.bak
 # AI-tooling and scratch notes stay out of the published tree.
 /.claude/
 /CLAUDE.md
+/TODO.md
 /next-session.md
 /optimizations.md
 /classes-rules.md

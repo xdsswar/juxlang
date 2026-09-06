@@ -59,10 +59,18 @@ pub struct Diagnostic {
     pub primary_span: Option<Span>,
     /// Index of the source file this diagnostic belongs to, within the
     /// workspace source list (stdlib units first, then user units — the
-    /// same ordering the driver/tycheck use). `None` when the diagnostic
-    /// cannot be attributed to a single source (e.g. a cross-unit
-    /// symbol-table conflict). [`Span`] itself is file-relative and
-    /// carries no file id, so this is the only place file identity lives.
+    /// same ordering the driver/tycheck use). `None` only when there is no
+    /// source to point at, because **the language server drops any
+    /// diagnostic without it**: leaving this unset makes the diagnostic
+    /// invisible in the editor while the CLI still reports it.
+    ///
+    /// [`Span`] carries its own `file` id, and the driver guarantees the two
+    /// indices agree (it calls `Source::set_index` in the same order it
+    /// reports with), so a pass that has a span can always derive this rather
+    /// than thread a file index through itself. An earlier version of this
+    /// comment claimed a `Span` "carries no file id" — that stopped being true
+    /// when `Span::file` was added, and the stale claim is what left the whole
+    /// symbol-table diagnostic set unattributed.
     pub file: Option<usize>,
     /// Secondary spans with explanatory captions. Per the spec these are
     /// the "labels" surfaced under the underline.
