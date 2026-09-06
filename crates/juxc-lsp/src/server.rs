@@ -1125,8 +1125,39 @@ fn already_imports(text: &str, fqn: &str) -> bool {
 /// same-package type needs no import (and a file must never offer to import the
 /// very type it is declaring).
 fn current_package(text: &str) -> Option<String> {
+    let mut in_block_comment = false;
     for line in text.lines() {
-        let t = line.trim_start();
+        let mut t = line.trim_start();
+
+        // Step over comments, including a BLOCK comment spanning lines. A file
+        // that opens with `/** … */` -- a licence header or a type doc -- is
+        // ordinary, and treating that first line as code ended the scan before
+        // the `package` line was ever seen. The package then read as "none",
+        // which made every same-package type look like it needed an import,
+        // including the file's own.
+        loop {
+            if in_block_comment {
+                match t.find("*/") {
+                    Some(i) => {
+                        in_block_comment = false;
+                        t = t[i + 2..].trim_start();
+                    }
+                    None => {
+                        t = "";
+                        break;
+                    }
+                }
+            } else if t.starts_with("/*") {
+                in_block_comment = true;
+                t = &t[2..];
+            } else {
+                break;
+            }
+        }
+        if t.is_empty() || t.starts_with("//") {
+            continue;
+        }
+
         if let Some(rest) = t.strip_prefix("package") {
             // Require a word boundary after `package`.
             if rest.starts_with(char::is_whitespace) {
@@ -1136,14 +1167,11 @@ fn current_package(text: &str) -> Option<String> {
                 }
             }
         }
-        // A non-blank, non-comment line before any `package` means there is none.
-        if !t.is_empty() && !t.starts_with("//") && !t.starts_with("package") {
-            break;
-        }
+        // Real code before any `package` means the file has none.
+        break;
     }
     None
 }
-
 fn import_edit(rope: &Rope, fqn: &str) -> Option<TextEdit> {
     let text = rope.to_string();
     if already_imports(&text, fqn) {
@@ -2639,6 +2667,52 @@ version = \"0.1.0\"
 
     /// `current_package` reads the file's own package so auto-import can skip
     /// same-package (and self) types.
+    /// A file that opens with a block or doc comment still has its package
+    /// read. Missing it made every same-package type look like it needed an
+    /// import — the file's own class included.
+    #[test]
+    fn package_is_found_past_a_leading_block_comment() {
+        assert_eq!(
+            current_package("/** Doc. */
+package app.model;
+public class A {}").as_deref(),
+            Some("app.model"),
+        );
+        assert_eq!(
+            current_package("/*
+ * licence
+ */
+package app.model;
+").as_deref(),
+            Some("app.model"),
+        );
+        // A block comment CLOSING onto real code still ends the scan.
+        assert_eq!(current_package("/* x */ public class A {}
+package nope;"), None);
+    }
+
+    /// A type in the CURRENT package needs no import, so none is offered —
+    /// which is also what stops a class being offered an import of itself.
+    #[test]
+    fn same_package_type_is_offered_no_import() {
+        let mut ws = Workspace::default();
+        ws.type_packages.insert("Animal".to_string(), vec!["app.model".to_string()]);
+        let rope = Rope::from_str("package app.model;
+public class Shelter {}
+");
+
+        assert!(
+            auto_import_for("Animal", &ws, Some("app.model"), &rope).is_none(),
+            "a sibling in the same package must not be offered an import",
+        );
+        assert!(
+            auto_import_for("Shelter", &ws, Some("app.model"), &rope).is_none(),
+            "a class must never be offered an import of itself",
+        );
+        // A type in ANOTHER package still is.
+        ws.type_packages.insert("Widget".to_string(), vec!["app.ui".to_string()]);
+        assert!(auto_import_for("Widget", &ws, Some("app.model"), &rope).is_some());
+    }
     #[test]
     fn current_package_is_read_for_same_package_suppression() {
         assert_eq!(current_package("package xss.it;\npublic class Other {}").as_deref(), Some("xss.it"));
