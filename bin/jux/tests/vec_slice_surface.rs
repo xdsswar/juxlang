@@ -3,7 +3,8 @@
 //! Before bindgen followed `Deref`, the scanned `Vec` had 58 methods and none
 //! of `first`, `last`, `contains`, `reverse` or `is_empty` — which is what
 //! pushed the backend into hardcoding some of them. This asserts the surface
-//! is discovered, by running a program that uses it.
+//! is discovered, by running a program that uses it. Ordering and indexed
+//! access come from the same place: `sort_unstable`, `binary_search` and `get`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -45,6 +46,9 @@ fn vec_has_its_slice_methods() {
             "empty=false len=3",
             "reversedFirst=30",
             "hasAlpha=true",
+            "sorted=10,30",
+            "binarySearch20=1",
+            "get0=10",
         ],
         "unexpected output:\n{stdout}",
     );
