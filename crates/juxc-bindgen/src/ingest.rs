@@ -43,14 +43,44 @@ pub fn generate_from_json(json: &str, package: &str) -> Result<StubFile, serde_j
 /// would otherwise collide as duplicate Jux declarations (E0400) once merged
 /// into a single package.
 pub fn generate_merged(jsons: &[(&str, &str)], package: &str) -> Result<StubFile, serde_json::Error> {
+    generate_merged_with_pool(jsons, &[], package)
+}
+
+/// [`generate_merged`], plus crates that are read ONLY to resolve `Deref`
+/// targets and never contribute items of their own.
+///
+/// `core` is the case this exists for. The inherent `impl<T> [T]` blocks that
+/// give `Vec` its `get`/`first`/`last`/`iter`/`contains`/`reverse` live there
+/// and nowhere else -- not in `alloc.json`, not in `std.json`. But emitting all
+/// of `core` into the stub would multiply the surface (and every compile's
+/// parse cost) for types nobody asked for. Pooling it separately takes the
+/// method knowledge without the bulk.
+pub fn generate_merged_with_pool(
+    jsons: &[(&str, &str)],
+    pool_only: &[(&str, &str)],
+    package: &str,
+) -> Result<StubFile, serde_json::Error> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut collected: Vec<(String, StubItem)> = Vec::new();
     let mut format_version = 0;
 
+    // Pass 1: pool every crate's INHERENT impls, keyed by the shape of the type
+    // they are written for. A `Deref` target usually lives in a different crate
+    // of the same ingest -- `Vec` is in `alloc`, the `[T]` impls it derefs to
+    // are in `core` -- so the pool has to span all of them before any type is
+    // built. Only the mapped methods are kept, so the parsed crates do not have
+    // to be held alive together.
+    let mut pool = InherentPool::new();
+    for (_crate_name, json) in jsons.iter().chain(pool_only.iter()) {
+        let krate: Crate = serde_json::from_str(json)?;
+        collect_inherent_pool(&krate, &mut pool);
+    }
+
+    // Pass 2: ingest, now able to resolve a deref target across crates.
     for (_crate_name, json) in jsons {
         let krate: Crate = serde_json::from_str(json)?;
         format_version = krate.format_version;
-        for (name, item) in collect_items(&krate) {
+        for (name, item) in collect_items_with(&krate, &pool) {
             // First definition wins (crates passed core→alloc→std), and
             // platform-duplicated names are collapsed.
             if seen.insert(name.clone()) {
@@ -102,6 +132,61 @@ pub fn generate(krate: &Crate, package: &str) -> StubFile {
 /// rustdoc JSON produced a different file each run: ~32 `@rust` paths moved
 /// between two regenerations. Sorting here fixes the winner.
 fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
+    // Single-crate ingest: the crate is its own pool.
+    let mut pool = InherentPool::new();
+    collect_inherent_pool(krate, &mut pool);
+    collect_items_with(krate, &pool)
+}
+
+/// Methods of every inherent impl seen across the whole ingest, keyed by the
+/// shape of the type the impl is written for (see [`type_shape_key`]).
+pub(crate) type InherentPool = std::collections::HashMap<String, Vec<StubFn>>;
+
+/// Record every inherent impl in `krate` into `pool`.
+fn collect_inherent_pool(krate: &Crate, pool: &mut InherentPool) {
+    for item in krate.index.values() {
+        let ItemEnum::Impl(im) = &item.inner else { continue };
+        if im.trait_.is_some() {
+            continue;
+        }
+        let Some(key) = type_shape_key(&im.for_) else { continue };
+        let slot = pool.entry(key).or_default();
+        for mid in &im.items {
+            let Some(mitem) = krate.index.get(mid) else { continue };
+            if !is_public(&mitem.visibility) {
+                continue;
+            }
+            let Some(mname) = &mitem.name else { continue };
+            let ItemEnum::Function(f) = &mitem.inner else { continue };
+            // Only real methods carry across a deref. An associated function
+            // with no receiver belongs to the target type, not to the type that
+            // derefs to it: `<[T]>::from_ref` is not `Vec::from_ref`.
+            if !has_self_receiver(f) {
+                continue;
+            }
+            let mut sf = map_function(mname, f);
+            sf.is_static = false;
+            slot.push(sf);
+        }
+    }
+}
+
+/// A key identifying a type's SHAPE, for matching a `Deref` target against the
+/// impls written for it.
+///
+/// Shape rather than equality because the generic argument names differ between
+/// the two sites: `Vec<T>` derefs to `[T]`, while the slice's own impls are
+/// written `impl<T> [T]` with a `T` of their own.
+fn type_shape_key(t: &Type) -> Option<String> {
+    match t {
+        Type::Slice(_) => Some("[]".to_string()),
+        Type::Primitive(p) => Some(format!("prim:{p}")),
+        Type::ResolvedPath(p) => Some(format!("path:{}", p.path)),
+        _ => None,
+    }
+}
+
+fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubItem)> {
     // Every id that is a member of some impl or trait — used to tell a free
     // function (top-level `fn`) apart from a method/associated function.
     let member_ids = collect_member_ids(krate);
@@ -116,7 +201,7 @@ fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
 
         match &item.inner {
             ItemEnum::Struct(s) if is_public(&item.visibility) => {
-                collected.push((item.id.0, name.clone(), StubItem::Type(build_struct(krate, name, s, item))));
+                collected.push((item.id.0, name.clone(), StubItem::Type(build_struct(krate, name, s, item, pool))));
             }
             ItemEnum::Enum(e) if is_public(&item.visibility) => {
                 collected.push((item.id.0, name.clone(), StubItem::Type(build_enum(krate, name, e, item))));
@@ -211,7 +296,7 @@ fn collect_member_ids(krate: &Crate) -> HashSet<u32> {
 // Type-declaration builders (§G.6.3)
 // ============================================================================
 
-fn build_struct(krate: &Crate, name: &str, s: &Struct, item: &Item) -> StubType {
+fn build_struct(krate: &Crate, name: &str, s: &Struct, item: &Item, pool: &InherentPool) -> StubType {
     let mut fields = Vec::new();
     let mut all_public = true;
 
@@ -242,6 +327,13 @@ fn build_struct(krate: &Crate, name: &str, s: &Struct, item: &Item) -> StubType 
     }
 
     let (ctors, mut methods) = collect_inherent_members(krate, &s.impls, name);
+    // Rust's method resolution follows `Deref`, so `Vec<T>` really does have
+    // every `[T]` method — and a stub that stops at the inherent impls is
+    // simply an incomplete description of the type. `Vec` came out with 58
+    // methods and without `sort`, `get`, `iter`, `first`, `last`, `contains`
+    // or `reverse`, which is why the backend had grown hardcoded branches for
+    // some of them: the scan was not telling it the truth.
+    methods.extend(deref_members(krate, &s.impls, pool));
     dedup_methods_by_name(&mut methods);
 
     // §G.6.3 kind selection: an all-public plain-fielded struct with no methods
@@ -387,6 +479,46 @@ fn collect_inherent_members(
         }
     }
     (ctors, methods)
+}
+
+/// The methods a type inherits through `Deref`.
+///
+/// Rust resolves `vec.first()` by dereferencing `Vec<T>` to `[T]` and finding
+/// `first` there, so those methods are part of the type's real surface. A stub
+/// that stops at the inherent impls is an incomplete description of the type:
+/// `Vec` came out with 58 methods and none of `get`, `first`, `last`, `iter`,
+/// `contains` or `reverse`, which is exactly why the backend had grown
+/// hardcoded branches for some of them.
+///
+/// One level only. Deref chains deeper than one step are rare, and following
+/// them blindly pulls in a large unrelated surface.
+fn deref_members(krate: &Crate, impls: &[rustdoc_types::Id], pool: &InherentPool) -> Vec<StubFn> {
+    let Some(target) = deref_target(krate, impls) else { return Vec::new() };
+    let Some(key) = type_shape_key(&target) else { return Vec::new() };
+    pool.get(&key).cloned().unwrap_or_default()
+}
+
+/// The `Target` of a type's `Deref` impl, if it has one.
+fn deref_target(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<Type> {
+    for impl_id in impls {
+        let Some(item) = krate.index.get(impl_id) else { continue };
+        let ItemEnum::Impl(im) = &item.inner else { continue };
+        let Some(tr) = &im.trait_ else { continue };
+        if tr.path.rsplit("::").next() != Some("Deref") {
+            continue;
+        }
+        // `type Target = [T];` is an associated type inside the impl.
+        for aid in &im.items {
+            let Some(aitem) = krate.index.get(aid) else { continue };
+            if aitem.name.as_deref() != Some("Target") {
+                continue;
+            }
+            if let ItemEnum::AssocType { type_: Some(t), .. } = &aitem.inner {
+                return Some(t.clone());
+            }
+        }
+    }
+    None
 }
 
 // ============================================================================

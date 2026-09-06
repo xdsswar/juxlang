@@ -1,0 +1,19 @@
+// Methods Vec gets from `[T]` through Deref — all discovered from the scan.
+import rust.std.*;
+
+public void main() {
+    var v = new Vec<int>();
+    v.push(10); v.push(20); v.push(30);
+
+    print($"first=${v.first()!!} last=${v.last()!!}\n");
+    print($"contains20=${v.contains(20)} contains99=${v.contains(99)}\n");
+    print($"empty=${v.is_empty()} len=${v.len()}\n");
+    v.reverse();
+    print($"reversedFirst=${v.first()!!}\n");
+
+    var words = new Vec<String>();
+    words.push("beta");
+    words.push("alpha");
+    bool hasAlpha = words.contains("alpha");
+    print($"hasAlpha=${hasAlpha}\n");
+}

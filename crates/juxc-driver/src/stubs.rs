@@ -55,10 +55,20 @@ pub const PROJECT_STUB_DIRNAME: &str = ".jux-stubs";
 /// `Rc`/`Arc`, `BTreeMap`, `HashMap`, …).
 const STD_MERGE_CRATES: &[&str] = &["alloc", "std"];
 
+/// Crates read ONLY to resolve `Deref` targets, contributing no items.
+///
+/// `Vec` derefs to `[T]`, and the inherent `impl<T> [T]` blocks that carry
+/// `get`/`first`/`last`/`iter`/`contains`/`reverse` live in `core` -- they are
+/// in neither `alloc.json` nor `std.json`. Without this every one of those
+/// methods is missing from the scanned surface, which is what pushed the
+/// backend into hardcoding some of them. Emitting all of `core` instead would
+/// multiply the stub for types nobody asked for.
+const STD_POOL_CRATES: &[&str] = &["core"];
+
 /// Bump to invalidate previously-cached generated `rust.std` stubs when the
 /// bindgen surface or the merge set changes. Embedded in the cache header and
 /// checked on load.
-const STD_STUB_CACHE_VERSION: u32 = 12;
+const STD_STUB_CACHE_VERSION: u32 = 15;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
 /// last-resort fallback.
@@ -351,7 +361,17 @@ fn generate_std_stub_text(json_dir: &Path) -> anyhow::Result<Option<String>> {
         jsons.push((crate_name.to_string(), text));
     }
     let refs: Vec<(&str, &str)> = jsons.iter().map(|(n, j)| (n.as_str(), j.as_str())).collect();
-    let stub = juxc_bindgen::ingest::generate_merged(&refs, "rust.std")
+    // Deref-only crates are optional: a toolchain without `core.json` still
+    // generates, just without the slice surface.
+    let mut pool_texts: Vec<(String, String)> = Vec::new();
+    for &crate_name in STD_POOL_CRATES {
+        if let Ok(text) = std::fs::read_to_string(json_dir.join(format!("{crate_name}.json"))) {
+            pool_texts.push((crate_name.to_string(), text));
+        }
+    }
+    let pool_refs: Vec<(&str, &str)> =
+        pool_texts.iter().map(|(n, j)| (n.as_str(), j.as_str())).collect();
+    let stub = juxc_bindgen::ingest::generate_merged_with_pool(&refs, &pool_refs, "rust.std")
         .map_err(|e| anyhow::anyhow!("bindgen failed to merge std rustdoc JSON: {e}"))?;
     let rendered = juxc_bindgen::render_stub(&stub);
     Ok(Some(format!("{}{rendered}", std_cache_header())))
