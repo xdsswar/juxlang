@@ -1003,6 +1003,45 @@ public void notifyParent(Child c) {
 
 This matches Swift's ARC + weak-reference model. It is the proven approach for Java-style reference semantics without a tracing GC.
 
+#### 6.5.1. Collections Are Reference Types
+
+**A collection is a reference, exactly like a class instance.** Binding one to
+a second name does not copy it, a getter that returns one hands back the real
+collection rather than a snapshot, and a mutation through any name is visible
+through every other:
+
+```java
+var items = holder.getItems();   // the SAME collection, not a copy
+items.push(v);                   // holder sees it
+```
+
+This is Java's rule for `List`/`Map`/`Set`, and the same rule §6.5 already
+gives class instances. A language whose objects are shared references but whose
+collections silently are not would make the most ordinary line in a program —
+reading a collection out of an object and adding to it — do nothing at all,
+with no diagnostic.
+
+**The names are Rust's.** `Vec`, `HashMap`, `HashSet`, `VecDeque`, `BTreeMap`,
+`BTreeSet` — the standard library IS Rust's standard library (§19), and these
+are its type and method names verbatim. There is no `List`/`Map`/`Set` facade
+and no Java-shaped collection API. Only the *aliasing* is Java's; the surface
+is Rust's, discovered from the toolchain rather than restated here.
+
+**Consequences that follow from being a reference type:**
+
+- A collection participates in reference counting, so a cycle through one
+  needs the same `weak` treatment as a cycle through a class (§6.5). A field
+  holding a collection of back-edges is the usual case.
+- Two names for one collection are two names for one object, so the borrow
+  rules of §6.9 apply between them exactly as they do for a class.
+- Passing a collection across the FFI boundary (§L) lends the underlying Rust
+  value; the receiving crate sees a plain `Vec`/`HashMap`, not a handle.
+
+**To copy, ask for a copy.** `clone()` produces an independent collection, and
+is the only thing that does. This is the same explicitness §6.4 requires of
+class values, and the reason the copy is visible in the source rather than
+implied by an assignment.
+
 **In `jux-embedded` and `jux-core`**, refcounting is off by default because atomic operations are expensive (or unavailable) on small MCUs. Class instances follow single-ownership semantics — assignment moves rather than shares. To opt back into shared ownership, wrap a value in `SharedRef<T>`:
 
 ```java
