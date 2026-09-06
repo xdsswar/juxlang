@@ -5515,12 +5515,29 @@ impl RustEmitter {
         // table, not by whether the file happened to use any of its members: an
         // unused `import rust.std.*;` must expand to nothing, NOT fall through
         // to the generic `use rust::std::*;` (a module that does not exist).
+        // A package counts as foreign only if it holds something this function
+        // can actually emit a `use` for: an EXTERNAL class, or a function with
+        // a recorded `@rust("…")` path.
+        //
+        // The function half used to ask only "does any function live under this
+        // prefix", with no foreignness test at all — so an ordinary Jux package
+        // that happens to contain free functions was declared foreign, this
+        // returned an empty line list, and `emit_imports` dropped the import
+        // entirely. `import jux.std.testing.*;` was the case that showed it: the
+        // resolver bound the assertion functions, the backend emitted no `use`,
+        // and every test file failed to compile with "cannot find function
+        // `assertNotNull` in this scope". `rust_path` is the right test because
+        // it is precisely what the emission loop above reads.
         let is_foreign = self
             .symbols
             .classes
             .iter()
             .any(|(fqn, sig)| sig.is_external && fqn.starts_with(&prefix))
-            || self.symbols.functions.keys().any(|fqn| fqn.starts_with(&prefix));
+            || self
+                .symbols
+                .functions
+                .iter()
+                .any(|(fqn, sig)| sig.rust_path.is_some() && fqn.starts_with(&prefix));
         if !is_foreign {
             // An ordinary Jux package wildcard — the generic renderer handles it.
             return None;

@@ -17,8 +17,8 @@ final class Yellow extends Light {
 
 final class Green extends Light {
     public int seconds;
-    public boolean leftTurnArrow;
-    public Green(int s, boolean arrow) {
+    public bool leftTurnArrow;
+    public Green(int s, bool arrow) {
         this.seconds = s;
         this.leftTurnArrow = arrow;
     }
@@ -39,7 +39,7 @@ class TrafficLight {
         return switch (current) {
             case Red(int s)               -> $"red for ${s}s; switching to green";
             case Yellow(int s)            -> $"yellow for ${s}s; switching to red";
-            case Green(int s, boolean a)  -> a
+            case Green(int s, bool a)  -> a
                                               ? $"green ${s}s + left arrow; switching to yellow"
                                               : $"green ${s}s; switching to yellow";
         };

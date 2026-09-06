@@ -52,7 +52,7 @@ public class IOException extends Exception {
     public IOException(String message) { super(message); }
 }
 
-public async int might_throw(bool fail) {
+public async int might_throw(bool fail) throws IOException {
     if (fail) {
         throw new IOException("simulated failure");
     }

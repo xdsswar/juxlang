@@ -1,4 +1,6 @@
-// Static nested types — flattened to top level on parse.
+// Static nested types. A nested type is named through its owner from outside
+// (`Outer.Inner`), exactly as in Java -- the bare name is in scope only inside
+// the class that declares it.
 
 public class Outer {
     public static int count = 0;
@@ -24,10 +26,10 @@ public void main() {
     print(o.bump());
     print(o.bump());
 
-    var i = new Inner(7);
+    var i = new Outer.Inner(7);
     print($"Inner.n=${i.n}, squared=${i.squared()}");
 
-    var p = new Pair(3, 4);
+    var p = new Outer.Pair(3, 4);
     print($"Pair=${p.x},${p.y}, sum=${p.sum()}");
     print($"Outer.count=${Outer.count}");
 }

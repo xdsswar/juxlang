@@ -6,7 +6,11 @@ package demo.testing;
 
 import jux.std.testing.*;
 
-int counter = 0;
+// The counter lives on a class rather than at file scope: only the ENTRY file
+// may carry top-level statements (§1275), and a test file is not one.
+class Fixture {
+    public static int counter = 0;
+}
 
 int divide(int a, int b) {
     return a / b;
@@ -14,17 +18,17 @@ int divide(int a, int b) {
 
 @BeforeAll
 void openFixture() {
-    counter = 0;
+    Fixture.counter = 0;
 }
 
 @BeforeEach
 void setup() {
-    counter = counter + 1;
+    Fixture.counter = Fixture.counter + 1;
 }
 
 @AfterEach
 void teardown() {
-    print("ran test #" + counter);
+    print("ran test #" + Fixture.counter);
 }
 
 @AfterAll
@@ -36,8 +40,8 @@ void closeFixture() {
 void numbersAddUp() {
     assertEqual(4, 2 + 2);
     assertNotEqual(5, 2 + 2);
-    assertTrue(counter > 0, "BeforeEach must have run");
-    assertFalse(counter < 0);
+    assertTrue(Fixture.counter > 0, "BeforeEach must have run");
+    assertFalse(Fixture.counter < 0);
     assertNear(0.3, 0.1 + 0.2, 1e-9);
 }
 
