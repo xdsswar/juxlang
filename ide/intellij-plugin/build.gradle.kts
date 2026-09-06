@@ -38,6 +38,12 @@ dependencies {
         // second copy causes ClassCastExceptions.
         plugin("com.redhat.devtools.lsp4ij:0.19.4")
 
+        // Spellchecker: a platform CONTENT MODULE (lib/intellij.spellchecker.jar),
+        // not a bundled plugin -- it declares the alias
+        // `com.intellij.modules.spellchecker`, which is what the descriptor
+        // depends on, optionally (META-INF/spellchecker.xml). Compile-time API only.
+        bundledModule("intellij.spellchecker")
+
         // Headless platform test fixtures (ParsingTestCase et al.).
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
     }
@@ -75,6 +81,23 @@ tasks.test {
 
 intellijPlatform {
     pluginConfiguration {
+        // Shown in Settings | Plugins after an update. There is no CHANGELOG.md
+        // and no org.jetbrains.changelog plugin, so this block is the whole
+        // mechanism -- keep it to what a user would notice.
+        changeNotes = """
+            <h3>0.0.2</h3>
+            <p>The everyday editor actions, and a real Refactor menu.</p>
+            <ul>
+              <li><b>Parameter Info</b> (Ctrl+P) for calls and constructors, every overload listed.</li>
+              <li><b>Surround With</b> (Ctrl+Alt+T): if / while / for / try-catch / unsafe, and (expr) / !(expr).</li>
+              <li><b>Complete Current Statement</b> (Ctrl+Shift+Enter): closes brackets, adds the missing semicolon, opens a body.</li>
+              <li><b>Move Statement Up/Down</b> (Ctrl+Shift+Up/Down), which will not lift a statement out of its block.</li>
+              <li><b>Type Hierarchy</b> (Ctrl+H): supertypes, subtypes, or both.</li>
+              <li><b>Breadcrumbs</b> under the editor, and <b>spellchecking</b> of comments, plain strings and declaration names.</li>
+              <li><b>Extract Variable</b> (Ctrl+Alt+V), <b>Introduce Constant</b> (Ctrl+Alt+C), <b>Inline Variable</b> (Ctrl+Alt+N) and <b>Safe Delete</b>.</li>
+            </ul>
+        """.trimIndent()
+
         ideaVersion {
             sinceBuild = providers.gradleProperty("pluginSinceBuild")
             // No untilBuild cap: track the latest stable on each push.

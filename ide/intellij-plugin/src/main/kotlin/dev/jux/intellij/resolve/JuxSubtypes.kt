@@ -79,6 +79,23 @@ object JuxSubtypes {
         return transitiveSubtypes(name, buildIndex(type.project))
     }
 
+    /**
+     * The types that name [type] directly in their own extends/implements
+     * clause, using a prebuilt [index].
+     *
+     * The direct step, not the transitive closure: a hierarchy tree expands one
+     * level at a time, so listing every descendant as a child of the root would
+     * show `Circle` twice — once under `Shape`, where it belongs, and once
+     * beside it.
+     */
+    fun directSubtypes(
+        type: JuxTypeDeclaration,
+        index: Map<String, List<JuxTypeDeclaration>>,
+    ): List<JuxTypeDeclaration> {
+        val name = type.name ?: return emptyList()
+        return index[name].orEmpty()
+    }
+
     fun overridingMethods(method: JuxMethodDeclaration): List<JuxMethodDeclaration> {
         val owner = JuxHierarchy.enclosingType(method) ?: return emptyList()
         val name = method.name ?: return emptyList()

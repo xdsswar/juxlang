@@ -197,14 +197,26 @@ object JuxHierarchy {
      * The declaration's kind as the compiler's E0423/E0424 wording names it —
      * "an interface" / "a record" / "an enum" / "a type alias" / "a class".
      */
-    fun kindWord(type: JuxTypeDeclaration): String = when (type.node.elementType) {
-        JuxElementTypes.INTERFACE_DECLARATION -> "an interface"
-        JuxElementTypes.RECORD_DECLARATION -> "a record"
-        JuxElementTypes.ENUM_DECLARATION -> "an enum"
-        JuxElementTypes.TYPE_ALIAS_DECLARATION -> "a type alias"
-        JuxElementTypes.STRUCT_DECLARATION -> "a struct"
-        JuxElementTypes.ANNOTATION_DECLARATION -> "an annotation"
-        else -> "a class"
+    fun kindWord(type: JuxTypeDeclaration): String {
+        val noun = kindNoun(type)
+        return if (noun.first() in "aeiou") "an $noun" else "a $noun"
+    }
+
+    /**
+     * The declaration's kind with no article — "interface", "record", "class".
+     *
+     * What a label wants: a breadcrumb tooltip or a hierarchy node reads
+     * "interface Drawable", not "an interface Drawable". [kindWord] adds the
+     * article for the prose that needs one.
+     */
+    fun kindNoun(type: JuxTypeDeclaration): String = when (type.node.elementType) {
+        JuxElementTypes.INTERFACE_DECLARATION -> "interface"
+        JuxElementTypes.RECORD_DECLARATION -> "record"
+        JuxElementTypes.ENUM_DECLARATION -> "enum"
+        JuxElementTypes.TYPE_ALIAS_DECLARATION -> "type alias"
+        JuxElementTypes.STRUCT_DECLARATION -> "struct"
+        JuxElementTypes.ANNOTATION_DECLARATION -> "annotation"
+        else -> "class"
     }
 
     /**
@@ -231,11 +243,21 @@ object JuxHierarchy {
         m.node.findChildByType(JuxElementTypes.TYPE_REFERENCE)?.text?.trim()
 
     /** The method's parameter names, in declaration order. */
-    fun parameterNames(m: PsiElement): List<String> {
+    fun parameterNames(m: PsiElement): List<String> =
+        parameters(m).mapNotNull { (it as? JuxNamedElement)?.name }
+
+    /**
+     * The method's PARAMETER nodes, in declaration order.
+     *
+     * A parameter node spans everything the author wrote for it — leading
+     * annotations and modifiers, the type, a `...` varargs marker, the name,
+     * and any default (`parseParameter` in `JuxParser`). Rendering one is
+     * therefore just its text with whitespace normalized, which is what the
+     * parameter-info popup shows.
+     */
+    fun parameters(m: PsiElement): List<PsiElement> {
         val list = m.node.findChildByType(JuxElementTypes.PARAMETER_LIST)?.psi ?: return emptyList()
-        return list.children
-            .filter { it.elementType === JuxElementTypes.PARAMETER }
-            .mapNotNull { (it as? JuxNamedElement)?.name }
+        return list.children.filter { it.node.elementType === JuxElementTypes.PARAMETER }
     }
 
     /** Direct children of `type`'s body with the given element type. */
