@@ -1,1 +1,0 @@
-Jux Paint — pick a tool on the left, drag to draw. U undoes, C clears, Esc quits.

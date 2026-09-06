@@ -40,6 +40,9 @@ Cargo.lock.bak
 /out.txt
 /stdout.txt
 /stderr.txt
+# Redirect files from launching a demo binary, at any depth.
+out.txt
+err.txt
 /graphify-out/
 /ref-only/
 _bugtest/
