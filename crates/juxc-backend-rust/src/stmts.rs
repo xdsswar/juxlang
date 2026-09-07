@@ -55,8 +55,13 @@ fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
     match stmt {
         Stmt::Labeled { stmt, .. } => stmt_moves_path(stmt, name),
         Stmt::Expr(e) => expr_moves_path_at_top(e, name),
-        Stmt::VarDecl(v) => v.init.as_ref().is_some_and(|e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
-        Stmt::Return(opt, _) => opt.as_ref().is_some_and(|e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
+        Stmt::VarDecl(v) => v
+            .init
+            .as_ref()
+            .is_some_and(|e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
+        Stmt::Return(opt, _) => opt
+            .as_ref()
+            .is_some_and(|e| is_path_named(e, name) || expr_moves_path_at_top(e, name)),
         Stmt::Assign(a) => {
             is_path_named(&a.value, name)
                 || expr_moves_path_at_top(&a.value, name)
@@ -68,12 +73,10 @@ fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
                 || else_branch_moves_path(s.else_branch.as_deref(), name)
         }
         Stmt::While(s) => {
-            expr_moves_path_at_top(&s.condition, name)
-                || body_moves_path(&s.body, name)
+            expr_moves_path_at_top(&s.condition, name) || body_moves_path(&s.body, name)
         }
         Stmt::DoWhile(s) => {
-            body_moves_path(&s.body, name)
-                || expr_moves_path_at_top(&s.condition, name)
+            body_moves_path(&s.body, name) || expr_moves_path_at_top(&s.condition, name)
         }
         Stmt::ForEach(s) => {
             // A nested for-each that consumes the outer var
@@ -87,9 +90,9 @@ fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
                 || body_moves_path(&s.body, name)
         }
         Stmt::ForC(f) => body_moves_path(&f.body, name),
-        Stmt::SuperCall(args, _) => {
-            args.iter().any(|a| is_path_named(a, name) || expr_moves_path_at_top(a, name))
-        }
+        Stmt::SuperCall(args, _) => args
+            .iter()
+            .any(|a| is_path_named(a, name) || expr_moves_path_at_top(a, name)),
         Stmt::Throw(e, _) => is_path_named(e, name) || expr_moves_path_at_top(e, name),
         Stmt::Try(t) => {
             if body_moves_path(&t.body, name) {
@@ -203,7 +206,9 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
             .any(|a| is_path_named(a, name) || expr_moves_path_at_top(a, name)),
         Expr::NewArray(n) => {
             expr_moves_path_at_top(&n.size, name)
-                || n.inner_sizes.iter().any(|s| expr_moves_path_at_top(s, name))
+                || n.inner_sizes
+                    .iter()
+                    .any(|s| expr_moves_path_at_top(s, name))
         }
         Expr::NewArrayLit(n) => n
             .elements
@@ -221,8 +226,7 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
             // `String`/user types via the trait method. So walk
             // for nested calls but don't treat top-level
             // operands as moves.
-            expr_moves_path_at_top(&b.left, name)
-                || expr_moves_path_at_top(&b.right, name)
+            expr_moves_path_at_top(&b.left, name) || expr_moves_path_at_top(&b.right, name)
         }
         Expr::Unary(u) => expr_moves_path_at_top(&u.operand, name),
         Expr::Range(r) => {
@@ -276,7 +280,9 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
             // A lambda captures by value (the emitter wraps in
             // `move`), so any read of the loop var inside the
             // body is a move-capture.
-            juxc_ast::LambdaBody::Expr(e) => is_path_named(e, name) || expr_moves_path_at_top(e, name),
+            juxc_ast::LambdaBody::Expr(e) => {
+                is_path_named(e, name) || expr_moves_path_at_top(e, name)
+            }
             juxc_ast::LambdaBody::Block(b) => body_moves_path(b, name),
         },
         Expr::SizeOf(s) => expr_moves_path_at_top(&s.operand, name),
@@ -296,9 +302,7 @@ fn expr_moves_path_at_top(e: &Expr, name: &str) -> bool {
         }
         // `await expr` — the operand is the position that gets
         // evaluated, so any move semantics flow through it.
-        Expr::Await(inner, _) => {
-            is_path_named(inner, name) || expr_moves_path_at_top(inner, name)
-        }
+        Expr::Await(inner, _) => is_path_named(inner, name) || expr_moves_path_at_top(inner, name),
     }
 }
 
@@ -323,9 +327,7 @@ impl RustEmitter {
         // An expression that is *already* `Option`-shaped (`return
         // this.nullableField;`, `return maybeX();`, `return nullableLocal;`)
         // flows back unchanged — wrapping it would yield `Some(Some(...))`.
-        returns_nullable
-            && !is_null_literal(expr)
-            && !self.expression_is_already_nullable(expr)
+        returns_nullable && !is_null_literal(expr) && !self.expression_is_already_nullable(expr)
     }
 }
 
@@ -425,8 +427,7 @@ pub(crate) enum LoopCtlRegion {
 /// excluded — it emits outside the closure, where plain loop control
 /// is already legal.
 pub(crate) fn try_needs_loopctl(t: &juxc_ast::TryStmt) -> bool {
-    block_has_loop_escape(&t.body)
-        || t.catches.iter().any(|c| block_has_loop_escape(&c.body))
+    block_has_loop_escape(&t.body) || t.catches.iter().any(|c| block_has_loop_escape(&c.body))
 }
 
 fn block_has_loop_escape(b: &juxc_ast::Block) -> bool {
@@ -724,9 +725,8 @@ impl RustEmitter {
                     // **Catch-arm throw parking** (§X.3.2): the new
                     // exception runs `finally` first, then propagates
                     // — same channel an unmatched payload uses.
-                    self.w.push_str(
-                        "{ __jux_unhandled = Some(::std::boxed::Box::new(",
-                    );
+                    self.w
+                        .push_str("{ __jux_unhandled = Some(::std::boxed::Box::new(");
                     self.emit_expr(e);
                     self.w.push_str(
                         ") as ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>); break '__jux_catch; }\n",
@@ -769,9 +769,8 @@ impl RustEmitter {
             }
         }
         let (body_stmts, body_tail) = split_tail(&t.body);
-        self.w.push_str(
-            "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n",
-        );
+        self.w
+            .push_str("match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
         self.w.indent_inc();
         let prev_catch_arm = self.in_catch_arm;
         self.in_catch_arm = false;
@@ -801,11 +800,7 @@ impl RustEmitter {
             clause_tys.extend(clause.alt_tys.iter());
             let binder_fqn = self.catch_binder_fqn(&clause_tys);
             let mut muts = std::collections::HashSet::new();
-            crate::analysis::collect_mutated_names(
-                &clause.body,
-                &mut muts,
-                &self.user_mut_methods,
-            );
+            crate::analysis::collect_mutated_names(&clause.body, &mut muts, &self.user_mut_methods);
             let binder_mut = muts.contains(&clause.name.text);
             for ty in clause_tys {
                 let arm_fqn = self.resolve_catch_ty_fqn(ty);
@@ -1014,7 +1009,11 @@ impl RustEmitter {
                     break;
                 }
                 depth += 1;
-                cur = self.symbols.classes.get(&n).and_then(|c| c.extends_fqn.clone());
+                cur = self
+                    .symbols
+                    .classes
+                    .get(&n)
+                    .and_then(|c| c.extends_fqn.clone());
                 out.push(n);
             }
             out
@@ -1074,7 +1073,11 @@ impl RustEmitter {
                     if p == base_fqn {
                         return true;
                     }
-                    cur = self.symbols.classes.get(&p).and_then(|c| c.extends_fqn.clone());
+                    cur = self
+                        .symbols
+                        .classes
+                        .get(&p)
+                        .and_then(|c| c.extends_fqn.clone());
                 }
                 false
             })
@@ -1151,8 +1154,7 @@ impl RustEmitter {
                 }
                 self.w.push_str(".store(");
                 self.w.push_str(&code.to_string());
-                self.w
-                    .push_str(", ::std::sync::atomic::Ordering::Relaxed)");
+                self.w.push_str(", ::std::sync::atomic::Ordering::Relaxed)");
             } else {
                 self.w.push_str(&flag);
                 self.w.push_str(" = ");
@@ -1368,7 +1370,8 @@ impl RustEmitter {
                 // S9: inferred — see the `__jux_ret` channel above.
                 self.w.push_str("let __jux_try_result = ");
             } else {
-                self.w.push_str("let __jux_try_result: std::thread::Result<Option<");
+                self.w
+                    .push_str("let __jux_try_result: std::thread::Result<Option<");
                 match self.current_return_type.clone() {
                     Some(juxc_ast::ReturnType::Type(rt))
                     | Some(juxc_ast::ReturnType::AsyncType(rt)) => {
@@ -1432,7 +1435,8 @@ impl RustEmitter {
         self.w.push_str("match __jux_try_result {\n");
         self.w.indent_inc();
         if has_ret {
-            self.w.line("Ok(__jux_body_ret) => { __jux_ret = __jux_body_ret; }");
+            self.w
+                .line("Ok(__jux_body_ret) => { __jux_ret = __jux_body_ret; }");
         } else {
             self.w.line("Ok(_) => {}");
         }
@@ -1497,7 +1501,11 @@ impl RustEmitter {
                 // Bind mutably only when the body actually mutates
                 // the binder (e.g. `e.addSuppressed(...)`).
                 let mut muts = std::collections::HashSet::new();
-                crate::analysis::collect_mutated_names(&clause.body, &mut muts, &self.user_mut_methods);
+                crate::analysis::collect_mutated_names(
+                    &clause.body,
+                    &mut muts,
+                    &self.user_mut_methods,
+                );
                 let binder_mut = muts.contains(&clause.name.text);
                 for ty in clause_tys {
                     let arm_fqn = self.resolve_catch_ty_fqn(ty);
@@ -1515,9 +1523,7 @@ impl RustEmitter {
                     self.emit_catch_arm_body(&clause.name.text, &clause.body, depth, binder_mut);
                     for sub_fqn in self.catch_subclass_fqns(ty) {
                         let sub_depth = match &binder_fqn {
-                            Some(b) => {
-                                self.extends_chain_distance(&sub_fqn, b).unwrap_or(0)
-                            }
+                            Some(b) => self.extends_chain_distance(&sub_fqn, b).unwrap_or(0),
                             None => 0,
                         };
                         self.w
@@ -1566,9 +1572,8 @@ impl RustEmitter {
         }
         // Resume an unmatched/uncaught exception now that `finally`
         // ran.
-        self.w.line(
-            "if let Some(__jux_p) = __jux_unhandled { std::panic::resume_unwind(__jux_p); }",
-        );
+        self.w
+            .line("if let Some(__jux_p) = __jux_unhandled { std::panic::resume_unwind(__jux_p); }");
         // Complete a `return` the try body initiated. When THIS try
         // is itself nested inside another try's closure, the real
         // return threads outward as `Some(...)` again — the restored
@@ -1576,8 +1581,9 @@ impl RustEmitter {
         if has_ret {
             self.w.emit_indent();
             if self.in_try_closure {
-                self.w
-                    .push_str("if let Some(__jux_ret_v) = __jux_ret { return Some(__jux_ret_v); }\n");
+                self.w.push_str(
+                    "if let Some(__jux_ret_v) = __jux_ret { return Some(__jux_ret_v); }\n",
+                );
             } else {
                 self.w
                     .push_str("if let Some(__jux_ret_v) = __jux_ret { return __jux_ret_v; }\n");
@@ -1590,7 +1596,10 @@ impl RustEmitter {
         // popped no longer applies and the enclosing one intercepts,
         // threading the escape outward one machinery layer at a time.
         if wants_loopctl {
-            let ch = self.try_loopctl.pop().expect("loopctl channel pushed above");
+            let ch = self
+                .try_loopctl
+                .pop()
+                .expect("loopctl channel pushed above");
             for (i, (is_break, label)) in ch.escapes.iter().enumerate() {
                 self.w.emit_indent();
                 self.w.push_str("if ");
@@ -1674,10 +1683,7 @@ impl RustEmitter {
             // Register the loop variable's element type (the stream's
             // generic arg) so wrapper-class elements deref correctly —
             // same rule as the collection for-each below.
-            let elem_ty = match self
-                .expr_types
-                .get(&crate::exprs::expr_span_of(&f.iter))
-            {
+            let elem_ty = match self.expr_types.get(&crate::exprs::expr_span_of(&f.iter)) {
                 Some(Ty::User { name, generic_args })
                     if name.rsplit('.').next() == Some("Stream") =>
                 {
@@ -1785,19 +1791,25 @@ impl RustEmitter {
                     .map(|i| i.methods.contains_key("iterator"))
                     .unwrap_or(false);
             if speaks_protocol {
-                self.w.push_str("{
-");
+                self.w.push_str(
+                    "{
+",
+                );
                 self.w.indent_inc();
                 self.w.emit_indent();
                 self.w.push_str("let mut __jux_it = ");
                 self.emit_expr_with_parent_prec(&f.iter, u8::MAX, false);
-                self.w.push_str(".iterator();
-");
+                self.w.push_str(
+                    ".iterator();
+",
+                );
                 self.w.emit_indent();
                 self.w.push_str("while let Some(");
                 self.w.push_str(&to_rust_ident(&f.var_name.text));
-                self.w.push_str(") = __jux_it.next() {
-");
+                self.w.push_str(
+                    ") = __jux_it.next() {
+",
+                );
                 self.w.indent_inc();
                 self.loop_emit_depth += 1;
                 self.emit_block_contents(&f.body);
@@ -1806,8 +1818,10 @@ impl RustEmitter {
                 self.w.line("}");
                 self.w.indent_dec();
                 self.w.emit_indent();
-                self.w.push_str("}
-");
+                self.w.push_str(
+                    "}
+",
+                );
                 return;
             }
         }
@@ -1849,8 +1863,7 @@ impl RustEmitter {
             }
             _ => false,
         };
-        let body_moves_var =
-            !element_is_copy && body_moves_path(&f.body, &f.var_name.text);
+        let body_moves_var = !element_is_copy && body_moves_path(&f.body, &f.var_name.text);
 
         // **Re-entrancy guard.** When the iterable is a collection field read
         // through a wrapper's `.0.borrow()` (`for (n : this.items) …`), iterating
@@ -1878,8 +1891,8 @@ impl RustEmitter {
         // temporary must be iterated BY VALUE: notably an iterator expression
         // like `s.chars()` — `&Chars` is NOT `IntoIterator` (rustc E0277) — and
         // by-value also works for a function that returns a collection.
-        let iter_is_place = snapshot
-            || matches!(&f.iter, Expr::Path(_) | Expr::Field(_) | Expr::Index(_));
+        let iter_is_place =
+            snapshot || matches!(&f.iter, Expr::Path(_) | Expr::Field(_) | Expr::Index(_));
         self.w.push_str("for ");
         if element_is_copy && iter_is_place {
             self.w.push('&');
@@ -2045,8 +2058,7 @@ impl RustEmitter {
                     self.w.push_str(".clone()");
                 }
             } else {
-                self.w
-                    .push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
                 if let Some(init) = &var.init {
                     let prev = std::mem::take(&mut self.emitting_format_arg);
                     self.emit_expr(init);
@@ -2068,10 +2080,7 @@ impl RustEmitter {
         // used below to mark it `mut` conservatively (§G.9.2).
         let mut external_local = false;
         if let Some(ty_ref) = &var.ty {
-            let ty = juxc_tycheck::ty_from_ref_in_env(
-                ty_ref,
-                &self.symbols,
-            );
+            let ty = juxc_tycheck::ty_from_ref_in_env(ty_ref, &self.symbols);
             external_local = self.is_external_user_ty(&ty);
             if let Some(scope) = self.local_types.last_mut() {
                 scope.insert(var.name.text.clone(), ty);
@@ -2230,8 +2239,7 @@ impl RustEmitter {
                 // the shared helper covers only the bare-`Path` / `this` and
                 // index-read (`var r = xs[0]`) places the field path doesn't.
                 if !wrap_some
-                    && (self.wrapper_value_needs_clone(init)
-                        || self.value_place_needs_clone(init))
+                    && (self.wrapper_value_needs_clone(init) || self.value_place_needs_clone(init))
                 {
                     self.w.push_str(".clone()");
                 }
@@ -2590,7 +2598,8 @@ impl RustEmitter {
         // and bindings like any other set. Without this the compound
         // form fell through to the raw wrapper-field write, which both
         // bypassed the setter AND named a nonexistent field (E0609).
-        if let Some(op) = a.op.filter(|_| self.assign_target_is_property_with_setter(&a.target))
+        if let Some(op) =
+            a.op.filter(|_| self.assign_target_is_property_with_setter(&a.target))
         {
             let desugared = AssignStmt {
                 target: a.target.clone(),
@@ -2668,10 +2677,9 @@ impl RustEmitter {
                     // borrow taken by `__op_index`. Integer `/=`/`%=` route
                     // the read-op-value through the checked division
                     // helpers (ERRATA.md E1) like every other assign shape.
-                    let checked_div = matches!(
-                        op,
-                        juxc_ast::BinaryOp::Div | juxc_ast::BinaryOp::Rem,
-                    ) && self.operand_is_float(&a.target) == Some(false);
+                    let checked_div =
+                        matches!(op, juxc_ast::BinaryOp::Div | juxc_ast::BinaryOp::Rem,)
+                            && self.operand_is_float(&a.target) == Some(false);
                     self.w.push_str("let __jux_tmp = ");
                     if checked_div {
                         self.w.push_str(if matches!(op, juxc_ast::BinaryOp::Div) {
@@ -2887,8 +2895,9 @@ impl RustEmitter {
         if a.op.is_none() {
             if let Expr::Field(tf) = &a.target {
                 if !tf.safe {
-                    if let Some(prop) =
-                        self.property_on_receiver(&tf.object, &tf.field.text).cloned()
+                    if let Some(prop) = self
+                        .property_on_receiver(&tf.object, &tf.field.text)
+                        .cloned()
                     {
                         if prop.setter.is_some() {
                             self.emit_property_setter_call(
@@ -2932,18 +2941,19 @@ impl RustEmitter {
                         if let Some(prop) = prop {
                             if prop.setter.is_some() {
                                 if prop.is_static {
-                                    let setter =
-                                        juxc_ast::desugar_static_setter_name(&name);
+                                    let setter = juxc_ast::desugar_static_setter_name(&name);
                                     self.w.push_str("Self::");
                                     self.w.push_str(&setter);
                                     self.w.push('(');
                                     self.emit_property_setter_arg(&a.value, prop.ty.nullable);
                                     self.w.push_str(");\n");
                                 } else {
-                                    let this_expr =
-                                        Expr::This(juxc_source::Span::DUMMY);
+                                    let this_expr = Expr::This(juxc_source::Span::DUMMY);
                                     self.emit_property_setter_call(
-                                        &this_expr, &name, &a.value, prop.ty.nullable,
+                                        &this_expr,
+                                        &name,
+                                        &a.value,
+                                        prop.ty.nullable,
                                     );
                                 }
                                 return;
@@ -3090,19 +3100,19 @@ impl RustEmitter {
             if !tf.safe && !matches!(&*tf.object, Expr::This(_)) {
                 if let Some(bare) = self.receiver_class_bare(&tf.object) {
                     if self.poly_base_classes.contains(&bare) {
-                        let field_info = self
-                            .symbols
-                            .lookup_field(&bare, &tf.field.text)
-                            .map(|(fsig, _)| {
-                                (
-                                    matches!(
-                                        fsig.visibility,
-                                        juxc_ast::Visibility::Public
-                                            | juxc_ast::Visibility::Protected
-                                    ),
-                                    fsig.ty.clone(),
-                                )
-                            });
+                        let field_info =
+                            self.symbols
+                                .lookup_field(&bare, &tf.field.text)
+                                .map(|(fsig, _)| {
+                                    (
+                                        matches!(
+                                            fsig.visibility,
+                                            juxc_ast::Visibility::Public
+                                                | juxc_ast::Visibility::Protected
+                                        ),
+                                        fsig.ty.clone(),
+                                    )
+                                });
                         if let Some((true, fty)) = field_info {
                             let field = tf.field.text.clone();
                             self.emit_expr(&tf.object);
@@ -3148,29 +3158,29 @@ impl RustEmitter {
                     && self
                         .wrapper_weak_field_target(&tf.object, &tf.field.text)
                         .is_some()
-                    {
-                        let depth = self
-                            .wrapper_field_parent_depth(&tf.object, &tf.field.text)
-                            .unwrap_or(0);
-                        self.w.push_str("{ let __jux_v = ");
-                        if matches!(&a.value, Expr::Literal(juxc_ast::Literal::Null)) {
-                            self.w.push_str("std::rc::Weak::new()");
-                        } else {
-                            self.w.push_str("std::rc::Rc::downgrade(&(");
-                            self.emit_expr(&a.value);
-                            self.w.push_str(").0)");
-                        }
-                        self.w.push_str("; ");
-                        self.emit_expr(&tf.object);
-                        self.w.push_str(".0.borrow_mut()");
-                        for _ in 0..depth {
-                            self.w.push_str(".__parent");
-                        }
-                        self.w.push('.');
-                        self.w.push_str(&to_rust_ident(&tf.field.text));
-                        self.w.push_str(" = __jux_v; }\n");
-                        return;
+                {
+                    let depth = self
+                        .wrapper_field_parent_depth(&tf.object, &tf.field.text)
+                        .unwrap_or(0);
+                    self.w.push_str("{ let __jux_v = ");
+                    if matches!(&a.value, Expr::Literal(juxc_ast::Literal::Null)) {
+                        self.w.push_str("std::rc::Weak::new()");
+                    } else {
+                        self.w.push_str("std::rc::Rc::downgrade(&(");
+                        self.emit_expr(&a.value);
+                        self.w.push_str(").0)");
                     }
+                    self.w.push_str("; ");
+                    self.emit_expr(&tf.object);
+                    self.w.push_str(".0.borrow_mut()");
+                    for _ in 0..depth {
+                        self.w.push_str(".__parent");
+                    }
+                    self.w.push('.');
+                    self.w.push_str(&to_rust_ident(&tf.field.text));
+                    self.w.push_str(" = __jux_v; }\n");
+                    return;
+                }
                 // Walk the `__parent` chain to the slot that actually
                 // declares the field — inherited-field writes
                 // (`child.parentField = v`) land deeper in the inner
@@ -3183,8 +3193,7 @@ impl RustEmitter {
                     .wrapper_field_parent_depth(&tf.object, &tf.field.text)
                     .unwrap_or(0);
                 self.w.push_str("{ let __jux_v = ");
-                let assign_nullable =
-                    a.op.is_none() && self.assign_target_is_nullable(&a.target);
+                let assign_nullable = a.op.is_none() && self.assign_target_is_nullable(&a.target);
                 // Base/interface upcast (S8): a derived RHS stored into a
                 // base- or interface-typed field must coerce exactly like the
                 // general store path below (`.into()` for a concrete base,
@@ -3354,8 +3363,7 @@ impl RustEmitter {
                 // Owned ctor param still read by a later statement —
                 // clone instead of moving (see `emit_assign_rhs`).
                 if let Expr::Path(qn) = &a.value {
-                    if qn.segments.len() == 1
-                        && self.ctor_live_after.contains(&qn.segments[0].text)
+                    if qn.segments.len() == 1 && self.ctor_live_after.contains(&qn.segments[0].text)
                     {
                         self.w.push_str(".clone()");
                     }
@@ -3384,11 +3392,7 @@ impl RustEmitter {
     /// `Option`-shaped). Callers MUST gate on non-compound assigns: `+=` has
     /// no upcast meaning. Shared by the general store path and the
     /// wrapper-field store-through path so both apply the same coercion.
-    fn assign_iface_coercion_tref(
-        &self,
-        target: &Expr,
-        value: &Expr,
-    ) -> Option<juxc_ast::TypeRef> {
+    fn assign_iface_coercion_tref(&self, target: &Expr, value: &Expr) -> Option<juxc_ast::TypeRef> {
         let ty = self
             .expr_types
             .get(&crate::exprs::expr_span_of(target))
@@ -3517,7 +3521,10 @@ impl RustEmitter {
         let backing = juxc_ast::desugar_backing_field_name(prop_name);
         let synthetic_target = Expr::Field(juxc_ast::FieldExpr {
             object: Box::new(receiver.clone()),
-            field: juxc_ast::Ident { text: backing, span: juxc_source::Span::DUMMY },
+            field: juxc_ast::Ident {
+                text: backing,
+                span: juxc_source::Span::DUMMY,
+            },
             safe: false,
             span: juxc_source::Span::DUMMY,
         });
@@ -3548,14 +3555,24 @@ impl RustEmitter {
     pub(crate) fn target_is_mutable_static(&self, target: &Expr) -> bool {
         match target {
             Expr::Field(f) => {
-                let Expr::Path(qn) = f.object.as_ref() else { return false };
-                let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) else { return false };
-                let Some(class) = self.symbols.classes.get(&class_fqn) else { return false };
-                let Some(field) = class.fields.get(f.field.text.as_str()) else { return false };
+                let Expr::Path(qn) = f.object.as_ref() else {
+                    return false;
+                };
+                let Some(class_fqn) = self.path_resolves_to_class_in_emit(qn) else {
+                    return false;
+                };
+                let Some(class) = self.symbols.classes.get(&class_fqn) else {
+                    return false;
+                };
+                let Some(field) = class.fields.get(f.field.text.as_str()) else {
+                    return false;
+                };
                 field.is_static && !field.is_final
             }
             Expr::Path(qn) if qn.segments.len() == 1 => {
-                let Some(class_name) = &self.enclosing_class else { return false };
+                let Some(class_name) = &self.enclosing_class else {
+                    return false;
+                };
                 let Some(class) = self.lookup_class_by_bare_or_fqn(class_name) else {
                     return false;
                 };
@@ -3675,13 +3692,12 @@ impl RustEmitter {
     /// statically-true upcast, so the binder gets `Some(<value coerced to T>)`.
     fn emit_typetest_binder_head(&mut self, t: &juxc_ast::TypeTestExpr) {
         let binder = t.binder.as_ref().expect("binder present");
-        let target = t
-            .ty
-            .name
-            .segments
-            .last()
-            .map(|s| s.text.clone())
-            .unwrap_or_default();
+        let target =
+            t.ty.name
+                .segments
+                .last()
+                .map(|s| s.text.clone())
+                .unwrap_or_default();
         self.w.push_str("let Some(");
         self.w.push_str(&to_rust_ident(&binder.text));
         self.w.push_str(") = ");
@@ -3891,10 +3907,7 @@ fn block_contains_return_where(
         .any(|s| stmt_contains_return_where(s, pred))
 }
 
-fn stmt_contains_return_where(
-    s: &Stmt,
-    pred: &dyn Fn(&Option<juxc_ast::Expr>) -> bool,
-) -> bool {
+fn stmt_contains_return_where(s: &Stmt, pred: &dyn Fn(&Option<juxc_ast::Expr>) -> bool) -> bool {
     match s {
         Stmt::Return(opt, _) => pred(opt),
         Stmt::If(i) => {

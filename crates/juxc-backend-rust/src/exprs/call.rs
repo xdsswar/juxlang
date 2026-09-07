@@ -94,10 +94,8 @@ fn type_ref_is_char(t: &juxc_ast::TypeRef) -> bool {
 /// lowering reads it to apply the `Some(...)` lift, and the dummy name
 /// resolves to nothing, so no interface/upcast coercion fires.
 fn synth_nullable_type_ref() -> juxc_ast::TypeRef {
-    let mut t = crate::analysis::synth_iface_type_ref(
-        "__jux_stream_elem",
-        juxc_source::Span::DUMMY,
-    );
+    let mut t =
+        crate::analysis::synth_iface_type_ref("__jux_stream_elem", juxc_source::Span::DUMMY);
     t.nullable = true;
     t
 }
@@ -150,19 +148,16 @@ impl super::super::RustEmitter {
         // has removed from `nullable_locals`, peel a recorded
         // `Ty::Nullable` so the inner `String` matches the
         // type-driven concat trigger.
-        let effective = if let (Expr::Path(qn), Some(juxc_tycheck::Ty::Nullable(inner))) =
-            (e, recorded)
-        {
-            if qn.segments.len() == 1
-                && !self.nullable_locals.contains(&qn.segments[0].text)
-            {
-                Some(inner.as_ref())
+        let effective =
+            if let (Expr::Path(qn), Some(juxc_tycheck::Ty::Nullable(inner))) = (e, recorded) {
+                if qn.segments.len() == 1 && !self.nullable_locals.contains(&qn.segments[0].text) {
+                    Some(inner.as_ref())
+                } else {
+                    recorded
+                }
             } else {
                 recorded
-            }
-        } else {
-            recorded
-        };
+            };
         matches!(effective, Some(juxc_tycheck::Ty::String))
     }
 }
@@ -218,8 +213,9 @@ impl RustEmitter {
                 // `std::fs::rename` (which would spuriously unwrap a `Result`).
                 // So prefer a non-`rust.`/`c.`/`cpp.` key; fall back to a foreign
                 // match only when no user function shares the name.
-                let is_foreign_key =
-                    |k: &str| k.starts_with("rust.") || k.starts_with("c.") || k.starts_with("cpp.");
+                let is_foreign_key = |k: &str| {
+                    k.starts_with("rust.") || k.starts_with("c.") || k.starts_with("cpp.")
+                };
                 let mut foreign_hit: Option<bool> = None;
                 for (k, s) in &self.symbols.functions {
                     if k.rsplit('.').next() == Some(bare) {
@@ -400,8 +396,7 @@ impl RustEmitter {
         if let Expr::Field(getf) = &*call.callee {
             if getf.field.text == "get" && call.args.is_empty() && !getf.safe {
                 if let Expr::Field(wf) = getf.object.as_ref() {
-                    if let Some(target) =
-                        self.wrapper_weak_field_target(&wf.object, &wf.field.text)
+                    if let Some(target) = self.wrapper_weak_field_target(&wf.object, &wf.field.text)
                     {
                         let depth = self
                             .wrapper_field_parent_depth(&wf.object, &wf.field.text)
@@ -481,13 +476,7 @@ impl RustEmitter {
                         if let Some((recv, prop, class)) =
                             self.resolve_observable_prop(&obsf.object)
                         {
-                            return self.emit_observers_call(
-                                recv,
-                                &prop,
-                                &class,
-                                opname,
-                                call,
-                            );
+                            return self.emit_observers_call(recv, &prop, &class, opname, call);
                         }
                         // P7: `Config.Level.observers.add(o)` — the receiver
                         // names a CLASS, so the instance resolution above misses;
@@ -495,12 +484,7 @@ impl RustEmitter {
                         if let Some((class, prop)) =
                             self.resolve_static_observable_prop(&obsf.object)
                         {
-                            return self.emit_static_observers_call(
-                                &class,
-                                &prop,
-                                opname,
-                                call,
-                            );
+                            return self.emit_static_observers_call(&class, &prop, opname, call);
                         }
                     }
                 }
@@ -514,9 +498,7 @@ impl RustEmitter {
         if let Expr::Field(opf) = &*call.callee {
             let opname = opf.field.text.as_str();
             if matches!(opname, "bind" | "bindBidirectional" | "unbind") {
-                if let Some((t_recv, t_prop, t_class)) =
-                    self.resolve_observable_prop(&opf.object)
-                {
+                if let Some((t_recv, t_prop, t_class)) = self.resolve_observable_prop(&opf.object) {
                     if opname == "unbind" && call.args.is_empty() {
                         let t_prop = t_prop.clone();
                         return self.emit_unbind(t_recv, &t_prop);
@@ -647,9 +629,8 @@ impl RustEmitter {
                 }
                 self.w.push_str(") as u64)) });\n");
                 self.w.emit_indent();
-                self.w.push_str(
-                    "match futures::future::select(std::pin::pin!(async move { ",
-                );
+                self.w
+                    .push_str("match futures::future::select(std::pin::pin!(async move { ");
                 match call.args.get(1) {
                     Some(Expr::Lambda(l)) if l.params.is_empty() => match &l.body {
                         juxc_ast::LambdaBody::Expr(e) => self.emit_expr(e),
@@ -674,7 +655,8 @@ impl RustEmitter {
                 }
                 self.w.push_str(" }), __jux_timer).await {\n");
                 self.w.indent_inc();
-                self.w.line("futures::future::Either::Left((__jux_v, _)) => __jux_v,");
+                self.w
+                    .line("futures::future::Either::Left((__jux_v, _)) => __jux_v,");
                 self.w.line(
                     "futures::future::Either::Right(_) => std::panic::panic_any(crate::jux::std::exceptions::TimeoutException::new(\"operation timed out\".to_string())),",
                 );
@@ -788,9 +770,7 @@ impl RustEmitter {
                     Some(other) => {
                         crate::worker::walk_expr(other, &mut |e| {
                             if let Expr::Path(qn) = e {
-                                if qn.segments.len() == 1
-                                    && !names.contains(&qn.segments[0].text)
-                                {
+                                if qn.segments.len() == 1 && !names.contains(&qn.segments[0].text) {
                                     names.push(qn.segments[0].text.clone());
                                 }
                             }
@@ -1128,7 +1108,9 @@ impl RustEmitter {
                         "readLines" => {
                             self.w.push_str("std::fs::read_to_string(&(");
                             self.emit_call_args(call);
-                            self.w.push_str(")).unwrap().lines().map(|l| l.to_string()).collect::<Vec<_>>()");
+                            self.w.push_str(
+                                ")).unwrap().lines().map(|l| l.to_string()).collect::<Vec<_>>()",
+                            );
                             return;
                         }
                         "delete" => {
@@ -1154,7 +1136,8 @@ impl RustEmitter {
                     let method = f.field.text.as_str();
                     match method {
                         "join" => {
-                            self.w.push_str("{ let mut __jux_p = std::path::PathBuf::from(&(");
+                            self.w
+                                .push_str("{ let mut __jux_p = std::path::PathBuf::from(&(");
                             if let Some(base) = call.args.first() {
                                 self.emit_expr(base);
                             }
@@ -1162,13 +1145,16 @@ impl RustEmitter {
                             if let Some(child) = call.args.get(1) {
                                 self.emit_expr(child);
                             }
-                            self.w.push_str(")); __jux_p.to_string_lossy().into_owned() }");
+                            self.w
+                                .push_str(")); __jux_p.to_string_lossy().into_owned() }");
                             return;
                         }
                         "parent" | "fileName" | "extension" => {
                             let accessor = match method {
                                 "parent" => ".parent().map(|x| x.to_string_lossy().into_owned())",
-                                "fileName" => ".file_name().map(|x| x.to_string_lossy().into_owned())",
+                                "fileName" => {
+                                    ".file_name().map(|x| x.to_string_lossy().into_owned())"
+                                }
                                 _ => ".extension().map(|x| x.to_string_lossy().into_owned())",
                             };
                             self.w.push_str("std::path::Path::new(&(");
@@ -1401,8 +1387,7 @@ impl RustEmitter {
                             .get(&class_fqn)
                             .map(|c| !c.generic_params.is_empty())
                             .unwrap_or(false);
-                        let lift_to_free_fn =
-                            class_is_generic && !f.field.text.starts_with("__");
+                        let lift_to_free_fn = class_is_generic && !f.field.text.starts_with("__");
                         // §G.9.2: a static call on a foreign stub class
                         // (`Url.parse(...)`) lowers through its REAL Rust path
                         // (`url::Url::parse(...)`) from the `@rust` annotation,
@@ -1555,10 +1540,14 @@ impl RustEmitter {
             // Use lookup_class_by_bare_or_fqn (bare-name aware) instead of
             // symbols.lookup_field (FQN-only) so probes.TaskRunner resolves
             // from the bare "TaskRunner" key stored in enclosing_class.
-            let is_fn_field = class_bare.as_deref().and_then(|bare| {
-                let class = self.lookup_class_by_bare_or_fqn(bare)?;
-                class.fields.get(f.field.text.as_str())
-            }).map(|fsig| fsig.ty.fn_shape.is_some()).unwrap_or(false);
+            let is_fn_field = class_bare
+                .as_deref()
+                .and_then(|bare| {
+                    let class = self.lookup_class_by_bare_or_fqn(bare)?;
+                    class.fields.get(f.field.text.as_str())
+                })
+                .map(|fsig| fsig.ty.fn_shape.is_some())
+                .unwrap_or(false);
             if is_fn_field {
                 // Emit as `(field_read)(args)` — parens prevent Rust from
                 // interpreting this as a method call on the struct/wrapper.
@@ -1566,13 +1555,15 @@ impl RustEmitter {
                 // For wrapper classes: `(self.0.borrow().task.clone())(args)`
                 // Both are valid because Rc<dyn Fn(...)> implements Fn via Deref.
                 self.w.push('(');
-                self.emit_expr(&call.callee);  // emitting_call_callee=false → borrow fires
+                self.emit_expr(&call.callee); // emitting_call_callee=false → borrow fires
                 self.w.push(')');
                 self.w.push('(');
                 let prev = self.emitting_format_arg;
                 self.emitting_format_arg = false;
                 for (i, arg) in call.args.iter().enumerate() {
-                    if i > 0 { self.w.push_str(", "); }
+                    if i > 0 {
+                        self.w.push_str(", ");
+                    }
                     self.emit_expr(arg);
                 }
                 self.emitting_format_arg = prev;
@@ -1649,7 +1640,9 @@ impl RustEmitter {
         // ctor with at least one boxed slot.
         let boxed_slots = self.enum_ctor_boxed_slots(call);
         for (i, arg) in call.args.iter().enumerate() {
-            if i > 0 { self.w.push_str(", "); }
+            if i > 0 {
+                self.w.push_str(", ");
+            }
             let box_this = boxed_slots.get(i).copied().unwrap_or(false);
             if box_this {
                 self.w.push_str("std::boxed::Box::new(");
@@ -1704,9 +1697,8 @@ impl RustEmitter {
                 // `class_asts` is keyed by FQN (`x4.Stack`); the receiver bare
                 // name matches a user class when it equals some key's last
                 // segment.
-                let receiver_is_user_class = self
-                    .receiver_class_bare(&f.object)
-                    .is_some_and(|bare| {
+                let receiver_is_user_class =
+                    self.receiver_class_bare(&f.object).is_some_and(|bare| {
                         self.class_asts
                             .keys()
                             .any(|k| k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
@@ -1734,9 +1726,7 @@ impl RustEmitter {
     pub(crate) fn emit_byref_arg(&mut self, arg: &Expr) {
         self.w.push_str("&mut ");
         if let Expr::Path(qn) = arg {
-            if qn.segments.len() == 1
-                && self.byref_param_names.contains(&qn.segments[0].text)
-            {
+            if qn.segments.len() == 1 && self.byref_param_names.contains(&qn.segments[0].text) {
                 // Reborrow an inherited `&mut T` param.
                 self.w.push('*');
             }
@@ -1843,7 +1833,9 @@ impl RustEmitter {
         !call.eval_order.is_empty()
             || self.call_has_self_aliasing_byref_arg(call)
             || self.call_needs_borrow_hoist(call)
-            || self.callee_receiver_reads_through_borrow(&call.callee).is_some()
+            || self
+                .callee_receiver_reads_through_borrow(&call.callee)
+                .is_some()
     }
 
     /// C6: true when any `&mut T` foreign-collection argument is a
@@ -1921,12 +1913,18 @@ impl RustEmitter {
         let args = sig
             .params
             .iter()
-            .map(|p| if p.is_out { FfiArg::Out } else { ffi_arg_kind(&p.ty) })
+            .map(|p| {
+                if p.is_out {
+                    FfiArg::Out
+                } else {
+                    ffi_arg_kind(&p.ty)
+                }
+            })
             .collect();
         let ret = match &sig.return_type {
-            juxc_ast::ReturnType::Type(t) if type_ref_is_string(t) => {
-                FfiRet::Str { nullable: t.nullable }
-            }
+            juxc_ast::ReturnType::Type(t) if type_ref_is_string(t) => FfiRet::Str {
+                nullable: t.nullable,
+            },
             juxc_ast::ReturnType::Type(t) if type_ref_is_char(t) => FfiRet::Char,
             _ => FfiRet::Plain,
         };
@@ -1962,11 +1960,11 @@ impl RustEmitter {
             let is_str = matches!(args.get(i), Some(FfiArg::Str))
                 || (i >= args.len() && expr_is_string_literal(arg));
             if is_str {
-                self.w.push_str(&format!("let __c{i} = ::std::ffi::CString::new("));
+                self.w
+                    .push_str(&format!("let __c{i} = ::std::ffi::CString::new("));
                 self.emit_expr(arg);
-                self.w.push_str(
-                    ").expect(\"string passed to C contains an interior NUL byte\"); ",
-                );
+                self.w
+                    .push_str(").expect(\"string passed to C contains an interior NUL byte\"); ");
             }
         }
         // 2. The call (bound to `__ret` only when we convert the return).
@@ -2019,14 +2017,17 @@ impl RustEmitter {
             // Copy a `String` out of the C buffer (read-only, never freed).
             FfiRet::Str { nullable } => {
                 self.w.push_str("; ");
-                let copy = "unsafe { ::std::ffi::CStr::from_ptr(__ret as *const core::ffi::c_char) }\
+                let copy =
+                    "unsafe { ::std::ffi::CStr::from_ptr(__ret as *const core::ffi::c_char) }\
                             .to_string_lossy().into_owned()";
                 if nullable {
-                    self.w
-                        .push_str(&format!("if __ret.is_null() {{ None }} else {{ Some({copy}) }}"));
+                    self.w.push_str(&format!(
+                        "if __ret.is_null() {{ None }} else {{ Some({copy}) }}"
+                    ));
                 } else {
-                    self.w
-                        .push_str(&format!("if __ret.is_null() {{ String::new() }} else {{ {copy} }}"));
+                    self.w.push_str(&format!(
+                        "if __ret.is_null() {{ String::new() }} else {{ {copy} }}"
+                    ));
                 }
             }
             // A C `char` widens back to a Jux/Rust `char` (via the byte value).
@@ -2054,7 +2055,8 @@ impl RustEmitter {
                     .map(|p| p.split('.').next().unwrap_or(&p) == recv_first)
                     .unwrap_or(false);
             if aliases {
-                self.w.push_str(&format!("let mut __jux_byref{i} = std::mem::take(&mut "));
+                self.w
+                    .push_str(&format!("let mut __jux_byref{i} = std::mem::take(&mut "));
                 let prev_lval = std::mem::replace(&mut self.emitting_lvalue, true);
                 self.emit_expr(arg);
                 self.emitting_lvalue = prev_lval;
@@ -2131,9 +2133,7 @@ impl RustEmitter {
         // pass a `ref` binding for write-through).
         if self.callee_param_is_shared_ref(&call.callee, i) {
             if let Expr::Path(qn) = arg {
-                if qn.segments.len() == 1
-                    && self.ref_locals.contains(&qn.segments[0].text)
-                {
+                if qn.segments.len() == 1 && self.ref_locals.contains(&qn.segments[0].text) {
                     self.w.push_str(&to_rust_ident(&qn.segments[0].text));
                     self.w.push_str(".clone()");
                     return;
@@ -2319,7 +2319,9 @@ impl RustEmitter {
         if call.args.iter().any(|a| self.expr_reads_wrapper_field(a)) {
             return true;
         }
-        let Expr::Field(f) = call.callee.as_ref() else { return false };
+        let Expr::Field(f) = call.callee.as_ref() else {
+            return false;
+        };
         // The receiver as a dotted place path: `x` / `this` /
         // `h.item` / `this.a.b` (S7 — field-path receivers conflict
         // exactly like bare locals). Anything that isn't a pure
@@ -2389,8 +2391,7 @@ impl RustEmitter {
             // borrow guard — same call-expression-temporary hazard as a
             // wrapper field read.
             Expr::Path(qn) => {
-                qn.segments.len() == 1
-                    && self.ref_locals.contains(&qn.segments[0].text)
+                qn.segments.len() == 1 && self.ref_locals.contains(&qn.segments[0].text)
             }
             Expr::Field(f) => {
                 if let Some(c) = self.receiver_class_bare(&f.object) {
@@ -2419,15 +2420,13 @@ impl RustEmitter {
                 c.args.iter().any(|a| self.expr_reads_wrapper_field(a))
             }
             Expr::Binary(b) => {
-                self.expr_reads_wrapper_field(&b.left)
-                    || self.expr_reads_wrapper_field(&b.right)
+                self.expr_reads_wrapper_field(&b.left) || self.expr_reads_wrapper_field(&b.right)
             }
             Expr::Unary(u) => self.expr_reads_wrapper_field(&u.operand),
             Expr::Cast(c) => self.expr_reads_wrapper_field(&c.value),
             Expr::TypeTest(t) => self.expr_reads_wrapper_field(&t.value),
             Expr::Index(i) => {
-                self.expr_reads_wrapper_field(&i.array)
-                    || self.expr_reads_wrapper_field(&i.index)
+                self.expr_reads_wrapper_field(&i.array) || self.expr_reads_wrapper_field(&i.index)
             }
             Expr::Elvis(el) => {
                 self.expr_reads_wrapper_field(&el.value)
@@ -2446,9 +2445,7 @@ impl RustEmitter {
                 matches!(seg, juxc_ast::InterpSegment::Expr(inner)
                     if self.expr_reads_wrapper_field(inner))
             }),
-            Expr::TupleLit(elems, _) => {
-                elems.iter().any(|el| self.expr_reads_wrapper_field(el))
-            }
+            Expr::TupleLit(elems, _) => elems.iter().any(|el| self.expr_reads_wrapper_field(el)),
             _ => false,
         }
     }
@@ -2721,8 +2718,7 @@ impl RustEmitter {
         match e {
             Expr::Call(c) => {
                 if let Expr::Field(f) = c.callee.as_ref() {
-                    let on_root =
-                        place_path_of(&f.object).as_deref() == Some(root);
+                    let on_root = place_path_of(&f.object).as_deref() == Some(root);
                     if on_root && self.user_mut_methods.contains(&f.field.text) {
                         return true;
                     }
@@ -2774,7 +2770,9 @@ impl RustEmitter {
             call.eval_order.clone()
         };
         for &i in &bind_order {
-            let Some(arg) = call.args.get(i) else { continue };
+            let Some(arg) = call.args.get(i) else {
+                continue;
+            };
             // C6: a `&mut T` foreign-collection arg must borrow the
             // caller's PLACE at the call slot, not a hoisted value temp
             // (a `&mut` into a temp would lose the caller's mutation).
@@ -2958,11 +2956,7 @@ impl RustEmitter {
     /// emits with `emitting_format_arg=false` so any string-literal
     /// arg still self-coerces — same discipline as a regular
     /// `emit_call`'s args. The result type is `Option<ReturnType>`.
-    pub(crate) fn emit_safe_method_call(
-        &mut self,
-        callee: &juxc_ast::FieldExpr,
-        call: &CallExpr,
-    ) {
+    pub(crate) fn emit_safe_method_call(&mut self, callee: &juxc_ast::FieldExpr, call: &CallExpr) {
         let needs_parens = !matches!(
             *callee.object,
             Expr::Path(_)
@@ -3123,15 +3117,14 @@ impl RustEmitter {
                 // literal-shape OR `Ty::String`-typed either side.
                 // Either condition routes through the inline-print
                 // path and the intermediate `format!` evaporates.
-                let lhs_string = is_string_literal(&b.left)
-                    || self.operand_is_string_typed_for_print(&b.left);
-                let rhs_string = is_string_literal(&b.right)
-                    || self.operand_is_string_typed_for_print(&b.right);
+                let lhs_string =
+                    is_string_literal(&b.left) || self.operand_is_string_typed_for_print(&b.left);
+                let rhs_string =
+                    is_string_literal(&b.right) || self.operand_is_string_typed_for_print(&b.right);
                 if b.op == juxc_ast::BinaryOp::Add && (lhs_string || rhs_string) {
                     let mut operands: Vec<&Expr> = Vec::new();
                     flatten_concat(b, &mut operands);
-                    let (template, runtime) =
-                        fold_concat_for_print(&operands);
+                    let (template, runtime) = fold_concat_for_print(&operands);
                     self.w.push_str("println!(\"");
                     self.w.push_str(&template);
                     self.w.push('"');
@@ -3302,26 +3295,23 @@ impl RustEmitter {
         //      `Span::DUMMY`, so they never appear in the map. We
         //      special-case string and array literals here.
         let recv_span = crate::exprs::expr_span_of(&f.object);
-        let recv_ty_from_locals: Option<juxc_tycheck::Ty> =
-            if let Expr::Path(qn) = &*f.object {
-                if qn.segments.len() == 1 {
-                    let bare = qn.segments[0].text.as_str();
-                    self.local_types
-                        .iter()
-                        .rev()
-                        .find_map(|scope| scope.get(bare).cloned())
-                } else {
-                    None
-                }
+        let recv_ty_from_locals: Option<juxc_tycheck::Ty> = if let Expr::Path(qn) = &*f.object {
+            if qn.segments.len() == 1 {
+                let bare = qn.segments[0].text.as_str();
+                self.local_types
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(bare).cloned())
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
         let recv_ty = recv_ty_from_locals
             .or_else(|| self.expr_types.get(&recv_span).cloned())
             .or_else(|| match &*f.object {
-                Expr::Literal(juxc_ast::Literal::String(_)) => {
-                    Some(juxc_tycheck::Ty::String)
-                }
+                Expr::Literal(juxc_ast::Literal::String(_)) => Some(juxc_tycheck::Ty::String),
                 // Numeric / char receivers built purely from literals
                 // (`255.toHex()`, `(0.0 / 0.0).isNaN()`) — literals
                 // carry `Span::DUMMY`, and a binary over two literals
@@ -3348,9 +3338,7 @@ impl RustEmitter {
                 } else {
                     self.receiver_class_bare(&rf.object)
                 };
-                class.and_then(|c| {
-                    self.lookup_class_field_ty_in_chain(&c, &rf.field.text)
-                })
+                class.and_then(|c| self.lookup_class_field_ty_in_chain(&c, &rf.field.text))
             });
         let Some(recv_ty) = recv_ty else {
             return false;
@@ -3358,8 +3346,7 @@ impl RustEmitter {
         // The Jux native array facade (`int[]`, `T[]`) — distinct from the
         // rust.std collections, which carry their real Rust method surface.
         let is_array = matches!(&recv_ty, juxc_tycheck::Ty::Array { .. });
-        let is_string =
-            matches!(&recv_ty, juxc_tycheck::Ty::String);
+        let is_string = matches!(&recv_ty, juxc_tycheck::Ty::String);
         // `Instant` elapsed readings (jux.std.time) — the receiver is
         // a Copy `std::time::Instant` value.
         if matches!(
@@ -3494,18 +3481,14 @@ impl RustEmitter {
                 // the Jux facade does), so `for (k : m.keys()) m.get(k)` iterates
                 // owned keys and `get`'s `&k` is `&K`, not `&&K` (rustc E0277
                 // `K: Borrow<&K>`).
-                if is_rust_std_coll
-                    && matches!(method, "keys" | "values")
-                    && call.args.is_empty()
-                {
+                if is_rust_std_coll && matches!(method, "keys" | "values") && call.args.is_empty() {
                     self.emit_stdlib_receiver(&f.object);
                     self.w.push('.');
                     self.w.push_str(method);
                     self.w.push_str("().cloned().collect::<Vec<_>>()");
                     return true;
                 }
-                if is_rust_std_coll
-                    && matches!(method, "get" | "first" | "last" | "front" | "back")
+                if is_rust_std_coll && matches!(method, "get" | "first" | "last" | "front" | "back")
                 {
                     self.w.push('(');
                     self.emit_stdlib_receiver(&f.object);
@@ -3533,7 +3516,9 @@ impl RustEmitter {
         // (String has no mutating-in-place methods on this path, so it's
         // excluded by `collection_method_mutates`.)
         if self.collection_method_mutates(&recv_ty, method)
-            && self.callee_receiver_reads_through_borrow(&call.callee).is_some()
+            && self
+                .callee_receiver_reads_through_borrow(&call.callee)
+                .is_some()
         {
             return self.emit_mut_collection_method(call, method, &recv_ty);
         }
@@ -3743,10 +3728,9 @@ impl RustEmitter {
                         method,
                         "insert" | "remove" | "clear" | "extend" | "retain" | "append"
                     ),
-                    "HashSet" | "BTreeSet" => matches!(
-                        method,
-                        "insert" | "remove" | "clear" | "extend" | "retain"
-                    ),
+                    "HashSet" | "BTreeSet" => {
+                        matches!(method, "insert" | "remove" | "clear" | "extend" | "retain")
+                    }
                     "VecDeque" => matches!(
                         method,
                         "push_back"
@@ -4052,8 +4036,7 @@ impl RustEmitter {
                 } else {
                     self.emit_stdlib_receiver(receiver);
                 }
-                self.w
-                    .push_str(".iter().cloned().map(|__e| (");
+                self.w.push_str(".iter().cloned().map(|__e| (");
                 self.emit_call_args(call);
                 self.w.push_str(")(__e)).collect::<Vec<_>>()");
                 if snapshot {
@@ -4070,8 +4053,7 @@ impl RustEmitter {
                 } else {
                     self.emit_stdlib_receiver(receiver);
                 }
-                self.w
-                    .push_str(".iter().cloned().filter(|__e| (");
+                self.w.push_str(".iter().cloned().filter(|__e| (");
                 self.emit_call_args(call);
                 self.w.push_str(")(__e.clone())).collect::<Vec<_>>()");
                 if snapshot {
@@ -4097,7 +4079,9 @@ impl RustEmitter {
         prim: juxc_tycheck::Primitive,
     ) -> bool {
         use juxc_tycheck::Primitive as P;
-        let Expr::Field(f) = &*call.callee else { return false };
+        let Expr::Field(f) = &*call.callee else {
+            return false;
+        };
         let receiver = &f.object;
         let is_float = matches!(prim, P::Float | P::Double | P::F32 | P::F64);
         let is_char = matches!(prim, P::Char);
@@ -4423,7 +4407,8 @@ impl RustEmitter {
                 self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".find(");
                 self.emit_call_args(call);
-                self.w.push_str(".as_str()).map(|__i| __i as isize).unwrap_or(-1))");
+                self.w
+                    .push_str(".as_str()).map(|__i| __i as isize).unwrap_or(-1))");
                 true
             }
             "split" => {
@@ -4453,8 +4438,7 @@ impl RustEmitter {
                     self.emit_expr(start);
                 }
                 self.emitting_format_arg = prev;
-                self.w
-                    .push_str(")) as usize).collect::<String>())");
+                self.w.push_str(")) as usize).collect::<String>())");
                 true
             }
             "charAt" => {
@@ -4523,7 +4507,9 @@ impl RustEmitter {
             _ => None,
         }
         .or_else(|| {
-            self.expr_types.get(&crate::exprs::expr_span_of(receiver)).cloned()
+            self.expr_types
+                .get(&crate::exprs::expr_span_of(receiver))
+                .cloned()
         })
     }
 
@@ -4570,9 +4556,8 @@ impl RustEmitter {
         // type-arg is `T?` (`ArrayList<int?>` → `Vec<Option<isize>>`): a
         // non-null value lifts into `Some(...)`; a `null` literal / an
         // already-`Option` value passes through.
-        let wrap_some = self
-            .builtin_arg_elem_nullable(call, i)
-            && !self.expression_is_already_nullable(arg);
+        let wrap_some =
+            self.builtin_arg_elem_nullable(call, i) && !self.expression_is_already_nullable(arg);
         if wrap_some {
             self.w.push_str("Some(");
         }
@@ -4599,12 +4584,10 @@ impl RustEmitter {
     /// position per method: list `add`/`set@1`/`insert@1`, set `add`,
     /// map `put@1` (values; keys stay non-null). Non-container shapes
     /// answer `false`.
-    fn builtin_arg_elem_ty(
-        &self,
-        call: &CallExpr,
-        arg_idx: usize,
-    ) -> Option<juxc_tycheck::Ty> {
-        let Expr::Field(f) = call.callee.as_ref() else { return None };
+    fn builtin_arg_elem_ty(&self, call: &CallExpr, arg_idx: usize) -> Option<juxc_tycheck::Ty> {
+        let Expr::Field(f) = call.callee.as_ref() else {
+            return None;
+        };
         let method = f.field.text.as_str();
         // Receiver type: span-keyed `expr_types` first, then the
         // name-keyed `local_types` fallback (span collisions and
@@ -4644,8 +4627,7 @@ impl RustEmitter {
             Some(juxc_tycheck::Ty::User { name, .. }) => {
                 match name.rsplit('.').next().unwrap_or(name) {
                     "Vec" | "VecDeque" => match (method, arg_idx) {
-                        ("add", 0) | ("push", 0) | ("push_back", 0)
-                        | ("push_front", 0) => 0,
+                        ("add", 0) | ("push", 0) | ("push_back", 0) | ("push_front", 0) => 0,
                         ("set", 1) | ("insert", 1) => 0, // (index, value) → element
                         _ => return None,
                     },
@@ -4691,7 +4673,9 @@ impl RustEmitter {
     fn builtin_arg_elem_is_super_wildcard(&self, call: &CallExpr, arg_idx: usize) -> bool {
         matches!(
             self.builtin_arg_elem_ty(call, arg_idx),
-            Some(juxc_tycheck::Ty::Wildcard(juxc_tycheck::ty::Wildcard::Super(_))),
+            Some(juxc_tycheck::Ty::Wildcard(
+                juxc_tycheck::ty::Wildcard::Super(_)
+            )),
         )
     }
 
@@ -4755,4 +4739,3 @@ pub(crate) fn literal_numeric_ty(e: &Expr) -> Option<juxc_tycheck::Primitive> {
         _ => None,
     }
 }
-

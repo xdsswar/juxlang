@@ -191,10 +191,7 @@ impl RustEmitter {
             // class comes from the recorded type (tycheck validated
             // the enclosing return shape).
             Expr::ErrorProp(inner, _) => {
-                let inner_ty = self
-                    .expr_types
-                    .get(&expr_span_of(inner))
-                    .cloned();
+                let inner_ty = self.expr_types.get(&expr_span_of(inner)).cloned();
                 let is_result = matches!(
                     &inner_ty,
                     Some(juxc_tycheck::Ty::User { name, generic_args })
@@ -208,9 +205,8 @@ impl RustEmitter {
                         " { crate::jux::std::result::Result::Ok(__jux_q) => __jux_q, crate::jux::std::result::Result::Err(__jux_e) => return crate::jux::std::result::Result::Err(__jux_e) })",
                     );
                 } else {
-                    self.w.push_str(
-                        " { Some(__jux_q) => __jux_q, None => return None })",
-                    );
+                    self.w
+                        .push_str(" { Some(__jux_q) => __jux_q, None => return None })");
                 }
             }
             // Tuple literal (§5.3) — Rust's identical `(a, b)` form.
@@ -357,9 +353,7 @@ impl RustEmitter {
                         // a constructor the desugarer already rewrote the bare name
                         // to the `__prop_<Name>` backing field, so this is a
                         // method-only path where the alias is `self`.
-                        if !shadowed
-                            && self.bare_name_is_property_in_chain(&class_name, &name)
-                        {
+                        if !shadowed && self.bare_name_is_property_in_chain(&class_name, &name) {
                             if let Some(alias) = self.this_alias.clone() {
                                 self.w.push_str(&alias);
                                 self.w.push('.');
@@ -460,9 +454,7 @@ impl RustEmitter {
                     }
                     // Atomic counters (§S.6.2) — Arc-wrapped so the
                     // handle shares across spawn boundaries.
-                    if (bare == "AtomicInt" || bare == "AtomicLong")
-                        && n.generic_args.is_empty()
-                    {
+                    if (bare == "AtomicInt" || bare == "AtomicLong") && n.generic_args.is_empty() {
                         let inner = if bare == "AtomicInt" {
                             "AtomicIsize"
                         } else {
@@ -575,10 +567,7 @@ impl RustEmitter {
                                 .map(|(p, _)| p.to_string())
                                 .unwrap_or_default();
                             if fqn_pkg != cur_pkg {
-                                let joined = fqn
-                                    .split('.')
-                                    .collect::<Vec<_>>()
-                                    .join("::");
+                                let joined = fqn.split('.').collect::<Vec<_>>().join("::");
                                 (joined, true)
                             } else {
                                 (bare.to_string(), false)
@@ -716,8 +705,7 @@ impl RustEmitter {
                     .next()
                     .map(|s| s.to_string())
                     .unwrap_or_default();
-                let ctor_sfx =
-                    self.ctor_overload_suffix_for_span(&ctor_bare, n.args.len(), n.span);
+                let ctor_sfx = self.ctor_overload_suffix_for_span(&ctor_bare, n.args.len(), n.span);
                 self.w.push_str("::new");
                 self.w.push_str(&ctor_sfx);
                 self.w.push('(');
@@ -788,12 +776,12 @@ impl RustEmitter {
                                     .find(|ctor| ctor.params.len() == n.args.len())
                                     .or_else(|| c.constructors.first());
                                 ctor.map(|ctor| {
-                                        ctor.params
-                                            .iter()
-                                            .map(|p| param_nullable(&p.ty, &gp))
-                                            .collect()
-                                    })
-                                    .unwrap_or_default()
+                                    ctor.params
+                                        .iter()
+                                        .map(|p| param_nullable(&p.ty, &gp))
+                                        .collect()
+                                })
+                                .unwrap_or_default()
                             })
                             .or_else(|| {
                                 self.symbols
@@ -1018,8 +1006,7 @@ impl RustEmitter {
                     // suppressed form would try to MOVE the Option out
                     // of the `Ref` (rustc E0507).
                     let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
-                    let prev_cmp =
-                        std::mem::take(&mut self.emitting_comparison_operand);
+                    let prev_cmp = std::mem::take(&mut self.emitting_comparison_operand);
                     self.w.push('(');
                     self.emit_expr(inner);
                     self.w.push(')');
@@ -1251,9 +1238,7 @@ impl RustEmitter {
                     .and_then(|fqn| self.symbols.interfaces.get(&fqn))
             })
             .and_then(|i| i.methods.get(m.member.text.as_str()));
-        let is_interface_static = iface_method
-            .map(|mi| mi.is_static)
-            .unwrap_or(false);
+        let is_interface_static = iface_method.map(|mi| mi.is_static).unwrap_or(false);
         let method_info = class_method.or(iface_method);
         let is_static = method_info.map(|mi| mi.is_static).unwrap_or(false);
         let arity = method_info.map(|mi| mi.params.len()).unwrap_or(0);
@@ -1463,8 +1448,7 @@ impl RustEmitter {
         // to completion right there. Without this the body emitted as
         // a plain closure and any `await` inside was rustc E0728.
         if l.is_async {
-            self.w
-                .push_str("futures::executor::block_on(async move ");
+            self.w.push_str("futures::executor::block_on(async move ");
             match &l.body {
                 juxc_ast::LambdaBody::Expr(e) => {
                     self.w.push_str("{ ");
@@ -1832,15 +1816,20 @@ impl RustEmitter {
             .last()
             .map(|s| s.text.as_str())
             .unwrap_or("");
-        let target_is_interface = self
-            .lookup_interface_by_bare_or_fqn(target_bare)
-            .is_some();
+        let target_is_interface = self.lookup_interface_by_bare_or_fqn(target_bare).is_some();
         let target_is_class = self.lookup_class_by_bare_or_fqn(target_bare).is_some();
-        let crate_prefix = if n.class_name.segments.len() > 1 { "crate::" } else { "" };
-        let body = n.anonymous_body.clone().unwrap_or_else(|| juxc_ast::AnonymousBody {
-            init_blocks: Vec::new(),
-            methods: Vec::new(),
-        });
+        let crate_prefix = if n.class_name.segments.len() > 1 {
+            "crate::"
+        } else {
+            ""
+        };
+        let body = n
+            .anonymous_body
+            .clone()
+            .unwrap_or_else(|| juxc_ast::AnonymousBody {
+                init_blocks: Vec::new(),
+                methods: Vec::new(),
+            });
         // Enclosing locals the body references (the Java capture pattern). Empty
         // for a capture-less anon, so everything below stays byte-identical then.
         let captures = self.collect_anon_captures(&body);
@@ -1866,16 +1855,18 @@ impl RustEmitter {
             self.w.push_str(" { type Target = ");
             self.w.push_str(crate_prefix);
             self.w.push_str(&path);
-            self.w.push_str("; fn deref(&self) -> &Self::Target { &self.__parent } } ");
+            self.w
+                .push_str("; fn deref(&self) -> &Self::Target { &self.__parent } } ");
             self.w.push_str("impl std::ops::DerefMut for ");
             self.w.push_str(&struct_name);
-            self.w.push_str(" { fn deref_mut(&mut self) -> &mut Self::Target { &mut self.__parent } } ");
+            self.w.push_str(
+                " { fn deref_mut(&mut self) -> &mut Self::Target { &mut self.__parent } } ",
+            );
             self.w.push_str("impl ");
             self.w.push_str(&struct_name);
             self.w.push_str(" {");
             // Captured names rewrite to `self.<field>` inside the method bodies.
-            let prev_captured =
-                std::mem::replace(&mut self.captured_locals, capture_names.clone());
+            let prev_captured = std::mem::replace(&mut self.captured_locals, capture_names.clone());
             // Inherent override methods — `&mut self` so `this.field`
             // writes through the embedded `__parent` borrow mutably.
             for method in &methods {
@@ -1908,8 +1899,7 @@ impl RustEmitter {
                 .last()
                 .map(|s| s.text.clone())
                 .unwrap_or_default();
-            let ctor_sfx =
-                self.ctor_overload_suffix_for_span(&ctor_bare, n.args.len(), n.span);
+            let ctor_sfx = self.ctor_overload_suffix_for_span(&ctor_bare, n.args.len(), n.span);
             self.w.push_str("::new");
             self.w.push_str(&ctor_sfx);
             self.w.push('(');
@@ -1995,16 +1985,22 @@ impl RustEmitter {
             .lookup_interface_by_bare_or_fqn(target_bare)
             .map(|(_, i)| i.is_external)
             .unwrap_or(false);
-        self.w
-            .push_str(if iface_is_external { " Box::new(" } else { " std::rc::Rc::new(" });
+        self.w.push_str(if iface_is_external {
+            " Box::new("
+        } else {
+            " std::rc::Rc::new("
+        });
         self.w.push_str(&struct_name);
         if !captures.is_empty() {
             self.w.push_str(" { ");
             self.emit_anon_capture_field_inits(&captures, false);
             self.w.push_str(" }");
         }
-        self.w
-            .push_str(if iface_is_external { ") as Box<dyn " } else { ") as std::rc::Rc<dyn " });
+        self.w.push_str(if iface_is_external {
+            ") as Box<dyn "
+        } else {
+            ") as std::rc::Rc<dyn "
+        });
         self.w.push_str(crate_prefix);
         self.w.push_str(&path);
         self.w.push_str("> }");
@@ -2224,7 +2220,8 @@ pub(crate) fn bare_type_spelling(s: &str) -> String {
     while let Some(c) = chars.next() {
         if c.is_alphanumeric() || c == '_' {
             segment.push(c);
-        } else if c == '.' && !segment.is_empty()
+        } else if c == '.'
+            && !segment.is_empty()
             && chars.peek().is_some_and(|n| n.is_alphabetic() || *n == '_')
         {
             // A dotted continuation — drop the prefix segment.
@@ -2398,8 +2395,8 @@ pub(crate) fn rust_primitive_name(p: juxc_tycheck::Primitive) -> &'static str {
 /// | 13    | `*`, `/`, `%`                                         |
 pub(crate) fn binary_prec(op: BinaryOp) -> u8 {
     match op {
-        BinaryOp::Or     => 4,
-        BinaryOp::And    => 5,
+        BinaryOp::Or => 4,
+        BinaryOp::And => 5,
         // Reference identity (`===`/`!==`) shares the equality level.
         BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::RefEq | BinaryOp::RefNeq => 6,
         BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge | BinaryOp::In => 7,
@@ -2407,7 +2404,7 @@ pub(crate) fn binary_prec(op: BinaryOp) -> u8 {
         // its precedence slot only matters for paren decisions when
         // nested — treat like comparisons, one notch tighter.
         BinaryOp::Cmp => 7,
-        BinaryOp::BitOr  => 8,
+        BinaryOp::BitOr => 8,
         BinaryOp::BitXor => 9,
         BinaryOp::BitAnd => 10,
         BinaryOp::Shl | BinaryOp::Shr => 11,
@@ -2423,17 +2420,13 @@ pub(crate) fn binary_prec(op: BinaryOp) -> u8 {
     }
 }
 
-
 /// Walk a lambda's body and report every **single-segment bare name**
 /// read anywhere inside it — the superset of the closure's captures
 /// (locals declared inside the body and the lambda's own params are
 /// filtered by the caller, `RustEmitter::collect_wrapper_captures`).
 /// Field accesses (`x.f`) report the root `x`; multi-segment paths
 /// (`pkg.Class`) are type names, not captures, and are skipped.
-pub(crate) fn collect_bare_names_in_lambda(
-    l: &juxc_ast::LambdaExpr,
-    sink: &mut dyn FnMut(&str),
-) {
+pub(crate) fn collect_bare_names_in_lambda(l: &juxc_ast::LambdaExpr, sink: &mut dyn FnMut(&str)) {
     match &l.body {
         juxc_ast::LambdaBody::Expr(e) => collect_bare_names_expr(e, sink),
         juxc_ast::LambdaBody::Block(b) => collect_bare_names_block(b, sink),

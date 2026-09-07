@@ -382,7 +382,10 @@ fn generate_std_stub_text(json_dir: &Path) -> anyhow::Result<Option<String>> {
         };
         jsons.push((crate_name.to_string(), text));
     }
-    let refs: Vec<(&str, &str)> = jsons.iter().map(|(n, j)| (n.as_str(), j.as_str())).collect();
+    let refs: Vec<(&str, &str)> = jsons
+        .iter()
+        .map(|(n, j)| (n.as_str(), j.as_str()))
+        .collect();
     // Deref-only crates are optional: a toolchain without `core.json` still
     // generates, just without the slice surface.
     let mut pool_texts: Vec<(String, String)> = Vec::new();
@@ -391,8 +394,10 @@ fn generate_std_stub_text(json_dir: &Path) -> anyhow::Result<Option<String>> {
             pool_texts.push((crate_name.to_string(), text));
         }
     }
-    let pool_refs: Vec<(&str, &str)> =
-        pool_texts.iter().map(|(n, j)| (n.as_str(), j.as_str())).collect();
+    let pool_refs: Vec<(&str, &str)> = pool_texts
+        .iter()
+        .map(|(n, j)| (n.as_str(), j.as_str()))
+        .collect();
     let stub = juxc_bindgen::ingest::generate_merged_with_pool(&refs, &pool_refs, "rust.std")
         .map_err(|e| anyhow::anyhow!("bindgen failed to merge std rustdoc JSON: {e}"))?;
     let rendered = juxc_bindgen::render_stub(&stub);
@@ -422,7 +427,11 @@ fn collect_stub_sources(dir: &Path) -> Vec<SourceFile> {
     paths.sort();
     paths
         .into_iter()
-        .filter_map(|p| std::fs::read_to_string(&p).ok().map(|c| SourceFile::new(p, c)))
+        .filter_map(|p| {
+            std::fs::read_to_string(&p)
+                .ok()
+                .map(|c| SourceFile::new(p, c))
+        })
         .collect()
 }
 
@@ -515,8 +524,9 @@ pub fn resolve_crate_stub(
 
     let json = run_cargo_rustdoc_json(crate_name, version)?;
     let package = format!("rust.{crate_name}");
-    let body = generate_stub_from_rustdoc_json(&json, &package)
-        .map_err(|e| anyhow::anyhow!("bindgen failed to ingest rustdoc JSON for `{crate_name}`: {e}"))?;
+    let body = generate_stub_from_rustdoc_json(&json, &package).map_err(|e| {
+        anyhow::anyhow!("bindgen failed to ingest rustdoc JSON for `{crate_name}`: {e}")
+    })?;
     // Prepend the cache-version marker so a future toolchain can detect a stale
     // stub (the leading `//` line is an ordinary Jux comment the parser ignores).
     let stub = format!("{}{body}", crate_cache_header());
@@ -585,9 +595,8 @@ fn run_cargo_rustdoc_json(crate_name: &str, version: Option<&str>) -> anyhow::Re
     // rustdoc writes `<crate>.json` (hyphens become underscores in the file).
     let json_name = format!("{sanitized}.json");
     let json_path = work.join("target").join("doc").join(&json_name);
-    std::fs::read_to_string(&json_path).map_err(|e| {
-        anyhow::anyhow!("rustdoc JSON not found at {}: {e}", json_path.display())
-    })
+    std::fs::read_to_string(&json_path)
+        .map_err(|e| anyhow::anyhow!("rustdoc JSON not found at {}: {e}", json_path.display()))
 }
 
 /// The throwaway-Cargo-project directory used to rustdoc one foreign crate:
@@ -616,7 +625,10 @@ mod tests {
 
     #[test]
     fn foreign_dep_kinds_split() {
-        assert_eq!(foreign_dep_kind("rust.serde_json"), Some(("rust", "serde_json")));
+        assert_eq!(
+            foreign_dep_kind("rust.serde_json"),
+            Some(("rust", "serde_json"))
+        );
         assert_eq!(foreign_dep_kind("c.sqlite3"), Some(("c", "sqlite3")));
         assert_eq!(foreign_dep_kind("cpp.myengine"), Some(("cpp", "myengine")));
         // An ordinary Jux path dependency is not foreign.
@@ -636,11 +648,20 @@ mod tests {
         let stub = generate_stub_from_rustdoc_json(json, "rust.minicrate")
             .expect("bindgen ingests the rustdoc fixture");
         assert!(stub.contains("package rust.minicrate;"), "stub:\n{stub}");
-        assert!(stub.contains("class Pt"), "expected `class Pt`, got:\n{stub}");
+        assert!(
+            stub.contains("class Pt"),
+            "expected `class Pt`, got:\n{stub}"
+        );
         // Jux-syntax constructor from `Pt::new(i32, i32)`, body elided to `;`.
-        assert!(stub.contains("public Pt(i32 x, i32 y);"), "ctor missing:\n{stub}");
+        assert!(
+            stub.contains("public Pt(i32 x, i32 y);"),
+            "ctor missing:\n{stub}"
+        );
         // Instance method `sum(&self) -> i32` → `public i32 sum();`.
-        assert!(stub.contains("public i32 sum();"), "method missing:\n{stub}");
+        assert!(
+            stub.contains("public i32 sum();"),
+            "method missing:\n{stub}"
+        );
     }
 
     /// `resolve_crate_stub` returns a cache-hit path without shelling out to
@@ -648,7 +669,10 @@ mod tests {
     #[test]
     fn resolve_crate_stub_returns_cache_hit() {
         let dir = std::env::temp_dir().join(format!("juxc-stub-cache-{}", std::process::id()));
-        let cached = dir.join(PROJECT_STUB_DIRNAME).join("rust").join("serde_json.jux.d");
+        let cached = dir
+            .join(PROJECT_STUB_DIRNAME)
+            .join("rust")
+            .join("serde_json.jux.d");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, "package rust.serde_json;\n").unwrap();
 
@@ -684,9 +708,20 @@ mod tests {
     #[test]
     fn vendored_std_stub_carries_the_prelude_types() {
         let src = vendored_std_stub();
-        for ty in ["class Vec", "class HashMap", "class VecDeque", "class HashSet"] {
-            assert!(src.contents().contains(ty), "vendored rust.std is missing `{ty}`");
+        for ty in [
+            "class Vec",
+            "class HashMap",
+            "class VecDeque",
+            "class HashSet",
+        ] {
+            assert!(
+                src.contents().contains(ty),
+                "vendored rust.std is missing `{ty}`"
+            );
         }
-        assert!(src.contents().contains("package rust.std;"), "missing package header");
+        assert!(
+            src.contents().contains("package rust.std;"),
+            "missing package header"
+        );
     }
 }

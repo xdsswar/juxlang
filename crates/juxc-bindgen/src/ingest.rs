@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rustdoc_types::{
-    Crate, Enum, Function, GenericArgs, GenericArg, GenericBound, GenericParamDefKind, Generics,
+    Crate, Enum, Function, GenericArg, GenericArgs, GenericBound, GenericParamDefKind, Generics,
     Id, Item, ItemEnum, Path, Struct, StructKind, Type, VariantKind, Visibility, WherePredicate,
 };
 
@@ -42,7 +42,10 @@ pub fn generate_from_json(json: &str, package: &str) -> Result<StubFile, serde_j
 /// ships (e.g. the several `ChildExt` traits under `std::os::*::process`) that
 /// would otherwise collide as duplicate Jux declarations (E0400) once merged
 /// into a single package.
-pub fn generate_merged(jsons: &[(&str, &str)], package: &str) -> Result<StubFile, serde_json::Error> {
+pub fn generate_merged(
+    jsons: &[(&str, &str)],
+    package: &str,
+) -> Result<StubFile, serde_json::Error> {
     generate_merged_with_pool(jsons, &[], package)
 }
 
@@ -114,7 +117,10 @@ pub fn generate(krate: &Crate, package: &str) -> StubFile {
 
     StubFile {
         package: package.to_string(),
-        header: vec![format!("bindgen — generated from rustdoc JSON (format_version {})", krate.format_version)],
+        header: vec![format!(
+            "bindgen — generated from rustdoc JSON (format_version {})",
+            krate.format_version
+        )],
         items: collected.into_iter().map(|(_, it)| it).collect(),
     }
 }
@@ -145,19 +151,27 @@ pub(crate) type InherentPool = std::collections::HashMap<String, Vec<StubFn>>;
 /// Record every inherent impl in `krate` into `pool`.
 fn collect_inherent_pool(krate: &Crate, pool: &mut InherentPool) {
     for item in krate.index.values() {
-        let ItemEnum::Impl(im) = &item.inner else { continue };
+        let ItemEnum::Impl(im) = &item.inner else {
+            continue;
+        };
         if im.trait_.is_some() {
             continue;
         }
-        let Some(key) = type_shape_key(&im.for_) else { continue };
+        let Some(key) = type_shape_key(&im.for_) else {
+            continue;
+        };
         let slot = pool.entry(key).or_default();
         for mid in &im.items {
-            let Some(mitem) = krate.index.get(mid) else { continue };
+            let Some(mitem) = krate.index.get(mid) else {
+                continue;
+            };
             if !is_public(&mitem.visibility) {
                 continue;
             }
             let Some(mname) = &mitem.name else { continue };
-            let ItemEnum::Function(f) = &mitem.inner else { continue };
+            let ItemEnum::Function(f) = &mitem.inner else {
+                continue;
+            };
             // Only real methods carry across a deref. An associated function
             // with no receiver belongs to the target type, not to the type that
             // derefs to it: `<[T]>::from_ref` is not `Vec::from_ref`.
@@ -201,15 +215,29 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
 
         match &item.inner {
             ItemEnum::Struct(s) if is_public(&item.visibility) => {
-                collected.push((item.id.0, name.clone(), StubItem::Type(build_struct(krate, name, s, item, pool))));
+                collected.push((
+                    item.id.0,
+                    name.clone(),
+                    StubItem::Type(build_struct(krate, name, s, item, pool)),
+                ));
             }
             ItemEnum::Enum(e) if is_public(&item.visibility) => {
-                collected.push((item.id.0, name.clone(), StubItem::Type(build_enum(krate, name, e, item))));
+                collected.push((
+                    item.id.0,
+                    name.clone(),
+                    StubItem::Type(build_enum(krate, name, e, item)),
+                ));
             }
             ItemEnum::Trait(t) if is_public(&item.visibility) => {
-                collected.push((item.id.0, name.clone(), StubItem::Type(build_trait(krate, name, &t.generics, &t.items, item))));
+                collected.push((
+                    item.id.0,
+                    name.clone(),
+                    StubItem::Type(build_trait(krate, name, &t.generics, &t.items, item)),
+                ));
             }
-            ItemEnum::Function(f) if is_public(&item.visibility) && !member_ids.contains(&item.id.0) => {
+            ItemEnum::Function(f)
+                if is_public(&item.visibility) && !member_ids.contains(&item.id.0) =>
+            {
                 // Free function (§G.5.5). Record its real Rust path so the
                 // backend can `use` the fully-qualified Rust path under the
                 // (verbatim, snake_case) Jux stub name on import.
@@ -219,7 +247,8 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
                 collected.push((item.id.0, name.clone(), StubItem::Function(sf)));
             }
             ItemEnum::Constant { type_, const_: _ } if is_public(&item.visibility) => {
-                collected.push((item.id.0, 
+                collected.push((
+                    item.id.0,
                     name.clone(),
                     StubItem::Const(StubConst {
                         name: name.clone(),
@@ -236,7 +265,8 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
                 ));
             }
             ItemEnum::Static(s) if is_public(&item.visibility) => {
-                collected.push((item.id.0, 
+                collected.push((
+                    item.id.0,
                     name.clone(),
                     StubItem::Const(StubConst {
                         name: name.clone(),
@@ -265,7 +295,10 @@ fn collect_items_with(krate: &Crate, pool: &InherentPool) -> Vec<(String, StubIt
             // id is intrinsic to the JSON, so it decides the same way every run.
             .then_with(|| a.0.cmp(&b.0))
     });
-    collected.into_iter().map(|(_, name, item)| (name, item)).collect()
+    collected
+        .into_iter()
+        .map(|(_, name, item)| (name, item))
+        .collect()
 }
 
 /// A collected item's recorded Rust path, or the empty string when it has none
@@ -296,18 +329,31 @@ fn collect_member_ids(krate: &Crate) -> HashSet<u32> {
 // Type-declaration builders (§G.6.3)
 // ============================================================================
 
-fn build_struct(krate: &Crate, name: &str, s: &Struct, item: &Item, pool: &InherentPool) -> StubType {
+fn build_struct(
+    krate: &Crate,
+    name: &str,
+    s: &Struct,
+    item: &Item,
+    pool: &InherentPool,
+) -> StubType {
     let mut fields = Vec::new();
     let mut all_public = true;
 
     match &s.kind {
-        StructKind::Plain { fields: fids, has_stripped_fields } => {
+        StructKind::Plain {
+            fields: fids,
+            has_stripped_fields,
+        } => {
             if *has_stripped_fields {
                 all_public = false;
             }
             for fid in fids {
-                let Some(fitem) = krate.index.get(fid) else { continue };
-                let ItemEnum::StructField(ty) = &fitem.inner else { continue };
+                let Some(fitem) = krate.index.get(fid) else {
+                    continue;
+                };
+                let ItemEnum::StructField(ty) = &fitem.inner else {
+                    continue;
+                };
                 if !is_public(&fitem.visibility) {
                     all_public = false;
                     continue;
@@ -364,8 +410,12 @@ fn build_enum(krate: &Crate, name: &str, e: &Enum, item: &Item) -> StubType {
     st.rust_path = real_rust_path(krate, item);
 
     for vid in &e.variants {
-        let Some(vitem) = krate.index.get(vid) else { continue };
-        let ItemEnum::Variant(v) = &vitem.inner else { continue };
+        let Some(vitem) = krate.index.get(vid) else {
+            continue;
+        };
+        let ItemEnum::Variant(v) = &vitem.inner else {
+            continue;
+        };
         let Some(vname) = &vitem.name else { continue };
 
         let payload = match &v.kind {
@@ -388,7 +438,11 @@ fn build_enum(krate: &Crate, name: &str, e: &Enum, item: &Item) -> StubType {
             .as_ref()
             .and_then(|d| d.value.parse::<i64>().ok());
 
-        st.variants.push(StubVariant { name: vname.clone(), payload, discriminant });
+        st.variants.push(StubVariant {
+            name: vname.clone(),
+            payload,
+            discriminant,
+        });
     }
     st
 }
@@ -408,7 +462,9 @@ fn build_trait(
     st.rust_path = real_rust_path(krate, item);
 
     for mid in item_ids {
-        let Some(mitem) = krate.index.get(mid) else { continue };
+        let Some(mitem) = krate.index.get(mid) else {
+            continue;
+        };
         let Some(mname) = &mitem.name else { continue };
         if let ItemEnum::Function(f) = &mitem.inner {
             let mut sf = map_function(mname, f);
@@ -448,18 +504,26 @@ fn collect_inherent_members(
     let mut methods = Vec::new();
 
     for impl_id in impls {
-        let Some(impl_item) = krate.index.get(impl_id) else { continue };
-        let ItemEnum::Impl(im) = &impl_item.inner else { continue };
+        let Some(impl_item) = krate.index.get(impl_id) else {
+            continue;
+        };
+        let ItemEnum::Impl(im) = &impl_item.inner else {
+            continue;
+        };
         if im.trait_.is_some() {
             continue; // only inherent impls contribute the safe wrapper surface
         }
         for mid in &im.items {
-            let Some(mitem) = krate.index.get(mid) else { continue };
+            let Some(mitem) = krate.index.get(mid) else {
+                continue;
+            };
             if !is_public(&mitem.visibility) {
                 continue;
             }
             let Some(mname) = &mitem.name else { continue };
-            let ItemEnum::Function(f) = &mitem.inner else { continue };
+            let ItemEnum::Function(f) = &mitem.inner else {
+                continue;
+            };
 
             let has_self = has_self_receiver(f);
             if mname == "new" && !has_self {
@@ -494,23 +558,33 @@ fn collect_inherent_members(
 /// One level only. Deref chains deeper than one step are rare, and following
 /// them blindly pulls in a large unrelated surface.
 fn deref_members(krate: &Crate, impls: &[rustdoc_types::Id], pool: &InherentPool) -> Vec<StubFn> {
-    let Some(target) = deref_target(krate, impls) else { return Vec::new() };
-    let Some(key) = type_shape_key(&target) else { return Vec::new() };
+    let Some(target) = deref_target(krate, impls) else {
+        return Vec::new();
+    };
+    let Some(key) = type_shape_key(&target) else {
+        return Vec::new();
+    };
     pool.get(&key).cloned().unwrap_or_default()
 }
 
 /// The `Target` of a type's `Deref` impl, if it has one.
 fn deref_target(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<Type> {
     for impl_id in impls {
-        let Some(item) = krate.index.get(impl_id) else { continue };
-        let ItemEnum::Impl(im) = &item.inner else { continue };
+        let Some(item) = krate.index.get(impl_id) else {
+            continue;
+        };
+        let ItemEnum::Impl(im) = &item.inner else {
+            continue;
+        };
         let Some(tr) = &im.trait_ else { continue };
         if tr.path.rsplit("::").next() != Some("Deref") {
             continue;
         }
         // `type Target = [T];` is an associated type inside the impl.
         for aid in &im.items {
-            let Some(aitem) = krate.index.get(aid) else { continue };
+            let Some(aitem) = krate.index.get(aid) else {
+                continue;
+            };
             if aitem.name.as_deref() != Some("Target") {
                 continue;
             }
@@ -621,7 +695,10 @@ fn map_return(output: &Option<Type>) -> (JuxType, Option<JuxType>) {
             // hides it but is still fallible, so record an opaque `Error` — the
             // call site unwraps either way (the backend ignores the error type;
             // only its presence drives the `throws` / unwrap, §G.5.4).
-            let err = args.get(1).cloned().or_else(|| Some(JuxType::user("Error")));
+            let err = args
+                .get(1)
+                .cloned()
+                .or_else(|| Some(JuxType::user("Error")));
             (ok, err)
         }
         Some(t) => (map_type(t), None),
@@ -651,8 +728,12 @@ fn has_self_receiver(f: &Function) -> bool {
 /// `@RustIndexRef` class annotation on the stub.
 fn has_ref_index_impl(krate: &Crate, impls: &[rustdoc_types::Id]) -> bool {
     impls.iter().any(|id| {
-        let Some(item) = krate.index.get(id) else { return false };
-        let ItemEnum::Impl(im) = &item.inner else { return false };
+        let Some(item) = krate.index.get(id) else {
+            return false;
+        };
+        let ItemEnum::Impl(im) = &item.inner else {
+            return false;
+        };
         let Some(tr) = &im.trait_ else { return false };
         if last_segment(&tr.path) != "Index" {
             return false;
@@ -676,12 +757,18 @@ fn has_ref_index_impl(krate: &Crate, impls: &[rustdoc_types::Id]) -> bool {
 /// (`Send`/`Sync`), which are not what any caller here is asking about.
 fn implements_trait(krate: &Crate, impls: &[rustdoc_types::Id], trait_name: &str) -> bool {
     impls.iter().any(|id| {
-        let Some(item) = krate.index.get(id) else { return false };
-        let ItemEnum::Impl(im) = &item.inner else { return false };
+        let Some(item) = krate.index.get(id) else {
+            return false;
+        };
+        let ItemEnum::Impl(im) = &item.inner else {
+            return false;
+        };
         if im.is_synthetic || im.is_negative {
             return false;
         }
-        im.trait_.as_ref().is_some_and(|tr| last_segment(&tr.path) == trait_name)
+        im.trait_
+            .as_ref()
+            .is_some_and(|tr| last_segment(&tr.path) == trait_name)
     })
 }
 
@@ -690,7 +777,14 @@ fn implements_trait(krate: &Crate, impls: &[rustdoc_types::Id], trait_name: &str
 /// mutates and is not flagged.)
 fn has_mut_self_receiver(f: &Function) -> bool {
     f.sig.inputs.iter().any(|(n, t)| {
-        n == "self" && matches!(t, Type::BorrowedRef { is_mutable: true, .. })
+        n == "self"
+            && matches!(
+                t,
+                Type::BorrowedRef {
+                    is_mutable: true,
+                    ..
+                }
+            )
     })
 }
 
@@ -700,7 +794,9 @@ fn generic_param_names(g: &Generics) -> Vec<String> {
         .filter_map(|p| match &p.kind {
             // Type params only; lifetimes and consts don't appear in Jux
             // generic lists. Skip synthetic `impl Trait` desugarings.
-            GenericParamDefKind::Type { .. } if !p.name.starts_with("impl ") => Some(p.name.clone()),
+            GenericParamDefKind::Type { .. } if !p.name.starts_with("impl ") => {
+                Some(p.name.clone())
+            }
             _ => None,
         })
         .collect()
@@ -724,13 +820,20 @@ pub fn map_type(t: &Type) -> JuxType {
                 JuxType::Tuple(ts.iter().map(map_type).collect())
             }
         }
-        Type::Slice(inner) => JuxType::Array { elem: Box::new(map_type(inner)), size: None },
-        Type::Array { type_, len } => {
-            JuxType::Array { elem: Box::new(map_type(type_)), size: len.parse::<u64>().ok() }
-        }
+        Type::Slice(inner) => JuxType::Array {
+            elem: Box::new(map_type(inner)),
+            size: None,
+        },
+        Type::Array { type_, len } => JuxType::Array {
+            elem: Box::new(map_type(type_)),
+            size: len.parse::<u64>().ok(),
+        },
         // Borrows vanish (§G.3.4); `&[T]` becomes a dynamic array.
         Type::BorrowedRef { type_, .. } => match type_.as_ref() {
-            Type::Slice(inner) => JuxType::Array { elem: Box::new(map_type(inner)), size: None },
+            Type::Slice(inner) => JuxType::Array {
+                elem: Box::new(map_type(inner)),
+                size: None,
+            },
             other => map_type(other),
         },
         Type::RawPointer { type_, .. } => JuxType::RawPtr(Box::new(map_type(type_))),
@@ -751,8 +854,17 @@ pub fn map_type(t: &Type) -> JuxType {
             .unwrap_or_else(|| JuxType::Unknown("Object".into())),
         Type::FunctionPointer(fp) => {
             let params = fp.sig.inputs.iter().map(|(_, t)| map_type(t)).collect();
-            let ret = fp.sig.output.as_ref().map(map_type).unwrap_or(JuxType::Void);
-            JuxType::Fn { params, ret: Box::new(ret), is_async: false }
+            let ret = fp
+                .sig
+                .output
+                .as_ref()
+                .map(map_type)
+                .unwrap_or(JuxType::Void);
+            JuxType::Fn {
+                params,
+                ret: Box::new(ret),
+                is_async: false,
+            }
         }
         // Pattern types, qualified paths, and inference markers have no Jux
         // spelling in this slice.
@@ -792,20 +904,31 @@ fn map_primitive(p: &str) -> JuxType {
 fn map_path(path: &Path) -> JuxType {
     let name = last_segment(&path.path);
     let args = collect_type_args(&path.args);
-    let arg0 = || args.first().cloned().unwrap_or(JuxType::Unknown("Object".into()));
+    let arg0 = || {
+        args.first()
+            .cloned()
+            .unwrap_or(JuxType::Unknown("Object".into()))
+    };
 
     match name {
         "String" => JuxType::String,
         "Vec" => JuxType::list(arg0()),
         "Option" => JuxType::nullable(arg0()),
         "HashMap" | "BTreeMap" => JuxType::map(
-            args.first().cloned().unwrap_or(JuxType::Unknown("Object".into())),
-            args.get(1).cloned().unwrap_or(JuxType::Unknown("Object".into())),
+            args.first()
+                .cloned()
+                .unwrap_or(JuxType::Unknown("Object".into())),
+            args.get(1)
+                .cloned()
+                .unwrap_or(JuxType::Unknown("Object".into())),
         ),
         "HashSet" | "BTreeSet" => JuxType::set(arg0()),
         // Smart pointers are transparent to Jux (§G.3.1).
         "Box" | "Rc" | "Arc" => arg0(),
-        _ => JuxType::User { name: name.to_string(), args },
+        _ => JuxType::User {
+            name: name.to_string(),
+            args,
+        },
     }
 }
 
@@ -841,7 +964,9 @@ fn first_trait_in_bounds(bounds: &[GenericBound]) -> Option<String> {
 /// AND `FnOnce`, so all three map to the same `(A) -> R`.
 fn fn_trait_to_jux(bounds: &[GenericBound]) -> Option<JuxType> {
     for b in bounds {
-        let GenericBound::TraitBound { trait_, .. } = b else { continue };
+        let GenericBound::TraitBound { trait_, .. } = b else {
+            continue;
+        };
         if !matches!(last_segment(&trait_.path), "Fn" | "FnMut" | "FnOnce") {
             continue;
         }
@@ -851,7 +976,11 @@ fn fn_trait_to_jux(bounds: &[GenericBound]) -> Option<JuxType> {
             if let GenericArgs::Parenthesized { inputs, output } = args.as_ref() {
                 let params = inputs.iter().map(map_type).collect();
                 let ret = output.as_ref().map(map_type).unwrap_or(JuxType::Void);
-                return Some(JuxType::Fn { params, ret: Box::new(ret), is_async: false });
+                return Some(JuxType::Fn {
+                    params,
+                    ret: Box::new(ret),
+                    is_async: false,
+                });
             }
         }
         // An `Fn` bound with no parenthesized args (rare) → a no-arg closure.
@@ -922,9 +1051,8 @@ fn definition_path_is_public(krate: &Crate, path: &[String]) -> bool {
 /// re-export table — both are whole-crate scans over an index with tens of
 /// thousands of entries.
 fn public_module_paths(krate: &Crate) -> &HashSet<String> {
-    static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<HashMap<usize, &'static HashSet<String>>>,
-    > = std::sync::OnceLock::new();
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<usize, &'static HashSet<String>>>> =
+        std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
     let key = std::ptr::from_ref(krate) as usize;
     if let Some(hit) = cache.lock().expect("module cache").get(&key) {
@@ -993,18 +1121,24 @@ fn reexport_paths(krate: &Crate) -> &HashMap<Id, String> {
 fn build_reexport_paths(krate: &Crate) -> HashMap<Id, String> {
     let mut out: HashMap<Id, String> = HashMap::new();
     for module_item in krate.index.values() {
-        let ItemEnum::Module(m) = &module_item.inner else { continue };
+        let ItemEnum::Module(m) = &module_item.inner else {
+            continue;
+        };
         if !is_public(&module_item.visibility) {
             continue;
         }
         // Where this module itself lives publicly.
-        let Some(summary) = krate.paths.get(&module_item.id) else { continue };
+        let Some(summary) = krate.paths.get(&module_item.id) else {
+            continue;
+        };
         if summary.path.is_empty() {
             continue;
         }
         let module_path = public_module_path(&summary.path);
         for child in &m.items {
-            let Some(child_item) = krate.index.get(child) else { continue };
+            let Some(child_item) = krate.index.get(child) else {
+                continue;
+            };
             // Two shapes reach the same conclusion. An explicit `pub use` names
             // its target; a re-export of a PRIVATE item is instead INLINED by
             // rustdoc — `std::io`'s private `mod copy` contributes its `pub fn
@@ -1020,9 +1154,7 @@ fn build_reexport_paths(krate: &Crate) -> HashMap<Id, String> {
                 | ItemEnum::Trait(_)
                 | ItemEnum::Function(_)
                 | ItemEnum::TypeAlias(_) => match &child_item.name {
-                    Some(n) if is_public(&child_item.visibility) => {
-                        (child_item.id, n.clone())
-                    }
+                    Some(n) if is_public(&child_item.visibility) => (child_item.id, n.clone()),
                     _ => continue,
                 },
                 _ => continue,
@@ -1100,7 +1232,11 @@ mod tests {
                 constraints: Vec::new(),
             }))
         };
-        Type::ResolvedPath(Path { path: path.to_string(), id: Id(0), args })
+        Type::ResolvedPath(Path {
+            path: path.to_string(),
+            id: Id(0),
+            args,
+        })
     }
 
     /// A module path keeps its shape — only the defining crate is remapped.
@@ -1110,7 +1246,10 @@ mod tests {
     #[test]
     fn module_paths_are_not_collection_collapsed() {
         let segs = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(public_module_path(&segs(&["alloc", "collections"])), "std::collections");
+        assert_eq!(
+            public_module_path(&segs(&["alloc", "collections"])),
+            "std::collections"
+        );
         assert_eq!(public_module_path(&segs(&["core", "fmt"])), "std::fmt");
         assert_eq!(public_module_path(&segs(&["std", "io"])), "std::io");
         // The TYPE rule still collapses, which is what re-exports std types at
@@ -1123,10 +1262,22 @@ mod tests {
 
     #[test]
     fn primitives_map_per_table() {
-        assert_eq!(map_type(&Type::Primitive("i8".into())), JuxType::Prim("byte"));
-        assert_eq!(map_type(&Type::Primitive("i32".into())), JuxType::Prim("i32"));
-        assert_eq!(map_type(&Type::Primitive("usize".into())), JuxType::Prim("uint"));
-        assert_eq!(map_type(&Type::Primitive("f64".into())), JuxType::Prim("double"));
+        assert_eq!(
+            map_type(&Type::Primitive("i8".into())),
+            JuxType::Prim("byte")
+        );
+        assert_eq!(
+            map_type(&Type::Primitive("i32".into())),
+            JuxType::Prim("i32")
+        );
+        assert_eq!(
+            map_type(&Type::Primitive("usize".into())),
+            JuxType::Prim("uint")
+        );
+        assert_eq!(
+            map_type(&Type::Primitive("f64".into())),
+            JuxType::Prim("double")
+        );
         assert_eq!(map_type(&Type::Primitive("str".into())), JuxType::String);
         assert_eq!(map_type(&Type::Primitive("never".into())), JuxType::Never);
     }
@@ -1173,18 +1324,28 @@ mod tests {
             generic_params: Vec::new(),
             modifier: rustdoc_types::TraitBoundModifier::None,
         };
-        assert_eq!(map_type(&Type::ImplTrait(vec![bound])).to_string(), "(i32) -> bool");
+        assert_eq!(
+            map_type(&Type::ImplTrait(vec![bound])).to_string(),
+            "(i32) -> bool"
+        );
     }
 
     /// A non-Fn `impl Trait` keeps its first-trait name (no closure recovery).
     #[test]
     fn impl_non_fn_trait_keeps_name() {
         let bound = GenericBound::TraitBound {
-            trait_: Path { path: "Display".into(), id: Id(0), args: None },
+            trait_: Path {
+                path: "Display".into(),
+                id: Id(0),
+                args: None,
+            },
             generic_params: Vec::new(),
             modifier: rustdoc_types::TraitBoundModifier::None,
         };
-        assert_eq!(map_type(&Type::ImplTrait(vec![bound])).to_string(), "Display");
+        assert_eq!(
+            map_type(&Type::ImplTrait(vec![bound])).to_string(),
+            "Display"
+        );
     }
 
     #[test]
@@ -1214,7 +1375,10 @@ mod tests {
         );
         let (ret, throws) = map_return(&Some(result_ty));
         assert_eq!(ret.to_string(), "Config");
-        assert_eq!(throws.map(|e| e.to_string()), Some("ConfigError".to_string()));
+        assert_eq!(
+            throws.map(|e| e.to_string()),
+            Some("ConfigError".to_string())
+        );
 
         // Plain return, no throws.
         let (ret, throws) = map_return(&Some(Type::Primitive("bool".into())));

@@ -81,10 +81,7 @@ impl RustEmitter {
     /// Only a bare, single-segment, argument-less name can *be* a type
     /// parameter, so anything else is left alone. Decorations on `ty`
     /// (`T?`, `T[]`) are re-applied by the caller.
-    fn kind_type_subst_for(
-        &self,
-        ty: &juxc_ast::TypeRef,
-    ) -> Option<juxc_ast::TypeRef> {
+    fn kind_type_subst_for(&self, ty: &juxc_ast::TypeRef) -> Option<juxc_ast::TypeRef> {
         if self.kind_type_subst.is_empty()
             || ty.fn_shape.is_some()
             || !ty.generic_args.is_empty()
@@ -515,22 +512,19 @@ impl RustEmitter {
             // so the mangled bare name resolves directly.
             let mut resolved_path: Option<String> = self.enclosing_nested_type(bare);
             if resolved_path.is_none() {
-            if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
-                if fqn.contains('.') {
-                    let cur_pkg = self.symbols.package.join(".");
-                    let fqn_pkg = fqn
-                        .rsplit_once('.')
-                        .map(|(p, _)| p.to_string())
-                        .unwrap_or_default();
-                    if fqn_pkg != cur_pkg {
-                        let joined = fqn
-                            .split('.')
-                            .collect::<Vec<_>>()
-                            .join("::");
-                        resolved_path = Some(format!("crate::{joined}"));
+                if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
+                    if fqn.contains('.') {
+                        let cur_pkg = self.symbols.package.join(".");
+                        let fqn_pkg = fqn
+                            .rsplit_once('.')
+                            .map(|(p, _)| p.to_string())
+                            .unwrap_or_default();
+                        if fqn_pkg != cur_pkg {
+                            let joined = fqn.split('.').collect::<Vec<_>>().join("::");
+                            resolved_path = Some(format!("crate::{joined}"));
+                        }
                     }
                 }
-            }
             }
             resolved_path.unwrap_or_else(|| bare.to_string())
         } else {
@@ -611,8 +605,11 @@ impl RustEmitter {
             return;
         }
         if value_iface {
-            self.w
-                .push_str(if value_iface_box { "Box<dyn " } else { "std::rc::Rc<dyn " });
+            self.w.push_str(if value_iface_box {
+                "Box<dyn "
+            } else {
+                "std::rc::Rc<dyn "
+            });
         }
         self.w.push_str(&path);
         // Emit any generic args attached to this type — `Box<int>`
@@ -776,7 +773,8 @@ impl RustEmitter {
             .unwrap_or("int");
         // Only `int` and `bool` survive the parser's E0445 gate; the
         // fallback keeps emission total if that ever changes.
-        self.w.push_str(if value_ty == "bool" { "bool" } else { "usize" });
+        self.w
+            .push_str(if value_ty == "bool" { "bool" } else { "usize" });
     }
 
     /// Emit a generic-parameter list as a declaration site — `<T, U>`,
@@ -1301,31 +1299,31 @@ pub(crate) fn jux_primitive_to_rust(t: &juxc_ast::TypeRef) -> Option<&'static st
     }
     Some(match t.name.segments[0].text.as_str() {
         // Java-family names
-        "bool"     => "bool",
+        "bool" => "bool",
         // `boolean` is Java's spelling; we accept both so a Java
         // developer's muscle memory doesn't trip a confusing
         // "cannot find type `boolean`" rustc error on the emitted
         // crate. Both spell the same Rust `bool`.
-        "boolean"  => "bool",
-        "byte"   => "i8",
-        "ubyte"  => "u8",
-        "short"  => "i16",
+        "boolean" => "bool",
+        "byte" => "i8",
+        "ubyte" => "u8",
+        "short" => "i16",
         "ushort" => "u16",
         // `int` / `uint` are PLATFORM-sized — pointer-width signed/unsigned.
         // Choose Rust's `isize`/`usize`, which is exactly that. No
         // width-explicit synonym — see the module-doc note.
-        "int"    => "isize",
-        "uint"   => "usize",
-        "long"   => "i64",
-        "ulong"  => "u64",
-        "float"  => "f32",
+        "int" => "isize",
+        "uint" => "usize",
+        "long" => "i64",
+        "ulong" => "u64",
+        "float" => "f32",
         "double" => "f64",
-        "char"   => "char",
+        "char" => "char",
         // `void` is only meaningful as a pointee (`void*`, §L.7) — an untyped C
         // region. The pointer wrapper makes `void*` → `*mut core::ffi::c_void`.
         // A bare `void` value type never reaches here (it is a return-only
         // keyword), so this only ever fires under a `*mut`/`*const`.
-        "void"   => "core::ffi::c_void",
+        "void" => "core::ffi::c_void",
         // Per JUX-CODEGEN-FIXES.md Fix 1: Jux `String` always lowers
         // to owned Rust `String` — never `&str`. Parameters, locals,
         // fields, returns, and string literals all share the same
@@ -1334,16 +1332,16 @@ pub(crate) fn jux_primitive_to_rust(t: &juxc_ast::TypeRef) -> Option<&'static st
         // exactly this and nobody notices.
         "String" => "String",
         // Width-explicit names — fixed widths only.
-        "i8"    => "i8",
-        "u8"    => "u8",
-        "i16"   => "i16",
-        "u16"   => "u16",
-        "i32"   => "i32",      // explicitly 32-bit — NOT alias for `int`
-        "u32"   => "u32",      // explicitly 32-bit — NOT alias for `uint`
-        "i64"   => "i64",
-        "u64"   => "u64",
-        "f32"   => "f32",
-        "f64"   => "f64",
+        "i8" => "i8",
+        "u8" => "u8",
+        "i16" => "i16",
+        "u16" => "u16",
+        "i32" => "i32", // explicitly 32-bit — NOT alias for `int`
+        "u32" => "u32", // explicitly 32-bit — NOT alias for `uint`
+        "i64" => "i64",
+        "u64" => "u64",
+        "f32" => "f32",
+        "f64" => "f64",
         _ => return None,
     })
 }
@@ -1370,7 +1368,10 @@ pub(crate) fn ty_to_type_ref(
             name: juxc_ast::QualifiedName {
                 segments: name
                     .split('.')
-                    .map(|seg| juxc_ast::Ident { text: seg.to_string(), span })
+                    .map(|seg| juxc_ast::Ident {
+                        text: seg.to_string(),
+                        span,
+                    })
                     .collect(),
                 span,
             },

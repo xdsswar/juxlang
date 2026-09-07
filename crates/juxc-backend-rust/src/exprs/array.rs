@@ -98,11 +98,7 @@ impl RustEmitter {
         // (`xs[i] = v`) and wrapper-class elements (whose share-clone
         // the wrapper machinery appends at the use site) are skipped.
         if !emitting_lvalue {
-            if let Some(elem_ty) = self
-                .expr_types
-                .get(&i.span)
-                .cloned()
-            {
+            if let Some(elem_ty) = self.expr_types.get(&i.span).cloned() {
                 let needs = match &elem_ty {
                     juxc_tycheck::Ty::String | juxc_tycheck::Ty::Array { .. } => true,
                     // A generic type parameter (`T` of `Vec<T>` inside a
@@ -386,6 +382,5 @@ impl RustEmitter {
 /// indexes by reference (`&map[k]`), which bindgen reads from its real trait
 /// impls. Annotations are case-insensitive per the Jux rules.
 fn is_index_ref(a: &juxc_ast::Annotation) -> bool {
-    a.name.segments.len() == 1
-        && a.name.segments[0].text.eq_ignore_ascii_case("rustindexref")
+    a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("rustindexref")
 }

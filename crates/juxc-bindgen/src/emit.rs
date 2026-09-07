@@ -151,7 +151,12 @@ fn render_field(out: &mut String, f: &StubField) {
 }
 
 fn render_ctor(out: &mut String, c: &StubCtor) {
-    let mut s = format!("    {}{}({})", c.visibility.prefix(), c.name, render_params(&c.params));
+    let mut s = format!(
+        "    {}{}({})",
+        c.visibility.prefix(),
+        c.name,
+        render_params(&c.params)
+    );
     if let Some(err) = &c.throws {
         let _ = write!(s, " throws {err}");
     }
@@ -189,7 +194,14 @@ fn render_fn(f: &StubFn, in_interface: bool) -> String {
     // The `default`-ness isn't representable in a bodyless view and is moot
     // anyway (stubs aren't lowered, §G.9), so it's surfaced as a plain
     // signature. `is_default` stays on the IR for non-stub consumers.
-    let _ = write!(s, "{} {}{}({})", f.ret, f.name, render_generics(&f.generics), render_params(&f.params));
+    let _ = write!(
+        s,
+        "{} {}{}({})",
+        f.ret,
+        f.name,
+        render_generics(&f.generics),
+        render_params(&f.params)
+    );
     if let Some(err) = &f.throws {
         let _ = write!(s, " throws {err}");
     }
@@ -240,7 +252,11 @@ mod tests {
     use crate::ty::JuxType;
 
     fn param(name: &str, ty: JuxType) -> StubParam {
-        StubParam { name: name.into(), ty, by_ref: false }
+        StubParam {
+            name: name.into(),
+            ty,
+            by_ref: false,
+        }
     }
 
     #[test]
@@ -259,7 +275,10 @@ mod tests {
             is_default: false,
             name: "insert".into(),
             generics: vec![],
-            params: vec![param("key", JuxType::Param("K".into())), param("value", JuxType::Param("V".into()))],
+            params: vec![
+                param("key", JuxType::Param("K".into())),
+                param("value", JuxType::Param("V".into())),
+            ],
             ret: JuxType::Void,
             throws: None,
             is_unsafe: false,
@@ -319,10 +338,21 @@ mod tests {
 
         let mut e = StubType::new(TypeKind::Enum, "Color");
         e.variants = vec![
-            StubVariant { name: "Red".into(), payload: vec![], discriminant: None },
-            StubVariant { name: "Custom".into(), payload: vec![JuxType::Prim("int")], discriminant: None },
+            StubVariant {
+                name: "Red".into(),
+                payload: vec![],
+                discriminant: None,
+            },
+            StubVariant {
+                name: "Custom".into(),
+                payload: vec![JuxType::Prim("int")],
+                discriminant: None,
+            },
         ];
-        let file = StubFile { items: vec![StubItem::Type(e)], ..Default::default() };
+        let file = StubFile {
+            items: vec![StubItem::Type(e)],
+            ..Default::default()
+        };
         let out = render(&file);
         assert!(out.contains("public enum Color {"));
         assert!(out.contains("Red, Custom(int)"));
@@ -353,7 +383,10 @@ mod tests {
             ..Default::default()
         };
         let out = render(&file);
-        assert!(out.contains("@rust(\"humantime::parse_duration\")"), "{out}");
+        assert!(
+            out.contains("@rust(\"humantime::parse_duration\")"),
+            "{out}"
+        );
         assert!(
             out.contains("public Duration parseDuration(String s) throws DurationError;"),
             "{out}",
