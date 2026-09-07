@@ -1076,14 +1076,15 @@ fn run_single_file(
             // Caller-provided emit dir wins; otherwise fall back to
             // `<input parent>/target/.rust-build/`, matching juxc's default.
             let emit_dir = emit_dir_override.unwrap_or_else(|| default_emit_dir(input));
-            // The `jux` driver tool always uses the legacy name —
-            // `jux.toml`-driven naming is the proper Phase-2 home
-            // for this knob. `juxc` itself exposes a `--name`
-            // flag for one-off binary-name overrides.
+            // Name the emitted crate after its input, the same way `juxc`
+            // does. Every single-file program used to emit `jux_emitted`, so
+            // two of them could not share a `CARGO_TARGET_DIR` without
+            // overwriting each other's binary - which is what made building
+            // the whole example corpus cost a full dependency tree per file.
             let artifact = juxc_driver::build(
                 &crate_,
                 &emit_dir,
-                juxc_driver::DEFAULT_CRATE_NAME,
+                &juxc_driver::crate_name_for_input(input),
                 release,
             )?;
             eprintln!("jux: built {}", artifact.binary_path.display());

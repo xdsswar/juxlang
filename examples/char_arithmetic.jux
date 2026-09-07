@@ -1,0 +1,24 @@
+// `char` in arithmetic follows Java's unary numeric promotion: it becomes an
+// `int`, which is why going back needs an explicit `(char)`.
+//
+// Rust has no such promotion -- its `char` cannot be added to an integer at all
+// -- so `(char)(c + 1)` reached rustc as "cannot add `{integer}` to `char`".
+// The type checker had inferred `char` for `c + 1`, which also made the cast
+// back look like an identity.
+//
+// Expected output: b / 98 / A / 195 / true
+
+public void main() {
+    char c = 'a';
+    char d = (char) (c + 1);
+    print(d);
+    print((int) d);
+    print((char) 65);
+
+    // Two chars in an arithmetic expression both promote.
+    print('a' + 'b');
+
+    // Two chars COMPARED stay chars: Rust orders them identically, so no cast
+    // is emitted and none is needed.
+    print('a' < 'b');
+}

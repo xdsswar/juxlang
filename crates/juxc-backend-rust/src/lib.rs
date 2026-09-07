@@ -1178,6 +1178,24 @@ struct RustEmitter {
     /// initial sync, so the only observable difference from in-place
     /// execution is ordering relative to later ctor statements.
     pub(crate) pending_ctor_binds: Vec<PendingCtorBind>,
+
+    /// Constructor statements deferred from the inner builder to the public
+    /// `new`, because the body calls a method on `this`.
+    ///
+    /// A wrapper class keeps its methods on the HANDLE (`C`), not on the inner
+    /// struct (`C_Inner`), and the inner builder only has the inner. So
+    /// `public Grid(int n) { this.n = n; this.init(); }` -- the most ordinary
+    /// constructor there is -- did not compile at all: rustc reported "no
+    /// method named `init` found for struct `Grid_Inner`". Running the body
+    /// where the handle exists fixes it, and matches Java, where the object is
+    /// created first and the constructor body then runs against it (which is
+    /// also why an overridable method called from a constructor dispatches to
+    /// the subclass override and sees its fields still at their defaults).
+    pub(crate) pending_ctor_tail: Vec<juxc_ast::Stmt>,
+
+    /// Set while emitting a wrapper constructor whose body must be deferred to
+    /// the public `new` (see [`Self::pending_ctor_tail`]).
+    pub(crate) defer_ctor_body: bool,
     /// §P observer-variable shapes: `observer<T>` fields/locals mapped
     /// to their lambda arity (0 = invalidation, 2 = full, 3 = full +
     /// property reference). Keyed by bare variable/field name; filled
@@ -4455,6 +4473,8 @@ impl RustEmitter {
             try_loopctl: Vec::new(),
             pending_setter_observer: None,
             pending_ctor_binds: Vec::new(),
+            pending_ctor_tail: Vec::new(),
+            defer_ctor_body: false,
             observer_shapes: std::collections::HashMap::new(),
             emitting_class_has_static_init: false,
             emitting_call_callee: false,

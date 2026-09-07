@@ -41,6 +41,51 @@ use juxc_source::SourceFile;
 /// caller-derived name (e.g. from the input file's stem).
 pub const DEFAULT_CRATE_NAME: &str = CRATE_NAME;
 
+/// A Cargo-safe crate name derived from an input path's stem (or a directory's
+/// own name). Shared so `jux` and `juxc` derive the SAME name for the same
+/// input - and so every emitted crate has a name of its own, which is what lets
+/// a whole corpus share one `CARGO_TARGET_DIR` without the binaries colliding.
+pub fn crate_name_for_input(input: &Path) -> String {
+    let raw = if input.is_dir() {
+        input.file_name().and_then(|s| s.to_str())
+    } else {
+        input.file_stem().and_then(|s| s.to_str())
+    }
+    .unwrap_or_default();
+    let mut out: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if out.is_empty() {
+        return CRATE_NAME.to_string();
+    }
+    if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        out.insert(0, '_');
+    }
+    out
+}
+
+/// Where cargo will put the build output for a crate rooted at `crate_dir`.
+///
+/// Cargo honours `CARGO_TARGET_DIR`, and [`spawn_toolchain`] does not clear the
+/// environment, so it always has - but this path was computed as
+/// `crate_dir/target` regardless. Anyone with that variable set globally got a
+/// successful build followed by "binary not found". Reading the same variable
+/// cargo reads keeps the two in agreement, and lets a caller point a whole
+/// corpus at one shared directory so the dependency tree compiles once.
+fn cargo_target_dir(crate_dir: &Path) -> PathBuf {
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(d) if !d.is_empty() => PathBuf::from(d),
+        _ => crate_dir.join("target"),
+    }
+}
+
 /// The cross-compilation target triple, when one was requested.
 ///
 /// Carried in the `JUX_TARGET` environment variable (set by the `jux`
@@ -657,7 +702,7 @@ pub fn build_with_manifest(
     // when `--release` was passed); a cross-compile target adds its
     // triple segment (`target/<triple>/<profile>/...`).
     let profile_dir = if release { "release" } else { "debug" };
-    let mut out_dir = crate_dir.join("target");
+    let mut out_dir = cargo_target_dir(crate_dir);
     if let Some(triple) = cross_target() {
         out_dir = out_dir.join(triple);
     }
@@ -943,7 +988,7 @@ pub fn build_emitted_crate(
     // Compute the produced-artifact path (cross targets add their
     // triple segment: `target/<triple>/<profile>/...`).
     let profile_dir = if release { "release" } else { "debug" };
-    let mut out_dir = crate_dir.join("target");
+    let mut out_dir = cargo_target_dir(crate_dir);
     if let Some(triple) = cross_target() {
         out_dir = out_dir.join(triple);
     }

@@ -1,0 +1,40 @@
+// A constructor that calls a method on the object being built, in both shapes
+// that matters in: an ordinary helper call, and the inherited case where the
+// call dispatches to a subclass override.
+//
+// A wrapper class keeps its methods on the handle, and the inner builder only
+// has the raw struct, so this did not compile at all -- "no method named `init`
+// found for struct `Grid_Inner`". It is about the most ordinary constructor a
+// Java programmer writes.
+//
+// Expected output: 3 / 9 / 7 / 7
+public class Grid {
+    public int n;
+    public Grid(int n) {
+        this.n = n;
+        this.init();
+    }
+    public void init() { this.n = this.n * 3; }
+    public int get() { return this.n; }
+}
+public void main() {
+    var g = new Grid(1);
+    print(g.get());
+    var h = new Grid(3);
+    print(h.get());
+    // The constructor dispatches to the OVERRIDE, as Java does. Unlike Java it
+    // reads 7 rather than 0: Jux runs every field initializer before any
+    // constructor body, so the override never sees a half-built object.
+    var c = new Child();
+    c.show();
+}
+
+public class Base {
+    public Base() { this.show(); }
+    public void show() { print(-1); }
+}
+public class Child extends Base {
+    public int v = 7;
+    public Child() { }
+    public void show() { print(this.v); }
+}

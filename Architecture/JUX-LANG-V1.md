@@ -1540,7 +1540,32 @@ public class Singleton {
 3. **`init { }` blocks** of `C` run, in textual order — before the constructor body. An init block may reference inherited fields because the parent has already constructed.
 4. **The constructor body** runs.
 
-This matches Java semantics.
+**One deliberate divergence from Java: every field initializer of the whole
+class hierarchy runs before any constructor body.** Java runs the parent's
+constructor body first and only then the child's field initializers, which is
+why a constructor that calls an overridable method sees the child's fields at
+their zero values:
+
+```java
+public class Base {
+    public Base() { this.show(); }          // Java: prints 0. Jux: prints 7.
+    public void show() { print(-1); }
+}
+public class Child extends Base {
+    public int v = 7;
+    public void show() { print(this.v); }
+}
+```
+
+The dispatch is the same in both languages -- `show()` resolves to the child's
+override, because the object being constructed is a `Child`. What differs is
+what it sees. Java's answer is a famous trap: the field is declared with a value
+right there in the source, and the method reads zero anyway. Jux initializes
+every field first, so a constructor never observes a half-built object.
+
+Calling an overridable method from a constructor is still worth avoiding -- the
+override runs before the subclass constructor body has had its say either way --
+but in Jux it can no longer read a value that was never written.
 
 **Record constructors.** Records get an implicit primary constructor from their declaration plus optional compact-form validation; see §7.6.
 

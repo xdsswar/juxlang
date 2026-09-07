@@ -1638,11 +1638,18 @@ fn numeric_promote(l: &Ty, r: &Ty) -> Option<Primitive> {
         return None;
     };
     let (lp, rp) = (*lp, *rp);
-    if matches!(lp, Primitive::Bool | Primitive::Char)
-        || matches!(rp, Primitive::Bool | Primitive::Char)
-    {
+    if matches!(lp, Primitive::Bool) || matches!(rp, Primitive::Bool) {
         return None;
     }
+    // Java's unary numeric promotion: a `char` operand becomes an `int` in any
+    // arithmetic or bitwise expression, which is why `char c2 = c + 1;` needs
+    // an explicit `(char)` in Java and here. Inferring `char` instead made the
+    // cast back look like an identity, and the emitted Rust then tried to add
+    // an integer to a Rust `char` -- rustc E0369, straight out of the compiler.
+    // Comparisons answer `bool` before ever reaching this, so two chars
+    // compared are unaffected.
+    let lp = if lp == Primitive::Char { Primitive::Int } else { lp };
+    let rp = if rp == Primitive::Char { Primitive::Int } else { rp };
     if lp == rp {
         return Some(lp);
     }

@@ -646,7 +646,7 @@ impl RustEmitter {
                 | BinaryOp::BitXor,
         );
         let promote = if is_arith || is_cmp {
-            self.numeric_promote_target(&b.left, &b.right)
+            self.numeric_promote_target(&b.left, &b.right, is_arith)
         } else {
             None
         };
@@ -747,12 +747,29 @@ impl RustEmitter {
         &self,
         left: &Expr,
         right: &Expr,
+        is_arith: bool,
     ) -> Option<juxc_tycheck::Primitive> {
         use juxc_tycheck::Primitive as P;
-        let lp = self.operand_primitive(left)?;
-        let rp = self.operand_primitive(right)?;
-        if lp == rp || matches!(lp, P::Bool | P::Char) || matches!(rp, P::Bool | P::Char) {
+        let lp0 = self.operand_primitive(left)?;
+        let rp0 = self.operand_primitive(right)?;
+        if matches!(lp0, P::Bool) || matches!(rp0, P::Bool) {
             return None;
+        }
+        // Java's unary numeric promotion: a `char` operand becomes an `int` in
+        // an arithmetic or bitwise op. Two chars COMPARED stay chars, because
+        // Rust orders them identically and a cast would only add noise; a char
+        // compared against a number still promotes, since the two are not
+        // comparable otherwise.
+        let promote_char = is_arith || (lp0 == P::Char) != (rp0 == P::Char);
+        if !promote_char && (lp0 == P::Char || rp0 == P::Char) {
+            return None;
+        }
+        let lp = if lp0 == P::Char { P::Int } else { lp0 };
+        let rp = if rp0 == P::Char { P::Int } else { rp0 };
+        if lp == rp {
+            // Two chars in an arithmetic op agree only AFTER promotion, so they
+            // still both need the cast Rust has no implicit form of.
+            return (lp0 == P::Char).then_some(P::Int);
         }
         let is_float = |p: P| matches!(p, P::Float | P::Double | P::F32 | P::F64);
         if is_float(lp) || is_float(rp) {

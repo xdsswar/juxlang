@@ -731,12 +731,164 @@ impl RustEmitter {
     /// `C_Inner` (`__self`), so the interior-mutability `borrow`
     /// rewrite is suppressed for the duration of the body — the
     /// field writes target `__self.field` directly.
+    /// Does this constructor call a method on the object being constructed?
+    ///
+    /// Both spellings count: the explicit `this.init()` and the bare `init()`
+    /// that means the same thing. A `static` method does not - it needs no
+    /// receiver, so the inner builder can call it perfectly well.
+    fn ctor_calls_method_on_this(
+        class_decl: &juxc_ast::ClassDecl,
+        ctor: &juxc_ast::ConstructorDecl,
+    ) -> bool {
+        let instance_method = |name: &str| {
+            class_decl
+                .methods
+                .iter()
+                .any(|m| {
+                    m.name.text == name
+                        && !m.modifiers.contains(&juxc_ast::FnModifier::Static)
+                })
+        };
+        let mut found = false;
+        let mut look = |e: &juxc_ast::Expr| {
+            let juxc_ast::Expr::Call(c) = e else { return };
+            found |= match &*c.callee {
+                juxc_ast::Expr::Field(f) => matches!(&*f.object, juxc_ast::Expr::This(_)),
+                juxc_ast::Expr::Path(qn) if qn.segments.len() == 1 => {
+                    instance_method(&qn.segments[0].text)
+                }
+                _ => false,
+            };
+        };
+        for stmt in &ctor.body.statements {
+            crate::worker::walk_stmt(stmt, &mut look);
+        }
+        for init in &class_decl.init_blocks {
+            for stmt in &init.statements {
+                crate::worker::walk_stmt(stmt, &mut look);
+            }
+        }
+        found
+    }
+
+    /// Replay the constructor bodies an ANCESTOR deferred, outermost ancestor
+    /// first, with `this` already resolved to the freshly built handle.
+    ///
+    /// A subclass builds its parent slice by calling `Parent::new_inner(...)`,
+    /// which never reaches the parent's public `new` -- so a parent body that
+    /// was handed over to `new` would simply be dropped when the object is
+    /// built through a subclass. Each level is emitted inside a block that
+    /// binds that level's constructor parameters from the `super(...)`
+    /// arguments reaching it, so the deepest ancestor runs first and every body
+    /// sees the names it was written against.
+    ///
+    /// This is also where a Java constructor's most notorious behaviour comes
+    /// from: the parent body runs against the CHILD's handle, so an overridable
+    /// method dispatches to the child's override while the child's own fields
+    /// are still at their defaults.
+    fn emit_ancestor_ctor_tails(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+        super_args: &[juxc_ast::Expr],
+    ) {
+        let Some(parent_ty) = &class_decl.extends else {
+            return;
+        };
+        let Some(parent_bare) = parent_ty.name.segments.last().map(|s| s.text.clone()) else {
+            return;
+        };
+        let Some(parent) = self.class_asts.get(&parent_bare).cloned() else {
+            return;
+        };
+        // Match the parent constructor the same way the inner builder does:
+        // by argument count.
+        let ctor = parent
+            .constructors
+            .iter()
+            .find(|c| c.params.len() == super_args.len())
+            .or_else(|| parent.constructors.first())
+            .cloned();
+        let defers = ctor
+            .as_ref()
+            .is_some_and(|c| Self::ctor_calls_method_on_this(&parent, c));
+        let grandparent_args = ctor
+            .as_ref()
+            .and_then(extract_super_args)
+            .unwrap_or_default();
+        // Nothing at this level, but a level above it may still defer.
+        if !defers {
+            self.emit_ancestor_ctor_tails(&parent, &grandparent_args);
+            return;
+        }
+        let ctor = ctor.expect("defers implies a constructor");
+        self.w.emit_indent();
+        self.w.push_str("{
+");
+        self.w.indent_inc();
+        for (i, p) in ctor.params.iter().enumerate() {
+            self.w.emit_indent();
+            self.w.push_str("let ");
+            self.w.push_str(&to_rust_ident(&p.name.text));
+            self.w.push_str(" = ");
+            match super_args.get(i) {
+                Some(a) => self.emit_expr(a),
+                None => self.emit_default_value_for(&p.ty),
+            }
+            self.w.push_str(";
+");
+        }
+        self.emit_ancestor_ctor_tails(&parent, &grandparent_args);
+        let owned = ctor_owned_param_names(&ctor.params);
+        let prev_params = std::mem::replace(
+            &mut self.current_fn_params,
+            ctor.params.iter().map(|p| p.name.text.clone()).collect(),
+        );
+        let mut tail: Vec<juxc_ast::Stmt> = Vec::new();
+        for init in &parent.init_blocks {
+            tail.extend(init.statements.iter().cloned());
+        }
+        tail.extend(ctor.body.statements.iter().cloned());
+        self.emit_ctor_body_stmts(&tail, &owned);
+        self.current_fn_params = prev_params;
+        self.w.indent_dec();
+        self.w.line("}");
+    }
+
+    /// Does any ancestor of `class_decl` defer its constructor body?
+    fn ancestor_chain_defers(&self, class_decl: &juxc_ast::ClassDecl) -> bool {
+        let mut cur = class_decl.clone();
+        loop {
+            let Some(parent_ty) = cur.extends.clone() else { return false };
+            let Some(bare) = parent_ty.name.segments.last().map(|s| s.text.clone()) else {
+                return false;
+            };
+            let Some(parent) = self.class_asts.get(&bare).cloned() else {
+                return false;
+            };
+            if parent
+                .constructors
+                .iter()
+                .any(|c| Self::ctor_calls_method_on_this(&parent, c))
+            {
+                return true;
+            }
+            cur = parent;
+        }
+    }
+
     pub(crate) fn emit_wrapper_constructor(
         &mut self,
         class_decl: &juxc_ast::ClassDecl,
         ctor: &juxc_ast::ConstructorDecl,
         ctor_idx: usize,
     ) {
+        // Decide up front whether the body has to run against the HANDLE
+        // rather than the raw inner - see `pending_ctor_tail`.
+        self.defer_ctor_body = Self::ctor_calls_method_on_this(class_decl, ctor);
+        // An ancestor whose body was deferred is replayed by whoever actually
+        // builds the object, so this constructor needs the handle shape too
+        // even when its own body is perfectly ordinary.
+        let ancestors_defer = self.ancestor_chain_defers(class_decl);
         // Emit two functions for each wrapper constructor:
         //
         //   - `new_inner(args) -> C_Inner` — builds the flattened inner
@@ -756,6 +908,10 @@ impl RustEmitter {
         // P6 (§P.9): binds on `this` recorded while the inner ctor's
         // body emitted — replayed below, after the wrapper exists.
         let ctor_binds = std::mem::take(&mut self.pending_ctor_binds);
+        // Statements the inner builder handed over because they call a method
+        // on `this` (see `pending_ctor_tail`).
+        let ctor_tail = std::mem::take(&mut self.pending_ctor_tail);
+        self.defer_ctor_body = false;
 
         // Thin public `new` delegating to `new_inner`.
         self.w.indent_inc();
@@ -789,7 +945,7 @@ impl RustEmitter {
             } else {
                 ("std::rc::Rc::new(", ")")
             };
-        if ctor_binds.is_empty() {
+        if ctor_binds.is_empty() && ctor_tail.is_empty() && !ancestors_defer {
             self.w.push_str("Self(");
             self.w.push_str(wrap_open);
             self.w.push_str("Self::new_inner");
@@ -824,6 +980,35 @@ impl RustEmitter {
             self.w.push_str(")");
             self.w.push_str(wrap_close);
             self.w.push_str(");\n");
+            // Run the deferred body against the handle. `this` is now a
+            // wrapper, so field access goes back through `.0.borrow_mut()` --
+            // which is also what makes a method called here dispatch
+            // virtually, the behaviour Java has and the reason a constructor
+            // must never call an overridable method it does not control.
+            {
+                // Ancestors first (§S.4.4: the super constructor completes
+                // before this one's body), each against THIS handle.
+                let prev_alias = self.this_alias.replace("__jux_self".to_string());
+                let prev_wrapper = std::mem::replace(&mut self.emitting_wrapper_class, true);
+                self.current_fn_params =
+                    ctor.params.iter().map(|p| p.name.text.clone()).collect();
+                let super_args = extract_super_args(ctor).unwrap_or_default();
+                self.emit_ancestor_ctor_tails(class_decl, &super_args);
+                self.current_fn_params.clear();
+                self.emitting_wrapper_class = prev_wrapper;
+                self.this_alias = prev_alias;
+            }
+            if !ctor_tail.is_empty() {
+                let prev_alias = self.this_alias.replace("__jux_self".to_string());
+                let prev_wrapper = std::mem::replace(&mut self.emitting_wrapper_class, true);
+                self.current_fn_params =
+                    ctor.params.iter().map(|p| p.name.text.clone()).collect();
+                let owned = ctor_owned_param_names(&ctor.params);
+                self.emit_ctor_body_stmts(&ctor_tail, &owned);
+                self.current_fn_params.clear();
+                self.emitting_wrapper_class = prev_wrapper;
+                self.this_alias = prev_alias;
+            }
             // Replay each deferred bind with `this` resolved to the
             // fresh wrapper handle.
             let prev_alias = self.this_alias.replace("__jux_self".to_string());
@@ -1086,18 +1271,30 @@ impl RustEmitter {
             // body (Java's instance-initializer order). Ctor params are
             // not in scope inside init blocks, so the shadow set stays
             // empty for this pass.
-            for init in &class_decl.init_blocks {
-                for stmt in &init.statements {
-                    self.emit_source_marker(stmt_span(stmt));
-                    self.w.emit_indent();
-                    self.emit_stmt(stmt);
+            // When the body calls a method on `this`, none of this can run
+            // here: the methods live on the handle, which does not exist
+            // yet. Hand the whole sequence - init blocks first, then the
+            // body, the order §S.4.4 requires - to the public `new`.
+            if self.defer_ctor_body {
+                for init in &class_decl.init_blocks {
+                    self.pending_ctor_tail.extend(init.statements.iter().cloned());
                 }
+                self.pending_ctor_tail
+                    .extend(ctor.body.statements.iter().cloned());
+            } else {
+                for init in &class_decl.init_blocks {
+                    for stmt in &init.statements {
+                        self.emit_source_marker(stmt_span(stmt));
+                        self.w.emit_indent();
+                        self.emit_stmt(stmt);
+                    }
+                }
+                // §S.4.4 step 5: the constructor body. `this` → __self.
+                self.current_fn_params = ctor.params.iter().map(|p| p.name.text.clone()).collect();
+                let owned = ctor_owned_param_names(&ctor.params);
+                self.emit_ctor_body_stmts(&ctor.body.statements, &owned);
+                self.current_fn_params.clear();
             }
-            // §S.4.4 step 5: the constructor body. `this` → __self.
-            self.current_fn_params = ctor.params.iter().map(|p| p.name.text.clone()).collect();
-            let owned = ctor_owned_param_names(&ctor.params);
-            self.emit_ctor_body_stmts(&ctor.body.statements, &owned);
-            self.current_fn_params.clear();
             self.this_alias = None;
             self.w.line("__self");
         }
