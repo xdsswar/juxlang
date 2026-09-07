@@ -1,0 +1,41 @@
+public class AppError extends Exception {
+    public AppError(String m) { super(m); }
+}
+public int risky(int n) throws AppError {
+    if (n < 0) {
+        throw new AppError("negative");
+    }
+    return n * 2;
+}
+public void main() {
+    try {
+        print(risky(5));
+        print(risky(-1));
+        print("unreachable");
+    } catch (AppError e) {
+        print("caught " + e.getMessage());
+    } finally {
+        print("finally 1");
+    }
+
+    for (int i = 0; i < 3; i++) {
+        try {
+            if (i == 1) { continue; }
+            if (i == 2) { break; }
+            print("body " + i);
+        } finally {
+            print("fin " + i);
+        }
+    }
+
+    try {
+        try {
+            throw new AppError("inner");
+        } finally {
+            print("inner finally");
+        }
+    } catch (AppError e) {
+        print("outer caught " + e.getMessage());
+    }
+    print("done");
+}

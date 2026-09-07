@@ -1,0 +1,29 @@
+// A self-referential field is `Node?` here where Java writes `Node`: Jux
+// requires a non-nullable field to be definitely assigned (E0600), and
+// Java silently defaults it to null. Same program, same output; the
+// nullability is written down instead of implied.
+public class Node {
+    public int value;
+    public Node? next;
+    public Node(int v) { this.value = v; }
+}
+public void bump(Node n) { n.value = n.value + 100; }
+public void reassign(Node n) { n = new Node(-1); }
+public void main() {
+    var a = new Node(1);
+    var b = a;
+    b.value = 5;
+    print(a.value);
+    bump(a);
+    print(b.value);
+    reassign(a);
+    print(a.value);
+
+    a.next = new Node(2);
+    a.next!!.next = new Node(3);
+    print(a.next!!.value);
+    print(a.next!!.next!!.value);
+    var mid = a.next!!;
+    mid.value = 20;
+    print(a.next!!.value);
+}

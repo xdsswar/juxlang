@@ -584,6 +584,10 @@ impl<'a> Parser<'a> {
                 | Some(TokenKind::Int(_))
                 | Some(TokenKind::Float(_))
                 | Some(TokenKind::Str(_))
+                // A char literal starts a unary expression like any other.
+                // Without it `(int) 'z'` was not read as a cast at all, and
+                // the parenthesized `(int)` then failed as an expression.
+                | Some(TokenKind::Char(_))
                 | Some(TokenKind::InterpStr(_))
                 | Some(TokenKind::RawStr(_))
                 | Some(TokenKind::InterpRawStr(_))
@@ -629,6 +633,10 @@ impl<'a> Parser<'a> {
                 | Some(TokenKind::Int(_))
                 | Some(TokenKind::Float(_))
                 | Some(TokenKind::Str(_))
+                // A char literal starts a unary expression like any other.
+                // Without it `(int) 'z'` was not read as a cast at all, and
+                // the parenthesized `(int)` then failed as an expression.
+                | Some(TokenKind::Char(_))
                 | Some(TokenKind::InterpStr(_))
                 | Some(TokenKind::RawStr(_))
                 | Some(TokenKind::InterpRawStr(_))

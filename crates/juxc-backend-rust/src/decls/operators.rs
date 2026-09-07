@@ -242,10 +242,26 @@ impl RustEmitter {
     /// address is the shared cell for wrapper classes (stable
     /// identity across aliases) and the value's own address for
     /// inline classes.
-    pub(crate) fn emit_identity_display(&mut self, class_name: &str, wrapper: bool) {
+    pub(crate) fn emit_identity_display(
+        &mut self,
+        class_name: &str,
+        wrapper: bool,
+        generic_params: &[juxc_ast::TypeParam],
+    ) {
         self.w.emit_indent();
-        self.w.push_str("impl std::fmt::Display for ");
+        self.w.push_str("impl");
+        // A generic class needs its parameters on the impl, with the same
+        // baseline bounds its struct declares. The identity form prints an
+        // address, so it adds no requirement of its own -- no `Display` on the
+        // parameters, which is the whole point: this impl is what LETS a class
+        // satisfy someone else's `Display` bound.
+        if !generic_params.is_empty() {
+            let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            self.emit_generic_params_with_clone_bound_plus_display(generic_params, &none, &none);
+        }
+        self.w.push_str(" std::fmt::Display for ");
         self.w.push_str(class_name);
+        self.emit_generic_params_as_args(generic_params);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.w

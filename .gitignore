@@ -56,3 +56,8 @@ _bugtest/
 # The Gradle wrapper itself IS checked in (INSTALL.md tells users to run
 # `./gradlew buildPlugin`, which needs it) -- only Gradle's own caches are not.
 /ide/intellij-plugin/.gradle/
+
+# Differential harness working files (emitted crates, shared target dir, run log).
+tools/java-differential/emit/
+tools/java-differential/shared/
+tools/java-differential/results.txt

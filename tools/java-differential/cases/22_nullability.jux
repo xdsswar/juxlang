@@ -1,0 +1,25 @@
+public class Box {
+    public String? label;
+    public Box() {}
+}
+public String describe(String? s) {
+    if (s == null) { return "none"; }
+    return "some:" + s!!;
+}
+public void main() {
+    print(describe(null));
+    print(describe("hi"));
+
+    var b = new Box();
+    print(b.label == null);
+    print(b.label ?? "default");
+    b.label = "set";
+    print(b.label == null);
+    print(b.label ?? "default");
+    print(b.label!!.length());
+
+    String? maybe = null;
+    print(maybe?.length() == null);
+    maybe = "abcd";
+    print(maybe?.length());
+}

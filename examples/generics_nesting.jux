@@ -1,0 +1,223 @@
+// Generics, nested as deep as programs actually nest them.
+//
+// Every line here was found by running the same program in Java and diffing.
+// Three of them used to be wrong, and two of those were silent:
+//
+//   1. A generic class was not usable as another generic's type ARGUMENT --
+//      `Cell<Cell<int>>` failed to compile, because a type parameter that
+//      reaches a format position carries a `Display` bound and a Jux class
+//      had none.
+//   2. A `String` inside a generic printed WITH QUOTES (`box("q")`), because
+//      the bound that picks `Display` over `Debug` was added for generic
+//      classes but never for generic functions, nor for a `T?` field read
+//      through `!!`.
+//   3. A polymorphic class as a type argument failed the same way: a
+//      base-typed value is a trait object, and the trait had no `Display`.
+//
+// Expected output:
+//   1
+//   [1]
+//   2
+//   [2]
+//   3
+//   30
+//   22
+//   box(7)
+//   box(q)
+//   1/a
+//   x/2.5
+//   (1,2)/tag
+//   store:8
+//   empty
+//   has v
+//   has deep
+//   sq=9.0
+//   tri=12.0
+
+public class Cell<T> {
+    private T value;
+
+    public Cell(T v) {
+        this.value = v;
+    }
+
+    public T get() {
+        return this.value;
+    }
+
+    public void set(T v) {
+        this.value = v;
+    }
+
+    public String show() {
+        return "[" + this.value + "]";
+    }
+}
+
+public class Pair<A, B> {
+    private A a;
+    private B b;
+
+    public Pair(A a, B b) {
+        this.a = a;
+        this.b = b;
+    }
+
+    public String show() {
+        return "(" + this.a + "," + this.b + ")";
+    }
+}
+
+/// A nullable payload, read back through `!!`. The `!!` is what the
+/// Display-bound scan used to look straight past.
+public class Slot<T> {
+    private T? value;
+
+    public Slot() {}
+
+    public void put(T v) {
+        this.value = v;
+    }
+
+    public T? peek() {
+        return this.value;
+    }
+
+    public String describe() {
+        if (this.value == null) {
+            return "empty";
+        }
+        return "has " + this.value!!;
+    }
+}
+
+public class Store<T> {
+    protected T item;
+
+    public Store(T item) {
+        this.item = item;
+    }
+
+    public T get() {
+        return this.item;
+    }
+
+    public String tag() {
+        return "store:" + this.item;
+    }
+}
+
+/// A subclass makes `Store` polymorphic, so a `Store`-typed value becomes a
+/// trait object -- the shape that could not be a type argument.
+public class Loud<T> extends Store<T> {
+    public Loud(T v) {
+        super(v);
+    }
+}
+
+public abstract class Shape {
+    public abstract double area();
+    public abstract String kind();
+
+    public String label() {
+        return this.kind() + "=" + this.area();
+    }
+}
+
+public class Sq extends Shape {
+    private double s;
+
+    public Sq(double s) {
+        this.s = s;
+    }
+
+    public double area() {
+        return this.s * this.s;
+    }
+
+    public String kind() {
+        return "sq";
+    }
+}
+
+public class Tri extends Shape {
+    private double b;
+    private double h;
+
+    public Tri(double b, double h) {
+        this.b = b;
+        this.h = h;
+    }
+
+    public double area() {
+        return this.b * this.h / 2.0;
+    }
+
+    public String kind() {
+        return "tri";
+    }
+}
+
+/// A generic FUNCTION formatting a type parameter. The bound it needs is
+/// collected from this body.
+public <T> String describe(Cell<T> c) {
+    return "box(" + c.get() + ")";
+}
+
+public <A, B> String both(A a, B b) {
+    return a + "/" + b;
+}
+
+/// A bounded parameter, dispatching virtually to the runtime type.
+public <T extends Shape> String label(T s) {
+    return s.label();
+}
+
+public void main() {
+    var one = new Cell<int>(1);
+    print(one.get());
+    print(one.show());
+
+    // Two and three levels of nesting.
+    var two = new Cell<Cell<int>>(new Cell<int>(2));
+    print(two.get().get());
+    print(two.get().show());
+
+    var three = new Cell<Cell<Cell<int>>>(new Cell<Cell<int>>(new Cell<int>(3)));
+    print(three.get().get().get());
+
+    // A handle taken from the middle still aliases what is inside.
+    var inner = three.get().get();
+    inner.set(30);
+    print(three.get().get().get());
+
+    two.set(new Cell<int>(22));
+    print(two.get().get());
+
+    // A generic function over a generic type: the int prints bare, and so
+    // must the String.
+    print(describe(new Cell<int>(7)));
+    print(describe(new Cell<String>("q")));
+    print(both(1, "a"));
+    print(both("x", 2.5));
+    print(both(new Pair<int, int>(1, 2).show(), "tag"));
+
+    // A POLYMORPHIC class as a type argument.
+    var ln = new Loud<Store<int>>(new Store<int>(8));
+    print(ln.get().tag());
+
+    // A nullable payload, before and after it is filled.
+    var s = new Slot<String>();
+    print(s.describe());
+    s.put("v");
+    print(s.describe());
+
+    var ss = new Slot<Slot<String>>();
+    ss.put(new Slot<String>());
+    ss.peek()!!.put("deep");
+    print(ss.peek()!!.describe());
+
+    // A bounded parameter reaching two different runtime types.
+    print(label(new Sq(3.0)));
+    print(label(new Tri(4.0, 6.0)));
+}

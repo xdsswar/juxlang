@@ -1,0 +1,23 @@
+public class Box<T> {
+    private T v;
+    public Box(T v) { this.v = v; }
+    public T get() { return this.v; }
+}
+public <T> T identity(T x) { return x; }
+public <T> String describe(Box<T> b) { return "box(" + b.get() + ")"; }
+public <A, B> String both(A a, B b) { return a + "/" + b; }
+public <T> Box<T> rewrap(Box<T> b) { return new Box<T>(b.get()); }
+public void main() {
+    print(identity(5));
+    print(identity("s"));
+    print(identity(true));
+
+    print(describe(new Box<int>(7)));
+    print(describe(new Box<String>("q")));
+
+    print(both(1, "a"));
+    print(both("x", 2.5));
+
+    print(rewrap(new Box<int>(3)).get());
+    print(rewrap(rewrap(new Box<String>("z"))).get());
+}

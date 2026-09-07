@@ -1,0 +1,44 @@
+public abstract class Shape {
+    public abstract double area();
+    public abstract String kind();
+    public String label() { return this.kind() + "=" + this.area(); }
+}
+public class Sq extends Shape {
+    private double s;
+    public Sq(double s) { this.s = s; }
+    public double area() { return this.s * this.s; }
+    public String kind() { return "sq"; }
+}
+public class Tri extends Shape {
+    private double b;
+    private double h;
+    public Tri(double b, double h) { this.b = b; this.h = h; }
+    public double area() { return this.b * this.h / 2.0; }
+    public String kind() { return "tri"; }
+}
+public class Holder<T extends Shape> {
+    private T item;
+    public Holder(T item) { this.item = item; }
+    public T get() { return this.item; }
+    public String report() { return "holds " + this.item.label(); }
+    public double doubled() { return this.item.area() * 2.0; }
+}
+public <T extends Shape> String biggest(T a, T b) {
+    if (a.area() >= b.area()) { return a.kind(); }
+    return b.kind();
+}
+public void main() {
+    var hs = new Holder<Sq>(new Sq(3.0));
+    print(hs.report());
+    print(hs.doubled());
+    print(hs.get().kind());
+
+    var ht = new Holder<Tri>(new Tri(4.0, 6.0));
+    print(ht.report());
+    print(ht.doubled());
+
+    print(biggest(new Sq(2.0), new Sq(5.0)));
+
+    var nested = new Holder<Sq>(new Sq(1.5));
+    print(nested.get().area());
+}

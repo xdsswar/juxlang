@@ -1,0 +1,97 @@
+// Three things Java does without comment, each of which used to go wrong.
+//
+//   1. Swapping two array elements. `a[j] = a[j + 1]` took a mutable borrow
+//      and a shared borrow of the same array in one statement, so a bubble
+//      sort ABORTED at run time with "RefCell already borrowed" -- the most
+//      ordinary use an array has.
+//   2. Narrowing casts. `(short) 70000` truncates to 4464 in Java; it used to
+//      not compile, and `(int) 'z'` did not even parse, because a cast
+//      followed by a char literal was not recognised as a cast at all.
+//   3. Safe navigation in output. `s?.length()` printed `Some(4)`, and a null
+//      one printed `None`, instead of `4` and `null`.
+//
+// Expected output:
+//   1,2,3,5,6,7,8,9,
+//   3
+//   -1
+//   44
+//   4464
+//   122
+//   B
+//   b
+//   4
+//   ABCD
+//   null
+//   2
+//   xy
+
+public void bubble(int[] a) {
+    for (int i = 0; i < a.length; i++) {
+        for (int j = 0; j < a.length - 1 - i; j++) {
+            if (a[j] > a[j + 1]) {
+                int t = a[j];
+                a[j] = a[j + 1];
+                a[j + 1] = t;
+            }
+        }
+    }
+}
+
+public int bsearch(int[] a, int target) {
+    int lo = 0;
+    int hi = a.length - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (a[mid] == target) {
+            return mid;
+        }
+        if (a[mid] < target) {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return -1;
+}
+
+public class Box {
+    public String? label;
+
+    public Box() {}
+}
+
+public void main() {
+    int[] a = new int[8];
+    a[0] = 5; a[1] = 3; a[2] = 9; a[3] = 1;
+    a[4] = 7; a[5] = 2; a[6] = 8; a[7] = 6;
+    bubble(a);
+    String out = "";
+    for (int v : a) {
+        out = out + v + ",";
+    }
+    print(out);
+    print(bsearch(a, 5));
+    print(bsearch(a, 100));
+
+    // Narrowing truncates, exactly as Java's does.
+    int big = 300;
+    print((byte) big);
+    print((short) 70000);
+
+    // A cast applied to a char literal, and back the other way.
+    print((int) 'z');
+    print((char) 66);
+    print((char) ((int) 'a' + 1));
+
+    // Safe navigation renders the value, or `null`.
+    String? s = "abcd";
+    print(s?.length());
+    print(s?.toUpperCase());
+    String? n = null;
+    print(n?.length());
+
+    var b = new Box();
+    b.label = "xy";
+    print(b.label?.length());
+    print(b.label ?? "none");
+}

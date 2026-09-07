@@ -397,3 +397,61 @@ fn scopes_and_identity() {
         ],
     );
 }
+
+#[test]
+fn generics_nesting() {
+    // Nested generics, found by diffing the same program against Java.
+    // A generic class could not be another's type argument; a `String`
+    // inside a generic printed with quotes.
+    common::expect_output(
+        "generics_nesting",
+        "generics-nesting",
+        &[
+            "1",
+            "[1]",
+            "2",
+            "[2]",
+            "3",
+            "30",
+            "22",
+            "box(7)",
+            // `box(q)`, NOT `box(\"q\")`: a generic function's type parameter
+            // carries a `Display` bound when its values are formatted.
+            "box(q)",
+            "1/a",
+            "x/2.5",
+            "(1,2)/tag",
+            "store:8",
+            "empty",
+            "has v",
+            "has deep",
+            "sq=9.0",
+            "tri=12.0",
+        ],
+    );
+}
+
+#[test]
+fn swap_casts_and_safe_nav() {
+    // The bubble sort aborted at run time with "RefCell already borrowed";
+    // `(short) 70000` did not compile; `s?.length()` printed `Some(4)`.
+    common::expect_output(
+        "swap_casts_and_safe_nav",
+        "swap-casts-safe-nav",
+        &[
+            "1,2,3,5,6,7,8,9,",
+            "3",
+            "-1",
+            "44",
+            "4464",
+            "122",
+            "B",
+            "b",
+            "4",
+            "ABCD",
+            "null",
+            "2",
+            "xy",
+        ],
+    );
+}

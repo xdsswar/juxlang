@@ -208,6 +208,34 @@ const BUILTIN_STRING_FIELDS: &[&str] = &["length"];
 // Checker
 // ============================================================================
 
+/// How close two method names are, for suggesting one when the other does
+/// not resolve. 1.0 is identical, 0.0 is nothing in common.
+///
+/// One name being a PREFIX of the other scores high whatever the lengths:
+/// that is the shape of the misses that actually happen -- `sort` for
+/// `sort_unstable`, `push` for `push_mut` -- and a length ratio would score
+/// exactly those near zero. Otherwise the shared prefix is scaled by the
+/// longer name, so unrelated names stay far apart.
+fn name_affinity(a: &str, b: &str) -> f32 {
+    let la = a.to_ascii_lowercase();
+    let lb = b.to_ascii_lowercase();
+    if la == lb {
+        return 1.0;
+    }
+    if !la.is_empty() && (lb.starts_with(&la) || la.starts_with(&lb)) {
+        return 0.9;
+    }
+    let shared = la
+        .chars()
+        .zip(lb.chars())
+        .take_while(|(x, y)| x == y)
+        .count();
+    if shared == 0 {
+        return 0.0;
+    }
+    shared as f32 / la.len().max(lb.len()) as f32
+}
+
 /// Statement-checker state. Holds an owned `TypeEnv` (pushed/popped as
 /// the walker descends), a borrowed [`SymbolTable`] (read-only), a
 /// borrowed diagnostic sink (append-only), and the **expected return
@@ -4327,6 +4355,54 @@ impl<'a> Checker<'a> {
     /// untouched (there `protected` already grants package access), `this` and
     /// `super` are untouched, and a static member has no receiver to be
     /// responsible for.
+    /// `" -- did you mean `x`?"` when the type has a method whose name is
+    /// close to the one written, else an empty string.
+    ///
+    /// Candidates come from the type's own recorded surface, so a foreign
+    /// type suggests what the rustdoc scan actually found. The threshold is
+    /// deliberately generous on a shared PREFIX, because the misses that
+    /// matter are a Rust name the user shortened (`sort` for
+    /// `sort_unstable`) or a Java name that has a differently-spelled twin.
+    fn nearest_method_hint(&self, type_name: &str, wanted: &str) -> String {
+        let mut names: Vec<&str> = Vec::new();
+        if let Some(cls) = self.symbols.classes.get(type_name) {
+            names.extend(cls.methods.keys().map(|k| k.as_str()));
+        }
+        if let Some(iface) = self.symbols.interfaces.get(type_name) {
+            names.extend(iface.methods.keys().map(|k| k.as_str()));
+        }
+        if let Some(rec) = self.symbols.records.get(type_name) {
+            names.extend(rec.methods.keys().map(|k| k.as_str()));
+        }
+        if let Some(en) = self.symbols.enums.get(type_name) {
+            names.extend(en.methods.keys().map(|k| k.as_str()));
+        }
+        // Up to three, best first, rather than one. Several candidates often
+        // score identically -- `sort` prefix-matches `sort_floats`,
+        // `sort_unstable` and `sort_unstable_by` alike -- and picking one
+        // would be a guess presented as an answer. Shorter names first within
+        // a score, and the list is sorted so the output never depends on hash
+        // iteration order.
+        names.sort_unstable();
+        let mut scored: Vec<(&str, f32)> = names
+            .into_iter()
+            .map(|c| (c, name_affinity(wanted, c)))
+            .filter(|(_, s)| *s >= 0.45)
+            .collect();
+        scored.sort_by(|a, b| {
+            b.1.total_cmp(&a.1)
+                .then(a.0.len().cmp(&b.0.len()))
+                .then(a.0.cmp(b.0))
+        });
+        scored.dedup_by(|a, b| a.0 == b.0);
+        let picks: Vec<String> = scored.iter().take(3).map(|(c, _)| format!("`{c}`")).collect();
+        match picks.len() {
+            0 => String::new(),
+            1 => format!(" -- did you mean {}?", picks[0]),
+            _ => format!(" -- did you mean {}?", picks.join(", ")),
+        }
+    }
+
     fn check_protected_qualifier(
         &mut self,
         vis: juxc_ast::Visibility,
@@ -5968,12 +6044,53 @@ impl<'a> Checker<'a> {
                     }
                 }
                 if let Ty::String = &receiver_ty {
+                    for arg in &c.args {
+                        self.check_expr(arg);
+                    }
                     if BUILTIN_STRING_METHODS.contains(&method_name) {
-                        for arg in &c.args {
-                            self.check_expr(arg);
-                        }
                         return;
                     }
+                    // **The SCANNED Rust `String` counts too.** Its surface is
+                    // discovered from rustdoc, not listed here, so `push_str`
+                    // and everything else Rust's `String` carries resolves
+                    // without this file naming them. Consulting the scan is
+                    // what keeps the check honest as the std moves.
+                    if self
+                        .symbols
+                        .classes
+                        .iter()
+                        .filter(|(k, _)| k.rsplit('.').next() == Some("String"))
+                        .any(|(_, c)| c.methods.contains_key(method_name))
+                    {
+                        return;
+                    }
+                    // **Anything
+                    // else is a real miss. It used to fall through with no
+                    // diagnostic at all and
+                    // land on rustc as "no method named `equals` found for
+                    // struct `String`" -- a Rust error about a Jux program.
+                    //
+                    // `equals` and `compareTo` are the ones people reach for
+                    // out of Java habit, and they have a real answer: `==` is
+                    // value equality and `<=>` gives the ordering, so the hint
+                    // names those rather than just refusing.
+                    let hint = match method_name {
+                        "equals" | "equalsIgnoreCase" => {
+                            " -- `==` on a String is value equality (§7.14.3)"
+                        }
+                        "compareTo" => " -- use `<=>`, or the `<` / `>` operators it derives",
+                        "toString" => " -- a String is already one; interpolate it directly",
+                        "size" => " -- use `length()`",
+                        _ => "",
+                    };
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0413_UnresolvedMethod,
+                            format!("no method `{method_name}` on `String`{hint}"),
+                        )
+                        .with_span(field.field.span),
+                    );
+                    return;
                 }
                 // Map-typed receivers: short-circuit method-call
                 // verification through the stdlib allowlist. Same
@@ -6310,10 +6427,11 @@ impl<'a> Checker<'a> {
                 {
                     return;
                 }
+                let hint = self.nearest_method_hint(&name, method_name);
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0413_UnresolvedMethod,
-                        format!("no method `{method_name}` on type `{name}`"),
+                        format!("no method `{method_name}` on type `{name}`{hint}"),
                     )
                     .with_span(c.span),
                 );

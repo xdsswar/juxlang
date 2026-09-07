@@ -1,0 +1,27 @@
+public bool isDigitCh(char c) {
+    return c >= '0' && c <= '9';
+}
+public void main() {
+    String s = "a1b22c333";
+    int digits = 0;
+    int letters = 0;
+    for (var c : s.chars()) {
+        if (isDigitCh(c)) {
+            digits = digits + 1;
+        } else {
+            letters = letters + 1;
+        }
+    }
+    print(digits);
+    print(letters);
+
+    int value = 0;
+    for (var c : "4207".chars()) {
+        value = value * 10 + ((int) c - (int) '0');
+    }
+    print(value);
+
+    print('a' < 'b');
+    print('Z' < 'a');
+    print((char) ((int) 'a' + 1));
+}

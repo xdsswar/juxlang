@@ -1,0 +1,29 @@
+public class Cell<T> {
+    private T value;
+    public Cell(T v) { this.value = v; }
+    public T get() { return this.value; }
+    public void set(T v) { this.value = v; }
+    public String show() { return "[" + this.value + "]"; }
+}
+public void main() {
+    var one = new Cell<int>(1);
+    print(one.get());
+    print(one.show());
+
+    var two = new Cell<Cell<int>>(new Cell<int>(2));
+    print(two.get().get());
+    print(two.get().show());
+
+    var three = new Cell<Cell<Cell<int>>>(new Cell<Cell<int>>(new Cell<int>(3)));
+    print(three.get().get().get());
+    print(three.get().get().show());
+
+    // Mutating through the innermost handle is visible from the outside.
+    var inner = three.get().get();
+    inner.set(30);
+    print(three.get().get().get());
+
+    // Replacing a whole level.
+    two.set(new Cell<int>(22));
+    print(two.get().get());
+}

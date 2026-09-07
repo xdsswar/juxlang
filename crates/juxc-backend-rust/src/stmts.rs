@@ -2653,7 +2653,71 @@ impl RustEmitter {
         fsig.ty.array_shape.clone()
     }
 
+    /// The handle a write goes THROUGH, when the target is an index into one.
+    ///
+    /// `a[i] = v` takes `a.borrow_mut()` for the whole statement, so anything
+    /// else in the same statement that borrows `a` is a second live guard.
+    fn assign_target_handle_key(&self, target: &Expr) -> Option<String> {
+        let Expr::Index(i) = target else { return None };
+        if !self.expr_is_collection_handle(&i.array) {
+            return None;
+        }
+        Self::receiver_place_key(&i.array)
+    }
+
+    /// True when `value` reads the same handle the target writes through.
+    fn expr_reads_handle(&self, value: &Expr, key: &str) -> bool {
+        let mut hit = false;
+        crate::worker::walk_expr(value, &mut |e| {
+            let place = match e {
+                Expr::Index(i) => Self::receiver_place_key(&i.array),
+                Expr::Call(c) => match &*c.callee {
+                    Expr::Field(f) => Self::receiver_place_key(&f.object),
+                    _ => None,
+                },
+                Expr::Field(f) => Self::receiver_place_key(&f.object),
+                _ => None,
+            };
+            hit |= place.as_deref() == Some(key);
+        });
+        hit
+    }
+
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
+        // **One handle, one borrow per statement.** When the value reads the
+        // very handle the target writes through -- `a[j] = a[j + 1]`, the
+        // swap at the heart of every sort -- the read is hoisted into a
+        // temporary so the two guards never overlap. Rust would let both
+        // exist syntactically; `RefCell` catches it at run time, which is the
+        // worst place to find out.
+        if let Some(key) = self.assign_target_handle_key(&a.target) {
+            if self.expr_reads_handle(&a.value, &key) {
+                self.w.emit_indent();
+                self.w.push_str("{\n");
+                self.w.indent_inc();
+                self.w.emit_indent();
+                self.w.push_str("let __jux_av = ");
+                self.emit_assign_rhs(&a.value);
+                self.w.push_str(";\n");
+                let hoisted = AssignStmt {
+                    target: a.target.clone(),
+                    op: a.op,
+                    value: Expr::Path(juxc_ast::QualifiedName {
+                        segments: vec![juxc_ast::Ident {
+                            text: "__jux_av".to_string(),
+                            span: a.span,
+                        }],
+                        span: a.span,
+                    }),
+                    span: a.span,
+                };
+                self.emit_assign_impl(&hoisted);
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push_str("}\n");
+                return;
+            }
+        }
         // §5.6: `target = new T[…]` into a DYNAMIC array slot (`T[] field`)
         // must heap the allocation (`vec![…]`) to match the slot's `Vec<T>`
         // lowering — even for a const size (otherwise a fixed `[T; N]` value

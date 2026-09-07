@@ -1,0 +1,38 @@
+public class Store<T> {
+    protected T item;
+    public Store(T item) { this.item = item; }
+    public T get() { return this.item; }
+    public String tag() { return "store:" + this.item; }
+}
+public class IntStore extends Store<int> {
+    public IntStore(int v) { super(v); }
+    public int doubled() { return this.get() * 2; }
+    public String tag() { return "int:" + this.get(); }
+}
+public class Loud<T> extends Store<T> {
+    public Loud(T v) { super(v); }
+    public String shout() { return "!" + this.get() + "!"; }
+}
+public void main() {
+    var s = new Store<String>("a");
+    print(s.get());
+    print(s.tag());
+
+    var i = new IntStore(21);
+    print(i.get());
+    print(i.doubled());
+    print(i.tag());
+
+    var l = new Loud<String>("hey");
+    print(l.get());
+    print(l.shout());
+    print(l.tag());
+
+    Store<int> base = new IntStore(5);
+    print(base.tag());
+    print(base.get());
+
+    var ln = new Loud<Store<int>>(new Store<int>(8));
+    print(ln.get().get());
+    print(ln.get().tag());
+}

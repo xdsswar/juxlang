@@ -1,0 +1,18 @@
+public void main() {
+    print(7 / 2);
+    print(-7 / 2);
+    print(7 / -2);
+    print(-7 / -2);
+    print(7 % 3);
+    print(-7 % 3);
+    print(7 % -3);
+    print(-7 % -3);
+    print(2147483647);
+    print(-2147483648);
+    print(1 << 10);
+    print(-16 >> 2);
+    print(255 & 15);
+    print(240 | 15);
+    print(255 ^ 15);
+    print(~0);
+}

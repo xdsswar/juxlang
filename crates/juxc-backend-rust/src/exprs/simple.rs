@@ -163,11 +163,49 @@ impl RustEmitter {
             self.w.push('(');
         }
         self.emit_expr(&c.value);
+        // **A literal that does not fit the target names its source type.**
+        // Rust types `70000 as i16` by the TARGET and then refuses the literal
+        // as out of range, so `(short) 70000` -- a truncation Java performs
+        // happily -- did not compile. Spelling the literal `70000isize` makes
+        // it an `int` being narrowed, which is what the Jux source says.
+        if !needs_paren {
+            if let Expr::Literal(juxc_ast::Literal::Int(lit)) = &*c.value {
+                if lit.kind.is_none() && self.cast_literal_needs_source_type(lit.value, &c.ty) {
+                    self.w.push_str("isize");
+                }
+            }
+        }
         if needs_paren {
             self.w.push(')');
         }
         self.w.push_str(" as ");
         self.emit_type_as_rust(&c.ty);
+    }
+
+    /// True when `value` does not fit the integer type `ty` names, so the
+    /// literal has to carry its own (wider) type into the cast.
+    ///
+    /// A literal that fits needs nothing -- `(long) 5` stays `5 as i64` --
+    /// which keeps the annotation off the overwhelming majority of casts.
+    fn cast_literal_needs_source_type(&self, value: i64, ty: &juxc_ast::TypeRef) -> bool {
+        if ty.array_shape.is_some() || ty.nullable || ty.ptr_depth > 0 {
+            return false;
+        }
+        let Some(seg) = ty.name.segments.last() else { return false };
+        let (lo, hi): (i64, i64) = match seg.text.as_str() {
+            "byte" | "i8" => (i8::MIN as i64, i8::MAX as i64),
+            "ubyte" | "u8" => (0, u8::MAX as i64),
+            "short" | "i16" => (i16::MIN as i64, i16::MAX as i64),
+            "ushort" | "u16" => (0, u16::MAX as i64),
+            "i32" => (i32::MIN as i64, i32::MAX as i64),
+            "u32" => (0, u32::MAX as i64),
+            // `int`/`long` and their unsigned twins are pointer- or 64-bit
+            // wide, and an `i64` literal always fits; a negative one into an
+            // unsigned type is a deliberate wrap, which `as` performs.
+            "uint" | "ulong" | "u64" | "usize" => return value < 0,
+            _ => return false,
+        };
+        value < lo || value > hi
     }
 
     /// Lower the **bare boolean** type-test `x => T` (the binder form in an

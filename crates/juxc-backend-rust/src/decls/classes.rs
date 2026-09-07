@@ -638,18 +638,24 @@ impl RustEmitter {
         // and the bound-propagation caveats. Non-generic classes only;
         // generic-class trait impls need `T: PartialEq` (etc.) bound
         // propagation that's deferred.
+        // §O.4.1 identity default: no `operator string` → the class still
+        // prints, as `ClassName@<addr>`. OUTSIDE the non-generic gate below:
+        // a generic class needs it just as much, and needs no bound
+        // propagation to have it.
+        let has_to_string = class_decl
+            .operators
+            .iter()
+            .any(|o| o.kind == OperatorKind::ToString && !o.is_deleted);
+        if !has_to_string {
+            self.emit_identity_display(
+                &class_decl.name.text,
+                false,
+                &class_decl.generic_params,
+            );
+        }
         if class_decl.generic_params.is_empty() {
             for op in &class_decl.operators {
                 self.emit_operator_trait_impl(&class_decl.name.text, op);
-            }
-            // §O.4.1 identity default: no `operator string` → the
-            // class still prints, as `ClassName@<addr>`.
-            let has_to_string = class_decl
-                .operators
-                .iter()
-                .any(|o| o.kind == OperatorKind::ToString && !o.is_deleted);
-            if !has_to_string {
-                self.emit_identity_display(&class_decl.name.text, false);
             }
             let has_eq = class_decl
                 .operators
@@ -1274,18 +1280,19 @@ impl RustEmitter {
         // non-generic classes. A generic class with operators keeps its
         // inherent `__op_*` methods (emitted above) but no trait bridge —
         // matching the deferral the legacy path documents.
+        // §O.4.1 identity default — wrapper shape: the address is the shared
+        // Rc cell, stable across aliases. Emitted for generic classes too;
+        // see the note on the legacy path.
+        let has_to_string = class_decl
+            .operators
+            .iter()
+            .any(|o| o.kind == OperatorKind::ToString && !o.is_deleted);
+        if !has_to_string {
+            self.emit_identity_display(name, true, &class_decl.generic_params);
+        }
         if class_decl.generic_params.is_empty() {
             for op in &class_decl.operators {
                 self.emit_operator_trait_impl(name, op);
-            }
-            // §O.4.1 identity default — wrapper shape: the address is
-            // the shared Rc cell, stable across aliases.
-            let has_to_string = class_decl
-                .operators
-                .iter()
-                .any(|o| o.kind == OperatorKind::ToString && !o.is_deleted);
-            if !has_to_string {
-                self.emit_identity_display(name, true);
             }
             let has_eq = class_decl
                 .operators
@@ -2027,6 +2034,84 @@ impl RustEmitter {
     /// through each `extends` hop — `Loud<T> extends Holder<T>` inherits
     /// `Holder`'s `get()`, and the backend inlines the inherited body into
     /// `Loud`'s own inherent impl, so `Loud` needs the bound too.
+    /// The type parameters of a FUNCTION that need a `std::fmt::Display`
+    /// bound -- the ones whose values reach a format position in its body.
+    ///
+    /// The class version reasons about members; a function has none, so the
+    /// tracked names are its own parameters and locals whose type is a bare
+    /// type parameter, plus a call returning one. Reusing
+    /// [`Self::scan_block_for_displayed_fields`] keeps the notion of "a format
+    /// position" in one place -- interpolation, `print(...)`, string concat.
+    pub(crate) fn fn_displayed_generic_params(
+        &self,
+        fn_decl: &juxc_ast::FnDecl,
+    ) -> HashSet<String> {
+        let mut displayed: HashSet<String> = HashSet::new();
+        if fn_decl.generic_params.is_empty() {
+            return displayed;
+        }
+        let param_names: HashSet<&str> = fn_decl
+            .generic_params
+            .iter()
+            .map(|p| p.name.text.as_str())
+            .collect();
+        // name -> the type parameter its value has. A VALUE parameter typed
+        // as a bare type parameter (`A a`), and a method whose declared
+        // return is one, are the two ways a `T` reaches the body.
+        let mut generic_members: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let bare_param = |ty: &juxc_ast::TypeRef| -> Option<String> {
+            if !ty.generic_args.is_empty()
+                || ty.array_shape.is_some()
+                || ty.fn_shape.is_some()
+                || ty.name.segments.len() != 1
+            {
+                return None;
+            }
+            let n = ty.name.segments[0].text.as_str();
+            param_names.contains(n).then(|| n.to_string())
+        };
+        for p in &fn_decl.params {
+            if let Some(tp) = bare_param(&p.ty) {
+                generic_members.insert(p.name.text.clone(), tp);
+            }
+        }
+        // A call on a value whose declared type is `C<T>` can return `T`
+        // (`b.get()` on a `Box<T>`), so every method of a generic class whose
+        // return is that class's own parameter maps to the argument supplied
+        // here. Resolved through the class signature so no name is guessed.
+        for p in &fn_decl.params {
+            let Some(seg) = p.ty.name.segments.last() else { continue };
+            let Some(cls) = self.lookup_class_by_bare_or_fqn(&seg.text) else { continue };
+            for (mname, msig) in &cls.methods {
+                let juxc_ast::ReturnType::Type(rt) = &msig.return_type else { continue };
+                if !rt.generic_args.is_empty() || rt.name.segments.len() != 1 {
+                    continue;
+                }
+                let ret = rt.name.segments[0].text.as_str();
+                let Some(pos) = cls
+                    .generic_params
+                    .iter()
+                    .position(|gp| gp.name.text == ret)
+                else { continue };
+                let Some(arg) = p.ty.generic_args.get(pos).and_then(|a| a.as_type()) else {
+                    continue;
+                };
+                if let Some(tp) = bare_param(arg) {
+                    // Keyed by receiver AND method: `b.get()`, not any `get()`.
+                    generic_members.insert(format!("{}.{}", p.name.text, mname), tp);
+                }
+            }
+        }
+        if generic_members.is_empty() {
+            return displayed;
+        }
+        if let Some(body) = &fn_decl.body {
+            Self::scan_block_for_displayed_fields(body, &generic_members, &mut displayed);
+        }
+        displayed
+    }
+
     pub(crate) fn class_displayed_generic_params(
         &self,
         class_decl: &juxc_ast::ClassDecl,
@@ -2214,7 +2299,33 @@ impl RustEmitter {
                     if let Some(param) = name.and_then(|n| generic_members.get(n)) {
                         out.insert(param.clone());
                     }
+                    // `recv.method()` on a NAMED receiver, keyed as
+                    // `"recv.method"`. A function's generic parameter usually
+                    // arrives through a value like this (`b.get()` on a
+                    // `Box<T>` param) rather than through `this`. Keying on
+                    // the receiver as well as the method keeps the match tied
+                    // to the value whose type was actually resolved.
+                    if let Expr::Field(fe) = &*c.callee {
+                        if let Expr::Path(rq) = &*fe.object {
+                            if rq.segments.len() == 1 {
+                                let key =
+                                    format!("{}.{}", rq.segments[0].text, fe.field.text);
+                                if let Some(param) = generic_members.get(&key) {
+                                    out.insert(param.clone());
+                                }
+                            }
+                        }
+                    }
                 }
+                // See through the wrappers that do not change WHICH value is
+                // being read. `this.value!!` on a `T?` field still produces a
+                // `T`, and without this arm the field went unnoticed, the
+                // `Display` bound was never added, and a `Slot<String>`
+                // printed its payload through `Debug` -- with quotes.
+                Expr::NotNullAssert(inner, _) | Expr::Await(inner, _) => {
+                    mark_field_read(inner, generic_members, out);
+                }
+                Expr::Cast(c) => mark_field_read(&c.value, generic_members, out),
                 _ => {}
             }
         }
@@ -3190,7 +3301,14 @@ impl RustEmitter {
                 .unwrap_or_default();
             self.emit_kind_trait_args(&parent, &args);
         } else {
-            self.w.push_str("std::fmt::Debug");
+            // `Display` alongside `Debug`: a base-typed value is a
+            // `Rc<dyn …Kind>`, and a type parameter that reaches a format
+            // position carries a `Display` bound. Without this supertrait a
+            // polymorphic class could not be another generic's type argument
+            // -- `Loud<Store<int>>` did not compile, though `Loud<int>` did.
+            // Every class emits an identity `Display` (O.4.1), so nothing can
+            // implement a `Kind` trait without satisfying it.
+            self.w.push_str("std::fmt::Debug + std::fmt::Display");
         }
         // A polymorphic base that IMPLEMENTS an interface carries it as a
         // supertrait, so a base-typed value — which is a `Rc<dyn <Base>Kind>`,

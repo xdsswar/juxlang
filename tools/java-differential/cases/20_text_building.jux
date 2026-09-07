@@ -1,0 +1,27 @@
+public String repeatWord(String w, int n) {
+    String out = "";
+    for (int i = 0; i < n; i++) {
+        out = out + w;
+        if (i < n - 1) { out = out + "-"; }
+    }
+    return out;
+}
+public void main() {
+    print(repeatWord("ab", 3));
+    print(repeatWord("x", 1));
+    print(repeatWord("y", 0));
+
+    String csv = "";
+    for (int i = 0; i < 5; i++) {
+        if (i > 0) { csv = csv + ","; }
+        csv = csv + (i * i);
+    }
+    print(csv);
+
+    String mixed = "n=" + 42 + " f=" + 1.5 + " b=" + true + " c=" + 'x';
+    print(mixed);
+
+    int n = 7;
+    print("value is " + n + "!");
+    print("" + n + n);
+}

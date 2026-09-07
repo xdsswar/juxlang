@@ -1,0 +1,26 @@
+public interface Named {
+    default String name() { return "anon"; }
+    default String tag() { return "[" + this.name() + "]"; }
+}
+public interface Aged {
+    default int age() { return 0; }
+}
+public abstract class Person implements Named, Aged {
+    protected String who;
+    public Person(String who) { this.who = who; }
+    public String name() { return this.who; }
+}
+public class Adult extends Person {
+    public Adult(String w) { super(w); }
+    public int age() { return 30; }
+}
+public class Ghost implements Named {}
+public void main() {
+    Named a = new Adult("Ada");
+    print(a.name());
+    print(a.tag());
+    print(new Adult("Bo").age());
+    Named g = new Ghost();
+    print(g.name());
+    print(g.tag());
+}

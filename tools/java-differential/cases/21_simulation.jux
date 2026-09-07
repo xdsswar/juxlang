@@ -1,0 +1,52 @@
+public class Account {
+    private String owner;
+    private int balance;
+    public Account(String owner, int opening) {
+        this.owner = owner;
+        this.balance = opening;
+    }
+    public String getOwner() { return this.owner; }
+    public int getBalance() { return this.balance; }
+    public bool withdraw(int amount) {
+        if (amount > this.balance) { return false; }
+        this.balance = this.balance - amount;
+        return true;
+    }
+    public void deposit(int amount) { this.balance = this.balance + amount; }
+}
+public class Bank {
+    private Vec<Account> accounts;
+    public Bank() { this.accounts = new Vec<Account>(); }
+    public void open(Account a) { this.accounts.push(a); }
+    public int total() {
+        int t = 0;
+        for (var a : this.accounts) { t = t + a.getBalance(); }
+        return t;
+    }
+    public bool transfer(int from, int to, int amount) {
+        var src = this.accounts[from];
+        var dst = this.accounts[to];
+        if (!src.withdraw(amount)) { return false; }
+        dst.deposit(amount);
+        return true;
+    }
+    public int count() { return (int) this.accounts.len(); }
+    public Account at(int i) { return this.accounts[i]; }
+}
+public void main() {
+    var bank = new Bank();
+    bank.open(new Account("ada", 100));
+    bank.open(new Account("bo", 50));
+    bank.open(new Account("cy", 0));
+    print(bank.count());
+    print(bank.total());
+    print(bank.transfer(0, 2, 40));
+    print(bank.at(0).getBalance());
+    print(bank.at(2).getBalance());
+    print(bank.total());
+    print(bank.transfer(2, 1, 1000));
+    print(bank.total());
+    for (int i = 0; i < bank.count(); i++) {
+        print(bank.at(i).getOwner() + "=" + bank.at(i).getBalance());
+    }
+}

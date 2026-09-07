@@ -1,0 +1,34 @@
+public String classify(int n) {
+    switch (n) {
+        case 0 -> { return "zero"; }
+        case 1 -> { return "one"; }
+        case 2 -> { return "two"; }
+        default -> { return "many"; }
+    }
+}
+public void main() {
+    outer:
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            if (j == 2) { continue outer; }
+            if (i == 3) { break outer; }
+            print(i + ":" + j);
+        }
+    }
+
+    int n = 0;
+    do {
+        print("do " + n);
+        n = n + 1;
+    } while (n < 3);
+
+    int w = 5;
+    while (w > 0) {
+        w = w - 2;
+    }
+    print(w);
+
+    for (int i = 0; i < 5; i++) {
+        print(classify(i));
+    }
+}

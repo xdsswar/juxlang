@@ -1,0 +1,26 @@
+public class Box {
+    public static int n = 0;
+}
+public int bump(int by) {
+    Box.n = Box.n + by;
+    return Box.n;
+}
+public void main() {
+    print(bump(1) + bump(10) * bump(100));
+    print(Box.n);
+    int k = 5;
+    print(k++ + --k);
+    print(k);
+    int a = 0;
+    a += 3;
+    a *= 4;
+    a -= 2;
+    a /= 2;
+    print(a);
+    bool hit = false;
+    if (false && bump(1000) > 0) { hit = true; }
+    print(Box.n);
+    if (true || bump(1000) > 0) { hit = true; }
+    print(Box.n);
+    print(hit);
+}

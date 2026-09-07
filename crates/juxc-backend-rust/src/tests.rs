@@ -1732,8 +1732,14 @@ fn class_bound_uses_marker_trait_kind() {
         public void main() {}
         "#,
     );
-    // Marker trait + impl emitted for Animal.
-    assert!(rust.contains("pub trait AnimalKind: std::fmt::Debug {}"), "marker decl: {rust}");
+    // Marker trait + impl emitted for Animal. `Display` rides alongside
+    // `Debug` so a base-typed value (a `Rc<dyn …Kind>`) can be another
+    // generic's type argument -- a parameter that reaches a format position
+    // carries a `Display` bound, and every class emits an identity one.
+    assert!(
+        rust.contains("pub trait AnimalKind: std::fmt::Debug + std::fmt::Display {}"),
+        "marker decl: {rust}",
+    );
     assert!(rust.contains("impl AnimalKind for Animal {}"), "marker impl: {rust}");
     // The bound on Carrier uses AnimalKind, not Animal directly.
     assert!(

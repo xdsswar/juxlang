@@ -1,0 +1,31 @@
+public interface Shape {
+    double area();
+    String kind();
+}
+public class Circle implements Shape {
+    private double r;
+    public Circle(double r) { this.r = r; }
+    public double area() { return 3.14159 * this.r * this.r; }
+    public String kind() { return "circle"; }
+}
+public class Rect implements Shape {
+    private double w;
+    private double h;
+    public Rect(double w, double h) { this.w = w; this.h = h; }
+    public double area() { return this.w * this.h; }
+    public String kind() { return "rect"; }
+}
+public void main() {
+    var shapes = new Vec<Shape>();
+    shapes.push(new Circle(1.0));
+    shapes.push(new Rect(2.0, 3.0));
+    shapes.push(new Circle(2.0));
+
+    double total = 0.0;
+    for (var s : shapes) {
+        print(s.kind() + " " + s.area());
+        total = total + s.area();
+    }
+    print(total);
+    print(shapes.len());
+}

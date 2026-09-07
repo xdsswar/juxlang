@@ -1,0 +1,27 @@
+public class Counter {
+    public static int made = 0;
+    public static const int LIMIT = 3;
+    private int id;
+    public Counter() {
+        Counter.made = Counter.made + 1;
+        this.id = Counter.made;
+    }
+    public int getId() { return this.id; }
+}
+public class Config {
+    public static const String NAME = "jux";
+    public static const String FULL = NAME + "-lang";
+    public static const int DOUBLE = Counter.LIMIT * 2;
+}
+public void main() {
+    print(Counter.made);
+    var a = new Counter();
+    var b = new Counter();
+    print(a.getId());
+    print(b.getId());
+    print(Counter.made);
+    print(Counter.LIMIT);
+    print(Config.NAME);
+    print(Config.FULL);
+    print(Config.DOUBLE);
+}

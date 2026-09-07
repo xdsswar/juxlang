@@ -1,0 +1,25 @@
+public void main() {
+    double d = 9.99;
+    print((int) d);
+    print((int) -9.99);
+    print((long) 3.7);
+
+    int big = 300;
+    print((byte) big);
+    print((short) 70000);
+
+    char c = 'A';
+    print((int) c);
+    print((char) 66);
+    print((int) 'z');
+
+    int i = 7;
+    double back = (double) i;
+    print(back);
+    print((double) 7 / (double) 2);
+    print(7 / 2);
+
+    long l = 5;
+    int narrowed = (int) l;
+    print(narrowed);
+}

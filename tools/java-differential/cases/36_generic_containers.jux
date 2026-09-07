@@ -1,0 +1,48 @@
+public class Wrap<T> {
+    private T v;
+    public Wrap(T v) { this.v = v; }
+    public T get() { return this.v; }
+}
+public void main() {
+    var rows = new Vec<Vec<int>>();
+    for (int r = 0; r < 3; r++) {
+        var row = new Vec<int>();
+        for (int c = 0; c < 3; c++) {
+            row.push(r * 3 + c);
+        }
+        rows.push(row);
+    }
+    print(rows.len());
+    print(rows[0][0]);
+    print(rows[2][2]);
+    print(rows[1][2]);
+
+    int total = 0;
+    for (var row : rows) {
+        for (var v : row) {
+            total = total + v;
+        }
+    }
+    print(total);
+
+    var wraps = new Vec<Wrap<String>>();
+    wraps.push(new Wrap<String>("a"));
+    wraps.push(new Wrap<String>("b"));
+    print(wraps.len());
+    print(wraps[0].get());
+    print(wraps[1].get());
+
+    var wrapped = new Wrap<Vec<int>>(new Vec<int>());
+    wrapped.get().push(7);
+    wrapped.get().push(8);
+    print(wrapped.get().len());
+    print(wrapped.get()[1]);
+
+    var m = new HashMap<String, Vec<int>>();
+    var xs = new Vec<int>();
+    xs.push(1);
+    xs.push(2);
+    m.insert("k", xs);
+    print(m.len());
+    print(m.get("k")!!.len());
+}

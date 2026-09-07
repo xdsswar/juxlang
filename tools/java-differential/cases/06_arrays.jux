@@ -1,0 +1,32 @@
+public void fill(int[] xs) {
+    for (int i = 0; i < xs.length; i++) {
+        xs[i] = i * i;
+    }
+}
+public void main() {
+    int[] a = new int[5];
+    print(a.length);
+    print(a[0]);
+    fill(a);
+    print(a[4]);
+    int[] b = a;
+    b[0] = 99;
+    print(a[0]);
+
+    int[][] grid = new int[3][4];
+    grid[1][2] = 7;
+    print(grid.length);
+    print(grid[0].length);
+    print(grid[1][2]);
+    print(grid[0][0]);
+
+    int total = 0;
+    for (int v : a) {
+        total = total + v;
+    }
+    print(total);
+
+    String[] names = new String[2];
+    names[0] = "x";
+    print(names[0]);
+}

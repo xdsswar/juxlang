@@ -1876,6 +1876,24 @@ impl crate::RustEmitter {
     /// safety: returning `false` defaults to wrap, which is the
     /// safer direction.
     pub(crate) fn expression_is_already_nullable(&self, expr: &juxc_ast::Expr) -> bool {
+        // **`?.` yields a nullable value, by definition.** Checked first,
+        // ahead of every other rule: a safe-navigation read or call produces
+        // `None` when the receiver is null, so its result is an `Option`
+        // whatever the member's own type says. The method-call arm below
+        // answers "not nullable" as a conservative default, and that default
+        // was wrong here -- `print(s?.length())` rendered the Option itself
+        // and put `Some(4)` on the user's terminal.
+        match expr {
+            juxc_ast::Expr::Field(f) if f.safe => return true,
+            juxc_ast::Expr::Call(c) => {
+                if let juxc_ast::Expr::Field(f) = &*c.callee {
+                    if f.safe {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
         // **Path queries** (single-segment ident) consult
         // `nullable_locals` as the source of truth so that
         // smart-cast removal (`emit_if`'s `if (x != null) { … }`

@@ -1,0 +1,40 @@
+// `sort_unstable()` is the name Rust's slice actually exposes; the
+// toolchain's rustdoc JSON carries no plain `sort`, so Jux does not
+// invent one. Same result here -- these elements are distinct.
+public void addAll(Vec<int> dst, int n) {
+    for (int i = 0; i < n; i++) {
+        dst.push(i);
+    }
+}
+public void main() {
+    var xs = new Vec<int>();
+    addAll(xs, 5);
+    print(xs.len());
+    print(xs[0]);
+    print(xs[4]);
+
+    // A collection is a reference: the callee's writes are visible here.
+    var alias = xs;
+    alias.push(99);
+    print(xs.len());
+    print(xs[5]);
+
+    int sum = 0;
+    for (var v : xs) {
+        sum = sum + v;
+    }
+    print(sum);
+
+    var last = xs.pop();
+    print(last);
+    print(xs.len());
+
+    var names = new Vec<String>();
+    names.push("b");
+    names.push("a");
+    names.push("c");
+    names.sort_unstable();
+    print(names[0]);
+    print(names[2]);
+    print(names.len());
+}

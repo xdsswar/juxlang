@@ -1,0 +1,26 @@
+public void main() {
+    var m = new HashMap<String, int>();
+    m.insert("one", 1);
+    m.insert("two", 2);
+    m.insert("three", 3);
+    print(m.len());
+    print(m.get("two"));
+    print(m.get("nope"));
+    print(m.contains_key("one"));
+    print(m.contains_key("zzz"));
+
+    // Overwrite.
+    m.insert("one", 11);
+    print(m.get("one"));
+    print(m.len());
+
+    // Iterate in a deterministic order by collecting and sorting the keys.
+    var keys = new Vec<String>();
+    for (var k : m.keys()) {
+        keys.push(k);
+    }
+    keys.sort_unstable();
+    for (var k : keys) {
+        print(k);
+    }
+}

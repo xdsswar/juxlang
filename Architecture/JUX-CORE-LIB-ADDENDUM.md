@@ -382,6 +382,7 @@ public final class String {                                  // operators only â
     public String concat(String other);                          -- used by + and $"..."
     public String repeat(int times);                             -- n copies concatenated; "" when times == 0
     public String substring(int charStart, int charEnd) throws IndexOutOfBoundsException;
+    public String substring(int charStart) throws IndexOutOfBoundsException;   -- to the end
     public String substringBytes(int byteStart, int byteEnd) throws EncodingException, IndexOutOfBoundsException;
 
     public bool operator==(String other);                        -- byte-equality
@@ -393,6 +394,14 @@ public final class String {                                  // operators only â
     public static String fromBytesUnchecked(byte[] bytes);       -- unsafe; caller asserts UTF-8
 }
 ```
+
+**Equality and ordering are operators, not methods.** `a == b` is byte
+equality and `a <=> b` is byte lexicographic order, so `<`, `<=`, `>`, `>=`
+work on strings directly. There is no `equals` or `compareTo`: they would be
+a second spelling of something the operators already say, and `==` on a Jux
+`String` is value equality already (7.14.3), so the Java habit of reaching
+for `.equals()` is not needed and not provided. Calling one is a normal
+"no such method" error naming `String`.
 
 ### K.7.1. Profile Availability
 

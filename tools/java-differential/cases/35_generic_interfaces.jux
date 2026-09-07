@@ -1,0 +1,45 @@
+public interface Source<T> {
+    T produce();
+    default String announce() { return "produced " + this.produce(); }
+}
+public interface Sink<T> {
+    void accept(T value);
+}
+public class IntSource implements Source<int> {
+    private int n;
+    public IntSource(int n) { this.n = n; }
+    public int produce() { return this.n; }
+}
+public class EchoSource<T> implements Source<T> {
+    private T v;
+    public EchoSource(T v) { this.v = v; }
+    public T produce() { return this.v; }
+}
+public class Collector<T> implements Sink<T> {
+    private Vec<T> seen;
+    public Collector() { this.seen = new Vec<T>(); }
+    public void accept(T value) { this.seen.push(value); }
+    public int count() { return (int) this.seen.len(); }
+    public T at(int i) { return this.seen[i]; }
+}
+public void main() {
+    Source<int> a = new IntSource(4);
+    print(a.produce());
+    print(a.announce());
+
+    Source<String> b = new EchoSource<String>("x");
+    print(b.produce());
+    print(b.announce());
+
+    var c = new Collector<String>();
+    c.accept("p");
+    c.accept("q");
+    print(c.count());
+    print(c.at(0));
+    print(c.at(1));
+
+    var nested = new Collector<EchoSource<int>>();
+    nested.accept(new EchoSource<int>(11));
+    print(nested.count());
+    print(nested.at(0).produce());
+}

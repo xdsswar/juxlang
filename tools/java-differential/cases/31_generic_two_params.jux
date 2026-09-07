@@ -1,0 +1,28 @@
+public class Pair<A, B> {
+    private A a;
+    private B b;
+    public Pair(A a, B b) { this.a = a; this.b = b; }
+    public A left() { return this.a; }
+    public B right() { return this.b; }
+    public Pair<B, A> swap() { return new Pair<B, A>(this.b, this.a); }
+    public String show() { return "(" + this.a + "," + this.b + ")"; }
+}
+public void main() {
+    var p = new Pair<int, String>(1, "x");
+    print(p.show());
+    print(p.swap().show());
+    print(p.left());
+    print(p.right());
+
+    var nested = new Pair<Pair<int, int>, String>(new Pair<int, int>(1, 2), "tag");
+    print(nested.left().show());
+    print(nested.right());
+    print(nested.swap().right().show());
+
+    var deep = new Pair<String, Pair<String, Pair<int, int>>>(
+        "a",
+        new Pair<String, Pair<int, int>>("b", new Pair<int, int>(3, 4)));
+    print(deep.left());
+    print(deep.right().left());
+    print(deep.right().right().show());
+}

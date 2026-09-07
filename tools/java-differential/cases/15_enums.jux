@@ -1,0 +1,23 @@
+public enum Planet {
+    MERCURY,
+    VENUS,
+    EARTH
+}
+public String describe(Planet p) {
+    return switch (p) {
+        case Planet.MERCURY -> "small and hot";
+        case Planet.VENUS -> "hot and thick";
+        case Planet.EARTH -> "home";
+    };
+}
+public void main() {
+    print(describe(Planet.MERCURY));
+    print(describe(Planet.VENUS));
+    print(describe(Planet.EARTH));
+    Planet a = Planet.EARTH;
+    Planet b = Planet.EARTH;
+    Planet c = Planet.VENUS;
+    print(a == b);
+    print(a == c);
+    print(describe(a));
+}

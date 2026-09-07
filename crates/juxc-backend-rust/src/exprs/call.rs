@@ -4765,7 +4765,11 @@ impl RustEmitter {
                 true
             }
             "substring" => {
-                // `s.substring(start, end)` — char-indexed slice.
+                // `s.substring(start, end)` — char-indexed slice — and the
+                // one-arg `s.substring(start)`, which runs to the end. The
+                // one-arg form used to fall through this code emitting an
+                // empty `take((() - start))`, which reached rustc as
+                // "cannot subtract {integer} from ()".
                 self.w.push('(');
                 self.emit_stdlib_receiver(receiver);
                 self.w.push_str(".chars().skip((");
@@ -4774,16 +4778,18 @@ impl RustEmitter {
                 if let Some(start) = call.args.first() {
                     self.emit_expr(start);
                 }
-                self.w.push_str(") as usize).take(((");
+                self.w.push_str(") as usize)");
                 if let Some(end) = call.args.get(1) {
+                    self.w.push_str(".take(((");
                     self.emit_expr(end);
-                }
-                self.w.push_str(") - (");
-                if let Some(start) = call.args.first() {
-                    self.emit_expr(start);
+                    self.w.push_str(") - (");
+                    if let Some(start) = call.args.first() {
+                        self.emit_expr(start);
+                    }
+                    self.w.push_str(")) as usize)");
                 }
                 self.emitting_format_arg = prev;
-                self.w.push_str(")) as usize).collect::<String>())");
+                self.w.push_str(".collect::<String>())");
                 true
             }
             "charAt" => {

@@ -1,0 +1,42 @@
+public class Slot<T> {
+    private T? value;
+    public Slot() {}
+    public bool isEmpty() { return this.value == null; }
+    public void put(T v) { this.value = v; }
+    public T? peek() { return this.value; }
+    public String describe() {
+        if (this.value == null) { return "empty"; }
+        return "has " + this.value!!;
+    }
+}
+public class Item {
+    public String name;
+    public Item(String n) { this.name = n; }
+}
+public void main() {
+    var s = new Slot<String>();
+    print(s.isEmpty());
+    print(s.describe());
+    s.put("v");
+    print(s.isEmpty());
+    print(s.describe());
+    print(s.peek() ?? "none");
+
+    var o = new Slot<Item>();
+    print(o.describe());
+    o.put(new Item("thing"));
+    print(o.isEmpty());
+    print(o.peek()!!.name);
+
+    var held = o.peek()!!;
+    held.name = "changed";
+    print(o.peek()!!.name);
+
+    var ss = new Slot<Slot<String>>();
+    print(ss.isEmpty());
+    ss.put(new Slot<String>());
+    print(ss.isEmpty());
+    print(ss.peek()!!.isEmpty());
+    ss.peek()!!.put("deep");
+    print(ss.peek()!!.describe());
+}

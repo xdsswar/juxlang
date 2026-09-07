@@ -330,7 +330,17 @@ impl RustEmitter {
         if combined_generics.is_empty() {
             self.emit_generic_params(&fn_decl.generic_params);
         } else {
-            self.emit_generic_params_with_clone_bound(&combined_generics);
+            // A parameter whose values reach a format position needs
+            // `Display`, exactly as a class's does -- otherwise the universal
+            // renderer falls back to `Debug` and a `String` prints with
+            // quotes. Collected from this function's own body.
+            let displayed = self.fn_displayed_generic_params(fn_decl);
+            let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            self.emit_generic_params_with_clone_bound_plus_display(
+                &combined_generics,
+                &displayed,
+                &none,
+            );
         }
         self.w.push('(');
         // Params the body mutates in place (`xs.push(…)` on a by-value

@@ -1,0 +1,32 @@
+public class Pair<A, B> {
+    private A first;
+    private B second;
+    public Pair(A a, B b) { this.first = a; this.second = b; }
+    public A getFirst() { return this.first; }
+    public B getSecond() { return this.second; }
+    public String show() { return "(" + this.first + ", " + this.second + ")"; }
+}
+public class Cell<T> {
+    private T value;
+    public Cell(T v) { this.value = v; }
+    public T get() { return this.value; }
+    public void set(T v) { this.value = v; }
+}
+public void main() {
+    var p = new Pair<int, String>(1, "one");
+    print(p.getFirst());
+    print(p.getSecond());
+    print(p.show());
+
+    var c = new Cell<String>("start");
+    print(c.get());
+    c.set("changed");
+    print(c.get());
+
+    // A generic class NESTED as another's type argument. Printing the outer
+    // one directly would show an identity address, which no two runs agree
+    // on, so the inner is rendered through its own `show()`.
+    var nested = new Pair<String, Pair<int, int>>("k", new Pair<int, int>(2, 3));
+    print(nested.getFirst());
+    print(nested.getSecond().show());
+}
