@@ -152,6 +152,26 @@ impl RustEmitter {
     /// - `new char[8]`     → `['\\0'; 8]`
     /// - `new MyType[N]`   → `[Default::default(); N]` (works iff MyType: Default + Copy)
     pub(crate) fn emit_new_array(&mut self, n: &NewArrayExpr) {
+        // §6.5.2: constructing an array produces the shared handle.
+        let handle = self.arrays_are_handles_here();
+        let elem = n
+            .element_type
+            .name
+            .segments
+            .last()
+            .map(|s| s.text.clone())
+            .unwrap_or_default();
+        let (open, close) = self.array_handle_new(&elem);
+        if handle {
+            self.w.push_str(open);
+        }
+        self.emit_new_array_inner(n);
+        if handle {
+            self.w.push_str(close);
+        }
+    }
+
+    fn emit_new_array_inner(&mut self, n: &NewArrayExpr) {
         // Collect every dimension's size, outermost-first: the outer
         // `size` plus any `inner_sizes` from a multi-dim `new T[a][b]`.
         let mut sizes: Vec<&Expr> = Vec::with_capacity(1 + n.inner_sizes.len());
@@ -248,6 +268,33 @@ impl RustEmitter {
                     .push_str(").map(|_| Default::default()).collect::<Vec<_>>()");
                 return;
             }
+            // An INNER dimension is an array in its own right, so it gets its
+            // own handle (§6.5.2) - `grid[1]` has to BE the row.
+            //
+            // And it cannot go through `vec![row; n]`, which clones one value
+            // n times: cloning a handle shares it, so every row of
+            // `new int[2][2]` would be the same array. Building each row
+            // separately is what makes them distinct, which is what Java does
+            // and what anyone writing a grid expects.
+            let inner_is_handle = !is_innermost && self.arrays_are_handles_here();
+            if inner_is_handle {
+                let elem = n
+                    .element_type
+                    .name
+                    .segments
+                    .last()
+                    .map(|s| s.text.clone())
+                    .unwrap_or_default();
+                let (open, close) = self.array_handle_new(&elem);
+                self.w.push_str("(0..");
+                self.emit_array_repeat_len(size);
+                self.w.push_str(").map(|_| ");
+                self.w.push_str(open);
+                self.emit_new_array_dim(n, sizes, depth + 1, target_dims);
+                self.w.push_str(close);
+                self.w.push_str(").collect::<Vec<_>>()");
+                return;
+            }
             self.w.push_str("vec![");
             if is_innermost {
                 self.emit_default_value_for(&n.element_type);
@@ -264,6 +311,27 @@ impl RustEmitter {
         if is_innermost && elem_is_type_param {
             self.w
                 .push_str("std::array::from_fn(|_| Default::default())");
+            return;
+        }
+        // Same rule as the dynamic branch: an inner dimension is an array of
+        // its own, so it carries its own handle, and it cannot be built by
+        // repetition -- `[row; n]` clones one value, and cloning a handle
+        // shares it, so every row of `new int[3][4]` would be the same array.
+        // `from_fn` builds each one separately.
+        if !is_innermost && self.arrays_are_handles_here() {
+            let elem = n
+                .element_type
+                .name
+                .segments
+                .last()
+                .map(|x| x.text.clone())
+                .unwrap_or_default();
+            let (open, close) = self.array_handle_new(&elem);
+            self.w.push_str("std::array::from_fn(|_| ");
+            self.w.push_str(open);
+            self.emit_new_array_dim(n, sizes, depth + 1, target_dims);
+            self.w.push_str(close);
+            self.w.push(')');
             return;
         }
         self.w.push('[');
@@ -332,6 +400,29 @@ impl RustEmitter {
     /// with full type-tracking can emit a `: Vec<isize>` annotation
     /// when a typed local makes the intended element type explicit.
     pub(crate) fn emit_new_array_lit(&mut self, n: &NewArrayLitExpr) {
+        // §6.5.2: an array literal produces the shared handle too.
+        let handle = self.arrays_are_handles_here();
+        // An array literal has no written element type; take it from the
+        // literal's checked type, which is where the exception case shows up
+        // (`new Exception[]{cause}` inside the Throwable chain).
+        let elem = match self.expr_types.get(&n.span) {
+            Some(juxc_tycheck::Ty::Array { element, .. }) => match element.as_ref() {
+                juxc_tycheck::Ty::User { name, .. } => name.clone(),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        };
+        let (open, close) = self.array_handle_new(&elem);
+        if handle {
+            self.w.push_str(open);
+        }
+        self.emit_new_array_lit_inner(n);
+        if handle {
+            self.w.push_str(close);
+        }
+    }
+
+    fn emit_new_array_lit_inner(&mut self, n: &NewArrayLitExpr) {
         // Fixed → Rust array literal `[a, b, c]`. Empty fixed literals
         // can't be written in Jux (the parser never produces them) so
         // we don't have a special path for them.

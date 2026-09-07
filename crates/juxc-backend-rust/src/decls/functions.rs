@@ -653,7 +653,7 @@ impl RustEmitter {
                     .push_str("futures::executor::block_on(__jux_async_main());\n");
             } else {
                 self.w.push_str(
-                    "futures::executor::block_on(__jux_async_main(std::env::args().skip(1).collect::<Vec<String>>()));\n",
+                    "futures::executor::block_on(__jux_async_main(crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())));\n",
                 );
             }
             self.w.indent_dec();
@@ -667,7 +667,7 @@ impl RustEmitter {
             self.w.line("fn main() {");
             self.w.indent_inc();
             self.w.emit_indent();
-            self.w.push_str("__jux_args_main(std::env::args().skip(1).collect::<Vec<String>>());\n");
+            self.w.push_str("__jux_args_main(std::rc::Rc::new(std::cell::RefCell::new(crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>()))));\n");
             self.w.indent_dec();
             self.w.line("}");
             self.w.newline();

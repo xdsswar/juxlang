@@ -67,7 +67,7 @@ fn varargs_pack_and_passthrough() {
         build.status.code(),
     );
     let exe = args_emit.join("target").join("debug").join(format!(
-        "jux_emitted{}",
+        "it-varargs-main{}",
         std::env::consts::EXE_SUFFIX
     ));
     let run = Command::new(&exe)

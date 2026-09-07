@@ -88,7 +88,7 @@ fn jux_build_hello_world_produces_binary_without_running() {
     let binary_path = emit_dir
         .join("target")
         .join("debug")
-        .join(format!("jux_emitted{}", std::env::consts::EXE_SUFFIX));
+        .join(format!("hello{}", std::env::consts::EXE_SUFFIX));
     assert!(
         binary_path.exists(),
         "expected emitted binary at {}",

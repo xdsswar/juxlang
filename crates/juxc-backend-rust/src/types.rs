@@ -324,6 +324,22 @@ impl RustEmitter {
         // `array_shape` is the remaining (inner) dimensions — or `None`
         // (a scalar element) once the last dimension is consumed.
         if let Some(shape) = &ty.array_shape {
+            // §6.5.2 - an array is a REFERENCE type, so each dimension is a
+            // shared handle. `int[] b = a;` then aliases, an array passed to a
+            // function is the caller's array, and `grid[1]` is the row rather
+            // than a copy of it. A `const` slot is the exception: it is
+            // link-time data with no identity to share.
+            let handle = self.arrays_are_handles_here();
+            let elem_name = ty
+                .name
+                .segments
+                .last()
+                .map(|s| s.text.clone())
+                .unwrap_or_default();
+            let (open, close) = self.array_handle_wrap(&elem_name);
+            if handle {
+                self.w.push_str(open);
+            }
             // `element_ty` is `ty` with the outermost dimension stripped.
             let element_ty = juxc_ast::TypeRef {
                 name: ty.name.clone(),
@@ -365,6 +381,9 @@ impl RustEmitter {
                     self.emit_type_as_rust(&element_ty);
                     self.w.push('>');
                 }
+            }
+            if handle {
+                self.w.push_str(close);
             }
             return;
         }
@@ -1196,9 +1215,25 @@ impl RustEmitter {
             // Rust array type. The field's declared Rust type (emitted by
             // `emit_type_as_rust`) drives inference for the nested element,
             // so the default need only name the outer wrapper.
+            // The default has to be the HANDLE, not the bare sequence
+            // (§6.5.2) - it is filling a slot whose declared type is one.
+            let handle = self.arrays_are_handles_here();
+            let elem = ty
+                .name
+                .segments
+                .last()
+                .map(|x| x.text.clone())
+                .unwrap_or_default();
+            let (open, close) = self.array_handle_new(&elem);
+            if handle {
+                self.w.push_str(open);
+            }
             match shape.outer() {
                 juxc_ast::ArrayDim::Dynamic => self.w.push_str("Vec::new()"),
                 juxc_ast::ArrayDim::Fixed(_) => self.w.push_str("Default::default()"),
+            }
+            if handle {
+                self.w.push_str(close);
             }
             return;
         }

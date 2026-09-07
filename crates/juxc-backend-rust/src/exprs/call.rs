@@ -252,14 +252,70 @@ impl RustEmitter {
         else {
             return false;
         };
+        // An ARRAY return counts too, now that an array is a reference type
+        // (§6.5.2): a crate hands back a plain sequence, and the slot taking
+        // it is a handle. `s.split(",")` is the everyday case.
         if t.array_shape.is_some() {
-            return false;
+            return self.arrays_are_handles_here();
         }
         // `Self` on a named constructor means the owning type.
         if t.name.segments.last().is_some_and(|l| l.text == "Self") {
             return owner.is_some_and(|fqn| self.collection_name_is_handle(&fqn));
         }
         self.collection_is_handle(&t.name)
+    }
+
+    /// True when this call hands back a BARE sequence into an array-typed
+    /// slot, which is a handle (§6.5.2), so the value has to be wrapped.
+    ///
+    /// A call into Jux code already produces the handle -- the callee built
+    /// one. What does not are the foreign methods, which return the crate's
+    /// own `Vec`, and the compiler intrinsics. Rather than enumerate those --
+    /// a list that would go stale the moment one is added -- ask the opposite
+    /// question, which has a stable answer: does this call resolve to a method
+    /// or function THIS program declares?
+    ///
+    /// The stdlib entry points that are declared in Jux but EMITTED as
+    /// intrinsics (`File.readLines`) are the one shape this cannot see; they
+    /// wrap at their own emission site.
+    pub(crate) fn call_yields_bare_array(&self, call: &CallExpr) -> bool {
+        if !self.arrays_are_handles_here() {
+            return false;
+        }
+        if !matches!(
+            self.expr_types.get(&call.span),
+            Some(juxc_tycheck::Ty::Array { .. })
+        ) {
+            return false;
+        }
+        let declared_in_jux = match &*call.callee {
+            Expr::Path(qn) if qn.segments.len() == 1 => self
+                .symbols
+                .lookup_function(&qn.segments[0].text)
+                .is_some_and(|(k, _)| {
+                    !(k.starts_with("rust.") || k.starts_with("c.") || k.starts_with("cpp."))
+                }),
+            Expr::Field(f) => {
+                let owner = match &*f.object {
+                    Expr::Path(qn) => qn
+                        .segments
+                        .last()
+                        .and_then(|l| self.symbols.find_fqn_by_bare(&l.text)),
+                    _ => None,
+                }
+                .or_else(|| match self.receiver_ty_of(&f.object) {
+                    Some(juxc_tycheck::Ty::User { name, .. }) => {
+                        self.resolve_bare_class_fqn(name.rsplit('.').next().unwrap_or(&name))
+                    }
+                    _ => None,
+                });
+                owner
+                    .and_then(|fqn| self.symbols.classes.get(&fqn))
+                    .is_some_and(|c| !c.is_external && c.methods.contains_key(&f.field.text))
+            }
+            _ => false,
+        };
+        !declared_in_jux
     }
 
     pub(crate) fn call_is_foreign_result(&self, call: &CallExpr) -> bool {
@@ -1197,11 +1253,20 @@ impl RustEmitter {
                             return;
                         }
                         "readLines" => {
+                            // Declared in the Jux stdlib but emitted here, so
+                            // the array handle (§6.5.2) is applied by hand.
+                            let handle = self.arrays_are_handles_here();
+                            if handle {
+                                self.w.push_str("crate::jux_arr(");
+                            }
                             self.w.push_str("std::fs::read_to_string(&(");
                             self.emit_call_args(call);
                             self.w.push_str(
                                 ")).unwrap().lines().map(|l| l.to_string()).collect::<Vec<_>>()",
                             );
+                            if handle {
+                                self.w.push_str(")");
+                            }
                             return;
                         }
                         "delete" => {
@@ -1211,9 +1276,18 @@ impl RustEmitter {
                             return;
                         }
                         "listDir" => {
+                            // Same as `readLines`: a fresh sequence into an
+                            // array-typed slot, which is a handle (§6.5.2).
+                            let handle = self.arrays_are_handles_here();
+                            if handle {
+                                self.w.push_str("crate::jux_arr(");
+                            }
                             self.w.push_str("std::fs::read_dir(&(");
                             self.emit_call_args(call);
                             self.w.push_str(")).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>()");
+                            if handle {
+                                self.w.push_str(")");
+                            }
                             return;
                         }
                         _ => {}
@@ -3933,12 +4007,23 @@ impl RustEmitter {
     /// The name lists below are the fallback for a stub cache generated before
     /// the marker existed — they are not the source of truth, and a new library
     /// method must never be added to them.
-    fn collection_method_mutates(&self, recv_ty: &juxc_tycheck::Ty, method: &str) -> bool {
+    pub(crate) fn collection_method_mutates(
+        &self,
+        recv_ty: &juxc_tycheck::Ty,
+        method: &str,
+    ) -> bool {
         match recv_ty {
-            juxc_tycheck::Ty::Array { .. } => matches!(
-                method,
-                "add" | "set" | "remove" | "insert" | "clear" | "reverse" | "sort"
-            ),
+            // A Jux array IS a `Vec` underneath and exposes its methods, so
+            // ask the `Vec` stub rather than keeping a second list that has to
+            // be remembered whenever the first one grows. It had already
+            // drifted: `push` and `pop` were missing, which is how
+            // `stack.push(1)` came to be emitted without the `borrow_mut()`
+            // an array handle needs (§6.5.2). The Java-facade names are the
+            // fallback, since no Rust `Vec` declares them.
+            juxc_tycheck::Ty::Array { .. } => {
+                self.external_method_mutates_receiver("Vec", method)
+                    || matches!(method, "add" | "set" | "remove" | "sort")
+            }
             juxc_tycheck::Ty::User { name, .. } => {
                 // Discovered answer first — see the doc comment above.
                 if self.external_method_mutates_receiver(name, method) {

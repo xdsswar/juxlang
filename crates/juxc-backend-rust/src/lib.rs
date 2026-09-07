@@ -3859,6 +3859,30 @@ impl RustEmitter {
         // `ptr_eq` — with an ATOMIC refcount and a real lock, so every site that
         // reaches through a class handle is spelled the same whichever tier the
         // class is on; only the type and the constructor differ.
+        // A Jux ARRAY (§6.5.2) is a reference type, so it lowers to a shared
+        // cell. Naming the shape keeps the emitted Rust readable: a two-
+        // dimensional `int[][]` is `JuxArr<Vec<JuxArr<Vec<isize>>>>` rather
+        // than the same thing spelled out, which nests to four lines.
+        w.push_str(
+            "/// A Jux array: a shared, interior-mutable sequence.
+",
+        );
+        w.push_str(
+            "pub type JuxArr<T> = std::rc::Rc<std::cell::RefCell<T>>;
+",
+        );
+        w.push_str(
+            "/// Build a [`JuxArr`] - the constructor an alias cannot provide.
+",
+        );
+        w.push_str(
+            "pub fn jux_arr<T>(v: T) -> JuxArr<T> { std::rc::Rc::new(std::cell::RefCell::new(v)) }
+",
+        );
+        w.push_str(
+            "
+",
+        );
         w.push_str(
             "pub struct JuxSync<T: ?Sized>(pub std::sync::Arc<std::sync::Mutex<T>>);
 ",
@@ -4676,7 +4700,7 @@ impl RustEmitter {
             // renamed to `__jux_args_main` by `emit_fn_decl`.
             let takes_args = main_decl.is_some_and(|f| !f.params.is_empty());
             let args_expr = if takes_args {
-                "std::env::args().skip(1).collect::<Vec<String>>()"
+                "crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())"
             } else {
                 ""
             };
@@ -4972,7 +4996,7 @@ impl RustEmitter {
             // were renamed to `__jux_args_main` by `emit_fn_decl`.
             let takes_args = !main_fn.params.is_empty();
             let args_expr = if takes_args {
-                "std::env::args().skip(1).collect::<Vec<String>>()"
+                "crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())"
             } else {
                 ""
             };
@@ -5083,7 +5107,7 @@ impl RustEmitter {
         };
         let takes_args = !method.params.is_empty();
         let args_expr = if takes_args {
-            "std::env::args().skip(1).collect::<Vec<String>>()"
+            "crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())"
         } else {
             ""
         };

@@ -1075,6 +1075,38 @@ lifting the collection out into a second name loses the aliasing. This is the
 one place §6.5.1 does not reach, and it is called out here rather than left to
 be discovered.
 
+#### 6.5.2. Arrays Are Reference Types
+
+**An array is a reference, on exactly the same terms as a collection (§6.5.1)
+and a class instance (§6.5).** Binding one to a second name does not copy it,
+a getter hands back the real array, an array passed to a function is the
+caller's array, and a row of a multi-dimensional array is the row itself:
+
+```java
+int[] b = a;          // the SAME array
+b[0] = 5;             // a[0] is 5
+
+void fill(int[] xs) { xs[0] = 9; }
+fill(c);              // c[0] is 9
+
+int[] row = grid[1];  // the row, not a copy of it
+row[0] = 3;           // grid[1][0] is 3
+```
+
+This is Java's rule, and the argument for it is the one §6.5.1 already makes:
+a language whose objects and collections are shared references but whose
+arrays silently are not would make ordinary lines of code do nothing at all,
+with no diagnostic. An array is the most primitive aggregate the language has,
+and it should not be the one that behaves differently.
+
+**`clone()` copies**, shallowly, as it does for a collection: a new array of
+the same length holding the same elements.
+
+**Arrays live on the heap.** Java's do too, and it is what makes a reference to
+one meaningful. A `T[N]` in a declaration constrains the length; it does not
+ask for stack storage, and the compiler is free to use it where an array
+provably never escapes.
+
 **In `jux-embedded` and `jux-core`**, refcounting is off by default because atomic operations are expensive (or unavailable) on small MCUs. Class instances follow single-ownership semantics — assignment moves rather than shares. To opt back into shared ownership, wrap a value in `SharedRef<T>`:
 
 ```java

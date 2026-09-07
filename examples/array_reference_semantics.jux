@@ -1,0 +1,55 @@
+// Arrays are REFERENCE types (JUX-LANG-V1 §6.5.2), on the same terms as
+// collections and class instances: binding one to a second name does not copy
+// it, an array passed to a function is the caller's array, an array read out of
+// an object is the object's array, and a row of a 2-D array is the row.
+//
+// Every one of these silently did nothing before. `fill(c)` wrote into a copy
+// that was dropped at the semicolon, and the caller saw its zeros. That is the
+// same class of bug Wave 1 removed for collections, on the language's most
+// primitive aggregate.
+//
+// Expected output: 5 / 9 / 7 / 3 / 4 / 7 2 / 0
+
+public class Holder {
+    public int[] data = new int[2];
+    public int[] get() { return this.data; }
+}
+
+public void fill(int[] xs) { xs[0] = 9; }
+
+public void main() {
+    // A second name is the same array.
+    int[] a = new int[2];
+    int[] b = a;
+    b[0] = 5;
+    print(a[0]);
+
+    // A function writes into the caller's array.
+    int[] c = new int[2];
+    fill(c);
+    print(c[0]);
+
+    // An array read out of an object is the object's array.
+    var h = new Holder();
+    int[] d = h.data;
+    d[0] = 7;
+    print(h.data[0]);
+
+    // A row of a 2-D array is the row, and the rows are DISTINCT: building
+    // them by repetition would have made every row the same array.
+    int[][] g = new int[2][2];
+    int[] row = g[1];
+    row[0] = 3;
+    print(g[1][0]);
+    print(g[0][0] + 4);
+
+    // A getter hands back the real array too.
+    h.get()[1] = 2;
+    print($"${h.data[0]} ${h.data[1]}");
+
+    // `clone()` is what copies.
+    int[] orig = {1, 2};
+    var copy = orig.clone();
+    copy[0] = 99;
+    print(orig[0] - 1);
+}

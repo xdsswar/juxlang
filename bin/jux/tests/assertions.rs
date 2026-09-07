@@ -63,7 +63,7 @@ public void main() {
         .expect("spawn jux build");
     assert!(build.status.success(), "build failed: {}", String::from_utf8_lossy(&build.stderr));
     let exe = emit.join("target").join("debug").join(format!(
-        "jux_emitted{}",
+        "it-assert-fail{}",
         std::env::consts::EXE_SUFFIX
     ));
     let run = Command::new(&exe).output().expect("run emitted exe");

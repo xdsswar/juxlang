@@ -196,11 +196,86 @@ impl RustEmitter {
     }
 
     /// Whether the VALUE of `e` is a collection handle, by its checked type.
+    /// Whether an ARRAY in the code being emitted right now takes its
+    /// §6.5.2 shared handle.
+    ///
+    /// Three places it must not. A `const` slot is link-time data with no
+    /// identity to share. A worker-shared class (JUX-ASYNC-ADDENDUM §18.2)
+    /// crosses threads, and `Rc<RefCell<..>>` is not `Send` -- the same
+    /// exception §6.5.1 already carves out for collections. And an exception
+    /// travels as a panic payload, which Rust requires to be `Send`; the
+    /// standard `Throwable` chain stores its cause and its suppressed list in
+    /// arrays, and neither ever leaves the object.
+    pub(crate) fn arrays_are_handles_here(&self) -> bool {
+        // A `const` slot is link-time data: no identity, nothing to share.
+        // Everywhere else an array is a handle. Which FLAVOUR of handle is a
+        // property of the element type, not of where the code stands - see
+        // [`Self::array_handle_is_sync`].
+        !self.emitting_const_context
+    }
+
+    /// Whether an array of `element` needs the ATOMIC handle rather than the
+    /// single-threaded one.
+    ///
+    /// An exception travels as a panic payload, which Rust requires to be
+    /// `Send`, and the standard `Throwable` chain stores its cause and its
+    /// suppressed list in arrays. `Rc<RefCell<..>>` is not `Send`; `JuxSync`
+    /// is, and presents the same `borrow()` / `borrow_mut()` surface, so every
+    /// rule written for an array handle applies to it unchanged.
+    ///
+    /// Keyed on the ELEMENT TYPE on purpose. A representation that depended on
+    /// the class being emitted would disagree with itself at the boundary: the
+    /// array `getSuppressed()` hands back would be one shape inside the
+    /// exception and another at the call site.
+    pub(crate) fn array_handle_is_sync(&self, element: &str) -> bool {
+        let bare = element.rsplit('.').next().unwrap_or(element);
+        if bare == "Throwable" {
+            return true;
+        }
+        let mut cursor = self.lookup_class_by_bare_or_fqn(bare);
+        for _ in 0..32 {
+            let Some(sig) = cursor else { return false };
+            let Some(parent) = sig.extends_fqn.as_deref() else {
+                return false;
+            };
+            if parent.rsplit('.').next() == Some("Throwable") {
+                return true;
+            }
+            cursor = self.symbols.classes.get(parent);
+        }
+        false
+    }
+
+    /// The `(open, close)` pair that wraps an array's storage in its handle.
+    pub(crate) fn array_handle_wrap(&self, element: &str) -> (&'static str, &'static str) {
+        if self.array_handle_is_sync(element) {
+            ("crate::JuxSync<", ">")
+        } else {
+            ("crate::JuxArr<", ">")
+        }
+    }
+
+    /// The constructor form matching [`Self::array_handle_wrap`].
+    pub(crate) fn array_handle_new(&self, element: &str) -> (&'static str, &'static str) {
+        if self.array_handle_is_sync(element) {
+            ("crate::JuxSync::new(", ")")
+        } else {
+            ("crate::jux_arr(", ")")
+        }
+    }
+
     pub(crate) fn expr_is_collection_handle(&self, e: &Expr) -> bool {
-        matches!(
-            self.receiver_ty_of(e),
-            Some(juxc_tycheck::Ty::User { ref name, .. }) if self.collection_name_is_handle(name)
-        )
+        match self.receiver_ty_of(e) {
+            // An array is a reference type on the same terms (§6.5.2), so it
+            // takes the same handle and every rule written for a collection --
+            // the borrow before a method, the snapshot in a for-each, the lend
+            // at a foreign slot -- applies to it unchanged.
+            Some(juxc_tycheck::Ty::Array { .. }) => self.arrays_are_handles_here(),
+            Some(juxc_tycheck::Ty::User { ref name, .. }) => {
+                self.collection_name_is_handle(name)
+            }
+            _ => false,
+        }
     }
 
     /// The `RefCell` borrow a collection-handle RECEIVER needs before
@@ -1054,10 +1129,14 @@ impl RustEmitter {
                 // so it is wrapped here. Outside the `Result` unwrap below, so
                 // a fallible constructor (`try_with_capacity`) wraps the value
                 // rather than the `Result`.
-                let wrap = self.call_returns_foreign_collection(c);
+                let array = self.call_yields_bare_array(c);
+                let wrap = self.call_returns_foreign_collection(c) || array;
                 if wrap {
-                    self.w
-                        .push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                    self.w.push_str(if array {
+                        "crate::jux_arr("
+                    } else {
+                        "std::rc::Rc::new(std::cell::RefCell::new("
+                    });
                 }
                 // A call to a foreign (`.jux.d`) function/method whose `throws E`
                 // maps a Rust `Result<T, E>` (§G.5.4): unwrap the `Result` so the
@@ -1072,7 +1151,7 @@ impl RustEmitter {
                     self.emit_call(c);
                 }
                 if wrap {
-                    self.w.push_str("))");
+                    self.w.push_str(if array { ")" } else { "))" });
                 }
             }
             Expr::Binary(b) => self.emit_binary(b),

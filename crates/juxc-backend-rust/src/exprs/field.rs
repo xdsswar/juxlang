@@ -298,9 +298,16 @@ impl RustEmitter {
             if needs_parens {
                 self.w.push('(');
             }
+            let handle = self.expr_is_collection_handle(&f.object);
+            let prev = std::mem::replace(&mut self.emitting_method_receiver, true);
             self.emit_expr(&f.object);
+            self.emitting_method_receiver = prev;
             if needs_parens {
                 self.w.push(')');
+            }
+            // §6.5.2: the length lives on the sequence inside the cell.
+            if handle {
+                self.w.push_str(".borrow()");
             }
             self.w.push_str(".len() as isize");
             return;
@@ -641,6 +648,26 @@ impl RustEmitter {
             for _ in 0..depth {
                 self.w.push_str(".__parent");
             }
+        }
+        // **A method on an ARRAY handle (§6.5.2).** A Jux array exposes
+        // Rust's `Vec` surface, so any of those methods can land here, and
+        // they live on the sequence inside the cell rather than on the handle.
+        // The named ones (`add`, `size`, ...) are rewritten earlier; anything
+        // else - `push`, `pop`, `sort_unstable` - passes through and needs the
+        // borrow just the same.
+        if is_call_callee && self.expr_is_collection_handle(&f.object) {
+            // Which borrow is DISCOVERED from the `Vec` stub, not assumed from
+            // the surrounding emission flags: this path is reached by methods
+            // the named rewrites never saw, so the caller has not decided
+            // anything about mutability on their behalf.
+            let mutates = self
+                .receiver_ty_of(&f.object)
+                .is_some_and(|t| self.collection_method_mutates(&t, &f.field.text));
+            self.w.push_str(if mutates || self.emitting_out_place {
+                ".borrow_mut()"
+            } else {
+                ".borrow()"
+            });
         }
         self.w.push('.');
         self.w.push_str(&to_rust_ident(&f.field.text));

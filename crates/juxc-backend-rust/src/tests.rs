@@ -628,14 +628,14 @@ fn for_each_on_string_vec_borrows_when_body_doesnt_move() {
     // Body only borrows via `print(x)` — no `.iter().cloned()`
     // needed. The cheaper `for x in &xs` form fires here so each
     // iteration runs without a per-element heap clone.
-    assert!(rust.contains("for x in &xs {"), "got: {rust}");
+    assert!(rust.contains("for x in &__jux_fe_iter {"), "got: {rust}");
     assert!(
         !rust.contains(".iter().cloned()"),
         "non-moving body shouldn't clone: {rust}",
     );
     // The post-loop `.length` reads xs — proves we didn't move it.
     // Identifier receiver, so no parens around it.
-    assert!(rust.contains("xs.len() as isize"), "got: {rust}");
+    assert!(rust.contains("xs.borrow().len() as isize"), "got: {rust}");
 }
 
 /// When the body **moves** the loop variable (passes it to a fn
@@ -651,7 +651,7 @@ fn for_each_on_string_vec_clones_when_body_consumes() {
            }"#,
     );
     assert!(
-        rust.contains("for x in xs.iter().cloned() {"),
+        rust.contains("for x in __jux_fe_iter.iter().cloned() {"),
         "moving body should clone: {rust}",
     );
 }
@@ -666,7 +666,7 @@ fn for_each_on_copy_fixed_array_borrows_each_element() {
                for (var x : xs) { print(x); }
            }"#,
     );
-    assert!(rust.contains("for &x in &xs {"), "got: {rust}");
+    assert!(rust.contains("for &x in &__jux_fe_iter {"), "got: {rust}");
 }
 
 /// Ranges keep their naked `for x in 0..10` form — no borrow.
@@ -1177,7 +1177,7 @@ fn typed_double_local_emits_f64_annotation() {
 fn fixed_int_array_lowers_to_isize_n_with_zero_init() {
     let rust = emit("public void main() { int[10] xs = new int[10]; print(xs[0]); }");
     assert!(
-        rust.contains("let xs: [isize; 10] = [0; 10];"),
+        rust.contains("let xs: crate::JuxArr<[isize; 10]> = crate::jux_arr([0; 10]);"),
         "got: {rust}",
     );
 }
@@ -1187,7 +1187,7 @@ fn fixed_int_array_lowers_to_isize_n_with_zero_init() {
 fn fixed_bool_array_zero_inits_to_false() {
     let rust = emit("public void main() { bool[5] flags = new bool[5]; print(flags[0]); }");
     assert!(
-        rust.contains("let flags: [bool; 5] = [false; 5];"),
+        rust.contains("let flags: crate::JuxArr<[bool; 5]> = crate::jux_arr([false; 5]);"),
         "got: {rust}",
     );
 }
@@ -1197,7 +1197,7 @@ fn fixed_bool_array_zero_inits_to_false() {
 fn fixed_double_array_zero_inits_to_zero_point_zero() {
     let rust = emit("public void main() { double[3] xs = new double[3]; print(xs[0]); }");
     assert!(
-        rust.contains("let xs: [f64; 3] = [0.0; 3];"),
+        rust.contains("let xs: crate::JuxArr<[f64; 3]> = crate::jux_arr([0.0; 3]);"),
         "got: {rust}",
     );
 }
@@ -1214,7 +1214,7 @@ fn two_dim_dynamic_array_lowers_to_nested_vec() {
         "public void main() { int[][] m = new int[3][4]; m[0][0] = 1; print(m[0][0]); }",
     );
     assert!(
-        rust.contains("let mut m: Vec<Vec<isize>> = vec![vec![0; 4]; 3];"),
+        rust.contains("let mut m: crate::JuxArr<Vec<crate::JuxArr<Vec<isize>>>> = crate::jux_arr((0..3).map(|_| crate::jux_arr(vec![0; 4])).collect::<Vec<_>>());"),
         "got: {rust}",
     );
 }
@@ -1227,7 +1227,7 @@ fn two_dim_fixed_array_lowers_to_nested_fixed() {
         "public void main() { int[3][4] b = new int[3][4]; b[0][0] = 1; print(b[0][0]); }",
     );
     assert!(
-        rust.contains("let mut b: [[isize; 4]; 3] = [[0; 4]; 3];"),
+        rust.contains("let mut b: crate::JuxArr<[crate::JuxArr<[isize; 4]>; 3]> = crate::jux_arr(std::array::from_fn(|_| crate::jux_arr([0; 4])));"),
         "got: {rust}",
     );
 }
@@ -1240,7 +1240,7 @@ fn mixed_fixed_outer_dynamic_inner_array_lowers_to_array_of_vec() {
         "public void main() { int[3][] r = new int[3][4]; print(r[0].length); }",
     );
     assert!(
-        rust.contains("let r: [Vec<isize>; 3] = [vec![0; 4]; 3];"),
+        rust.contains("let r: crate::JuxArr<[crate::JuxArr<Vec<isize>>; 3]> = crate::jux_arr(std::array::from_fn(|_| crate::jux_arr(vec![0; 4])));"),
         "got: {rust}",
     );
 }
@@ -1252,11 +1252,11 @@ fn three_dim_dynamic_array_lowers_to_triple_nested_vec() {
         "public void main() { int[][][] c = new int[2][2][2]; print(c[0][0][0]); }",
     );
     assert!(
-        rust.contains("Vec<Vec<Vec<isize>>>"),
+        rust.contains("crate::JuxArr<Vec<crate::JuxArr<Vec<crate::JuxArr<Vec<isize>>>>>>"),
         "expected triply-nested Vec type, got: {rust}",
     );
     assert!(
-        rust.contains("vec![vec![vec![0; 2]; 2]; 2]"),
+        rust.contains("crate::jux_arr(vec![0; 2])"),
         "expected triply-nested vec! init, got: {rust}",
     );
 }
@@ -1267,7 +1267,7 @@ fn three_dim_dynamic_array_lowers_to_triple_nested_vec() {
 fn two_dim_string_array_lowers_to_nested_vec_of_string() {
     let rust = emit("public void main() { String[][] t; print(t.length); }");
     assert!(
-        rust.contains("Vec<Vec<String>>"),
+        rust.contains("crate::JuxArr<Vec<crate::JuxArr<Vec<String>>>>"),
         "got: {rust}",
     );
 }
@@ -1277,7 +1277,7 @@ fn two_dim_string_array_lowers_to_nested_vec_of_string() {
 #[test]
 fn integer_literal_index_does_not_cast_to_usize() {
     let rust = emit("public void main() { int[10] xs = new int[10]; print(xs[3]); }");
-    assert!(rust.contains("xs[3]"), "got: {rust}");
+    assert!(rust.contains("xs.borrow()[3]"), "got: {rust}");
     assert!(!rust.contains("xs[(3)"), "literal indices should be naked: {rust}");
 }
 
@@ -1288,7 +1288,7 @@ fn variable_index_wraps_with_as_usize() {
     let rust = emit(
         "public void main() { int[10] xs = new int[10]; var i = 0; print(xs[i]); }",
     );
-    assert!(rust.contains("xs[(i) as usize]"), "got: {rust}");
+    assert!(rust.contains("xs.borrow()[(i) as usize]"), "got: {rust}");
 }
 
 /// `xs[i] = v;` lowers to a direct indexed assignment with the same
@@ -1298,7 +1298,7 @@ fn indexed_assignment_emits_with_usize_coercion() {
     let rust = emit(
         "public void main() { int[3] xs = new int[3]; var i = 0; xs[i] = 7; }",
     );
-    assert!(rust.contains("xs[(i) as usize] = 7;"), "got: {rust}");
+    assert!(rust.contains("xs.borrow_mut()[(i) as usize] = 7;"), "got: {rust}");
 }
 
 /// `xs[i] = v;` causes the mutation analysis to promote `xs` to
@@ -1320,11 +1320,11 @@ fn array_length_lowers_to_len_as_isize() {
         "public void main() { int[10] xs = new int[10]; print(xs.length); }",
     );
     assert!(
-        rust.contains("xs.len() as isize"),
+        rust.contains("xs.borrow().len() as isize"),
         "expected `.len() as isize`, got: {rust}",
     );
     assert!(
-        !rust.contains("(xs).len()"),
+        !rust.contains("(xs).borrow().len()"),
         "no spurious parens around identifier receiver: {rust}",
     );
 }
@@ -1347,7 +1347,7 @@ fn array_length_on_composite_receiver_keeps_parens() {
     let rust = emit(
         "public void main() { int[3] xs = {1,2,3}; print(xs[0]); }",
     );
-    assert!(rust.contains("xs[0]"), "got: {rust}");
+    assert!(rust.contains("xs.borrow()[0]"), "got: {rust}");
 }
 
 // ----------------------------------------------------------------------
@@ -1362,7 +1362,7 @@ fn dynamic_int_array_lowers_to_vec_isize_with_vec_macro() {
         "public void main() { int[] xs = new int[]{1, 2, 3}; print(xs.length); }",
     );
     assert!(
-        rust.contains("let xs: Vec<isize> = vec![1, 2, 3];"),
+        rust.contains("let xs: crate::JuxArr<Vec<isize>> = crate::jux_arr(vec![1, 2, 3]);"),
         "got: {rust}",
     );
 }
@@ -1375,7 +1375,7 @@ fn dynamic_string_array_lowers_to_vec_owned_string() {
         r#"public void main() { String[] xs = new String[]{"a", "b"}; print(xs.length); }"#,
     );
     assert!(
-        rust.contains(r#"let xs: Vec<String> = vec!["a".to_string(), "b".to_string()];"#),
+        rust.contains(r#"let xs: crate::JuxArr<Vec<String>> = crate::jux_arr(vec!["a".to_string(), "b".to_string()]);"#),
         "got: {rust}",
     );
 }
@@ -1399,7 +1399,7 @@ fn empty_new_array_lit_uses_turbofish_new() {
 #[test]
 fn var_inferred_new_array_lit_has_no_annotation() {
     let rust = emit("public void main() { var xs = new int[]{1, 2}; print(xs.length); }");
-    assert!(rust.contains("let xs = vec![1, 2];"), "got: {rust}");
+    assert!(rust.contains("let xs = crate::jux_arr(vec![1, 2]);"), "got: {rust}");
 }
 
 // ----------------------------------------------------------------------
@@ -1412,7 +1412,7 @@ fn var_inferred_new_array_lit_has_no_annotation() {
 fn bare_init_on_fixed_lhs_emits_rust_array_literal() {
     let rust = emit("public void main() { int[3] xs = {1, 2, 3}; print(xs.length); }");
     assert!(
-        rust.contains("let xs: [isize; 3] = [1, 2, 3];"),
+        rust.contains("let xs: crate::JuxArr<[isize; 3]> = crate::jux_arr([1, 2, 3]);"),
         "got: {rust}",
     );
     assert!(
@@ -1427,7 +1427,7 @@ fn bare_init_on_fixed_lhs_emits_rust_array_literal() {
 fn bare_init_on_dynamic_lhs_emits_vec_macro() {
     let rust = emit("public void main() { int[] xs = {1, 2, 3}; print(xs.length); }");
     assert!(
-        rust.contains("let xs: Vec<isize> = vec![1, 2, 3];"),
+        rust.contains("let xs: crate::JuxArr<Vec<isize>> = crate::jux_arr(vec![1, 2, 3]);"),
         "got: {rust}",
     );
 }
@@ -1442,7 +1442,7 @@ fn bare_init_string_fixed_array_lowers_to_owned_string_array() {
     );
     assert!(
         rust.contains(
-            r#"let cs: [String; 3] = ["a".to_string(), "b".to_string(), "c".to_string()];"#
+            r#"crate::jux_arr(["a".to_string(), "b".to_string(), "c".to_string()])"#
         ),
         "got: {rust}",
     );
@@ -1464,7 +1464,7 @@ fn empty_bare_init_on_dynamic_lhs_emits_turbofish_new() {
 #[test]
 fn runtime_new_array_size_emits_vec() {
     let rust = emit("public void main() { var n = 5; var a = new int[n + 1]; print(a.length); }");
-    assert!(rust.contains("vec!["), "expected a heap vec!: {rust}");
+    assert!(rust.contains("crate::jux_arr(vec!["), "expected a heap vec!: {rust}");
 }
 
 /// A const-sized `new T[N]` assigned to a dynamic `T[]` FIELD heaps
@@ -1478,7 +1478,7 @@ fn field_assign_dynamic_array_emits_vec() {
          public Buf() { this.data = new int[16]; } } \
          public void main() { var b = new Buf(); }",
     );
-    assert!(rust.contains("vec!["), "expected a heap vec!: {rust}");
+    assert!(rust.contains("crate::jux_arr(vec!["), "expected a heap vec!: {rust}");
     assert!(
         !rust.contains("[0isize; 16]"),
         "dynamic field should heap, not emit a fixed array: {rust}",
@@ -1493,7 +1493,7 @@ fn field_default_dynamic_array_emits_vec() {
         "public class Buf { public int[] data = new int[16]; public Buf() { } } \
          public void main() { var b = new Buf(); }",
     );
-    assert!(rust.contains("vec!["), "expected a heap vec!: {rust}");
+    assert!(rust.contains("crate::jux_arr(vec!["), "expected a heap vec!: {rust}");
 }
 
 // ----------------------------------------------------------------------
@@ -1505,8 +1505,8 @@ fn field_default_dynamic_array_emits_vec() {
 #[test]
 fn push_method_call_promotes_to_let_mut() {
     let rust = emit("public void main() { int[] xs = {}; xs.push(7); }");
-    assert!(rust.contains("let mut xs: Vec<isize>"), "got: {rust}");
-    assert!(rust.contains("xs.push(7);"), "got: {rust}");
+    assert!(rust.contains("let mut xs: crate::JuxArr<Vec<isize>>"), "got: {rust}");
+    assert!(rust.contains("xs.borrow_mut().push(7);"), "got: {rust}");
 }
 
 /// `xs.pop()` lowers to `xs.pop().unwrap()` since Jux doesn't have
@@ -1516,7 +1516,7 @@ fn pop_method_call_appends_unwrap() {
     let rust = emit(
         "public void main() { int[] xs = {}; xs.push(1); var v = xs.pop(); print(v); }",
     );
-    assert!(rust.contains("let v = xs.pop().unwrap();"), "got: {rust}");
+    assert!(rust.contains("let v = xs.borrow_mut().pop().unwrap();"), "got: {rust}");
 }
 
 /// `xs.pop()` mutates `xs` even when its return value is bound to
@@ -1527,7 +1527,7 @@ fn pop_method_call_promotes_receiver_to_let_mut() {
     let rust = emit(
         "public void main() { int[] xs = {}; xs.push(1); var v = xs.pop(); print(v); }",
     );
-    assert!(rust.contains("let mut xs: Vec<isize>"), "got: {rust}");
+    assert!(rust.contains("let mut xs: crate::JuxArr<Vec<isize>>"), "got: {rust}");
 }
 
 // ----------------------------------------------------------------------
@@ -2777,12 +2777,12 @@ fn wrapper_array_store_and_index_read_clone() {
     );
     // Store: the element clones into the Vec (shared handle in).
     assert!(
-        rust.contains("vec![c.clone()]"),
+        rust.contains("crate::jux_arr(vec![c.clone()])"),
         "array-store element clones (shared handle into Vec): {rust}",
     );
     // Index read: the value clones out of the Vec (shared handle out).
     assert!(
-        rust.contains("xs[0].clone()"),
+        rust.contains("xs.borrow()[0].clone()"),
         "index-read clones out of the Vec: {rust}",
     );
     // The method-call receiver `r.set(...)` must NOT clone (it borrows
@@ -2954,7 +2954,7 @@ fn no_mutating_method_keeps_let_immutable() {
     let rust = emit(
         "public void main() { int[] xs = {1, 2, 3}; print(xs.length); }",
     );
-    assert!(rust.contains("let xs: Vec<isize>"), "got: {rust}");
+    assert!(rust.contains("let xs: crate::JuxArr<Vec<isize>>"), "got: {rust}");
     assert!(!rust.contains("let mut xs"), "no method-mutation here: {rust}");
 }
 
@@ -3094,7 +3094,7 @@ fn interp_expr_with_array_index_emits_indexed_value() {
         "public void main() { int[3] xs = {10, 20, 30}; print($\"first=${xs[0]}\"); }",
     );
     assert!(
-        rust.contains(r#"println!("first={}", xs[0])"#),
+        rust.contains(r#"println!("first={}", xs.borrow()[0])"#),
         "got: {rust}",
     );
 }
