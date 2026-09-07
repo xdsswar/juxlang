@@ -894,8 +894,7 @@ impl RustEmitter {
                 // `pub` for the same cross-package reach as the plain
                 // class shape (catch upcasts, subclass chains).
                 self.w.push_str("pub __parent: ");
-                self.w.push_str(&to_rust_ident(&seg.text));
-                self.w.push_str("_Inner");
+                self.emit_parent_inner_path(&seg.text);
                 // Thread the parent's generic args onto its inner type
                 // (`extends Container<int>` → `__parent: Container_Inner<isize>`).
                 // Without this, a child that binds its parent's type
@@ -1330,6 +1329,49 @@ impl RustEmitter {
     /// Field-position arg mapping is used (Jux `String` → owned Rust
     /// `String`) so a stored `__parent` slot doesn't carry an elided
     /// lifetime — same rule the field-type emitter applies.
+    /// Emit the parent's INNER struct name, package-qualified when the parent
+    /// lives somewhere else.
+    ///
+    /// Each package becomes its own Rust module, and a sibling is only in
+    /// scope through the `use super::*;` the emitter writes -- which reaches
+    /// the same package and no further. A child extending a parent in another
+    /// package emitted a bare `Animal_Inner` that resolved to nothing, so
+    /// cross-package inheritance did not compile at all.
+    /// `crate::<pkg>::` when the class named `bare` lives in another package,
+    /// or the empty string when a bare name already resolves.
+    ///
+    /// Each package is its own Rust module and `use super::*;` reaches only
+    /// the current one, so anything emitted ACROSS a package boundary -- a
+    /// parent's inner struct, a parent's `Kind` trait, a subclass named in the
+    /// base package's upcast impl -- has to say where it lives.
+    pub(crate) fn cross_package_prefix(&self, bare: &str) -> String {
+        self.symbols
+            .find_fqn_by_bare(bare)
+            .and_then(|fqn| {
+                let (pkg, _) = fqn.rsplit_once('.')?;
+                (pkg != self.symbols.package.join(".")).then(|| {
+                    let joined = pkg.split('.').collect::<Vec<_>>().join("::");
+                    format!("crate::{joined}::")
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    fn emit_parent_inner_path(&mut self, bare: &str) {
+        let qualified = self.symbols.find_fqn_by_bare(bare).and_then(|fqn| {
+            let (pkg, _) = fqn.rsplit_once('.')?;
+            (pkg != self.symbols.package.join(".")).then(|| {
+                let joined = pkg.split('.').collect::<Vec<_>>().join("::");
+                format!("crate::{joined}::")
+            })
+        });
+        if let Some(prefix) = qualified {
+            self.w.push_str(&prefix);
+        }
+        self.w.push_str(&to_rust_ident(bare));
+        self.w.push_str("_Inner");
+    }
+
     fn emit_parent_inner_generic_args(&mut self, parent_ty: &juxc_ast::TypeRef) {
         if parent_ty.generic_args.is_empty() {
             return;
@@ -2666,7 +2708,7 @@ impl RustEmitter {
             ReturnType::Type(t) | ReturnType::AsyncType(t) => {
                 if is_async {
                     self.w.push_str(
-                        " -> std::pin::Pin<Box<dyn std::future::Future<Output = ",
+                        " -> std::pin::Pin<::std::boxed::Box<dyn std::future::Future<Output = ",
                     );
                     self.emit_return_type_as_rust(t);
                     self.w.push_str("> + '_>>");
@@ -2711,7 +2753,7 @@ impl RustEmitter {
             ReturnType::Type(t) | ReturnType::AsyncType(t) => {
                 if is_async {
                     self.w.push_str(
-                        " -> std::pin::Pin<Box<dyn std::future::Future<Output = ",
+                        " -> std::pin::Pin<::std::boxed::Box<dyn std::future::Future<Output = ",
                     );
                     self.emit_return_type_as_rust(t);
                     self.w.push_str("> + '_>>");
@@ -2724,7 +2766,7 @@ impl RustEmitter {
         self.w.push_str(" { ");
         // An async delegate returns the boxed future the trait promises.
         if is_async {
-            self.w.push_str("Box::pin(async move { ");
+            self.w.push_str("::std::boxed::Box::pin(async move { ");
         }
         self.w.push_str(recv_class_bare);
         self.w.push_str("::");
@@ -3135,6 +3177,9 @@ impl RustEmitter {
             None
         };
         if let Some(parent) = &parent_super {
+            // The parent's `Kind` trait may be in another package.
+            let prefix = self.cross_package_prefix(parent);
+            self.w.push_str(&prefix);
             self.w.push_str(parent);
             self.w.push_str("Kind");
             // `trait BoxKind<T>: ContainerKind<T>` — the args this class hands
@@ -3446,6 +3491,10 @@ impl RustEmitter {
         for sub in subs {
             self.w.emit_indent();
             self.w.push_str("impl From<");
+            // The subclass is often in another package than the base whose
+            // upcast impl this is.
+            let sub_prefix = self.cross_package_prefix(&sub);
+            self.w.push_str(&sub_prefix);
             self.w.push_str(&to_rust_ident(&sub));
             self.w.push_str("> for std::rc::Rc<dyn ");
             self.w.push_str(&to_rust_ident(base_bare));
@@ -3454,6 +3503,7 @@ impl RustEmitter {
             self.w.indent_inc();
             self.w.emit_indent();
             self.w.push_str("fn from(__v: ");
+            self.w.push_str(&sub_prefix);
             self.w.push_str(&to_rust_ident(&sub));
             self.w.push_str(") -> Self { std::rc::Rc::new(__v) }
 ");
@@ -3594,7 +3644,7 @@ impl RustEmitter {
             ReturnType::Type(t) | ReturnType::AsyncType(t) => {
                 if is_async {
                     self.w.push_str(
-                        " -> std::pin::Pin<Box<dyn std::future::Future<Output = ",
+                        " -> std::pin::Pin<::std::boxed::Box<dyn std::future::Future<Output = ",
                     );
                     self.emit_return_type_as_rust(t);
                     self.w.push_str("> + '_>>");
@@ -4165,7 +4215,7 @@ impl RustEmitter {
                     ReturnType::AsyncType(t) => {
                         // Matches the trait's boxed-future signature.
                         self.w.push_str(
-                            " -> std::pin::Pin<Box<dyn std::future::Future<Output = ",
+                            " -> std::pin::Pin<::std::boxed::Box<dyn std::future::Future<Output = ",
                         );
                         let subst = substitute_type_ref(t, &type_subst);
                         self.emit_return_type_as_rust(&subst);
@@ -4194,7 +4244,7 @@ impl RustEmitter {
                 // `.await` is legal here.
                 let is_async = matches!(method.return_type, ReturnType::AsyncType(_));
                 if is_async {
-                    self.w.push_str("Box::pin(async move { ");
+                    self.w.push_str("::std::boxed::Box::pin(async move { ");
                 }
                 match target {
                     _ if abstract_stubs.contains(method_name.as_str()) => {

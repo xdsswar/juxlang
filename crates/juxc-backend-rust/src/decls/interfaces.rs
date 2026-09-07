@@ -79,7 +79,7 @@ impl RustEmitter {
                 ReturnType::AsyncType(t) => {
                     let t = t.clone();
                     self.w
-                        .push_str(" -> std::pin::Pin<Box<dyn std::future::Future<Output = ");
+                        .push_str(" -> std::pin::Pin<::std::boxed::Box<dyn std::future::Future<Output = ");
                     self.emit_return_type_as_rust(&t);
                     self.w.push_str("> + '_>>");
                 }
@@ -320,7 +320,7 @@ impl RustEmitter {
                     // the future to the `&self` borrow, which is what a method
                     // reading its receiver needs.
                     self.w
-                        .push_str(" -> std::pin::Pin<Box<dyn std::future::Future<Output = ");
+                        .push_str(" -> std::pin::Pin<::std::boxed::Box<dyn std::future::Future<Output = ");
                     self.emit_return_type_as_rust(t);
                     self.w.push_str("> + '_>>");
                 }
@@ -338,7 +338,7 @@ impl RustEmitter {
                 // signature promises.
                 if is_async {
                     self.w.emit_indent();
-                    self.w.push_str("Box::pin(async move {
+                    self.w.push_str("::std::boxed::Box::pin(async move {
 ");
                     self.w.indent_inc();
                 }

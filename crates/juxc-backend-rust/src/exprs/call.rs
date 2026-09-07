@@ -3817,6 +3817,14 @@ impl RustEmitter {
             return self.emit_mut_collection_method(call, method, &recv_ty);
         }
         if is_array {
+            // An array is a handle (§6.5.2), so a mutating method needs the
+            // EXCLUSIVE borrow, which is what the mut dispatch sets up before
+            // the receiver is emitted. Only a receiver read through a wrapper
+            // reached it above, so a plain `ys.add(6)` came out as
+            // `ys.borrow().push(6)` and rustc refused the write.
+            if self.collection_method_mutates(&recv_ty, method) {
+                return self.emit_mut_collection_method(call, method, &recv_ty);
+            }
             return self.emit_array_stdlib_method(call, method);
         }
         if is_string {
@@ -4119,7 +4127,27 @@ impl RustEmitter {
             this.emitting_lvalue = true;
             this.collection_args_prehoisted = true;
             let handled = match recv_ty {
-                juxc_tycheck::Ty::Array { .. } => this.emit_array_stdlib_method(c, method),
+                // The facade names (`add`, `set`, ...) first, then anything
+                // else straight through to `Vec` -- which is what an array is.
+                // Without the fallback a `push` hoisted its arguments and then
+                // failed to dispatch, leaving the hoist block behind and the
+                // real call emitted separately, against the unhoisted value.
+                juxc_tycheck::Ty::Array { .. } => {
+                    if this.emit_array_stdlib_method(c, method) {
+                        true
+                    } else if this.emit_vec_raw_mut_method(c, method) {
+                        // An array's `pop` yields the ELEMENT, not an
+                        // `Option` -- the raw `Vec` passthrough hands back
+                        // Rust's `Option<T>`, so bridge it the same way the
+                        // non-mutating path does.
+                        if method == "pop" && c.args.is_empty() {
+                            this.w.push_str(".unwrap()");
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                }
                 // A rust.std collection carries the real Rust method name
                 // already (`insert`/`push_back`/`push`/…), so it emits as a raw
                 // passthrough on the `borrow_mut()` receiver (flags set by the

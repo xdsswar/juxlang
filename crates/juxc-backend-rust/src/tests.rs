@@ -1506,7 +1506,17 @@ fn field_default_dynamic_array_emits_vec() {
 fn push_method_call_promotes_to_let_mut() {
     let rust = emit("public void main() { int[] xs = {}; xs.push(7); }");
     assert!(rust.contains("let mut xs: crate::JuxArr<Vec<isize>>"), "got: {rust}");
-    assert!(rust.contains("xs.borrow_mut().push(7);"), "got: {rust}");
+    // The argument is hoisted ahead of the borrow, so the borrow is taken as
+    // late as possible: an argument that itself reads the same collection
+    // would otherwise be evaluated while the exclusive borrow was held.
+    assert!(
+        rust.contains("let __jux_carg0 = 7;"),
+        "argument should hoist ahead of the borrow: {rust}",
+    );
+    assert!(
+        rust.contains("xs.borrow_mut().push(__jux_carg0)"),
+        "got: {rust}",
+    );
 }
 
 /// `xs.pop()` lowers to `xs.pop().unwrap()` since Jux doesn't have

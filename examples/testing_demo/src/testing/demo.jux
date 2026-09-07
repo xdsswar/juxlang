@@ -2,7 +2,7 @@
 // jux.std.testing assertion surface. `jux test` discovers the @Test functions
 // below and runs them with the per-file BeforeAll/BeforeEach/AfterEach/AfterAll
 // ordering of sec. TS.5.
-package demo.testing;
+package testing;
 
 import jux.std.testing.*;
 
