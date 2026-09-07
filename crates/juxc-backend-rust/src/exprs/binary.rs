@@ -224,6 +224,13 @@ impl RustEmitter {
     /// `expr_types` map, then structural typing for literal-only
     /// expressions (whose spans are DUMMY and never reach the map).
     pub(crate) fn operand_primitive(&self, e: &Expr) -> Option<juxc_tycheck::Primitive> {
+        // A char LITERAL carries its type in the token, and tycheck does not
+        // always record a span for it. Without this `ch - '0'` saw one typed
+        // operand and one untyped one, skipped promotion entirely, and asked
+        // Rust to subtract a `char` from a `char`.
+        if let Expr::Literal(juxc_ast::Literal::Char(_)) = e {
+            return Some(juxc_tycheck::Primitive::Char);
+        }
         if let Expr::Path(qn) = e {
             if qn.segments.len() == 1 {
                 let bare = qn.segments[0].text.as_str();
@@ -664,9 +671,16 @@ impl RustEmitter {
         let deref_right =
             self.in_enum_method && matches!(b.right.as_ref(), Expr::This(_) | Expr::Super(_));
 
+        // **A cast on the left of a shift needs parentheses.** Rust reads
+        // `r as u32 << 16` as the start of generic arguments for `u32`, not as
+        // a shift, and rejects it outright -- so the ordinary `(u32) r << 16`
+        // that any pixel-packing routine is written with did not compile. The
+        // precedence is not in question; the syntax is.
+        let cast_operand_needs_parens = matches!(b.op, BinaryOp::Shl | BinaryOp::Shr)
+            && matches!(b.left.as_ref(), Expr::Cast(_));
         // Left side of a left-associative op: equal precedence is OK,
         // because emission order already preserves grouping.
-        if cast_left {
+        if cast_left || cast_operand_needs_parens {
             self.w.push('(');
         }
         if deref_left {
@@ -679,6 +693,8 @@ impl RustEmitter {
         if cast_left {
             self.w.push_str(" as ");
             self.w.push_str(target_name.unwrap());
+            self.w.push(')');
+        } else if cast_operand_needs_parens {
             self.w.push(')');
         }
         self.w.push(' ');

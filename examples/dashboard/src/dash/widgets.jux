@@ -1,0 +1,257 @@
+// The pieces the dashboard is assembled from.
+//
+// Every widget takes the rectangle it must fit inside and draws itself within
+// it. None of them knows the layout, which is what lets the same widgets
+// rearrange themselves at any window size.
+package dash;
+
+import rust.std.*;
+
+// A rectangle. Layout hands these out; widgets draw inside them.
+public record Rect(int x, int y, int w, int h) {
+    public int right() { return this.x + this.w; }
+    public int bottom() { return this.y + this.h; }
+
+    // The same rectangle inset on every side, for padding.
+    public Rect shrink(int by) {
+        return new Rect(this.x + by, this.y + by, this.w - 2 * by, this.h - 2 * by);
+    }
+}
+
+// A titled surface. Everything else sits on one of these.
+public class Panel {
+    public String title;
+
+    public Panel(String title) { this.title = title; }
+
+    // Draw the surface and its heading, then return the region left over for
+    // the caller to draw into.
+    public Rect draw(Canvas c, Rect r) {
+        c.fillRound(r.x, r.y, r.w, r.h, 6, Theme.PANEL);
+        // A one-pixel top highlight lifts the card off the page without
+        // putting a border around the whole thing.
+        c.fillRect(r.x + 6, r.y, r.w - 12, 1, Theme.PANEL_HI);
+        Font.draw(c, this.title, r.x + Theme.PAD, r.y + Theme.PAD, 1, Theme.MUTED);
+        return new Rect(
+            r.x + Theme.PAD,
+            r.y + Theme.PAD + Font.H + 10,
+            r.w - 2 * Theme.PAD,
+            r.h - (Theme.PAD + Font.H + 10) - Theme.PAD);
+    }
+}
+
+// A headline number with its label, unit, and change since the run began.
+public class StatTile {
+    public Series series;
+
+    public StatTile(Series series) { this.series = series; }
+
+    public void draw(Canvas c, Rect r) {
+        c.fillRound(r.x, r.y, r.w, r.h, 6, Theme.PANEL);
+        // A colored rule down the left edge ties the tile to its chart.
+        c.fillRect(r.x, r.y + 6, 3, r.h - 12, this.series.color);
+
+        int left = r.x + Theme.PAD;
+        Font.draw(c, this.series.name, left, r.y + Theme.PAD, 1, Theme.MUTED);
+
+        var value = "" + this.series.latest();
+        int vy = r.y + Theme.PAD + Font.H + 8;
+        int after = Font.draw(c, value, left, vy, 3, Theme.TEXT);
+        Font.draw(c, this.series.unit, after + 4, vy + 2 * Font.H, 1, Theme.MUTED);
+
+        // The delta, colored by direction. The arrows are glyphs the font has.
+        int t = this.series.trend();
+        var arrow = t >= 0 ? ">" : "<";
+        var sign = t >= 0 ? "+" : "";
+        var delta = $"${arrow} ${sign}${t}%";
+        u32 tone = t >= 0 ? Theme.GREEN : Theme.ROSE;
+        Font.drawRight(c, delta, r.right() - Theme.PAD, r.y + Theme.PAD, 1, tone);
+    }
+}
+
+// A filled line chart. The fill is what makes it read as a volume rather than
+// a squiggle, and it costs one extra vertical run per column.
+public class LineChart {
+    public Series series;
+
+    public LineChart(Series series) { this.series = series; }
+
+    public void draw(Canvas c, Rect r) {
+        var pts = this.series.history();
+        int n = (int) pts.len();
+        if (n < 2 || r.w < 4 || r.h < 4) { return; }
+
+        int hi = this.series.max();
+        int lo = this.series.min();
+        // A series that barely moves would otherwise be drawn glued to the
+        // bottom of its panel, which reads as "no data" rather than "steady".
+        // Padding the range keeps a flat line in the middle where it belongs.
+        int span = hi - lo;
+        if (span < 4) {
+            int pad = 4 - span;
+            lo = lo - pad;
+            hi = hi + pad;
+            span = hi - lo;
+        }
+
+        // Horizontal guides, so the eye has something to measure against.
+        for (int g = 1; g < 4; g++) {
+            int gy = r.y + (r.h * g) / 4;
+            for (int gx = r.x; gx < r.right(); gx = gx + 3) {
+                c.px(gx, gy, Theme.STROKE);
+            }
+        }
+
+        int prevX = 0;
+        int prevY = 0;
+        for (int i = 0; i < n; i++) {
+            int px = r.x + (i * (r.w - 1)) / (n - 1);
+            int py = r.bottom() - 1 - ((pts[i] - lo) * (r.h - 2)) / span;
+            if (i > 0) {
+                // Fill and stroke the SEGMENT, not just the sample. Filling
+                // only at the sampled columns leaves the area striped, because
+                // the samples are several pixels apart; walking the segment
+                // interpolates the gap and the fill reads as one shape.
+                int dx = px - prevX;
+                for (int sx = prevX; sx <= px; sx++) {
+                    int sy = dx == 0 ? py : prevY + ((sx - prevX) * (py - prevY)) / dx;
+                    for (int fy = sy; fy < r.bottom(); fy++) {
+                        c.blend(sx, fy, this.series.color, 30);
+                    }
+                }
+                c.thickLine(prevX, prevY, px, py, 2, this.series.color);
+            }
+            prevX = px;
+            prevY = py;
+        }
+
+        // A dot on the newest sample, ringed so it reads against the fill.
+        c.fillRound(prevX - 3, prevY - 3, 7, 7, 3, Theme.TEXT);
+        c.fillRound(prevX - 2, prevY - 2, 5, 5, 2, this.series.color);
+    }
+}
+
+// A horizontal bar per series, scaled against the largest of them.
+public class BarChart {
+    public Vec<Series> series;
+
+    public BarChart(Vec<Series> series) { this.series = series; }
+
+    public void draw(Canvas c, Rect r) {
+        int n = (int) this.series.len();
+        if (n == 0) { return; }
+
+        int peak = 1;
+        for (var s : this.series) {
+            if (s.latest() > peak) { peak = s.latest(); }
+        }
+
+        int row = r.h / n;
+        int barH = row - 8 < 6 ? 6 : row - 8;
+        int labelW = 62;
+        int i = 0;
+        for (var s : this.series) {
+            int y = r.y + i * row;
+            Font.draw(c, s.name, r.x, y + (barH - Font.H) / 2, 1, Theme.MUTED);
+            int trackX = r.x + labelW;
+            int trackW = r.w - labelW - 40;
+            if (trackW > 0) {
+                c.fillRound(trackX, y, trackW, barH, barH / 2, Theme.PANEL_HI);
+                int fill = (s.latest() * trackW) / peak;
+                if (fill < barH) { fill = barH; }
+                c.fillRound(trackX, y, fill, barH, barH / 2, s.color);
+            }
+            Font.drawRight(c, "" + s.latest(), r.right(), y + (barH - Font.H) / 2, 1, Theme.TEXT);
+            i = i + 1;
+        }
+    }
+}
+
+// A ring showing one value as a fraction of a budget.
+public class Gauge {
+    public String label;
+    public int percent;
+    public u32 color;
+
+    public Gauge(String label, int percent, u32 color) {
+        this.label = label;
+        this.percent = percent;
+        this.color = color;
+    }
+
+    public void draw(Canvas c, Rect r) {
+        // Reserve the label's line before sizing the ring, or a short panel
+        // draws the two on top of each other.
+        int avail = r.h - Font.H - 6;
+        int size = r.w < avail ? r.w : avail;
+        if (size < 24) { return; }
+        int cx = r.x + r.w / 2;
+        int cy = r.y + size / 2;
+        int outer = size / 2 - 2;
+        int inner = outer - 9;
+        if (inner < 2) { return; }
+
+        // Sweep the ring pixel by pixel, filling the arc up to `percent`.
+        // The angle comes from the quadrant rather than a trig call, so the
+        // whole widget stays in integer arithmetic.
+        for (int dy = -outer; dy <= outer; dy++) {
+            for (int dx = -outer; dx <= outer; dx++) {
+                int d2 = dx * dx + dy * dy;
+                if (d2 > outer * outer || d2 < inner * inner) { continue; }
+                int frac = Gauge.fraction(dx, dy);
+                u32 tone = frac <= this.percent ? this.color : Theme.PANEL_HI;
+                c.px(cx + dx, cy + dy, tone);
+            }
+        }
+
+        var text = $"${this.percent}%";
+        Font.draw(c, text, cx - Font.width(text, 2) / 2, cy - Font.H, 2, Theme.TEXT);
+        Font.draw(c, this.label, cx - Font.width(this.label, 1) / 2, r.bottom() - Font.H, 1, Theme.MUTED);
+    }
+
+    // Where (dx, dy) falls on a 0..100 sweep starting at the top, clockwise.
+    // Integer only: the quadrant fixes the coarse position, and the ratio
+    // within it fixes the rest.
+    private static int fraction(int dx, int dy) {
+        int ax = dx < 0 ? -dx : dx;
+        int ay = dy < 0 ? -dy : dy;
+        int sum = ax + ay;
+        if (sum == 0) { return 0; }
+        // A Manhattan angle: exact on the axes and the diagonals, and smooth
+        // enough between them that a ring reads correctly.
+        int q = (ax * 100) / sum;
+        if (dx >= 0 && dy < 0) { return q / 4; }
+        if (dx >= 0 && dy >= 0) { return 25 + (100 - q) / 4; }
+        if (dx < 0 && dy >= 0) { return 50 + q / 4; }
+        return 75 + (100 - q) / 4;
+    }
+}
+
+// A list of recent events, newest first.
+public class EventLog {
+    public Vec<String> events;
+
+    public EventLog(Vec<String> events) { this.events = events; }
+
+    public void draw(Canvas c, Rect r) {
+        int y = r.y;
+        int i = 0;
+        for (var e : this.events) {
+            if (y + Font.H > r.bottom()) { return; }
+            u32 tone = EventLog.tone(i);
+            c.fillRound(r.x, y + 1, 5, 5, 2, tone);
+            Font.draw(c, e, r.x + 12, y, 1, i == 0 ? Theme.TEXT : Theme.MUTED);
+            y = y + Font.H + 7;
+            i = i + 1;
+        }
+    }
+
+    private static u32 tone(int i) {
+        return switch (i % 4) {
+            case 0 -> Theme.CYAN;
+            case 1 -> Theme.VIOLET;
+            case 2 -> Theme.GREEN;
+            case _ -> Theme.AMBER;
+        };
+    }
+}

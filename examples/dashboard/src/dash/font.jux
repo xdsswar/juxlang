@@ -1,0 +1,96 @@
+// A 5x7 bitmap font, and the text drawing built on it.
+//
+// Each glyph is seven rows of five bits, packed most-significant-first into
+// one `long` -- 35 bits, which needs the 64-bit type rather than the
+// platform-sized `int`. Keeping the
+// alphabet as plain numbers means the font needs no file, no parser and no
+// dependency: it is data the compiler folds straight into the binary.
+package dash;
+
+public class Font {
+    public static const int W = 5;
+    public static const int H = 7;
+
+    // The characters this font can draw, in glyph order. Anything else draws
+    // as a blank, which is where a miss lands after the lookup below.
+    public static const String ORDER = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:-+/%()><*!?=";
+
+    // One packed bitmap per character of ORDER.
+    public static long[] glyphs() {
+        return new long[] {
+            0, 15621670449, 32814712382, 16660316687, 32801080894, 33854865951,
+            33854865936, 16660416046, 18857117233, 33424543903, 1108395566, 18879369809,
+            17734058527, 19182175793, 19115132465, 15621211694, 32801505808, 15621215821,
+            32801509969, 16660235326, 33424543876, 18842437166, 18842436932, 18842572657,
+            18834663985, 18834657412, 33321787935, 15623448110, 4701950094, 15603929375,
+            33357366830, 2359917634, 33854359086, 6728664622, 33321787656, 15621113390,
+            15621129292, 198, 6344, 207624384, 1015808, 139432064,
+            1109533200, 18861920561, 2290360450, 8726317192, 8726284424, 2290622594,
+            340758848, 4433514500, 15603929092, 32537600
+        };
+    }
+
+    // Draw `text` with its top-left at (x, y), each font pixel `scale` pixels
+    // square. Returns the x just past the last glyph, so callers can chain.
+    //
+    // Lower case is folded to upper: the font has one case, and a label that
+    // silently vanished would be worse than one that shouts.
+    public static int draw(Canvas c, String text, int x, int y, int scale, u32 color) {
+        var glyphs = Font.glyphs();
+        int pen = x;
+        for (var ch : text.chars()) {
+            int idx = Font.indexOf(Font.upper(ch));
+            if (idx >= 0) {
+                long bits = glyphs[idx];
+                for (int row = 0; row < Font.H; row++) {
+                    // Rows were packed most-significant-first, so the top row
+                    // sits highest and the shift counts back down.
+                    long shift = (long) ((Font.H - 1 - row) * Font.W);
+                    long line = (bits >> shift) & (long) 31;
+                    for (int col = 0; col < Font.W; col++) {
+                        long mask = (long) 1 << (long) (Font.W - 1 - col);
+                        if ((line & mask) != (long) 0) {
+                            c.fillRect(pen + col * scale, y + row * scale, scale, scale, color);
+                        }
+                    }
+                }
+            }
+            pen = pen + (Font.W + 1) * scale;
+        }
+        return pen;
+    }
+
+    // How wide `text` will be, so a caller can right-align or centre it
+    // without drawing first.
+    public static int width(String text, int scale) {
+        int n = 0;
+        for (var ch : text.chars()) {
+            n = n + 1;
+        }
+        return n * (Font.W + 1) * scale;
+    }
+
+    // Draw `text` so it ends at `right`.
+    public static void drawRight(Canvas c, String text, int right, int y, int scale, u32 color) {
+        int w = Font.width(text, scale);
+        Font.draw(c, text, right - w, y, scale, color);
+    }
+
+    private static char upper(char ch) {
+        if (ch >= 'a' && ch <= 'z') {
+            return (char) (ch - 32);
+        }
+        return ch;
+    }
+
+    private static int indexOf(char ch) {
+        int i = 0;
+        for (var c : Font.ORDER.chars()) {
+            if (c == ch) {
+                return i;
+            }
+            i = i + 1;
+        }
+        return -1;
+    }
+}

@@ -1196,6 +1196,14 @@ struct RustEmitter {
     /// Set while emitting a wrapper constructor whose body must be deferred to
     /// the public `new` (see [`Self::pending_ctor_tail`]).
     pub(crate) defer_ctor_body: bool,
+
+    /// The local a constructor body must yield when it returns early.
+    ///
+    /// A constructor lowers to a builder that ends by handing back the value it
+    /// assembled, so a bare `return;` inside one -- a perfectly ordinary Java
+    /// guard clause -- has to become `return __self;`. Without this it emitted
+    /// `return;` from a function whose return type is the struct.
+    pub(crate) ctor_builder_alias: Option<String>,
     /// §P observer-variable shapes: `observer<T>` fields/locals mapped
     /// to their lambda arity (0 = invalidation, 2 = full, 3 = full +
     /// property reference). Keyed by bare variable/field name; filled
@@ -4499,6 +4507,7 @@ impl RustEmitter {
             pending_ctor_binds: Vec::new(),
             pending_ctor_tail: Vec::new(),
             defer_ctor_body: false,
+            ctor_builder_alias: None,
             observer_shapes: std::collections::HashMap::new(),
             emitting_class_has_static_init: false,
             emitting_call_callee: false,

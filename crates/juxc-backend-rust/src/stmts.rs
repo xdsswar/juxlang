@@ -619,6 +619,18 @@ impl RustEmitter {
                 // real return. (Inside a nested try's closure the
                 // closure-threading takes precedence.)
                 let park = self.in_catch_arm;
+                // **Constructor early return.** The builder yields the value it
+                // assembled, so a bare `return;` in a constructor body returns
+                // that instead of nothing.
+                if value.is_none() && !park && !self.in_try_closure {
+                    if let Some(alias) = self.ctor_builder_alias.clone() {
+                        self.w.push_str("return ");
+                        self.w.push_str(&alias);
+                        self.w.push_str(";
+");
+                        return;
+                    }
+                }
                 if park {
                     self.w.push_str("{ __jux_ret = ");
                 } else {
@@ -2039,7 +2051,12 @@ impl RustEmitter {
         // its own scope so it doesn't leak past the loop.
         let elem_ty = self.for_each_element_ty(&f.iter);
         self.local_types.push(std::collections::HashMap::new());
-        if let Some(ty @ Ty::User { .. }) = &elem_ty {
+        // Register whatever the element type is, not only a class. A `char`
+        // loop variable needs it as much as a wrapper one does: without a type
+        // the numeric-promotion pass sees an untyped operand and skips the
+        // whole expression, so `ch - '0'` reached Rust as one `char` minus
+        // another.
+        if let Some(ty) = &elem_ty {
             if let Some(scope) = self.local_types.last_mut() {
                 scope.insert(f.var_name.text.clone(), ty.clone());
             }
@@ -2098,6 +2115,20 @@ impl RustEmitter {
                 {
                     let ty = juxc_tycheck::ty_from_ref_in_env(field_ty, &self.symbols);
                     return Self::element_of(&ty);
+                }
+            }
+        }
+        // `for (var ch : text.chars())` -- the element is a `char`, and saying
+        // so is what lets the loop variable take part in numeric promotion.
+        // Without it `ch - '0'` had one typed operand and one untyped one, so
+        // promotion was skipped and Rust was asked to subtract a `char` from a
+        // `char`.
+        if let Expr::Call(c) = iter {
+            if let Expr::Field(f) = &*c.callee {
+                if f.field.text == "chars"
+                    && matches!(self.receiver_ty_of(&f.object), Some(Ty::String))
+                {
+                    return Some(Ty::Primitive(juxc_tycheck::Primitive::Char));
                 }
             }
         }

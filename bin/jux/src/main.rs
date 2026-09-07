@@ -120,6 +120,12 @@ enum CliCommand {
         /// package's first binary.
         #[arg(long)]
         bin: Option<String>,
+        /// Arguments for the program itself, after a `--` separator.
+        ///
+        /// `main(String[] args)` has always been a legal entry point; until
+        /// now there was no way to give it anything.
+        #[arg(last = true)]
+        args: Vec<String>,
         /// Cross-compile + run for the given Rust target triple. The
         /// toolchain must be installed: `rustup target add <triple>`.
         #[arg(long)]
@@ -217,8 +223,9 @@ fn run_cli(cli: Cli) -> Result<ExitCode> {
             let sel = Selection { package, bin, lib };
             run_single_or_project(root, file, Action::Build, emit_dir, release, sel)
         }
-        CliCommand::Run { file, emit_dir, release, package, bin, target } => {
+        CliCommand::Run { file, emit_dir, release, package, bin, args, target } => {
             set_cross_target(target);
+            set_program_args(args);
             let sel = Selection { package, bin, lib: false };
             run_single_or_project(root, file, Action::Run, emit_dir, release, sel)
         }
@@ -249,6 +256,20 @@ impl Selection {
 /// driver's cargo invocations and artifact-path computations read (see
 /// `juxc_driver::cross_target`). A `None` leaves the env untouched so the
 /// manifest's `[build] target` default (applied later) can still take effect.
+/// Arguments to hand the program being run, from `jux run … -- <args>`.
+///
+/// Carried in a process-wide slot rather than threaded through every run
+/// signature, the same way the cross-compile target already is.
+static PROGRAM_ARGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+fn set_program_args(args: Vec<String>) {
+    let _ = PROGRAM_ARGS.set(args);
+}
+
+fn program_args() -> &'static [String] {
+    PROGRAM_ARGS.get().map(|v| v.as_slice()).unwrap_or(&[])
+}
+
 fn set_cross_target(triple: Option<String>) {
     if let Some(t) = triple {
         std::env::set_var("JUX_TARGET", t);
@@ -772,7 +793,10 @@ fn build_and_act(
                 return Ok(ExitCode::SUCCESS);
             };
             eprintln!("jux: built {}", bin.binary_path.display());
-            let status = Command::new(&bin.binary_path).status().with_context(|| {
+            let status = Command::new(&bin.binary_path)
+                    .args(program_args())
+                    .status()
+                    .with_context(|| {
                 format!("running {}", bin.binary_path.display())
             })?;
             let code = status.code().unwrap_or(1) as u8;
@@ -885,7 +909,10 @@ fn run_workspace(
         // "application" sits at the top of the topological order).
         if let Some((_, build)) = ws.members.last() {
             if let Some(bin) = build.binaries.first() {
-                let status = Command::new(&bin.binary_path).status().with_context(|| {
+                let status = Command::new(&bin.binary_path)
+                    .args(program_args())
+                    .status()
+                    .with_context(|| {
                     format!("running {}", bin.binary_path.display())
                 })?;
                 let code = status.code().unwrap_or(1) as u8;
@@ -1094,7 +1121,10 @@ fn run_single_file(
                 // user sees its output verbatim. Forward the exit code so
                 // CI / IDEs see a non-zero exit when the user's program
                 // exits non-zero.
-                let status = Command::new(&artifact.binary_path).status().with_context(|| {
+                let status = Command::new(&artifact.binary_path)
+                    .args(program_args())
+                    .status()
+                    .with_context(|| {
                     format!("running {}", artifact.binary_path.display())
                 })?;
                 let code = status.code().unwrap_or(1) as u8;

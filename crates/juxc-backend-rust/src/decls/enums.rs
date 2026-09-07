@@ -243,7 +243,17 @@ impl RustEmitter {
         self.w.push_str(" {\n");
 
         self.w.indent_inc();
+        // The variant `#[derive(Default)]` above points at: the first one
+        // without a payload.
+        let default_variant = enum_decl
+            .variants
+            .iter()
+            .find(|v| v.payload.is_empty())
+            .map(|v| v.name.text.clone());
         for variant in &enum_decl.variants {
+            if default_variant.as_deref() == Some(variant.name.text.as_str()) {
+                self.w.line("#[default]");
+            }
             self.w.emit_indent();
             self.w.push_str(&to_rust_ident(&variant.name.text));
             if !variant.payload.is_empty() {
@@ -573,6 +583,14 @@ fn enum_derive_attribute(enum_decl: &juxc_ast::EnumDecl) -> String {
     }
     if all_copy {
         derives.push("Copy");
+    }
+    // A field of enum type with no initializer is seeded with the type's
+    // default before the constructor body assigns it, so the enum needs one.
+    // Rust derives `Default` for an enum only when a variant is marked, so the
+    // first PAYLOAD-FREE variant is marked below; an enum whose variants all
+    // carry payloads has no sensible default and gets none.
+    if enum_decl.variants.iter().any(|v| v.payload.is_empty()) {
+        derives.push("Default");
     }
     format!("#[derive({})]", derives.join(", "))
 }

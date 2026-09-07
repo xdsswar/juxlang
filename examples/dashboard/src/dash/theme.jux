@@ -1,0 +1,28 @@
+// Colors and metrics, in one place.
+//
+// Every color is 0x00RRGGBB, the layout minifb wants. They are `const`, so
+// they are link-time data with no allocation behind them.
+package dash;
+
+public class Theme {
+    // Surfaces, from the page up.
+    public static const u32 BG        = (u32) 0x000B0E14;
+    public static const u32 PANEL     = (u32) 0x00141A24;
+    public static const u32 PANEL_HI  = (u32) 0x001B2330;
+    public static const u32 STROKE    = (u32) 0x00243044;
+
+    // Type.
+    public static const u32 TEXT      = (u32) 0x00E6EDF3;
+    public static const u32 MUTED     = (u32) 0x008B98A9;
+
+    // Accents, in the order the series use them.
+    public static const u32 CYAN      = (u32) 0x0038BDF8;
+    public static const u32 VIOLET    = (u32) 0x00A78BFA;
+    public static const u32 GREEN     = (u32) 0x0034D399;
+    public static const u32 AMBER     = (u32) 0x00FBBF24;
+    public static const u32 ROSE      = (u32) 0x00FB7185;
+
+    // Spacing. One number to change if the whole thing should breathe more.
+    public static const int GAP       = 14;
+    public static const int PAD       = 14;
+}

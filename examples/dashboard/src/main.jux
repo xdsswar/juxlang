@@ -1,0 +1,125 @@
+// A responsive dashboard, rendered from scratch in Jux.
+//
+// Nothing here is a UI framework: the whole thing is integer arithmetic
+// painting 0x00RRGGBB pixels into a buffer. The `dash` package does the
+// drawing and knows nothing about windows; this file is the only part that
+// does, which is what lets the same frame go to a desktop window or to a file.
+//
+//   cd examples/dashboard
+//   jux run                                     -- live window, resizable
+//   jux run -- --snapshot a.ppm                 -- one frame to a file
+//   jux run -- --snapshot a.ppm --size 1280x800
+//
+// Resize the window and the layout rearranges itself: four stat tiles become
+// two and then one, the charts go from two columns to one, and the side column
+// drops away entirely. The header names the breakpoint it picked, so the
+// rearrangement is visible rather than merely implied.
+
+import rust.minifb.Window;
+import rust.minifb.WindowOptions;
+import dash.Canvas;
+import dash.Dashboard;
+import dash.Model;
+
+public void main(String[] args) {
+    // The seed is fixed, so a snapshot is reproducible and can be diffed.
+    var model = new Model((long) 20260907);
+    var dash = new Dashboard(model);
+
+    int w = 1280;
+    int h = 800;
+    String? out = null;
+
+    // Arguments, hand-parsed: two flags do not need a library.
+    int i = 0;
+    int n = args.length;
+    while (i < n) {
+        var a = args[i];
+        if (a == "--snapshot" && i + 1 < n) {
+            out = args[i + 1];
+            i = i + 1;
+        } else if (a == "--size" && i + 1 < n) {
+            var dims = args[i + 1].split("x");
+            if (dims.length == 2) {
+                w = parseSize(dims[0], w);
+                h = parseSize(dims[1], h);
+            }
+            i = i + 1;
+        }
+        i = i + 1;
+    }
+
+    if (out != null) {
+        var canvas = new Canvas(w, h);
+        dash.render(canvas);
+        print($"wrote ${w}x${h} frame to ${out!!}");
+        writePpm(canvas, out!!);
+        return;
+    }
+
+    runWindow(dash, w, h);
+}
+
+// The live front end: open a window, and repaint whenever it changes size.
+public void runWindow(Dashboard dash, int w, int h) {
+    var opts = new WindowOptions();
+    opts.resize = true;
+    var window = new Window("Jux Operations", (uint) w, (uint) h, opts);
+    window.set_target_fps((uint) 30);
+
+    // The canvas is rebuilt only when the window size actually changes, so a
+    // still window costs one allocation for the whole run.
+    var canvas = new Canvas(w, h);
+    int curW = w;
+    int curH = h;
+
+    while (window.is_open()) {
+        var size = window.get_size();
+        int nw = (int) size.0;
+        int nh = (int) size.1;
+        if (nw > 0 && nh > 0 && (nw != curW || nh != curH)) {
+            curW = nw;
+            curH = nh;
+            canvas = new Canvas(curW, curH);
+        }
+
+        dash.model.step();
+        dash.render(canvas);
+        window.update_with_buffer(canvas.buf, (uint) curW, (uint) curH);
+    }
+}
+
+// Write the canvas as a plain-text PPM (P3).
+//
+// The verbose ASCII form is deliberate: it needs no image library, no binary
+// I/O, and any viewer or one-line script can read it back. This is the path a
+// test uses, because it needs no display.
+public void writePpm(Canvas c, String path) {
+    // `String` is Rust's `String`, so it grows in place with `push_str`. There
+    // is no builder type in the language and none is needed.
+    var sb = "";
+    sb.push_str($"P3\n${c.width()} ${c.height()}\n255\n");
+    for (int y = 0; y < c.height(); y++) {
+        for (int x = 0; x < c.width(); x++) {
+            u32 p = c.buf[y * c.width() + x];
+            int r = (int) ((p >> 16) & (u32) 0xFF);
+            int g = (int) ((p >> 8) & (u32) 0xFF);
+            int b = (int) (p & (u32) 0xFF);
+            sb.push_str($"${r} ${g} ${b} ");
+        }
+        sb.push_str("\n");
+    }
+    File.writeText(path, sb);
+}
+
+// A tolerant integer parse: anything unreadable keeps the default.
+public int parseSize(String s, int fallback) {
+    int v = 0;
+    bool any = false;
+    for (var ch : s.chars()) {
+        if (ch < '0' || ch > '9') { return fallback; }
+        v = v * 10 + (ch - '0');
+        any = true;
+    }
+    return any && v > 0 ? v : fallback;
+}

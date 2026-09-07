@@ -2289,6 +2289,17 @@ impl crate::RustEmitter {
         arg_idx: usize,
     ) -> Option<&juxc_tycheck::symbol_table::ParamSig> {
         let juxc_ast::Expr::Field(f) = callee else { return None };
+        // A `String` receiver is its own `Ty`, not a `Ty::User`, so it never
+        // matched the value branch below -- and `String`'s scanned methods take
+        // `&str` all over (`push_str` above all). The argument arrived owned
+        // where a borrow was wanted, and rustc said so.
+        if matches!(self.receiver_ty_of(&f.object), Some(juxc_tycheck::Ty::String)) {
+            return self
+                .lookup_class_by_bare_or_fqn("String")
+                .filter(|c| c.is_external)
+                .and_then(|c| c.methods.get(f.field.text.as_str()))
+                .and_then(|m| m.params.get(arg_idx));
+        }
         // Static call `ClassName.method(...)`: the receiver is a class NAME, not
         // a value, so it never appears in `expr_types`. Resolve the class
         // directly and read the static method's param. Only foreign (external)

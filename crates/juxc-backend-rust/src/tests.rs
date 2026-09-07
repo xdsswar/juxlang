@@ -1605,7 +1605,7 @@ fn unit_enum_emits_derives_and_display() {
     // Unit-only enums have no payload slots, so every eligibility check
     // is vacuously true and §O.3 grants the full derive set.
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]"),
+        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, Default)]"),
         "got: {rust}",
     );
     assert!(rust.contains("pub enum Color {"), "got: {rust}");
@@ -3436,7 +3436,7 @@ fn int_payload_enum_gets_full_derive_set() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]"),
+        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, Default)]"),
         "got: {rust}",
     );
 }
@@ -3452,7 +3452,7 @@ fn string_payload_enum_drops_copy() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash)]"),
+        rust.contains("#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]"),
         "got: {rust}",
     );
     assert!(!rust.contains("Copy"), "Copy should be skipped: {rust}");
@@ -3469,7 +3469,7 @@ fn one_float_payload_disqualifies_enum_eq_hash() {
         "#,
     );
     assert!(
-        rust.contains("#[derive(Debug, Clone, PartialEq, Copy)]"),
+        rust.contains("#[derive(Debug, Clone, PartialEq, Copy, Default)]"),
         "got: {rust}",
     );
     assert!(!rust.contains(", Eq"), "Eq should be skipped: {rust}");

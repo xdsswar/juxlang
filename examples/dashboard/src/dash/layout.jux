@@ -1,0 +1,132 @@
+// The responsive part.
+//
+// `Layout.of(w, h)` is the only place that decides where anything goes. It
+// picks a breakpoint from the width and returns a rectangle per region, so the
+// same widgets rearrange themselves as the window resizes and no widget has to
+// know it happened.
+package dash;
+
+import rust.std.*;
+
+// How much room there is to work with. Named rather than numeric so the
+// layout code reads as intent instead of arithmetic.
+public enum Breakpoint {
+    Compact,   // one column: stats stack, charts stack
+    Medium,    // two columns
+    Wide;      // the full three-region layout
+
+    // The width each breakpoint starts at.
+    public static Breakpoint forWidth(int w) {
+        if (w < 720) { return Breakpoint.Compact; }
+        if (w < 1080) { return Breakpoint.Medium; }
+        return Breakpoint.Wide;
+    }
+
+    public String label() {
+        return switch (this) {
+            case Breakpoint.Compact -> "COMPACT";
+            case Breakpoint.Medium -> "MEDIUM";
+            case Breakpoint.Wide -> "WIDE";
+        };
+    }
+}
+
+public class Layout {
+    public Breakpoint mode;
+    public Rect header;
+    public Vec<Rect> stats;    // one per series
+    public Vec<Rect> charts;   // one per series
+    public Rect bars;
+    public Rect gauges;
+    public Rect events;
+
+    // Work out every region for a `w` by `h` surface.
+    //
+    // The whole layout is column-based: pick a column count from the
+    // breakpoint, then hand out rows. Nothing is hard-coded to a pixel size,
+    // which is why the same code fills a 640-wide window and a 1600-wide one.
+    public Layout(int w, int h) {
+        this.mode = Breakpoint.forWidth(w);
+        this.stats = new Vec<Rect>();
+        this.charts = new Vec<Rect>();
+
+        int gap = Theme.GAP;
+        int x0 = gap;
+        int y = gap;
+        int contentW = w - 2 * gap;
+
+        // Header: a fixed band across the top.
+        int headerH = 56;
+        this.header = new Rect(x0, y, contentW, headerH);
+        y = y + headerH + gap;
+
+        // Stat tiles: four across when there is room, two when there is less,
+        // one when there is little.
+        int statCols = switch (this.mode) {
+            case Breakpoint.Wide -> 4;
+            case Breakpoint.Medium -> 2;
+            case Breakpoint.Compact -> 1;
+        };
+        int statRows = (4 + statCols - 1) / statCols;
+        int tileW = (contentW - (statCols - 1) * gap) / statCols;
+        int tileH = 78;
+        for (int i = 0; i < 4; i++) {
+            int col = i % statCols;
+            int row = i / statCols;
+            this.stats.push(new Rect(
+                x0 + col * (tileW + gap),
+                y + row * (tileH + gap),
+                tileW,
+                tileH));
+        }
+        y = y + statRows * (tileH + gap);
+
+        // What is left, split between the charts and the side column.
+        int restH = h - y - gap;
+        if (restH < 120) { restH = 120; }
+
+        int sideW = switch (this.mode) {
+            case Breakpoint.Wide -> 300;
+            case Breakpoint.Medium -> 260;
+            case Breakpoint.Compact -> 0;
+        };
+        int mainW = sideW == 0 ? contentW : contentW - sideW - gap;
+
+        // Charts: two across when wide, one otherwise.
+        int chartCols = this.mode == Breakpoint.Wide ? 2 : 1;
+        int chartRows = (4 + chartCols - 1) / chartCols;
+        int chartW = (mainW - (chartCols - 1) * gap) / chartCols;
+        int chartH = (restH - (chartRows - 1) * gap) / chartRows;
+        for (int i = 0; i < 4; i++) {
+            int col = i % chartCols;
+            int row = i / chartCols;
+            this.charts.push(new Rect(
+                x0 + col * (chartW + gap),
+                y + row * (chartH + gap),
+                chartW,
+                chartH));
+        }
+
+        // The side column, when the width affords one. In Compact it collapses
+        // to nothing and the three panels below simply are not drawn.
+        int sx = x0 + mainW + gap;
+        if (sideW == 0) {
+            this.bars = new Rect(0, 0, 0, 0);
+            this.gauges = new Rect(0, 0, 0, 0);
+            this.events = new Rect(0, 0, 0, 0);
+            return;
+        }
+        int barsH = restH / 3;
+        int gaugesH = restH / 3;
+        this.bars = new Rect(sx, y, sideW, barsH);
+        this.gauges = new Rect(sx, y + barsH + gap, sideW, gaugesH);
+        this.events = new Rect(
+            sx,
+            y + barsH + gaugesH + 2 * gap,
+            sideW,
+            restH - barsH - gaugesH - 2 * gap);
+    }
+
+    // True when the side column has room to exist.
+    public bool hasSide() { return this.bars.w > 0; }
+}

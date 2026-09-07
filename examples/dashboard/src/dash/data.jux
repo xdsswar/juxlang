@@ -1,0 +1,148 @@
+// The numbers on the dashboard.
+//
+// Deterministic on purpose: the same `seed` always produces the same frame, so
+// a snapshot can be compared byte for byte in a test. Nothing here touches a
+// clock or a random source.
+package dash;
+
+import rust.std.*;
+
+// One named metric with a rolling history.
+//
+// The history is a `Vec<int>`, and a collection is a reference type, so
+// `series.history()` hands back the real series rather than a copy of it.
+public class Series {
+    public String name;
+    public String unit;
+    public u32 color;
+    private Vec<int> points;
+
+    public Series(String name, String unit, u32 color) {
+        this.name = name;
+        this.unit = unit;
+        this.color = color;
+        this.points = new Vec<int>();
+    }
+
+    public Vec<int> history() { return this.points; }
+
+    public void push(int v) { this.points.push(v); }
+
+    public int latest() {
+        int n = (int) this.points.len();
+        return n == 0 ? 0 : this.points[n - 1];
+    }
+
+    public int max() {
+        int m = 1;
+        for (var p : this.points) {
+            if (p > m) { m = p; }
+        }
+        return m;
+    }
+
+    public int min() {
+        int m = this.latest();
+        for (var p : this.points) {
+            if (p < m) { m = p; }
+        }
+        return m;
+    }
+
+    public int average() {
+        int n = (int) this.points.len();
+        if (n == 0) { return 0; }
+        int sum = 0;
+        for (var p : this.points) { sum = sum + p; }
+        return sum / n;
+    }
+
+    // Percent change from the first sample to the latest, which is what the
+    // little delta under each headline number reports.
+    public int trend() {
+        int n = (int) this.points.len();
+        if (n < 2) { return 0; }
+        int first = this.points[0];
+        if (first == 0) { return 0; }
+        return ((this.latest() - first) * 100) / first;
+    }
+}
+
+// A tiny reproducible generator, so the demo has plausible-looking data
+// without a dependency and without a clock.
+//
+// This is a linear congruential generator with the constants Numerical Recipes
+// uses. It is not for anything that matters; it is for making a chart wiggle.
+public class Noise {
+    private long state;
+
+    public Noise(long seed) { this.state = seed; }
+
+    public int next(int bound) {
+        this.state = (this.state * (long) 1664525 + (long) 1013904223) % (long) 2147483648;
+        return (int) (this.state % (long) bound);
+    }
+}
+
+// Everything the dashboard draws, built once.
+public class Model {
+    public Vec<Series> series;
+    public Vec<String> events;
+    public int tick;
+
+    public Model(long seed) {
+        this.tick = 0;
+        this.series = new Vec<Series>();
+        this.events = new Vec<String>();
+
+        var rng = new Noise(seed);
+        var names = new Vec<Series>();
+        names.push(new Series("REQUESTS", "/S", Theme.CYAN));
+        names.push(new Series("LATENCY", "MS", Theme.VIOLET));
+        names.push(new Series("ERRORS", "/MIN", Theme.ROSE));
+        names.push(new Series("THROUGHPUT", "MB/S", Theme.GREEN));
+
+        // Each series walks from its own base so the four charts do not look
+        // like copies of one another.
+        var bases = new Vec<int>();
+        bases.push(420); bases.push(90); bases.push(28); bases.push(140);
+
+        int si = 0;
+        for (var s : names) {
+            int level = bases[si];
+            for (int i = 0; i < 48; i++) {
+                int drift = rng.next(21) - 10;
+                level = level + (level * drift) / 100;
+                if (level < 1) { level = 1; }
+                s.push(level);
+            }
+            this.series.push(s);
+            si = si + 1;
+        }
+
+        this.events.push("DEPLOY 14.2.1 ROLLED OUT");
+        this.events.push("CACHE WARMED IN 2.4S");
+        this.events.push("REGION EU-WEST FAILED OVER");
+        this.events.push("AUTOSCALE 6 > 9 NODES");
+        this.events.push("NIGHTLY BACKUP OK");
+    }
+
+    // Advance every series by one sample. The window loop calls this; the
+    // snapshot path does not, so a snapshot is always the same frame.
+    public void step() {
+        this.tick = this.tick + 1;
+        var rng = new Noise((long) (this.tick * 7919 + 13));
+        for (var s : this.series) {
+            int level = s.latest();
+            int drift = rng.next(19) - 9;
+            level = level + (level * drift) / 100;
+            if (level < 1) { level = 1; }
+            s.push(level);
+            // Keep the history bounded, or the chart would compress forever.
+            var h = s.history();
+            if ((int) h.len() > 64) {
+                h.remove(0);
+            }
+        }
+    }
+}

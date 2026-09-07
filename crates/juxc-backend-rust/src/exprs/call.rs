@@ -1630,7 +1630,10 @@ impl RustEmitter {
                             self.emit_arg_with_nullable_wrap(arg, nullable);
                             if upcast {
                                 self.w.push_str(".into()");
-                            } else if !nullable && self.wrapper_value_needs_clone(arg) {
+                            } else if !nullable
+                                && (self.wrapper_value_needs_clone(arg)
+                                    || self.value_place_needs_clone(arg))
+                            {
                                 // Wrapper-class share-on-pass (§CR.4.1) —
                                 // same shared-handle rule as the generic
                                 // call path, for `Class.staticMethod(arg)`.

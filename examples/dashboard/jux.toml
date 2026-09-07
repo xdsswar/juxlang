@@ -1,0 +1,10 @@
+[package]
+name = "demo.dashboard"
+version = "0.1.0"
+
+# The dashboard paints itself into a plain pixel buffer, so the rendering half
+# needs nothing but the language. `minifb` is here only to put that buffer in
+# a window; `--snapshot` writes the same frame to a file instead, which is how
+# the example is tested where there is no display.
+[dependencies]
+"rust.minifb" = "0.27"

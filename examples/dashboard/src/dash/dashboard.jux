@@ -1,0 +1,91 @@
+// Putting it together: one function that paints a whole frame.
+//
+// It takes a canvas and a model and draws. It never asks what the canvas is
+// attached to, so the window front end and the snapshot front end call exactly
+// the same code.
+package dash;
+
+import rust.std.*;
+
+public class Dashboard {
+    public Model model;
+
+    public Dashboard(Model model) { this.model = model; }
+
+    public void render(Canvas c) {
+        var l = new Layout(c.width(), c.height());
+
+        c.clear(Theme.BG);
+        this.drawHeader(c, l);
+
+        // Stat tiles and charts, one of each per series.
+        int i = 0;
+        for (var s : this.model.series) {
+            new StatTile(s).draw(c, l.stats[i]);
+
+            var chart = l.charts[i];
+            var body = new Panel($"${s.name} (${s.unit})").draw(c, chart);
+            new LineChart(s).draw(c, body);
+            i = i + 1;
+        }
+
+        // The side column exists only when the window is wide enough for it.
+        if (l.hasSide()) {
+            var barsBody = new Panel("CURRENT").draw(c, l.bars);
+            new BarChart(this.model.series).draw(c, barsBody);
+
+            var gaugeBody = new Panel("BUDGET").draw(c, l.gauges);
+            this.drawGauges(c, gaugeBody);
+
+            var eventBody = new Panel("ACTIVITY").draw(c, l.events);
+            new EventLog(this.model.events).draw(c, eventBody);
+        }
+    }
+
+    // A band with the title, the live breakpoint, and the frame counter.
+    // Showing the breakpoint is the point of the demo: resize the window and
+    // watch the word change as the layout rearranges itself.
+    private void drawHeader(Canvas c, Layout l) {
+        var r = l.header;
+        c.fillRound(r.x, r.y, r.w, r.h, 6, Theme.PANEL);
+        c.gradientRect(r.x + 6, r.y + 1, r.w - 12, 2, Theme.CYAN, Theme.VIOLET);
+
+        Font.draw(c, "JUX OPERATIONS", r.x + Theme.PAD, r.y + 14, 2, Theme.TEXT);
+        Font.draw(c, "LIVE SERVICE METRICS", r.x + Theme.PAD, r.y + 34, 1, Theme.MUTED);
+
+        var meta = $"${l.mode.label()}  ${c.width()}X${c.height()}  FRAME ${this.model.tick}";
+        Font.drawRight(c, meta, r.right() - Theme.PAD, r.y + 14, 1, Theme.MUTED);
+
+        // A small health strip: one pip per series, green when its latest
+        // sample is under the average and amber when it is over.
+        int px = r.right() - Theme.PAD - 4 * 12;
+        for (var s : this.model.series) {
+            u32 tone = s.latest() <= s.average() ? Theme.GREEN : Theme.AMBER;
+            c.fillRound(px, r.y + 34, 8, 8, 3, tone);
+            px = px + 12;
+        }
+    }
+
+    private void drawGauges(Canvas c, Rect r) {
+        // Three rings across, each a percentage derived from a series so the
+        // dial moves with the data rather than sitting still.
+        var gauges = new Vec<Gauge>();
+        gauges.push(new Gauge("CPU", Dashboard.clamp(this.model.series[0].latest() / 8), Theme.CYAN));
+        gauges.push(new Gauge("MEM", Dashboard.clamp(this.model.series[1].latest() * 2 / 3), Theme.VIOLET));
+        gauges.push(new Gauge("DISK", Dashboard.clamp(this.model.series[3].latest() / 2), Theme.GREEN));
+
+        int n = (int) gauges.len();
+        int cellW = r.w / n;
+        int i = 0;
+        for (var g : gauges) {
+            g.draw(c, new Rect(r.x + i * cellW, r.y, cellW, r.h));
+            i = i + 1;
+        }
+    }
+
+    private static int clamp(int v) {
+        if (v < 0) { return 0; }
+        if (v > 100) { return 100; }
+        return v;
+    }
+}

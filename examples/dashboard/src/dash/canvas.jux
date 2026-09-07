@@ -1,0 +1,159 @@
+// A software canvas: a flat row-major buffer of 0x00RRGGBB pixels, plus the
+// handful of primitives everything else is drawn from.
+//
+// It knows nothing about windows. That separation is why the same frame can go
+// to a desktop window or to a file with no change here.
+package dash;
+
+public class Canvas {
+    public u32[] buf;
+    public int w;
+    public int h;
+
+    public Canvas(int w, int h) {
+        this.w = w;
+        this.h = h;
+        this.buf = new u32[w * h];
+    }
+
+    public int width() { return this.w; }
+    public int height() { return this.h; }
+
+    // ---- pixels -------------------------------------------------------
+
+    // Write one pixel, ignoring anything off-surface. Every primitive below
+    // clips through here, so none of them has to bounds-check twice.
+    public void px(int x, int y, u32 color) {
+        if (x < 0 || y < 0 || x >= this.w || y >= this.h) {
+            return;
+        }
+        this.buf[y * this.w + x] = color;
+    }
+
+    // Blend `color` over what is already there. `alpha` is 0..255.
+    //
+    // The channels are pulled apart, mixed, and packed back. Doing it in
+    // integers keeps the whole renderer free of floating point.
+    public void blend(int x, int y, u32 color, int alpha) {
+        if (x < 0 || y < 0 || x >= this.w || y >= this.h) {
+            return;
+        }
+        if (alpha >= 255) {
+            this.buf[y * this.w + x] = color;
+            return;
+        }
+        if (alpha <= 0) {
+            return;
+        }
+        u32 dst = this.buf[y * this.w + x];
+        int a = alpha;
+        int inv = 255 - a;
+        int r = ((int) ((color >> 16) & (u32) 0xFF) * a + (int) ((dst >> 16) & (u32) 0xFF) * inv) / 255;
+        int g = ((int) ((color >> 8) & (u32) 0xFF) * a + (int) ((dst >> 8) & (u32) 0xFF) * inv) / 255;
+        int b = ((int) (color & (u32) 0xFF) * a + (int) (dst & (u32) 0xFF) * inv) / 255;
+        this.buf[y * this.w + x] = ((u32) r << 16) | ((u32) g << 8) | (u32) b;
+    }
+
+    public void clear(u32 color) {
+        int n = this.w * this.h;
+        for (int i = 0; i < n; i++) {
+            this.buf[i] = color;
+        }
+    }
+
+    // ---- shapes -------------------------------------------------------
+
+    public void fillRect(int x, int y, int rw, int rh, u32 color) {
+        for (int yy = y; yy < y + rh; yy++) {
+            for (int xx = x; xx < x + rw; xx++) {
+                this.px(xx, yy, color);
+            }
+        }
+    }
+
+    public void strokeRect(int x, int y, int rw, int rh, u32 color) {
+        for (int xx = x; xx < x + rw; xx++) {
+            this.px(xx, y, color);
+            this.px(xx, y + rh - 1, color);
+        }
+        for (int yy = y; yy < y + rh; yy++) {
+            this.px(x, yy, color);
+            this.px(x + rw - 1, yy, color);
+        }
+    }
+
+    // A rectangle with its corners knocked off. `r` is the corner radius.
+    //
+    // Rather than a circle test per pixel, the four corner blocks are the only
+    // ones that need one; the rest is three plain rectangles.
+    public void fillRound(int x, int y, int rw, int rh, int r, u32 color) {
+        if (r <= 0) {
+            this.fillRect(x, y, rw, rh, color);
+            return;
+        }
+        this.fillRect(x + r, y, rw - 2 * r, rh, color);
+        this.fillRect(x, y + r, r, rh - 2 * r, color);
+        this.fillRect(x + rw - r, y + r, r, rh - 2 * r, color);
+        for (int dy = 0; dy < r; dy++) {
+            for (int dx = 0; dx < r; dx++) {
+                // Distance from the corner's centre, squared, to keep it in
+                // integers. The +1 biases the edge outward so the curve does
+                // not look bitten into.
+                int d2 = (r - dx) * (r - dx) + (r - dy) * (r - dy);
+                if (d2 <= r * r) {
+                    this.px(x + dx, y + dy, color);
+                    this.px(x + rw - 1 - dx, y + dy, color);
+                    this.px(x + dx, y + rh - 1 - dy, color);
+                    this.px(x + rw - 1 - dx, y + rh - 1 - dy, color);
+                }
+            }
+        }
+    }
+
+    // A vertical gradient, `top` at the first row and `bottom` at the last.
+    public void gradientRect(int x, int y, int rw, int rh, u32 top, u32 bottom) {
+        for (int i = 0; i < rh; i++) {
+            int t = rh <= 1 ? 0 : (i * 255) / (rh - 1);
+            int r = ((int) ((top >> 16) & (u32) 0xFF) * (255 - t) + (int) ((bottom >> 16) & (u32) 0xFF) * t) / 255;
+            int g = ((int) ((top >> 8) & (u32) 0xFF) * (255 - t) + (int) ((bottom >> 8) & (u32) 0xFF) * t) / 255;
+            int b = ((int) (top & (u32) 0xFF) * (255 - t) + (int) (bottom & (u32) 0xFF) * t) / 255;
+            u32 row = ((u32) r << 16) | ((u32) g << 8) | (u32) b;
+            this.fillRect(x, y + i, rw, 1, row);
+        }
+    }
+
+    // A line, by Bresenham. Used for the chart strokes.
+    public void line(int x0, int y0, int x1, int y1, u32 color) {
+        int dx = x1 - x0;
+        int dy = y1 - y0;
+        int sx = dx < 0 ? -1 : 1;
+        int sy = dy < 0 ? -1 : 1;
+        dx = dx < 0 ? -dx : dx;
+        dy = dy < 0 ? -dy : dy;
+        int err = dx - dy;
+        int x = x0;
+        int y = y0;
+        while (true) {
+            this.px(x, y, color);
+            if (x == x1 && y == y1) {
+                return;
+            }
+            int e2 = 2 * err;
+            if (e2 > -dy) {
+                err = err - dy;
+                x = x + sx;
+            }
+            if (e2 < dx) {
+                err = err + dx;
+                y = y + sy;
+            }
+        }
+    }
+
+    // A line thick enough to read at a glance: the same stroke, offset.
+    public void thickLine(int x0, int y0, int x1, int y1, int weight, u32 color) {
+        for (int o = 0; o < weight; o++) {
+            this.line(x0, y0 + o, x1, y1 + o, color);
+        }
+    }
+}

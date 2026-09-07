@@ -89,6 +89,20 @@ impl RustEmitter {
         stmts: &[juxc_ast::Stmt],
         owned_params: &HashSet<String>,
     ) {
+        // A `return;` inside these statements yields the value being built,
+        // whatever local is holding it -- see `ctor_builder_alias`.
+        let prev_builder = self
+            .ctor_builder_alias
+            .replace(self.this_alias.clone().unwrap_or_else(|| "__self".to_string()));
+        self.emit_ctor_body_stmts_inner(stmts, owned_params);
+        self.ctor_builder_alias = prev_builder;
+    }
+
+    fn emit_ctor_body_stmts_inner(
+        &mut self,
+        stmts: &[juxc_ast::Stmt],
+        owned_params: &HashSet<String>,
+    ) {
         for (i, stmt) in stmts.iter().enumerate() {
             let mut live = HashSet::new();
             if !owned_params.is_empty() && i + 1 < stmts.len() {
