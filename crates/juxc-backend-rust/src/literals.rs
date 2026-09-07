@@ -137,6 +137,28 @@ impl RustEmitter {
     /// Emit a Jux string in Rust source form, escaping the characters
     /// that have special meaning inside `"..."`. The Jux lexer hands us
     /// the raw bytes between Jux's quotes; we re-escape those for Rust.
+    /// The folded value for a `String`-typed const slot whose initializer is
+    /// not already a plain literal, or `None` to emit the initializer as it
+    /// stands (§T.11.7).
+    ///
+    /// A literal is left alone deliberately: the ordinary literal path already
+    /// emits it, and it may be a raw string whose exact spelling is worth
+    /// keeping in the generated Rust.
+    pub(crate) fn const_string_fold(
+        &self,
+        ty: &juxc_ast::TypeRef,
+        init: &juxc_ast::Expr,
+    ) -> Option<String> {
+        if ty.array_shape.is_some()
+            || ty.nullable
+            || !crate::analysis::is_jux_string_type(ty)
+            || matches!(init, juxc_ast::Expr::Literal(juxc_ast::Literal::String(_)))
+        {
+            return None;
+        }
+        self.try_const_string(init)
+    }
+
     pub(crate) fn emit_rust_string_literal(&mut self, s: &str) {
         self.w.push('"');
         for c in s.chars() {

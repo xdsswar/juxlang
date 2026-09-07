@@ -295,3 +295,55 @@ fn type_aliases() {
         ],
     );
 }
+
+#[test]
+fn interface_default_override() {
+    // A class method beats an interface default, including when the class
+    // that declares it is an ancestor rather than the concrete type. The
+    // last line is the case that must NOT change: an interface default
+    // calling another default, with no class override anywhere.
+    common::expect_output(
+        "interface_default_override",
+        "interface-default-override",
+        &[
+            "[user: <user>]",
+            "[user: Ada (staff)]",
+            "[user: Bo (intern, mentored by Ada)]",
+            "visitor logged in",
+        ],
+    );
+}
+
+#[test]
+fn smart_cast_reuse() {
+    // Reading a smart-cast binding more than once. Every line here failed
+    // to compile at one point, and only because of the SECOND read.
+    common::expect_output(
+        "smart_cast_reuse",
+        "smart-cast-reuse",
+        &[
+            "hi|hi",
+            "len=2 upper=HI",
+            "[\"a\", \"b\"]|2",
+            "Ada/Ada/Ada",
+            "none",
+        ],
+    );
+}
+
+#[test]
+fn const_string_use() {
+    // A `const String` is stored as a borrow and read as a `String`, and a
+    // constant String expression folds at compile time (§T.11.7).
+    common::expect_output(
+        "const_string_use",
+        "const-string-use",
+        &[
+            "3",
+            "jux-lang",
+            "JUX",
+            "greeting: hello, jux",
+            "TOOL=juxc VERSION=0.0.1",
+        ],
+    );
+}

@@ -1,0 +1,69 @@
+// A smart-cast binding can be read as many times as you like.
+//
+// `if (s != null)` narrows `s` for the rest of the block, and inside that
+// block `s!!` is an ordinary read of an ordinary variable. Reading one
+// twice must copy it, exactly as reading a plain `String` twice does --
+// Jux has no move semantics for the programmer to reason about.
+//
+// This used to fail to compile once the second read appeared, and only
+// then: the one-read version was fine, so the error arrived when you added
+// a line that had nothing wrong with it.
+//
+// Expected output:
+//   hi|hi
+//   len=2 upper=HI
+//   [a, b]|2
+//   Ada/Ada/Ada
+//   none
+
+public void twice(String a, String b) {
+    print($"${a}|${b}");
+}
+
+public class Tag {
+    public String label;
+
+    public Tag(String label) {
+        this.label = label;
+    }
+}
+
+public void main() {
+    // Two reads of one narrowed local, as two arguments to one call.
+    String? s = "hi";
+    if (s != null) {
+        twice(s!!, s!!);
+    }
+
+    // Two reads in separate statements, feeding different methods.
+    String? t = "hi";
+    if (t != null) {
+        var n = t!!.length();
+        var u = t!!.toUpperCase();
+        print($"len=${n} upper=${u}");
+    }
+
+    // A narrowed COLLECTION read twice. Collections are reference types,
+    // so the two reads must see the same handle, not two copies.
+    Vec<String>? items = null;
+    items = new Vec<String>();
+    if (items != null) {
+        items!!.push("a");
+        items!!.push("b");
+        print($"${items!!}|${items!!.len()}");
+    }
+
+    // A narrowed class reference read three times in one expression.
+    Tag? tag = new Tag("Ada");
+    if (tag != null) {
+        print($"${tag!!.label}/${tag!!.label}/${tag!!.label}");
+    }
+
+    // The narrowing genuinely gates: a null slot takes the other branch.
+    String? empty = null;
+    if (empty != null) {
+        twice(empty!!, empty!!);
+    } else {
+        print("none");
+    }
+}

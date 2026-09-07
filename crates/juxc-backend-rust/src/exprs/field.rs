@@ -472,11 +472,29 @@ impl RustEmitter {
                         // wrapper ctor), so they fall through to the
                         // thread_local read below.
                         if field.is_final && !self.final_static_needs_runtime_init(&field.ty) {
+                            // A `const String` is stored as `&'static str`: a
+                            // Rust `const` cannot allocate, and link-time data
+                            // should not. A READ of one is an ordinary Jux
+                            // `String` though, so it owns up here -- passing
+                            // `K.NAME` to anything taking a `String` was a
+                            // mismatch the program had no way to write around.
+                            //
+                            // Not in a const context (the storage itself), and
+                            // not in a format slot, where `&str` already
+                            // displays and the allocation would be pure waste.
+                            let owns = !self.emitting_const_context
+                                && !self.emitting_format_arg
+                                && field.ty.array_shape.is_none()
+                                && field.ty.name.segments.last()
+                                    .is_some_and(|x| x.text == "String");
                             self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
                             self.w.push_str("::");
                             self.w.push_str(&to_rust_ident(&f.field.text));
                             if let Some(sfx) = &method_suffix {
                                 self.w.push_str(sfx);
+                            }
+                            if owns && method_suffix.is_none() && !is_call_callee {
+                                self.w.push_str(".to_string()");
                             }
                             return;
                         }
@@ -886,9 +904,23 @@ impl RustEmitter {
                 .map(|ty| self.final_static_needs_runtime_init(ty))
                 .unwrap_or(false);
         if is_final && !final_runtime && !is_thread_local {
+            // Same ownership rule as the qualified `Class.NAME` form: a
+            // `const String` is stored as `&'static str`, but READING one
+            // yields a Jux `String`. Bare and qualified reads of the same
+            // constant must agree, or `NAME` and `K.NAME` type differently.
+            let owns = !self.emitting_const_context
+                && !self.emitting_format_arg
+                && !self.emitting_method_receiver
+                && field_ty.as_ref().is_some_and(|ty| {
+                    ty.array_shape.is_none()
+                        && ty.name.segments.last().is_some_and(|x| x.text == "String")
+                });
             self.w.push_str(class_name);
             self.w.push_str("::");
             self.w.push_str(&to_rust_ident(field_name));
+            if owns {
+                self.w.push_str(".to_string()");
+            }
             return;
         }
         if is_thread_local {
@@ -1280,6 +1312,14 @@ impl RustEmitter {
     ///   handle (`rust.minifb.Window`) may not be, and cloning one would be a
     ///   rustc error rather than a slow program.
     pub(crate) fn value_place_needs_clone(&self, expr: &Expr) -> bool {
+        // Look through a `!!`. After a smart cast the assertion is a no-op and
+        // emits the operand bare, so `f(s!!, s!!)` is two reads of one place --
+        // but the shape here was `NotNullAssert(Path)`, not `Path`, so the
+        // reuse went unnoticed and the first read MOVED the value out.
+        let expr = match expr {
+            Expr::NotNullAssert(inner, _) => inner.as_ref(),
+            other => other,
+        };
         let Expr::Path(qn) = expr else { return false };
         if qn.segments.len() != 1 || !self.non_final_uses.contains(&qn.span) {
             return false;
@@ -1290,6 +1330,13 @@ impl RustEmitter {
                 .rev()
                 .find_map(|scope| scope.get(qn.segments[0].text.as_str()))
         });
+        // A nullable slot is an `Option<T>`, which is no more `Copy` than its
+        // payload -- and after a smart cast the place is read as the payload
+        // anyway. Either way, reading it twice must copy.
+        let ty = match ty {
+            Some(juxc_tycheck::Ty::Nullable(inner)) => Some(inner.as_ref()),
+            other => other,
+        };
         match ty {
             // Jux's own owned representations: `String` is a Rust `String`, an
             // array is a `Vec`/`[T; N]`. Both are `Clone` whenever their element
@@ -1306,6 +1353,14 @@ impl RustEmitter {
     }
 
     pub(crate) fn wrapper_value_needs_clone(&self, expr: &Expr) -> bool {
+        // Same reason as `value_place_needs_clone`: a `!!` over a place is
+        // still a read of that place.
+        let expr = match expr {
+            Expr::NotNullAssert(inner, _) if !self.expression_is_already_nullable(inner) => {
+                inner.as_ref()
+            }
+            other => other,
+        };
         match expr {
             // Bare local/param reference of wrapped-class type.
             Expr::Path(_) | Expr::This(_) => {

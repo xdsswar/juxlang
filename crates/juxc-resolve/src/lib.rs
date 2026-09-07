@@ -798,14 +798,6 @@ impl Resolver {
     /// `this.field` for member access — bare-field shorthand is a Turn-2
     /// extension that needs a real type table).
     fn visit_class_decl(&mut self, class_decl: &juxc_ast::ClassDecl) {
-        // Fields may carry default-initializer expressions; resolve any
-        // identifiers they reference in the top-level scope (no `this`
-        // available — initializers run before the constructor body).
-        for field in &class_decl.fields {
-            if let Some(init) = &field.default {
-                self.visit_expr(init);
-            }
-        }
         // Static fields and methods (instance and static) of this class
         // are visible as bare names inside every constructor / method /
         // operator body (Java rule: `a` inside `class Test` resolves
@@ -863,6 +855,26 @@ impl Resolver {
             }
             owner = s.rsplit_once("__").map(|(outer, _)| outer);
         }
+        // **Field default-initializers see the class's own members.** A
+        // `const String FULL = NAME + SUFFIX;` names a sibling constant by
+        // its simple name, which is how Java writes it and how the same
+        // reference already reads inside a method body. Resolving these
+        // before `member_names` existed made the bare form an E0301 while
+        // the qualified `K.NAME` compiled -- a difference the source gives
+        // no hint of. There is no `this` here: an initializer runs before
+        // the constructor body, so only the member NAMES are in scope, and
+        // tycheck and the backend each do their own lookup on what a given
+        // name actually resolves to.
+        self.push_scope();
+        for name in &member_names {
+            self.declare(name);
+        }
+        for field in &class_decl.fields {
+            if let Some(init) = &field.default {
+                self.visit_expr(init);
+            }
+        }
+        self.pop_scope();
         // Helper closure: predeclared class-member names land in an
         // outer scope so a local/param of the same name shadows them
         // in the inner scope without firing

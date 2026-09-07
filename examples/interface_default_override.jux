@@ -1,0 +1,97 @@
+// A class override beats an interface default -- including when the
+// override is INHERITED rather than declared on the class itself.
+//
+// Java's rule is that a method declared in a class always wins over a
+// default method of an interface the class implements, no matter how far
+// up the extends chain the class method sits. The interesting case is the
+// third one below: `Staff` declares no `displayName` at all, so a naive
+// "does this class declare it?" check finds nothing and lets the interface
+// default fire. That answer compiles, runs, and is wrong, which is the
+// worst kind. The override two levels up is the one Java calls.
+//
+// Expected output:
+//   [user: <user>]
+//   [user: Ada (staff)]
+//   [user: Bo (intern, mentored by Ada)]
+//   visitor logged in
+
+public interface Loggable {
+    // The fallback, for a Loggable that supplies nothing of its own.
+    default String displayName() {
+        return "<user>";
+    }
+
+    // A default calling an overridable one: this is the method whose
+    // dispatch the whole example is about.
+    default String banner() {
+        return $"[user: ${this.displayName()}]";
+    }
+}
+
+/// Implements the interface and overrides nothing. Gets the defaults.
+public class Anonymous implements Loggable {}
+
+/// The override lives HERE, on an abstract class in the middle. Neither
+/// the interface nor the concrete leaf declares it.
+public abstract class Person implements Loggable {
+    protected String name;
+
+    public Person(String name) {
+        this.name = name;
+    }
+
+    /// Abstract, so `displayName` below dispatches virtually to the leaf.
+    public abstract String role();
+
+    public String displayName() {
+        return $"${this.name} (${this.role()})";
+    }
+}
+
+/// Declares only `role`. Its `displayName` comes from `Person`, and that
+/// inherited one must still beat `Loggable`'s default.
+public class Staff extends Person {
+    public Staff(String name) {
+        super(name);
+    }
+
+    public String role() {
+        return "staff";
+    }
+}
+
+/// Three levels: the override is two hops up, and this class refines the
+/// virtual method the override calls.
+public class Intern extends Staff {
+    private String mentor;
+
+    public Intern(String name, String mentor) {
+        super(name);
+        this.mentor = mentor;
+    }
+
+    public String role() {
+        return $"intern, mentored by ${this.mentor}";
+    }
+}
+
+/// An interface whose default calls another default, with no class in
+/// sight -- the path that must keep using Rust's own trait default.
+public interface Greeter {
+    default String who() {
+        return "visitor";
+    }
+
+    default String greet() {
+        return $"${this.who()} logged in";
+    }
+}
+
+public class Door implements Greeter {}
+
+public void main() {
+    print(new Anonymous().banner());
+    print(new Staff("Ada").banner());
+    print(new Intern("Bo", "Ada").banner());
+    print(new Door().greet());
+}

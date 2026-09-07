@@ -639,6 +639,16 @@ fn run_single_or_project(
         // Single-file mode ignores package/target selection (the file is the
         // unit). Warn rather than silently dropping a `-p`/`--bin` the user
         // likely meant for project mode.
+        // A DIRECTORY is either a project (it carries a `jux.toml`) or a set
+        // of sibling files that make one program. `juxc` has always accepted
+        // both; `jux` read it as a file and failed with an OS error, so a
+        // multi-file example could not be run by name at all.
+        Some(path) if path.is_dir() => {
+            if path.join("jux.toml").exists() {
+                return run_project(Some(path), action, emit_dir, release, selection);
+            }
+            run_source_set(&path, action, emit_dir, release)
+        }
         Some(path) => {
             if !selection.is_empty() {
                 eprintln!(
@@ -1066,6 +1076,54 @@ fn walk_jux_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 /// - Non-zero from juxc diagnostics → 1.
 /// - Non-zero from the emitted binary (`Run` only) → forwarded as-is.
 /// - Everything else → 0.
+/// Compile every `.jux` under `dir` as ONE program.
+///
+/// This is the loose multi-file shape - sibling files that import each other
+/// but carry no manifest, which is most of `examples/`. `target/` and hidden
+/// directories are skipped, the same rule `juxc` walks by.
+fn run_source_set(
+    dir: &Path,
+    action: Action,
+    emit_dir_override: Option<PathBuf>,
+    release: bool,
+) -> Result<ExitCode> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_jux_files(dir, &mut files)?;
+    files.sort();
+    if files.is_empty() {
+        eprintln!("jux: no .jux files under {}", dir.display());
+        return Ok(ExitCode::from(1));
+    }
+    let mut sources = Vec::with_capacity(files.len());
+    for f in &files {
+        let contents = std::fs::read_to_string(f)
+            .with_context(|| format!("reading {}", f.display()))?;
+        sources.push(juxc_source::SourceFile::new(f.clone(), contents));
+    }
+    let result = juxc_driver::compile_workspace(sources)?;
+    finish_compile(result, dir, action, emit_dir_override, release)
+}
+
+/// Every `.jux` under `dir`, skipping `target/` and hidden directories.
+fn collect_jux_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir)
+        .with_context(|| format!("reading directory {}", dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.starts_with('.') || name == "target" {
+                continue;
+            }
+            collect_jux_files(&path, out)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jux") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
 fn run_single_file(
     input: &Path,
     action: Action,
@@ -1077,6 +1135,18 @@ fn run_single_file(
         .with_context(|| format!("reading {}", input.display()))?;
     let source = juxc_source::SourceFile::new(input.to_path_buf(), contents);
     let result = juxc_driver::compile(source)?;
+    finish_compile(result, input, action, emit_dir_override, release)
+}
+
+/// Report, then build and possibly run - shared by the single-file and
+/// source-set entry points, which differ only in how they gather their input.
+fn finish_compile(
+    result: juxc_driver::CompileResult,
+    input: &Path,
+    action: Action,
+    emit_dir_override: Option<PathBuf>,
+    release: bool,
+) -> Result<ExitCode> {
 
     print_diagnostics(&result.diagnostics, &result.sources);
 

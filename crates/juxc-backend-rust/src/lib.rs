@@ -5862,13 +5862,16 @@ impl RustEmitter {
         // wrap when this flag is set, so the value text and type
         // line up.
         self.emitting_const_context = true;
-        self.emit_type_as_rust(&juxc_tycheck::resolved_const_type(decl));
+        let const_ty = juxc_tycheck::resolved_const_type(decl);
+        self.emit_type_as_rust(&const_ty);
         self.w.push_str(" = ");
         // An int/bool initializer that const-folds (`doubled(1024)`, `SIZE * 2`)
         // emits the computed literal — a Rust `const` can't call the emitted
         // (non-`const`) function, so we evaluate it ourselves (§T.11). Other
         // initializers (String, double, …) emit verbatim as before.
-        if let Some(v) = self.try_const_int(&decl.value) {
+        if let Some(folded) = self.const_string_fold(&const_ty, &decl.value) {
+            self.emit_rust_string_literal(&folded);
+        } else if let Some(v) = self.try_const_int(&decl.value) {
             self.w.push_str(&v.to_string());
         } else if let Some(b) = self.try_const_bool(&decl.value) {
             self.w.push_str(if b { "true" } else { "false" });

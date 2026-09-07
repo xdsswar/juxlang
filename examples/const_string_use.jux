@@ -1,0 +1,52 @@
+// A `const String` is a String everywhere a String is wanted.
+//
+// A constant lowers to a Rust `&'static str`, which is the right storage:
+// it costs nothing and lives for the whole program. But reading one is
+// reading a `String`-typed thing, so the read has to produce a `String`.
+// Passing a constant to a function taking `String` used to be a type
+// error at the Rust level -- a leak of the representation, in a place
+// where nothing in the Jux source hints that a constant is special.
+//
+// The read-only positions must NOT pay for that: a constant used inside
+// another constant's initializer, or interpolated into a string, stays a
+// borrow.
+//
+// Expected output:
+//   3
+//   jux-lang
+//   JUX
+//   greeting: hello, jux
+//   TOOL=juxc VERSION=0.0.1
+
+public class Brand {
+    public static const String NAME = "jux";
+    public static const String SUFFIX = "-lang";
+
+    /// A constant read inside another constant's initializer: this one is
+    /// folded at compile time and must stay a borrow.
+    public static const String FULL = NAME + SUFFIX;
+}
+
+public class Tool {
+    public static const String NAME = "juxc";
+    public static const String VERSION = "0.0.1";
+}
+
+/// Takes an owned `String`, the case that used to fail.
+public int len(String s) {
+    return (int) s.len();
+}
+
+/// Takes two, so a constant has to survive being one argument among many.
+public String pair(String a, String b) {
+    return $"${a}, ${b}";
+}
+
+public void main() {
+    print(len(Brand.NAME));
+    print(Brand.FULL);
+    print(Brand.NAME.toUpperCase());
+    print($"greeting: ${pair("hello", Brand.NAME)}");
+    // Interpolation reads constants without owning them.
+    print($"TOOL=${Tool.NAME} VERSION=${Tool.VERSION}");
+}

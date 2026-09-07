@@ -4064,9 +4064,22 @@ impl RustEmitter {
                     method_targets.insert(name.clone(), Some(String::new()));
                     continue;
                 }
-                if sig.is_abstract {
-                    // Abstract on the interface — must provide a
-                    // body. Walk ancestors for an inherent.
+                {
+                    // **An ancestor class may carry the override.** This runs
+                    // for BOTH kinds of interface method, and for different
+                    // reasons. An abstract one has no body at all, so a body
+                    // must be found or the impl does not compile. A DEFAULT one
+                    // does have a body, but Java says a class method beats an
+                    // interface default -- and when the override lives on an
+                    // ancestor class rather than on this class, nothing else
+                    // notices: `class_method_names` holds only what THIS class
+                    // declares, so skipping here would silently let the
+                    // interface default win. That is the wrong answer, and a
+                    // quiet one, because the program still compiles and runs.
+                    //
+                    // Either way the walk is the same: find the nearest
+                    // ancestor with a real body, and if there is none, leave
+                    // the entry out so Rust's own trait default fires.
                     let mut cursor: Option<&juxc_ast::TypeRef> = class_decl.extends.as_ref();
                     let mut found: Option<String> = None;
                     while let Some(parent_ref) = cursor {
@@ -4424,10 +4437,16 @@ impl RustEmitter {
         // const-evaluatable. See `emit_const_decl` for the
         // top-level mirror.
         self.emitting_const_context = true;
-        self.emit_field_type_as_rust(&juxc_tycheck::resolved_field_type(field));
+        let field_ty = juxc_tycheck::resolved_field_type(field);
+        self.emit_field_type_as_rust(&field_ty);
         self.w.push_str(" = ");
         if let Some(init) = &field.default {
-            self.emit_expr(init);
+            // A `const String` slot is a `&'static str`; a non-literal
+            // initializer folds to one (§T.11.7) or emits verbatim.
+            match self.const_string_fold(&field_ty, init) {
+                Some(folded) => self.emit_rust_string_literal(&folded),
+                None => self.emit_expr(init),
+            }
         } else {
             // No initializer — Rust requires one at the const/static
             // site. Emit a placeholder so the build fails with a

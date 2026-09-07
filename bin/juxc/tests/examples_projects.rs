@@ -145,17 +145,18 @@ fn stress_demo() {
 
 #[test]
 fn stress_shop() {
-    // `[user: <user>]` is the example's OWN documented Phase-1 limitation
-    // (see the comment on `Loggable`): a default interface method calling an
-    // overridable one does not dispatch to the override. Pinned as it stands,
-    // so the day that is fixed this test says so rather than passing quietly.
+    // The three banners come from `Loggable::banner`, a DEFAULT method
+    // calling `displayName()`. Each user's name arrives through an override
+    // two levels away -- `Person` writes `displayName`, `Customer`/`Staff`
+    // refine it, and none of them is the class the interface is written on.
+    // This used to print `[user: <user>]` three times.
     let got = run("stress_shop", &["examples/stress_shop"]);
     assert_eq!(
         got,
         [
-            "[user: <user>]",
-            "[user: <user>]",
-            "[user: <user>]",
+            "[user: Alice (premium-customer)]",
+            "[user: Bob (customer)]",
+            "[user: Charlie (staff:logistics)]",
             "book Effective Jux @ 29.99 USD",
             "apparel T-Shirt (M) @ 15.0 USD",
             "subscription Pro Plan: 9.99 USD/mo x 12",

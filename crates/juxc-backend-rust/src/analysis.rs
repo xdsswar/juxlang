@@ -3458,6 +3458,13 @@ impl crate::RustEmitter {
     /// nullable params in `nullable_locals` directly, so this stays correct for
     /// them too.
     pub(crate) fn emit_format_arg(&mut self, arg: &juxc_ast::Expr) {
+        // A collection or array is a HANDLE (`Rc<RefCell<T>>`), and a handle's
+        // own `Debug` prints the machinery -- `RefCell { value: ["a"] }` where
+        // the program said `["a"]`. Rendering it means rendering what is
+        // inside, so lend the interior for the duration of the format call.
+        // The `Ref` guard is a temporary and lives to the end of the enclosing
+        // statement, which is exactly as long as the `format!` needs it.
+        let handle = self.expr_is_collection_handle(arg);
         if self.expression_is_already_nullable(arg) {
             // `match &(<arg>)` borrows so the value is never moved out of its
             // place; `Some(__jux_v)` binds `&T`, rendered through the same
@@ -3465,9 +3472,19 @@ impl crate::RustEmitter {
             // Debug). `None` becomes the literal `"null"`.
             self.w.push_str("match &(");
             self.emit_expr(arg);
-            self.w.push_str(
-                ") { Some(__jux_v) => crate::__jux_show!(__jux_v), None => \"null\".to_string() }",
-            );
+            if handle {
+                self.w.push_str(
+                    ") { Some(__jux_v) => crate::__jux_show!(&*__jux_v.borrow()),                      None => \"null\".to_string() }",
+                );
+            } else {
+                self.w.push_str(
+                    ") { Some(__jux_v) => crate::__jux_show!(__jux_v), None => \"null\".to_string() }",
+                );
+            }
+        } else if handle {
+            self.w.push_str("crate::__jux_show!(&*");
+            self.emit_expr(arg);
+            self.w.push_str(".borrow())");
         } else if self.format_arg_is_obviously_display(arg) {
             // Clean fast path: a primitive scalar / `String` always implements
             // `Display`, so it drops straight into the `{}` slot — keeping the

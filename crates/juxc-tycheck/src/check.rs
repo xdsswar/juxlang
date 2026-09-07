@@ -836,6 +836,7 @@ impl<'a> Checker<'a> {
             let disc_ctx = crate::const_eval::ConstCtx {
                 symbols: self.symbols,
                 generic_param_names: &std::collections::HashSet::new(),
+                enclosing_class: None,
             };
             for variant in &enum_decl.variants {
                 if !variant.payload.is_empty() {
@@ -4977,6 +4978,7 @@ impl<'a> Checker<'a> {
         let ctx = crate::const_eval::ConstCtx {
             symbols: self.symbols,
             generic_param_names: &self.const_param_names,
+            enclosing_class: None,
         };
         match crate::const_eval::eval_const_int(size, &ctx) {
             // Reduces to a concrete value (`5`, `SIZE`, `SIZE + 1`, a const-fn
@@ -5115,6 +5117,7 @@ impl<'a> Checker<'a> {
                     let ctx = crate::const_eval::ConstCtx {
                         symbols: self.symbols,
                         generic_param_names: &self.const_param_names,
+                        enclosing_class: None,
                     };
                     let param_is_bool = cty
                         .name

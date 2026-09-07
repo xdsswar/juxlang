@@ -58,10 +58,29 @@ impl RustEmitter {
     /// emitter's symbols + in-scope generic const params. Any failure (including
     /// the "mentions a generic param" defer signal) → `None`, so the caller
     /// emits the expression verbatim exactly as before.
+    /// Fold a constant String expression to its value (§T.11.7).
+    ///
+    /// A Rust `const` slot of Jux type `String` is a `&'static str`, and Rust
+    /// has no `const` string concatenation -- so `const String FULL = NAME +
+    /// SUFFIX;` has to arrive already folded or it reaches rustc as an error
+    /// about `&str + &str`, which says nothing about the Jux program. Returns
+    /// `None` when the expression is not a compile-time constant, leaving the
+    /// caller to emit it verbatim exactly as before.
+    pub(crate) fn try_const_string(&self, e: &juxc_ast::Expr) -> Option<String> {
+        let ctx = juxc_tycheck::const_eval::ConstCtx {
+            symbols: &self.symbols,
+            generic_param_names: &self.const_int_params,
+            // A bare `NAME` in a class body means that class's own constant.
+            enclosing_class: self.enclosing_class.as_deref(),
+        };
+        juxc_tycheck::const_eval::eval_const_string(e, &ctx).ok()
+    }
+
     pub(crate) fn try_const_int(&self, e: &juxc_ast::Expr) -> Option<i64> {
         let ctx = juxc_tycheck::const_eval::ConstCtx {
             symbols: &self.symbols,
             generic_param_names: &self.const_int_params,
+            enclosing_class: None,
         };
         juxc_tycheck::const_eval::eval_const_int(e, &ctx).ok()
     }
@@ -71,6 +90,7 @@ impl RustEmitter {
         let ctx = juxc_tycheck::const_eval::ConstCtx {
             symbols: &self.symbols,
             generic_param_names: &self.const_int_params,
+            enclosing_class: None,
         };
         juxc_tycheck::const_eval::eval_const_bool(e, &ctx).ok()
     }

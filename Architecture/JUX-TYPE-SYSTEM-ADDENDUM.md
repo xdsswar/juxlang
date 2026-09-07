@@ -907,6 +907,38 @@ If a const evaluation exceeds limits: `E0840`.
 
 ---
 
+### T.11.7. Constant String Expressions
+
+A `String` expression is const-evaluable when it is built entirely from things already
+known at compile time. This mirrors Java (JLS 15.29), where a constant expression includes
+String concatenation of constants:
+
+- A string literal.
+- A read of a `const` / `static final` String whose own initializer is const-evaluable.
+- `+` where at least one side is a const String and the other is a const String, a const
+  primitive (numeric, `bool`, `char`), or a literal of those.
+
+The result is folded to a single literal at compile time, so a `const String` costs nothing
+at run time and its storage stays `&'static str`.
+
+```jux
+public class Brand {
+    public static const String NAME = "jux";
+    public static const String SUFFIX = "-lang";
+    public static const String FULL = NAME + SUFFIX;      -- folded to "jux-lang"
+    public static const String V = "v" + 1;               -- folded to "v1"
+}
+```
+
+Anything else in a String const position is `E0841`, naming the operation. In particular a
+method call on a String (`NAME.toUpperCase()`) is not const-evaluable: it allocates, which
+T.11.2 excludes. Write the literal, or make the binding a plain `static` field.
+
+**Reading a const String is a `String`.** The storage is a borrow, but a READ yields an
+ordinary Jux `String` and may be passed anywhere a `String` is expected. The bare form
+(`NAME` from inside the declaring class) and the qualified form (`Brand.NAME`) are the same
+expression and behave identically.
+
 ## Cross-References
 
 | Topic                            | Specified here | Used by                                                |

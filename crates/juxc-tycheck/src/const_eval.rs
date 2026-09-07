@@ -25,10 +25,14 @@ use juxc_ast::{BinaryOp, Block, Expr, Literal, Stmt, UnaryOp};
 use crate::symbol_table::SymbolTable;
 
 /// A reduced compile-time value.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// Not `Copy`: a constant String expression folds to an owned `String`
+/// (§T.11.7), and the strings involved are short and folded once.
+#[derive(Clone, Debug, PartialEq)]
 pub enum ConstVal {
     Int(i64),
     Bool(bool),
+    Str(String),
 }
 
 /// Why a const evaluation did not produce a value.
@@ -52,6 +56,19 @@ pub struct ConstCtx<'a> {
     /// Names of in-scope GENERIC const params (`<int N>`). Reading one →
     /// [`ConstEvalError::Generic`].
     pub generic_param_names: &'a HashSet<String>,
+    /// The class whose body the expression was written in, if any. A bare
+    /// `NAME` inside `class Brand` means `Brand.NAME`, and two classes may
+    /// each declare a `NAME`; without this the lookup can only accept a name
+    /// that is unique program-wide.
+    pub enclosing_class: Option<&'a str>,
+}
+
+impl<'a> ConstCtx<'a> {
+    /// A context with no enclosing class -- for a top-level const, an array
+    /// size, or any position that is not inside a class body.
+    pub fn new(symbols: &'a SymbolTable, generic_param_names: &'a HashSet<String>) -> Self {
+        Self { symbols, generic_param_names, enclosing_class: None }
+    }
 }
 
 const MAX_OPS: u32 = 100_000;
@@ -75,9 +92,10 @@ struct Frame<'a> {
 pub fn eval_const_int(expr: &Expr, ctx: &ConstCtx) -> Result<i64, ConstEvalError> {
     match eval_top(expr, ctx)? {
         ConstVal::Int(i) => Ok(i),
-        ConstVal::Bool(_) => Err(ConstEvalError::NonConst(
-            "expected an integer constant, found a boolean".to_string(),
-        )),
+        other => Err(ConstEvalError::NonConst(format!(
+            "expected an integer constant, found {}",
+            describe(&other),
+        ))),
     }
 }
 
@@ -85,9 +103,37 @@ pub fn eval_const_int(expr: &Expr, ctx: &ConstCtx) -> Result<i64, ConstEvalError
 pub fn eval_const_bool(expr: &Expr, ctx: &ConstCtx) -> Result<bool, ConstEvalError> {
     match eval_top(expr, ctx)? {
         ConstVal::Bool(b) => Ok(b),
-        ConstVal::Int(_) => Err(ConstEvalError::NonConst(
-            "expected a boolean constant, found an integer".to_string(),
-        )),
+        other => Err(ConstEvalError::NonConst(format!(
+            "expected a boolean constant, found {}",
+            describe(&other),
+        ))),
+    }
+}
+
+/// Evaluate `expr` to a compile-time `String` (§T.11.7), or report why not.
+///
+/// A numeric or boolean constant is accepted and rendered, so `"v" + 1` folds
+/// the way it reads. Anything that would allocate or run at run time -- a
+/// method call, an interpolation, a non-constant name -- is a `NonConst`.
+pub fn eval_const_string(expr: &Expr, ctx: &ConstCtx) -> Result<String, ConstEvalError> {
+    Ok(render(&eval_top(expr, ctx)?))
+}
+
+/// The folded value as it appears inside a string.
+fn render(v: &ConstVal) -> String {
+    match v {
+        ConstVal::Int(i) => i.to_string(),
+        ConstVal::Bool(b) => b.to_string(),
+        ConstVal::Str(s) => s.clone(),
+    }
+}
+
+/// A value's kind, for a diagnostic that says what was found.
+fn describe(v: &ConstVal) -> &'static str {
+    match v {
+        ConstVal::Int(_) => "an integer",
+        ConstVal::Bool(_) => "a boolean",
+        ConstVal::Str(_) => "a string",
     }
 }
 
@@ -112,8 +158,12 @@ fn eval(expr: &Expr, f: &mut Frame) -> Result<ConstVal, ConstEvalError> {
     match expr {
         Expr::Literal(Literal::Int(i)) => Ok(ConstVal::Int(i.value)),
         Expr::Literal(Literal::Bool(b)) => Ok(ConstVal::Bool(*b)),
+        // A plain string literal folds to itself (§T.11.7). An INTERPOLATED
+        // one is a separate `Expr` variant and never reaches here, which is
+        // right: its segments are arbitrary expressions.
+        Expr::Literal(Literal::String(sl)) => Ok(ConstVal::Str(sl.clone())),
         Expr::Literal(_) => Err(ConstEvalError::NonConst(
-            "only integer and boolean literals are const-evaluable".to_string(),
+            "only integer, boolean and string literals are const-evaluable".to_string(),
         )),
 
         Expr::Path(qn) if qn.segments.len() == 1 => {
@@ -123,10 +173,10 @@ fn eval(expr: &Expr, f: &mut Frame) -> Result<ConstVal, ConstEvalError> {
                 return Err(ConstEvalError::Generic);
             }
             if let Some(v) = f.locals.get(name) {
-                return Ok(*v);
+                return Ok(v.clone());
             }
             if let Some(v) = f.memo.get(name) {
-                return Ok(*v);
+                return Ok(v.clone());
             }
             // A top-level `const`/`final` binding: evaluate its initializer in a
             // FRESH frame (a const has no locals), then memoize.
@@ -141,16 +191,62 @@ fn eval(expr: &Expr, f: &mut Frame) -> Result<ConstVal, ConstEvalError> {
                     };
                     eval(&init, &mut sub)?
                 };
-                f.memo.insert(name.to_string(), v);
+                f.memo.insert(name.to_string(), v.clone());
                 return Ok(v);
+            }
+            // A `static const` FIELD of a class, named bare from inside the
+            // class that declares it (`FULL = NAME + SUFFIX`). There is no
+            // enclosing-class context here, so the name must be unambiguous
+            // across the program; an ambiguous one simply does not fold, which
+            // leaves behaviour exactly as it was.
+            // The enclosing class first: a bare `NAME` inside `class Brand`
+            // is `Brand.NAME`, even when another class also declares a `NAME`.
+            if let Some(owner) = f.ctx.enclosing_class {
+                if let Some(init) = lookup_static_const_field(f.ctx.symbols, owner, name) {
+                    return eval_fresh(&init, f, &format!("{owner}.{name}"));
+                }
+            }
+            if let Some(init) = lookup_static_const_field_by_bare(f.ctx.symbols, name) {
+                return eval_fresh(&init, f, name);
             }
             Err(ConstEvalError::NonConst(format!(
                 "`{name}` is not a compile-time constant"
             )))
         }
+        // `Class.FIELD` -- the qualified form of the same thing. Written as a
+        // path when the parser saw two plain segments.
+        Expr::Path(qn) if qn.segments.len() == 2 => {
+            let (owner, member) = (qn.segments[0].text.as_str(), qn.segments[1].text.as_str());
+            match lookup_static_const_field(f.ctx.symbols, owner, member) {
+                Some(init) => eval_fresh(&init, f, member),
+                None => Err(ConstEvalError::NonConst(format!(
+                    "`{owner}.{member}` is not a compile-time constant"
+                ))),
+            }
+        }
         Expr::Path(_) => Err(ConstEvalError::NonConst(
             "qualified names are not const-evaluable in this phase".to_string(),
         )),
+
+        // The same `Class.FIELD`, when the parser produced a field access.
+        Expr::Field(fe) => {
+            let owner = match fe.object.as_ref() {
+                Expr::Path(qn) if qn.segments.len() == 1 => qn.segments[0].text.as_str(),
+                _ => {
+                    return Err(ConstEvalError::NonConst(
+                        "a field read is const-evaluable only on a class's own constants"
+                            .to_string(),
+                    ))
+                }
+            };
+            let member = fe.field.text.as_str();
+            match lookup_static_const_field(f.ctx.symbols, owner, member) {
+                Some(init) => eval_fresh(&init, f, member),
+                None => Err(ConstEvalError::NonConst(format!(
+                    "`{owner}.{member}` is not a compile-time constant"
+                ))),
+            }
+        }
 
         Expr::Binary(b) => eval_binary(b.op, &b.left, &b.right, f),
         Expr::Unary(u) => eval_unary(u.op, &u.operand, f),
@@ -179,18 +275,20 @@ fn eval(expr: &Expr, f: &mut Frame) -> Result<ConstVal, ConstEvalError> {
 fn eval_int(e: &Expr, f: &mut Frame) -> Result<i64, ConstEvalError> {
     match eval(e, f)? {
         ConstVal::Int(i) => Ok(i),
-        ConstVal::Bool(_) => Err(ConstEvalError::NonConst(
-            "expected an integer operand, found a boolean".to_string(),
-        )),
+        other => Err(ConstEvalError::NonConst(format!(
+            "expected an integer operand, found {}",
+            describe(&other),
+        ))),
     }
 }
 
 fn eval_bool(e: &Expr, f: &mut Frame) -> Result<bool, ConstEvalError> {
     match eval(e, f)? {
         ConstVal::Bool(b) => Ok(b),
-        ConstVal::Int(_) => Err(ConstEvalError::NonConst(
-            "expected a boolean operand, found an integer".to_string(),
-        )),
+        other => Err(ConstEvalError::NonConst(format!(
+            "expected a boolean operand, found {}",
+            describe(&other),
+        ))),
     }
 }
 
@@ -221,12 +319,23 @@ fn eval_binary(
         _ => {}
     }
 
+    // **Constant String concatenation (§T.11.7).** Java's rule: `+` with a
+    // constant String on either side, and any constant on the other, is itself
+    // a constant. Folding it here is what lets `const String FULL = NAME +
+    // SUFFIX;` stay a `&'static str` -- Rust has no `const` string `+`, so an
+    // unfolded one would reach rustc as an error the Jux source cannot explain.
+    if matches!(op, Add) && matches!((&l, &r), (ConstVal::Str(_), _) | (_, ConstVal::Str(_))) {
+        return Ok(ConstVal::Str(format!("{}{}", render(&l), render(&r))));
+    }
+
     let (li, ri) = match (l, r) {
         (ConstVal::Int(a), ConstVal::Int(b)) => (a, b),
-        _ => {
-            return Err(ConstEvalError::NonConst(
-                "this operator requires integer operands".to_string(),
-            ))
+        (a, b) => {
+            return Err(ConstEvalError::NonConst(format!(
+                "this operator requires integer operands, found {} and {}",
+                describe(&a),
+                describe(&b),
+            )))
         }
     };
     let panic = |m: &str| ConstEvalError::Panic(m.to_string());
@@ -407,6 +516,57 @@ fn eval_if_chain(i: &juxc_ast::IfStmt, f: &mut Frame) -> Result<Option<ConstVal>
 
 /// Resolve a bare const NAME to `(fqn, &ConstSig)` — exact key first, then a
 /// unique last-segment match.
+/// Evaluate a constant's initializer in a FRESH frame (a constant has no
+/// locals of its own) and memoize the result under `key`.
+fn eval_fresh(init: &Expr, f: &mut Frame, key: &str) -> Result<ConstVal, ConstEvalError> {
+    if let Some(v) = f.memo.get(key) {
+        return Ok(v.clone());
+    }
+    let v = {
+        let mut sub = Frame {
+            ctx: f.ctx,
+            budget: f.budget,
+            locals: HashMap::new(),
+            memo: f.memo,
+        };
+        eval(init, &mut sub)?
+    };
+    f.memo.insert(key.to_string(), v.clone());
+    Ok(v)
+}
+
+/// The initializer of `Owner.member`, when `member` is a `static final` /
+/// `const` field of a class named `Owner` (bare or fully qualified).
+fn lookup_static_const_field(
+    symbols: &SymbolTable,
+    owner: &str,
+    member: &str,
+) -> Option<Expr> {
+    let (_, class) = symbols
+        .classes
+        .iter()
+        .find(|(k, _)| k.as_str() == owner || k.rsplit('.').next().unwrap_or(k) == owner)?;
+    let field = class.fields.get(member)?;
+    if !field.is_static || !field.is_final {
+        return None;
+    }
+    field.default.clone()
+}
+
+/// The initializer of a `static final` field named `bare`, when exactly one
+/// class in the program declares one by that name. Ambiguity yields `None`:
+/// folding the wrong constant would be worse than not folding at all.
+fn lookup_static_const_field_by_bare(symbols: &SymbolTable, bare: &str) -> Option<Expr> {
+    let mut hits = symbols.classes.values().filter_map(|c| {
+        let f = c.fields.get(bare)?;
+        (f.is_static && f.is_final).then(|| f.default.clone()).flatten()
+    });
+    match (hits.next(), hits.next()) {
+        (Some(init), None) => Some(init),
+        _ => None,
+    }
+}
+
 fn lookup_const<'a>(
     symbols: &'a SymbolTable,
     name: &str,

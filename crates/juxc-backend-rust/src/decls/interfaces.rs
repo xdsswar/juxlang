@@ -477,10 +477,14 @@ impl RustEmitter {
             self.w.push_str(&to_rust_ident(&field.name.text));
             self.w.push_str(": ");
             self.emitting_const_context = true;
-            self.emit_field_type_as_rust(&juxc_tycheck::resolved_field_type(field));
+            let field_ty = juxc_tycheck::resolved_field_type(field);
+            self.emit_field_type_as_rust(&field_ty);
             self.w.push_str(" = ");
             if let Some(init) = &field.default {
-                self.emit_expr(init);
+                match self.const_string_fold(&field_ty, init) {
+                    Some(folded) => self.emit_rust_string_literal(&folded),
+                    None => self.emit_expr(init),
+                }
             } else {
                 self.w.push_str("Default::default()");
             }
