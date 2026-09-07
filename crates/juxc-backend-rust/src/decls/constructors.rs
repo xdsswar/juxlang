@@ -410,7 +410,12 @@ impl RustEmitter {
                 self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
             }
             if let Some(default) = &field.default {
-                self.emit_expr(default);
+                // Through `emit_ctor_field_init`, not a bare `emit_expr`: a field
+                // initializer has to know the slot it is filling. `new int[2]` in a
+                // `int[]` field emitted a FIXED Rust array where the field is a
+                // `Vec`, so a class whose array field carried its own initializer did
+                // not compile at all.
+                self.emit_ctor_field_init(field.ty.as_ref(), default);
             } else {
                 self.emit_field_storage_default(field);
             }
@@ -1236,7 +1241,7 @@ impl RustEmitter {
                     self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
                 }
                 if let Some(default) = &field.default {
-                    self.emit_expr(default);
+                    self.emit_ctor_field_init(field.ty.as_ref(), default);
                 } else {
                     self.emit_field_storage_default(field);
                 }
@@ -1505,7 +1510,7 @@ impl RustEmitter {
                 self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
             }
             if let Some(default) = &field.default {
-                self.emit_expr(default);
+                self.emit_ctor_field_init(field.ty.as_ref(), default);
             } else {
                 self.emit_field_storage_default(field);
             }
@@ -1643,7 +1648,7 @@ impl RustEmitter {
                 self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
             }
             if let Some(default) = &field.default {
-                self.emit_expr(default);
+                self.emit_ctor_field_init(field.ty.as_ref(), default);
             } else {
                 self.emit_field_storage_default(field);
             }

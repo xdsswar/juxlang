@@ -1489,6 +1489,18 @@ impl RustEmitter {
         if let Some(bare) = self.receiver_class_bare(obj) {
             return Some(bare);
         }
+        // A `?.` receiver is USUALLY nullable - that is the whole point of the
+        // operator - and a nullable type wraps the class rather than being one.
+        // Without looking through it the class never resolved, so the lowering
+        // could not tell whether the method returns `T?` and always chose
+        // `.map`: `a?.next()` on a `Node? next()` produced
+        // `Option<Option<Node>>`, and the next link in the chain saw the wrong
+        // type.
+        if let Some(juxc_tycheck::Ty::Nullable(inner)) = self.receiver_ty_of(obj) {
+            if let juxc_tycheck::Ty::User { name, .. } = &*inner {
+                return Some(self.lift_nested_class_name(name));
+            }
+        }
         match obj {
             // `recv.field` (plain or `?.`): the field's declared type's class.
             Expr::Field(f2) => {

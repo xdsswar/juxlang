@@ -3107,6 +3107,39 @@ impl RustEmitter {
     /// arg still self-coerces — same discipline as a regular
     /// `emit_call`'s args. The result type is `Option<ReturnType>`.
     pub(crate) fn emit_safe_method_call(&mut self, callee: &juxc_ast::FieldExpr, call: &CallExpr) {
+        // **`?.` on a receiver that cannot be null is just `.`.** Kotlin calls
+        // this an unnecessary safe call and compiles it as an ordinary one;
+        // here it used to emit `recv.as_ref()`, which a plain struct has no
+        // such method for, so the program failed to build with a rustc error.
+        // It costs nothing to accept: the operator asks "if this is not null",
+        // and a non-nullable receiver answers yes.
+        // Only for a SIMPLE binding. Mid-chain the recorded type is the
+        // method's own return type, not the `Option` the chain is carrying, so
+        // a chain would look non-nullable and lose its `?.` entirely.
+        let receiver_is_plainly_non_null = matches!(
+            &*callee.object,
+            Expr::Path(_) | Expr::This(_)
+        ) && matches!(
+            self.receiver_ty_of(&callee.object),
+            Some(t) if !matches!(t, juxc_tycheck::Ty::Nullable(_))
+        );
+        if receiver_is_plainly_non_null {
+            let plain = CallExpr {
+                callee: Box::new(Expr::Field(juxc_ast::FieldExpr {
+                    object: callee.object.clone(),
+                    field: callee.field.clone(),
+                    safe: false,
+                    span: callee.span,
+                })),
+                explicit_generic_args: call.explicit_generic_args.clone(),
+                args: call.args.clone(),
+                arg_names: call.arg_names.clone(),
+                eval_order: call.eval_order.clone(),
+                span: call.span,
+            };
+            self.emit_call(&plain);
+            return;
+        }
         let needs_parens = !matches!(
             *callee.object,
             Expr::Path(_)

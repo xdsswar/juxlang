@@ -1,0 +1,49 @@
+// `?.` and `??` must SHORT-CIRCUIT, the way Java's `?:` and Kotlin's `?.`/`?:`
+// do: the part on the right runs only when it is actually needed.
+//
+// `??` lowered to Rust's `unwrap_or`, which takes its argument by value and so
+// evaluates it eagerly -- `present ?? counter.hit()` bumped the counter even
+// though the value was there, and nothing in the output said so.
+//
+// `?.` on a receiver that CANNOT be null emitted `recv.as_ref()`, a method a
+// plain struct does not have, so the program failed to build. Kotlin calls that
+// an unnecessary safe call and compiles it as an ordinary one.
+//
+// Expected output: 5 / 0 / 9 / 1 / -1 / 1
+
+public class Counter {
+    public int n = 0;
+    public int hit() { this.n = this.n + 1; return 9; }
+}
+
+public class Tail { public int v = 1; }
+
+public class Node {
+    public int calls = 0;
+    public Tail? next;
+    public Tail? step() { this.calls = this.calls + 1; return this.next; }
+}
+
+public void main() {
+    var c = new Counter();
+
+    // The value is there, so the fallback must not run.
+    int? present = 5;
+    print(present ?? c.hit());
+    print(c.n);
+
+    // The value is missing, so it must.
+    int? absent = null;
+    print(absent ?? c.hit());
+    print(c.n);
+
+    // A null receiver skips the whole call, side effect included.
+    Node? gone = null;
+    var r = gone?.step();
+    print(r == null ? -1 : 0);
+
+    // A receiver that cannot be null is simply called.
+    var n = new Node();
+    var s = n?.step();
+    print(n.calls);
+}

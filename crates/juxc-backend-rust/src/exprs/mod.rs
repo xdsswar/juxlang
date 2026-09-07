@@ -1519,9 +1519,24 @@ impl RustEmitter {
         if preserve_lhs {
             self.w.push_str(".clone()");
         }
-        self.w.push_str(".unwrap_or(");
-        self.emit_expr(&e.fallback);
-        self.w.push(')');
+        // **The fallback is LAZY.** `a ?? b` evaluates `b` only when `a` is
+        // null, exactly as Java's `?:` and Kotlin's `?:` do. Rust's
+        // `unwrap_or` takes its argument by value, so it evaluates eagerly:
+        // `present ?? counter.hit()` bumped the counter even though the value
+        // was there, and nothing in the output said so. `unwrap_or_else`
+        // defers it into a closure.
+        //
+        // A literal keeps the plain `unwrap_or`, because there is nothing to
+        // defer and the emitted Rust reads better for the common `x ?? 0`.
+        if matches!(*e.fallback, Expr::Literal(_)) {
+            self.w.push_str(".unwrap_or(");
+            self.emit_expr(&e.fallback);
+            self.w.push(')');
+        } else {
+            self.w.push_str(".unwrap_or_else(|| ");
+            self.emit_expr(&e.fallback);
+            self.w.push(')');
+        }
         self.emitting_format_arg = prev;
     }
 
