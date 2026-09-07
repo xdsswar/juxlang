@@ -169,17 +169,14 @@ impl SymbolTable {
     /// stub class), made **deterministic** with `min()` (a `HashMap`-order
     /// `find()` would otherwise pick arbitrarily on a bare-name collision).
     pub fn find_fqn_by_bare_in(&self, name: &str, prefer_pkg: &str) -> Option<String> {
-        let matches_last =
-            |fqn: &str| fqn.rsplit('.').next().is_some_and(|seg| seg == name);
+        let matches_last = |fqn: &str| fqn.rsplit('.').next().is_some_and(|seg| seg == name);
         // (A) Same-package match wins. A package can't declare two types of one
         //     name (E0400), so at most one of these fires — category order only
         //     disambiguates the (impossible-within-a-package) tie.
         let pick_in_pkg = |keys: &mut dyn Iterator<Item = &String>| -> Option<String> {
-            keys.filter(|k| {
-                matches_last(k) && fqn_package(k).unwrap_or("") == prefer_pkg
-            })
-            .min()
-            .cloned()
+            keys.filter(|k| matches_last(k) && fqn_package(k).unwrap_or("") == prefer_pkg)
+                .min()
+                .cloned()
         };
         for found in [
             pick_in_pkg(&mut self.classes.keys()),
@@ -330,7 +327,12 @@ impl SymbolTable {
         let mut fields: Vec<(&String, &FieldSig)> = class.fields.iter().collect();
         fields.sort_by(|a, b| a.0.cmp(b.0));
         for (name, f) in fields {
-            let head = f.ty.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+            let head =
+                f.ty.name
+                    .segments
+                    .last()
+                    .map(|s| s.text.as_str())
+                    .unwrap_or("");
             let why = if f.is_weak {
                 "a weak reference"
             } else if f.ty.fn_shape.is_some() {
@@ -484,13 +486,10 @@ impl SymbolTable {
             }
         })?;
         let group = class.method_overloads.get(method_name)?;
-        group
-            .iter()
-            .enumerate()
-            .find(|(_, m)| {
-                let (lo, hi) = ctor_arity_range(&m.params);
-                arg_count >= lo && hi.map_or(true, |h| arg_count <= h)
-            })
+        group.iter().enumerate().find(|(_, m)| {
+            let (lo, hi) = ctor_arity_range(&m.params);
+            arg_count >= lo && hi.map_or(true, |h| arg_count <= h)
+        })
     }
 
     pub fn lookup_method<'a>(
@@ -525,15 +524,12 @@ impl SymbolTable {
             // `resolve_class_chain_fqns` finalize pass). Falling
             // back to the bare last segment keeps no-package /
             // single-unit programs working unchanged.
-            cursor = class
-                .extends_fqn
-                .as_deref()
-                .or_else(|| {
-                    class
-                        .extends
-                        .as_ref()
-                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-                });
+            cursor = class.extends_fqn.as_deref().or_else(|| {
+                class
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+            });
             depth += 1;
         }
         // Pass 2: no inherent method found — look for a
@@ -653,15 +649,12 @@ impl SymbolTable {
             }
             // Use the resolved parent FQN — see `lookup_method` for
             // why the fallback to a bare last segment remains.
-            cursor = class
-                .extends_fqn
-                .as_deref()
-                .or_else(|| {
-                    class
-                        .extends
-                        .as_ref()
-                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-                });
+            cursor = class.extends_fqn.as_deref().or_else(|| {
+                class
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+            });
             depth += 1;
         }
         None
@@ -691,15 +684,12 @@ impl SymbolTable {
             if let Some(prop) = class.properties.get(prop_name) {
                 return Some((prop, class_key.as_str()));
             }
-            cursor = class
-                .extends_fqn
-                .as_deref()
-                .or_else(|| {
-                    class
-                        .extends
-                        .as_ref()
-                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-                });
+            cursor = class.extends_fqn.as_deref().or_else(|| {
+                class
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+            });
             depth += 1;
         }
         None
@@ -1247,12 +1237,7 @@ pub fn build_workspace(
     // (this is the seam we extend in the next pass).
     if let Some(first) = units.first() {
         if let Some(pkg) = &first.package {
-            table.package = pkg
-                .name
-                .segments
-                .iter()
-                .map(|s| s.text.clone())
-                .collect();
+            table.package = pkg.name.segments.iter().map(|s| s.text.clone()).collect();
         }
     }
     // First pass: insert every top-level declaration under its FQN.
@@ -1274,7 +1259,14 @@ pub fn build_workspace(
             if let Some(name) = top_level_name(item) {
                 table.decl_unit.insert(make_fqn(&unit_pkg, name), unit_idx);
             }
-            insert_top_level(&mut table, item, &unit_pkg, unit_idx, unit.is_external, diagnostics);
+            insert_top_level(
+                &mut table,
+                item,
+                &unit_pkg,
+                unit_idx,
+                unit.is_external,
+                diagnostics,
+            );
         }
     }
     // Second pass: build per-unit name-resolution contexts now that
@@ -1364,7 +1356,9 @@ fn check_unannotated_cycles(table: &SymbolTable, diagnostics: &mut Vec<Diagnosti
         edges: &HashMap<String, Vec<(String, Span, String)>>,
         seen: &mut std::collections::HashSet<String>,
     ) -> bool {
-        let Some(outs) = edges.get(from) else { return false };
+        let Some(outs) = edges.get(from) else {
+            return false;
+        };
         for (next, _, _) in outs {
             if next == target {
                 return true;
@@ -1486,15 +1480,14 @@ fn check_imports_resolve(
             return;
         }
         let bare = fqn_bare(&fqn).to_string();
-        let mut msg = format!("unresolved import `{fqn}`: no declaration with that fully-qualified name");
+        let mut msg =
+            format!("unresolved import `{fqn}`: no declaration with that fully-qualified name");
         if let Some(real) = suggest(&bare) {
             if real != fqn {
                 msg.push_str(&format!(" (did you mean `{real}`?)"));
             }
         }
-        diagnostics.push(
-            Diagnostic::error(code::Code::E0301_NameNotFound, msg).with_span(span),
-        );
+        diagnostics.push(Diagnostic::error(code::Code::E0301_NameNotFound, msg).with_span(span));
     };
     for unit in units {
         // **Conflicting-import detection (E0307).** Two imports in one file
@@ -1507,24 +1500,24 @@ fn check_imports_resolve(
         // binding name is the alias when present, else the imported leaf.
         let mut bound: HashMap<String, String> = HashMap::new();
         let mut note_binding =
-            |bind: String, fqn: String, span: Span, diagnostics: &mut Vec<Diagnostic>| {
-                match bound.get(&bind) {
-                    Some(prev) if *prev != fqn => {
-                        diagnostics.push(
-                            Diagnostic::error(
-                                code::Code::E0303_ConflictingImport,
-                                format!(
-                                    "conflicting imports: the name `{bind}` is imported from \
+            |bind: String, fqn: String, span: Span, diagnostics: &mut Vec<Diagnostic>| match bound
+                .get(&bind)
+            {
+                Some(prev) if *prev != fqn => {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0303_ConflictingImport,
+                            format!(
+                                "conflicting imports: the name `{bind}` is imported from \
                                      both `{prev}` and `{fqn}` — give one an `as` alias \
                                      (`import {fqn} as {bind}2;`) or use a fully-qualified name",
-                                ),
-                            )
-                            .with_span(span),
-                        );
-                    }
-                    _ => {
-                        bound.insert(bind, fqn);
-                    }
+                            ),
+                        )
+                        .with_span(span),
+                    );
+                }
+                _ => {
+                    bound.insert(bind, fqn);
                 }
             };
         // The importing file's own package (`xss.it`), for the same-package
@@ -1532,15 +1525,31 @@ fn check_imports_resolve(
         let unit_pkg = unit
             .package
             .as_ref()
-            .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+            .map(|p| {
+                p.name
+                    .segments
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
             .unwrap_or_default();
         for import in &unit.imports {
             match &import.spec {
-                ImportSpec::Path { name, wildcard, alias } => {
+                ImportSpec::Path {
+                    name,
+                    wildcard,
+                    alias,
+                } => {
                     if *wildcard || name.segments.is_empty() {
                         continue;
                     }
-                    let fqn = name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+                    let fqn = name
+                        .segments
+                        .iter()
+                        .map(|s| s.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
                     // E0302: importing a type from this file's OWN package. The
                     // sibling is already visible by its bare name, and emitting a
                     // `use` for it would collide with its definition in the same
@@ -1570,14 +1579,21 @@ fn check_imports_resolve(
                     }
                     report(fqn.clone(), import.span, diagnostics);
                     // Binding name = alias, else the imported leaf segment.
-                    let bind = alias
-                        .as_ref()
-                        .map(|a| a.text.clone())
-                        .unwrap_or_else(|| name.segments.last().map(|s| s.text.clone()).unwrap_or_default());
+                    let bind = alias.as_ref().map(|a| a.text.clone()).unwrap_or_else(|| {
+                        name.segments
+                            .last()
+                            .map(|s| s.text.clone())
+                            .unwrap_or_default()
+                    });
                     note_binding(bind, fqn, import.span, diagnostics);
                 }
                 ImportSpec::Items { prefix, items } => {
-                    let pfx = prefix.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+                    let pfx = prefix
+                        .segments
+                        .iter()
+                        .map(|s| s.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
                     for it in items {
                         let fqn = if pfx.is_empty() {
                             it.name.text.clone()
@@ -1585,7 +1601,11 @@ fn check_imports_resolve(
                             format!("{pfx}.{}", it.name.text)
                         };
                         report(fqn.clone(), import.span, diagnostics);
-                        let bind = it.alias.as_ref().map(|a| a.text.clone()).unwrap_or_else(|| it.name.text.clone());
+                        let bind = it
+                            .alias
+                            .as_ref()
+                            .map(|a| a.text.clone())
+                            .unwrap_or_else(|| it.name.text.clone());
                         note_binding(bind, fqn, import.span, diagnostics);
                     }
                 }
@@ -1713,7 +1733,10 @@ fn build_unit_contexts(
                 }
             }
 
-            UnitContext { package: pkg, unqualified }
+            UnitContext {
+                package: pkg,
+                unqualified,
+            }
         })
         .collect()
 }
@@ -1728,10 +1751,7 @@ fn build_unit_contexts(
 /// - Single-segment `extends Foo` → consult the unit's context.
 /// - Unknown name → leave as `None`; downstream resolver/tycheck
 ///   passes surface the diagnostic.
-fn resolve_class_chain_fqns(
-    table: &mut SymbolTable,
-    class_unit: &HashMap<String, usize>,
-) {
+fn resolve_class_chain_fqns(table: &mut SymbolTable, class_unit: &HashMap<String, usize>) {
     let fqns: Vec<String> = table.classes.keys().cloned().collect();
     for fqn in fqns {
         let Some(&unit_idx) = class_unit.get(&fqn) else {
@@ -1815,7 +1835,11 @@ fn seed_unqualified_from_import(
 ) {
     use juxc_ast::ImportSpec;
     match spec {
-        ImportSpec::Path { name, wildcard: false, alias } => {
+        ImportSpec::Path {
+            name,
+            wildcard: false,
+            alias,
+        } => {
             let fqn_segs: Vec<&str> = name.segments.iter().map(|s| s.text.as_str()).collect();
             if fqn_segs.is_empty() {
                 return;
@@ -1827,7 +1851,11 @@ fn seed_unqualified_from_import(
             let fqn = fqn_segs.join(".");
             out.insert(bare, fqn);
         }
-        ImportSpec::Path { name, wildcard: true, .. } => {
+        ImportSpec::Path {
+            name,
+            wildcard: true,
+            ..
+        } => {
             // `import a.b.*;` — every FQN under `a.b.` (single segment
             // remaining) joins the unqualified set.
             //
@@ -1854,7 +1882,8 @@ fn seed_unqualified_from_import(
             for fqn in all_fqns {
                 if let Some(rest) = fqn.strip_prefix(&pat) {
                     if !rest.contains('.') {
-                        out.entry(rest.to_string()).or_insert_with(|| (*fqn).clone());
+                        out.entry(rest.to_string())
+                            .or_insert_with(|| (*fqn).clone());
                     }
                 }
             }
@@ -1890,7 +1919,9 @@ fn seed_unqualified_from_import(
 fn rust_path_annotation(annotations: &[juxc_ast::Annotation]) -> Option<String> {
     use juxc_ast::{AnnotationArg, Expr, Literal};
     for ann in annotations {
-        let Some(seg) = ann.name.segments.last() else { continue };
+        let Some(seg) = ann.name.segments.last() else {
+            continue;
+        };
         if !seg.text.eq_ignore_ascii_case("rust") {
             continue;
         }
@@ -1948,7 +1979,14 @@ fn insert_top_level(
             insert_interface(table, interface_decl, package, is_external, diagnostics);
         }
         TopLevelDecl::Function(fn_decl) => {
-            insert_function(table, fn_decl, package, is_external, /*is_extern_c=*/ false, diagnostics);
+            insert_function(
+                table,
+                fn_decl,
+                package,
+                is_external,
+                /*is_extern_c=*/ false,
+                diagnostics,
+            );
         }
         TopLevelDecl::TypeAlias(alias) => {
             insert_type_alias(table, alias, package, unit_idx, diagnostics);
@@ -1961,7 +1999,14 @@ fn insert_top_level(
             // so call resolution finds it. They carry `FnModifier::Unsafe`, so
             // `FunctionSig.is_unsafe` is set and an unguarded call trips E0506.
             for f in &block.fns {
-                insert_function(table, f, package, is_external, /*is_extern_c=*/ true, diagnostics);
+                insert_function(
+                    table,
+                    f,
+                    package,
+                    is_external,
+                    /*is_extern_c=*/ true,
+                    diagnostics,
+                );
             }
         }
     }
@@ -2013,7 +2058,6 @@ fn insert_type_alias(
     );
 }
 
-
 /// Verify every class with an `extends` clause respects its parent's
 /// `final` and `sealed` declarations. Emits:
 ///
@@ -2023,10 +2067,7 @@ fn insert_type_alias(
 ///
 /// Runs after every class has been inserted, so the lookups can rely
 /// on a populated `symbols.classes`.
-fn check_final_and_sealed_extends(
-    table: &SymbolTable,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn check_final_and_sealed_extends(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (child_name, child) in &table.classes {
         let Some(extends) = child.extends.as_ref() else {
             continue;
@@ -2169,10 +2210,7 @@ fn check_final_and_sealed_extends(
 /// name. Per spec: `@Override` ≡ `@override` ≡ `@OVERRIDE`.
 /// Multi-segment names (`@foo.Bar`) are only matched on their
 /// trailing identifier — built-ins don't live in packages.
-pub(crate) fn has_annotation(
-    annotations: &[juxc_ast::Annotation],
-    canonical_lower: &str,
-) -> bool {
+pub(crate) fn has_annotation(annotations: &[juxc_ast::Annotation], canonical_lower: &str) -> bool {
     annotations.iter().any(|a| {
         a.name
             .segments
@@ -2216,8 +2254,7 @@ pub(crate) fn is_layout_c_annotation(annotations: &[juxc_ast::Annotation]) -> bo
 /// interfaces rejected that as E0426.
 fn interface_chain_declares(table: &SymbolTable, iface_key: &str, method_name: &str) -> bool {
     let mut stack = vec![iface_key.to_string()];
-    let mut seen: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     while let Some(name) = stack.pop() {
         let key = if table.interfaces.contains_key(&name) {
             name.clone()
@@ -2230,7 +2267,9 @@ fn interface_chain_declares(table: &SymbolTable, iface_key: &str, method_name: &
         if !seen.insert(key.clone()) {
             continue;
         }
-        let Some(iface) = table.interfaces.get(&key) else { continue };
+        let Some(iface) = table.interfaces.get(&key) else {
+            continue;
+        };
         if iface.methods.contains_key(method_name) {
             return true;
         }
@@ -2251,7 +2290,9 @@ fn interface_chain_declares(table: &SymbolTable, iface_key: &str, method_name: &
 /// doesn't yet allow `implements pkg.Bar`, so bare-name matching is exact.
 fn class_implements_declare(table: &SymbolTable, class_sig: &ClassSig, method_name: &str) -> bool {
     class_sig.implements.iter().any(|impl_ty| {
-        let Some(seg) = impl_ty.name.segments.last() else { return false };
+        let Some(seg) = impl_ty.name.segments.last() else {
+            return false;
+        };
         let bare = seg.text.as_str();
         let key = if table.interfaces.contains_key(bare) {
             bare.to_string()
@@ -2268,10 +2309,7 @@ fn class_implements_declare(table: &SymbolTable, class_sig: &ClassSig, method_na
 /// Verify every method annotated with `@Override` actually
 /// overrides a method from an ancestor class. Fires E0426 when
 /// no matching method exists in the extends chain.
-fn check_override_annotations(
-    table: &SymbolTable,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn check_override_annotations(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (child_name, child) in &table.classes {
         for (method_name, method) in &child.methods {
             if !has_annotation(&method.annotations, "override") {
@@ -2295,15 +2333,12 @@ fn check_override_annotations(
             let mut cursor: Option<&str> = if found {
                 None
             } else {
-                child
-                    .extends_fqn
-                    .as_deref()
-                    .or_else(|| {
-                        child
-                            .extends
-                            .as_ref()
-                            .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-                    })
+                child.extends_fqn.as_deref().or_else(|| {
+                    child
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+                })
             };
             let mut depth = 0usize;
             while let Some(ancestor_name) = cursor {
@@ -2346,24 +2381,18 @@ fn check_override_annotations(
 /// marked `final`. Walks each class's `methods` map and, for each
 /// method that shadows one further up the extends chain, fires
 /// **E0421** if the ancestor's signature had the `final` modifier.
-fn check_final_method_overrides(
-    table: &SymbolTable,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn check_final_method_overrides(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (child_name, child) in &table.classes {
         for (method_name, child_method) in &child.methods {
             // Walk up the extends chain from the IMMEDIATE parent —
             // skip self. Uses the resolved FQN where possible so
             // cross-package final-method checks work.
-            let mut cursor: Option<&str> = child
-                .extends_fqn
-                .as_deref()
-                .or_else(|| {
-                    child
-                        .extends
-                        .as_ref()
-                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-                });
+            let mut cursor: Option<&str> = child.extends_fqn.as_deref().or_else(|| {
+                child
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+            });
             let mut depth = 0usize;
             while let Some(ancestor_name) = cursor {
                 if depth > 64 {
@@ -2409,10 +2438,7 @@ fn check_final_method_overrides(
 /// abstract methods unimplemented for a concrete subclass to
 /// satisfy. The same is true for interfaces themselves; this
 /// pass only looks at classes.
-fn check_abstract_methods_implemented(
-    table: &SymbolTable,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn check_abstract_methods_implemented(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (class_name, class) in &table.classes {
         if class.is_abstract {
             continue;
@@ -2449,15 +2475,12 @@ fn check_abstract_methods_implemented(
         // ancestor class. A concrete subclass must implement every
         // such method directly or via another concrete ancestor
         // further down the chain.
-        let mut cursor: Option<&str> = class
-            .extends_fqn
-            .as_deref()
-            .or_else(|| {
-                class
-                    .extends
-                    .as_ref()
-                    .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-            });
+        let mut cursor: Option<&str> = class.extends_fqn.as_deref().or_else(|| {
+            class
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+        });
         let mut depth = 0usize;
         while let Some(ancestor_name) = cursor {
             if depth > 64 {
@@ -2475,15 +2498,12 @@ fn check_abstract_methods_implemented(
                 }
                 missing.push((ancestor_name.to_string(), m_name.clone()));
             }
-            cursor = ancestor
-                .extends_fqn
-                .as_deref()
-                .or_else(|| {
-                    ancestor
-                        .extends
-                        .as_ref()
-                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-                });
+            cursor = ancestor.extends_fqn.as_deref().or_else(|| {
+                ancestor
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+            });
             depth += 1;
         }
         if !missing.is_empty() {
@@ -2497,9 +2517,7 @@ fn check_abstract_methods_implemented(
             diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0429_AbstractNotImplemented,
-                    format!(
-                        "class `{class_name}` doesn't implement abstract method(s): {list}",
-                    ),
+                    format!("class `{class_name}` doesn't implement abstract method(s): {list}",),
                 )
                 .with_span(class.span),
             );
@@ -2515,7 +2533,10 @@ fn check_abstract_methods_implemented(
 /// the same fallback [`SymbolTable::lookup_method`] uses. Without this, the
 /// completeness checks silently skip cross-package interfaces and the error
 /// leaks to rustc as `E0046`.
-pub(crate) fn resolve_interface<'a>(table: &'a SymbolTable, written_name: &str) -> Option<&'a InterfaceSig> {
+pub(crate) fn resolve_interface<'a>(
+    table: &'a SymbolTable,
+    written_name: &str,
+) -> Option<&'a InterfaceSig> {
     if let Some(iface) = table.interfaces.get(written_name) {
         return Some(iface);
     }
@@ -2584,11 +2605,7 @@ pub fn interface_dyn_dispatch_support(
     Some(Ok(()))
 }
 
-fn class_provides_method(
-    table: &SymbolTable,
-    class_name: &str,
-    method_name: &str,
-) -> bool {
+fn class_provides_method(table: &SymbolTable, class_name: &str, method_name: &str) -> bool {
     let mut cursor: Option<&str> = Some(class_name);
     let mut depth = 0usize;
     while let Some(name) = cursor {
@@ -2603,15 +2620,12 @@ fn class_provides_method(
                 return true;
             }
         }
-        cursor = class
-            .extends_fqn
-            .as_deref()
-            .or_else(|| {
-                class
-                    .extends
-                    .as_ref()
-                    .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-            });
+        cursor = class.extends_fqn.as_deref().or_else(|| {
+            class
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+        });
         depth += 1;
     }
     false
@@ -2704,10 +2718,7 @@ pub fn polymorphic_base_bare_names(table: &SymbolTable) -> std::collections::Has
 /// object so overrides dispatch dynamically; a method with its own generic
 /// type parameters makes that trait not object-safe (rustc `E0038`). Mirrors
 /// the interface object-safety rule E0435.
-fn check_polymorphic_base_generic_methods(
-    table: &SymbolTable,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn check_polymorphic_base_generic_methods(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     let bases = polymorphic_base_bare_names(table);
     if bases.is_empty() {
         return;
@@ -2722,9 +2733,7 @@ fn check_polymorphic_base_generic_methods(
             .methods
             .iter()
             .filter(|(_, m)| !m.is_static && !m.generic_params.is_empty())
-            .filter(|(_, m)| {
-                matches!(m.visibility, Visibility::Public | Visibility::Protected)
-            })
+            .filter(|(_, m)| matches!(m.visibility, Visibility::Public | Visibility::Protected))
             .map(|(name, _)| name)
             .collect();
         offenders.sort();
@@ -2756,10 +2765,7 @@ fn check_polymorphic_base_generic_methods(
 /// `!Send`), so they stay on the legacy `&mut self` value path and the
 /// `impl Trait for ExcClass` would fail to compile. Catching it here turns a
 /// leaked rustc `E0308`/`E0596` into a clear, deferred-feature diagnostic.
-fn check_interface_on_exception_class(
-    table: &SymbolTable,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn check_interface_on_exception_class(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (class_name, class) in &table.classes {
         if class.is_external {
             continue;
@@ -2850,10 +2856,7 @@ fn class_extends_exception_hierarchy(table: &SymbolTable, class_name: &str) -> b
 /// itself does not override. Fires **E0430** so users see a clear
 /// resolution prompt instead of rustc's "multiple applicable
 /// items" message.
-fn check_diamond_default_conflicts(
-    table: &SymbolTable,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn check_diamond_default_conflicts(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (class_name, class) in &table.classes {
         if class.implements.len() < 2 {
             continue;
@@ -2940,16 +2943,13 @@ fn check_method_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>
         for (name, group) in &class.method_overloads {
             let ranges: Vec<(usize, Option<usize>)> =
                 group.iter().map(|m| ctor_arity_range(&m.params)).collect();
-            let shapes: Vec<String> = group
-                .iter()
-                .map(|m| param_shape_key(&m.params))
-                .collect();
+            let shapes: Vec<String> = group.iter().map(|m| param_shape_key(&m.params)).collect();
             for j in 1..ranges.len() {
                 for i in 0..j {
                     let (lo_a, hi_a) = ranges[i];
                     let (lo_b, hi_b) = ranges[j];
-                    let overlap = lo_a <= hi_b.unwrap_or(usize::MAX)
-                        && lo_b <= hi_a.unwrap_or(usize::MAX);
+                    let overlap =
+                        lo_a <= hi_b.unwrap_or(usize::MAX) && lo_b <= hi_a.unwrap_or(usize::MAX);
                     if overlap && shapes[i] == shapes[j] {
                         diagnostics.push(
                             Diagnostic::error(
@@ -2997,8 +2997,8 @@ fn check_constructor_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagno
             for i in 0..j {
                 let (lo_a, hi_a) = ranges[i];
                 let (lo_b, hi_b) = ranges[j];
-                let overlap = lo_a <= hi_b.unwrap_or(usize::MAX)
-                    && lo_b <= hi_a.unwrap_or(usize::MAX);
+                let overlap =
+                    lo_a <= hi_b.unwrap_or(usize::MAX) && lo_b <= hi_a.unwrap_or(usize::MAX);
                 // Same-count constructors are legal when their
                 // parameter-TYPE shapes differ — the call site picks
                 // by argument types (§T.3 applied to §7.3.1, S19).
@@ -3127,10 +3127,7 @@ pub(crate) fn ctor_arity_range(params: &[ParamSig]) -> (usize, Option<usize>) {
     (required, max)
 }
 
-fn check_method_modifier_combinations(
-    table: &SymbolTable,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn check_method_modifier_combinations(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (class_name, class) in &table.classes {
         // External `.jux.d` stub classes (JUX-BINDGEN §G.9) hold bodyless
         // *signatures*, not abstract members to implement — the real foreign
@@ -3173,9 +3170,7 @@ fn check_method_modifier_combinations(
                     .with_span(method.span),
                 );
             }
-            if method.is_abstract
-                && matches!(method.visibility, juxc_ast::Visibility::Private)
-            {
+            if method.is_abstract && matches!(method.visibility, juxc_ast::Visibility::Private) {
                 diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0431_InvalidMethodModifiers,
@@ -3202,10 +3197,7 @@ fn check_method_modifier_combinations(
 /// `juxc_parse::compilation::collect_nested_flat`), so without
 /// [`is_lifted_nested_type`] every one of them arrives here
 /// looking top-level and a legal private helper is rejected.
-fn check_top_level_visibility(
-    table: &SymbolTable,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn check_top_level_visibility(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     use juxc_ast::Visibility;
     for (name, class) in &table.classes {
         if is_lifted_nested_type(name, table) {
@@ -3284,21 +3276,15 @@ fn visibility_label(v: juxc_ast::Visibility) -> &'static str {
 /// cannot. We walk the extends chain for every concrete method
 /// and compare against the ancestor's visibility; widening is
 /// fine. Fires **E0433**.
-fn check_override_does_not_narrow_access(
-    table: &SymbolTable,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn check_override_does_not_narrow_access(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (child_name, child) in &table.classes {
         for (method_name, child_method) in &child.methods {
-            let mut cursor: Option<&str> = child
-                .extends_fqn
-                .as_deref()
-                .or_else(|| {
-                    child
-                        .extends
-                        .as_ref()
-                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-                });
+            let mut cursor: Option<&str> = child.extends_fqn.as_deref().or_else(|| {
+                child
+                    .extends
+                    .as_ref()
+                    .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+            });
             let mut depth = 0usize;
             while let Some(ancestor_name) = cursor {
                 if depth > 64 {
@@ -3325,15 +3311,12 @@ fn check_override_does_not_narrow_access(
                         break;
                     }
                 }
-                cursor = ancestor
-                    .extends_fqn
-                    .as_deref()
-                    .or_else(|| {
-                        ancestor
-                            .extends
-                            .as_ref()
-                            .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
-                    });
+                cursor = ancestor.extends_fqn.as_deref().or_else(|| {
+                    ancestor
+                        .extends
+                        .as_ref()
+                        .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
+                });
                 depth += 1;
             }
         }
@@ -3481,21 +3464,17 @@ fn insert_class(
     check_operator_visibility(&class_ops, "class", &class_decl.name.text, diagnostics);
     // §O.2.1: individual ordering operators (<, <=, >, >=) must be
     // declared as a complete set or not at all.
-    check_individual_ordering_completeness(
-        &class_ops,
-        "class",
-        &class_decl.name.text,
-        diagnostics,
-    );
+    check_individual_ordering_completeness(&class_ops, "class", &class_decl.name.text, diagnostics);
 
     // Property write-access metadata (§M.7.2). The getter / setter
     // already landed in `methods` via desugaring; here we record only
     // the access shape (read-only / init-only / setter visibility).
     let mut properties: HashMap<String, PropertySig> = HashMap::new();
     for prop in &class_decl.properties {
-        let setter_visibility = prop.setter.as_ref().map(|s| {
-            s.visibility.unwrap_or(prop.visibility)
-        });
+        let setter_visibility = prop
+            .setter
+            .as_ref()
+            .map(|s| s.visibility.unwrap_or(prop.visibility));
         properties.insert(
             prop.name.text.clone(),
             PropertySig {
@@ -3523,24 +3502,19 @@ fn insert_class(
             // A `@layout(c) struct` is a C-compatible value type (§L.1.2). The
             // `class`-misuse case is rejected separately (E0509); we only flag
             // the valid struct form here so the backend lowers it by value.
-            is_layout_c: class_decl.is_struct
-                && is_layout_c_annotation(&class_decl.annotations),
+            is_layout_c: class_decl.is_struct && is_layout_c_annotation(&class_decl.annotations),
             is_final: class_decl.is_final,
             is_sealed: class_decl.is_sealed,
-            permits: class_decl
-                .permits
-                .iter()
-                .map(|n| n.text.clone())
-                .collect(),
+            permits: class_decl.permits.iter().map(|n| n.text.clone()).collect(),
             generic_params: class_decl.generic_params.clone(),
             extends: class_decl.extends.clone(),
             extends_fqn: None, // resolved in a finalize pass once
-                                // every class is registered and
-                                // the unit-context maps are built.
+            // every class is registered and
+            // the unit-context maps are built.
             implements: class_decl.implements.clone(),
             fields,
             constructors,
-        method_overloads,
+            method_overloads,
             methods,
             operators,
             properties,
@@ -3690,12 +3664,7 @@ fn insert_enum(
     check_cmp_individual_conflict(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
     check_operator_return_types(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
     check_operator_visibility(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
-    check_individual_ordering_completeness(
-        &enum_ops,
-        "enum",
-        &enum_decl.name.text,
-        diagnostics,
-    );
+    check_individual_ordering_completeness(&enum_ops, "enum", &enum_decl.name.text, diagnostics);
     table.enums.insert(
         fqn,
         EnumSig {
@@ -3724,12 +3693,7 @@ fn insert_interface(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let fqn = make_fqn(package, &interface_decl.name.text);
-    if !ensure_top_level_unique(
-        table,
-        &fqn,
-        interface_decl.span,
-        diagnostics,
-    ) {
+    if !ensure_top_level_unique(table, &fqn, interface_decl.span, diagnostics) {
         return;
     }
     let mut methods = HashMap::new();
@@ -3841,7 +3805,11 @@ fn insert_function(
             },
             // Keep the body so a const-position call can be evaluated
             // (§T.11 / §A.2.2). `None` for bodyless (abstract / stub) functions.
-            body: if is_external { None } else { fn_decl.body.clone() },
+            body: if is_external {
+                None
+            } else {
+                fn_decl.body.clone()
+            },
             span: fn_decl.span,
         },
     );
@@ -3908,7 +3876,10 @@ fn ty_to_type_ref(ty: &crate::ty::Ty, span: Span) -> Option<TypeRef> {
 fn synth_type_ref(name: &str, span: Span) -> TypeRef {
     TypeRef {
         name: juxc_ast::QualifiedName {
-            segments: vec![juxc_ast::Ident { text: name.to_string(), span }],
+            segments: vec![juxc_ast::Ident {
+                text: name.to_string(),
+                span,
+            }],
             span,
         },
         generic_args: Vec::new(),
@@ -4114,7 +4085,9 @@ fn required_return_type_for_operator(kind: OperatorKind) -> Option<&'static str>
 /// nullable, no array, no generic args — those would all be a
 /// mismatch.
 fn return_type_matches_primitive(rt: &ReturnType, expected: &str) -> bool {
-    let ReturnType::Type(t) = rt else { return false };
+    let ReturnType::Type(t) = rt else {
+        return false;
+    };
     t.array_shape.is_none()
         && !t.nullable
         && t.generic_args.is_empty()
@@ -4215,11 +4188,7 @@ fn check_individual_ordering_completeness(
     let anchor_span = defined[0].span;
     let missing: Vec<&'static str> = ORDERING
         .iter()
-        .filter(|kind| {
-            !operators
-                .iter()
-                .any(|o| o.kind == **kind && !o.is_deleted)
-        })
+        .filter(|kind| !operators.iter().any(|o| o.kind == **kind && !o.is_deleted))
         .map(|kind| operator_kind_display(*kind))
         .collect();
     if missing.is_empty() {
@@ -4407,7 +4376,11 @@ mod tests {
     fn build_table(src: &str) -> (SymbolTable, Vec<Diagnostic>) {
         let sf = SourceFile::new("test.jux", src);
         let lex_result = lex(&sf);
-        assert!(lex_result.diagnostics.is_empty(), "lex: {:?}", lex_result.diagnostics);
+        assert!(
+            lex_result.diagnostics.is_empty(),
+            "lex: {:?}",
+            lex_result.diagnostics
+        );
         let parse_result = parse(&lex_result.tokens);
         assert!(
             parse_result.diagnostics.is_empty(),
@@ -4423,9 +4396,17 @@ mod tests {
     fn parse_unit(src: &str) -> CompilationUnit {
         let sf = SourceFile::new("t.jux", src);
         let lex_result = lex(&sf);
-        assert!(lex_result.diagnostics.is_empty(), "lex: {:?}", lex_result.diagnostics);
+        assert!(
+            lex_result.diagnostics.is_empty(),
+            "lex: {:?}",
+            lex_result.diagnostics
+        );
         let parse_result = parse(&lex_result.tokens);
-        assert!(parse_result.diagnostics.is_empty(), "parse: {:?}", parse_result.diagnostics);
+        assert!(
+            parse_result.diagnostics.is_empty(),
+            "parse: {:?}",
+            parse_result.diagnostics
+        );
         parse_result.ast
     }
 
@@ -4444,8 +4425,14 @@ mod tests {
             .find(|d| d.code == code::Code::E0301_NameNotFound)
             .map(|d| d.message.clone())
             .expect("E0301 for the package import");
-        assert!(msg.contains("is a package, not a declaration"), "got: {msg}");
-        assert!(msg.contains("import a.b.*;"), "should suggest the wildcard: {msg}");
+        assert!(
+            msg.contains("is a package, not a declaration"),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("import a.b.*;"),
+            "should suggest the wildcard: {msg}"
+        );
     }
 
     /// Two classes with the same bare name in DIFFERENT packages are distinct,
@@ -4459,12 +4446,22 @@ mod tests {
         let table = build_workspace(&[a, b], &mut diags);
 
         // Both are stored distinctly, by FQN.
-        assert!(table.classes.contains_key("a.Foo"), "a.Foo missing: {:?}", table.classes.keys().collect::<Vec<_>>());
+        assert!(
+            table.classes.contains_key("a.Foo"),
+            "a.Foo missing: {:?}",
+            table.classes.keys().collect::<Vec<_>>()
+        );
         assert!(table.classes.contains_key("b.Foo"), "b.Foo missing");
 
         // A bare `Foo` binds to the referrer's package.
-        assert_eq!(table.find_fqn_by_bare_in("Foo", "a").as_deref(), Some("a.Foo"));
-        assert_eq!(table.find_fqn_by_bare_in("Foo", "b").as_deref(), Some("b.Foo"));
+        assert_eq!(
+            table.find_fqn_by_bare_in("Foo", "a").as_deref(),
+            Some("a.Foo")
+        );
+        assert_eq!(
+            table.find_fqn_by_bare_in("Foo", "b").as_deref(),
+            Some("b.Foo")
+        );
     }
 
     /// E0307: two unaliased imports binding the same simple name to different
@@ -4477,7 +4474,9 @@ mod tests {
         let mut diags = Vec::new();
         let _ = build_workspace(&[a, b, app], &mut diags);
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0303_ConflictingImport),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0303_ConflictingImport),
             "expected E0307, got {diags:?}",
         );
     }
@@ -4487,11 +4486,14 @@ mod tests {
     fn aliased_same_name_imports_no_e0307() {
         let a = parse_unit("package a; public class Foo { public int x; }");
         let b = parse_unit("package b; public class Foo { public int y; }");
-        let app = parse_unit("package app; import a.Foo; import b.Foo as BFoo; public void main() {}");
+        let app =
+            parse_unit("package app; import a.Foo; import b.Foo as BFoo; public void main() {}");
         let mut diags = Vec::new();
         let _ = build_workspace(&[a, b, app], &mut diags);
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0303_ConflictingImport),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0303_ConflictingImport),
             "unexpected E0307: {diags:?}",
         );
     }
@@ -4503,7 +4505,8 @@ mod tests {
         let mut d = Vec::new();
         let _ = build_workspace(&[u], &mut d);
         assert!(
-            d.iter().any(|x| x.code == code::Code::W0457_UnannotatedRefCycle),
+            d.iter()
+                .any(|x| x.code == code::Code::W0457_UnannotatedRefCycle),
             "{d:?}",
         );
     }
@@ -4515,7 +4518,8 @@ mod tests {
         let mut d = Vec::new();
         let _ = build_workspace(&[u], &mut d);
         assert!(
-            !d.iter().any(|x| x.code == code::Code::W0457_UnannotatedRefCycle),
+            !d.iter()
+                .any(|x| x.code == code::Code::W0457_UnannotatedRefCycle),
             "{d:?}",
         );
     }
@@ -4529,8 +4533,14 @@ mod tests {
         let mut diags = Vec::new();
         let table = build_workspace(&[a, b], &mut diags);
 
-        assert_eq!(table.lookup_enum_in("Color", "a").map(|(k, _)| k), Some("a.Color"));
-        assert_eq!(table.lookup_enum_in("Color", "b").map(|(k, _)| k), Some("b.Color"));
+        assert_eq!(
+            table.lookup_enum_in("Color", "a").map(|(k, _)| k),
+            Some("a.Color")
+        );
+        assert_eq!(
+            table.lookup_enum_in("Color", "b").map(|(k, _)| k),
+            Some("b.Color")
+        );
         // No package context → ambiguous → None (must qualify/import).
         assert_eq!(table.lookup_enum_in("Color", "").map(|(k, _)| k), None);
     }
@@ -4584,9 +4594,7 @@ mod tests {
     /// Two `class Foo`s in the same unit → E0400 on the second.
     #[test]
     fn duplicate_class_name_emits_e0400() {
-        let (table, diags) = build_table(
-            "public class Foo {} public class Foo {}",
-        );
+        let (table, diags) = build_table("public class Foo {} public class Foo {}");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, code::Code::E0400_DuplicateDeclaration);
         // Only the first survives.
@@ -4647,9 +4655,7 @@ mod tests {
     /// Two `Red` variants in the same enum → E0403.
     #[test]
     fn duplicate_enum_variant_emits_e0403() {
-        let (_table, diags) = build_table(
-            "public enum Color { Red, Green, Red }",
-        );
+        let (_table, diags) = build_table("public enum Color { Red, Green, Red }");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, code::Code::E0403_DuplicateVariant);
     }
@@ -4657,9 +4663,7 @@ mod tests {
     /// A record's components land in `table.records`.
     #[test]
     fn record_with_components_is_indexed() {
-        let (table, diags) = build_table(
-            "public record Pair(int first, int second) {}",
-        );
+        let (table, diags) = build_table("public record Pair(int first, int second) {}");
         assert!(diags.is_empty(), "{:?}", diags);
         let record = table.records.get("Pair").expect("Pair in table");
         assert_eq!(record.components.len(), 2);
@@ -4669,9 +4673,7 @@ mod tests {
     /// An enum with variants — payload and unit — both end up indexed.
     #[test]
     fn enum_with_unit_and_payload_variants_is_indexed() {
-        let (table, _diags) = build_table(
-            "public enum Token { Stop, Number(int), Word(String) }",
-        );
+        let (table, _diags) = build_table("public enum Token { Stop, Number(int), Word(String) }");
         let e = table.enums.get("Token").expect("Token in table");
         assert_eq!(e.variants.len(), 3);
         assert!(e.variants["Stop"].payload.is_empty());
@@ -4682,9 +4684,8 @@ mod tests {
     /// An interface's method signatures land in `table.interfaces`.
     #[test]
     fn interface_with_method_sigs_is_indexed() {
-        let (table, diags) = build_table(
-            "public interface Drawable { void draw(); int weight(); }",
-        );
+        let (table, diags) =
+            build_table("public interface Drawable { void draw(); int weight(); }");
         assert!(diags.is_empty(), "{:?}", diags);
         let iface = table.interfaces.get("Drawable").expect("Drawable in table");
         assert_eq!(iface.methods.len(), 2);
@@ -4705,9 +4706,7 @@ mod tests {
     /// A class and a function sharing the same name → E0400.
     #[test]
     fn class_and_function_with_same_name_collide() {
-        let (_table, diags) = build_table(
-            "public class Foo {} public void Foo() {}",
-        );
+        let (_table, diags) = build_table("public class Foo {} public void Foo() {}");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, code::Code::E0400_DuplicateDeclaration);
     }
@@ -4729,7 +4728,10 @@ mod tests {
         assert_eq!(class.operators.len(), 2);
         assert!(class.operators.contains_key(&OperatorKind::Eq));
         assert!(class.operators.contains_key(&OperatorKind::Hash));
-        assert!(class.methods.is_empty(), "operators should not leak into methods");
+        assert!(
+            class.methods.is_empty(),
+            "operators should not leak into methods"
+        );
     }
 
     /// Two `operator+` declarations in the same class → E0402.
@@ -4758,9 +4760,7 @@ mod tests {
             }
             "#,
         );
-        let (_method, declaring) = table
-            .lookup_method("A", "m")
-            .expect("A has m");
+        let (_method, declaring) = table.lookup_method("A", "m").expect("A has m");
         assert_eq!(declaring, "A");
     }
 
@@ -4777,9 +4777,7 @@ mod tests {
             public class B extends A {}
             "#,
         );
-        let (_method, declaring) = table
-            .lookup_method("B", "m")
-            .expect("B inherits m from A");
+        let (_method, declaring) = table.lookup_method("B", "m").expect("B inherits m from A");
         assert_eq!(declaring, "A");
     }
 
@@ -4835,7 +4833,12 @@ mod tests {
             }
             "#,
         );
-        assert!(diags.iter().any(|d| d.code == code::Code::E0932_OperatorNotPublic), "{diags:?}");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0932_OperatorNotPublic),
+            "{diags:?}"
+        );
     }
 
     /// So is one written with no modifier at all, which inherits the
@@ -4851,7 +4854,12 @@ mod tests {
             }
             "#,
         );
-        assert!(diags.iter().any(|d| d.code == code::Code::E0932_OperatorNotPublic), "{diags:?}");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0932_OperatorNotPublic),
+            "{diags:?}"
+        );
     }
 
     /// `protected` is no better: a subclass gets no privileged `+`.
@@ -4866,7 +4874,12 @@ mod tests {
             }
             "#,
         );
-        assert!(diags.iter().any(|d| d.code == code::Code::E0932_OperatorNotPublic), "{diags:?}");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0932_OperatorNotPublic),
+            "{diags:?}"
+        );
     }
 
     /// The ordinary shape stays clean, on every declaring kind.
@@ -4889,7 +4902,9 @@ mod tests {
             "#,
         );
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0932_OperatorNotPublic),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0932_OperatorNotPublic),
             "{diags:?}",
         );
     }
@@ -4907,7 +4922,9 @@ mod tests {
             "#,
         );
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0932_OperatorNotPublic),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0932_OperatorNotPublic),
             "{diags:?}",
         );
     }
@@ -4924,7 +4941,9 @@ mod tests {
             "#,
         );
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0932_OperatorNotPublic),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0932_OperatorNotPublic),
             "{diags:?}",
         );
     }
@@ -4941,7 +4960,12 @@ mod tests {
             }
             "#,
         );
-        assert!(diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash), "{diags:?}");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0931_EqWithoutHash),
+            "{diags:?}"
+        );
     }
 
     /// A class with both `operator==` AND `operator hash` is fine.
@@ -4958,7 +4982,9 @@ mod tests {
             "#,
         );
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0931_EqWithoutHash),
             "{diags:?}",
         );
     }
@@ -4978,7 +5004,12 @@ mod tests {
             }
             "#,
         );
-        assert!(diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash), "{diags:?}");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0931_EqWithoutHash),
+            "{diags:?}"
+        );
     }
 
     /// `operator==(...) = delete;` is not a definition, so no E0931
@@ -4996,7 +5027,9 @@ mod tests {
             "#,
         );
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0931_EqWithoutHash),
             "{diags:?}",
         );
     }
@@ -5011,7 +5044,12 @@ mod tests {
             }
             "#,
         );
-        assert!(diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash), "{diags:?}");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0931_EqWithoutHash),
+            "{diags:?}"
+        );
     }
 
     /// And to enums.
@@ -5025,7 +5063,12 @@ mod tests {
             }
             "#,
         );
-        assert!(diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash), "{diags:?}");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0931_EqWithoutHash),
+            "{diags:?}"
+        );
     }
 
     /// `operator hash` alone (no `operator==`) is fine — the spec
@@ -5043,7 +5086,9 @@ mod tests {
             "#,
         );
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0931_EqWithoutHash),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0931_EqWithoutHash),
             "{diags:?}",
         );
     }
@@ -5067,7 +5112,12 @@ mod tests {
             }
             "#,
         );
-        assert!(diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict), "{diags:?}");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0930_OperatorConflict),
+            "{diags:?}"
+        );
     }
 
     /// `<=>` paired with multiple individual ops — emit one E0930 per
@@ -5107,7 +5157,9 @@ mod tests {
             "#,
         );
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0930_OperatorConflict),
             "{diags:?}",
         );
     }
@@ -5130,7 +5182,9 @@ mod tests {
             "#,
         );
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0930_OperatorConflict),
             "{diags:?}",
         );
     }
@@ -5155,7 +5209,9 @@ mod tests {
             "#,
         );
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0930_OperatorConflict),
             "{diags:?}",
         );
     }
@@ -5176,7 +5232,9 @@ mod tests {
             "#,
         );
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0930_OperatorConflict),
             "{diags:?}",
         );
     }
@@ -5202,7 +5260,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0410_TypeMismatch),
             "{diags:?}",
         );
     }
@@ -5221,7 +5281,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0410_TypeMismatch),
             "{diags:?}",
         );
     }
@@ -5240,7 +5302,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0410_TypeMismatch),
             "{diags:?}",
         );
     }
@@ -5259,7 +5323,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0410_TypeMismatch),
             "{diags:?}",
         );
     }
@@ -5284,10 +5350,9 @@ mod tests {
         // counting only signature-rule violations here, which would
         // anchor at the operator span. For this test we just check
         // that no E0410 with the operator-return phrasing appears.)
-        let any_op_e0410 = diags.iter().any(|d| {
-            d.code == code::Code::E0410_TypeMismatch
-                && d.message.contains("must return")
-        });
+        let any_op_e0410 = diags
+            .iter()
+            .any(|d| d.code == code::Code::E0410_TypeMismatch && d.message.contains("must return"));
         assert!(!any_op_e0410, "{diags:?}");
     }
 
@@ -5304,10 +5369,9 @@ mod tests {
             }
             "#,
         );
-        let any_op_e0410 = diags.iter().any(|d| {
-            d.code == code::Code::E0410_TypeMismatch
-                && d.message.contains("must return")
-        });
+        let any_op_e0410 = diags
+            .iter()
+            .any(|d| d.code == code::Code::E0410_TypeMismatch && d.message.contains("must return"));
         assert!(!any_op_e0410, "deletion should bypass rule: {diags:?}");
     }
 
@@ -5330,8 +5394,8 @@ mod tests {
             "#,
         );
         let hit = diags.iter().find(|d| {
-            d.code == code::Code::E0930_OperatorConflict
-                && d.message.contains("partial set") || d.message.contains("not all four")
+            d.code == code::Code::E0930_OperatorConflict && d.message.contains("partial set")
+                || d.message.contains("not all four")
         });
         assert!(hit.is_some(), "{diags:?}");
         let msg = &hit.unwrap().message;
@@ -5355,8 +5419,7 @@ mod tests {
             "#,
         );
         let hit = diags.iter().find(|d| {
-            d.code == code::Code::E0930_OperatorConflict
-                && d.message.contains("not all four")
+            d.code == code::Code::E0930_OperatorConflict && d.message.contains("not all four")
         });
         assert!(hit.is_some(), "{diags:?}");
         let msg = &hit.unwrap().message;
@@ -5381,8 +5444,7 @@ mod tests {
         );
         assert!(
             !diags.iter().any(|d| {
-                d.code == code::Code::E0930_OperatorConflict
-                    && d.message.contains("not all four")
+                d.code == code::Code::E0930_OperatorConflict && d.message.contains("not all four")
             }),
             "{diags:?}",
         );
@@ -5406,8 +5468,7 @@ mod tests {
             "#,
         );
         let hit = diags.iter().find(|d| {
-            d.code == code::Code::E0930_OperatorConflict
-                && d.message.contains("not all four")
+            d.code == code::Code::E0930_OperatorConflict && d.message.contains("not all four")
         });
         assert!(hit.is_some(), "{diags:?}");
         assert!(
@@ -5434,8 +5495,7 @@ mod tests {
         );
         assert!(
             !diags.iter().any(|d| {
-                d.code == code::Code::E0930_OperatorConflict
-                    && d.message.contains("not all four")
+                d.code == code::Code::E0930_OperatorConflict && d.message.contains("not all four")
             }),
             "{diags:?}",
         );
@@ -5452,8 +5512,7 @@ mod tests {
             "#,
         );
         let hit = diags.iter().any(|d| {
-            d.code == code::Code::E0930_OperatorConflict
-                && d.message.contains("not all four")
+            d.code == code::Code::E0930_OperatorConflict && d.message.contains("not all four")
         });
         assert!(hit, "{diags:?}");
     }
@@ -5471,10 +5530,9 @@ mod tests {
             }
             "#,
         );
-        let any_op_e0410 = diags.iter().any(|d| {
-            d.code == code::Code::E0410_TypeMismatch
-                && d.message.contains("must return")
-        });
+        let any_op_e0410 = diags
+            .iter()
+            .any(|d| d.code == code::Code::E0410_TypeMismatch && d.message.contains("must return"));
         assert!(!any_op_e0410, "arithmetic ops have free return: {diags:?}");
     }
 
@@ -5489,7 +5547,12 @@ mod tests {
             }
             "#,
         );
-        assert!(diags.iter().any(|d| d.code == code::Code::E0930_OperatorConflict), "{diags:?}");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0930_OperatorConflict),
+            "{diags:?}"
+        );
     }
 
     // ----------------------------------------------------------------
@@ -5506,7 +5569,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0420_FinalClassExtended),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0420_FinalClassExtended),
             "expected E0420, got: {diags:?}",
         );
     }
@@ -5525,7 +5590,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0421_FinalMethodOverridden),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0421_FinalMethodOverridden),
             "expected E0421, got: {diags:?}",
         );
     }
@@ -5541,7 +5608,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0422_SealedClassNotPermitted),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0422_SealedClassNotPermitted),
             "expected E0422 for `Square`, got: {diags:?}",
         );
     }
@@ -5557,7 +5626,9 @@ mod tests {
             "#,
         );
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0422_SealedClassNotPermitted),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0422_SealedClassNotPermitted),
             "permitted subclasses should be OK: {diags:?}",
         );
     }
@@ -5616,7 +5687,9 @@ mod tests {
         assert!(table.classes.contains_key("a.lib.Foo"));
         assert!(table.classes.contains_key("b.app.Bar"));
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
             "no duplicates expected: {diags:?}",
         );
     }
@@ -5631,7 +5704,9 @@ mod tests {
             "package a.lib;\npublic class Foo {}",
         ]);
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
             "same FQN twice should fire E0400: {diags:?}",
         );
     }
@@ -5647,7 +5722,9 @@ mod tests {
         assert!(table.classes.contains_key("a.lib.Foo"));
         assert!(table.classes.contains_key("b.app.Foo"));
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
             "Foo in two packages should coexist: {diags:?}",
         );
     }
@@ -5723,7 +5800,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0423_ExtendsNotAClass),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0423_ExtendsNotAClass),
             "expected E0423: {diags:?}",
         );
     }
@@ -5738,7 +5817,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0424_ImplementsNotAnInterface),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0424_ImplementsNotAnInterface),
             "expected E0424: {diags:?}",
         );
     }
@@ -5758,8 +5839,7 @@ mod tests {
         assert!(
             !diags.iter().any(|d| matches!(
                 d.code,
-                code::Code::E0423_ExtendsNotAClass
-                    | code::Code::E0424_ImplementsNotAnInterface
+                code::Code::E0423_ExtendsNotAClass | code::Code::E0424_ImplementsNotAnInterface
             )),
             "expected no E0423/E0424: {diags:?}",
         );
@@ -5960,9 +6040,17 @@ mod tests {
             "#,
         );
         assert!(diags.is_empty(), "{diags:?}");
-        assert!(crate::ty::is_subtype(&user_ty("Circle"), &user_ty("Shape"), &table));
+        assert!(crate::ty::is_subtype(
+            &user_ty("Circle"),
+            &user_ty("Shape"),
+            &table
+        ));
         // Not the reverse.
-        assert!(!crate::ty::is_subtype(&user_ty("Shape"), &user_ty("Circle"), &table));
+        assert!(!crate::ty::is_subtype(
+            &user_ty("Shape"),
+            &user_ty("Circle"),
+            &table
+        ));
     }
 
     /// A class inherits its superclass's `implements`, so it's a subtype
@@ -5979,7 +6067,11 @@ mod tests {
             "#,
         );
         assert!(diags.is_empty(), "{diags:?}");
-        assert!(crate::ty::is_subtype(&user_ty("Derived"), &user_ty("Shape"), &table));
+        assert!(crate::ty::is_subtype(
+            &user_ty("Derived"),
+            &user_ty("Shape"),
+            &table
+        ));
     }
 
     /// Transitive interface-extends: `class C implements A`, `A extends B`
@@ -6014,9 +6106,17 @@ mod tests {
             "#,
         );
         assert!(diags.is_empty(), "{diags:?}");
-        assert!(!crate::ty::is_subtype(&user_ty("Other"), &user_ty("Shape"), &table));
+        assert!(!crate::ty::is_subtype(
+            &user_ty("Other"),
+            &user_ty("Shape"),
+            &table
+        ));
         // Regression: class-extends subtyping is untouched.
-        assert!(crate::ty::is_subtype(&user_ty("Dog"), &user_ty("Animal"), &table));
+        assert!(crate::ty::is_subtype(
+            &user_ty("Dog"),
+            &user_ty("Animal"),
+            &table
+        ));
     }
 
     // ----------------------------------------------------------------
@@ -6063,7 +6163,9 @@ mod tests {
             "#,
         );
         assert!(
-            !diags.iter().any(|d| d.code == code::Code::E0426_OverrideMissing),
+            !diags
+                .iter()
+                .any(|d| d.code == code::Code::E0426_OverrideMissing),
             "no E0426 expected: {diags:?}",
         );
     }
@@ -6081,7 +6183,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0426_OverrideMissing),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0426_OverrideMissing),
             "expected E0426: {diags:?}",
         );
     }
@@ -6100,7 +6204,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0426_OverrideMissing),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0426_OverrideMissing),
             "lowercase @override should be matched the same: {diags:?}",
         );
     }
@@ -6151,7 +6257,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
             "expected E0400 for duplicate constant: {diags:?}",
         );
     }
@@ -6166,7 +6274,9 @@ mod tests {
             "#,
         );
         assert!(
-            diags.iter().any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
+            diags
+                .iter()
+                .any(|d| d.code == code::Code::E0400_DuplicateDeclaration),
             "expected E0400 for alias vs class name clash: {diags:?}",
         );
     }

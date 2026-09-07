@@ -33,17 +33,17 @@
 //!   distinct pass that builds the full inheritance substitution chain.
 
 use juxc_ast::{
-    BinaryExpr, BinaryOp, Block, CallExpr, CastExpr, ElseBranch, Expr, FieldExpr,
-    FloatKind, FloatLit, IndexExpr, IntKind, IntLit, Literal, NewArrayExpr, NewArrayLitExpr,
-    NewObjectExpr, OperatorKind, ReturnType, Stmt, SwitchBody, TypeRef, UnaryExpr, UnaryOp,
+    BinaryExpr, BinaryOp, Block, CallExpr, CastExpr, ElseBranch, Expr, FieldExpr, FloatKind,
+    FloatLit, IndexExpr, IntKind, IntLit, Literal, NewArrayExpr, NewArrayLitExpr, NewObjectExpr,
+    OperatorKind, ReturnType, Stmt, SwitchBody, TypeRef, UnaryExpr, UnaryOp,
 };
 
 use crate::env::TypeEnv;
 use crate::symbol_table::{MethodSig, SymbolTable};
 use crate::ty::{
-    compose_extends_substitution, explicit_generic_arg_map, infer_generic_args,
-    lower_member_type, primitive_from_name, substitute, substitute_via_inference,
-    ty_from_ref, ArrayKind, Primitive, Ty,
+    compose_extends_substitution, explicit_generic_arg_map, infer_generic_args, lower_member_type,
+    primitive_from_name, substitute, substitute_via_inference, ty_from_ref, ArrayKind, Primitive,
+    Ty,
 };
 
 // ============================================================================
@@ -94,8 +94,7 @@ pub(crate) fn select_method_overload_typed(
         0 => None,
         1 => Some((candidates[0].0, candidates[0].1.clone())),
         _ => {
-            let arg_tys: Vec<Ty> =
-                c.args.iter().map(|a| infer_expr(a, env, symbols)).collect();
+            let arg_tys: Vec<Ty> = c.args.iter().map(|a| infer_expr(a, env, symbols)).collect();
             let mut best: Option<(i32, usize, &MethodSig)> = None;
             for (k, m) in &candidates {
                 let mut score = 0i32;
@@ -120,8 +119,7 @@ pub(crate) fn select_method_overload_typed(
                     best = Some((score, *k, m));
                 }
             }
-            best
-                .map(|(_, k, m)| (k, m.clone()))
+            best.map(|(_, k, m)| (k, m.clone()))
                 .or_else(|| Some((candidates[0].0, candidates[0].1.clone())))
         }
     }
@@ -154,8 +152,7 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         Expr::ErrorProp(inner, _) => match infer_expr(inner, env, symbols) {
             Ty::Nullable(boxed) => *boxed,
             Ty::User { name, generic_args }
-                if name.rsplit('.').next() == Some("Result")
-                    && generic_args.len() == 2 =>
+                if name.rsplit('.').next() == Some("Result") && generic_args.len() == 2 =>
             {
                 generic_args[0].clone()
             }
@@ -363,7 +360,11 @@ fn infer_super(env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     let Some(current) = &env.current_class else {
         return Ty::Unknown;
     };
-    match symbols.classes.get(current).and_then(|c| c.extends_fqn.clone()) {
+    match symbols
+        .classes
+        .get(current)
+        .and_then(|c| c.extends_fqn.clone())
+    {
         Some(parent_fqn) => Ty::User {
             name: parent_fqn,
             generic_args: Vec::new(),
@@ -475,9 +476,7 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     Primitive::Float | Primitive::Double | Primitive::F32 | Primitive::F64
                 );
                 let known = match f.field.text.as_str() {
-                    "MIN_VALUE" | "MAX_VALUE" => {
-                        !matches!(prim, Primitive::Bool | Primitive::Char)
-                    }
+                    "MIN_VALUE" | "MAX_VALUE" => !matches!(prim, Primitive::Bool | Primitive::Char),
                     "NAN" | "POSITIVE_INFINITY" | "NEGATIVE_INFINITY" | "EPSILON" => is_float,
                     _ => false,
                 };
@@ -530,12 +529,9 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             // an inherited field. When declaring_class == name the
             // composition reduces to one hop (the receiver's own
             // scope) and behaves like the previous direct path.
-            if let Some((params, args)) = compose_extends_substitution(
-                name,
-                generic_args,
-                declaring_class,
-                symbols,
-            ) {
+            if let Some((params, args)) =
+                compose_extends_substitution(name, generic_args, declaring_class, symbols)
+            {
                 return substitute(&raw, &params, &args);
             }
             return raw;
@@ -547,12 +543,9 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // inherited generic property reads through `extends Parent<int>`.
         if let Some((prop, declaring_class)) = symbols.lookup_property(name, field_name) {
             let raw = lower_member_type(&prop.ty, declaring_class, symbols);
-            if let Some((params, args)) = compose_extends_substitution(
-                name,
-                generic_args,
-                declaring_class,
-                symbols,
-            ) {
+            if let Some((params, args)) =
+                compose_extends_substitution(name, generic_args, declaring_class, symbols)
+            {
                 return substitute(&raw, &params, &args);
             }
             return raw;
@@ -575,7 +568,10 @@ fn infer_index(i: &IndexExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     match array_ty {
         Ty::Array { element, .. } => *element,
         // `operator[]` (§O.2.4): the overload's declared return type.
-        ref user @ Ty::User { ref name, ref generic_args } => {
+        ref user @ Ty::User {
+            ref name,
+            ref generic_args,
+        } => {
             if let Some(ret) =
                 lookup_user_operator_return_type(user, OperatorKind::Index, env, symbols)
             {
@@ -588,12 +584,8 @@ fn infer_index(i: &IndexExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             // wrapper-class element behind `xs[i]` (its field reads then
             // skip the `.0.borrow()` rewrite — a rustc E0609 leak).
             match name.rsplit('.').next().unwrap_or(name) {
-                "Vec" | "VecDeque" => {
-                    generic_args.first().cloned().unwrap_or(Ty::Unknown)
-                }
-                "HashMap" | "BTreeMap" => {
-                    generic_args.get(1).cloned().unwrap_or(Ty::Unknown)
-                }
+                "Vec" | "VecDeque" => generic_args.first().cloned().unwrap_or(Ty::Unknown),
+                "HashMap" | "BTreeMap" => generic_args.get(1).cloned().unwrap_or(Ty::Unknown),
                 _ => Ty::Unknown,
             }
         }
@@ -685,24 +677,12 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                         symbols,
                     )
                 } else {
-                    let param_tys: Vec<&TypeRef> =
-                        fn_sig.params.iter().map(|p| &p.ty).collect();
-                    let arg_tys: Vec<Ty> = c
-                        .args
-                        .iter()
-                        .map(|a| infer_expr(a, env, symbols))
-                        .collect();
-                    infer_generic_args(
-                        &fn_sig.generic_params,
-                        &param_tys,
-                        &arg_tys,
-                    )
+                    let param_tys: Vec<&TypeRef> = fn_sig.params.iter().map(|p| &p.ty).collect();
+                    let arg_tys: Vec<Ty> =
+                        c.args.iter().map(|a| infer_expr(a, env, symbols)).collect();
+                    infer_generic_args(&fn_sig.generic_params, &param_tys, &arg_tys)
                 };
-                return substitute_via_inference(
-                    &base,
-                    &fn_sig.generic_params,
-                    &inferred,
-                );
+                return substitute_via_inference(&base, &fn_sig.generic_params, &inferred);
             }
             Ty::Unknown
         }
@@ -757,11 +737,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                                 .first()
                                 .map(|a| infer_expr(a, env, symbols))
                                 .unwrap_or(Ty::Unknown),
-                            "from" => match c
-                                .args
-                                .first()
-                                .map(|a| infer_expr(a, env, symbols))
-                            {
+                            "from" => match c.args.first().map(|a| infer_expr(a, env, symbols)) {
                                 Some(Ty::Array { element, .. }) => *element,
                                 _ => Ty::Unknown,
                             },
@@ -804,9 +780,9 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             if let Ty::User { name, generic_args } = &receiver_ty {
                 if name.rsplit('.').next() == Some("Channel") {
                     return match method_name {
-                        "receive" => Ty::nullable(
-                            generic_args.first().cloned().unwrap_or(Ty::Unknown),
-                        ),
+                        "receive" => {
+                            Ty::nullable(generic_args.first().cloned().unwrap_or(Ty::Unknown))
+                        }
                         _ => Ty::Void,
                     };
                 }
@@ -827,9 +803,9 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     && !symbols.classes.contains_key("Stream")
                 {
                     return match method_name {
-                        "next" => Ty::nullable(
-                            generic_args.first().cloned().unwrap_or(Ty::Unknown),
-                        ),
+                        "next" => {
+                            Ty::nullable(generic_args.first().cloned().unwrap_or(Ty::Unknown))
+                        }
                         "mapAsync" => Ty::User {
                             name: "Stream".to_string(),
                             generic_args: vec![Ty::Unknown],
@@ -841,16 +817,12 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             }
             if let Ty::User { name, generic_args } = &receiver_ty {
                 // Walk the class extends-chain first.
-                if let Some((method, declaring_class)) =
-                    symbols.lookup_method(name, method_name)
-                {
+                if let Some((method, declaring_class)) = symbols.lookup_method(name, method_name) {
                     // Overload-group pick (§T.3, count + types): a
                     // group's members may differ in return type.
-                    let method = &select_method_overload_typed(
-                        symbols, name, method_name, c, env,
-                    )
-                    .map(|(_, m)| m)
-                    .unwrap_or_else(|| method.clone());
+                    let method = &select_method_overload_typed(symbols, name, method_name, c, env)
+                        .map(|(_, m)| m)
+                        .unwrap_or_else(|| method.clone());
                     // Lower in the declaring class's generic scope AND the
                     // method's own generic params so both `T get()` (class
                     // param) and `<U> U pick()` (method param) read as
@@ -904,8 +876,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                             &method.generic_params,
                             symbols,
                         );
-                        let after_class =
-                            substitute(&raw, &record.generic_params, generic_args);
+                        let after_class = substitute(&raw, &record.generic_params, generic_args);
                         return method_infer_return(
                             &after_class,
                             method,
@@ -928,8 +899,7 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                             &method.generic_params,
                             symbols,
                         );
-                        let after_class =
-                            substitute(&raw, &iface.generic_params, generic_args);
+                        let after_class = substitute(&raw, &iface.generic_params, generic_args);
                         return method_infer_return(
                             &after_class,
                             method,
@@ -971,7 +941,8 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             // inference. Without this the chain collapses to
             // `Unknown` after the first stdlib hop and the
             // backend can't dispatch.
-            if let Some(ty) = infer_stdlib_method(&receiver_ty, method_name, &c.args, env, symbols) {
+            if let Some(ty) = infer_stdlib_method(&receiver_ty, method_name, &c.args, env, symbols)
+            {
                 return ty;
             }
             Ty::Unknown
@@ -998,8 +969,8 @@ fn infer_stdlib_method(
     match receiver_ty {
         Ty::String => match method_name {
             // String → String
-            "trim" | "toUpperCase" | "toLowerCase" | "replace" | "substring"
-            | "repeat" | "to_string" | "clone" => Some(Ty::String),
+            "trim" | "toUpperCase" | "toLowerCase" | "replace" | "substring" | "repeat"
+            | "to_string" | "clone" => Some(Ty::String),
             // String → uint. `len()` is the Rust `str::len()` byte count, which
             // returns `usize`; typing it `uint` keeps it consistent with the
             // emitted Rust (and with `Vec::len()`), so a mixed-type use coerces
@@ -1046,8 +1017,9 @@ fn infer_stdlib_method(
             };
             if is_char {
                 return match method_name {
-                    "isDigit" | "isAlphabetic" | "isWhitespace" | "isUppercase"
-                    | "isLowercase" => Some(Ty::Primitive(Primitive::Bool)),
+                    "isDigit" | "isAlphabetic" | "isWhitespace" | "isUppercase" | "isLowercase" => {
+                        Some(Ty::Primitive(Primitive::Bool))
+                    }
                     "toUppercase" | "toLowercase" => Some(Ty::Primitive(Primitive::Char)),
                     "codePoint" => Some(Ty::Primitive(Primitive::Uint)),
                     _ => None,
@@ -1089,14 +1061,13 @@ fn infer_stdlib_method(
             // List<T> → bool
             "isEmpty" | "contains" => Some(Ty::Primitive(Primitive::Bool)),
             // List<T> → T (element type)
-            "get" | "first" | "last" | "pop" | "remove" | "set" => {
-                Some((**element).clone())
-            }
+            "get" | "first" | "last" | "pop" | "remove" | "set" => Some((**element).clone()),
             // List<T> → void (mutating ops, no useful return). Phase-1
             // doesn't have a Void Ty, so we use Unknown which the
             // surrounding stmt-level emit treats fine.
-            "add" | "push" | "insert" | "clear" | "reverse" | "sort"
-            | "forEach" => Some(Ty::Unknown),
+            "add" | "push" | "insert" | "clear" | "reverse" | "sort" | "forEach" => {
+                Some(Ty::Unknown)
+            }
             // List<T> → String
             "join" => Some(Ty::String),
             // List<T> → List<U> — preserves the wrapper; element is
@@ -1357,8 +1328,7 @@ pub(crate) fn resolve_class_name(
             // its declared type but not its constructor, so a nested class
             // could not be built from inside the class that owns it.
             nested
-        } else if let Some(fqn) =
-            symbols.find_fqn_by_bare_in(bare, &env.current_package.join("."))
+        } else if let Some(fqn) = symbols.find_fqn_by_bare_in(bare, &env.current_package.join("."))
         {
             // Implicit auto-import: bare name matches the last segment of a
             // known FQN. Mirrors Java's `java.lang.*` rule applied across the
@@ -1368,7 +1338,8 @@ pub(crate) fn resolve_class_name(
             bare.clone()
         }
     } else {
-        let joined = qn.segments
+        let joined = qn
+            .segments
             .iter()
             .map(|s| s.text.as_str())
             .collect::<Vec<_>>()
@@ -1419,9 +1390,7 @@ pub(crate) fn resolve_class_name(
         let Some(alias) = symbols.aliases.get(&cursor) else {
             return cursor;
         };
-        let alias_ctx = alias
-            .unit_index
-            .and_then(|idx| symbols.units.get(idx));
+        let alias_ctx = alias.unit_index.and_then(|idx| symbols.units.get(idx));
         let target_fqn = if alias.target.name.segments.len() == 1 {
             let bare = &alias.target.name.segments[0].text;
             // Prefer the alias's declaring unit's resolver, fall
@@ -1599,9 +1568,9 @@ fn infer_binary(b: &BinaryExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     if matches!(b.op, BinaryOp::Add)
         && (matches!(left_ty, Ty::String)
             || matches!(infer_expr(&b.right, env, symbols), Ty::String))
-        {
-            return Ty::String;
-        }
+    {
+        return Ty::String;
+    }
     match b.op {
         // `<=>` (§A.4 level 11) always yields int: -1 / 0 / +1.
         // (A user `operator<=>` was already consulted above via the
@@ -1670,8 +1639,12 @@ fn numeric_promote(l: &Ty, r: &Ty) -> Option<Primitive> {
     if lp == rp {
         return Some(lp);
     }
-    let is_float =
-        |p: Primitive| matches!(p, Primitive::Float | Primitive::Double | Primitive::F32 | Primitive::F64);
+    let is_float = |p: Primitive| {
+        matches!(
+            p,
+            Primitive::Float | Primitive::Double | Primitive::F32 | Primitive::F64
+        )
+    };
     if is_float(lp) || is_float(rp) {
         let is_f64 = |p: Primitive| matches!(p, Primitive::Double | Primitive::F64);
         return Some(if is_f64(lp) || is_f64(rp) {
@@ -1755,7 +1728,9 @@ fn lookup_user_operator_return_type(
     _env: &TypeEnv,
     symbols: &SymbolTable,
 ) -> Option<Ty> {
-    let Ty::User { name, generic_args } = receiver_ty else { return None };
+    let Ty::User { name, generic_args } = receiver_ty else {
+        return None;
+    };
 
     // Class lookup first; then records; then enums.
     if let Some(class) = symbols.classes.get(name) {
@@ -1971,7 +1946,11 @@ mod tests {
     fn build_table(src: &str) -> (SymbolTable, CompilationUnit) {
         let sf = SourceFile::new("test.jux", src);
         let lex_result = lex(&sf);
-        assert!(lex_result.diagnostics.is_empty(), "lex: {:?}", lex_result.diagnostics);
+        assert!(
+            lex_result.diagnostics.is_empty(),
+            "lex: {:?}",
+            lex_result.diagnostics
+        );
         let parse_result = parse(&lex_result.tokens);
         assert!(
             parse_result.diagnostics.is_empty(),
@@ -2025,7 +2004,10 @@ mod tests {
         let (table, unit) = build_table("public void main() { var x = 42; }");
         let init = first_var_init(first_fn_body(&unit));
         let env = TypeEnv::new();
-        assert_eq!(infer_expr(init, &env, &table), Ty::Primitive(Primitive::Int));
+        assert_eq!(
+            infer_expr(init, &env, &table),
+            Ty::Primitive(Primitive::Int)
+        );
     }
 
     /// `1.5` → `Primitive::Double`.
@@ -2255,7 +2237,10 @@ mod tests {
         );
         let init = first_var_init(first_fn_body(&unit));
         let env = TypeEnv::new();
-        assert_eq!(infer_expr(init, &env, &table), Ty::Primitive(Primitive::Int));
+        assert_eq!(
+            infer_expr(init, &env, &table),
+            Ty::Primitive(Primitive::Int)
+        );
     }
 
     /// `$"hi"` → `Ty::String`.
@@ -2563,7 +2548,10 @@ mod tests {
         );
         let init = first_var_init(first_fn_body(&unit));
         let env = TypeEnv::new();
-        assert_eq!(infer_expr(init, &env, &table), Ty::Primitive(Primitive::Int));
+        assert_eq!(
+            infer_expr(init, &env, &table),
+            Ty::Primitive(Primitive::Int)
+        );
     }
 
     /// Phase E.2 — a raw-type receiver (`new Box(...)` with no

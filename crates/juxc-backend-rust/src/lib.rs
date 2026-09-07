@@ -38,9 +38,9 @@
 use std::collections::{HashMap, HashSet};
 
 use juxc_ast::{CompilationUnit, ImportDecl, ImportSpec, QualifiedName, ReturnType, TopLevelDecl};
+use juxc_lex::to_rust_ident;
 use juxc_source::{SourceFile, Span};
 use juxc_tycheck::{SymbolTable, Ty};
-use juxc_lex::to_rust_ident;
 
 mod analysis;
 mod backend_fqn;
@@ -245,11 +245,7 @@ pub fn lower_workspace_with_entry(
     // `wrapper_classes` = every newtype-handle class (bare `Rc` OR `Rc<RefCell>`)
     // — the `.0` newtype shape. `refcell_classes` is the interior-mutable subset
     // that the `.0.borrow()` / `RefCell::new` sites gate on.
-    e.wrapper_classes = e
-        .class_reps
-        .keys()
-        .cloned()
-        .collect();
+    e.wrapper_classes = e.class_reps.keys().cloned().collect();
     e.refcell_classes = e
         .class_reps
         .iter()
@@ -429,11 +425,7 @@ pub fn lower_workspace_test(
     // `wrapper_classes` = every newtype-handle class (bare `Rc` OR `Rc<RefCell>`)
     // — the `.0` newtype shape. `refcell_classes` is the interior-mutable subset
     // that the `.0.borrow()` / `RefCell::new` sites gate on.
-    e.wrapper_classes = e
-        .class_reps
-        .keys()
-        .cloned()
-        .collect();
+    e.wrapper_classes = e.class_reps.keys().cloned().collect();
     e.refcell_classes = e
         .class_reps
         .iter()
@@ -1092,8 +1084,7 @@ struct RustEmitter {
     /// param's own bounds (`R: Id + Named + Comparable<K> + …`), since Rust has
     /// no `R: K` "param-as-bound" form. Set/restored alongside
     /// [`Self::current_type_params`].
-    pub(crate) type_param_bounds:
-        std::collections::HashMap<String, Vec<juxc_ast::TypeRef>>,
+    pub(crate) type_param_bounds: std::collections::HashMap<String, Vec<juxc_ast::TypeRef>>,
     /// True while emitting the size expression of a fixed array
     /// (`[T; «here»]`, types.rs `ArrayShape::Fixed`). Suppresses the
     /// `(N as isize)` value-cast for const params — the size slot
@@ -1260,10 +1251,7 @@ struct RustEmitter {
 /// hierarchies). Retained as a single-class predicate for reference.
 #[allow(dead_code)]
 pub(crate) fn class_decl_uses_wrapper(cd: &juxc_ast::ClassDecl) -> bool {
-    cd.extends.is_none()
-        && cd.permits.is_empty()
-        && cd.generic_params.is_empty()
-        && !cd.is_abstract
+    cd.extends.is_none() && cd.permits.is_empty() && cd.generic_params.is_empty() && !cd.is_abstract
 }
 
 /// True for a `@layout(c) struct` — a C-compatible **value** type (§L.1.2): a
@@ -1465,9 +1453,8 @@ pub(crate) fn compute_wrapper_classes(
                 let parent_sealed = by_name
                     .get(&parent)
                     .map(|ds| {
-                        ds.iter().any(|(pcd, _)| {
-                            crate::decls::classes::sealed_decl_lowers_to_enum(pcd)
-                        })
+                        ds.iter()
+                            .any(|(pcd, _)| crate::decls::classes::sealed_decl_lowers_to_enum(pcd))
                     })
                     .unwrap_or(true); // unseen parent → treat as unsafe
                 if parent_sealed {
@@ -1614,9 +1601,7 @@ pub(crate) fn compute_aliased_classes(
     // `C?` or `C[]` element binding still aliases the underlying `C`.
     fn class_name_of_ty(ty: &Ty) -> Option<String> {
         match ty {
-            Ty::User { name, .. } => {
-                Some(name.rsplit('.').next().unwrap_or(name).to_string())
-            }
+            Ty::User { name, .. } => Some(name.rsplit('.').next().unwrap_or(name).to_string()),
             Ty::Nullable(inner) => class_name_of_ty(inner),
             _ => None,
         }
@@ -1782,9 +1767,7 @@ pub(crate) fn compute_aliased_classes(
                     }
                     match &arm.body {
                         juxc_ast::SwitchBody::Expr(b) => walk_expr(b, aliased, mark),
-                        juxc_ast::SwitchBody::Block(blk) => {
-                            walk_block(blk, aliased, mark)
-                        }
+                        juxc_ast::SwitchBody::Block(blk) => walk_block(blk, aliased, mark),
                     }
                 }
             }
@@ -1996,9 +1979,7 @@ pub(crate) fn compute_aliased_classes(
             Expr::NotNullAssert(inner, _) => mark_lambda_captures(inner, aliased, mark),
             Expr::Lambda(inner) => match &inner.body {
                 juxc_ast::LambdaBody::Expr(b) => mark_lambda_captures(b, aliased, mark),
-                juxc_ast::LambdaBody::Block(blk) => {
-                    mark_lambda_captures_block(blk, aliased, mark)
-                }
+                juxc_ast::LambdaBody::Block(blk) => mark_lambda_captures_block(blk, aliased, mark),
             },
             _ => {}
         }
@@ -2079,7 +2060,10 @@ pub(crate) fn compute_aliased_classes(
                 Stmt::Unsafe(b) => mark_lambda_captures_block(b, aliased, mark),
                 Stmt::Break(..) | Stmt::Continue(..) => {}
                 Stmt::Labeled { stmt, .. } => mark_lambda_captures_block(
-                    &juxc_ast::Block { statements: vec![(**stmt).clone()], span: Span::DUMMY },
+                    &juxc_ast::Block {
+                        statements: vec![(**stmt).clone()],
+                        span: Span::DUMMY,
+                    },
                     aliased,
                     mark,
                 ),
@@ -2341,7 +2325,11 @@ pub(crate) fn compute_escaping_classes(
             walk_stmt(s, et, out);
         }
     }
-    fn walk_else(branch: Option<&juxc_ast::ElseBranch>, et: &HashMap<Span, Ty>, out: &mut HashSet<String>) {
+    fn walk_else(
+        branch: Option<&juxc_ast::ElseBranch>,
+        et: &HashMap<Span, Ty>,
+        out: &mut HashSet<String>,
+    ) {
         match branch {
             Some(juxc_ast::ElseBranch::Block(b)) => walk_block(b, et, out),
             Some(juxc_ast::ElseBranch::If(inner)) => {
@@ -2781,7 +2769,10 @@ pub(crate) fn compute_mutated_classes(
             // property (a setter writes its backing field).
             if let juxc_ast::TopLevelDecl::Class(cd) = item {
                 let internal = cd.methods.iter().any(|m| {
-                    m.body.as_ref().map(crate::analysis::body_writes_to_this).unwrap_or(false)
+                    m.body
+                        .as_ref()
+                        .map(crate::analysis::body_writes_to_this)
+                        .unwrap_or(false)
                         || user_mut.contains(&m.name.text)
                 }) || cd
                     .properties
@@ -2793,7 +2784,9 @@ pub(crate) fn compute_mutated_classes(
             }
             // External mutation (and a redundant internal pass via `this` typing):
             // walk every body for writes / mutating calls and mark the owner.
-            for_each_body(item, &mut |b| walk_block(b, expr_types, &user_mut, &mut mutated));
+            for_each_body(item, &mut |b| {
+                walk_block(b, expr_types, &user_mut, &mut mutated)
+            });
         }
     }
     mutated
@@ -2997,9 +2990,7 @@ pub(crate) fn compute_recursive_field_classes(
 /// intersects it with the wrap-eligible set, so a sealed/exception component
 /// is excluded here and handled on its own path (sealed `&self` match
 /// dispatch) or diagnosed at tycheck.
-fn compute_interface_forced_classes(
-    units: &[juxc_ast::CompilationUnit],
-) -> HashSet<String> {
+fn compute_interface_forced_classes(units: &[juxc_ast::CompilationUnit]) -> HashSet<String> {
     // Direct `extends` parent (bare) per class, plus the inverse children
     // adjacency, and the seed list of classes that implement an interface.
     let mut parent_of: HashMap<String, Option<String>> = HashMap::new();
@@ -3047,9 +3038,7 @@ fn compute_interface_forced_classes(
 /// `(N as isize)` (the param declares as Rust `const N: usize`; see
 /// `emit_const_generic_param_decl`). `bool` const params need no cast and
 /// are excluded.
-pub(crate) fn collect_const_int_params(
-    params: &[juxc_ast::TypeParam],
-) -> HashSet<String> {
+pub(crate) fn collect_const_int_params(params: &[juxc_ast::TypeParam]) -> HashSet<String> {
     params
         .iter()
         .filter(|p| {
@@ -3067,9 +3056,7 @@ pub(crate) fn collect_const_int_params(
 /// generic-params list — everything that is NOT a const param. Feeds
 /// [`RustEmitter::current_type_params`] (generic-element array
 /// recognition in `emit_new_array`).
-pub(crate) fn collect_type_param_names(
-    params: &[juxc_ast::TypeParam],
-) -> HashSet<String> {
+pub(crate) fn collect_type_param_names(params: &[juxc_ast::TypeParam]) -> HashSet<String> {
     params
         .iter()
         .filter(|p| !p.is_const())
@@ -3267,9 +3254,7 @@ pub(crate) fn compute_polymorphic_base_classes(
 /// stays uniform across the hierarchy (§CR.3.5). [`compute_wrapped_set`]
 /// intersects this with the eligible set, so a component that includes a
 /// sealed / exception / generic member collapses back to legacy.
-fn compute_polymorphic_forced_classes(
-    units: &[juxc_ast::CompilationUnit],
-) -> HashSet<String> {
+fn compute_polymorphic_forced_classes(units: &[juxc_ast::CompilationUnit]) -> HashSet<String> {
     let bases = compute_polymorphic_base_classes(units);
     let mut parent_of: HashMap<String, Option<String>> = HashMap::new();
     let mut children_of: HashMap<String, Vec<String>> = HashMap::new();
@@ -3557,11 +3542,7 @@ fn cast_targets_expr(e: &juxc_ast::Expr, out: &mut HashSet<String>) {
                 }
             }
         }
-        Expr::Literal(_)
-        | Expr::Path(_)
-        | Expr::This(_)
-        | Expr::Super(_)
-        | Expr::MethodRef(_) => {}
+        Expr::Literal(_) | Expr::Path(_) | Expr::This(_) | Expr::Super(_) | Expr::MethodRef(_) => {}
     }
 }
 
@@ -3720,7 +3701,10 @@ pub(crate) fn is_intrinsic_class(pkg: &str, name: &str) -> bool {
     matches!(
         (pkg, name),
         ("jux.std.io", "File" | "Path" | "Console")
-            | ("jux.std.concurrent", "Worker" | "Task" | "AtomicInt" | "AtomicLong")
+            | (
+                "jux.std.concurrent",
+                "Worker" | "Task" | "AtomicInt" | "AtomicLong"
+            )
             | ("jux.std.time", "Clock" | "Instant")
     )
 }
@@ -3774,8 +3758,10 @@ impl RustEmitter {
         // items are not in scope, so the prelude always resolves against std, and
         // the `pub use` keeps every helper reachable under the bare name emitted
         // user code uses.
-        w.push_str("pub mod __jux_rt {
-");
+        w.push_str(
+            "pub mod __jux_rt {
+",
+        );
         // Prelude: ONE universal value formatter for every interpolation /
         // `print(...)` / string-concat argument. Jux's `$"…${expr}"` needs each
         // value rendered to text, but Rust splits that across two traits: most
@@ -3828,62 +3814,114 @@ impl RustEmitter {
         // `ptr_eq` — with an ATOMIC refcount and a real lock, so every site that
         // reaches through a class handle is spelled the same whichever tier the
         // class is on; only the type and the constructor differ.
-        w.push_str("pub struct JuxSync<T: ?Sized>(pub std::sync::Arc<std::sync::Mutex<T>>);
-");
-        w.push_str("impl<T> JuxSync<T> {
-");
-        w.push_str("    pub fn new(value: T) -> Self {
-");
-        w.push_str("        JuxSync(std::sync::Arc::new(std::sync::Mutex::new(value)))
-");
-        w.push_str("    }
-");
-        w.push_str("}
-");
-        w.push_str("impl<T: ?Sized> JuxSync<T> {
-");
+        w.push_str(
+            "pub struct JuxSync<T: ?Sized>(pub std::sync::Arc<std::sync::Mutex<T>>);
+",
+        );
+        w.push_str(
+            "impl<T> JuxSync<T> {
+",
+        );
+        w.push_str(
+            "    pub fn new(value: T) -> Self {
+",
+        );
+        w.push_str(
+            "        JuxSync(std::sync::Arc::new(std::sync::Mutex::new(value)))
+",
+        );
+        w.push_str(
+            "    }
+",
+        );
+        w.push_str(
+            "}
+",
+        );
+        w.push_str(
+            "impl<T: ?Sized> JuxSync<T> {
+",
+        );
         // A poisoned lock means another thread panicked while holding it. The
         // object is still there, and Jux has no notion of poisoning, so take the
         // value back rather than turn every later access into a second panic.
-        w.push_str("    pub fn borrow(&self) -> std::sync::MutexGuard<'_, T> {
-");
-        w.push_str("        self.0.lock().unwrap_or_else(|e| e.into_inner())
-");
-        w.push_str("    }
-");
-        w.push_str("    pub fn borrow_mut(&self) -> std::sync::MutexGuard<'_, T> { self.borrow() }
-");
-        w.push_str("    pub fn as_ptr(&self) -> *const std::sync::Mutex<T> {
-");
-        w.push_str("        std::sync::Arc::as_ptr(&self.0)
-");
-        w.push_str("    }
-");
-        w.push_str("    pub fn ptr_eq(&self, other: &Self) -> bool {
-");
-        w.push_str("        std::sync::Arc::ptr_eq(&self.0, &other.0)
-");
-        w.push_str("    }
-");
-        w.push_str("}
-");
-        w.push_str("impl<T: ?Sized> Clone for JuxSync<T> {
-");
-        w.push_str("    fn clone(&self) -> Self { JuxSync(self.0.clone()) }
-");
-        w.push_str("}
-");
-        w.push_str("impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for JuxSync<T> {
-");
-        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-");
-        w.push_str("        std::fmt::Debug::fmt(&*self.borrow(), f)
-");
-        w.push_str("    }
-");
-        w.push_str("}
+        w.push_str(
+            "    pub fn borrow(&self) -> std::sync::MutexGuard<'_, T> {
+",
+        );
+        w.push_str(
+            "        self.0.lock().unwrap_or_else(|e| e.into_inner())
+",
+        );
+        w.push_str(
+            "    }
+",
+        );
+        w.push_str(
+            "    pub fn borrow_mut(&self) -> std::sync::MutexGuard<'_, T> { self.borrow() }
+",
+        );
+        w.push_str(
+            "    pub fn as_ptr(&self) -> *const std::sync::Mutex<T> {
+",
+        );
+        w.push_str(
+            "        std::sync::Arc::as_ptr(&self.0)
+",
+        );
+        w.push_str(
+            "    }
+",
+        );
+        w.push_str(
+            "    pub fn ptr_eq(&self, other: &Self) -> bool {
+",
+        );
+        w.push_str(
+            "        std::sync::Arc::ptr_eq(&self.0, &other.0)
+",
+        );
+        w.push_str(
+            "    }
+",
+        );
+        w.push_str(
+            "}
+",
+        );
+        w.push_str(
+            "impl<T: ?Sized> Clone for JuxSync<T> {
+",
+        );
+        w.push_str(
+            "    fn clone(&self) -> Self { JuxSync(self.0.clone()) }
+",
+        );
+        w.push_str(
+            "}
+",
+        );
+        w.push_str(
+            "impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for JuxSync<T> {
+",
+        );
+        w.push_str(
+            "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+",
+        );
+        w.push_str(
+            "        std::fmt::Debug::fmt(&*self.borrow(), f)
+",
+        );
+        w.push_str(
+            "    }
+",
+        );
+        w.push_str(
+            "}
 
-");
+",
+        );
         // Observable-property observer handle (§P.2/§P.3): one
         // attached observer of a `{ get; set; }` property. NAMED
         // observer variables attach weakly (§P.2.3 — the owner's
@@ -3973,7 +4011,9 @@ impl RustEmitter {
         w.push_str("        }\n");
         w.push_str("    )*};\n");
         w.push_str("}\n");
-        w.push_str("jux_int_div_impl!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);\n");
+        w.push_str(
+            "jux_int_div_impl!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);\n",
+        );
         w.push_str("pub fn __jux_idiv<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_div(b) }\n");
         w.push_str("pub fn __jux_irem<T: JuxIntDiv>(a: T, b: T) -> T { a.jux_rem(b) }\n\n");
         // Async-runtime helper: `__jux_yield_now()` returns a one-
@@ -3993,9 +4033,7 @@ impl RustEmitter {
         // workloads.
         w.push_str("pub struct __JuxYieldNow(bool);\n");
         w.push_str("impl std::future::Future for __JuxYieldNow {\n");
-        w.push_str(
-            "    type Output = ();\n",
-        );
+        w.push_str("    type Output = ();\n");
         w.push_str(
             "    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {\n",
         );
@@ -4056,13 +4094,17 @@ impl RustEmitter {
         w.push_str("        std::pin::Pin::new(h).poll(cx)\n");
         w.push_str("    }\n");
         w.push_str("}\n");
-        w.push_str("pub static __JUX_TASK_POOL: std::sync::LazyLock<futures::executor::ThreadPool> =\n");
+        w.push_str(
+            "pub static __JUX_TASK_POOL: std::sync::LazyLock<futures::executor::ThreadPool> =\n",
+        );
         w.push_str("    std::sync::LazyLock::new(|| futures::executor::ThreadPool::new().expect(\"task pool\"));\n");
         w.push_str("pub fn __jux_spawn<T: Send + 'static>(\n");
         w.push_str("    fut: impl std::future::Future<Output = T> + Send + 'static,\n");
         w.push_str(") -> JuxTask<T> {\n");
         w.push_str("    JuxTask(Some(\n");
-        w.push_str("        futures::task::SpawnExt::spawn_with_handle(&mut &*__JUX_TASK_POOL, fut)\n");
+        w.push_str(
+            "        futures::task::SpawnExt::spawn_with_handle(&mut &*__JUX_TASK_POOL, fut)\n",
+        );
         w.push_str("            .expect(\"spawn\"),\n");
         w.push_str("    ))\n");
         w.push_str("}\n\n");
@@ -4085,7 +4127,9 @@ impl RustEmitter {
         w.push_str("}\n");
         w.push_str("impl<T> JuxChannel<T> {\n");
         w.push_str("    pub fn new(capacity: isize) -> Self {\n");
-        w.push_str("        let (tx, rx) = futures::channel::mpsc::channel(capacity.max(1) as usize);\n");
+        w.push_str(
+            "        let (tx, rx) = futures::channel::mpsc::channel(capacity.max(1) as usize);\n",
+        );
         w.push_str("        JuxChannel {\n");
         w.push_str("            inner: std::sync::Arc::new(JuxChannelInner {\n");
         w.push_str("                tx: std::sync::Mutex::new(Some(tx)),\n");
@@ -4125,15 +4169,23 @@ impl RustEmitter {
         w.push_str("    }\n");
         w.push_str("}\n");
         w.push_str("impl<T: Clone + 'static> JuxStream<T> {\n");
-        w.push_str("    pub fn from_stream(s: futures::stream::LocalBoxStream<'static, T>) -> Self {\n");
+        w.push_str(
+            "    pub fn from_stream(s: futures::stream::LocalBoxStream<'static, T>) -> Self {\n",
+        );
         w.push_str("        // `fuse` makes exhaustion idempotent (§18.6.2): every\n");
         w.push_str("        // `next()` after the first None resolves None instead of\n");
         w.push_str("        // re-polling the source (`unfold` panics if re-polled).\n");
-        w.push_str("        let fused = ::std::boxed::Box::pin(futures::stream::StreamExt::fuse(s));\n");
-        w.push_str("        JuxStream { inner: std::rc::Rc::new(std::cell::RefCell::new(fused)) }\n");
+        w.push_str(
+            "        let fused = ::std::boxed::Box::pin(futures::stream::StreamExt::fuse(s));\n",
+        );
+        w.push_str(
+            "        JuxStream { inner: std::rc::Rc::new(std::cell::RefCell::new(fused)) }\n",
+        );
         w.push_str("    }\n");
         w.push_str("    pub fn of(items: Vec<T>) -> Self {\n");
-        w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::iter(items)))\n");
+        w.push_str(
+            "        Self::from_stream(::std::boxed::Box::pin(futures::stream::iter(items)))\n",
+        );
         w.push_str("    }\n");
         w.push_str("    pub fn from(items: Vec<T>) -> Self {\n");
         w.push_str("        Self::of(items)\n");
@@ -4149,7 +4201,9 @@ impl RustEmitter {
         w.push_str("        let mut s = self.inner.borrow_mut();\n");
         w.push_str("        futures::stream::StreamExt::next(&mut *s).await\n");
         w.push_str("    }\n");
-        w.push_str("    pub fn take_inner(&self) -> futures::stream::LocalBoxStream<'static, T> {\n");
+        w.push_str(
+            "    pub fn take_inner(&self) -> futures::stream::LocalBoxStream<'static, T> {\n",
+        );
         w.push_str("        std::mem::replace(\n");
         w.push_str("            &mut *self.inner.borrow_mut(),\n");
         w.push_str("            ::std::boxed::Box::pin(futures::stream::empty()),\n");
@@ -4163,7 +4217,9 @@ impl RustEmitter {
         w.push_str("        )))\n");
         w.push_str("    }\n");
         w.push_str("    #[allow(non_snake_case)]\n");
-        w.push_str("    pub fn filterAsync(&self, f: std::rc::Rc<dyn Fn(T) -> bool>) -> JuxStream<T> {\n");
+        w.push_str(
+            "    pub fn filterAsync(&self, f: std::rc::Rc<dyn Fn(T) -> bool>) -> JuxStream<T> {\n",
+        );
         w.push_str("        Self::from_stream(::std::boxed::Box::pin(futures::stream::StreamExt::filter(\n");
         w.push_str("            self.take_inner(),\n");
         w.push_str("            move |v: &T| futures::future::ready(f(v.clone())),\n");
@@ -4194,7 +4250,9 @@ impl RustEmitter {
         w.push_str("}\n");
         w.push_str("impl<T> JuxAsyncMutex<T> {\n");
         w.push_str("    pub fn new(v: T) -> Self {\n");
-        w.push_str("        JuxAsyncMutex { inner: std::sync::Arc::new(futures::lock::Mutex::new(v)) }\n");
+        w.push_str(
+            "        JuxAsyncMutex { inner: std::sync::Arc::new(futures::lock::Mutex::new(v)) }\n",
+        );
         w.push_str("    }\n");
         w.push_str("    pub async fn lock(&self) -> futures::lock::MutexGuard<'_, T> {\n");
         w.push_str("        self.inner.lock().await\n");
@@ -4240,7 +4298,9 @@ impl RustEmitter {
         w.push_str("}\n");
         // `join()` — block the calling thread until the worker completes.
         // Uses futures::executor::block_on so no additional runtime dep needed.
-        w.push_str("impl<T> Task<T> { pub fn join(self) -> T { futures::executor::block_on(self) } }\n");
+        w.push_str(
+            "impl<T> Task<T> { pub fn join(self) -> T { futures::executor::block_on(self) } }\n",
+        );
         w.push_str("pub struct Worker;\n");
         w.push_str("impl Worker {\n");
         w.push_str(
@@ -4263,11 +4323,15 @@ impl RustEmitter {
             "    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)\n",
         );
         w.push_str("}\n\n");
-        w.push_str("}
-");
-        w.push_str("pub use __jux_rt::*;
+        w.push_str(
+            "}
+",
+        );
+        w.push_str(
+            "pub use __jux_rt::*;
 
-");
+",
+        );
         // Receiver-mutability discovery: every external (stub) method
         // carrying the bindgen `@MutSelf` marker mutates its receiver
         // (the real Rust signature is `&mut self`). Seeding the
@@ -4418,10 +4482,8 @@ impl RustEmitter {
         // callers (`pairWith` → `self.backing.peek()`) are folded in too —
         // otherwise the method emits `&mut self` while the call site fails to
         // promote its receiver to `let mut` (E0596).
-        self.user_mut_methods = crate::analysis::collect_user_mut_methods_seeded(
-            unit,
-            &self.extern_mut_methods,
-        );
+        self.user_mut_methods =
+            crate::analysis::collect_user_mut_methods_seeded(unit, &self.extern_mut_methods);
         // Pre-pass (C6): record by-`&mut` foreign-collection params for
         // this unit. In workspace mode the entry point already populated
         // the map from EVERY unit (so cross-file calls resolve); this
@@ -4502,9 +4564,9 @@ impl RustEmitter {
             .as_ref()
             .map(|p| p.name.segments.iter().map(|s| s.text.clone()).collect())
             .unwrap_or_default();
-        let has_main = unit.items.iter().any(|item| {
-            matches!(item, TopLevelDecl::Function(fn_decl) if fn_decl.name.text == "main")
-        });
+        let has_main = unit.items.iter().any(
+            |item| matches!(item, TopLevelDecl::Function(fn_decl) if fn_decl.name.text == "main"),
+        );
 
         if package.is_empty() {
             // No package — emit flat at crate root, same as before.
@@ -4557,15 +4619,18 @@ impl RustEmitter {
                 TopLevelDecl::Function(fn_decl) if fn_decl.name.text == "main" => Some(fn_decl),
                 _ => None,
             });
-            let async_main = main_decl.is_some_and(|f| {
-                matches!(f.return_type, juxc_ast::ReturnType::AsyncType(_))
-            });
+            let async_main = main_decl
+                .is_some_and(|f| matches!(f.return_type, juxc_ast::ReturnType::AsyncType(_)));
             // `main(String[] args)` / `main(String... args)` — the
             // shim feeds `std::env::args().skip(1)` (program name
             // excluded, like Java). A sync param-taking main was
             // renamed to `__jux_args_main` by `emit_fn_decl`.
             let takes_args = main_decl.is_some_and(|f| !f.params.is_empty());
-            let args_expr = if takes_args { "std::env::args().skip(1).collect::<Vec<String>>()" } else { "" };
+            let args_expr = if takes_args {
+                "std::env::args().skip(1).collect::<Vec<String>>()"
+            } else {
+                ""
+            };
             self.w.newline();
             self.w.line("fn main() {");
             self.w.indent_inc();
@@ -4659,9 +4724,7 @@ impl RustEmitter {
         pkg_path: &[String],
     ) {
         let dir = pkg_path.join("/");
-        let mut mod_rs = String::from(
-            "// AUTO-GENERATED by juxc. DO NOT EDIT.\n\n",
-        );
+        let mut mod_rs = String::from("// AUTO-GENERATED by juxc. DO NOT EDIT.\n\n");
         let mut used_bases: std::collections::HashSet<String> = std::collections::HashSet::new();
         for &idx in &node.unit_indices {
             let unit = &units[idx];
@@ -4678,7 +4741,8 @@ impl RustEmitter {
             let saved_uses = std::mem::take(&mut self.emitted_uses_in_module);
             self.w.push_str("// AUTO-GENERATED by juxc. DO NOT EDIT.\n");
             if let Some(src) = sources.get(idx) {
-                self.w.push_str(&format!("// Source: {}\n", src.path().display()));
+                self.w
+                    .push_str(&format!("// Source: {}\n", src.path().display()));
             }
             // Bring every SAME-PACKAGE sibling into scope. The parent `mod.rs`
             // re-exports each unit-file flat (`pub use <base>::*;`), so
@@ -4687,7 +4751,8 @@ impl RustEmitter {
             // single-file output worked because all siblings shared one
             // `pub mod` scope. The explicit glob also shadows Rust's prelude
             // (so a Jux `Iterator` wins over `std::iter::Iterator`).
-            self.w.push_str("#[allow(unused_imports)]\nuse super::*;\n\n");
+            self.w
+                .push_str("#[allow(unused_imports)]\nuse super::*;\n\n");
             if !self.workspace_mode {
                 self.user_mut_methods = crate::analysis::collect_user_mut_methods_seeded(
                     unit,
@@ -4842,13 +4907,16 @@ impl RustEmitter {
             // need `futures::executor::block_on(...)` to drive.
             let main_fn = free_main;
             let Some(main_fn) = main_fn else { return };
-            let is_async_main =
-                matches!(main_fn.return_type, juxc_ast::ReturnType::AsyncType(_));
+            let is_async_main = matches!(main_fn.return_type, juxc_ast::ReturnType::AsyncType(_));
             // Param-taking main (`String[]` / `String...`, §E.1.2) —
             // the shim feeds `std::env::args().skip(1)`. Sync forms
             // were renamed to `__jux_args_main` by `emit_fn_decl`.
             let takes_args = !main_fn.params.is_empty();
-            let args_expr = if takes_args { "std::env::args().skip(1).collect::<Vec<String>>()" } else { "" };
+            let args_expr = if takes_args {
+                "std::env::args().skip(1).collect::<Vec<String>>()"
+            } else {
+                ""
+            };
             let pkg: Vec<&str> = unit
                 .package
                 .as_ref()
@@ -4865,7 +4933,8 @@ impl RustEmitter {
                     self.w.line("fn main() {");
                     self.w.indent_inc();
                     self.w.emit_indent();
-                    self.w.push_str("futures::executor::block_on(__jux_async_main(");
+                    self.w
+                        .push_str("futures::executor::block_on(__jux_async_main(");
                     self.w.push_str(args_expr);
                     self.w.push_str("));\n");
                     self.w.indent_dec();
@@ -4934,7 +5003,9 @@ impl RustEmitter {
                 }
             }
         }
-        let Some((class_name, method)) = found else { return };
+        let Some((class_name, method)) = found else {
+            return;
+        };
 
         let is_async = matches!(method.return_type, juxc_ast::ReturnType::AsyncType(_));
         // An entry-shaped non-void return is `int` — forward it as the process
@@ -4943,10 +5014,12 @@ impl RustEmitter {
         // sentinel); the latter would otherwise drop its exit code.
         let returns_int = match &method.return_type {
             juxc_ast::ReturnType::Type(_) => true,
-            juxc_ast::ReturnType::AsyncType(t) => !(t.name.segments.len() == 1
-                && t.name.segments[0].text == "void"
-                && t.generic_args.is_empty()
-                && !t.nullable),
+            juxc_ast::ReturnType::AsyncType(t) => {
+                !(t.name.segments.len() == 1
+                    && t.name.segments[0].text == "void"
+                    && t.generic_args.is_empty()
+                    && !t.nullable)
+            }
             juxc_ast::ReturnType::Void => false,
         };
         let takes_args = !method.params.is_empty();
@@ -5037,8 +5110,7 @@ impl RustEmitter {
                 .as_ref()
                 .map(|p| p.name.segments.iter().map(|s| s.text.as_str()).collect())
                 .unwrap_or_default();
-            let rust_prefix: String =
-                pkg.iter().map(|s| format!("{s}::")).collect();
+            let rust_prefix: String = pkg.iter().map(|s| format!("{s}::")).collect();
             let jux_prefix: String = pkg.iter().map(|s| format!("{s}.")).collect();
             let mut plan = UnitPlan {
                 tests: Vec::new(),
@@ -5051,10 +5123,7 @@ impl RustEmitter {
                 let TopLevelDecl::Function(fn_decl) = item else {
                     continue;
                 };
-                let is_async = matches!(
-                    fn_decl.return_type,
-                    juxc_ast::ReturnType::AsyncType(_),
-                );
+                let is_async = matches!(fn_decl.return_type, juxc_ast::ReturnType::AsyncType(_),);
                 let call = format!("{rust_prefix}{}", fn_decl.name.text);
                 if has_ann(fn_decl, "Test") {
                     let display = format!("{jux_prefix}{}", fn_decl.name.text);
@@ -5095,9 +5164,8 @@ impl RustEmitter {
         self.w.indent_inc();
         self.w
             .line("if let Some(s) = p.downcast_ref::<String>() { return s.clone(); }");
-        self.w.line(
-            "if let Some(s) = p.downcast_ref::<&'static str>() { return s.to_string(); }",
-        );
+        self.w
+            .line("if let Some(s) = p.downcast_ref::<&'static str>() { return s.to_string(); }");
         for fqn in self.throwable_class_fqns() {
             let path = match backend_fqn::fqn_package(&fqn) {
                 Some(pkg) => format!(
@@ -5125,9 +5193,8 @@ impl RustEmitter {
         self.w
             .line("std::panic::set_hook(::std::boxed::Box::new(|_| {}));");
         // Runtime filtering (§TS.8): argv substrings select tests.
-        self.w.line(
-            "let __jux_filter: Vec<String> = std::env::args().skip(1).collect();",
-        );
+        self.w
+            .line("let __jux_filter: Vec<String> = std::env::args().skip(1).collect();");
         self.w.line(
             "let __jux_match = |n: &str| __jux_filter.is_empty() || __jux_filter.iter().any(|f| n.contains(f.as_str()));",
         );
@@ -5135,9 +5202,7 @@ impl RustEmitter {
         self.w.push_str("let __jux_names: [&str; ");
         self.w.push_str(&total.to_string());
         self.w.push_str("] = [");
-        for (i, (_, display, _)) in
-            plans.iter().flat_map(|p| p.tests.iter()).enumerate()
-        {
+        for (i, (_, display, _)) in plans.iter().flat_map(|p| p.tests.iter()).enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
             }
@@ -5146,11 +5211,9 @@ impl RustEmitter {
             self.w.push('"');
         }
         self.w.push_str("];\n");
-        self.w.line(
-            "let __jux_total = __jux_names.iter().filter(|n| __jux_match(n)).count();",
-        );
         self.w
-            .line("println!(\"running {} tests\", __jux_total);");
+            .line("let __jux_total = __jux_names.iter().filter(|n| __jux_match(n)).count();");
+        self.w.line("println!(\"running {} tests\", __jux_total);");
         self.w.line("let mut __jux_passed: i64 = 0;");
         self.w.line("let mut __jux_failed: i64 = 0;");
 
@@ -5161,8 +5224,7 @@ impl RustEmitter {
             self.w
                 .line(&format!("let mut __jux_unit{ui}_started = false;"));
             for (call, display, is_async) in &plan.tests {
-                self.w
-                    .line(&format!("if __jux_match(\"{display}\") {{"));
+                self.w.line(&format!("if __jux_match(\"{display}\") {{"));
                 self.w.indent_inc();
                 self.w.emit_indent();
                 self.w.push_str(
@@ -5216,8 +5278,7 @@ impl RustEmitter {
                 // Per-file AfterAll — only when the file ran (§TS.5);
                 // a failure counts against the run without masking
                 // any test's own result.
-                self.w
-                    .line(&format!("if __jux_unit{ui}_started {{"));
+                self.w.line(&format!("if __jux_unit{ui}_started {{"));
                 self.w.indent_inc();
                 self.w.emit_indent();
                 self.w.push_str(
@@ -5239,13 +5300,13 @@ impl RustEmitter {
         // Summary + exit code (§TS.7); `; N filtered out` when a
         // filter was active.
         self.w.line("println!();");
-        self.w.line(
-            "let __jux_filtered = __jux_names.len() - __jux_total;",
-        );
+        self.w
+            .line("let __jux_filtered = __jux_names.len() - __jux_total;");
         self.w.line(
             "if __jux_filtered > 0 { println!(\"test result: {}. {} passed; {} failed; {} filtered out\", if __jux_failed == 0 { \"ok\" } else { \"FAILED\" }, __jux_passed, __jux_failed, __jux_filtered); } else { println!(\"test result: {}. {} passed; {} failed\", if __jux_failed == 0 { \"ok\" } else { \"FAILED\" }, __jux_passed, __jux_failed); }",
         );
-        self.w.line("if __jux_failed > 0 { std::process::exit(1); }");
+        self.w
+            .line("if __jux_failed > 0 { std::process::exit(1); }");
         self.w.indent_dec();
         self.w.line("}");
     }
@@ -5300,7 +5361,10 @@ impl RustEmitter {
                         let mut segments = prefix.segments.clone();
                         segments.push(item.name.clone());
                         let synthetic = ImportSpec::Path {
-                            name: juxc_ast::QualifiedName { segments, span: prefix.span },
+                            name: juxc_ast::QualifiedName {
+                                segments,
+                                span: prefix.span,
+                            },
                             wildcard: false,
                             alias: item.alias.clone(),
                         };
@@ -5313,7 +5377,12 @@ impl RustEmitter {
     }
 
     fn external_use_line(&self, spec: &ImportSpec) -> Option<String> {
-        let ImportSpec::Path { name, wildcard, alias } = spec else {
+        let ImportSpec::Path {
+            name,
+            wildcard,
+            alias,
+        } = spec
+        else {
             return None;
         };
         if *wildcard || name.segments.is_empty() {
@@ -5434,7 +5503,12 @@ impl RustEmitter {
     }
 
     fn foreign_wildcard_use_lines(&self, spec: &ImportSpec) -> Option<Vec<String>> {
-        let ImportSpec::Path { name, wildcard: true, .. } = spec else {
+        let ImportSpec::Path {
+            name,
+            wildcard: true,
+            ..
+        } = spec
+        else {
             return None;
         };
         if name.segments.is_empty() {
@@ -5462,7 +5536,9 @@ impl RustEmitter {
             if !sig.is_external {
                 continue;
             }
-            let Some(simple) = fqn.strip_prefix(&prefix) else { continue };
+            let Some(simple) = fqn.strip_prefix(&prefix) else {
+                continue;
+            };
             // Direct members only — a deeper `rust.std.sync.atomic.X` is not
             // brought in by `import rust.std.*`, matching Java's one-level rule.
             if simple.contains('.') || !mentions(simple) {
@@ -5492,7 +5568,9 @@ impl RustEmitter {
         // Rust path, so one that resolves badly is a hard error in a file that
         // never asked for the function.
         for (fqn, sig) in &self.symbols.functions {
-            let Some(simple) = fqn.strip_prefix(&prefix) else { continue };
+            let Some(simple) = fqn.strip_prefix(&prefix) else {
+                continue;
+            };
             if simple.contains('.') || !mentions(simple) || !self.source_calls(simple) {
                 continue;
             }
@@ -5587,7 +5665,12 @@ impl RustEmitter {
             // name-driven — so the whole declaration is dropped.
             // Wildcard imports of the package still emit (the module
             // exists and carries the non-intrinsic items).
-            if let ImportSpec::Path { name, wildcard: false, .. } = &import.spec {
+            if let ImportSpec::Path {
+                name,
+                wildcard: false,
+                ..
+            } = &import.spec
+            {
                 if name.segments.len() >= 2 {
                     let pkg = name.segments[..name.segments.len() - 1]
                         .iter()
@@ -5740,12 +5823,15 @@ impl RustEmitter {
     ///
     /// Sorted for deterministic emission.
     fn throwable_class_fqns(&self) -> Vec<String> {
-        let root: Option<String> =
-            if self.symbols.classes.contains_key("jux.std.exceptions.Exception") {
-                Some("jux.std.exceptions.Exception".to_string())
-            } else {
-                self.symbols.find_fqn_by_bare("Exception")
-            };
+        let root: Option<String> = if self
+            .symbols
+            .classes
+            .contains_key("jux.std.exceptions.Exception")
+        {
+            Some("jux.std.exceptions.Exception".to_string())
+        } else {
+            self.symbols.find_fqn_by_bare("Exception")
+        };
         let Some(root) = root else {
             return Vec::new();
         };
@@ -5775,7 +5861,11 @@ impl RustEmitter {
                     if p == root {
                         return true;
                     }
-                    cur = self.symbols.classes.get(&p).and_then(|c| c.extends_fqn.clone());
+                    cur = self
+                        .symbols
+                        .classes
+                        .get(&p)
+                        .and_then(|c| c.extends_fqn.clone());
                 }
                 false
             })
@@ -5811,8 +5901,7 @@ impl RustEmitter {
             .as_ref()
             .map(|fs| fs.iter().map(|(_, c)| c.as_str()).collect())
             .unwrap_or_default();
-        let uses_async =
-            source.contains("async fn ") || split_text.contains("async fn ");
+        let uses_async = source.contains("async fn ") || split_text.contains("async fn ");
         // **Silent panic hook for try/throw programs.** When the
         // user's code throws and catches typed exceptions, the
         // emitted `panic_any` triggers the default Rust panic
@@ -5970,18 +6059,14 @@ fn ident_words(text: &str) -> std::collections::HashSet<&str> {
         let c = bytes[i];
         if c.is_ascii_alphabetic() || c == b'_' {
             let start = i;
-            while i < bytes.len()
-                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
-            {
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
             }
             out.insert(&text[start..i]);
         } else if c.is_ascii_alphanumeric() {
             // A digit-led run (`3rd`, `0xff`) is not an identifier — skip it
             // whole so its tail isn't mistaken for one.
-            while i < bytes.len()
-                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
-            {
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
             }
         } else {
@@ -6002,7 +6087,11 @@ fn render_use(spec: &ImportSpec, inside_package_mod: bool) -> Option<String> {
     // expects.
     let root = if inside_package_mod { "crate::" } else { "" };
     match spec {
-        ImportSpec::Path { name, wildcard, alias } => {
+        ImportSpec::Path {
+            name,
+            wildcard,
+            alias,
+        } => {
             let path = render_qualified(name)?;
             let mut out = format!("use {root}{path}");
             if *wildcard {

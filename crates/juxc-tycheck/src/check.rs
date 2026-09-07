@@ -102,7 +102,14 @@ use crate::ty::{
 /// non-async context. If/when more built-ins land (`assert`, `panic`,
 /// …) they go here.
 pub const BUILTINS: &[&str] = &[
-    "print", "parallel", "block_on", "yield_now", "Worker", "now_ms", "assert", "spawn",
+    "print",
+    "parallel",
+    "block_on",
+    "yield_now",
+    "Worker",
+    "now_ms",
+    "assert",
+    "spawn",
     "withTimeout",
     // Stdlib I/O — `File.readText(path)`, `File.writeText(path, body)`.
     // The Jux-level shape is `File.readText(...)`, parsed as a
@@ -139,11 +146,9 @@ pub const BUILTINS: &[&str] = &[
 /// | `.join(sep)`  | `.join(sep)`                          |
 /// | `.map(f)` / `.filter(f)` / `.forEach(f)` | `iter().map/...` |
 const BUILTIN_ARRAY_METHODS: &[&str] = &[
-    "push", "pop", "clone", "len", "length",
-    // List<T> spec methods.
-    "add", "get", "set", "contains", "indexOf", "isEmpty", "size",
-    "first", "last", "reverse", "sort", "clear", "remove", "insert",
-    "join", "map", "filter", "forEach",
+    "push", "pop", "clone", "len", "length", // List<T> spec methods.
+    "add", "get", "set", "contains", "indexOf", "isEmpty", "size", "first", "last", "reverse",
+    "sort", "clear", "remove", "insert", "join", "map", "filter", "forEach",
 ];
 
 /// Methods we let through on a **String receiver**. Same idea: the
@@ -167,13 +172,29 @@ const BUILTIN_ARRAY_METHODS: &[&str] = &[
 /// | `.charAt(i)`      | `.chars().nth(i).unwrap()`                     |
 /// | `.isEmpty()`      | `.is_empty()`                                  |
 const BUILTIN_STRING_METHODS: &[&str] = &[
-    "length", "len", "clone", "chars", "bytes", "to_string",
+    "length",
+    "len",
+    "clone",
+    "chars",
+    "bytes",
+    "to_string",
     // String spec methods.
-    "split", "trim", "contains", "startsWith", "endsWith",
-    "toUpperCase", "toLowerCase", "replace", "indexOf",
-    "substring", "charAt", "isEmpty",
+    "split",
+    "trim",
+    "contains",
+    "startsWith",
+    "endsWith",
+    "toUpperCase",
+    "toLowerCase",
+    "replace",
+    "indexOf",
+    "substring",
+    "charAt",
+    "isEmpty",
     // §K.7 surface: explicit byte/char length forms + repeat.
-    "byteLength", "charLength", "repeat",
+    "byteLength",
+    "charLength",
+    "repeat",
 ];
 
 /// Field/property names we allow on **any array receiver** without a
@@ -416,7 +437,9 @@ impl<'a> Checker<'a> {
             if k.rsplit('.').next() == Some("Exception") {
                 return true;
             }
-            let Some(class) = self.symbols.classes.get(&k) else { break };
+            let Some(class) = self.symbols.classes.get(&k) else {
+                break;
+            };
             key = match &class.extends_fqn {
                 Some(fqn) => Some(fqn.clone()),
                 None => class
@@ -485,7 +508,6 @@ impl<'a> Checker<'a> {
         }
         ty
     }
-
 
     /// Walk every top-level item in `unit`. Functions get checked
     /// directly; classes / records dispatch to `check_class` /
@@ -592,7 +614,9 @@ impl<'a> Checker<'a> {
                                 "parameter `{}` of foreign function `{}` has type `{}`, which is \
                                  not allowed at the C boundary — use a primitive, a raw pointer \
                                  (`T*`), or `String`",
-                                p.name.text, f.name.text, type_ref_display(&p.ty),
+                                p.name.text,
+                                f.name.text,
+                                type_ref_display(&p.ty),
                             ),
                         )
                         .with_span(p.span),
@@ -609,7 +633,8 @@ impl<'a> Checker<'a> {
                                 "return type `{}` of foreign function `{}` is not allowed at the \
                                  C boundary — use a primitive, a raw pointer (`T*`), `String`, or \
                                  `void`",
-                                type_ref_display(t), f.name.text,
+                                type_ref_display(t),
+                                f.name.text,
                             ),
                         )
                         .with_span(f.span),
@@ -636,7 +661,12 @@ impl<'a> Checker<'a> {
         if t.nullable {
             return false;
         }
-        let name = t.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+        let name = t
+            .name
+            .segments
+            .last()
+            .map(|s| s.text.as_str())
+            .unwrap_or("");
         if name == "String" {
             return false;
         }
@@ -647,7 +677,10 @@ impl<'a> Checker<'a> {
         // C-compatible by-value fields with a portable `#[repr]`).
         match ty_from_ref(t, &self.env, self.symbols) {
             Ty::User { name, .. } => {
-                self.symbols.classes.get(&name).is_some_and(|c| c.is_layout_c)
+                self.symbols
+                    .classes
+                    .get(&name)
+                    .is_some_and(|c| c.is_layout_c)
                     || self.symbols.enums.get(&name).is_some_and(|e| e.is_layout_c)
             }
             _ => false,
@@ -677,11 +710,7 @@ impl<'a> Checker<'a> {
                     .classes
                     .get(&name)
                     .is_some_and(|c| c.is_layout_c)
-                    || self
-                        .symbols
-                        .enums
-                        .get(&name)
-                        .is_some_and(|e| e.is_layout_c);
+                    || self.symbols.enums.get(&name).is_some_and(|e| e.is_layout_c);
             }
         }
         false
@@ -707,7 +736,11 @@ impl<'a> Checker<'a> {
                 .with_span(fn_decl.span),
             );
         }
-        if fn_decl.modifiers.iter().any(|m| matches!(m, juxc_ast::FnModifier::Unsafe)) {
+        if fn_decl
+            .modifiers
+            .iter()
+            .any(|m| matches!(m, juxc_ast::FnModifier::Unsafe))
+        {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0508_FfiTypeNotAllowed,
@@ -778,8 +811,7 @@ impl<'a> Checker<'a> {
         // integer with one discriminant per variant (Layout-ABI §L.1.3). Such
         // an enum may NOT carry a payload — a C enum is just an integer, it has
         // no associated data — so a variant with a payload is rejected (E0509).
-        let is_c_enum =
-            crate::symbol_table::is_layout_c_annotation(&enum_decl.annotations);
+        let is_c_enum = crate::symbol_table::is_layout_c_annotation(&enum_decl.annotations);
         if is_c_enum {
             // A C enum is a plain integer with one concrete repr, so it cannot
             // be generic (`@layout(c) enum E<T>`): type parameters have no place
@@ -814,8 +846,7 @@ impl<'a> Checker<'a> {
                                 "variant `{}` of `@layout(c) enum {}` carries a payload, which is \
                                  not C-compatible — a C enum is a plain integer with no associated \
                                  data; drop the payload or remove `@layout(c)`",
-                                variant.name.text,
-                                enum_decl.name.text,
+                                variant.name.text, enum_decl.name.text,
                             ),
                         )
                         .with_span(variant.span),
@@ -862,10 +893,7 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        let name = crate::symbol_table::make_fqn(
-            &self.env.current_package,
-            &enum_decl.name.text,
-        );
+        let name = crate::symbol_table::make_fqn(&self.env.current_package, &enum_decl.name.text);
         self.env.set_class(&name);
         let this_ty = Ty::User {
             name: name.clone(),
@@ -928,11 +956,7 @@ impl<'a> Checker<'a> {
             return None;
         }
         let suffix = format!(".{name}");
-        let mut hits = self
-            .symbols
-            .classes
-            .keys()
-            .filter(|k| k.ends_with(&suffix));
+        let mut hits = self.symbols.classes.keys().filter(|k| k.ends_with(&suffix));
         match (hits.next(), hits.next()) {
             (Some(k), None) => Some(k.clone()),
             _ => None,
@@ -957,7 +981,12 @@ impl<'a> Checker<'a> {
                 return false;
             }
             depth += 1;
-            match self.symbols.classes.get(&cur).and_then(|c| c.extends_fqn.clone()) {
+            match self
+                .symbols
+                .classes
+                .get(&cur)
+                .and_then(|c| c.extends_fqn.clone())
+            {
                 Some(p) => cur = p,
                 None => return false,
             }
@@ -1085,8 +1114,11 @@ impl<'a> Checker<'a> {
                         return None;
                     }
                     let suffix = format!(".{name}");
-                    let mut hits =
-                        self.symbols.records.iter().filter(|(k, _)| k.ends_with(&suffix));
+                    let mut hits = self
+                        .symbols
+                        .records
+                        .iter()
+                        .filter(|(k, _)| k.ends_with(&suffix));
                     match (hits.next(), hits.next()) {
                         (Some((_, r)), None) => Some(r),
                         _ => None,
@@ -1094,10 +1126,8 @@ impl<'a> Checker<'a> {
                 });
                 let record_ok = record
                     .map(|r| {
-                        let declared =
-                            r.operators.get(&kind).is_some_and(|o| !o.is_deleted);
-                        let deleted =
-                            r.operators.get(&kind).is_some_and(|o| o.is_deleted);
+                        let declared = r.operators.get(&kind).is_some_and(|o| !o.is_deleted);
+                        let deleted = r.operators.get(&kind).is_some_and(|o| o.is_deleted);
                         let auto = matches!(kind, K::Eq | K::Hash | K::ToString);
                         declared || (auto && !deleted)
                     })
@@ -1186,7 +1216,9 @@ impl<'a> Checker<'a> {
             else {
                 continue;
             };
-            let Some(bound) = subst_args.get(idx) else { continue };
+            let Some(bound) = subst_args.get(idx) else {
+                continue;
+            };
             if !self.ty_satisfies_operator(bound, *kind) {
                 self.diagnostics.push(
                     Diagnostic::error(
@@ -1294,9 +1326,7 @@ impl<'a> Checker<'a> {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0730_QuestionIncompatibleReturn,
-                        format!(
-                            "`?` needs a Result or nullable operand, found {operand}",
-                        ),
+                        format!("`?` needs a Result or nullable operand, found {operand}",),
                     )
                     .with_span(span),
                 );
@@ -1370,7 +1400,9 @@ impl<'a> Checker<'a> {
             }
         }
         for param in params {
-            let Some(default) = &param.default else { continue };
+            let Some(default) = &param.default else {
+                continue;
+            };
             for other in params {
                 let mut hit_span: Option<Span> = None;
                 collect_bare_name_reads(default, &mut |qn| {
@@ -1523,11 +1555,7 @@ impl<'a> Checker<'a> {
     /// notes shadowing diagnostics are deferred — so an inner `var x` legitimately
     /// un-finals an outer `final x`). Both plain (`x = …`) and compound
     /// (`x += …`, and the parser's `++`/`--` desugaring) assignments are caught.
-    fn check_final_not_reassigned(
-        &mut self,
-        params: &[juxc_ast::Param],
-        body: &juxc_ast::Block,
-    ) {
+    fn check_final_not_reassigned(&mut self, params: &[juxc_ast::Param], body: &juxc_ast::Block) {
         // `ref`/`weak` bindings are excluded: on those, `x = v` is a
         // store-through / handle operation (§M.13.2), not a binding
         // reassignment, so `final ref` / `final weak` never trip E0464.
@@ -1765,10 +1793,7 @@ impl<'a> Checker<'a> {
         // Class context — FQN'd so the visibility / subtype walks
         // that key on `env.current_class` find the right entry in
         // the symbol table.
-        let class_name = crate::symbol_table::make_fqn(
-            &self.env.current_package,
-            &class.name.text,
-        );
+        let class_name = crate::symbol_table::make_fqn(&self.env.current_package, &class.name.text);
         self.env.set_class(&class_name);
         // Register every generic param so `T` in declared types lowers
         // to `Ty::Param("T")` rather than `Unknown`.
@@ -2030,8 +2055,8 @@ impl<'a> Checker<'a> {
         }
         let saved = self.current_return.take();
         self.current_return = None; // constructors don't return values
-        // Constructors are never async (§18.1.1) — `await` in a ctor body is
-        // therefore an error. Force the async context off across the body.
+                                    // Constructors are never async (§18.1.1) — `await` in a ctor body is
+                                    // therefore an error. Force the async context off across the body.
         let saved_async = self.in_async;
         self.in_async = false;
         self.check_block(&ctor.body);
@@ -2164,7 +2189,11 @@ impl<'a> Checker<'a> {
 
     /// [`Self::check_type_visibility`] for a bare name — `new X(…)` carries a
     /// [`QualifiedName`] rather than a full type reference.
-    fn check_type_name_visibility(&mut self, name: &juxc_ast::QualifiedName, span: juxc_source::Span) {
+    fn check_type_name_visibility(
+        &mut self,
+        name: &juxc_ast::QualifiedName,
+        span: juxc_source::Span,
+    ) {
         if name.segments.len() != 1 {
             return;
         }
@@ -2278,7 +2307,14 @@ impl<'a> Checker<'a> {
         // emitted helpers rather than symbol-table types. These never appear in
         // `symbols.*`, so `ty_from_ref` can't vouch for them.
         const INTRINSIC: &[&str] = &[
-            "void", "var", "Self", "observer", "Channel", "AsyncMutex", "Stream", "Task",
+            "void",
+            "var",
+            "Self",
+            "observer",
+            "Channel",
+            "AsyncMutex",
+            "Stream",
+            "Task",
         ];
         if INTRINSIC.contains(&bare) || bare == juxc_ast::TUPLE_SENTINEL {
             return false;
@@ -2394,16 +2430,14 @@ impl<'a> Checker<'a> {
             return;
         }
         // The type must name a user-declared generic class.
-        let Some(seg) = tref.name.segments.last() else { return };
+        let Some(seg) = tref.name.segments.last() else {
+            return;
+        };
         let bare = seg.text.as_str();
-        let is_user_generic_class = self
-            .symbols
-            .classes
-            .iter()
-            .any(|(k, c)| {
-                !c.generic_params.is_empty()
-                    && (k == bare || k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
-            });
+        let is_user_generic_class = self.symbols.classes.iter().any(|(k, c)| {
+            !c.generic_params.is_empty()
+                && (k == bare || k.rsplit('.').next().unwrap_or(k.as_str()) == bare)
+        });
         if !is_user_generic_class {
             return;
         }
@@ -2496,9 +2530,7 @@ impl<'a> Checker<'a> {
         self.diagnostics.push(
             Diagnostic::error(
                 code::Code::E0442_UnrelatedCast,
-                format!(
-                    "`{src_ty} => {target_ty}` can never be true: the types are unrelated",
-                ),
+                format!("`{src_ty} => {target_ty}` can never be true: the types are unrelated",),
             )
             .with_span(t.span),
         );
@@ -2556,7 +2588,9 @@ impl<'a> Checker<'a> {
     /// resolution in tycheck today (Phase E substitution only fires
     /// on the receiver's own class) and keeps the diagnostic precise.
     fn check_op_not_deleted(&mut self, receiver_ty: &Ty, kind: OperatorKind, span: Span) {
-        let Ty::User { name, .. } = receiver_ty else { return };
+        let Ty::User { name, .. } = receiver_ty else {
+            return;
+        };
         let deleted = self
             .symbols
             .classes
@@ -2623,10 +2657,7 @@ impl<'a> Checker<'a> {
     /// `= delete;` operators have no body and are skipped inside
     /// [`Self::check_operator`].
     fn check_record(&mut self, record: &RecordDecl) {
-        let name = crate::symbol_table::make_fqn(
-            &self.env.current_package,
-            &record.name.text,
-        );
+        let name = crate::symbol_table::make_fqn(&self.env.current_package, &record.name.text);
         self.env.set_class(&name);
         for tp in &record.generic_params {
             self.env.add_generic_param(&tp.name.text);
@@ -2679,7 +2710,9 @@ impl<'a> Checker<'a> {
                 // If both a declared type and an initializer are
                 // present, the two must be compatible. Otherwise the
                 // present one wins.
-                let declared = v.ty.as_ref().map(|t| ty_from_ref(t, &self.env, self.symbols));
+                let declared =
+                    v.ty.as_ref()
+                        .map(|t| ty_from_ref(t, &self.env, self.symbols));
                 let inferred = v.init.as_ref().map(|e| {
                     // Walk the initializer for nested checks (e.g. a
                     // call inside the RHS) before reading its type.
@@ -2864,30 +2897,26 @@ impl<'a> Checker<'a> {
             Stmt::If(if_stmt) => {
                 // Type-test smart-cast: `if (x => Dog d)` allows the binder and
                 // introduces `d: Dog` into the then-branch only (§T.6.2).
-                let smartcast: Option<(String, Ty)> =
-                    if let Expr::TypeTest(t) = &if_stmt.condition {
-                        self.check_typetest(t, true);
-                        t.binder.as_ref().map(|b| {
-                            (
-                                b.text.clone(),
-                                ty_from_ref(&t.ty, &self.env, self.symbols),
+                let smartcast: Option<(String, Ty)> = if let Expr::TypeTest(t) = &if_stmt.condition
+                {
+                    self.check_typetest(t, true);
+                    t.binder
+                        .as_ref()
+                        .map(|b| (b.text.clone(), ty_from_ref(&t.ty, &self.env, self.symbols)))
+                } else {
+                    self.check_expr(&if_stmt.condition);
+                    let cond_ty = infer_expr(&if_stmt.condition, &self.env, self.symbols);
+                    if !is_boolish(&cond_ty) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0410_TypeMismatch,
+                                format!("expected bool condition, found {cond_ty}"),
                             )
-                        })
-                    } else {
-                        self.check_expr(&if_stmt.condition);
-                        let cond_ty =
-                            infer_expr(&if_stmt.condition, &self.env, self.symbols);
-                        if !is_boolish(&cond_ty) {
-                            self.diagnostics.push(
-                                Diagnostic::error(
-                                    code::Code::E0410_TypeMismatch,
-                                    format!("expected bool condition, found {cond_ty}"),
-                                )
-                                .with_span(expr_span(&if_stmt.condition)),
-                            );
-                        }
-                        None
-                    };
+                            .with_span(expr_span(&if_stmt.condition)),
+                        );
+                    }
+                    None
+                };
                 self.env.push_scope();
                 if let Some((name, ty)) = &smartcast {
                     self.env.declare(name, ty.clone());
@@ -3012,9 +3041,9 @@ impl<'a> Checker<'a> {
                         // element type — `iterator()`'s Iterator<T>
                         // argument, or the iterator's own `next()`
                         // return with the `?` peeled.
-                        Ty::User { name, .. } => self
-                            .iterable_element_type(name)
-                            .unwrap_or(Ty::Unknown),
+                        Ty::User { name, .. } => {
+                            self.iterable_element_type(name).unwrap_or(Ty::Unknown)
+                        }
                         _ => Ty::Unknown,
                     }
                 };
@@ -3107,7 +3136,9 @@ impl<'a> Checker<'a> {
                         if declared.contains(&name) {
                             continue;
                         }
-                        let Some(ty) = self.env.lookup(&name) else { continue };
+                        let Some(ty) = self.env.lookup(&name) else {
+                            continue;
+                        };
                         if matches!(ty, Ty::Primitive(_) | Ty::String) {
                             self.diagnostics.push(
                                 Diagnostic::error(
@@ -3142,8 +3173,7 @@ impl<'a> Checker<'a> {
                     // All listed types of the clause — one for the
                     // ordinary form, several for a multi-catch
                     // (`catch (E1 | E2 e)`, §X.3.6).
-                    let mut tys: Vec<Ty> =
-                        vec![ty_from_ref(&c.ty, &self.env, self.symbols)];
+                    let mut tys: Vec<Ty> = vec![ty_from_ref(&c.ty, &self.env, self.symbols)];
                     for alt in &c.alt_tys {
                         tys.push(ty_from_ref(alt, &self.env, self.symbols));
                     }
@@ -3250,26 +3280,26 @@ impl<'a> Checker<'a> {
             ElseBranch::If(if_stmt) => {
                 // Same type-test smart-cast handling as a top-level `if`, so
                 // `else if (x => Dog d)` binds `d` in its then-branch.
-                let smartcast: Option<(String, Ty)> =
-                    if let Expr::TypeTest(t) = &if_stmt.condition {
-                        self.check_typetest(t, true);
-                        t.binder.as_ref().map(|b| {
-                            (b.text.clone(), ty_from_ref(&t.ty, &self.env, self.symbols))
-                        })
-                    } else {
-                        self.check_expr(&if_stmt.condition);
-                        let cond_ty = infer_expr(&if_stmt.condition, &self.env, self.symbols);
-                        if !is_boolish(&cond_ty) {
-                            self.diagnostics.push(
-                                Diagnostic::error(
-                                    code::Code::E0410_TypeMismatch,
-                                    format!("expected bool condition, found {cond_ty}"),
-                                )
-                                .with_span(expr_span(&if_stmt.condition)),
-                            );
-                        }
-                        None
-                    };
+                let smartcast: Option<(String, Ty)> = if let Expr::TypeTest(t) = &if_stmt.condition
+                {
+                    self.check_typetest(t, true);
+                    t.binder
+                        .as_ref()
+                        .map(|b| (b.text.clone(), ty_from_ref(&t.ty, &self.env, self.symbols)))
+                } else {
+                    self.check_expr(&if_stmt.condition);
+                    let cond_ty = infer_expr(&if_stmt.condition, &self.env, self.symbols);
+                    if !is_boolish(&cond_ty) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0410_TypeMismatch,
+                                format!("expected bool condition, found {cond_ty}"),
+                            )
+                            .with_span(expr_span(&if_stmt.condition)),
+                        );
+                    }
+                    None
+                };
                 self.env.push_scope();
                 if let Some((name, ty)) = &smartcast {
                     self.env.declare(name, ty.clone());
@@ -3737,9 +3767,7 @@ impl<'a> Checker<'a> {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0410_TypeMismatch,
-                            format!(
-                                "ternary condition must be bool, found {cond_ty}",
-                            ),
+                            format!("ternary condition must be bool, found {cond_ty}",),
                         )
                         .with_span(expr_span(&t.condition)),
                     );
@@ -3863,11 +3891,12 @@ impl<'a> Checker<'a> {
         // Resolve the declaring class: static (`Class.Prop`) or
         // instance (`obj.Prop`).
         let class_fqn: Option<String> = if let Expr::Path(qn) = f.object.as_ref() {
-            crate::infer::path_resolves_to_class(qn, &self.env, self.symbols)
-                .or_else(|| match infer_expr(&f.object, &self.env, self.symbols) {
+            crate::infer::path_resolves_to_class(qn, &self.env, self.symbols).or_else(|| {
+                match infer_expr(&f.object, &self.env, self.symbols) {
                     Ty::User { name, .. } => self.resolve_class_fqn(&name),
                     _ => None,
-                })
+                }
+            })
         } else {
             match infer_expr(&f.object, &self.env, self.symbols) {
                 Ty::User { name, .. } => self.resolve_class_fqn(&name),
@@ -3941,11 +3970,7 @@ impl<'a> Checker<'a> {
     /// `declaring_class` is permitted from the current accessor
     /// context. Mirrors the allow-rules in [`Self::check_visibility`]
     /// without emitting a diagnostic.
-    fn write_visibility_allowed(
-        &self,
-        vis: juxc_ast::Visibility,
-        declaring_class: &str,
-    ) -> bool {
+    fn write_visibility_allowed(&self, vis: juxc_ast::Visibility, declaring_class: &str) -> bool {
         use juxc_ast::Visibility;
         let accessor = self.env.current_class.as_deref();
         // The same ladder [`Self::check_visibility`] applies to reads, so an
@@ -4090,9 +4115,13 @@ impl<'a> Checker<'a> {
     /// target as a read as well produced a second, vaguer error for one
     /// mistake.
     fn assign_target_is_property(&self, target: &juxc_ast::Expr) -> bool {
-        let juxc_ast::Expr::Field(f) = target else { return false };
+        let juxc_ast::Expr::Field(f) = target else {
+            return false;
+        };
         let recv = infer_expr(&f.object, &self.env, self.symbols);
-        let Ty::User { name, .. } = &recv else { return false };
+        let Ty::User { name, .. } = &recv else {
+            return false;
+        };
         self.symbols
             .lookup_method(name, &f.field.text)
             .is_some_and(|(m, _)| m.is_property)
@@ -4124,11 +4153,12 @@ impl<'a> Checker<'a> {
                 // static (`ClassName.x`) — the same way property-write
                 // resolution does, so a qualified static-final write is caught.
                 let class_fqn = if let Expr::Path(qn) = f.object.as_ref() {
-                    crate::infer::path_resolves_to_class(qn, &self.env, self.symbols)
-                        .or_else(|| match infer_expr(&f.object, &self.env, self.symbols) {
+                    crate::infer::path_resolves_to_class(qn, &self.env, self.symbols).or_else(
+                        || match infer_expr(&f.object, &self.env, self.symbols) {
                             Ty::User { name, .. } => self.resolve_class_fqn(&name),
                             _ => None,
-                        })
+                        },
+                    )
                 } else {
                     match infer_expr(&f.object, &self.env, self.symbols) {
                         Ty::User { name, .. } => self.resolve_class_fqn(&name),
@@ -4308,7 +4338,9 @@ impl<'a> Checker<'a> {
         if self.same_package_as(declaring_class) {
             return;
         }
-        let Some(accessor) = self.env.current_class.clone() else { return };
+        let Some(accessor) = self.env.current_class.clone() else {
+            return;
+        };
         // Only inside a subclass. Anywhere else the ordinary ladder has
         // already rejected the access, and reporting twice helps nobody.
         let in_subclass = accessor != declaring_class
@@ -4438,8 +4470,14 @@ impl<'a> Checker<'a> {
         // variant) and sealed classes (every permitted subclass).
         // Resolve to one of them, or bail.
         enum SealedKind<'a> {
-            Enum { name: &'a str, variants: Vec<String> },
-            Class { name: &'a str, permits: Vec<String> },
+            Enum {
+                name: &'a str,
+                variants: Vec<String>,
+            },
+            Class {
+                name: &'a str,
+                permits: Vec<String>,
+            },
         }
         let scrut_name = match &scrut_ty {
             Ty::User { name, .. } => name.as_str(),
@@ -4448,8 +4486,9 @@ impl<'a> Checker<'a> {
         // FQN-aware lookup (exact key, then unique suffix) so a
         // locally-inferred bare enum name still gets exhaustiveness
         // (and rustc's E0004 never leaks for it).
-        let kind = if let Some((_, e)) =
-            self.symbols.lookup_enum_in(scrut_name, &self.env.current_package.join("."))
+        let kind = if let Some((_, e)) = self
+            .symbols
+            .lookup_enum_in(scrut_name, &self.env.current_package.join("."))
         {
             SealedKind::Enum {
                 name: scrut_name,
@@ -4497,8 +4536,7 @@ impl<'a> Checker<'a> {
             SealedKind::Enum { name, variants } => ("enum", variants.clone(), *name),
             SealedKind::Class { name, permits } => ("sealed class", permits.clone(), *name),
         };
-        let missing: Vec<String> =
-            all.into_iter().filter(|v| !covered.contains(v)).collect();
+        let missing: Vec<String> = all.into_iter().filter(|v| !covered.contains(v)).collect();
         if missing.is_empty() {
             return;
         }
@@ -4524,11 +4562,9 @@ impl<'a> Checker<'a> {
         // so the user isn't told "no field `x`" when there IS one
         // but it lives on instances.
         if let Expr::Path(qn) = f.object.as_ref() {
-            if let Some(class_fqn) = crate::infer::path_resolves_to_class(
-                qn,
-                &self.env,
-                self.symbols,
-            ) {
+            if let Some(class_fqn) =
+                crate::infer::path_resolves_to_class(qn, &self.env, self.symbols)
+            {
                 let field_name = f.field.text.as_str();
                 if let Some(field) = self
                     .symbols
@@ -4538,13 +4574,7 @@ impl<'a> Checker<'a> {
                 {
                     if field.is_static {
                         let vis = field.visibility;
-                        self.check_visibility(
-                            vis,
-                            &class_fqn,
-                            field_name,
-                            "static field",
-                            f.span,
-                        );
+                        self.check_visibility(vis, &class_fqn, field_name, "static field", f.span);
                     } else {
                         self.diagnostics.push(
                             Diagnostic::error(
@@ -4593,11 +4623,9 @@ impl<'a> Checker<'a> {
             // type name in expression position just like a class
             // static. We resolve them the same way and emit a
             // clean E0412 when the field doesn't exist.
-            if let Some(iface_fqn) = crate::infer::path_resolves_to_interface(
-                qn,
-                &self.env,
-                self.symbols,
-            ) {
+            if let Some(iface_fqn) =
+                crate::infer::path_resolves_to_interface(qn, &self.env, self.symbols)
+            {
                 let field_name = f.field.text.as_str();
                 if let Some(_field) = self
                     .symbols
@@ -4610,9 +4638,7 @@ impl<'a> Checker<'a> {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0412_UnresolvedField,
-                        format!(
-                            "no static field `{field_name}` on interface `{iface_fqn}`",
-                        ),
+                        format!("no static field `{field_name}` on interface `{iface_fqn}`",),
                     )
                     .with_span(f.span),
                 );
@@ -4683,23 +4709,18 @@ impl<'a> Checker<'a> {
         match &receiver_ty {
             // Arrays: allow .length and friends silently.
             Ty::Array { .. } => {
-                if BUILTIN_ARRAY_FIELDS.contains(&field_name) {
-                }
+                if BUILTIN_ARRAY_FIELDS.contains(&field_name) {}
                 // Unknown field on array — stay quiet today. A future
                 // pass may tighten this.
             }
             // Strings: same allowlist treatment.
-            Ty::String => {
-                if BUILTIN_STRING_FIELDS.contains(&field_name) {
-                }
-            }
+            Ty::String => if BUILTIN_STRING_FIELDS.contains(&field_name) {},
             // User types: walk the inheritance chain looking for the
             // field. Emit E0412 if not found anywhere. When the field
             // is found, verify visibility against the current
             // accessor context.
             Ty::User { name, .. } => {
-                if let Some((field, declaring_class)) =
-                    self.symbols.lookup_field(name, field_name)
+                if let Some((field, declaring_class)) = self.symbols.lookup_field(name, field_name)
                 {
                     // **Field access through a polymorphic-base reference.**
                     // The receiver lowers to a `Rc<dyn …Kind>` trait object
@@ -4764,13 +4785,7 @@ impl<'a> Checker<'a> {
                     }
                     let vis = field.visibility;
                     let declaring = declaring_class.to_string();
-                    self.check_visibility(
-                        vis,
-                        &declaring,
-                        field_name,
-                        "field",
-                        f.span,
-                    );
+                    self.check_visibility(vis, &declaring, field_name, "field", f.span);
                     // JLS 6.6.2.1 — across a package boundary a subclass may
                     // only reach an inherited `protected` member through a
                     // qualifier typed as itself.
@@ -4839,9 +4854,7 @@ impl<'a> Checker<'a> {
                             c.properties
                                 .iter()
                                 .filter(|(_, sig)| {
-                                    !sig.is_static
-                                        && !sig.is_read_only
-                                        && !sig.is_init_only
+                                    !sig.is_static && !sig.is_read_only && !sig.is_init_only
                                 })
                                 .map(|(pname, _)| pname.clone())
                                 .collect()
@@ -5183,7 +5196,9 @@ impl<'a> Checker<'a> {
     }
 
     fn check_spawn_captures(&mut self, args: &[Expr]) {
-        let Some(Expr::Lambda(l)) = args.first() else { return };
+        let Some(Expr::Lambda(l)) = args.first() else {
+            return;
+        };
         let mut names: Vec<(String, Span)> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut sink = |qn: &juxc_ast::QualifiedName| {
@@ -5234,7 +5249,9 @@ impl<'a> Checker<'a> {
             {
                 continue;
             }
-            let Some(ty) = self.env.lookup(&name) else { continue };
+            let Some(ty) = self.env.lookup(&name) else {
+                continue;
+            };
             if !is_object_ty(ty) {
                 continue;
             }
@@ -5242,7 +5259,9 @@ impl<'a> Checker<'a> {
             // the backend's `worker` pass upgrades it instead of refusing. Only
             // a class holding something that cannot come along is an error, and
             // the message names that member.
-            let Some(class_bare) = object_class_name(ty) else { continue };
+            let Some(class_bare) = object_class_name(ty) else {
+                continue;
+            };
             if let Some(why) = self.symbols.worker_share_blocker(&class_bare) {
                 self.diagnostics.push(
                     Diagnostic::error(
@@ -5268,11 +5287,12 @@ impl<'a> Checker<'a> {
         // Same class-resolution ladder as the E0970/E0972 write checks:
         // a static `Class.Prop` path, else the receiver's inferred type.
         let class_fqn: Option<String> = if let Expr::Path(qn) = f.object.as_ref() {
-            crate::infer::path_resolves_to_class(qn, &self.env, self.symbols)
-                .or_else(|| match infer_expr(&f.object, &self.env, self.symbols) {
+            crate::infer::path_resolves_to_class(qn, &self.env, self.symbols).or_else(|| {
+                match infer_expr(&f.object, &self.env, self.symbols) {
                     Ty::User { name, .. } => self.resolve_class_fqn(&name),
                     _ => None,
-                })
+                }
+            })
         } else {
             match infer_expr(&f.object, &self.env, self.symbols) {
                 Ty::User { name, .. } => self.resolve_class_fqn(&name),
@@ -5318,13 +5338,10 @@ impl<'a> Checker<'a> {
         // surfaces at the bind site instead of leaking a rustc error
         // from the emitted binding closure.
         if let Expr::Field(opf) = c.callee.as_ref() {
-            if matches!(opf.field.text.as_str(), "bind" | "bindBidirectional")
-                && c.args.len() == 1
+            if matches!(opf.field.text.as_str(), "bind" | "bindBidirectional") && c.args.len() == 1
             {
                 if let Some((t_ty, t_label)) = self.property_access_ty(&opf.object) {
-                    if let Some((s_ty, s_label)) =
-                        self.property_access_ty(&c.args[0])
-                    {
+                    if let Some((s_ty, s_label)) = self.property_access_ty(&c.args[0]) {
                         if t_ty != s_ty {
                             self.diagnostics.push(
                                 Diagnostic::error(
@@ -5393,8 +5410,12 @@ impl<'a> Checker<'a> {
                     }
                     return;
                 };
-                let Some(class_name) = self.env.current_class.clone() else { return };
-                let Some(class) = self.symbols.classes.get(&class_name) else { return };
+                let Some(class_name) = self.env.current_class.clone() else {
+                    return;
+                };
+                let Some(class) = self.symbols.classes.get(&class_name) else {
+                    return;
+                };
                 let selected = self.select_ctor_typed(&class.constructors, &c.args);
                 match selected {
                     Some(k) if k == current_idx => {
@@ -5557,10 +5578,8 @@ impl<'a> Checker<'a> {
                     // A C-variadic foreign fn (`printf(String, ...)`) accepts
                     // any number of trailing args beyond its fixed params.
                     let callee_c_variadic = fn_sig.is_c_variadic;
-                    let callee_async = matches!(
-                        fn_sig.return_type,
-                        juxc_ast::ReturnType::AsyncType(_),
-                    );
+                    let callee_async =
+                        matches!(fn_sig.return_type, juxc_ast::ReturnType::AsyncType(_),);
                     // §X.1.3 propagation: the callee's declared
                     // checked throws raise here.
                     let callee_throws = fn_sig.throws.clone();
@@ -5584,33 +5603,24 @@ impl<'a> Checker<'a> {
                     // type args from the argument types so that
                     // per-arg checks below can substitute through the
                     // expected types.
-                    let (subst_params, subst_args): (Vec<TypeParam>, Vec<Ty>) =
-                        if generic_params.is_empty() {
-                            (Vec::new(), Vec::new())
-                        } else {
-                            let param_tys: Vec<&TypeRef> =
-                                params.iter().map(|p| &p.ty).collect();
-                            let arg_tys: Vec<Ty> = c
-                                .args
-                                .iter()
-                                .map(|a| infer_expr(a, &self.env, self.symbols))
-                                .collect();
-                            let inferred = infer_generic_args(
-                                &generic_params,
-                                &param_tys,
-                                &arg_tys,
-                            );
-                            let args: Vec<Ty> = generic_params
-                                .iter()
-                                .map(|p| {
-                                    inferred
-                                        .get(&p.name.text)
-                                        .cloned()
-                                        .unwrap_or(Ty::Unknown)
-                                })
-                                .collect();
-                            (generic_params, args)
-                        };
+                    let (subst_params, subst_args): (Vec<TypeParam>, Vec<Ty>) = if generic_params
+                        .is_empty()
+                    {
+                        (Vec::new(), Vec::new())
+                    } else {
+                        let param_tys: Vec<&TypeRef> = params.iter().map(|p| &p.ty).collect();
+                        let arg_tys: Vec<Ty> = c
+                            .args
+                            .iter()
+                            .map(|a| infer_expr(a, &self.env, self.symbols))
+                            .collect();
+                        let inferred = infer_generic_args(&generic_params, &param_tys, &arg_tys);
+                        let args: Vec<Ty> = generic_params
+                            .iter()
+                            .map(|p| inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown))
+                            .collect();
+                        (generic_params, args)
+                    };
                     // §O.5 (E0941): the instantiation must satisfy the
                     // callee's where-constraints.
                     self.enforce_where_constraints(
@@ -5682,8 +5692,7 @@ impl<'a> Checker<'a> {
                 // otherwise trip.
                 if method_name == "get" && c.args.is_empty() {
                     if let Expr::Field(inner) = field.object.as_ref() {
-                        let inner_recv =
-                            infer_expr(&inner.object, &self.env, self.symbols);
+                        let inner_recv = infer_expr(&inner.object, &self.env, self.symbols);
                         if let Ty::User { name, .. } = &inner_recv {
                             if self
                                 .symbols
@@ -5788,11 +5797,9 @@ impl<'a> Checker<'a> {
                 // before treating the object as a value. Mirrors
                 // the static-field path in `check_field_access`.
                 if let Expr::Path(qn) = field.object.as_ref() {
-                    if let Some(class_fqn) = crate::infer::path_resolves_to_class(
-                        qn,
-                        &self.env,
-                        self.symbols,
-                    ) {
+                    if let Some(class_fqn) =
+                        crate::infer::path_resolves_to_class(qn, &self.env, self.symbols)
+                    {
                         let class_method = match crate::infer::select_method_overload_typed(
                             self.symbols,
                             &class_fqn,
@@ -5821,11 +5828,7 @@ impl<'a> Checker<'a> {
                                     "static method",
                                     c.span,
                                 );
-                                self.require_unsafe_context(
-                                    method.is_unsafe,
-                                    method_name,
-                                    c.span,
-                                );
+                                self.require_unsafe_context(method.is_unsafe, method_name, c.span);
                                 // §18.1.2: async static call must be
                                 // awaited (E0705).
                                 let static_is_async = matches!(
@@ -5868,9 +5871,7 @@ impl<'a> Checker<'a> {
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0413_UnresolvedMethod,
-                                format!(
-                                    "no static method `{method_name}` on class `{class_fqn}`",
-                                ),
+                                format!("no static method `{method_name}` on class `{class_fqn}`",),
                             )
                             .with_span(c.span),
                         );
@@ -5885,11 +5886,9 @@ impl<'a> Checker<'a> {
                     // abstract method called this way is an error
                     // (E0427) so users don't paper over the
                     // wrong-shape issue and silently miscompile.
-                    if let Some(iface_fqn) = crate::infer::path_resolves_to_interface(
-                        qn,
-                        &self.env,
-                        self.symbols,
-                    ) {
+                    if let Some(iface_fqn) =
+                        crate::infer::path_resolves_to_interface(qn, &self.env, self.symbols)
+                    {
                         let iface_method = self
                             .symbols
                             .interfaces
@@ -5987,9 +5986,7 @@ impl<'a> Checker<'a> {
                         }
                         return;
                     }
-                    if bare == "Channel"
-                        && matches!(method_name, "send" | "receive" | "close")
-                    {
+                    if bare == "Channel" && matches!(method_name, "send" | "receive" | "close") {
                         for arg in &c.args {
                             self.check_expr(arg);
                         }
@@ -6053,10 +6050,8 @@ impl<'a> Checker<'a> {
                     self.record_callee_throws(&method_throws, c.span);
                     let method_is_static = method.is_static;
                     let method_is_unsafe = method.is_unsafe;
-                    let method_is_async = matches!(
-                        method.return_type,
-                        juxc_ast::ReturnType::AsyncType(_),
-                    );
+                    let method_is_async =
+                        matches!(method.return_type, juxc_ast::ReturnType::AsyncType(_),);
                     // Clone the declaring-class name into an owned
                     // String so it outlives the immutable borrow on
                     // `self.symbols` we'd otherwise need.
@@ -6087,13 +6082,7 @@ impl<'a> Checker<'a> {
                     // run after cloning out the fields we need so
                     // the symbol-table borrow ends before the
                     // diagnostic-pushing helper grabs `&mut self`.
-                    self.check_visibility(
-                        method_vis,
-                        &owner_name,
-                        method_name,
-                        "method",
-                        c.span,
-                    );
+                    self.check_visibility(method_vis, &owner_name, method_name, "method", c.span);
                     self.require_unsafe_context(method_is_unsafe, method_name, c.span);
                     // §18.1.2: an async method call must be awaited (E0705).
                     self.flag_unawaited_async_call(method_name, method_is_async, c.span);
@@ -6128,8 +6117,7 @@ impl<'a> Checker<'a> {
                     // params were composed in first).
                     let method_n = method_generic_params.len();
                     if method_n > 0 && subst_args.len() >= method_n {
-                        let tail_args =
-                            subst_args[subst_args.len() - method_n..].to_vec();
+                        let tail_args = subst_args[subst_args.len() - method_n..].to_vec();
                         self.enforce_generic_bounds(
                             &method_generic_params,
                             &tail_args,
@@ -6214,8 +6202,7 @@ impl<'a> Checker<'a> {
                         let components = record.components.clone();
                         for (i, arg) in c.args.iter().enumerate() {
                             self.check_expr(arg);
-                            let Some(Some(arg_name)) =
-                                c.arg_names.get(i).map(|n| n.as_ref())
+                            let Some(Some(arg_name)) = c.arg_names.get(i).map(|n| n.as_ref())
                             else {
                                 self.diagnostics.push(
                                     Diagnostic::error(
@@ -6403,12 +6390,7 @@ impl<'a> Checker<'a> {
             let resolved_args: Vec<Ty> = if !explicit_generic_args.is_empty() {
                 explicit_generic_args.clone()
             } else {
-                crate::infer::infer_ctor_generic_args(
-                    &class_name,
-                    &n.args,
-                    &self.env,
-                    self.symbols,
-                )
+                crate::infer::infer_ctor_generic_args(&class_name, &n.args, &self.env, self.symbols)
             };
             self.enforce_generic_bounds(
                 &class_generic_params,
@@ -6476,13 +6458,7 @@ impl<'a> Checker<'a> {
             // Visibility check on the constructor itself (E0414 /
             // E0415 / E0416). A synthetic default constructor on a
             // class with no declared ctors is treated as `public`.
-            self.check_visibility(
-                ctor_vis,
-                &class_name,
-                "constructor",
-                "constructor",
-                n.span,
-            );
+            self.check_visibility(ctor_vis, &class_name, "constructor", "constructor", n.span);
             let subst_args = self.resolve_ctor_generic_args(
                 &subst_params,
                 &explicit_generic_args,
@@ -6603,23 +6579,26 @@ impl<'a> Checker<'a> {
             self.check_expr(arg);
         }
 
-        let Some(child_name) = self.env.current_class.clone() else { return };
-        let Some(child) = self.symbols.classes.get(&child_name) else { return };
-        let Some(extends) = child.extends.as_ref() else { return };
+        let Some(child_name) = self.env.current_class.clone() else {
+            return;
+        };
+        let Some(child) = self.symbols.classes.get(&child_name) else {
+            return;
+        };
+        let Some(extends) = child.extends.as_ref() else {
+            return;
+        };
         // Prefer the resolved-at-build-time FQN so cross-package
         // `super(...)` calls find the parent class. Fall back to
         // the bare last segment for single-unit / no-package builds.
-        let parent_name: String = child
-            .extends_fqn
-            .clone()
-            .unwrap_or_else(|| {
-                extends
-                    .name
-                    .segments
-                    .last()
-                    .map(|s| s.text.clone())
-                    .unwrap_or_default()
-            });
+        let parent_name: String = child.extends_fqn.clone().unwrap_or_else(|| {
+            extends
+                .name
+                .segments
+                .last()
+                .map(|s| s.text.clone())
+                .unwrap_or_default()
+        });
 
         // Lower the extends-clause generic args. `extends Animal<int>`
         // gives us [Int]; `extends Animal` gives us []. Empty disables
@@ -6633,7 +6612,9 @@ impl<'a> Checker<'a> {
             })
             .collect();
 
-        let Some(parent) = self.symbols.classes.get(&parent_name) else { return };
+        let Some(parent) = self.symbols.classes.get(&parent_name) else {
+            return;
+        };
         // Parent-constructor overload selection — same count rule as
         // `new` sites; the backend reads the recorded index when it
         // builds `__parent: Parent::new__K(args)`.
@@ -6742,12 +6723,9 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|a| infer_expr(a, &self.env, self.symbols))
             .collect();
-        let inferred =
-            infer_generic_args(method_generic_params, &param_tys, &arg_tys);
+        let inferred = infer_generic_args(method_generic_params, &param_tys, &arg_tys);
         for p in method_generic_params {
-            subst_args.push(
-                inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown),
-            );
+            subst_args.push(inferred.get(&p.name.text).cloned().unwrap_or(Ty::Unknown));
         }
         subst_params.extend(method_generic_params.iter().cloned());
     }
@@ -6897,8 +6875,7 @@ impl<'a> Checker<'a> {
         // no plan needed beyond defaults for the fixed prefix.
         let passthrough = variadic.len() == 1 && {
             let found = infer_expr(&args[fixed], &self.env, self.symbols);
-            compatible(&va_array_ty, &found, self.symbols)
-                && matches!(found, Ty::Array { .. })
+            compatible(&va_array_ty, &found, self.symbols) && matches!(found, Ty::Array { .. })
         };
         if !passthrough {
             for &i in &variadic {
@@ -6927,8 +6904,7 @@ impl<'a> Checker<'a> {
         // Record the plan. Skipped only for the no-op shape: full
         // fixed prefix supplied AND a passthrough array (the call is
         // already plain positional).
-        let fixed_complete = args.len() >= fixed
-            && params[..fixed.min(args.len())].len() == fixed;
+        let fixed_complete = args.len() >= fixed && params[..fixed.min(args.len())].len() == fixed;
         if passthrough && fixed_complete {
             return;
         }
@@ -6945,7 +6921,10 @@ impl<'a> Checker<'a> {
         if passthrough {
             plan.push(crate::ArgSource::Explicit(fixed));
         } else {
-            plan.push(crate::ArgSource::Variadic { element_type, indices: variadic });
+            plan.push(crate::ArgSource::Variadic {
+                element_type,
+                indices: variadic,
+            });
         }
         self.call_expansions.insert(call_span, plan);
     }
@@ -7134,7 +7113,9 @@ impl<'a> Checker<'a> {
                 .map(|(j, p)| match param_filled[j] {
                     Some(i) => crate::ArgSource::Explicit(i),
                     None => crate::ArgSource::Default(
-                        p.default.clone().expect("missing-default slots reported above"),
+                        p.default
+                            .clone()
+                            .expect("missing-default slots reported above"),
                     ),
                 })
                 .collect();
@@ -7142,7 +7123,9 @@ impl<'a> Checker<'a> {
         }
         for (i, arg) in args.iter().enumerate() {
             self.check_expr(arg);
-            let Some(param) = arg_to_param[i].and_then(|j| params.get(j)) else { continue };
+            let Some(param) = arg_to_param[i].and_then(|j| params.get(j)) else {
+                continue;
+            };
             // **`out` argument rules (§M.4).** An `out` arg must line up with an
             // `out` parameter and vice versa (E0943), and the arg must be an
             // assignable place (E0942). The type check below (E0410) handles the
@@ -7221,7 +7204,6 @@ impl<'a> Checker<'a> {
             }
         }
     }
-
 }
 
 // ============================================================================
@@ -7247,7 +7229,9 @@ fn foreign_arg_bridges(
     symbols: &SymbolTable,
 ) -> bool {
     // External (foreign) callee only — resolve by exact key, else by bare name.
-    let Some(cls) = declaring_class else { return false };
+    let Some(cls) = declaring_class else {
+        return false;
+    };
     let is_external = symbols
         .classes
         .get(cls)
@@ -7273,7 +7257,9 @@ fn foreign_arg_bridges(
     };
     match found {
         // A Jux array argument, element-compatible.
-        Ty::Array { element: found_el, .. } => compatible(element, found_el, symbols),
+        Ty::Array {
+            element: found_el, ..
+        } => compatible(element, found_el, symbols),
         // The `rust.std` owned `Vec<E>`, element-compatible.
         Ty::User { name, generic_args } if generic_args.len() == 1 => {
             let bare = name.rsplit('.').next().unwrap_or(name);
@@ -7367,7 +7353,12 @@ fn ffi_type_ok(t: &juxc_ast::TypeRef) -> bool {
     if t.ptr_depth > 0 {
         return true;
     }
-    let name = t.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+    let name = t
+        .name
+        .segments
+        .last()
+        .map(|s| s.text.as_str())
+        .unwrap_or("");
     // `String` (and `String?`) marshal to/from C `const char*`.
     if name == "String" {
         return true;
@@ -7665,9 +7656,7 @@ fn collect_returns_in_stmt(stmt: &Stmt, out: &mut Vec<Span>) {
 fn pattern_introduces_bindings(p: &Pattern) -> bool {
     match p {
         Pattern::Bind(_) | Pattern::TypeBind { .. } => true,
-        Pattern::EnumVariant { args, .. } => {
-            args.iter().any(pattern_introduces_bindings)
-        }
+        Pattern::EnumVariant { args, .. } => args.iter().any(pattern_introduces_bindings),
         Pattern::Or(alts, _) => alts.iter().any(pattern_introduces_bindings),
         Pattern::Wildcard(_) | Pattern::Literal(_, _) | Pattern::Range { .. } => false,
     }
@@ -7699,10 +7688,7 @@ fn collect_variants_covered(
     // but the pattern usually quotes only the bare class name
     // (`Item.Book`). Compare against the last segment so a
     // cross-package switch still matches its variants.
-    let bare = enum_name
-        .rsplit('.')
-        .next()
-        .unwrap_or(enum_name);
+    let bare = enum_name.rsplit('.').next().unwrap_or(enum_name);
     // Or-pattern coverage is the union of its alternatives
     // (`case A | B ->` covers both A and B).
     if let Pattern::Or(alts, _) = pattern {
@@ -7714,9 +7700,7 @@ fn collect_variants_covered(
     if let Pattern::EnumVariant { path, .. } = pattern {
         match path.segments.len() {
             // `case EnumName.Variant(...)` — qualified form.
-            2 if path.segments[0].text == bare
-                || path.segments[0].text == enum_name =>
-            {
+            2 if path.segments[0].text == bare || path.segments[0].text == enum_name => {
                 out.insert(path.segments[1].text.clone());
             }
             // `case Variant(...)` — bare form. The scrutinee's
@@ -7789,34 +7773,25 @@ fn stmt_has_await_shallow(s: &Stmt) -> bool {
         Stmt::Expr(e) | Stmt::Throw(e, _) => expr_has_await_shallow(e),
         Stmt::Return(Some(e), _) => expr_has_await_shallow(e),
         Stmt::VarDecl(v) => v.init.as_ref().is_some_and(expr_has_await_shallow),
-        Stmt::Assign(a) => {
-            expr_has_await_shallow(&a.value) || expr_has_await_shallow(&a.target)
-        }
+        Stmt::Assign(a) => expr_has_await_shallow(&a.value) || expr_has_await_shallow(&a.target),
         Stmt::If(i) => {
             expr_has_await_shallow(&i.condition)
                 || block_has_await_shallow(&i.then_block)
                 || match i.else_branch.as_deref() {
                     Some(ElseBranch::Block(b)) => block_has_await_shallow(b),
-                    Some(ElseBranch::If(inner)) => {
-                        stmt_has_await_shallow(&Stmt::If(inner.clone()))
-                    }
+                    Some(ElseBranch::If(inner)) => stmt_has_await_shallow(&Stmt::If(inner.clone())),
                     None => false,
                 }
         }
-        Stmt::While(w) => {
-            expr_has_await_shallow(&w.condition) || block_has_await_shallow(&w.body)
-        }
+        Stmt::While(w) => expr_has_await_shallow(&w.condition) || block_has_await_shallow(&w.body),
         Stmt::DoWhile(d) => {
             block_has_await_shallow(&d.body) || expr_has_await_shallow(&d.condition)
         }
         Stmt::ForEach(f) => {
-            f.is_await
-                || expr_has_await_shallow(&f.iter)
-                || block_has_await_shallow(&f.body)
+            f.is_await || expr_has_await_shallow(&f.iter) || block_has_await_shallow(&f.body)
         }
         Stmt::ForC(f) => {
-            f.cond.as_ref().is_some_and(expr_has_await_shallow)
-                || block_has_await_shallow(&f.body)
+            f.cond.as_ref().is_some_and(expr_has_await_shallow) || block_has_await_shallow(&f.body)
         }
         Stmt::Try(t) => {
             block_has_await_shallow(&t.body)
@@ -7834,18 +7809,13 @@ fn expr_has_await_shallow(e: &Expr) -> bool {
         Expr::Await(..) => true,
         // Lambdas are their own async scope — don't descend.
         Expr::Lambda(_) => false,
-        Expr::Binary(b) => {
-            expr_has_await_shallow(&b.left) || expr_has_await_shallow(&b.right)
-        }
+        Expr::Binary(b) => expr_has_await_shallow(&b.left) || expr_has_await_shallow(&b.right),
         Expr::Unary(u) => expr_has_await_shallow(&u.operand),
         Expr::Call(c) => {
-            expr_has_await_shallow(&c.callee)
-                || c.args.iter().any(expr_has_await_shallow)
+            expr_has_await_shallow(&c.callee) || c.args.iter().any(expr_has_await_shallow)
         }
         Expr::Field(f) => expr_has_await_shallow(&f.object),
-        Expr::Index(i) => {
-            expr_has_await_shallow(&i.array) || expr_has_await_shallow(&i.index)
-        }
+        Expr::Index(i) => expr_has_await_shallow(&i.array) || expr_has_await_shallow(&i.index),
         Expr::Cast(c) => expr_has_await_shallow(&c.value),
         Expr::NotNullAssert(inner, _) => expr_has_await_shallow(inner),
         Expr::Elvis(el) => {
@@ -7924,9 +7894,7 @@ fn collect_async_try_writes_stmt(
             }
         }
         Stmt::Unsafe(b) => collect_async_try_writes(b, assigned, declared),
-        Stmt::Labeled { stmt, .. } => {
-            collect_async_try_writes_stmt(stmt, assigned, declared)
-        }
+        Stmt::Labeled { stmt, .. } => collect_async_try_writes_stmt(stmt, assigned, declared),
         _ => {}
     }
 }
@@ -7983,7 +7951,8 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
         // side is the unsuffixed-literal default. Going the other
         // direction (`int x = 7L;` for instance) is rejected.
         (Ty::Primitive(_), Ty::Primitive(Primitive::Int))
-            if expected.is_numeric() && !matches!(expected, Ty::Primitive(Primitive::Bool | Primitive::Char)) =>
+            if expected.is_numeric()
+                && !matches!(expected, Ty::Primitive(Primitive::Bool | Primitive::Char)) =>
         {
             true
         }
@@ -7991,10 +7960,7 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
             if matches!(
                 expected,
                 Ty::Primitive(
-                    Primitive::Float
-                        | Primitive::F32
-                        | Primitive::F64
-                        | Primitive::Double,
+                    Primitive::Float | Primitive::F32 | Primitive::F64 | Primitive::Double,
                 ),
             ) =>
         {
@@ -8009,10 +7975,7 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
         // int+long promotion).
         (Ty::Primitive(_), Ty::Primitive(Primitive::Uint))
             if expected.is_numeric()
-                && !matches!(
-                    expected,
-                    Ty::Primitive(Primitive::Bool | Primitive::Char)
-                ) =>
+                && !matches!(expected, Ty::Primitive(Primitive::Bool | Primitive::Char)) =>
         {
             true
         }
@@ -8023,12 +7986,17 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
         // direction (dynamic → fixed) loses the compile-time size
         // guarantee and needs an explicit check, so it's rejected.
         (
-            Ty::Array { element: e1, kind: k1 },
-            Ty::Array { element: e2, kind: k2 },
+            Ty::Array {
+                element: e1,
+                kind: k1,
+            },
+            Ty::Array {
+                element: e2,
+                kind: k2,
+            },
         ) => {
             let kind_ok = k1 == k2
-                || (*k1 == crate::ty::ArrayKind::Dynamic
-                    && *k2 == crate::ty::ArrayKind::Fixed);
+                || (*k1 == crate::ty::ArrayKind::Dynamic && *k2 == crate::ty::ArrayKind::Fixed);
             kind_ok && compatible(e1, e2, symbols)
         }
         // User types — same name AND pairwise compatible generic
@@ -8042,8 +8010,14 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
         // diagnostic is at least loud rather than silently
         // mis-lowered).
         (
-            Ty::User { name: n1, generic_args: a1 },
-            Ty::User { name: n2, generic_args: a2 },
+            Ty::User {
+                name: n1,
+                generic_args: a1,
+            },
+            Ty::User {
+                name: n2,
+                generic_args: a2,
+            },
         ) => {
             if n1 == n2 {
                 // Same name — length-mismatch is only a problem
@@ -8069,9 +8043,7 @@ pub(crate) fn compatible(expected: &Ty, found: &Ty, symbols: &SymbolTable) -> bo
                 return a1
                     .iter()
                     .zip(a2.iter())
-                    .all(|(x, y)| {
-                        compatible(x, y, symbols) && compatible(y, x, symbols)
-                    });
+                    .all(|(x, y)| compatible(x, y, symbols) && compatible(y, x, symbols));
             }
             // Different names — try the upcast direction: is the
             // found type a subclass of the expected type? Walks
@@ -8125,17 +8097,33 @@ mod tests {
     fn run_with_stub(stub_src: &str, src: &str) -> Vec<Diagnostic> {
         let stub_sf = SourceFile::new("stub.jux.d", stub_src);
         let stub_lex = lex(&stub_sf);
-        assert!(stub_lex.diagnostics.is_empty(), "stub lex: {:?}", stub_lex.diagnostics);
+        assert!(
+            stub_lex.diagnostics.is_empty(),
+            "stub lex: {:?}",
+            stub_lex.diagnostics
+        );
         let stub_parse = parse(&stub_lex.tokens);
-        assert!(stub_parse.diagnostics.is_empty(), "stub parse: {:?}", stub_parse.diagnostics);
+        assert!(
+            stub_parse.diagnostics.is_empty(),
+            "stub parse: {:?}",
+            stub_parse.diagnostics
+        );
         let mut stub_ast = stub_parse.ast;
         stub_ast.is_external = true;
 
         let sf = SourceFile::new("test.jux", src);
         let lex_result = lex(&sf);
-        assert!(lex_result.diagnostics.is_empty(), "lex: {:?}", lex_result.diagnostics);
+        assert!(
+            lex_result.diagnostics.is_empty(),
+            "lex: {:?}",
+            lex_result.diagnostics
+        );
         let parse_result = parse(&lex_result.tokens);
-        assert!(parse_result.diagnostics.is_empty(), "parse: {:?}", parse_result.diagnostics);
+        assert!(
+            parse_result.diagnostics.is_empty(),
+            "parse: {:?}",
+            parse_result.diagnostics
+        );
         let main_ast = parse_result.ast;
 
         let mut throwaway = Vec::new();
@@ -8177,7 +8165,10 @@ mod tests {
             "import demo.stub.Sink; import demo.stub.Vec; \
              public void main() { var s = new Sink(); var v = new demo.stub.Vec<u32>(); s.feed(v); }",
         );
-        assert!(!has(&d, code::Code::E0410_TypeMismatch), "Vec should bridge to a slice: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0410_TypeMismatch),
+            "Vec should bridge to a slice: {d:?}"
+        );
     }
 
     /// A plain Jux array argument bridges to a foreign slice parameter — NO E0410.
@@ -8188,7 +8179,10 @@ mod tests {
             "import demo.stub.Sink; \
              public void main() { var s = new Sink(); var a = new u32[8]; s.feed(a); }",
         );
-        assert!(!has(&d, code::Code::E0410_TypeMismatch), "array should bridge to a slice: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0410_TypeMismatch),
+            "array should bridge to a slice: {d:?}"
+        );
     }
 
     /// The bridge is Vec/array-ONLY: a non-`Vec` external container into a
@@ -8201,18 +8195,19 @@ mod tests {
             "import demo.stub.Sink; import demo.stub.HashSet; \
              public void main() { var s = new Sink(); var h = new demo.stub.HashSet<u32>(); s.feed(h); }",
         );
-        assert!(has(&d, code::Code::E0410_TypeMismatch), "HashSet must NOT bridge to a slice: {d:?}");
+        assert!(
+            has(&d, code::Code::E0410_TypeMismatch),
+            "HashSet must NOT bridge to a slice: {d:?}"
+        );
     }
 
     /// A nullable `T?` argument flowing into a non-nullable parameter raises
     /// E0410 WITH actionable unwrap guidance (the `Frame.options` mistake).
     #[test]
     fn nullable_arg_to_non_null_param_emits_e0410_with_help() {
-        let d = run(
-            "public class Opt { public Opt() { } } \
+        let d = run("public class Opt { public Opt() { } } \
              public void take(Opt o) { } \
-             public void main() { Opt? maybe = new Opt(); take(maybe); }",
-        );
+             public void main() { Opt? maybe = new Opt(); take(maybe); }");
         let hit = d.iter().find(|x| x.code == code::Code::E0410_TypeMismatch);
         assert!(hit.is_some(), "expected E0410 for T? -> T param: {d:?}");
         assert!(
@@ -8237,20 +8232,16 @@ mod tests {
     /// (each `unsafe native` fn is implicitly unsafe to call).
     #[test]
     fn foreign_call_outside_unsafe_is_e0506() {
-        let d = run(
-            "@extern(lib = \"c\") unsafe native { i32 getpid(); } \
-             public void main() { i32 p = getpid(); }",
-        );
+        let d = run("@extern(lib = \"c\") unsafe native { i32 getpid(); } \
+             public void main() { i32 p = getpid(); }");
         assert!(has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "{d:?}");
     }
 
     /// The same call inside `unsafe { … }` is clean (no E0506).
     #[test]
     fn foreign_call_inside_unsafe_is_clean() {
-        let d = run(
-            "@extern(lib = \"c\") unsafe native { i32 getpid(); } \
-             public void main() { unsafe { i32 p = getpid(); } }",
-        );
+        let d = run("@extern(lib = \"c\") unsafe native { i32 getpid(); } \
+             public void main() { unsafe { i32 p = getpid(); } }");
         assert!(!has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "{d:?}");
     }
 
@@ -8269,12 +8260,10 @@ mod tests {
     /// no E0508 for the canonical malloc/free/puts shapes.
     #[test]
     fn foreign_ffi_types_are_allowed() {
-        let d = run(
-            "@extern(lib = \"c\") unsafe native { \
+        let d = run("@extern(lib = \"c\") unsafe native { \
                 void* malloc(ulong size); void free(void* p); \
                 i32 puts(String s); String getenv(String name); \
-             } public void main() {}",
-        );
+             } public void main() {}");
         assert!(!has(&d, code::Code::E0508_FfiTypeNotAllowed), "{d:?}");
     }
 
@@ -8329,10 +8318,8 @@ mod tests {
     /// plain integer with no associated data).
     #[test]
     fn layout_c_enum_with_payload_is_e0509() {
-        let d = run(
-            "@layout(c, repr = \"i32\") enum Bad { Ok, Err(i32) } \
-             public void main() {}",
-        );
+        let d = run("@layout(c, repr = \"i32\") enum Bad { Ok, Err(i32) } \
+             public void main() {}");
         assert!(has(&d, code::Code::E0509_LayoutCOnNonAggregate), "{d:?}");
     }
 
@@ -8348,7 +8335,10 @@ mod tests {
     #[test]
     fn plain_enum_without_discriminant_ok() {
         let d = run("enum Y { A, B } public void main() {}");
-        assert!(!has(&d, code::Code::E0510_DiscriminantOutsideCEnum), "{d:?}");
+        assert!(
+            !has(&d, code::Code::E0510_DiscriminantOutsideCEnum),
+            "{d:?}"
+        );
     }
 
     /// A C-variadic foreign call accepts MORE arguments than its fixed params
@@ -8362,10 +8352,8 @@ mod tests {
         assert!(!has(&ok, code::Code::E0411_WrongArgCount), "{ok:?}");
 
         // A variadic with no fixed parameter is illegal.
-        let bad = run(
-            "@extern(lib = \"c\") unsafe native { i32 bad(...); } \
-             public void main() {}",
-        );
+        let bad = run("@extern(lib = \"c\") unsafe native { i32 bad(...); } \
+             public void main() {}");
         assert!(has(&bad, code::Code::E0508_FfiTypeNotAllowed), "{bad:?}");
     }
 
@@ -8380,11 +8368,9 @@ mod tests {
         );
         assert!(!has(&ok, code::Code::E0508_FfiTypeNotAllowed), "{ok:?}");
 
-        let bad = run(
-            "enum Plain { A, B } \
+        let bad = run("enum Plain { A, B } \
              @extern(lib = \"c\") unsafe native { Plain flip(Plain s); } \
-             public void main() {}",
-        );
+             public void main() {}");
         assert!(has(&bad, code::Code::E0508_FfiTypeNotAllowed), "{bad:?}");
     }
 
@@ -8393,19 +8379,18 @@ mod tests {
     /// a `String` field is still rejected.
     #[test]
     fn c_enum_is_a_valid_layout_c_struct_field() {
-        let ok = run(
-            "@layout(c, repr = \"i32\") enum Kind { A = 1, B = 2 } \
+        let ok = run("@layout(c, repr = \"i32\") enum Kind { A = 1, B = 2 } \
              @layout(c) struct Tagged { Kind kind; i32 value; } \
-             public void main() {}",
-        );
+             public void main() {}");
         assert!(!has(&ok, code::Code::E0509_LayoutCOnNonAggregate), "{ok:?}");
 
-        let bad = run(
-            "enum Plain { A, B } \
+        let bad = run("enum Plain { A, B } \
              @layout(c) struct Bad { Plain kind; } \
-             public void main() {}",
+             public void main() {}");
+        assert!(
+            has(&bad, code::Code::E0509_LayoutCOnNonAggregate),
+            "{bad:?}"
         );
-        assert!(has(&bad, code::Code::E0509_LayoutCOnNonAggregate), "{bad:?}");
     }
 
     /// A generic `@layout(c)` struct or enum has no fixed C layout → E0509.
@@ -8423,12 +8408,14 @@ mod tests {
     fn non_const_c_enum_discriminant_is_e0509() {
         // `g()` does IO, so it is not const-evaluable — the backend would
         // silently drop the value, so it must be rejected.
-        let bad = run(
-            "i32 g() { print(\"io\"); return 1; } \
-             @layout(c, repr = \"i32\") enum M { A = g(), B } public void main() {}",
+        let bad = run("i32 g() { print(\"io\"); return 1; } \
+             @layout(c, repr = \"i32\") enum M { A = g(), B } public void main() {}");
+        assert!(
+            has(&bad, code::Code::E0509_LayoutCOnNonAggregate),
+            "{bad:?}"
         );
-        assert!(has(&bad, code::Code::E0509_LayoutCOnNonAggregate), "{bad:?}");
-        let ok = run("@layout(c, repr = \"i32\") enum N { A = 200, B = 1 + 1 } public void main() {}");
+        let ok =
+            run("@layout(c, repr = \"i32\") enum N { A = 200, B = 1 + 1 } public void main() {}");
         assert!(!has(&ok, code::Code::E0509_LayoutCOnNonAggregate), "{ok:?}");
     }
 
@@ -8440,9 +8427,8 @@ mod tests {
             "class Foo { @export public static int bar(int x) { return x; } } public void main() {}",
         );
         assert!(has(&st, code::Code::E0508_FfiTypeNotAllowed), "{st:?}");
-        let inst = run(
-            "class Foo { @export public int baz(int x) { return x; } } public void main() {}",
-        );
+        let inst =
+            run("class Foo { @export public int baz(int x) { return x; } } public void main() {}");
         assert!(has(&inst, code::Code::E0508_FfiTypeNotAllowed), "{inst:?}");
     }
 
@@ -8452,11 +8438,12 @@ mod tests {
     /// (arg count).
     #[test]
     fn layout_c_struct_implicit_ctor_is_clean() {
-        let d = run(
-            "@layout(c) struct P { i32 x; i32 y; } \
-             public void main() { P p = new P(1, 2); i32 a = p.x; }",
+        let d = run("@layout(c) struct P { i32 x; i32 y; } \
+             public void main() { P p = new P(1, 2); i32 a = p.x; }");
+        assert!(
+            !has(&d, code::Code::E0600_FieldNotDefinitelyAssigned),
+            "{d:?}"
         );
-        assert!(!has(&d, code::Code::E0600_FieldNotDefinitelyAssigned), "{d:?}");
         assert!(!has(&d, code::Code::E0411_WrongArgCount), "{d:?}");
     }
 
@@ -8465,9 +8452,7 @@ mod tests {
     /// A clean `@export` signature (primitive params/return) is accepted.
     #[test]
     fn export_clean_signature_ok() {
-        let d = run(
-            "@export public int add(int a, int b) { return a + b; } public void main() {}",
-        );
+        let d = run("@export public int add(int a, int b) { return a + b; } public void main() {}");
         assert!(!has(&d, code::Code::E0508_FfiTypeNotAllowed), "{d:?}");
     }
 
@@ -8476,9 +8461,7 @@ mod tests {
     /// E0508. A genuinely non-C type (a class) is still rejected.
     #[test]
     fn export_string_signature_ok() {
-        let ok = run(
-            "@export String greet(String name) { return name; } public void main() {}",
-        );
+        let ok = run("@export String greet(String name) { return name; } public void main() {}");
         assert!(!has(&ok, code::Code::E0508_FfiTypeNotAllowed), "{ok:?}");
 
         let bad = run(
@@ -8531,28 +8514,22 @@ mod tests {
     /// `x` is a `const`/`final` field, is E0465.
     #[test]
     fn final_field_bare_reassign_in_method_is_e0465() {
-        let d = run(
-            "public class C { const int x = 10; public void m() { x = 5; } }",
-        );
+        let d = run("public class C { const int x = 10; public void m() { x = 5; } }");
         assert!(has(&d, code::Code::E0465_FinalFieldReassigned), "{d:?}");
     }
 
     /// `this.x = 5` in a method is also E0465.
     #[test]
     fn final_field_this_reassign_in_method_is_e0465() {
-        let d = run(
-            "public class C { final int x = 10; public void m() { this.x = 5; } }",
-        );
+        let d = run("public class C { final int x = 10; public void m() { this.x = 5; } }");
         assert!(has(&d, code::Code::E0465_FinalFieldReassigned), "{d:?}");
     }
 
     /// External write `c.x = 5` from outside the class is E0465.
     #[test]
     fn final_field_external_reassign_is_e0465() {
-        let d = run(
-            "public class C { const int x = 10; } \
-             public void main() { var c = new C(); c.x = 5; }",
-        );
+        let d = run("public class C { const int x = 10; } \
+             public void main() { var c = new C(); c.x = 5; }");
         assert!(has(&d, code::Code::E0465_FinalFieldReassigned), "{d:?}");
     }
 
@@ -8560,9 +8537,15 @@ mod tests {
     #[test]
     fn final_field_compound_and_incr_are_e0465() {
         let comp = run("public class C { final int x = 0; public void m() { x += 1; } }");
-        assert!(has(&comp, code::Code::E0465_FinalFieldReassigned), "{comp:?}");
+        assert!(
+            has(&comp, code::Code::E0465_FinalFieldReassigned),
+            "{comp:?}"
+        );
         let incr = run("public class C { final int x = 0; public void m() { x++; } }");
-        assert!(has(&incr, code::Code::E0465_FinalFieldReassigned), "{incr:?}");
+        assert!(
+            has(&incr, code::Code::E0465_FinalFieldReassigned),
+            "{incr:?}"
+        );
     }
 
     /// A `static final` field reassigned (qualified `C.N` or bare) is E0465.
@@ -8577,9 +8560,15 @@ mod tests {
     #[test]
     fn final_field_assign_in_ctor_is_ok() {
         let bare = run("public class C { final int x; public C(int v) { x = v; } }");
-        assert!(!has(&bare, code::Code::E0465_FinalFieldReassigned), "{bare:?}");
+        assert!(
+            !has(&bare, code::Code::E0465_FinalFieldReassigned),
+            "{bare:?}"
+        );
         let this_ = run("public class C { final int x; public C(int v) { this.x = v; } }");
-        assert!(!has(&this_, code::Code::E0465_FinalFieldReassigned), "{this_:?}");
+        assert!(
+            !has(&this_, code::Code::E0465_FinalFieldReassigned),
+            "{this_:?}"
+        );
     }
 
     /// A `final` field assigned in an instance `init { }` block is allowed.
@@ -8607,7 +8596,11 @@ mod tests {
                 let lexed = lex(&sf);
                 assert!(lexed.diagnostics.is_empty(), "lex: {:?}", lexed.diagnostics);
                 let parsed = parse(&lexed.tokens);
-                assert!(parsed.diagnostics.is_empty(), "parse: {:?}", parsed.diagnostics);
+                assert!(
+                    parsed.diagnostics.is_empty(),
+                    "parse: {:?}",
+                    parsed.diagnostics
+                );
                 parsed.ast
             })
             .collect();
@@ -8669,10 +8662,8 @@ mod tests {
     /// pushed authors AWAY from encapsulation.
     #[test]
     fn a_nested_class_reads_its_owners_private() {
-        let d = run(
-            "public class Outer { private int secret = 7;\n\
-               public class Inner { public int go(Outer o) { return o.secret; } } }",
-        );
+        let d = run("public class Outer { private int secret = 7;\n\
+               public class Inner { public int go(Outer o) { return o.secret; } } }");
         assert!(!has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
     }
 
@@ -8691,21 +8682,17 @@ mod tests {
     /// body, so they see each other.
     #[test]
     fn sibling_nested_classes_see_each_others_privates() {
-        let d = run(
-            "public class Outer {\n\
+        let d = run("public class Outer {\n\
                public class A { private int x = 1; }\n\
-               public class B { public int go(A a) { return a.x; } } }",
-        );
+               public class B { public int go(A a) { return a.x; } } }");
         assert!(!has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
     }
 
     /// The boundary that still holds: two UNRELATED top-level classes.
     #[test]
     fn unrelated_top_level_classes_still_cannot_read_privates() {
-        let d = run(
-            "public class A { private int x = 1; }\n\
-             public class B { public int go(A a) { return a.x; } }",
-        );
+        let d = run("public class A { private int x = 1; }\n\
+             public class B { public int go(A a) { return a.x; } }");
         assert!(has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
     }
 
@@ -8753,7 +8740,10 @@ mod tests {
                public class Inner { public void go(Outer o) { o.Level = 9; } } }",
         );
         assert!(!has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
-        assert!(!has(&d, code::Code::E0972_PropertyAccessorVisibility), "{d:?}");
+        assert!(
+            !has(&d, code::Code::E0972_PropertyAccessorVisibility),
+            "{d:?}"
+        );
     }
 
     // --- §M.7.7 property visibility (the read side) ---
@@ -8779,10 +8769,8 @@ mod tests {
     /// crossing the class boundary, not about the modifier existing.
     #[test]
     fn private_property_read_inside_its_own_class_is_ok() {
-        let d = run(
-            "public class Config { private int Level { get; set; } = 3;
-               public int go() { return Level; } }",
-        );
+        let d = run("public class Config { private int Level { get; set; } = 3;
+               public int go() { return Level; } }");
         assert!(!has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
     }
 
@@ -8790,10 +8778,8 @@ mod tests {
     /// not fire on the ordinary case.
     #[test]
     fn public_property_read_from_outside_is_ok() {
-        let d = run(
-            "public class Config { public int Level { get; set; } = 3; }
-             public class U { public int go() { Config c = new Config(); return c.Level; } }",
-        );
+        let d = run("public class Config { public int Level { get; set; } = 3; }
+             public class U { public int go() { Config c = new Config(); return c.Level; } }");
         assert!(!has(&d, code::Code::E0414_PrivateAccess), "{d:?}");
     }
 
@@ -8839,8 +8825,15 @@ mod tests {
                 )
             })
             .collect();
-        assert_eq!(reported.len(), 1, "one mistake, one diagnostic: {reported:?}");
-        assert!(has(&d, code::Code::E0972_PropertyAccessorVisibility), "{d:?}");
+        assert_eq!(
+            reported.len(),
+            1,
+            "one mistake, one diagnostic: {reported:?}"
+        );
+        assert!(
+            has(&d, code::Code::E0972_PropertyAccessorVisibility),
+            "{d:?}"
+        );
     }
 
     /// A package-private property does not cross a package boundary.
@@ -8926,11 +8919,9 @@ mod tests {
     /// public, so calling it (through the interface type) is NOT E0416.
     #[test]
     fn interface_method_is_public_by_default() {
-        let d = run(
-            "public interface I { String label(); } \
+        let d = run("public interface I { String label(); } \
              public class C implements I { @override public String label() { return \"x\"; } } \
-             public void main() { I x = new C(); var s = x.label(); }",
-        );
+             public void main() { I x = new C(); var s = x.label(); }");
         assert!(!has(&d, code::Code::E0416_PackagePrivateAccess), "{d:?}");
     }
 
@@ -8994,8 +8985,7 @@ mod tests {
     /// without a wildcard arm — every case is covered.
     #[test]
     fn switch_over_enum_with_all_variants_is_exhaustive() {
-        let d = run(
-            r#"public enum Color { Red, Green, Blue }
+        let d = run(r#"public enum Color { Red, Green, Blue }
                public void main() {
                    var c = Color.Red;
                    switch (c) {
@@ -9003,8 +8993,7 @@ mod tests {
                        case Color.Green -> {}
                        case Color.Blue -> {}
                    }
-               }"#,
-        );
+               }"#);
         assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
     }
 
@@ -9012,16 +9001,14 @@ mod tests {
     /// E0440 naming the missing variant.
     #[test]
     fn switch_over_enum_missing_variant_emits_e0440() {
-        let d = run(
-            r#"public enum Color { Red, Green, Blue }
+        let d = run(r#"public enum Color { Red, Green, Blue }
                public void main() {
                    var c = Color.Red;
                    switch (c) {
                        case Color.Red -> {}
                        case Color.Green -> {}
                    }
-               }"#,
-        );
+               }"#);
         assert!(has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
         let msg = d
             .iter()
@@ -9035,16 +9022,14 @@ mod tests {
     /// no E0440 even when explicit variants are missing.
     #[test]
     fn switch_with_wildcard_arm_is_exhaustive() {
-        let d = run(
-            r#"public enum Color { Red, Green, Blue }
+        let d = run(r#"public enum Color { Red, Green, Blue }
                public void main() {
                    var c = Color.Red;
                    switch (c) {
                        case Color.Red -> {}
                        case _ -> {}
                    }
-               }"#,
-        );
+               }"#);
         assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
     }
 
@@ -9052,16 +9037,14 @@ mod tests {
     /// it catches every remaining variant.
     #[test]
     fn switch_with_bind_arm_is_exhaustive() {
-        let d = run(
-            r#"public enum Color { Red, Green, Blue }
+        let d = run(r#"public enum Color { Red, Green, Blue }
                public void main() {
                    var c = Color.Red;
                    switch (c) {
                        case Color.Red -> {}
                        case var other -> {}
                    }
-               }"#,
-        );
+               }"#);
         assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
     }
 
@@ -9069,15 +9052,13 @@ mod tests {
     /// exhaustiveness — the wildcard arm remains the user's tool.
     #[test]
     fn switch_over_int_does_not_check_exhaustiveness() {
-        let d = run(
-            r#"public void main() {
+        let d = run(r#"public void main() {
                    var n = 1;
                    switch (n) {
                        case 0 -> {}
                        case 1 -> {}
                    }
-               }"#,
-        );
+               }"#);
         assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
     }
 
@@ -9085,8 +9066,7 @@ mod tests {
     /// permitted subclass passes exhaustiveness.
     #[test]
     fn switch_over_sealed_class_with_all_subclasses_is_exhaustive() {
-        let d = run(
-            r#"public sealed class Shape permits Circle, Square {}
+        let d = run(r#"public sealed class Shape permits Circle, Square {}
                public class Circle extends Shape {
                    public Circle() {}
                }
@@ -9099,8 +9079,7 @@ mod tests {
                        case Square -> {}
                    }
                }
-               public void main() {}"#,
-        );
+               public void main() {}"#);
         assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
     }
 
@@ -9108,8 +9087,7 @@ mod tests {
     /// permitted subclass fires E0440, naming the gap.
     #[test]
     fn switch_over_sealed_class_missing_subclass_emits_e0440() {
-        let d = run(
-            r#"public sealed class Shape permits Circle, Square {}
+        let d = run(r#"public sealed class Shape permits Circle, Square {}
                public class Circle extends Shape {
                    public Circle() {}
                }
@@ -9121,8 +9099,7 @@ mod tests {
                        case Circle -> {}
                    }
                }
-               public void main() {}"#,
-        );
+               public void main() {}"#);
         assert!(has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
         let msg = d
             .iter()
@@ -9138,8 +9115,7 @@ mod tests {
     /// the wildcard arm stays the canonical fallback.
     #[test]
     fn switch_over_non_sealed_class_does_not_check_exhaustiveness() {
-        let d = run(
-            r#"public class Animal { public Animal() {} }
+        let d = run(r#"public class Animal { public Animal() {} }
                public class Dog extends Animal {
                    public Dog() {}
                }
@@ -9148,8 +9124,7 @@ mod tests {
                    switch (a) {
                        case Dog -> {}
                    }
-               }"#,
-        );
+               }"#);
         assert!(!has(&d, code::Code::E0440_NotExhaustive), "got: {d:?}");
     }
 
@@ -9184,9 +9159,15 @@ mod tests {
     #[test]
     fn null_init_on_non_nullable_field_is_e0410() {
         let gen = run("public class C<K> { private K k = null; } public void main() {}");
-        assert!(has(&gen, code::Code::E0410_TypeMismatch), "generic K: {gen:?}");
+        assert!(
+            has(&gen, code::Code::E0410_TypeMismatch),
+            "generic K: {gen:?}"
+        );
         let concrete = run("public class C { private String s = null; } public void main() {}");
-        assert!(has(&concrete, code::Code::E0410_TypeMismatch), "String: {concrete:?}");
+        assert!(
+            has(&concrete, code::Code::E0410_TypeMismatch),
+            "String: {concrete:?}"
+        );
     }
 
     /// A `null` initializer on a NULLABLE field (`K?`) is fine — nullable fields
@@ -9202,7 +9183,10 @@ mod tests {
     #[test]
     fn bare_return_in_non_void_is_e0410() {
         let bad = run("public int f() { return ; }");
-        assert!(has(&bad, code::Code::E0410_TypeMismatch), "non-void: {bad:?}");
+        assert!(
+            has(&bad, code::Code::E0410_TypeMismatch),
+            "non-void: {bad:?}"
+        );
         let ok = run("public void f() { return ; }");
         assert!(!has(&ok, code::Code::E0410_TypeMismatch), "void: {ok:?}");
     }
@@ -9213,14 +9197,20 @@ mod tests {
     #[test]
     fn await_in_plain_function_errors() {
         let d = run(r#"public int g(){ return 1; } public void f(){ var x = await g(); }"#);
-        assert!(has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+        assert!(
+            has(&d, code::Code::E0700_AwaitRequiresAsyncContext),
+            "got: {d:?}"
+        );
     }
 
     /// `await` inside an `async` function is fine.
     #[test]
     fn await_in_async_function_ok() {
         let d = run(r#"public int g(){ return 1; } public async int f(){ return await g(); }"#);
-        assert!(!has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0700_AwaitRequiresAsyncContext),
+            "got: {d:?}"
+        );
     }
 
     /// Constructors are never async, so `await` in a constructor body → E0700.
@@ -9229,7 +9219,10 @@ mod tests {
         let d = run(
             r#"public int g(){ return 1; } public class C { public C(){ var x = await g(); } }"#,
         );
-        assert!(has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+        assert!(
+            has(&d, code::Code::E0700_AwaitRequiresAsyncContext),
+            "got: {d:?}"
+        );
     }
 
     /// `await` inside an `async` method is fine.
@@ -9238,7 +9231,10 @@ mod tests {
         let d = run(
             r#"public int g(){ return 1; } public class C { public async int m(){ return await g(); } }"#,
         );
-        assert!(!has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0700_AwaitRequiresAsyncContext),
+            "got: {d:?}"
+        );
     }
 
     /// A plain lambda introduces a non-async context even inside an async
@@ -9248,7 +9244,10 @@ mod tests {
         let d = run(
             r#"public int g(){ return 1; } public async void f(){ var bad = () -> { return await g(); }; }"#,
         );
-        assert!(has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+        assert!(
+            has(&d, code::Code::E0700_AwaitRequiresAsyncContext),
+            "got: {d:?}"
+        );
     }
 
     /// An async lambda permits `await`, even inside a plain function.
@@ -9257,7 +9256,10 @@ mod tests {
         let d = run(
             r#"public int g(){ return 1; } public void f(){ var ok = async () -> { return await g(); }; }"#,
         );
-        assert!(!has(&d, code::Code::E0700_AwaitRequiresAsyncContext), "got: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0700_AwaitRequiresAsyncContext),
+            "got: {d:?}"
+        );
     }
 
     // ---- unsafe-context enforcement (E0506, §A.2.8 / Layout-ABI §L.5.2) ----
@@ -9265,8 +9267,12 @@ mod tests {
     /// Calling an `unsafe` free function from a plain (non-unsafe) context → E0506.
     #[test]
     fn unsafe_call_outside_unsafe_errors() {
-        let d = run(r#"public unsafe int risky(){ return 1; } public void f(){ var x = risky(); }"#);
-        assert!(has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+        let d =
+            run(r#"public unsafe int risky(){ return 1; } public void f(){ var x = risky(); }"#);
+        assert!(
+            has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe),
+            "got: {d:?}"
+        );
     }
 
     /// The same call wrapped in an `unsafe { … }` block is fine.
@@ -9275,7 +9281,10 @@ mod tests {
         let d = run(
             r#"public unsafe int risky(){ return 1; } public void f(){ unsafe { var x = risky(); } }"#,
         );
-        assert!(!has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe),
+            "got: {d:?}"
+        );
     }
 
     /// An `unsafe` callee invoked from the body of another `unsafe` fn is fine —
@@ -9285,7 +9294,10 @@ mod tests {
         let d = run(
             r#"public unsafe int risky(){ return 1; } public unsafe int caller(){ return risky(); }"#,
         );
-        assert!(!has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe),
+            "got: {d:?}"
+        );
     }
 
     /// Calling a SAFE function (no `unsafe` modifier) never trips E0506,
@@ -9293,28 +9305,40 @@ mod tests {
     #[test]
     fn safe_call_never_trips_e0506() {
         let d = run(r#"public int ok(){ return 1; } public void f(){ var x = ok(); }"#);
-        assert!(!has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe),
+            "got: {d:?}"
+        );
     }
 
     /// Address-of `&x` outside an `unsafe` context → E0506 (§A.2.9).
     #[test]
     fn address_of_outside_unsafe_errors() {
         let d = run(r#"public void f(){ int x = 1; int* p = &x; }"#);
-        assert!(has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+        assert!(
+            has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe),
+            "got: {d:?}"
+        );
     }
 
     /// Raw-pointer deref `*p` outside an `unsafe` context → E0506 (§A.2.9).
     #[test]
     fn deref_outside_unsafe_errors() {
         let d = run(r#"public void f(){ int x = 1; int* p = &x; int y = *p; }"#);
-        assert!(has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+        assert!(
+            has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe),
+            "got: {d:?}"
+        );
     }
 
     /// The same pointer ops inside an `unsafe { }` block are fine.
     #[test]
     fn pointer_ops_in_unsafe_block_ok() {
         let d = run(r#"public void f(){ int x = 1; unsafe { int* p = &x; *p = 2; } }"#);
-        assert!(!has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe), "got: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0506_UnsafeOpOutsideUnsafe),
+            "got: {d:?}"
+        );
     }
 
     // ---- throw operand must be an Exception (E0710, §X.2.1) ----
@@ -9324,19 +9348,28 @@ mod tests {
     #[test]
     fn throw_int_errors() {
         let d = run(r#"public class Exception {} public void f(){ throw 5; }"#);
-        assert!(has(&d, code::Code::E0710_ThrowRequiresException), "got: {d:?}");
+        assert!(
+            has(&d, code::Code::E0710_ThrowRequiresException),
+            "got: {d:?}"
+        );
     }
 
     #[test]
     fn throw_string_errors() {
         let d = run(r#"public class Exception {} public void f(){ throw "oops"; }"#);
-        assert!(has(&d, code::Code::E0710_ThrowRequiresException), "got: {d:?}");
+        assert!(
+            has(&d, code::Code::E0710_ThrowRequiresException),
+            "got: {d:?}"
+        );
     }
 
     #[test]
     fn throw_exception_ok() {
         let d = run(r#"public class Exception {} public void f(){ throw new Exception(); }"#);
-        assert!(!has(&d, code::Code::E0710_ThrowRequiresException), "got: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0710_ThrowRequiresException),
+            "got: {d:?}"
+        );
     }
 
     #[test]
@@ -9344,7 +9377,10 @@ mod tests {
         let d = run(
             r#"public class Exception {} public class MyErr extends Exception {} public void f(){ throw new MyErr(); }"#,
         );
-        assert!(!has(&d, code::Code::E0710_ThrowRequiresException), "got: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0710_ThrowRequiresException),
+            "got: {d:?}"
+        );
     }
 
     // ---- uninferable empty-diamond `new` (E0453, §T.4.2) ----
@@ -9353,8 +9389,12 @@ mod tests {
     /// can't have its type argument pinned → E0453.
     #[test]
     fn unused_uninferable_new_errors() {
-        let d = run(r#"public class Box<T> { public Box() {} } public void f(){ var b = new Box(); }"#);
-        assert!(has(&d, code::Code::E0453_GenericInferenceNoSolution), "got: {d:?}");
+        let d =
+            run(r#"public class Box<T> { public Box() {} } public void f(){ var b = new Box(); }"#);
+        assert!(
+            has(&d, code::Code::E0453_GenericInferenceNoSolution),
+            "got: {d:?}"
+        );
     }
 
     /// The same construction, but `b` is later used as a receiver — a use could
@@ -9364,21 +9404,34 @@ mod tests {
         let d = run(
             r#"public class Box<T> { public Box() {} public void touch(){} } public void f(){ var b = new Box(); b.touch(); }"#,
         );
-        assert!(!has(&d, code::Code::E0453_GenericInferenceNoSolution), "got: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0453_GenericInferenceNoSolution),
+            "got: {d:?}"
+        );
     }
 
     /// An explicit type argument pins it — never flagged even if unused.
     #[test]
     fn explicit_type_arg_new_ok() {
-        let d = run(r#"public class Box<T> { public Box() {} } public void f(){ var b = new Box<int>(); }"#);
-        assert!(!has(&d, code::Code::E0453_GenericInferenceNoSolution), "got: {d:?}");
+        let d = run(
+            r#"public class Box<T> { public Box() {} } public void f(){ var b = new Box<int>(); }"#,
+        );
+        assert!(
+            !has(&d, code::Code::E0453_GenericInferenceNoSolution),
+            "got: {d:?}"
+        );
     }
 
     /// A non-generic class has no argument to infer — never flagged.
     #[test]
     fn non_generic_new_not_flagged() {
-        let d = run(r#"public class Plain { public Plain() {} } public void f(){ var p = new Plain(); }"#);
-        assert!(!has(&d, code::Code::E0453_GenericInferenceNoSolution), "got: {d:?}");
+        let d = run(
+            r#"public class Plain { public Plain() {} } public void f(){ var p = new Plain(); }"#,
+        );
+        assert!(
+            !has(&d, code::Code::E0453_GenericInferenceNoSolution),
+            "got: {d:?}"
+        );
     }
 
     // ---- unreachable catch (E0720, §X.3.4) ----
@@ -9405,7 +9458,8 @@ mod tests {
     /// Catching the exact same type twice — the second is unreachable.
     #[test]
     fn duplicate_catch_type_errors() {
-        let d = run(r#"public class E1 {} public void f(){ try {} catch (E1 e) {} catch (E1 e2) {} }"#);
+        let d =
+            run(r#"public class E1 {} public void f(){ try {} catch (E1 e) {} catch (E1 e2) {} }"#);
         assert!(has(&d, code::Code::E0720_UnreachableCatch), "got: {d:?}");
     }
 
@@ -9451,10 +9505,8 @@ mod tests {
     /// Reading a field that doesn't exist → E0412.
     #[test]
     fn unresolved_field_emits_e0412() {
-        let d = run(
-            "public class Foo { public int x; } \
-             public void main() { var f = new Foo(); print(f.y); }",
-        );
+        let d = run("public class Foo { public int x; } \
+             public void main() { var f = new Foo(); print(f.y); }");
         assert!(has(&d, code::Code::E0412_UnresolvedField), "{d:?}");
     }
 
@@ -9471,22 +9523,18 @@ mod tests {
     /// A method defined on a parent class is resolvable from a child.
     #[test]
     fn inherited_method_resolves() {
-        let d = run(
-            "public class Animal { public int age() { return 5; } } \
+        let d = run("public class Animal { public int age() { return 5; } } \
              public class Dog extends Animal {} \
-             public void main() { var d = new Dog(); print(d.age()); }",
-        );
+             public void main() { var d = new Dog(); print(d.age()); }");
         assert!(d.is_empty(), "{d:?}");
     }
 
     /// A field defined on a parent class is resolvable from a child.
     #[test]
     fn inherited_field_resolves() {
-        let d = run(
-            "public class Animal { public int age = 0; } \
+        let d = run("public class Animal { public int age = 0; } \
              public class Dog extends Animal {} \
-             public void main() { var d = new Dog(); print(d.age); }",
-        );
+             public void main() { var d = new Dog(); print(d.age); }");
         assert!(d.is_empty(), "{d:?}");
     }
 
@@ -9514,10 +9562,8 @@ mod tests {
     /// An initializer, a nullable field, and a `weak` field are all exempt.
     #[test]
     fn initializer_nullable_and_weak_fields_exempt_e0600() {
-        let d = run(
-            "public class P { public int x = 0; } \
-             public class C { public int n = 0; public P? p; weak P back; }",
-        );
+        let d = run("public class P { public int x = 0; } \
+             public class C { public int n = 0; public P? p; weak P back; }");
         assert!(
             !has(&d, code::Code::E0600_FieldNotDefinitelyAssigned),
             "{d:?}",
@@ -9528,10 +9574,8 @@ mod tests {
     /// assigned (the else path leaves it unset) → E0600.
     #[test]
     fn conditionally_assigned_field_fires_e0600() {
-        let d = run(
-            "public class C { public int n; \
-             public C(bool b) { if (b) { this.n = 1; } } }",
-        );
+        let d = run("public class C { public int n; \
+             public C(bool b) { if (b) { this.n = 1; } } }");
         assert!(
             has(&d, code::Code::E0600_FieldNotDefinitelyAssigned),
             "{d:?}",
@@ -9541,9 +9585,7 @@ mod tests {
     /// `print` accepts any single argument shape.
     #[test]
     fn print_is_builtin_no_arg_check() {
-        let d = run(
-            r#"public void main() { print("x"); print(42); print(true); }"#,
-        );
+        let d = run(r#"public void main() { print("x"); print(42); print(true); }"#);
         assert!(d.is_empty(), "{d:?}");
     }
 
@@ -9551,18 +9593,14 @@ mod tests {
     /// no error.
     #[test]
     fn array_push_is_builtin() {
-        let d = run(
-            "public void main() { var xs = new int[]{1, 2, 3}; xs.push(4); }",
-        );
+        let d = run("public void main() { var xs = new int[]{1, 2, 3}; xs.push(4); }");
         assert!(d.is_empty(), "{d:?}");
     }
 
     /// `.length` on an int array reads as int — no error.
     #[test]
     fn array_length_is_builtin() {
-        let d = run(
-            "public void main() { var xs = new int[]{1}; print(xs.length); }",
-        );
+        let d = run("public void main() { var xs = new int[]{1}; print(xs.length); }");
         assert!(d.is_empty(), "{d:?}");
     }
 
@@ -9590,10 +9628,8 @@ mod tests {
     /// Top-level call with wrong number of args → E0411.
     #[test]
     fn top_level_wrong_arg_count_emits_e0411() {
-        let d = run(
-            "public int add(int a, int b) { return a + b; } \
-             public void main() { print(add(1)); }",
-        );
+        let d = run("public int add(int a, int b) { return a + b; } \
+             public void main() { print(add(1)); }");
         assert!(has(&d, code::Code::E0411_WrongArgCount), "{d:?}");
     }
 
@@ -9601,20 +9637,16 @@ mod tests {
     /// the path even though "Int → String" wouldn't be tolerated.)
     #[test]
     fn top_level_wrong_arg_type_emits_e0410() {
-        let d = run(
-            r#"public void greet(String name) { print(name); }
-               public void main() { greet(42); }"#,
-        );
+        let d = run(r#"public void greet(String name) { print(name); }
+               public void main() { greet(42); }"#);
         assert!(has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
     }
 
     /// Multiple wrong-type args still emit at least one E0410.
     #[test]
     fn multiple_wrong_args_each_emit_e0410() {
-        let d = run(
-            r#"public void f(String a, String b) {}
-               public void main() { f(1, 2); }"#,
-        );
+        let d = run(r#"public void f(String a, String b) {}
+               public void main() { f(1, 2); }"#);
         assert!(count(&d, code::Code::E0410_TypeMismatch) >= 2, "{d:?}");
     }
 
@@ -9627,8 +9659,7 @@ mod tests {
     /// was left as `Ty::Param("T")` and the wildcard rule accepted it.
     #[test]
     fn instantiated_ctor_arg_mismatch_emits_e0410() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Box<T> {
                 public T value;
                 public Box(T value) { this.value = value; }
@@ -9636,16 +9667,14 @@ mod tests {
             public void main() {
                 var b = new Box<int>("hi");
             }
-            "#,
-        );
+            "#);
         assert!(has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
     }
 
     /// Phase E.2 — same ctor, correct type → no diagnostic.
     #[test]
     fn instantiated_ctor_matching_arg_is_ok() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Box<T> {
                 public T value;
                 public Box(T value) { this.value = value; }
@@ -9653,8 +9682,7 @@ mod tests {
             public void main() {
                 var b = new Box<int>(42);
             }
-            "#,
-        );
+            "#);
         assert!(d.is_empty(), "{d:?}");
     }
 
@@ -9662,8 +9690,7 @@ mod tests {
     /// turbofish) leaves substitution off, so any arg passes.
     #[test]
     fn raw_ctor_accepts_any_arg() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Box<T> {
                 public T value;
                 public Box(T value) { this.value = value; }
@@ -9672,8 +9699,7 @@ mod tests {
                 var a = new Box(42);
                 var b = new Box("hi");
             }
-            "#,
-        );
+            "#);
         assert!(d.is_empty(), "{d:?}");
     }
 
@@ -9681,8 +9707,7 @@ mod tests {
     /// type, so passing a String to a `set(T v)` is rejected.
     #[test]
     fn instantiated_method_arg_mismatch_emits_e0410() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Box<T> {
                 public T value;
                 public Box(T value) { this.value = value; }
@@ -9692,8 +9717,7 @@ mod tests {
                 var b = new Box<int>(0);
                 b.set("hi");
             }
-            "#,
-        );
+            "#);
         assert!(has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
     }
 
@@ -9701,32 +9725,28 @@ mod tests {
     /// emits E0410.
     #[test]
     fn super_call_wrong_arg_type_emits_e0410() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal {
                 public Animal(int age) {}
             }
             public class Dog extends Animal {
                 public Dog() { super("hi"); }
             }
-            "#,
-        );
+            "#);
         assert!(has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
     }
 
     /// Phase E.3 — `super(42)` against `Animal(int)` is fine.
     #[test]
     fn super_call_matching_args_is_ok() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal {
                 public Animal(int age) {}
             }
             public class Dog extends Animal {
                 public Dog() { super(42); }
             }
-            "#,
-        );
+            "#);
         assert!(d.is_empty(), "{d:?}");
     }
 
@@ -9734,16 +9754,14 @@ mod tests {
     /// wrong-arg-count, emits E0411.
     #[test]
     fn super_call_wrong_arg_count_emits_e0411() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal {
                 public Animal(int age) {}
             }
             public class Dog extends Animal {
                 public Dog() { super(); }
             }
-            "#,
-        );
+            "#);
         assert!(has(&d, code::Code::E0411_WrongArgCount), "{d:?}");
     }
 
@@ -9752,16 +9770,14 @@ mod tests {
     /// (extends Animal<String>) pass a String.
     #[test]
     fn super_call_substitutes_extends_generic_arg() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal<T> {
                 public Animal(T name) {}
             }
             public class Dog extends Animal<String> {
                 public Dog() { super("rex"); }
             }
-            "#,
-        );
+            "#);
         assert!(d.is_empty(), "{d:?}");
     }
 
@@ -9775,8 +9791,7 @@ mod tests {
     /// pairing rule would fire `E0931`.
     #[test]
     fn operator_eq_body_typechecks_cleanly() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Path {
                 public String value;
                 public Path(String v) { this.value = v; }
@@ -9787,8 +9802,7 @@ mod tests {
                     return 0;
                 }
             }
-            "#,
-        );
+            "#);
         assert!(d.is_empty(), "{d:?}");
     }
 
@@ -9797,15 +9811,13 @@ mod tests {
     /// `current_return` to the declared return type before walking.
     #[test]
     fn operator_return_type_mismatch_emits_e0410() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Path {
                 public bool operator==(Path other) {
                     return 42;
                 }
             }
-            "#,
-        );
+            "#);
         assert!(has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
     }
 
@@ -9814,8 +9826,7 @@ mod tests {
     /// arg-type check path is reachable from within an operator body.
     #[test]
     fn operator_body_call_arg_mismatch_emits_e0410() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Path {
                 public String value;
                 public Path(String v) { this.value = v; }
@@ -9825,8 +9836,7 @@ mod tests {
                     return true;
                 }
             }
-            "#,
-        );
+            "#);
         assert!(has(&d, code::Code::E0410_TypeMismatch), "{d:?}");
     }
 
@@ -9834,15 +9844,13 @@ mod tests {
     /// when the return type matches.
     #[test]
     fn operator_hash_body_typechecks_cleanly() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Path {
                 public int operator hash() {
                     return 1;
                 }
             }
-            "#,
-        );
+            "#);
         assert!(d.is_empty(), "{d:?}");
     }
 
@@ -9854,8 +9862,7 @@ mod tests {
     /// E0935 at the interp-string site.
     #[test]
     fn interp_string_on_deleted_string_op_emits_e0935() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public record OpaqueToken(int secret) {
                 public String operator string() = delete;
             }
@@ -9863,16 +9870,14 @@ mod tests {
                 var t = new OpaqueToken(42);
                 print($"$t");
             }
-            "#,
-        );
+            "#);
         assert!(has(&d, code::Code::E0935_DeletedOperator), "{d:?}");
     }
 
     /// `a + b` where `a`'s class deleted `operator+` fires E0935.
     #[test]
     fn arithmetic_on_deleted_op_emits_e0935() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class M {
                 public int x;
                 public M(int x) { this.x = x; }
@@ -9883,16 +9888,14 @@ mod tests {
                 var b = new M(2);
                 var c = a + b;
             }
-            "#,
-        );
+            "#);
         assert!(has(&d, code::Code::E0935_DeletedOperator), "{d:?}");
     }
 
     /// `-x` where `x`'s class deleted unary `operator-` fires E0935.
     #[test]
     fn unary_minus_on_deleted_op_emits_e0935() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class N {
                 public int x;
                 public N(int x) { this.x = x; }
@@ -9902,8 +9905,7 @@ mod tests {
                 var v = new N(1);
                 var w = -v;
             }
-            "#,
-        );
+            "#);
         assert!(has(&d, code::Code::E0935_DeletedOperator), "{d:?}");
     }
 
@@ -9911,8 +9913,7 @@ mod tests {
     /// check is gated on receiver class + deletion flag.
     #[test]
     fn no_e0935_for_primitives_or_undeleted() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class M {
                 public int x;
                 public M(int x) { this.x = x; }
@@ -9924,10 +9925,10 @@ mod tests {
                 var c = new M(2);
                 var eq = b == c;
             }
-            "#,
-        );
+            "#);
         assert!(
-            !d.iter().any(|d| d.code == code::Code::E0935_DeletedOperator),
+            !d.iter()
+                .any(|d| d.code == code::Code::E0935_DeletedOperator),
             "should not emit E0935: {d:?}",
         );
     }
@@ -9936,17 +9937,16 @@ mod tests {
     /// E0935 — primitives don't have an operator-string declaration.
     #[test]
     fn no_e0935_for_primitive_in_interp() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public void main() {
                 var x = 42;
                 var s = "hi";
                 print($"x=$x, s=$s");
             }
-            "#,
-        );
+            "#);
         assert!(
-            !d.iter().any(|d| d.code == code::Code::E0935_DeletedOperator),
+            !d.iter()
+                .any(|d| d.code == code::Code::E0935_DeletedOperator),
             "should not emit E0935 for primitive: {d:?}",
         );
     }
@@ -9959,8 +9959,7 @@ mod tests {
     /// Dog is-a Animal, slot is covariant (producer).
     #[test]
     fn extends_wildcard_accepts_subtype() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal {}
             public class Dog extends Animal {}
             public class List<T> {
@@ -9971,8 +9970,7 @@ mod tests {
                 List<? extends Animal> animals = dogs;
                 print(animals);
             }
-            "#,
-        );
+            "#);
         assert!(
             !d.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
             "covariant assignment should be accepted: {d:?}",
@@ -9983,8 +9981,7 @@ mod tests {
     /// Cat isn't a Dog.
     #[test]
     fn extends_wildcard_rejects_non_subtype() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal {}
             public class Dog extends Animal {}
             public class Cat extends Animal {}
@@ -9996,8 +9993,7 @@ mod tests {
                 List<? extends Dog> dogs = cats;
                 print(dogs);
             }
-            "#,
-        );
+            "#);
         assert!(
             d.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
             "List<Cat> shouldn't fit List<? extends Dog>: {d:?}",
@@ -10008,8 +10004,7 @@ mod tests {
     /// Animal is a supertype of Dog, slot is contravariant (consumer).
     #[test]
     fn super_wildcard_accepts_supertype() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal {}
             public class Dog extends Animal {}
             public class List<T> {
@@ -10020,8 +10015,7 @@ mod tests {
                 List<? super Dog> dogs = animals;
                 print(dogs);
             }
-            "#,
-        );
+            "#);
         assert!(
             !d.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
             "contravariant assignment should be accepted: {d:?}",
@@ -10032,8 +10026,7 @@ mod tests {
     /// Cat is not a supertype of Dog.
     #[test]
     fn super_wildcard_rejects_unrelated() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal {}
             public class Dog extends Animal {}
             public class Cat extends Animal {}
@@ -10045,8 +10038,7 @@ mod tests {
                 List<? super Dog> sink = cats;
                 print(sink);
             }
-            "#,
-        );
+            "#);
         assert!(
             d.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
             "List<Cat> shouldn't fit List<? super Dog>: {d:?}",
@@ -10060,8 +10052,7 @@ mod tests {
     /// Reading a private field from top-level code fires E0414.
     #[test]
     fn private_field_access_from_outside_emits_e0414() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Account {
                 private int balance;
                 public Account(int n) { this.balance = n; }
@@ -10070,8 +10061,7 @@ mod tests {
                 var a = new Account(10);
                 print(a.balance);
             }
-            "#,
-        );
+            "#);
         assert!(
             d.iter().any(|d| d.code == code::Code::E0414_PrivateAccess),
             "expected E0414, got: {d:?}",
@@ -10081,8 +10071,7 @@ mod tests {
     /// Reading a private field from inside the same class is OK.
     #[test]
     fn private_field_access_from_same_class_is_ok() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Account {
                 private int balance;
                 public Account(int n) { this.balance = n; }
@@ -10092,8 +10081,7 @@ mod tests {
                 var a = new Account(10);
                 print(a.get());
             }
-            "#,
-        );
+            "#);
         assert!(
             !d.iter().any(|d| d.code == code::Code::E0414_PrivateAccess),
             "should not emit E0414 for self-access: {d:?}",
@@ -10115,7 +10103,8 @@ mod tests {
             "package b; import a.*; public class Other { public void touch(Base b) { b.secret(); } }",
         );
         assert!(
-            d.iter().any(|d| d.code == code::Code::E0415_ProtectedAccess),
+            d.iter()
+                .any(|d| d.code == code::Code::E0415_ProtectedAccess),
             "expected E0415, got: {d:?}",
         );
     }
@@ -10128,7 +10117,8 @@ mod tests {
             "package a; public class Other { public void touch(Base b) { b.secret(); } }",
         );
         assert!(
-            !d.iter().any(|d| d.code == code::Code::E0415_ProtectedAccess),
+            !d.iter()
+                .any(|d| d.code == code::Code::E0415_ProtectedAccess),
             "same-package access is legal: {d:?}",
         );
     }
@@ -10136,8 +10126,7 @@ mod tests {
     /// Calling a protected method from a subclass is OK.
     #[test]
     fn protected_method_from_subclass_is_ok() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Base {
                 protected void secret() {}
             }
@@ -10148,10 +10137,10 @@ mod tests {
                 var s = new Sub();
                 s.touch();
             }
-            "#,
-        );
+            "#);
         assert!(
-            !d.iter().any(|d| d.code == code::Code::E0415_ProtectedAccess),
+            !d.iter()
+                .any(|d| d.code == code::Code::E0415_ProtectedAccess),
             "should not emit E0415 for subclass access: {d:?}",
         );
     }
@@ -10159,8 +10148,7 @@ mod tests {
     /// `new Foo()` against a private constructor fires E0414.
     #[test]
     fn private_constructor_emits_e0414() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Singleton {
                 private Singleton() {}
             }
@@ -10168,8 +10156,7 @@ mod tests {
                 var s = new Singleton();
                 print(s);
             }
-            "#,
-        );
+            "#);
         assert!(
             d.iter().any(|d| d.code == code::Code::E0414_PrivateAccess),
             "expected E0414 on private ctor, got: {d:?}",
@@ -10183,8 +10170,7 @@ mod tests {
     /// `Math.PI` and `Math.max(1, 2)` type-check cleanly.
     #[test]
     fn static_member_access_typechecks() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Math {
                 public static final int X = 1;
                 public static int dbl(int n) { return n + n; }
@@ -10193,26 +10179,24 @@ mod tests {
                 print(Math.X);
                 print(Math.dbl(5));
             }
-            "#,
-        );
+            "#);
         assert!(d.is_empty(), "expected clean tycheck: {d:?}");
     }
 
     /// `this` inside a `static` method fires E0425.
     #[test]
     fn this_in_static_method_emits_e0425() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class C {
                 public int x;
                 public C() { this.x = 0; }
                 public static int f() { return this.x; }
             }
             public void main() { print(C.f()); }
-            "#,
-        );
+            "#);
         assert!(
-            d.iter().any(|d| d.code == code::Code::E0425_ThisInStaticContext),
+            d.iter()
+                .any(|d| d.code == code::Code::E0425_ThisInStaticContext),
             "expected E0425: {d:?}",
         );
     }
@@ -10221,14 +10205,13 @@ mod tests {
     /// fires a clear `E0412` with the "instance field" message.
     #[test]
     fn instance_field_via_classname_emits_e0412() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class C { public int x; public C() { this.x = 0; } }
             public void main() { print(C.x); }
-            "#,
-        );
+            "#);
         assert!(
-            d.iter().any(|d| d.code == code::Code::E0412_UnresolvedField),
+            d.iter()
+                .any(|d| d.code == code::Code::E0412_UnresolvedField),
             "expected E0412: {d:?}",
         );
     }
@@ -10236,8 +10219,7 @@ mod tests {
     /// Unbounded `?` accepts anything in the slot.
     #[test]
     fn unbounded_wildcard_accepts_anything() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class List<T> {
                 public T head;
             }
@@ -10246,8 +10228,7 @@ mod tests {
                 List<?> any = ints;
                 print(any);
             }
-            "#,
-        );
+            "#);
         assert!(
             !d.iter().any(|d| d.code == code::Code::E0410_TypeMismatch),
             "List<?> should accept anything: {d:?}",
@@ -10261,16 +10242,14 @@ mod tests {
     /// A read-write auto-property may be freely read and written.
     #[test]
     fn property_read_write_is_ok() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class P { public String Name { get; set; } }
             public void main() {
                 var p = new P();
                 p.Name = "Bob";
                 print(p.Name);
             }
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0970_PropertyNotWritable)
                 && !has(&d, code::Code::E0972_PropertyAccessorVisibility),
@@ -10282,16 +10261,17 @@ mod tests {
     /// constructor fires E0970.
     #[test]
     fn write_readonly_property_outside_ctor_errors() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class P {
                 public int Id { get; }
                 public P() { this.Id = 7; }
             }
             public void main() { var p = new P(); p.Id = 1; }
-            "#,
+            "#);
+        assert!(
+            has(&d, code::Code::E0970_PropertyNotWritable),
+            "expected E0970: {d:?}"
         );
-        assert!(has(&d, code::Code::E0970_PropertyNotWritable), "expected E0970: {d:?}");
     }
 
     /// §P removed the `init` accessor — the read-only-after-construction
@@ -10299,31 +10279,30 @@ mod tests {
     /// write to it fires E0970.
     #[test]
     fn write_ctor_settable_readonly_property_after_construction_errors() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class P {
                 public String Code { get; }
                 public P(String c) { this.Code = c; }
             }
             public void main() { var p = new P("a"); p.Code = "x"; }
-            "#,
+            "#);
+        assert!(
+            has(&d, code::Code::E0970_PropertyNotWritable),
+            "expected E0970: {d:?}"
         );
-        assert!(has(&d, code::Code::E0970_PropertyNotWritable), "expected E0970: {d:?}");
     }
 
     /// Writing a `{ get; private set; }` property from outside the
     /// declaring class fires E0972.
     #[test]
     fn write_private_set_property_from_outside_errors() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class P {
                 public String Token { get; private set; }
                 public P() { this.Token = "t"; }
             }
             public void main() { var p = new P(); p.Token = "y"; }
-            "#,
-        );
+            "#);
         assert!(
             has(&d, code::Code::E0972_PropertyAccessorVisibility),
             "expected E0972: {d:?}",
@@ -10336,8 +10315,7 @@ mod tests {
     /// by §P; `{ get; }` covers the construction-time-settable shape.)
     #[test]
     fn ctor_may_set_restricted_properties() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class P {
                 public int Id { get; }
                 public String Code { get; }
@@ -10345,8 +10323,7 @@ mod tests {
                 public P(String c) { this.Id = 1; this.Code = c; this.Token = "t"; }
             }
             public void main() { var p = new P("a"); print(p.Id); }
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0970_PropertyNotWritable)
                 && !has(&d, code::Code::E0972_PropertyAccessorVisibility),
@@ -10375,7 +10352,10 @@ public class C { protected int tag; public C() { this.tag = 0; } }",
 import base.C;
 public class S extends C { public int peek(C other) { return other.tag; } }",
         );
-        assert!(has(&d, code::Code::E0415_ProtectedAccess), "expected E0415: {d:?}");
+        assert!(
+            has(&d, code::Code::E0415_ProtectedAccess),
+            "expected E0415: {d:?}"
+        );
     }
 
     /// The same access through `this` is exactly what `protected` is for.
@@ -10388,7 +10368,10 @@ public class C { protected int tag; public C() { this.tag = 0; } }",
 import base.C;
 public class S extends C { public int peek() { return this.tag; } }",
         );
-        assert!(!has(&d, code::Code::E0415_ProtectedAccess), "`this` is always permitted: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0415_ProtectedAccess),
+            "`this` is always permitted: {d:?}"
+        );
     }
 
     /// A qualifier typed as the SUBCLASS is permitted.
@@ -10401,7 +10384,10 @@ public class C { protected int tag; public C() { this.tag = 0; } }",
 import base.C;
 public class S extends C { public int peek(S other) { return other.tag; } }",
         );
-        assert!(!has(&d, code::Code::E0415_ProtectedAccess), "a qualifier typed S is permitted: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0415_ProtectedAccess),
+            "a qualifier typed S is permitted: {d:?}"
+        );
     }
 
     /// Same PACKAGE is unaffected — there `protected` already grants package
@@ -10414,21 +10400,25 @@ public class C { protected int tag; public C() { this.tag = 0; } }",
             "package one;
 public class S extends C { public int peek(C other) { return other.tag; } }",
         );
-        assert!(!has(&d, code::Code::E0415_ProtectedAccess), "same package is unaffected: {d:?}");
+        assert!(
+            !has(&d, code::Code::E0415_ProtectedAccess),
+            "same package is unaffected: {d:?}"
+        );
     }
 
     /// Reading a PRIVATE field through a polymorphic-base reference → E0437
     /// (no accessor is generated for private fields).
     #[test]
     fn private_field_through_polymorphic_base_emits_e0437() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal { private String name; public Animal(String n){ this.name = n; } public String speak(){ return "..."; } }
             public class Dog extends Animal { public Dog(String n){ super(n); } public String speak(){ return "woof"; } }
             public void main() { Animal a = new Dog("Rex"); print(a.speak()); var n = a.name; }
-            "#,
+            "#);
+        assert!(
+            has(&d, code::Code::E0437_FieldThroughPolymorphicBase),
+            "expected E0437: {d:?}"
         );
-        assert!(has(&d, code::Code::E0437_FieldThroughPolymorphicBase), "expected E0437: {d:?}");
     }
 
     /// An `internal` field through a polymorphic base is NOT private: the
@@ -10437,13 +10427,11 @@ public class S extends C { public int peek(C other) { return other.tag; } }",
     /// and it said "private field" about a field that is not private.
     #[test]
     fn internal_field_through_polymorphic_base_is_allowed() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal { internal String name; public Animal(String n){ this.name = n; } public String speak(){ return "..."; } }
             public class Dog extends Animal { public Dog(String n){ super(n); } public String speak(){ return "woof"; } }
             public void main() { Animal a = new Dog("Rex"); print(a.name); }
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0437_FieldThroughPolymorphicBase),
             "an internal field has an accessor: {d:?}",
@@ -10453,13 +10441,11 @@ public class S extends C { public int peek(C other) { return other.tag; } }",
     /// The same for a package-private field (no modifier at all).
     #[test]
     fn package_private_field_through_polymorphic_base_is_allowed() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal { String name; public Animal(String n){ this.name = n; } public String speak(){ return "..."; } }
             public class Dog extends Animal { public Dog(String n){ super(n); } public String speak(){ return "woof"; } }
             public void main() { Animal a = new Dog("Rex"); print(a.name); }
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0437_FieldThroughPolymorphicBase),
             "a package-private field has an accessor: {d:?}",
@@ -10471,8 +10457,7 @@ public class S extends C { public int peek(C other) { return other.tag; } }",
     /// one of them used to arrive there looking top-level and got E0432.
     #[test]
     fn private_nested_class_is_not_a_top_level_visibility_error() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Registry {
                 private int tag;
                 public Registry() { this.tag = 1; }
@@ -10482,8 +10467,7 @@ public class S extends C { public int peek(C other) { return other.tag; } }",
                 }
             }
             public void main() { var r = new Registry(); }
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0432_InvalidTopLevelVisibility),
             "a private nested class is legal: {d:?}",
@@ -10496,90 +10480,96 @@ public class S extends C { public int peek(C other) { return other.tag; } }",
     fn private_top_level_class_still_emits_e0432() {
         let d = run("private class Hidden { }
 public void main() { }");
-        assert!(has(&d, code::Code::E0432_InvalidTopLevelVisibility), "expected E0432: {d:?}");
+        assert!(
+            has(&d, code::Code::E0432_InvalidTopLevelVisibility),
+            "expected E0432: {d:?}"
+        );
     }
 
     /// Reading a PUBLIC field through a polymorphic-base reference is allowed
     /// (the generated `__get_<f>` accessor handles it) — no E0437.
     #[test]
     fn public_field_through_polymorphic_base_is_allowed() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal { public String name; public Animal(String n){ this.name = n; } public String speak(){ return "..."; } }
             public class Dog extends Animal { public Dog(String n){ super(n); } public String speak(){ return "woof"; } }
             public void main() { Animal a = new Dog("Rex"); print(a.name); }
-            "#,
+            "#);
+        assert!(
+            !has(&d, code::Code::E0437_FieldThroughPolymorphicBase),
+            "public field via accessor: {d:?}"
         );
-        assert!(!has(&d, code::Code::E0437_FieldThroughPolymorphicBase), "public field via accessor: {d:?}");
     }
 
     /// Accessing a field on `this` (concrete self) or on a concrete subclass
     /// reference must NOT trip E0437.
     #[test]
     fn field_on_this_or_concrete_no_e0437() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal { public String name; public Animal(String n){ this.name = n; } public String who(){ return this.name; } public String speak(){ return "..."; } }
             public class Dog extends Animal { public Dog(String n){ super(n); } public String speak(){ return "woof"; } }
             public void main() { var d = new Dog("Rex"); print(d.name); }
-            "#,
+            "#);
+        assert!(
+            !has(&d, code::Code::E0437_FieldThroughPolymorphicBase),
+            "this/concrete field access must be clean: {d:?}"
         );
-        assert!(!has(&d, code::Code::E0437_FieldThroughPolymorphicBase), "this/concrete field access must be clean: {d:?}");
     }
 
     /// A generic virtual method on a polymorphic base → E0438.
     #[test]
     fn generic_virtual_method_on_base_emits_e0438() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Base { public <R> R pick(R x){ return x; } }
             public class Sub extends Base {}
             public void main() {}
-            "#,
+            "#);
+        assert!(
+            has(&d, code::Code::E0438_GenericVirtualMethod),
+            "expected E0438: {d:?}"
         );
-        assert!(has(&d, code::Code::E0438_GenericVirtualMethod), "expected E0438: {d:?}");
     }
 
     /// A cast between two unrelated classes can never succeed → E0442.
     #[test]
     fn unrelated_class_cast_emits_e0442() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public abstract class Animal { public abstract String sound(); }
             public class Dog extends Animal { public Dog() {} public String sound() { return "w"; } }
             public class Cat extends Animal { public Cat() {} public String sound() { return "m"; } }
             public void main() { var dog = new Dog(); var c = dog as Cat; }
-            "#,
+            "#);
+        assert!(
+            has(&d, code::Code::E0442_UnrelatedCast),
+            "expected E0442: {d:?}"
         );
-        assert!(has(&d, code::Code::E0442_UnrelatedCast), "expected E0442: {d:?}");
     }
 
     /// A type-test binder outside an `if` condition is rejected (E0441).
     #[test]
     fn typetest_binder_outside_if_emits_e0441() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public abstract class Animal { public abstract String s(); }
             public class Dog extends Animal { public Dog() {} public String s() { return "w"; } }
             public void main() { Animal a = new Dog(); var b = a => Dog d; }
-            "#,
+            "#);
+        assert!(
+            has(&d, code::Code::E0441_TypeTestBinderMisplaced),
+            "expected E0441: {d:?}"
         );
-        assert!(has(&d, code::Code::E0441_TypeTestBinderMisplaced), "expected E0441: {d:?}");
     }
 
     /// `if (x => Dog d)` binds `d: Dog` in the then-branch and is clean.
     #[test]
     fn typetest_smartcast_binder_in_if_is_ok() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public abstract class Animal { public abstract String s(); }
             public class Dog extends Animal { public Dog() {} public String s() { return "w"; } public String fetch() { return "f"; } }
             public void main() {
                 Animal a = new Dog();
                 if (a => Dog d) { print(d.fetch()); }
             }
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0441_TypeTestBinderMisplaced)
                 && !has(&d, code::Code::E0413_UnresolvedMethod)
@@ -10591,8 +10581,7 @@ public void main() { }");
     /// A downcast to a subclass and an interface sidecast are valid (no E0442).
     #[test]
     fn downcast_and_interface_sidecast_are_ok() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public abstract class Animal { public abstract String sound(); }
             public interface Named { String label(); }
             public class Dog extends Animal { public Dog() {} public String sound() { return "w"; } }
@@ -10601,20 +10590,20 @@ public void main() { }");
                 Animal a = new Dog(); var d = a as Dog;        // downcast
                 Animal t = new Tagged(); var n = t as Named;    // interface sidecast
             }
-            "#,
+            "#);
+        assert!(
+            !has(&d, code::Code::E0442_UnrelatedCast),
+            "valid downcast/sidecast: {d:?}"
         );
-        assert!(!has(&d, code::Code::E0442_UnrelatedCast), "valid downcast/sidecast: {d:?}");
     }
 
     /// `super.method()` in a class with no superclass is rejected.
     #[test]
     fn super_without_superclass_is_rejected() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal { public String speak() { return super.speak(); } }
             public void main() {}
-            "#,
-        );
+            "#);
         assert!(
             d.iter().any(|x| x.message.contains("super")),
             "expected a `super` diagnostic: {d:?}",
@@ -10624,16 +10613,14 @@ public void main() { }");
     /// `super.method()` from a real override resolves cleanly (no error).
     #[test]
     fn super_call_from_override_is_ok() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal { public String speak() { return "generic"; } }
             public class Dog extends Animal {
                 public Dog() {}
                 public String speak() { return super.speak(); }
             }
             public void main() { var dog = new Dog(); print(dog.speak()); }
-            "#,
-        );
+            "#);
         assert!(
             !d.iter().any(|x| x.message.contains("super")),
             "valid super.method() should be clean: {d:?}",
@@ -10644,26 +10631,25 @@ public void main() { }");
     /// dispatch concern → no E0438.
     #[test]
     fn generic_method_on_leaf_no_e0438() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Util { public <R> R pick(R x){ return x; } }
             public void main() {}
-            "#,
+            "#);
+        assert!(
+            !has(&d, code::Code::E0438_GenericVirtualMethod),
+            "leaf generic method must be clean: {d:?}"
         );
-        assert!(!has(&d, code::Code::E0438_GenericVirtualMethod), "leaf generic method must be clean: {d:?}");
     }
 
     /// A generic-method interface used as a value-typed local can't be a
     /// trait object (object safety) → E0435.
     #[test]
     fn generic_method_interface_value_local_emits_e0435() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public interface Mapper { <R> R map(R input); }
             public class Id implements Mapper { public <R> R map(R input) { return input; } }
             public void main() { Mapper m = new Id(); }
-            "#,
-        );
+            "#);
         assert!(
             has(&d, code::Code::E0435_InterfaceNotDynDispatchable),
             "expected E0435 for generic-method interface value: {d:?}",
@@ -10673,13 +10659,11 @@ public void main() { }");
     /// A raw generic interface (no type argument) as a value type → E0435.
     #[test]
     fn raw_generic_interface_value_param_emits_e0435() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public interface Box<T> { T get(); }
             public void use(Box b) {}
             public void main() {}
-            "#,
-        );
+            "#);
         assert!(
             has(&d, code::Code::E0435_InterfaceNotDynDispatchable),
             "expected E0435 for raw generic interface value: {d:?}",
@@ -10690,13 +10674,11 @@ public void main() { }");
     /// object (`dyn Box<int>`) — must NOT trip E0435.
     #[test]
     fn concrete_generic_interface_value_is_ok() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public interface Box<T> { T get(); }
             public void use(Box<int> b) {}
             public void main() {}
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0435_InterfaceNotDynDispatchable),
             "Box<int> value type should be allowed: {d:?}",
@@ -10707,13 +10689,11 @@ public void main() { }");
     /// case — never E0435.
     #[test]
     fn plain_interface_value_field_is_ok() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public interface Shape { double area(); }
             public class Holder { public Shape s; public Holder(Shape s) { this.s = s; } }
             public void main() {}
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0435_InterfaceNotDynDispatchable),
             "plain interface value field should be allowed: {d:?}",
@@ -10724,8 +10704,7 @@ public void main() { }");
     /// E0444 (covariant container storage isn't supported in Phase 1).
     #[test]
     fn wildcard_storage_field_emits_e0444() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal { public String name; public Animal(String n) { this.name = n; } }
             public class Bag<T> { public T item; public Bag(T item) { this.item = item; } }
             public class Holder {
@@ -10733,8 +10712,7 @@ public void main() { }");
                 public Holder(Bag<? extends Animal> c) { this.contents = c; }
             }
             public void main() {}
-            "#,
-        );
+            "#);
         assert!(
             has(&d, code::Code::E0444_WildcardStorageUnsupported),
             "expected E0444 for wildcard storage field: {d:?}",
@@ -10745,14 +10723,12 @@ public void main() { }");
     /// generic and is sound — must NOT trip E0444.
     #[test]
     fn wildcard_param_does_not_emit_e0444() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal { public String name; public Animal(String n) { this.name = n; } }
             public class Bag<T> { public T item; public Bag(T item) { this.item = item; } }
             public void describe(Bag<? extends Animal> b) {}
             public void main() {}
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0444_WildcardStorageUnsupported),
             "param-position wildcard should be allowed: {d:?}",
@@ -10763,8 +10739,7 @@ public void main() { }");
     /// wildcard — never E0444.
     #[test]
     fn concrete_storage_field_is_ok() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Animal { public String name; public Animal(String n) { this.name = n; } }
             public class Dog extends Animal { public Dog(String n) { super(n); } }
             public class Bag<T> { public T item; public Bag(T item) { this.item = item; } }
@@ -10773,8 +10748,7 @@ public void main() { }");
                 public Holder(Bag<Dog> c) { this.contents = c; }
             }
             public void main() {}
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0444_WildcardStorageUnsupported),
             "concrete-arg storage field should be allowed: {d:?}",
@@ -10785,12 +10759,10 @@ public void main() { }");
     /// (`new Buf<String>()` against `class Buf<int N>`) → E0445.
     #[test]
     fn type_in_const_slot_emits_e0445() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Buf<int N> { public Buf() { } }
             public void main() { var b = new Buf<String>(); }
-            "#,
-        );
+            "#);
         assert!(
             has(&d, code::Code::E0445_ConstGenericUnsupported),
             "expected E0445 for a type in a const slot: {d:?}",
@@ -10801,12 +10773,10 @@ public void main() { }");
     /// → E0445.
     #[test]
     fn literal_in_type_slot_emits_e0445() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Box<T> { public T v; public Box(T v) { this.v = v; } }
             public void main() { var b = new Box<256>(5); }
-            "#,
-        );
+            "#);
         assert!(
             has(&d, code::Code::E0445_ConstGenericUnsupported),
             "expected E0445 for a literal in a type slot: {d:?}",
@@ -10830,10 +10800,8 @@ public void main() { }");
     /// A const-position call to a non-terminating function exhausts the budget.
     #[test]
     fn const_eval_runaway_recursion_e0840() {
-        let d = run(
-            "int rec(int x) { return rec(x); } \
-             public class C { int[rec(1)] data; }",
-        );
+        let d = run("int rec(int x) { return rec(x); } \
+             public class C { int[rec(1)] data; }");
         assert!(has(&d, code::Code::E0840_ConstEvalLimitExceeded), "{d:?}");
     }
 
@@ -10869,10 +10837,8 @@ public void main() { }");
     /// Const arithmetic over CONCRETE consts is accepted (no const-eval error).
     #[test]
     fn concrete_const_arithmetic_array_size_ok() {
-        let d = run(
-            "const int SIZE = 4; \
-             public void main() { var a = new int[SIZE + 1]; }",
-        );
+        let d = run("const int SIZE = 4; \
+             public void main() { var a = new int[SIZE + 1]; }");
         assert!(!has(&d, code::Code::E0445_ConstGenericUnsupported), "{d:?}");
         assert!(!has(&d, code::Code::E0841_NonConstInConstContext), "{d:?}");
         assert!(!has(&d, code::Code::E0842_ConstEvalPanic), "{d:?}");
@@ -10884,15 +10850,13 @@ public void main() { }");
     /// E0445 (see `generic_param_arithmetic_array_size_still_e0445`).
     #[test]
     fn const_generic_arithmetic_new_array_heaps_no_e0445() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class S<int N> {
                 public S() { }
                 public int probe() { var a = new int[N + 1]; return 0; }
             }
             public void main() { }
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0445_ConstGenericUnsupported),
             "expected `new int[N + 1]` to heap (no E0445): {d:?}",
@@ -10903,15 +10867,13 @@ public void main() { }");
     /// §18.2 upgrades its refcount to an atomic one rather than refusing.
     #[test]
     fn shareable_object_captured_by_spawn_is_accepted() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Counter { public int n; public Counter() { this.n = 0; } }
             public void main() {
                 var c = new Counter();
                 var t = Worker.spawn(() -> { return c.n; });
             }
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0702_ObjectCapturedBySpawn),
             "a shareable class should cross a worker boundary: {d:?}",
@@ -10922,8 +10884,7 @@ public void main() { }");
     /// and the diagnostic names the member that blocks it.
     #[test]
     fn unshareable_object_captured_by_spawn_emits_e0702() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public interface Sink { void write(String s); }
             public class Service {
                 private Sink out;
@@ -10937,8 +10898,7 @@ public void main() { }");
                 var svc = new Service(new Logger());
                 var t = Worker.spawn(() -> { svc.go(); return 1; });
             }
-            "#,
-        );
+            "#);
         assert!(
             has(&d, code::Code::E0702_ObjectCapturedBySpawn),
             "expected E0702 for an unshareable capture: {d:?}",
@@ -10952,15 +10912,13 @@ public void main() { }");
     /// Primitive / String captures cross threads fine — no E0702.
     #[test]
     fn primitive_captures_in_spawn_are_ok() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public void main() {
                 int n = 5;
                 String tag = "x";
                 var t = Worker.spawn(() -> { return n + tag.length(); });
             }
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0702_ObjectCapturedBySpawn),
             "primitive captures must not fire E0702: {d:?}",
@@ -10972,16 +10930,14 @@ public void main() { }");
     /// no E0445.
     #[test]
     fn const_generic_core_subset_is_clean() {
-        let d = run(
-            r#"
+        let d = run(r#"
             public class Buf<int N> {
                 public int[N] data;
                 public Buf() { this.data = new int[N]; }
                 public int cap() { return N; }
             }
             public void main() { var b = new Buf<4>(); print(b.cap()); }
-            "#,
-        );
+            "#);
         assert!(
             !has(&d, code::Code::E0445_ConstGenericUnsupported),
             "core const-generic subset should be clean: {d:?}",
@@ -11006,8 +10962,7 @@ public void main() { }");
     /// in every common consuming position (call arg, index, initializer).
     #[test]
     fn incdec_value_forms_are_clean_on_numeric() {
-        let d = run(
-            r#"public void main() {
+        let d = run(r#"public void main() {
                    int x = 1;
                    var arr = new int[]{0, 0};
                    int i = 0;
@@ -11016,9 +10971,11 @@ public void main() { }");
                    var a = arr[i++];
                    var b = --arr[i];
                    print(a + b);
-               }"#,
+               }"#);
+        assert!(
+            d.is_empty(),
+            "numeric inc/dec value forms should be clean: {d:?}"
         );
-        assert!(d.is_empty(), "numeric inc/dec value forms should be clean: {d:?}");
     }
 
     /// `++` / `--` on a NON-numeric place (a `String`) is rejected
