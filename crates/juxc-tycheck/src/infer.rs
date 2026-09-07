@@ -816,6 +816,13 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 }
             }
             if let Ty::User { name, generic_args } = &receiver_ty {
+                // `clone()` on a scanned `Clone` type yields the SAME type. The
+                // stub lists no `clone` method - it comes from the trait, which
+                // the scan records on the type - so this is the only place the
+                // call can resolve.
+                if method_name == "clone" && c.args.is_empty() && symbols.type_is_rust_clone(name) {
+                    return receiver_ty.clone();
+                }
                 // Walk the class extends-chain first.
                 if let Some((method, declaring_class)) = symbols.lookup_method(name, method_name) {
                     // Overload-group pick (§T.3, count + types): a

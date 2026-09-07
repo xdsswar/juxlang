@@ -508,6 +508,97 @@ impl RustEmitter {
     /// [`Writer::emit_indent`]), and for bumping the writer's level
     /// when nested blocks need to land one deeper.
     pub(crate) fn emit_stmt(&mut self, stmt: &Stmt) {
+        // Which collection handles this statement borrows twice over, so the
+        // call emitter knows where its scoping wrapper is needed and where it
+        // would do harm. Saved and restored because a nested statement
+        // (an `if` body, a loop body) computes its own.
+        let conflicts = self.handle_conflicts_in(stmt);
+        let prev_conflicts = std::mem::replace(&mut self.handle_conflict_receivers, conflicts);
+        self.emit_stmt_inner(stmt);
+        self.handle_conflict_receivers = prev_conflicts;
+    }
+
+    /// The receiver places this statement calls into a collection handle
+    /// more than once, with at least one of those calls mutating.
+    ///
+    /// Only the statement's OWN expressions count. A nested block is a
+    /// sequence of statements in its own right, each of which recomputes this
+    /// for itself, and its borrows never overlap this one's.
+    fn handle_conflicts_in(&self, stmt: &Stmt) -> std::collections::HashSet<String> {
+        use std::collections::HashMap;
+        let mut seen: HashMap<String, (u32, bool)> = HashMap::new();
+        let mut note = |e: &Expr| {
+            let Expr::Call(c) = e else { return };
+            let Expr::Field(f) = &*c.callee else { return };
+            if !self.expr_is_collection_handle(&f.object) {
+                return;
+            }
+            let Some(key) = Self::receiver_place_key(&f.object) else {
+                return;
+            };
+            let mutates = self
+                .collection_handle_borrow(&f.object, &f.field.text)
+                .is_some_and(|b| b == ".borrow_mut()");
+            let slot = seen.entry(key).or_insert((0, false));
+            slot.0 += 1;
+            slot.1 |= mutates;
+        };
+        for e in Self::stmt_own_exprs(stmt) {
+            crate::worker::walk_expr(e, &mut note);
+        }
+        seen.into_iter()
+            .filter(|(_, (n, mutates))| *n >= 2 && *mutates)
+            .map(|(k, _)| k)
+            .collect()
+    }
+
+    /// The expressions a statement evaluates ITSELF, not counting those in
+    /// any block it contains.
+    fn stmt_own_exprs(stmt: &Stmt) -> Vec<&Expr> {
+        match stmt {
+            Stmt::Expr(e) | Stmt::Throw(e, _) | Stmt::Return(Some(e), _) => vec![e],
+            Stmt::VarDecl(v) => v.init.iter().collect(),
+            Stmt::Assign(a) => vec![&a.target, &a.value],
+            Stmt::If(i) => vec![&i.condition],
+            Stmt::While(w) => vec![&w.condition],
+            Stmt::DoWhile(d) => vec![&d.condition],
+            Stmt::ForEach(f) => vec![&f.iter],
+            Stmt::ForC(f) => f.cond.iter().collect(),
+            Stmt::SuperCall(args, _) => args.iter().collect(),
+            Stmt::Labeled { stmt, .. } => Self::stmt_own_exprs(stmt),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Text identifying a receiver PLACE - `d`, `this.items`, `a.b.c` - so two
+    /// mentions of the same collection in one statement can be recognised as
+    /// one. `None` for anything that is not a chain of plain names, which is
+    /// then left un-wrapped: the guard keeps its statement lifetime, exactly
+    /// as it did before handles existed.
+    pub(crate) fn receiver_conflicts_in_statement(&self, recv: &Expr) -> bool {
+        Self::receiver_place_key(recv).is_some_and(|k| self.handle_conflict_receivers.contains(&k))
+    }
+
+    fn receiver_place_key(e: &Expr) -> Option<String> {
+        match e {
+            Expr::This(_) => Some("this".to_string()),
+            Expr::Path(qn) => Some(
+                qn.segments
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            ),
+            Expr::Field(f) => Some(format!(
+                "{}.{}",
+                Self::receiver_place_key(&f.object)?,
+                f.field.text
+            )),
+            _ => None,
+        }
+    }
+
+    fn emit_stmt_inner(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Expr(e) => {
                 self.emit_expr(e);
@@ -1874,14 +1965,37 @@ impl RustEmitter {
         // (cloning detaches the Rc element handles; element mutation still aliases
         // the live objects) so the field borrow drops before the body runs. This
         // also gives iterate-a-snapshot semantics if the body adds to the field.
-        let snapshot = self.for_each_iter_reads_through_borrow(&f.iter);
+        // **Collection handle (§6.5.1).** A collection is a reference type, so
+        // the iterable is an `Rc<RefCell<…>>` and the sequence lives inside the
+        // cell. A for-each walks a SHALLOW SNAPSHOT of that sequence: the
+        // elements are shared exactly as they always are (an element that is
+        // itself a handle is a refcount bump, not a copy), but the sequence is
+        // captured at loop entry.
+        //
+        // Holding the cell's read guard across the body instead would be
+        // cheaper, and it would answer "mutate the collection you are
+        // iterating" with a `RefCell already borrowed` panic - Java's
+        // `ConcurrentModificationException`, in a message naming Rust machinery
+        // the Jux programmer never wrote. Snapshotting makes that program well
+        // defined instead: the loop walks the elements that were there when it
+        // started, and the mutation is visible after it.
+        let handle = self.expr_is_collection_handle(&f.iter);
+        let snapshot = handle || self.for_each_iter_reads_through_borrow(&f.iter);
         if snapshot {
             self.w.push_str("{\n");
             self.w.indent_inc();
             self.w.emit_indent();
             self.w.push_str("let __jux_fe_iter = ");
             self.emit_expr(&f.iter);
-            self.w.push_str(".clone();\n");
+            // A handle's own `.clone()` only bumps the refcount, so reach
+            // through the cell for the sequence itself. Every guard here is a
+            // temporary in a `let` initializer, so all of them drop at the
+            // semicolon, before the body runs.
+            self.w.push_str(if handle {
+                ".borrow().clone();\n"
+            } else {
+                ".clone();\n"
+            });
             self.w.emit_indent();
         }
 
@@ -3258,6 +3372,12 @@ impl RustEmitter {
                 if let Some(depth) = depth {
                     let prev = self.emitting_format_arg;
                     self.emitting_format_arg = false;
+                    // A collection field is a reference type (§6.5.1): the write
+                    // lands in the COLLECTION's own cell, so the owner only needs
+                    // a shared borrow to reach the handle. Taking the exclusive
+                    // one here would make a write to one field conflict with a
+                    // read of a sibling for no reason.
+                    let handle = self.expr_is_collection_handle(&ix.array);
                     self.w.push_str("{ let __jux_v = ");
                     self.emit_assign_rhs(&a.value);
                     self.w.push_str("; let __jux_i = (");
@@ -3266,12 +3386,19 @@ impl RustEmitter {
                     self.emitting_method_receiver = true;
                     self.emit_expr(&af.object);
                     self.emitting_method_receiver = false;
-                    self.w.push_str(".0.borrow_mut()");
+                    self.w.push_str(if handle {
+                        ".0.borrow()"
+                    } else {
+                        ".0.borrow_mut()"
+                    });
                     for _ in 0..depth {
                         self.w.push_str(".__parent");
                     }
                     self.w.push('.');
                     self.w.push_str(&to_rust_ident(&af.field.text));
+                    if handle {
+                        self.w.push_str(".borrow_mut()");
+                    }
                     self.w.push_str("[__jux_i]");
                     if let Some(op) = a.op {
                         self.w.push(' ');

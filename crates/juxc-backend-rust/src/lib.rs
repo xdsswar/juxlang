@@ -1199,6 +1199,33 @@ struct RustEmitter {
     /// flag on entry so only the outermost field sees it; a nested
     /// field receiver (`obj.field.method()`) still borrows correctly.
     pub(crate) emitting_call_callee: bool,
+    /// True while emitting the STATEMENT-SCOPING wrapper around a method
+    /// call on a collection handle (§6.5.1). A `RefCell` guard created inside
+    /// a larger expression stays alive to the end of the whole statement, so
+    /// `$"${d.len()} ${d.pop_front()}"` would hold a shared borrow while
+    /// taking an exclusive one and panic `already borrowed`. Binding the
+    /// call's RESULT to a `let` drops the guard at that `let`'s semicolon.
+    /// The flag stops the wrapper from wrapping itself.
+    pub(crate) wrapping_handle_call: bool,
+    /// Receiver places (written as text: `d`, `this.items`) whose collection
+    /// calls in the CURRENT statement conflict over one `RefCell` and so need
+    /// the statement-scoping wrapper (§6.5.1).
+    ///
+    /// A guard taken inside a larger expression lives to the end of the whole
+    /// statement, so `$"${d.len()} ${d.pop_front()}"` would hold a shared
+    /// borrow while taking an exclusive one and panic `already borrowed`.
+    /// Binding each call's RESULT to a `let` drops its guard at that `let`'s
+    /// semicolon instead. That wrapper cannot be applied blindly, though: a
+    /// method whose Rust result BORROWS from the receiver (`first`, `get_mut`)
+    /// cannot have the value outlive the guard, and the block would move the
+    /// guard out from under it (rustc E0597 / E0716).
+    ///
+    /// So it is applied only where a conflict actually exists: two or more
+    /// calls on the SAME receiver in one statement, at least one of them
+    /// mutating. Two reads share a `RefCell` happily, and a lone call has
+    /// nothing to conflict with, so both keep the plain statement-lifetime
+    /// guard that reference-returning methods need.
+    pub(crate) handle_conflict_receivers: std::collections::HashSet<String>,
     /// True while emitting the RECEIVER place of a method call
     /// (`h.item` in `h.item.set(x)`). A plain (non-wrapper-borrow)
     /// field read in this position must NOT take the auto-`.clone()`
@@ -4431,6 +4458,8 @@ impl RustEmitter {
             observer_shapes: std::collections::HashMap::new(),
             emitting_class_has_static_init: false,
             emitting_call_callee: false,
+            wrapping_handle_call: false,
+            handle_conflict_receivers: std::collections::HashSet::new(),
             emitting_method_receiver: false,
             in_lambda_body: false,
             lambda_void_target: false,
@@ -4675,8 +4704,18 @@ impl RustEmitter {
         // package grouping". These stay inlined at the crate root
         // (in `main.rs`) in both single-file and split modes.
         for &idx in &tree.unit_indices {
+            // Track the unit the same way the PACKAGED tiers below do. Without
+            // it every import-alias-aware bare-name lookup silently missed for
+            // a no-package file — the tier the whole example corpus lives in —
+            // because `resolve_bare_class_fqn` had no unit context to consult.
+            // `import rust.std.{BTreeMap as SortedMap};` then left `SortedMap`
+            // unresolvable, so the type was not recognised as a collection and
+            // its declared slot disagreed with its own `new`.
+            let prev_unit = self.current_unit_idx.take();
+            self.current_unit_idx = Some(idx);
             self.source = sources.get(idx).cloned();
             self.emit_compilation_unit(&units[idx]);
+            self.current_unit_idx = prev_unit;
         }
         // **Split mode:** each top-level package becomes a file tree under
         // `src/<name>/`, declared in `main.rs` with `pub mod <name>;`. The

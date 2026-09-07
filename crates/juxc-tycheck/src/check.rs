@@ -6290,6 +6290,16 @@ impl<'a> Checker<'a> {
                         return;
                     }
                 }
+                // `clone()` comes from Rust's `Clone` trait, which the scan
+                // records on the TYPE (`@RustClone`) rather than as a method, so
+                // it never appears in the method table. It is the one way to
+                // copy a collection (§6.5.1), so it has to resolve.
+                if method_name == "clone"
+                    && c.args.is_empty()
+                    && self.symbols.type_is_rust_clone(&name)
+                {
+                    return;
+                }
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0413_UnresolvedMethod,

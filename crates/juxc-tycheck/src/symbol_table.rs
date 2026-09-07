@@ -156,6 +156,28 @@ impl SymbolTable {
     /// classes > records > enums > interfaces > aliases. Order
     /// inside each category is HashMap-iteration which is stable
     /// per session.
+    /// Whether `name` is a scanned type that Rust says is `Clone`, recorded by
+    /// bindgen as the `@RustClone` marker.
+    ///
+    /// Jux surfaces `clone()` on such a type even though the stub lists no such
+    /// method: it comes from the `Clone` trait, and the scan records traits on
+    /// the type rather than re-listing their methods. It matters because a
+    /// collection is a reference type (§6.5.1), so `clone()` is the ONLY way
+    /// to ask for an independent copy of one.
+    pub fn type_is_rust_clone(&self, name: &str) -> bool {
+        let sig = self.classes.get(name).or_else(|| {
+            self.find_fqn_by_bare(name.rsplit('.').next().unwrap_or(name))
+                .and_then(|fqn| self.classes.get(&fqn))
+        });
+        sig.is_some_and(|c| {
+            c.is_external
+                && c.annotations.iter().any(|a| {
+                    a.name.segments.len() == 1
+                        && a.name.segments[0].text.eq_ignore_ascii_case("rustclone")
+                })
+        })
+    }
+
     pub fn find_fqn_by_bare(&self, name: &str) -> Option<String> {
         self.find_fqn_by_bare_in(name, "")
     }

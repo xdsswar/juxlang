@@ -175,6 +175,13 @@ fn render_fn(f: &StubFn, in_interface: bool) -> String {
     if f.is_mut_self {
         s.push_str("@MutSelf ");
     }
+    // The Rust result borrows from the receiver. Marked here because the Jux
+    // return type drops the `&`, so nothing downstream could tell otherwise -
+    // and the compiler has to, to clone the value out of the `RefCell` guard a
+    // collection call is made through (§6.5.1).
+    if f.returns_borrow {
+        s.push_str("@RustRefOut ");
+    }
     s.push_str(f.visibility.prefix());
     // `static` is valid on a *class* stub method (no body needed there), but on
     // an interface a bodyless `static` is `E0200`. A Rust trait's associated
@@ -283,6 +290,7 @@ mod tests {
             throws: None,
             is_unsafe: false,
             is_mut_self: false,
+            returns_borrow: false,
             rust_path: None,
             doc: None,
         });
@@ -297,6 +305,7 @@ mod tests {
             throws: None,
             is_unsafe: false,
             is_mut_self: false,
+            returns_borrow: false,
             rust_path: None,
             doc: None,
         });
@@ -328,6 +337,7 @@ mod tests {
             throws: Some(JuxType::user("ConfigError")),
             is_unsafe: false,
             is_mut_self: false,
+            returns_borrow: false,
             rust_path: None,
             doc: None,
         };
@@ -375,6 +385,7 @@ mod tests {
             throws: Some(JuxType::user("DurationError")),
             is_unsafe: false,
             is_mut_self: false,
+            returns_borrow: false,
             rust_path: Some("humantime::parse_duration".into()),
             doc: None,
         };
@@ -408,6 +419,7 @@ mod tests {
             throws: None,
             is_unsafe: true,
             is_mut_self: false,
+            returns_borrow: false,
             rust_path: None,
             doc: None,
         };
