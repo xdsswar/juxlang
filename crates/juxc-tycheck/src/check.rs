@@ -7222,9 +7222,17 @@ impl<'a> Checker<'a> {
 
 /// Foreign-call argument BRIDGE (§G interop). A `rust.*` / crate callee whose
 /// parameter is a Rust **slice** (`&[T]`, spelled `T[]` in the `.jux.d` stub)
-/// accepts a Jux array OR the `rust.std` owned `Vec<T>` as its argument:
-/// `&[T; N]` and `&Vec<T>` both Deref-coerce to `&[T]` in Rust, and the
-/// backend re-adds the borrow at the call slot (`callee_param_is_foreign_slice`).
+/// accepts a Jux array OR the `rust.std` `Vec<T>` as its argument.
+///
+/// A Jux array is a plain `Vec<T>` and Deref-coerces to `&[T]` once the backend
+/// re-adds the borrow at the call slot (`callee_param_is_foreign_slice`, and
+/// its by-name twin `external_param_is_slice`). A `rust.std` collection does
+/// NOT: since §6.5.1 it is a shared handle, and `&Rc<RefCell<Vec<T>>>`
+/// coerces to nothing. The backend therefore LENDS the interior at the call
+/// slot (`foreign_arg_handle_lend`) so the crate sees the sequence it asked
+/// for. This comment used to claim the coercion did the work by itself; that
+/// stopped being true when collections became reference types, and it was a
+/// silent rustc E0308 until an example was written that crosses the boundary.
 ///
 /// Deliberately narrow — it fires ONLY for an external callee, ONLY for a
 /// slice parameter, and leaves the global [`compatible`] untouched, so normal
@@ -7345,11 +7353,33 @@ fn type_ref_display(t: &juxc_ast::TypeRef) -> String {
         .map(|x| x.text.as_str())
         .collect::<Vec<_>>()
         .join(".");
+    // Generic arguments and the array shape are part of the type the user
+    // wrote, and they are exactly the shapes the FFI check rejects - without
+    // them E0508 reported `int[]` as `int` and `Vec<int>` as `Vec`, naming a
+    // type that would have been perfectly legal.
+    if !t.generic_args.is_empty() {
+        s.push('<');
+        for (i, a) in t.generic_args.iter().enumerate() {
+            if i > 0 {
+                s.push_str(", ");
+            }
+            match a {
+                juxc_ast::GenericArg::Type(inner) => s.push_str(&type_ref_display(inner)),
+                _ => s.push('_'),
+            }
+        }
+        s.push('>');
+    }
     if t.nullable {
         s.push('?');
     }
     for _ in 0..t.ptr_depth {
         s.push('*');
+    }
+    if let Some(shape) = &t.array_shape {
+        for _ in 0..shape.dims.len() {
+            s.push_str("[]");
+        }
     }
     s
 }

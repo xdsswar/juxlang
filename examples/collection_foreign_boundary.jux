@@ -1,0 +1,66 @@
+// A collection crossing into a Rust crate (JUX-LANG-V1 §6.5.1, JUX-BINDGEN §G).
+//
+// A collection is a shared handle, but a crate wants the SEQUENCE: bindgen maps
+// Rust's `Vec<T>`, `&[T]` and `&mut [T]` all onto the same Jux `T[]` slot, and
+// `&Rc<RefCell<Vec<T>>>` coerces to none of them. So the handle lends its
+// interior on the way out, and a container handed back by a crate is wrapped
+// into a handle on the way in.
+//
+// `Vec.extend_from_slice` is the std-only, every-platform stand-in for the
+// crate APIs that motivated this -- minifb's `update_with_buffer(&[u32], ..)`
+// takes the same shape.
+//
+// Expected output: 3 / 3 / 4 / 2 / 1 / 1
+
+import rust.std.*;
+
+public class Canvas {
+    public Vec<int> buf;
+    public Canvas() {
+        this.buf = new Vec<int>();
+        this.buf.push(7);
+        this.buf.push(8);
+    }
+}
+
+public void main() {
+    // A collection handle into a foreign slice slot.
+    var a = new Vec<int>();
+    a.push(1); a.push(2);
+    var b = new Vec<int>();
+    b.push(3);
+    a.extend_from_slice(b);
+    print(a.len());
+
+    // A Jux ARRAY into the same slot. This never worked either: the slot
+    // carries no `&` marker in the stub, so nothing borrowed it.
+    var c = new Vec<int>();
+    int[] arr = new int[3];
+    c.extend_from_slice(arr);
+    print(c.len());
+
+    // Self-aliasing. Java's `list.addAll(list)` doubles the list; lending
+    // would take a shared borrow of the cell the receiver holds exclusively,
+    // so this one copies instead of panicking.
+    var d = new Vec<int>();
+    d.push(1); d.push(2);
+    d.extend_from_slice(d);
+    print(d.len());
+
+    // A handle FIELD, read through its owner's own handle -- the shape the
+    // paint and window demos use to hand a framebuffer to the crate.
+    var canvas = new Canvas();
+    var sink = new Vec<int>();
+    sink.extend_from_slice(canvas.buf);
+    print(sink.len());
+
+    // The return direction: a foreign named constructor hands back the bare
+    // container, and the slot receiving it is a handle.
+    Vec<int> v = Vec.with_capacity(8);
+    v.push(1);
+    print(v.len());
+
+    VecDeque<int> q = VecDeque.with_capacity(4);
+    q.push_back(9);
+    print(q.len());
+}

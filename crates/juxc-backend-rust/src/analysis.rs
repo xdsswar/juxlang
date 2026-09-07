@@ -2216,6 +2216,52 @@ impl crate::RustEmitter {
             .unwrap_or(false)
     }
 
+    /// The borrow a §6.5.1 collection HANDLE needs to reach a FOREIGN
+    /// parameter slot, or `None` when this argument is not that case.
+    ///
+    /// A foreign slot never wants the handle. bindgen maps a Rust `Vec<T>`,
+    /// `&[T]` and `&mut [T]` all to the same Jux `T[]` (§G.3.4 drops the
+    /// borrow), and a `&T` slot keeps its `&` marker; in every one of those
+    /// shapes the crate expects the SEQUENCE, so the handle lends its interior
+    /// rather than being handed over. Passing the handle itself was a silent
+    /// rustc E0308 with no test to catch it, because no example in the corpus
+    /// passes a collection to a foreign function.
+    ///
+    /// **Self-aliasing copies instead.** `a.extend_from_slice(a)` is a legal
+    /// Java-shaped program, but lending would take a shared borrow of the very
+    /// cell the receiver holds exclusively and panic. Copying out matches what
+    /// the program means and keeps the panic out of the language.
+    pub(crate) fn foreign_arg_handle_lend(
+        &self,
+        callee: &juxc_ast::Expr,
+        arg_idx: usize,
+        arg: &juxc_ast::Expr,
+    ) -> Option<&'static str> {
+        if !self.expr_is_collection_handle(arg) {
+            return None;
+        }
+        let p = self.foreign_callee_param(callee, arg_idx)?;
+        if !(p.is_ref || p.ty.array_shape.is_some()) {
+            return None;
+        }
+        let aliases_receiver = matches!(callee, juxc_ast::Expr::Field(f)
+            if Self::receiver_place_key(&f.object).is_some()
+                && Self::receiver_place_key(&f.object) == Self::receiver_place_key(arg));
+        // Borrowing needs somewhere for the guard to borrow FROM. A bare local
+        // is a binding that outlives the call; anything else - a field read
+        // through an owner's own cell, a call result - is a temporary, and a
+        // guard taken from one dies at the end of the `let` that made it
+        // (rustc E0716). Those copy out instead, which is exactly what a Jux
+        // ARRAY in the same slot has always done.
+        let lends_from_a_binding =
+            matches!(arg, juxc_ast::Expr::Path(qn) if qn.segments.len() == 1);
+        Some(if aliases_receiver || !lends_from_a_binding {
+            ".borrow().clone()"
+        } else {
+            ".borrow()"
+        })
+    }
+
     /// True when arg `arg_idx` of `callee` maps to an **external** method
     /// parameter that is a Jux FUNCTION type (`(A) -> R`) — bindgen produces
     /// this for a Rust `impl Fn(..)` closure parameter (§G.3). A Jux lambda

@@ -198,6 +198,70 @@ impl RustEmitter {
     /// `Result` unwrapped at the use site (see the `Expr::Call` arm of
     /// `emit_expr`). Covers bare free-function calls and `ClassName.method(...)`
     /// static calls; instance-method foreign-result calls are a later refinement.
+    /// True when a FOREIGN method/function hands back a collection - a
+    /// `VecDeque<T>` from `VecDeque.with_capacity(n)`, say.
+    ///
+    /// The crate returns the bare container, but a collection is a reference
+    /// type (§6.5.1) and the slot receiving it is a handle, so the value has
+    /// to be wrapped on the way in. This is the mirror of the lend that
+    /// happens on the way out ([`Self::foreign_arg_handle_lend`]).
+    ///
+    /// Read off the STUB's declared return type rather than the call's checked
+    /// type, so it cannot fire on a call the emitter already wraps for itself -
+    /// `clone()` comes from a trait and appears in no stub, and construction
+    /// goes through `new`, not here.
+    pub(crate) fn call_returns_foreign_collection(&self, call: &CallExpr) -> bool {
+        // The owning class, when the callee is a method - a named constructor
+        // writes its return type as `Self` (`Vec.with_capacity`), which names
+        // nothing on its own.
+        let mut owner: Option<String> = None;
+        let ret = match &*call.callee {
+            Expr::Path(qn) if qn.segments.len() == 1 => self
+                .symbols
+                .lookup_function(&qn.segments[0].text)
+                .filter(|(k, _)| k.starts_with("rust."))
+                .map(|(_, sig)| sig.return_type.clone()),
+            Expr::Field(f) => {
+                let method = f.field.text.as_str();
+                // Static `Container.method(...)`: the receiver is a type name.
+                let by_name = if let Expr::Path(qn) = &*f.object {
+                    qn.segments
+                        .last()
+                        .and_then(|l| self.symbols.find_fqn_by_bare(&l.text))
+                } else {
+                    None
+                };
+                // Instance `value.method(...)`: resolve the receiver's type.
+                let by_value = || match self.receiver_ty_of(&f.object) {
+                    Some(juxc_tycheck::Ty::User { name, .. }) => {
+                        self.resolve_bare_class_fqn(name.rsplit('.').next().unwrap_or(&name))
+                    }
+                    _ => None,
+                };
+                owner = by_name.or_else(by_value);
+                owner
+                    .as_ref()
+                    .and_then(|fqn| self.symbols.classes.get(fqn))
+                    .filter(|c| c.is_external)
+                    .and_then(|c| c.methods.get(method))
+                    .map(|m| m.return_type.clone())
+            }
+            _ => None,
+        };
+        let (Some(juxc_ast::ReturnType::Type(t)) | Some(juxc_ast::ReturnType::AsyncType(t))) = ret
+        else {
+            return false;
+        };
+        if t.array_shape.is_some() {
+            return false;
+        }
+        // `Self` on a named constructor means the owning type.
+        if t.name.segments.last().is_some_and(|l| l.text == "Self") {
+            return owner.is_some_and(|fqn| self.collection_name_is_handle(&fqn));
+        }
+        self.collection_is_handle(&t.name)
+    }
+
     pub(crate) fn call_is_foreign_result(&self, call: &CallExpr) -> bool {
         match &*call.callee {
             // Free function `f(args)` — exact key, else last-segment match for an
@@ -1414,7 +1478,6 @@ impl RustEmitter {
                             .get(&class_fqn)
                             .map(|c| !c.generic_params.is_empty())
                             .unwrap_or(false);
-                        let lift_to_free_fn = class_is_generic && !f.field.text.starts_with("__");
                         // §G.9.2: a static call on a foreign stub class
                         // (`Url.parse(...)`) lowers through its REAL Rust path
                         // (`url::Url::parse(...)`) from the `@rust` annotation,
@@ -1425,6 +1488,17 @@ impl RustEmitter {
                             .get(&class_fqn)
                             .filter(|c| c.is_external)
                             .and_then(|c| c.rust_path.clone());
+                        // The free-function lift is about classes THIS compiler
+                        // emits: it hoists a static out of a parameterized impl
+                        // so the call site need not infer the class's own type
+                        // params. A foreign class is emitted by nobody - its
+                        // statics live on the real Rust type - so lifting one
+                        // named a function that does not exist
+                        // (`std::vec::Vec_with_capacity`). Every generic
+                        // container constructor was unreachable this way.
+                        let lift_to_free_fn = class_is_generic
+                            && !f.field.text.starts_with("__")
+                            && external_real.is_none();
                         if let Some(real) = external_real {
                             self.w.push_str(&real);
                         } else {
@@ -2152,6 +2226,17 @@ impl RustEmitter {
         // coercion / share-clone. `emit_expr` handles the `Expr::Out` shape.
         if matches!(arg, Expr::Out(..)) {
             self.emit_expr(arg);
+            return;
+        }
+        // **Foreign slot: lend the interior (§6.5.1).** A crate wants the
+        // sequence, never the handle. Emitted as a method RECEIVER so the
+        // value-position auto-`.clone()` (an `Rc` bump, the wrong thing here)
+        // stays out of the way.
+        if let Some(borrow) = self.foreign_arg_handle_lend(&call.callee, i, arg) {
+            self.emitting_method_receiver = true;
+            self.emit_expr(arg);
+            self.emitting_method_receiver = false;
+            self.w.push_str(borrow);
             return;
         }
         // `ref` parameter slot (§M.13): a `ref` argument ALIASES the
@@ -4590,7 +4675,10 @@ impl RustEmitter {
             if i > 0 {
                 self.w.push_str(", ");
             }
-            let by_ref = self.external_param_is_by_ref(recv_type, method, i);
+            // A slice slot needs the borrow just as much as a `&T` one does;
+            // it simply has no `&` in the stub to say so.
+            let by_ref = self.external_param_is_by_ref(recv_type, method, i)
+                || self.external_param_is_slice(recv_type, method, i);
             if by_ref {
                 self.w.push_str("&(");
             }
@@ -4654,6 +4742,17 @@ impl RustEmitter {
         }
         if self.collection_args_prehoisted {
             self.emit_expr(arg);
+            return;
+        }
+        // **Foreign slot: lend the interior (§6.5.1).** A crate wants the
+        // sequence, never the handle. Emitted as a method RECEIVER so the
+        // value-position auto-`.clone()` (an `Rc` bump, the wrong thing here)
+        // stays out of the way.
+        if let Some(borrow) = self.foreign_arg_handle_lend(&call.callee, i, arg) {
+            self.emitting_method_receiver = true;
+            self.emit_expr(arg);
+            self.emitting_method_receiver = false;
+            self.w.push_str(borrow);
             return;
         }
         // **Dynamic-dispatch element slot** — a container whose element type

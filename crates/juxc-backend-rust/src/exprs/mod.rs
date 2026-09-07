@@ -757,6 +757,19 @@ impl RustEmitter {
             if by_ref {
                 this.w.push('&');
             }
+            // Same rule a foreign METHOD argument follows (§6.5.1): a crate
+            // wants the sequence, never the handle, so the handle lends its
+            // interior. Kept here rather than left to the method path because a
+            // constructor argument never reaches it - a foreign ctor with a
+            // slice parameter would otherwise be the one slot in the language
+            // where a collection arrives as an `Rc<RefCell<..>>`.
+            if by_ref && this.expr_is_collection_handle(arg) {
+                this.emitting_method_receiver = true;
+                this.emit_expr(arg);
+                this.emitting_method_receiver = false;
+                this.w.push_str(".borrow()");
+                return;
+            }
             let nullable = ctor_nullable_flags.get(i).copied().unwrap_or(false);
             this.emit_arg_with_nullable_wrap(arg, nullable);
             if !nullable
@@ -1036,6 +1049,16 @@ impl RustEmitter {
                 self.w.push_str(&path);
             }
             Expr::Call(c) => {
+                // A foreign method that hands back a COLLECTION hands back the
+                // bare container; the slot receiving it is a handle (§6.5.1),
+                // so it is wrapped here. Outside the `Result` unwrap below, so
+                // a fallible constructor (`try_with_capacity`) wraps the value
+                // rather than the `Result`.
+                let wrap = self.call_returns_foreign_collection(c);
+                if wrap {
+                    self.w
+                        .push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                }
                 // A call to a foreign (`.jux.d`) function/method whose `throws E`
                 // maps a Rust `Result<T, E>` (§G.5.4): unwrap the `Result` so the
                 // Jux-visible value is `T`, re-throwing the error via `panic_any`
@@ -1047,6 +1070,9 @@ impl RustEmitter {
                         .push_str(").unwrap_or_else(|__e| std::panic::panic_any(__e))");
                 } else {
                     self.emit_call(c);
+                }
+                if wrap {
+                    self.w.push_str("))");
                 }
             }
             Expr::Binary(b) => self.emit_binary(b),

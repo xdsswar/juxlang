@@ -579,7 +579,7 @@ impl RustEmitter {
         Self::receiver_place_key(recv).is_some_and(|k| self.handle_conflict_receivers.contains(&k))
     }
 
-    fn receiver_place_key(e: &Expr) -> Option<String> {
+    pub(crate) fn receiver_place_key(e: &Expr) -> Option<String> {
         match e {
             Expr::This(_) => Some("this".to_string()),
             Expr::Path(qn) => Some(

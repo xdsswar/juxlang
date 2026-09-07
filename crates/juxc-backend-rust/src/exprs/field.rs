@@ -2032,6 +2032,30 @@ impl super::super::RustEmitter {
         class.methods.get(method)
     }
 
+    /// By-NAME twin of [`Self::callee_param_is_foreign_slice`]: parameter
+    /// `idx` of `type_name::method` is a Jux array (`T[]`), which bindgen
+    /// produces for a Rust slice. The real signature takes it by reference, so
+    /// the call site has to borrow it - and unlike a scalar `&T` slot, a slice
+    /// carries no `&` marker to notice (§G.3.4).
+    ///
+    /// Without this, `emit_foreign_call_args` passed an owned value into a
+    /// `&[T]` slot: `v.extend_from_slice(other)` failed rustc E0308 for a plain
+    /// Jux array as well as for a collection handle.
+    pub(crate) fn external_param_is_slice(
+        &self,
+        type_name: &str,
+        method: &str,
+        idx: usize,
+    ) -> bool {
+        let class = self.symbols.classes.get(type_name).or_else(|| {
+            self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
+        });
+        class
+            .and_then(|c| c.methods.get(method))
+            .and_then(|m| m.params.get(idx))
+            .is_some_and(|p| p.ty.array_shape.is_some() && !p.is_ref)
+    }
+
     pub(crate) fn external_param_is_by_ref(
         &self,
         type_name: &str,
