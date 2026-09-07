@@ -149,6 +149,20 @@ A Rust function returning `Result<T, E>` maps to a Jux function with return type
 
 Rust's `&T` and `&mut T` carry no Jux spelling — they map to plain `T`, and Jux's borrow inference (§6.3, `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.7) re-derives the borrow mode at each call site. This is the central reason Jux code reads like Java even though it lowers to borrow-checked Rust: the `&` is inferred, never written. A `&mut self` method becomes an ordinary mutating method (§6.3); a `&self` method becomes a non-mutating one.
 
+Because the `&` vanishes, a stub signature alone cannot say whether a value
+came back **borrowed from the receiver** or owned: `T? first()` and `T? pop()`
+read identically, though Rust returns `Option<&T>` for one and `Option<T>` for
+the other. That difference decides whether the value may outlive the borrow the
+call was made through, which matters for every collection, since a collection
+is a reference type (`JUX-LANG-V1.md` §6.5.1) and every call on one reaches
+through its cell.
+
+So the fact is **recorded rather than re-derived**: a method whose Rust return
+type is `&T`, `&mut T`, or an `Option`/`Result` of one carries a `@RustRefOut`
+marker on the stub, and the compiler clones the borrowed value out. Like
+`@MutSelf`, it is discovered from the real rustdoc signature; unlike a list of
+method names, it cannot go stale when the library grows one.
+
 ### G.3.5. Phase-1 Nominal Placeholders — Tuples and Raw Pointers
 
 The grammar reserves `tuple-type` (`(A, B)`, §A.2.7) and `pointer-type` (`T*`, §A.2.7, `unsafe`-only) but the Phase-1 parser does not yet read either spelling back in. Because a generated stub must **parse** for its enclosing member to survive into the symbol table (and thus autocomplete), `bindgen` surfaces these two types under nominal placeholders until the real type-syntax features land (the pointer/tuple work travels with the broader `unsafe` / C-interop effort):

@@ -1042,6 +1042,39 @@ is the only thing that does. This is the same explicitness §6.4 requires of
 class values, and the reason the copy is visible in the source rather than
 implied by an assignment.
 
+The copy is **shallow**: the sequence is new, the elements are not. Cloning a
+`Vec<Order>` gives a list you can add to without the original growing, holding
+the same orders the original holds. That is Java's `new ArrayList<>(xs)`, and
+it falls out of §6.5 rather than being a separate rule: an element that is
+itself a reference stays one.
+
+**A `for`-each walks a snapshot.** The loop captures the sequence it is about
+to iterate, so a body that adds to or removes from the same collection is well
+defined: the loop visits the elements that were there when it started, and the
+mutation is visible after it ends.
+
+```java
+for (var v : items) {
+    items.push(v * 10);   // legal; the loop still visits the original elements
+}
+```
+
+The snapshot is shallow in the same sense as `clone()`, so mutating an
+*element* inside the loop is seen by everyone holding that element, as always.
+Java answers this program with a `ConcurrentModificationException`; Jux gives
+it a meaning instead, because the alternative is a runtime failure whose cause
+is invisible in the source.
+
+**One exception: a class that crosses a worker boundary.** Its instances are
+shared between threads (JUX-ASYNC-ADDENDUM §18.2), and the whole object is
+protected by the lock that sharing installs. A collection *field* of such a
+class is stored directly in the object rather than behind its own handle, so
+reading it out of the object hands back a copy rather than an alias. Mutating
+it through the owning object -- `registry.add(x)` -- behaves normally; only
+lifting the collection out into a second name loses the aliasing. This is the
+one place §6.5.1 does not reach, and it is called out here rather than left to
+be discovered.
+
 **In `jux-embedded` and `jux-core`**, refcounting is off by default because atomic operations are expensive (or unavailable) on small MCUs. Class instances follow single-ownership semantics — assignment moves rather than shares. To opt back into shared ownership, wrap a value in `SharedRef<T>`:
 
 ```java

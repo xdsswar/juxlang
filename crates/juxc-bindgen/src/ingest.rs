@@ -613,6 +613,7 @@ fn map_function(name: &str, f: &Function) -> StubFn {
         throws,
         is_unsafe: f.header.is_unsafe,
         is_mut_self: has_mut_self_receiver(f),
+        returns_borrow: f.sig.output.as_ref().is_some_and(returns_borrowed),
         // Set by the free-function call site (which has the rustdoc item); a
         // method leaves this `None` (it's dispatched on its `@rust`-pathed type).
         rust_path: None,
@@ -678,6 +679,29 @@ fn generic_fn_bound(name: &str, generics: &Generics) -> Option<JuxType> {
 /// must be passed with a call-site `&` (§G.9.2). A borrowed **slice** (`&[T]`)
 /// is excluded — it maps to a Jux array and is lowered through the array path,
 /// not as a single `&arg`.
+/// True when a Rust RETURN type hands back a borrow of the receiver: `&T` /
+/// `&mut T`, or an `Option` / `Result` wrapping one. `Option<&T>` is what
+/// `Vec::first`, `HashMap::get` and every positional getter return, and it is
+/// indistinguishable from an owned `Option<T>` once the Jux type has dropped
+/// the `&`.
+///
+/// Recursion into generic arguments is one level deep on purpose: that is
+/// where every shape in the std surface puts it, and going deeper would start
+/// flagging containers that merely CONTAIN references.
+fn returns_borrowed(ty: &Type) -> bool {
+    match ty {
+        Type::BorrowedRef { .. } => true,
+        Type::ResolvedPath(p) => matches!(
+            p.args.as_deref(),
+            Some(GenericArgs::AngleBracketed { args, .. })
+                if args
+                    .iter()
+                    .any(|a| matches!(a, GenericArg::Type(Type::BorrowedRef { .. })))
+        ),
+        _ => false,
+    }
+}
+
 fn is_borrow_param(ty: &Type) -> bool {
     matches!(ty, Type::BorrowedRef { type_, .. } if !matches!(type_.as_ref(), Type::Slice(_)))
 }

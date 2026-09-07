@@ -72,7 +72,22 @@ impl RustEmitter {
             if self.bare_name_is_user_type(bare) {
                 return None;
             }
-            self.symbols.find_fqn_by_bare(bare)?
+            // `find_fqn_by_bare` matches on an FQN's LAST segment, so it cannot
+            // see a renaming import: `import rust.std.{BTreeMap as SortedMap};`
+            // binds the simple name `SortedMap`, which is the last segment of
+            // nothing. Fall back to the unit's own binding map, where the alias
+            // is recorded. Without this the aliased type missed the external
+            // branch entirely, and with it the §6.5.1 collection handle - so a
+            // `SortedMap` slot held a bare `BTreeMap` while its `new` built the
+            // handle, and the two disagreed.
+            match self.symbols.find_fqn_by_bare(bare) {
+                Some(fqn) => fqn,
+                None => self
+                    .current_unit_idx
+                    .and_then(|idx| self.symbols.units.get(idx))
+                    .and_then(|ctx| ctx.unqualified.get(bare))
+                    .cloned()?,
+            }
         } else {
             class_name
                 .segments
@@ -109,6 +124,110 @@ impl RustEmitter {
         None
     }
 
+    /// Whether this type lowers to a shared COLLECTION HANDLE
+    /// (`Rc<RefCell<…>>`) rather than to a bare owned value.
+    ///
+    /// §6.5.1 makes a collection a reference type, exactly like a class
+    /// instance: assignment aliases, a getter hands back the real collection,
+    /// and only `clone()` copies. The handle is what implements that.
+    ///
+    /// Which types qualify is DISCOVERED, not listed: a scanned type counts
+    /// when it declares the `@RustClone` marker (it can be shared by refcount)
+    /// AND carries at least one `@MutSelf` method (there is mutation to make
+    /// visible). A `String` is `Clone` but has no reason to be a handle, and
+    /// an immutable foreign value type has nothing to alias.
+    pub(crate) fn collection_is_handle(&self, name: &juxc_ast::QualifiedName) -> bool {
+        let Some(bare) = name.segments.last().map(|s| s.text.as_str()) else {
+            return false;
+        };
+        self.collection_name_is_handle(bare)
+    }
+
+    /// [`Self::collection_is_handle`] keyed by a bare or dotted type NAME,
+    /// for the paths that have a checked `Ty` rather than a written path.
+    pub(crate) fn collection_name_is_handle(&self, name: &str) -> bool {
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        // **Worker-shared class (JUX-ASYNC-ADDENDUM §18.2).** Its instances
+        // cross a thread boundary, so the class carries the ATOMIC handle and
+        // everything reachable from it must be `Send`. `Rc<RefCell<…>>` is
+        // not. Inside such a class a collection is therefore stored INLINE and
+        // protected by the class's own lock, which already gives it shared
+        // mutation across the threads that hold the object.
+        //
+        // The cost is that reading a collection OUT of a worker-shared object
+        // hands back a copy rather than an alias, so it is the one place
+        // §6.5.1 does not reach. Making it reach there needs a second,
+        // atomic handle shape and a type that says which one a value carries;
+        // that is a language-level decision, not a codegen one.
+        if self
+            .enclosing_class
+            .as_deref()
+            .is_some_and(|c| self.sync_classes.contains(c))
+        {
+            return false;
+        }
+        // A type the PROGRAM declares shadows a foreign one of the same name
+        // (JLS 6.4.1), and so does a nested type of the enclosing class. Both
+        // checks are the ones `emit_type_as_rust` already makes before taking
+        // the external branch, and they belong here for the same reason: the
+        // std surface has a `Cursor`, an `Entry` and a `Range`, so a program
+        // that declares its own nested `Cursor` had its `new Cursor()` wrapped
+        // in a collection handle while the declared slot stayed a plain
+        // struct, and the two disagreed.
+        if self.bare_name_is_user_type(bare) || self.enclosing_nested_type(bare).is_some() {
+            return false;
+        }
+        let Some(sig) = self.lookup_class_by_bare_or_fqn(bare) else {
+            return false;
+        };
+        if !sig.is_external {
+            return false;
+        }
+        let cloneable = sig
+            .annotations
+            .iter()
+            .any(crate::exprs::field::annotation_is_rust_clone);
+        let mutable = sig.methods.values().any(|m| {
+            m.annotations
+                .iter()
+                .any(crate::exprs::field::annotation_is_mut_self)
+        });
+        cloneable && mutable
+    }
+
+    /// Whether the VALUE of `e` is a collection handle, by its checked type.
+    pub(crate) fn expr_is_collection_handle(&self, e: &Expr) -> bool {
+        matches!(
+            self.receiver_ty_of(e),
+            Some(juxc_tycheck::Ty::User { ref name, .. }) if self.collection_name_is_handle(name)
+        )
+    }
+
+    /// The `RefCell` borrow a collection-handle RECEIVER needs before
+    /// `method`, or `None` when the receiver is not a handle.
+    ///
+    /// `Rc<RefCell<Vec<T>>>` has no `push`; the interior does. Which borrow
+    /// to take is discovered the same way the handle itself is: `@MutSelf`
+    /// on the scanned method means `borrow_mut`, everything else reads.
+    pub(crate) fn collection_handle_borrow(
+        &self,
+        recv: &Expr,
+        method: &str,
+    ) -> Option<&'static str> {
+        let juxc_tycheck::Ty::User { name, .. } = self.receiver_ty_of(recv)? else {
+            return None;
+        };
+        if !self.collection_name_is_handle(&name) {
+            return None;
+        }
+        let bare = name.rsplit('.').next().unwrap_or(&name);
+        Some(if self.external_method_mutates_receiver(bare, method) {
+            ".borrow_mut()"
+        } else {
+            ".borrow()"
+        })
+    }
+
     /// Whether `bare` names a type this program declares, rather than one it
     /// borrows from a foreign crate.
     ///
@@ -143,6 +262,547 @@ impl RustEmitter {
             }
             _ => false,
         }
+    }
+
+    /// Emit a `new T(...)` expression (the non-anonymous form).
+    ///
+    /// Split out of the [`Self::emit_expr`] dispatch arm so the collection-
+    /// handle wrapper can bracket the whole construction: the body below has
+    /// several early returns, and a caller cannot append a suffix after them.
+    pub(crate) fn emit_new_object(&mut self, n: &juxc_ast::NewObjectExpr) {
+        // Every `rust.std` container — `HashMap`, `HashSet`, `Vec`, … — is
+        // constructed through the DISCOVERED external path further down, which
+        // reads the real Rust path off the stub's `@rust(…)` annotation and
+        // splices explicit generic args as a turbofish. Nothing about a
+        // collection is spelled out by name here: the scan is the source of
+        // truth, so a container Rust adds tomorrow works without a code change.
+        if n.class_name.segments.len() == 1 {
+            let bare = n.class_name.segments[0].text.as_str();
+            // Atomic counters (§S.6.2) — Arc-wrapped so the
+            // handle shares across spawn boundaries.
+            if (bare == "AtomicInt" || bare == "AtomicLong") && n.generic_args.is_empty() {
+                let inner = if bare == "AtomicInt" {
+                    "AtomicIsize"
+                } else {
+                    "AtomicI64"
+                };
+                self.w.push_str("std::sync::Arc::new(std::sync::atomic::");
+                self.w.push_str(inner);
+                self.w.push_str("::new(");
+                let prev = self.emitting_format_arg;
+                self.emitting_format_arg = false;
+                if let Some(arg) = n.args.first() {
+                    self.emit_expr(arg);
+                } else {
+                    self.w.push('0');
+                }
+                self.emitting_format_arg = prev;
+                self.w.push_str("))");
+                return;
+            }
+        }
+        // `new Foo(args)`              → `Foo::new(args)`.
+        // `new com.lib.Foo(args)`      → `crate::com::lib::Foo::new(args)`.
+        // `new Foo<int>(args)`         → `Foo::<isize>::new(args)`
+        //                                (Rust turbofish form).
+        //
+        // **`crate::` prefix on multi-segment names.** The
+        // path the user wrote is absolute from the crate
+        // root — `poll.lib.Animal` always means the class
+        // at `crate::poll::lib::Animal` regardless of how
+        // deep the surrounding `pub mod` nest is. Without
+        // the `crate::` prefix, Rust would try to resolve
+        // `poll::lib::…` relative to the enclosing module
+        // and fail. Single-segment names depend on the
+        // unit's `use` statements (or same-package
+        // visibility) for resolution, so they're emitted
+        // bare.
+        // Cross-package auto-import lookup: single-segment
+        // names that resolve to an FQN in a different
+        // package get the fully-qualified `crate::a::b::…`
+        // form. Same-package single-segment names stay
+        // bare. Mirrors the type-position rule in
+        // `emit_type_as_rust`.
+        // §G.9.2: constructing an external stub type (`new PathBuf()`)
+        // lowers to its REAL Rust path's `::new()` —
+        // `std::path::PathBuf::new()` — never the Jux
+        // `crate::rust::std::PathBuf`. The real path is recorded on
+        // `ClassSig::rust_path` from the `@rust("…")` annotation.
+        // `new Channel<T>(capacity)` — async-runtime builtin
+        // type (§18.3); lowers to the emitted JuxChannel
+        // helper. Recognized before user-class resolution so
+        // no stdlib stub is needed.
+        // `new AsyncMutex<T>(v)` — §18.3 runtime helper.
+        if n.class_name.segments.len() == 1
+            && n.class_name.segments[0].text == "AsyncMutex"
+            && !self.symbols.classes.contains_key("AsyncMutex")
+        {
+            self.w.push_str("crate::JuxAsyncMutex::new(");
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            if let Some(v) = n.args.first() {
+                self.emit_expr(v);
+            }
+            self.emitting_format_arg = prev;
+            self.w.push(')');
+            return;
+        }
+        if n.class_name.segments.len() == 1
+            && n.class_name.segments[0].text == "Channel"
+            && !self.symbols.classes.contains_key("Channel")
+        {
+            self.w.push_str("crate::JuxChannel::new(");
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            if let Some(cap) = n.args.first() {
+                self.emit_expr(cap);
+            } else {
+                self.w.push('1');
+            }
+            self.emitting_format_arg = prev;
+            self.w.push(')');
+            return;
+        }
+        // §M.9 enclosing-class fallback, the emission half of the rule
+        // tycheck applies: a bare `new Inner()` written inside `Outer`
+        // builds the lifted `Outer__Inner`. The owner chain is walked
+        // outward so a sibling nested type and a deeper level resolve
+        // the same way.
+        //
+        // Checked BEFORE the foreign-stub path because a nested type
+        // shadows an import, the `rust.std` prelude included: a
+        // `class Entry` nested in `Registry` must build
+        // `Registry__Entry`, never `std::collections::Entry`.
+        let lifted_nested = if n.class_name.segments.len() == 1 {
+            self.enclosing_nested_type(&n.class_name.segments[0].text)
+        } else {
+            None
+        };
+        let shadows_an_import = lifted_nested.is_some();
+        let (path, prepend_crate) = if let Some(lifted) = lifted_nested {
+            (lifted, false)
+        } else if let Some(real) = self.external_class_real_path(&n.class_name) {
+            (real, false)
+        } else if n.class_name.segments.len() == 1 {
+            let bare = n.class_name.segments[0].text.as_str();
+            if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
+                if fqn.contains('.') {
+                    let cur_pkg = self.symbols.package.join(".");
+                    let fqn_pkg = fqn
+                        .rsplit_once('.')
+                        .map(|(p, _)| p.to_string())
+                        .unwrap_or_default();
+                    if fqn_pkg != cur_pkg {
+                        let joined = fqn.split('.').collect::<Vec<_>>().join("::");
+                        (joined, true)
+                    } else {
+                        (bare.to_string(), false)
+                    }
+                } else {
+                    (bare.to_string(), false)
+                }
+            } else {
+                (bare.to_string(), false)
+            }
+        } else {
+            // §M.9 qualified nested-type construction:
+            // `new HttpServer.Config()` targets the lifted
+            // `HttpServer__Config`. Try the mangled form
+            // first (same-package bare / cross-package
+            // crate-rooted); package-qualified class paths
+            // fall through to the `::` join.
+            let first = n.class_name.segments[0].text.as_str();
+            let rest = n.class_name.segments[1..]
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join("__");
+            let mangled = format!("{first}__{rest}");
+            let is_lifted = |f: &String| {
+                self.symbols.classes.contains_key(f)
+                    || self.symbols.records.contains_key(f)
+                    || self.symbols.enums.contains_key(f)
+            };
+            let mangled_fqn = if is_lifted(&mangled) {
+                Some(mangled.clone())
+            } else {
+                self.symbols.find_fqn_by_bare(&mangled).filter(is_lifted)
+            };
+            if let Some(fqn) = mangled_fqn {
+                let cur_pkg = self.symbols.package.join(".");
+                let fqn_pkg = fqn
+                    .rsplit_once('.')
+                    .map(|(p, _)| p.to_string())
+                    .unwrap_or_default();
+                if fqn.contains('.') && fqn_pkg != cur_pkg {
+                    (fqn.split('.').collect::<Vec<_>>().join("::"), true)
+                } else {
+                    (mangled, false)
+                }
+            } else {
+                let joined = n
+                    .class_name
+                    .segments
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                (joined, true)
+            }
+        };
+        // A foreign ctor lowered from `new() -> Result<Self, E>`
+        // (§G.5.4): wrap the whole call so the `Result` is unwrapped at
+        // the use site, re-throwing on `Err` via `panic_any` for an
+        // enclosing Jux `try`/`catch` (mirrors `call_is_foreign_result`).
+        let ctor_is_foreign_result = n
+            .class_name
+            .segments
+            .last()
+            .map(|s| s.text.as_str())
+            .and_then(|nm| self.lookup_class_by_bare_or_fqn(nm))
+            .and_then(|c| {
+                c.constructors
+                    .iter()
+                    .find(|ct| ct.params.len() == n.args.len())
+                    .or_else(|| c.constructors.first())
+            })
+            .map(|ct| ct.is_foreign_result)
+            .unwrap_or(false);
+        if ctor_is_foreign_result {
+            self.w.push('(');
+        }
+        // Mark the writer BEFORE the callee so a re-ordered
+        // named ctor (§S.1.4 / C7) can split off `Class::new(`
+        // and re-emit it after the lexical-order arg temps.
+        let mark_callee = self.w.len();
+        if prepend_crate {
+            self.w.push_str("crate::");
+        }
+        self.w.push_str(&path);
+        if !n.generic_args.is_empty() {
+            self.w.push_str("::<");
+            // Clone to release the immutable borrow on `n` before
+            // the `emit_type_as_rust` calls (which need `&mut self`).
+            let args: Vec<juxc_ast::TypeRef> = n.generic_args.clone();
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                // Value position: an interface / poly-base generic arg
+                // (`new Vec<Shape>()`) must lower to its `Rc<dyn …>`
+                // handle, not the bare trait (rustc E0782).
+                self.emit_element_type_as_rust(arg);
+            }
+            self.w.push('>');
+        }
+        // §G.5.1 — implicit zero-arg constructor for a foreign type with
+        // no `new`. A Rust type built via `Default::default()` (the
+        // idiomatic "give me one with defaults" for option/config structs
+        // like `WindowOptions`) has no inherent constructor, so bindgen
+        // surfaces none. `new T()` is then the single Jux construction
+        // idiom and lowers to `T::default()` — `default` itself is never
+        // exposed as a member. Only fires for external (`@rust`) types
+        // with no zero-arg constructor; user classes keep their `::new`.
+        let foreign_default_ctor = n.args.is_empty()
+                // A nested type shadows the import it collides with (see
+                // `lifted_nested` above), so it is a USER class no matter
+                // what a same-named stub says: it keeps `::new`.
+                && !shadows_an_import
+                && self.external_class_real_path(&n.class_name).is_some()
+                && !n
+                    .class_name
+                    .segments
+                    .last()
+                    .map(|s| s.text.as_str())
+                    .and_then(|nm| self.lookup_class_by_bare_or_fqn(nm))
+                    .map(|c| c.constructors.iter().any(|ct| ct.params.is_empty()))
+                    .unwrap_or(false);
+        if foreign_default_ctor {
+            self.w.push_str("::default()");
+            return;
+        }
+        // Constructor-overload pick (§7.3.1): count-based
+        // suffix re-derived against the class's ctor list.
+        // Derived from the EMITTED path's final segment so a
+        // lifted nested type (`HttpServer__Config`) keys the
+        // lookup by its real registered name.
+        let ctor_bare = path
+            .rsplit("::")
+            .next()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let ctor_sfx = self.ctor_overload_suffix_for_span(&ctor_bare, n.args.len(), n.span);
+        self.w.push_str("::new");
+        self.w.push_str(&ctor_sfx);
+        self.w.push('(');
+        // Constructor args consume their values, so any
+        // nested string literal needs the Fix-1 self-coerce
+        // — clear the format-arg flag for the arg emission.
+        // Per-arg nullable-wrap: when a positional ctor
+        // parameter is `T?`, a non-nullable arg is lifted
+        // into `Some(arg)` so the field's `Option<T>`
+        // type-check passes.
+        //
+        // Two callee shapes carry constructor signatures:
+        // **classes** (declared `constructors`) and
+        // **records** (synthesized canonical ctor matching
+        // the component list). We consult both — records
+        // were missing in the original wiring, which left
+        // `new Maybe<String>("hello")` un-wrapped when
+        // `Maybe`'s component is `String?`.
+        let bare_class = n.class_name.segments.last().map(|s| s.text.as_str());
+        // A param is nullable when its DECLARED type is `T?` — or
+        // when it's a bare generic param (`T v`) whose explicit
+        // type argument at this `new` site is nullable
+        // (`new Box<int?>(7)` must wrap the 7 in `Some`). The
+        // substitution check lines class generic params up with
+        // `n.generic_args` positionally.
+        let param_nullable =
+            |param_ty: &juxc_ast::TypeRef, generic_params: &[juxc_ast::TypeParam]| -> bool {
+                if param_ty.nullable {
+                    return true;
+                }
+                if param_ty.array_shape.is_some()
+                    || param_ty.fn_shape.is_some()
+                    || !param_ty.generic_args.is_empty()
+                    || param_ty.name.segments.len() != 1
+                {
+                    return false;
+                }
+                let bare = param_ty.name.segments[0].text.as_str();
+                generic_params
+                    .iter()
+                    .position(|gp| gp.name.text == bare)
+                    .and_then(|i| n.generic_args.get(i))
+                    .map(|arg| arg.nullable)
+                    .unwrap_or(false)
+            };
+        let ctor_nullable_flags: Vec<bool> = bare_class
+            .and_then(|name| {
+                // FQN-tolerant lookup: classes/records may be
+                // keyed under their full package name when
+                // imported across packages, while the
+                // `new C(...)` syntax site only carries the
+                // bare or imported name. Helper falls back
+                // to a suffix scan so cross-package ctor
+                // auto-`Some()` wrapping works the same as
+                // single-file emission.
+                self.lookup_class_by_bare_or_fqn(name)
+                    .map(|c| {
+                        let gp = c.generic_params.clone();
+                        // Pick the overload matching this call's arity so
+                        // nullable flags come from the right constructor —
+                        // always using `first()` broke calls to a second
+                        // overload whose later params are nullable (e.g.
+                        // Exception(msg, cause?) with arg count 2).
+                        let ctor = c
+                            .constructors
+                            .iter()
+                            .find(|ctor| ctor.params.len() == n.args.len())
+                            .or_else(|| c.constructors.first());
+                        ctor.map(|ctor| {
+                            ctor.params
+                                .iter()
+                                .map(|p| param_nullable(&p.ty, &gp))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                    })
+                    .or_else(|| {
+                        self.symbols
+                            .records
+                            .iter()
+                            .find(|(k, _)| {
+                                k.as_str() == name
+                                    || k.rsplit('.').next().unwrap_or(k.as_str()) == name
+                            })
+                            .map(|(_, r)| {
+                                let gp = r.generic_params.clone();
+                                r.components
+                                    .iter()
+                                    .map(|c| param_nullable(&c.ty, &gp))
+                                    .collect()
+                            })
+                    })
+            })
+            .unwrap_or_default();
+        // Constructor parameter TYPES — for coercing a subclass /
+        // implementer argument into an interface / polymorphic-base
+        // (`Rc<dyn …>`) parameter slot, mirroring the function-call
+        // arg path. Without this, `new Holder(new Dog())` where the
+        // param is `Animal`/an interface would pass a raw value.
+        let ctor_param_types: Vec<juxc_ast::TypeRef> = n
+            .class_name
+            .segments
+            .last()
+            .map(|s| s.text.as_str())
+            .and_then(|name| {
+                self.lookup_class_by_bare_or_fqn(name)
+                    // Pick the constructor overload matching this call's
+                    // arity (was `constructors.first()`, which took the
+                    // wrong overload's param types — so args past the
+                    // first ctor's arity got no coercion). Fall back to
+                    // the first ctor when no arity matches (e.g. varargs).
+                    .and_then(|c| {
+                        c.constructors
+                            .iter()
+                            .find(|ctor| ctor.params.len() == n.args.len())
+                            .or_else(|| c.constructors.first())
+                    })
+                    .map(|ctor| ctor.params.iter().map(|p| p.ty.clone()).collect())
+                    .or_else(|| {
+                        self.symbols
+                            .records
+                            .iter()
+                            .find(|(k, _)| {
+                                k.as_str() == name
+                                    || k.rsplit('.').next().unwrap_or(k.as_str()) == name
+                            })
+                            .map(|(_, r)| r.components.iter().map(|c| c.ty.clone()).collect())
+                    })
+            })
+            .unwrap_or_default();
+        // **Generic substitution.** A constructor parameter typed as one
+        // of the class's own type params (`Bag<T>::Bag(T item)`) only
+        // says what the slot holds once the call's type arguments are
+        // applied: `new Bag<Animal>(…)` has an `Animal` slot, which for a
+        // polymorphic base or an interface is a `Rc<dyn …>` the argument
+        // must be wrapped into. Without this the param stays the opaque
+        // `T` and no coercion fires.
+        let ctor_param_types: Vec<juxc_ast::TypeRef> = if n.generic_args.is_empty() {
+            ctor_param_types
+        } else {
+            let subst = n
+                .class_name
+                .segments
+                .last()
+                .map(|s| s.text.as_str())
+                .and_then(|name| self.lookup_class_by_bare_or_fqn(name))
+                .map(|c| {
+                    c.generic_params
+                        .iter()
+                        .map(|p| p.name.text.clone())
+                        .zip(n.generic_args.iter().cloned())
+                        .collect::<std::collections::HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+            ctor_param_types
+                .iter()
+                .map(|t| Self::subst_type_ref(t, &subst))
+                .collect()
+        };
+        // §G.9.2: foreign-borrow (`&T`) constructor parameters get the
+        // call-site `&` re-added — mirrors the method-call path so a
+        // `Window(&str name, …)` receives `&"…".to_string()` (coerces to
+        // `&str`), not an owned `String`.
+        let ctor_param_is_ref: Vec<bool> = n
+            .class_name
+            .segments
+            .last()
+            .map(|s| s.text.as_str())
+            .and_then(|name| {
+                self.lookup_class_by_bare_or_fqn(name).and_then(|c| {
+                    c.constructors
+                        .iter()
+                        .find(|ctor| ctor.params.len() == n.args.len())
+                        .or_else(|| c.constructors.first())
+                        .map(|ctor| ctor.params.iter().map(|p| p.is_ref).collect())
+                })
+            })
+            .unwrap_or_default();
+        // A FOREIGN slice ctor parameter (`T[]` = Rust `&[T]`) also gets
+        // the call-site `&` (mirrors `callee_param_is_foreign_slice` on
+        // the method path): a Jux array / `Vec<T>` argument borrows to
+        // `&[T]`. Gated on the class being external so user `T[]` ctor
+        // params keep their by-value behavior.
+        let ctor_param_is_foreign_slice: Vec<bool> = n
+            .class_name
+            .segments
+            .last()
+            .map(|s| s.text.as_str())
+            .and_then(|name| {
+                self.lookup_class_by_bare_or_fqn(name)
+                    .filter(|c| c.is_external)
+                    .and_then(|c| {
+                        c.constructors
+                            .iter()
+                            .find(|ctor| ctor.params.len() == n.args.len())
+                            .or_else(|| c.constructors.first())
+                            .map(|ctor| {
+                                ctor.params
+                                    .iter()
+                                    .map(|p| p.ty.array_shape.is_some() && !p.is_ref)
+                                    .collect()
+                            })
+                    })
+            })
+            .unwrap_or_default();
+        let prev = self.emitting_format_arg;
+        self.emitting_format_arg = false;
+        // The per-arg coercion (iface/base wrap, nullable
+        // `Some()`, wrapper share-clone), shared by the inline
+        // and the lexical-hoist paths.
+        let emit_one = |this: &mut Self, i: usize, arg: &juxc_ast::Expr| {
+            if let Some(pty) = ctor_param_types.get(i) {
+                if !matches!(
+                    this.iface_coercion_to(pty, arg),
+                    crate::analysis::IfaceCoercion::None,
+                ) {
+                    this.emit_expr_coerced_to_iface(pty, arg);
+                    return;
+                }
+            }
+            let by_ref = ctor_param_is_ref.get(i).copied().unwrap_or(false)
+                || ctor_param_is_foreign_slice.get(i).copied().unwrap_or(false);
+            if by_ref {
+                this.w.push('&');
+            }
+            let nullable = ctor_nullable_flags.get(i).copied().unwrap_or(false);
+            this.emit_arg_with_nullable_wrap(arg, nullable);
+            if !nullable
+                && (this.wrapper_value_needs_clone(arg) || this.value_place_needs_clone(arg))
+            {
+                this.w.push_str(".clone()");
+            }
+        };
+        if !n.eval_order.is_empty() {
+            // §S.1.4 (C7): the named args were re-ordered. Pull
+            // the already-emitted `Class::new(` back out, bind
+            // each (coerced) arg to `__jux_arg{slot}` in
+            // call-site LEXICAL order, then re-emit the callee
+            // passing the temps POSITIONALLY — side effects fire
+            // left-to-right as written, slots stay correct.
+            let callee = self.w.split_off_from(mark_callee);
+            self.w.push_str("{ ");
+            for &slot in &n.eval_order {
+                if let Some(arg) = n.args.get(slot) {
+                    self.w.push_str(&format!("let __jux_arg{slot} = "));
+                    emit_one(self, slot, arg);
+                    self.w.push_str("; ");
+                }
+            }
+            self.w.push_str(&callee);
+            for i in 0..n.args.len() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str(&format!("__jux_arg{i}"));
+            }
+            self.w.push_str(") }");
+        } else {
+            for (i, arg) in n.args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                emit_one(self, i, arg);
+            }
+            self.w.push(')');
+        }
+        if ctor_is_foreign_result {
+            self.w
+                .push_str(").unwrap_or_else(|__e| std::panic::panic_any(__e))");
+        }
+        self.emitting_format_arg = prev;
     }
 
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
@@ -425,562 +1085,16 @@ impl RustEmitter {
                 self.emit_anonymous_class(n);
             }
             Expr::NewObject(n) => {
-                // **rust.std collection construction** — explicit-generic
-                // `new HashMap<K,V>()` / `new HashSet<T>()` lower directly to the
-                // Rust std container's `new()` with turbofish-spliced generic
-                // args (the no-arg `new HashMap()` form goes through the generic
-                // rust.std `new` path).
-                if n.class_name.segments.len() == 1 {
-                    let bare = n.class_name.segments[0].text.as_str();
-                    if bare == "HashMap" && n.generic_args.len() == 2 {
-                        self.w.push_str("std::collections::HashMap::<");
-                        let args: Vec<juxc_ast::TypeRef> = n.generic_args.clone();
-                        for (i, arg) in args.iter().enumerate() {
-                            if i > 0 {
-                                self.w.push_str(", ");
-                            }
-                            self.emit_element_type_as_rust(arg);
-                        }
-                        self.w.push_str(">::new()");
-                        return;
-                    }
-                    if bare == "HashSet" && n.generic_args.len() == 1 {
-                        self.w.push_str("std::collections::HashSet::<");
-                        if let Some(arg) = n.generic_args.first() {
-                            self.emit_element_type_as_rust(arg);
-                        }
-                        self.w.push_str(">::new()");
-                        return;
-                    }
-                    // Atomic counters (§S.6.2) — Arc-wrapped so the
-                    // handle shares across spawn boundaries.
-                    if (bare == "AtomicInt" || bare == "AtomicLong") && n.generic_args.is_empty() {
-                        let inner = if bare == "AtomicInt" {
-                            "AtomicIsize"
-                        } else {
-                            "AtomicI64"
-                        };
-                        self.w.push_str("std::sync::Arc::new(std::sync::atomic::");
-                        self.w.push_str(inner);
-                        self.w.push_str("::new(");
-                        let prev = self.emitting_format_arg;
-                        self.emitting_format_arg = false;
-                        if let Some(arg) = n.args.first() {
-                            self.emit_expr(arg);
-                        } else {
-                            self.w.push('0');
-                        }
-                        self.emitting_format_arg = prev;
-                        self.w.push_str("))");
-                        return;
-                    }
+                // A collection is a reference type (§6.5.1): its construction
+                // produces the shared handle, not a bare container.
+                let handle = self.collection_is_handle(&n.class_name);
+                if handle {
+                    self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
                 }
-                // `new Foo(args)`              → `Foo::new(args)`.
-                // `new com.lib.Foo(args)`      → `crate::com::lib::Foo::new(args)`.
-                // `new Foo<int>(args)`         → `Foo::<isize>::new(args)`
-                //                                (Rust turbofish form).
-                //
-                // **`crate::` prefix on multi-segment names.** The
-                // path the user wrote is absolute from the crate
-                // root — `poll.lib.Animal` always means the class
-                // at `crate::poll::lib::Animal` regardless of how
-                // deep the surrounding `pub mod` nest is. Without
-                // the `crate::` prefix, Rust would try to resolve
-                // `poll::lib::…` relative to the enclosing module
-                // and fail. Single-segment names depend on the
-                // unit's `use` statements (or same-package
-                // visibility) for resolution, so they're emitted
-                // bare.
-                // Cross-package auto-import lookup: single-segment
-                // names that resolve to an FQN in a different
-                // package get the fully-qualified `crate::a::b::…`
-                // form. Same-package single-segment names stay
-                // bare. Mirrors the type-position rule in
-                // `emit_type_as_rust`.
-                // §G.9.2: constructing an external stub type (`new PathBuf()`)
-                // lowers to its REAL Rust path's `::new()` —
-                // `std::path::PathBuf::new()` — never the Jux
-                // `crate::rust::std::PathBuf`. The real path is recorded on
-                // `ClassSig::rust_path` from the `@rust("…")` annotation.
-                // `new Channel<T>(capacity)` — async-runtime builtin
-                // type (§18.3); lowers to the emitted JuxChannel
-                // helper. Recognized before user-class resolution so
-                // no stdlib stub is needed.
-                // `new AsyncMutex<T>(v)` — §18.3 runtime helper.
-                if n.class_name.segments.len() == 1
-                    && n.class_name.segments[0].text == "AsyncMutex"
-                    && !self.symbols.classes.contains_key("AsyncMutex")
-                {
-                    self.w.push_str("crate::JuxAsyncMutex::new(");
-                    let prev = self.emitting_format_arg;
-                    self.emitting_format_arg = false;
-                    if let Some(v) = n.args.first() {
-                        self.emit_expr(v);
-                    }
-                    self.emitting_format_arg = prev;
-                    self.w.push(')');
-                    return;
+                self.emit_new_object(n);
+                if handle {
+                    self.w.push_str("))");
                 }
-                if n.class_name.segments.len() == 1
-                    && n.class_name.segments[0].text == "Channel"
-                    && !self.symbols.classes.contains_key("Channel")
-                {
-                    self.w.push_str("crate::JuxChannel::new(");
-                    let prev = self.emitting_format_arg;
-                    self.emitting_format_arg = false;
-                    if let Some(cap) = n.args.first() {
-                        self.emit_expr(cap);
-                    } else {
-                        self.w.push('1');
-                    }
-                    self.emitting_format_arg = prev;
-                    self.w.push(')');
-                    return;
-                }
-                // §M.9 enclosing-class fallback, the emission half of the rule
-                // tycheck applies: a bare `new Inner()` written inside `Outer`
-                // builds the lifted `Outer__Inner`. The owner chain is walked
-                // outward so a sibling nested type and a deeper level resolve
-                // the same way.
-                //
-                // Checked BEFORE the foreign-stub path because a nested type
-                // shadows an import, the `rust.std` prelude included: a
-                // `class Entry` nested in `Registry` must build
-                // `Registry__Entry`, never `std::collections::Entry`.
-                let lifted_nested = if n.class_name.segments.len() == 1 {
-                    self.enclosing_nested_type(&n.class_name.segments[0].text)
-                } else {
-                    None
-                };
-                let shadows_an_import = lifted_nested.is_some();
-                let (path, prepend_crate) = if let Some(lifted) = lifted_nested {
-                    (lifted, false)
-                } else if let Some(real) = self.external_class_real_path(&n.class_name) {
-                    (real, false)
-                } else if n.class_name.segments.len() == 1 {
-                    let bare = n.class_name.segments[0].text.as_str();
-                    if let Some(fqn) = self.symbols.find_fqn_by_bare(bare) {
-                        if fqn.contains('.') {
-                            let cur_pkg = self.symbols.package.join(".");
-                            let fqn_pkg = fqn
-                                .rsplit_once('.')
-                                .map(|(p, _)| p.to_string())
-                                .unwrap_or_default();
-                            if fqn_pkg != cur_pkg {
-                                let joined = fqn.split('.').collect::<Vec<_>>().join("::");
-                                (joined, true)
-                            } else {
-                                (bare.to_string(), false)
-                            }
-                        } else {
-                            (bare.to_string(), false)
-                        }
-                    } else {
-                        (bare.to_string(), false)
-                    }
-                } else {
-                    // §M.9 qualified nested-type construction:
-                    // `new HttpServer.Config()` targets the lifted
-                    // `HttpServer__Config`. Try the mangled form
-                    // first (same-package bare / cross-package
-                    // crate-rooted); package-qualified class paths
-                    // fall through to the `::` join.
-                    let first = n.class_name.segments[0].text.as_str();
-                    let rest = n.class_name.segments[1..]
-                        .iter()
-                        .map(|s| s.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join("__");
-                    let mangled = format!("{first}__{rest}");
-                    let is_lifted = |f: &String| {
-                        self.symbols.classes.contains_key(f)
-                            || self.symbols.records.contains_key(f)
-                            || self.symbols.enums.contains_key(f)
-                    };
-                    let mangled_fqn = if is_lifted(&mangled) {
-                        Some(mangled.clone())
-                    } else {
-                        self.symbols.find_fqn_by_bare(&mangled).filter(is_lifted)
-                    };
-                    if let Some(fqn) = mangled_fqn {
-                        let cur_pkg = self.symbols.package.join(".");
-                        let fqn_pkg = fqn
-                            .rsplit_once('.')
-                            .map(|(p, _)| p.to_string())
-                            .unwrap_or_default();
-                        if fqn.contains('.') && fqn_pkg != cur_pkg {
-                            (fqn.split('.').collect::<Vec<_>>().join("::"), true)
-                        } else {
-                            (mangled, false)
-                        }
-                    } else {
-                        let joined = n
-                            .class_name
-                            .segments
-                            .iter()
-                            .map(|s| s.text.as_str())
-                            .collect::<Vec<_>>()
-                            .join("::");
-                        (joined, true)
-                    }
-                };
-                // A foreign ctor lowered from `new() -> Result<Self, E>`
-                // (§G.5.4): wrap the whole call so the `Result` is unwrapped at
-                // the use site, re-throwing on `Err` via `panic_any` for an
-                // enclosing Jux `try`/`catch` (mirrors `call_is_foreign_result`).
-                let ctor_is_foreign_result = n
-                    .class_name
-                    .segments
-                    .last()
-                    .map(|s| s.text.as_str())
-                    .and_then(|nm| self.lookup_class_by_bare_or_fqn(nm))
-                    .and_then(|c| {
-                        c.constructors
-                            .iter()
-                            .find(|ct| ct.params.len() == n.args.len())
-                            .or_else(|| c.constructors.first())
-                    })
-                    .map(|ct| ct.is_foreign_result)
-                    .unwrap_or(false);
-                if ctor_is_foreign_result {
-                    self.w.push('(');
-                }
-                // Mark the writer BEFORE the callee so a re-ordered
-                // named ctor (§S.1.4 / C7) can split off `Class::new(`
-                // and re-emit it after the lexical-order arg temps.
-                let mark_callee = self.w.len();
-                if prepend_crate {
-                    self.w.push_str("crate::");
-                }
-                self.w.push_str(&path);
-                if !n.generic_args.is_empty() {
-                    self.w.push_str("::<");
-                    // Clone to release the immutable borrow on `n` before
-                    // the `emit_type_as_rust` calls (which need `&mut self`).
-                    let args: Vec<juxc_ast::TypeRef> = n.generic_args.clone();
-                    for (i, arg) in args.iter().enumerate() {
-                        if i > 0 {
-                            self.w.push_str(", ");
-                        }
-                        // Value position: an interface / poly-base generic arg
-                        // (`new Vec<Shape>()`) must lower to its `Rc<dyn …>`
-                        // handle, not the bare trait (rustc E0782).
-                        self.emit_element_type_as_rust(arg);
-                    }
-                    self.w.push('>');
-                }
-                // §G.5.1 — implicit zero-arg constructor for a foreign type with
-                // no `new`. A Rust type built via `Default::default()` (the
-                // idiomatic "give me one with defaults" for option/config structs
-                // like `WindowOptions`) has no inherent constructor, so bindgen
-                // surfaces none. `new T()` is then the single Jux construction
-                // idiom and lowers to `T::default()` — `default` itself is never
-                // exposed as a member. Only fires for external (`@rust`) types
-                // with no zero-arg constructor; user classes keep their `::new`.
-                let foreign_default_ctor = n.args.is_empty()
-                    // A nested type shadows the import it collides with (see
-                    // `lifted_nested` above), so it is a USER class no matter
-                    // what a same-named stub says: it keeps `::new`.
-                    && !shadows_an_import
-                    && self.external_class_real_path(&n.class_name).is_some()
-                    && !n
-                        .class_name
-                        .segments
-                        .last()
-                        .map(|s| s.text.as_str())
-                        .and_then(|nm| self.lookup_class_by_bare_or_fqn(nm))
-                        .map(|c| c.constructors.iter().any(|ct| ct.params.is_empty()))
-                        .unwrap_or(false);
-                if foreign_default_ctor {
-                    self.w.push_str("::default()");
-                    return;
-                }
-                // Constructor-overload pick (§7.3.1): count-based
-                // suffix re-derived against the class's ctor list.
-                // Derived from the EMITTED path's final segment so a
-                // lifted nested type (`HttpServer__Config`) keys the
-                // lookup by its real registered name.
-                let ctor_bare = path
-                    .rsplit("::")
-                    .next()
-                    .map(|s| s.to_string())
-                    .unwrap_or_default();
-                let ctor_sfx = self.ctor_overload_suffix_for_span(&ctor_bare, n.args.len(), n.span);
-                self.w.push_str("::new");
-                self.w.push_str(&ctor_sfx);
-                self.w.push('(');
-                // Constructor args consume their values, so any
-                // nested string literal needs the Fix-1 self-coerce
-                // — clear the format-arg flag for the arg emission.
-                // Per-arg nullable-wrap: when a positional ctor
-                // parameter is `T?`, a non-nullable arg is lifted
-                // into `Some(arg)` so the field's `Option<T>`
-                // type-check passes.
-                //
-                // Two callee shapes carry constructor signatures:
-                // **classes** (declared `constructors`) and
-                // **records** (synthesized canonical ctor matching
-                // the component list). We consult both — records
-                // were missing in the original wiring, which left
-                // `new Maybe<String>("hello")` un-wrapped when
-                // `Maybe`'s component is `String?`.
-                let bare_class = n.class_name.segments.last().map(|s| s.text.as_str());
-                // A param is nullable when its DECLARED type is `T?` — or
-                // when it's a bare generic param (`T v`) whose explicit
-                // type argument at this `new` site is nullable
-                // (`new Box<int?>(7)` must wrap the 7 in `Some`). The
-                // substitution check lines class generic params up with
-                // `n.generic_args` positionally.
-                let param_nullable = |param_ty: &juxc_ast::TypeRef,
-                                      generic_params: &[juxc_ast::TypeParam]|
-                 -> bool {
-                    if param_ty.nullable {
-                        return true;
-                    }
-                    if param_ty.array_shape.is_some()
-                        || param_ty.fn_shape.is_some()
-                        || !param_ty.generic_args.is_empty()
-                        || param_ty.name.segments.len() != 1
-                    {
-                        return false;
-                    }
-                    let bare = param_ty.name.segments[0].text.as_str();
-                    generic_params
-                        .iter()
-                        .position(|gp| gp.name.text == bare)
-                        .and_then(|i| n.generic_args.get(i))
-                        .map(|arg| arg.nullable)
-                        .unwrap_or(false)
-                };
-                let ctor_nullable_flags: Vec<bool> = bare_class
-                    .and_then(|name| {
-                        // FQN-tolerant lookup: classes/records may be
-                        // keyed under their full package name when
-                        // imported across packages, while the
-                        // `new C(...)` syntax site only carries the
-                        // bare or imported name. Helper falls back
-                        // to a suffix scan so cross-package ctor
-                        // auto-`Some()` wrapping works the same as
-                        // single-file emission.
-                        self.lookup_class_by_bare_or_fqn(name)
-                            .map(|c| {
-                                let gp = c.generic_params.clone();
-                                // Pick the overload matching this call's arity so
-                                // nullable flags come from the right constructor —
-                                // always using `first()` broke calls to a second
-                                // overload whose later params are nullable (e.g.
-                                // Exception(msg, cause?) with arg count 2).
-                                let ctor = c
-                                    .constructors
-                                    .iter()
-                                    .find(|ctor| ctor.params.len() == n.args.len())
-                                    .or_else(|| c.constructors.first());
-                                ctor.map(|ctor| {
-                                    ctor.params
-                                        .iter()
-                                        .map(|p| param_nullable(&p.ty, &gp))
-                                        .collect()
-                                })
-                                .unwrap_or_default()
-                            })
-                            .or_else(|| {
-                                self.symbols
-                                    .records
-                                    .iter()
-                                    .find(|(k, _)| {
-                                        k.as_str() == name
-                                            || k.rsplit('.').next().unwrap_or(k.as_str()) == name
-                                    })
-                                    .map(|(_, r)| {
-                                        let gp = r.generic_params.clone();
-                                        r.components
-                                            .iter()
-                                            .map(|c| param_nullable(&c.ty, &gp))
-                                            .collect()
-                                    })
-                            })
-                    })
-                    .unwrap_or_default();
-                // Constructor parameter TYPES — for coercing a subclass /
-                // implementer argument into an interface / polymorphic-base
-                // (`Rc<dyn …>`) parameter slot, mirroring the function-call
-                // arg path. Without this, `new Holder(new Dog())` where the
-                // param is `Animal`/an interface would pass a raw value.
-                let ctor_param_types: Vec<juxc_ast::TypeRef> = n
-                    .class_name
-                    .segments
-                    .last()
-                    .map(|s| s.text.as_str())
-                    .and_then(|name| {
-                        self.lookup_class_by_bare_or_fqn(name)
-                            // Pick the constructor overload matching this call's
-                            // arity (was `constructors.first()`, which took the
-                            // wrong overload's param types — so args past the
-                            // first ctor's arity got no coercion). Fall back to
-                            // the first ctor when no arity matches (e.g. varargs).
-                            .and_then(|c| {
-                                c.constructors
-                                    .iter()
-                                    .find(|ctor| ctor.params.len() == n.args.len())
-                                    .or_else(|| c.constructors.first())
-                            })
-                            .map(|ctor| ctor.params.iter().map(|p| p.ty.clone()).collect())
-                            .or_else(|| {
-                                self.symbols
-                                    .records
-                                    .iter()
-                                    .find(|(k, _)| {
-                                        k.as_str() == name
-                                            || k.rsplit('.').next().unwrap_or(k.as_str()) == name
-                                    })
-                                    .map(|(_, r)| {
-                                        r.components.iter().map(|c| c.ty.clone()).collect()
-                                    })
-                            })
-                    })
-                    .unwrap_or_default();
-                // **Generic substitution.** A constructor parameter typed as one
-                // of the class's own type params (`Bag<T>::Bag(T item)`) only
-                // says what the slot holds once the call's type arguments are
-                // applied: `new Bag<Animal>(…)` has an `Animal` slot, which for a
-                // polymorphic base or an interface is a `Rc<dyn …>` the argument
-                // must be wrapped into. Without this the param stays the opaque
-                // `T` and no coercion fires.
-                let ctor_param_types: Vec<juxc_ast::TypeRef> = if n.generic_args.is_empty() {
-                    ctor_param_types
-                } else {
-                    let subst = n
-                        .class_name
-                        .segments
-                        .last()
-                        .map(|s| s.text.as_str())
-                        .and_then(|name| self.lookup_class_by_bare_or_fqn(name))
-                        .map(|c| {
-                            c.generic_params
-                                .iter()
-                                .map(|p| p.name.text.clone())
-                                .zip(n.generic_args.iter().cloned())
-                                .collect::<std::collections::HashMap<_, _>>()
-                        })
-                        .unwrap_or_default();
-                    ctor_param_types
-                        .iter()
-                        .map(|t| Self::subst_type_ref(t, &subst))
-                        .collect()
-                };
-                // §G.9.2: foreign-borrow (`&T`) constructor parameters get the
-                // call-site `&` re-added — mirrors the method-call path so a
-                // `Window(&str name, …)` receives `&"…".to_string()` (coerces to
-                // `&str`), not an owned `String`.
-                let ctor_param_is_ref: Vec<bool> = n
-                    .class_name
-                    .segments
-                    .last()
-                    .map(|s| s.text.as_str())
-                    .and_then(|name| {
-                        self.lookup_class_by_bare_or_fqn(name).and_then(|c| {
-                            c.constructors
-                                .iter()
-                                .find(|ctor| ctor.params.len() == n.args.len())
-                                .or_else(|| c.constructors.first())
-                                .map(|ctor| ctor.params.iter().map(|p| p.is_ref).collect())
-                        })
-                    })
-                    .unwrap_or_default();
-                // A FOREIGN slice ctor parameter (`T[]` = Rust `&[T]`) also gets
-                // the call-site `&` (mirrors `callee_param_is_foreign_slice` on
-                // the method path): a Jux array / `Vec<T>` argument borrows to
-                // `&[T]`. Gated on the class being external so user `T[]` ctor
-                // params keep their by-value behavior.
-                let ctor_param_is_foreign_slice: Vec<bool> = n
-                    .class_name
-                    .segments
-                    .last()
-                    .map(|s| s.text.as_str())
-                    .and_then(|name| {
-                        self.lookup_class_by_bare_or_fqn(name)
-                            .filter(|c| c.is_external)
-                            .and_then(|c| {
-                                c.constructors
-                                    .iter()
-                                    .find(|ctor| ctor.params.len() == n.args.len())
-                                    .or_else(|| c.constructors.first())
-                                    .map(|ctor| {
-                                        ctor.params
-                                            .iter()
-                                            .map(|p| p.ty.array_shape.is_some() && !p.is_ref)
-                                            .collect()
-                                    })
-                            })
-                    })
-                    .unwrap_or_default();
-                let prev = self.emitting_format_arg;
-                self.emitting_format_arg = false;
-                // The per-arg coercion (iface/base wrap, nullable
-                // `Some()`, wrapper share-clone), shared by the inline
-                // and the lexical-hoist paths.
-                let emit_one = |this: &mut Self, i: usize, arg: &juxc_ast::Expr| {
-                    if let Some(pty) = ctor_param_types.get(i) {
-                        if !matches!(
-                            this.iface_coercion_to(pty, arg),
-                            crate::analysis::IfaceCoercion::None,
-                        ) {
-                            this.emit_expr_coerced_to_iface(pty, arg);
-                            return;
-                        }
-                    }
-                    let by_ref = ctor_param_is_ref.get(i).copied().unwrap_or(false)
-                        || ctor_param_is_foreign_slice.get(i).copied().unwrap_or(false);
-                    if by_ref {
-                        this.w.push('&');
-                    }
-                    let nullable = ctor_nullable_flags.get(i).copied().unwrap_or(false);
-                    this.emit_arg_with_nullable_wrap(arg, nullable);
-                    if !nullable
-                        && (this.wrapper_value_needs_clone(arg)
-                            || this.value_place_needs_clone(arg))
-                    {
-                        this.w.push_str(".clone()");
-                    }
-                };
-                if !n.eval_order.is_empty() {
-                    // §S.1.4 (C7): the named args were re-ordered. Pull
-                    // the already-emitted `Class::new(` back out, bind
-                    // each (coerced) arg to `__jux_arg{slot}` in
-                    // call-site LEXICAL order, then re-emit the callee
-                    // passing the temps POSITIONALLY — side effects fire
-                    // left-to-right as written, slots stay correct.
-                    let callee = self.w.split_off_from(mark_callee);
-                    self.w.push_str("{ ");
-                    for &slot in &n.eval_order {
-                        if let Some(arg) = n.args.get(slot) {
-                            self.w.push_str(&format!("let __jux_arg{slot} = "));
-                            emit_one(self, slot, arg);
-                            self.w.push_str("; ");
-                        }
-                    }
-                    self.w.push_str(&callee);
-                    for i in 0..n.args.len() {
-                        if i > 0 {
-                            self.w.push_str(", ");
-                        }
-                        self.w.push_str(&format!("__jux_arg{i}"));
-                    }
-                    self.w.push_str(") }");
-                } else {
-                    for (i, arg) in n.args.iter().enumerate() {
-                        if i > 0 {
-                            self.w.push_str(", ");
-                        }
-                        emit_one(self, i, arg);
-                    }
-                    self.w.push(')');
-                }
-                if ctor_is_foreign_result {
-                    self.w
-                        .push_str(").unwrap_or_else(|__e| std::panic::panic_any(__e))");
-                }
-                self.emitting_format_arg = prev;
             }
             Expr::Lambda(l) => self.emit_lambda(l),
             Expr::Elvis(e) => self.emit_elvis(e),

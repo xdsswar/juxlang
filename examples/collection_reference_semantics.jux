@@ -1,0 +1,62 @@
+// Collections are REFERENCE types (JUX-LANG-V1 §6.5.1): binding one to a second
+// name does not copy it, a getter hands back the real collection, and a
+// mutation through any name is visible through every other. `clone()` is the
+// only thing that copies, and it copies shallowly.
+//
+// Expected output: 1 / 1 / 2 / 1 / 2 3 / 42 / 2 9 / 4
+
+import rust.std.*;
+
+public class Cart {
+    private Vec<int> items;
+    public Cart() { this.items = new Vec<int>(); }
+    public Vec<int> getItems() { return this.items; }
+    public int count() { return this.items.len(); }
+}
+
+public void fill(Vec<int> xs) { xs.push(9); }
+
+public void main() {
+    // A getter hands back the real collection, not a snapshot.
+    var cart = new Cart();
+    cart.getItems().push(1);
+    print(cart.count());
+
+    // Binding to a second name aliases.
+    var a = new Vec<int>();
+    var b = a;
+    b.push(1);
+    print(a.len());
+
+    // Passing to a function passes the reference.
+    fill(a);
+    print(a.len());
+
+    // A collection stored in a map is shared the same way.
+    var m = new HashMap<String, Vec<int>>();
+    m.insert("k", new Vec<int>());
+    m.get("k")!!.push(7);
+    print(m.get("k")!!.len());
+
+    // `clone()` is the one thing that copies.
+    var c = a.clone();
+    c.push(100);
+    print((int) a.len() + " " + (int) c.len());
+
+    // An indexed write goes through the shared handle.
+    var xs = new Vec<int>();
+    xs.push(0); xs.push(0);
+    xs[1] = 42;
+    print(xs[1]);
+
+    // A read and a write on one collection in a single statement: two borrows
+    // of one cell, which must not collide.
+    print((int) a.len() + " " + (a.pop() ?? -1));
+
+    // A for-each walks a SNAPSHOT, so a body that grows the collection it is
+    // iterating is well defined: two elements visited, two appended.
+    var it = new Vec<int>();
+    it.push(1); it.push(2);
+    for (var v : it) { it.push(v * 10); }
+    print(it.len());
+}

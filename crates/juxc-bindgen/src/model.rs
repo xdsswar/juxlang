@@ -153,6 +153,15 @@ pub struct StubFn {
     /// `borrow_mut()` upgrade) instead of relying on hardcoded method-name
     /// lists that drift when the library changes.
     pub is_mut_self: bool,
+    /// The Rust return type BORROWS from the receiver - `&T`, `&mut T`, or an
+    /// `Option` / `Result` of one. The Jux type drops the `&` the same way a
+    /// parameter does (§G.3.4), so the stub alone cannot tell `T? first()`
+    /// (`Option<&T>`) from `T? pop()` (`Option<T>`). Rendered as a `@RustRefOut`
+    /// annotation, because the difference decides whether the value may outlive
+    /// the borrow the call was made through: a collection is a reference type
+    /// (§6.5.1), so every call on one reaches through a `RefCell` guard, and a
+    /// borrowed result has to be cloned out of it before the guard drops.
+    pub returns_borrow: bool,
     /// The **real** fully-qualified Rust path of a free function
     /// (`humantime::parse_duration`), from the rustdoc summary. Rendered as a
     /// `@rust("…")` annotation so the backend lowers the import to

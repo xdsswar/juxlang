@@ -200,12 +200,18 @@ impl RustEmitter {
                 //    cell (rustc E0596 otherwise).
                 let mutates =
                     is_call_callee && self.external_method_mutates_receiver(&name, &f.field.text);
+                // A collection is a reference type (§6.5.1) and so is held as
+                // `Rc<RefCell<…>>`. Its own cell carries the mutation, so the
+                // enclosing wrapper only needs a SHARED `.0.borrow()` — taking
+                // the exclusive one here would make two mutating calls on
+                // sibling fields of the same object panic for no reason.
+                let handle = self.collection_name_is_handle(&name);
                 let prev_recv = self.emitting_method_receiver;
                 let prev_out = self.emitting_out_place;
                 let prev_lv = self.emitting_lvalue;
                 if is_call_callee {
                     self.emitting_method_receiver = true;
-                    if mutates {
+                    if mutates && !handle {
                         self.emitting_out_place = true;
                         self.emitting_lvalue = true;
                     }
@@ -214,6 +220,15 @@ impl RustEmitter {
                 self.emitting_method_receiver = prev_recv;
                 self.emitting_out_place = prev_out;
                 self.emitting_lvalue = prev_lv;
+                // The methods live on the INTERIOR of the handle, so reach
+                // through the cell before naming one.
+                if is_call_callee && handle {
+                    self.w.push_str(if mutates {
+                        ".borrow_mut()"
+                    } else {
+                        ".borrow()"
+                    });
+                }
                 self.w.push('.');
                 self.w
                     .push_str(&crate::backend_fqn::to_rust_ident(&f.field.text));
@@ -1967,6 +1982,24 @@ impl RustEmitter {
         }
         rust_std_container_method_mutates(method)
     }
+
+    /// Whether the scanned `type_name::method` hands back a BORROW of its
+    /// receiver, per the `@RustRefOut` marker bindgen derives from the real
+    /// rustdoc signature (`Option<&T>` for `first` / `get`, `&mut T` for the
+    /// `_mut` twins). The Jux return type drops the `&`, so this marker is the
+    /// only thing that distinguishes `T? first()` from `T? pop()`.
+    ///
+    /// It matters because a collection is a reference type (§6.5.1): every
+    /// call on one reaches through a `RefCell` guard, and a result that
+    /// borrows from that guard cannot outlive it.
+    pub(crate) fn external_method_returns_borrow(&self, type_name: &str, method: &str) -> bool {
+        let class = self.symbols.classes.get(type_name).or_else(|| {
+            self.lookup_class_by_bare_or_fqn(type_name.rsplit('.').next().unwrap_or(type_name))
+        });
+        class
+            .and_then(|c| c.methods.get(method))
+            .is_some_and(|m| m.annotations.iter().any(annotation_is_rust_ref_out))
+    }
 }
 
 /// Whether the stub declares parameter `idx` of `type_name::method` as a Rust
@@ -2023,6 +2056,11 @@ pub(crate) fn annotation_is_rust_clone(a: &juxc_ast::Annotation) -> bool {
 
 /// True when an annotation names the bindgen `@MutSelf` marker
 /// (annotations are case-insensitive per the Jux rules).
+pub(crate) fn annotation_is_rust_ref_out(a: &juxc_ast::Annotation) -> bool {
+    a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("rustrefout")
+}
+
+/// Whether the scanned method is marked `@MutSelf`.
 pub(crate) fn annotation_is_mut_self(a: &juxc_ast::Annotation) -> bool {
     a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("mutself")
 }

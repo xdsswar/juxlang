@@ -76,6 +76,18 @@ impl RustEmitter {
         self.emitting_method_receiver = true;
         self.emit_expr(&i.array);
         self.emitting_method_receiver = false;
+        // A collection is a reference type (§6.5.1): the `Index` impl is on
+        // the sequence inside the cell, not on the handle. An `xs[i] = v` write
+        // reaches here as the assignment's LHS, and `IndexMut` needs the
+        // exclusive borrow - `Ref` derefs to `&Vec<T>`, which cannot be written
+        // through (rustc E0596).
+        if self.expr_is_collection_handle(&i.array) {
+            self.w.push_str(if self.emitting_lvalue {
+                ".borrow_mut()"
+            } else {
+                ".borrow()"
+            });
+        }
         self.w.push('[');
         if map_index {
             self.w.push_str("&(");

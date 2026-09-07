@@ -389,36 +389,16 @@ impl RustEmitter {
             return;
         }
 
-        // **Stdlib compiler primitives.** ArrayList / HashMap /
-        // HashSet lower directly to their Rust std counterparts.
-        // The Jux source files under `jux.std/collections/`
-        // document the API contract; the compiler knows the
-        // mapping by FQN (a small fixed set, on par with how
-        // `int` and `String` are also hardcoded primitives).
+        // **Stdlib compiler primitives.** A handful of types the compiler
+        // knows by name because they have no stub to be discovered from.
+        // Collections are NOT in this set: they are ordinary scanned
+        // `rust.std` types and go through the discovered path below, which is
+        // what gives them their §6.5.1 reference-type handle. Short-circuiting
+        // them here emitted a bare container for the declared slot while the
+        // matching `new` emitted a handle, and the two disagreed.
         if let Some(seg) = ty.name.segments.last() {
             let bare = seg.text.as_str();
             match bare {
-                "HashMap" if ty.generic_args.len() == 2 => {
-                    self.w.push_str("std::collections::HashMap<");
-                    for (i, arg) in ty.generic_args.iter().enumerate() {
-                        if i > 0 {
-                            self.w.push_str(", ");
-                        }
-                        if let juxc_ast::GenericArg::Type(t) = arg {
-                            self.emit_element_type_as_rust(t);
-                        }
-                    }
-                    self.w.push('>');
-                    return;
-                }
-                "HashSet" if ty.generic_args.len() == 1 => {
-                    self.w.push_str("std::collections::HashSet<");
-                    if let Some(juxc_ast::GenericArg::Type(t)) = ty.generic_args.first() {
-                        self.emit_element_type_as_rust(t);
-                    }
-                    self.w.push('>');
-                    return;
-                }
                 // Monotonic time-point (jux.std.time) — a plain Copy
                 // value, not a wrapper class.
                 "Instant" if ty.generic_args.is_empty() => {
@@ -475,6 +455,16 @@ impl RustEmitter {
             .external_class_real_path(&ty.name)
             .filter(|_| !shadowed_by_nested_type)
         {
+            // §6.5.1 — a collection is a REFERENCE type, like a class
+            // instance, so it lowers to the same handle a class does. That is
+            // what makes `var a = h.getItems(); a.push(v)` mutate `h`'s
+            // collection instead of a copy: the `.clone()` the value path
+            // already emits becomes an `Rc` refcount bump rather than a deep
+            // copy of the elements.
+            let handle = self.collection_is_handle(&ty.name);
+            if handle {
+                self.w.push_str("std::rc::Rc<std::cell::RefCell<");
+            }
             self.w.push_str(&real);
             if !ty.generic_args.is_empty() {
                 self.w.push('<');
@@ -492,6 +482,9 @@ impl RustEmitter {
                     self.emit_generic_arg_type_as_rust(arg);
                 }
                 self.w.push('>');
+            }
+            if handle {
+                self.w.push_str(">>");
             }
             return;
         }

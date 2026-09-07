@@ -314,6 +314,33 @@ impl RustEmitter {
     /// `println!(…)`. Every other callee is emitted verbatim (the
     /// resolver guarantees the name exists).
     pub(crate) fn emit_call(&mut self, call: &CallExpr) {
+        // **Statement-scoped handle guard (§6.5.1).** A call on a collection
+        // handle reaches through a `RefCell`, and the guard it creates is an
+        // expression temporary: it lives to the end of the enclosing STATEMENT,
+        // not the end of the call. Two calls on one handle in a single
+        // statement would then hold two guards at once, and a read plus a write
+        // panics `already borrowed`. Binding the call's RESULT to a `let` moves
+        // the guard into that let's initializer, where it is dropped at the
+        // semicolon, so each call's borrow ends before the next one begins.
+        // Only where the statement analysis found a real conflict: wrapping a
+        // call whose Rust result BORROWS from the receiver (`first`, `get_mut`)
+        // would move the guard out from under the value (rustc E0597 / E0716),
+        // and a lone call or a pair of reads has nothing to conflict with.
+        if !self.wrapping_handle_call
+            && matches!(&*call.callee, Expr::Field(f)
+                if self.expr_is_collection_handle(&f.object)
+                    && self.receiver_conflicts_in_statement(&f.object))
+        {
+            self.wrapping_handle_call = true;
+            self.w.push_str("({ let __jux_hv = ");
+            self.emit_call(call);
+            self.w.push_str("; __jux_hv })");
+            self.wrapping_handle_call = false;
+            return;
+        }
+        // Nested calls inside this one are separate statements' worth of
+        // borrows again, so release the guard immediately.
+        self.wrapping_handle_call = false;
         // The method-RECEIVER marker (S7) applies only to a direct
         // field-place receiver — a nested CALL inside the receiver
         // expression (`getH().item.set(x)` evaluating `getH()`) is a
@@ -2563,7 +2590,15 @@ impl RustEmitter {
                 self.w.push_str("crate::JuxStream::from(");
                 if let Some(arg) = call.args.first() {
                     self.emit_expr(arg);
-                    self.w.push_str(".clone()");
+                    // The stream shim takes an owned `Vec<T>`, so a collection
+                    // handle (§6.5.1) is LENT its interior here rather than
+                    // handed the handle: cloning the handle alone would only
+                    // bump the refcount and pass the wrong type.
+                    self.w.push_str(if self.expr_is_collection_handle(arg) {
+                        ".borrow().clone()"
+                    } else {
+                        ".clone()"
+                    });
                 }
                 self.w.push(')');
             }
@@ -2685,9 +2720,23 @@ impl RustEmitter {
     /// `emit_field`. The flag is take-and-cleared by `emit_field` /
     /// `emit_call`, so it never leaks past the receiver expression.
     fn emit_stdlib_receiver(&mut self, receiver: &Expr) {
+        // Whether the caller is emitting a MUTATING method is already carried
+        // by `emitting_out_place` (`emit_mut_collection_method` sets it), so
+        // the handle borrow can pick its strength without a second parameter
+        // threaded through all 40-odd call sites.
+        let mutable = self.emitting_out_place;
         self.emitting_method_receiver = true;
         self.emit_expr(receiver);
         self.emitting_method_receiver = false;
+        // A collection is a reference type (§6.5.1): reach through its cell
+        // before naming a method that lives on the interior.
+        if self.expr_is_collection_handle(receiver) {
+            self.w.push_str(if mutable {
+                ".borrow_mut()"
+            } else {
+                ".borrow()"
+            });
+        }
     }
 
     /// True when evaluating `e` reads a field through a wrapper
@@ -2901,7 +2950,23 @@ impl RustEmitter {
             }
             self.emitting_format_arg = prev_args_fmt;
         }
-        self.w.push_str("__jux_recv.");
+        // Same handle rule as `emit_field`: `__jux_recv` holds the collection
+        // HANDLE and the method is on the interior (§6.5.1). The guard gets a
+        // BINDING of its own rather than riding in the tail expression: a
+        // temporary created in a block's tail outlives the block's locals, so
+        // `__jux_recv.borrow()` there would outlive `__jux_recv` (rustc E0597).
+        let handle_borrow = self.collection_handle_borrow(&callee.object, &callee.field.text);
+        if let Some(borrow) = handle_borrow {
+            self.w.push_str(if borrow == ".borrow_mut()" {
+                "let mut __jux_cell = __jux_recv"
+            } else {
+                "let __jux_cell = __jux_recv"
+            });
+            self.w.push_str(borrow);
+            self.w.push_str("; __jux_cell.");
+        } else {
+            self.w.push_str("__jux_recv.");
+        }
         self.w.push_str(&to_rust_ident(&callee.field.text));
         if let Some(sfx) = self.pending_method_suffix.take() {
             self.w.push_str(&sfx);
@@ -3448,8 +3513,60 @@ impl RustEmitter {
                     bare,
                     "Vec" | "VecDeque" | "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet",
                 );
+            // **`clone()` on a collection.** §6.5.1: a collection is a
+            // reference, and `clone()` is the one thing that copies it - "to copy,
+            // ask for a copy". The handle's own `Clone` would only bump the
+            // refcount and hand back the SAME collection, which is the opposite
+            // of what was asked, so reach through the cell, copy the sequence,
+            // and put the copy behind a handle of its own.
+            //
+            // The copy is shallow, exactly like Java's `new ArrayList<>(xs)`: an
+            // element that is itself a reference is still shared afterwards.
+            if method == "clone" && call.args.is_empty() && self.collection_name_is_handle(name) {
+                if let Expr::Field(f) = &*call.callee {
+                    self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                    self.emit_stdlib_receiver(&f.object);
+                    self.w.push_str(".clone()))");
+                    return true;
+                }
+            }
             if is_rust_std_coll && self.collection_method_mutates(&recv_ty, method) {
                 return self.emit_mut_collection_method(call, method, &recv_ty);
+            }
+            // **A read whose Rust result BORROWS the receiver** - `get`, `first`,
+            // `last`, `front`, `back` and every other method rustdoc shows
+            // returning `Option<&V>` / `&V`. Jux's `T?` is an owned `Option<V>`,
+            // and bindgen drops the `&` from the stub return type, so the generic
+            // call path cannot tell the difference; clone the borrowed value out
+            // so the two line up. The owned-`Option` methods (`pop`,
+            // `pop_front`, ...) are untouched, because the marker is absent there.
+            //
+            // Which methods these are is DISCOVERED from the `@RustRefOut` marker
+            // bindgen derives from the real signature, replacing the pair of
+            // hardcoded lists this used to carry - one of method names and one of
+            // container names. Both were wrong in the same way: `Vec` returned
+            // early before ever reaching the check, so `v.first()` and
+            // `nums.get(0)` handed back a raw Rust reference that only happened
+            // to compile while nothing outlived the statement.
+            if let Expr::Field(f) = &*call.callee {
+                if self.external_method_returns_borrow(name, method) {
+                    let nullable = matches!(
+                        self.expr_types.get(&call.span),
+                        Some(juxc_tycheck::Ty::Nullable(_))
+                    );
+                    self.w.push('(');
+                    self.emit_stdlib_receiver(&f.object);
+                    self.w.push('.');
+                    self.w.push_str(method);
+                    self.w.push('(');
+                    // Borrow exactly the arguments the real signature borrows -
+                    // a map's `get(&Q key)` is the case that needs it.
+                    self.emit_foreign_call_args(call, name, method);
+                    self.w.push_str("))");
+                    self.w
+                        .push_str(if nullable { ".cloned()" } else { ".clone()" });
+                    return true;
+                }
             }
         }
         let is_vec = matches!(
@@ -3486,24 +3603,6 @@ impl RustEmitter {
                     self.w.push('.');
                     self.w.push_str(method);
                     self.w.push_str("().cloned().collect::<Vec<_>>()");
-                    return true;
-                }
-                if is_rust_std_coll && matches!(method, "get" | "first" | "last" | "front" | "back")
-                {
-                    self.w.push('(');
-                    self.emit_stdlib_receiver(&f.object);
-                    self.w.push('.');
-                    self.w.push_str(method);
-                    self.w.push('(');
-                    // `get(k)` borrows its key (`&k`); the no-arg getters take none.
-                    if method == "get" && !call.args.is_empty() {
-                        self.w.push_str("&(");
-                        self.emit_call_args(call);
-                        self.w.push(')');
-                    } else {
-                        self.emit_call_args(call);
-                    }
-                    self.w.push_str(")).cloned()");
                     return true;
                 }
             }
@@ -3603,6 +3702,14 @@ impl RustEmitter {
         let Expr::NotNullAssert(inner, _) = receiver else {
             return false;
         };
+        // §6.5.1 retired this rewrite for the case it was written for. A
+        // collection read out of a container is now the shared HANDLE, so
+        // `map.get(k)!!.push(v)` already mutates the map's own collection
+        // through the plain read path. Taking the `_mut` getter here instead
+        // would hand back `&mut Rc<RefCell<…>>`, which has no `push` on it.
+        if self.expr_is_collection_handle(receiver) {
+            return false;
+        }
         // …over a call…
         let Expr::Call(get_call) = &**inner else {
             return false;
@@ -4497,7 +4604,7 @@ impl RustEmitter {
 
     /// The type of a receiver expression, from the two places the emitter
     /// records it: a declared local, else the span-keyed inference map.
-    fn receiver_ty_of(&self, receiver: &Expr) -> Option<juxc_tycheck::Ty> {
+    pub(crate) fn receiver_ty_of(&self, receiver: &Expr) -> Option<juxc_tycheck::Ty> {
         match receiver {
             Expr::Path(qn) if qn.segments.len() == 1 => self
                 .local_types
@@ -4511,6 +4618,22 @@ impl RustEmitter {
                 .get(&crate::exprs::expr_span_of(receiver))
                 .cloned()
         })
+        .or_else(|| {
+            // See through a `!!` assertion: `map.get(k)!!.push(v)` has the
+            // same receiver TYPE as `map.get(k)`, minus the nullability.
+            // Tycheck records the type of the inner call but not always of the
+            // assertion node wrapped around it, and without this the receiver
+            // looked untyped - so a collection read out of a map was not
+            // recognised as a handle and never got its `.borrow_mut()`.
+            let Expr::NotNullAssert(inner, _) = receiver else {
+                return None;
+            };
+            let inner = inner.as_ref();
+            Some(match self.receiver_ty_of(inner)? {
+                juxc_tycheck::Ty::Nullable(t) => *t,
+                t => t,
+            })
+        })
     }
 
     /// Emit ONE builtin-container argument with its element coercion
@@ -4520,6 +4643,15 @@ impl RustEmitter {
     /// argument is already a coerced temp, so the ladder is skipped (the
     /// bare temp is emitted) — see that flag's doc.
     fn emit_collection_arg(&mut self, call: &CallExpr, i: usize, arg: &Expr) {
+        // A lambda flowing into a foreign `impl FnMut(..)` param lowers to a
+        // BARE Rust closure, not the default `Rc<dyn Fn>` (§G.3). The generic
+        // argument path already does this; a MUTATING collection method
+        // (`v.resize_with(n, () -> ...)`) hoists its arguments through here
+        // instead, and used to miss it - so the closure arrived as an `Rc`,
+        // which does not implement `FnMut`.
+        if matches!(arg, Expr::Lambda(_)) && self.callee_param_is_foreign_fn(&call.callee, i) {
+            self.lambda_bare_target = true;
+        }
         if self.collection_args_prehoisted {
             self.emit_expr(arg);
             return;
