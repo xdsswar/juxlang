@@ -195,7 +195,7 @@ fn expand_stmt(stmt: &mut Stmt, plans: &HashMap<Span, Vec<ArgSource>>) {
                 expand_block(f, plans);
             }
         }
-        Stmt::Unsafe(b) => expand_block(b, plans),
+        Stmt::Block(b) | Stmt::Unsafe(b) => expand_block(b, plans),
         Stmt::ForC(f) => {
             if let Some(init) = &mut f.init {
                 expand_stmt(init, plans);

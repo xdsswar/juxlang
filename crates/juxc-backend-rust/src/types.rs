@@ -502,7 +502,7 @@ impl RustEmitter {
             // copy of the elements.
             let handle = self.collection_is_handle(&ty.name);
             if handle {
-                self.w.push_str("std::rc::Rc<std::cell::RefCell<");
+                self.w.push_str("crate::JuxArr<");
             }
             self.w.push_str(&real);
             if !ty.generic_args.is_empty() {
@@ -523,7 +523,7 @@ impl RustEmitter {
                 self.w.push('>');
             }
             if handle {
-                self.w.push_str(">>");
+                self.w.push('>');
             }
             return;
         }
@@ -1227,6 +1227,22 @@ impl RustEmitter {
         // nullable slot's default is `None` regardless of the inner.
         if ty.nullable {
             self.w.push_str("None");
+            return;
+        }
+        // A FUNCTION-typed slot (`() -> int`) lowers to `Rc<dyn Fn…>`, which
+        // has no `Default`. The placeholder is a closure of the right arity
+        // returning the return type's own default -- it is overwritten by the
+        // constructor body before anything can call it, and exists only so the
+        // `__self` builder has a value to put in the slot.
+        if let Some(fn_shape) = &ty.fn_shape {
+            self.w.push_str("std::rc::Rc::new(|");
+            for i in 0..fn_shape.params.len() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str(&format!("_a{i}"));
+            }
+            self.w.push_str("| Default::default())");
             return;
         }
         if let Some(shape) = &ty.array_shape {

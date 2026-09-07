@@ -3229,3 +3229,75 @@ fn bodyless_const_parses() {
     let TopLevelDecl::Const(c) = &ast.items[0] else { panic!("const") };
     assert_eq!(c.name.text, "SEP");
 }
+
+// ---------------------------------------------------------------------------
+// Integer literal range (E0202)
+// ---------------------------------------------------------------------------
+
+/// `-9223372036854775808` is `long`'s smallest value. Its magnitude is one
+/// past `long`'s largest, so the sign has to fold into the literal -- parsing
+/// the digits and negating afterwards cannot represent it, and used to yield
+/// `0` with no diagnostic at all.
+#[test]
+fn long_min_literal_folds_its_sign() {
+    let ast = parse_clean("public void m() { long x = -9223372036854775808; }");
+    let TopLevelDecl::Function(f) = &ast.items[0] else { panic!("fn") };
+    let juxc_ast::Stmt::VarDecl(v) = &f.body.as_ref().expect("body").statements[0] else {
+        panic!("var decl")
+    };
+    let Some(juxc_ast::Expr::Literal(juxc_ast::Literal::Int(lit))) = &v.init else {
+        panic!("int literal, folded -- not a unary minus over one")
+    };
+    assert_eq!(lit.value, i64::MIN);
+}
+
+/// The largest positive literal still parses as itself.
+#[test]
+fn long_max_literal_parses() {
+    let ast = parse_clean("public void m() { long x = 9223372036854775807; }");
+    let TopLevelDecl::Function(f) = &ast.items[0] else { panic!("fn") };
+    let juxc_ast::Stmt::VarDecl(v) = &f.body.as_ref().expect("body").statements[0] else {
+        panic!("var decl")
+    };
+    let Some(juxc_ast::Expr::Literal(juxc_ast::Literal::Int(lit))) = &v.init else {
+        panic!("int literal")
+    };
+    assert_eq!(lit.value, i64::MAX);
+}
+
+/// Past the range, in either direction, is E0202 -- never a silent `0`.
+#[test]
+fn out_of_range_literal_is_reported() {
+    assert!(parse_has_code(
+        "public void m() { long x = 99999999999999999999; }",
+        juxc_diagnostics::code::Code::E0202_NumericLiteralOutOfRange,
+    ));
+    assert!(parse_has_code(
+        "public void m() { long x = -9223372036854775809; }",
+        juxc_diagnostics::code::Code::E0202_NumericLiteralOutOfRange,
+    ));
+}
+
+/// A minus that is not directly on a literal stays an ordinary negation --
+/// the folding must not swallow `-(x)` or `- 1 + 2`.
+#[test]
+fn minus_on_a_non_literal_stays_a_negation() {
+    let ast = parse_clean("public void m() { int y = 1; int x = -y; }");
+    let TopLevelDecl::Function(f) = &ast.items[0] else { panic!("fn") };
+    let juxc_ast::Stmt::VarDecl(v) = &f.body.as_ref().expect("body").statements[1] else {
+        panic!("var decl")
+    };
+    assert!(matches!(&v.init, Some(juxc_ast::Expr::Unary(_))));
+}
+
+/// A bare `{ … }` is a statement (grammar A.2.8), not the start of an
+/// expression. It used to report "expected expression" at the brace.
+#[test]
+fn bare_block_is_a_statement() {
+    let ast = parse_clean("public void m() { int a = 1; { int b = 2; } }");
+    let TopLevelDecl::Function(f) = &ast.items[0] else { panic!("fn") };
+    let body = f.body.as_ref().expect("body");
+    assert_eq!(body.statements.len(), 2);
+    let juxc_ast::Stmt::Block(inner) = &body.statements[1] else { panic!("block stmt") };
+    assert_eq!(inner.statements.len(), 1);
+}

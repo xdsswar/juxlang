@@ -92,6 +92,12 @@ pub enum Stmt {
     /// functions and the raw-pointer operators (`*p`, `&x`) are permitted;
     /// the body lowers verbatim to a Rust `unsafe { … }` block.
     Unsafe(Block),
+    /// A bare `{ … }` in statement position (grammar A.2.8 `statement = block`).
+    ///
+    /// It introduces a scope and nothing else. Java programs use one to bound
+    /// a local's lifetime, and to shadow a name for a few lines without
+    /// affecting the rest of the method.
+    Block(Block),
     /// `for (init; cond; update) block` — the C-style counted loop per
     /// §A.2.8. Distinct from the enhanced [`Self::ForEach`] form. See
     /// [`ForCStmt`].

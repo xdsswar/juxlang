@@ -41,7 +41,7 @@ fn vector3_record_value_equality_and_string_component() {
     let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
     assert_eq!(
         lines.as_slice(),
-        ["v = (1, 2, 3)", "v == u", "v != w", "name=Ada, age=36"],
+        ["v = (1.0, 2.0, 3.0)", "v == u", "v != w", "name=Ada, age=36"],
         "unexpected output:\n{stdout}",
     );
 }

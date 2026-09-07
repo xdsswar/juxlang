@@ -770,6 +770,28 @@ impl RustEmitter {
         };
         let mut found = false;
         let mut look = |e: &juxc_ast::Expr| {
+            // A lambda that CAPTURES `this` needs the body deferred for the
+            // same reason a method call does: it has to see the real object.
+            // Run against the struct being built, Rust 2021 captures the
+            // individual FIELD it reads -- a snapshot, so a later write to
+            // that field is invisible to the closure. Deferring binds `this`
+            // to the handle, and the capture becomes the object itself.
+            if let juxc_ast::Expr::Lambda(l) = e {
+                let mut uses_this = false;
+                let mut probe = |inner: &juxc_ast::Expr| {
+                    uses_this |= matches!(inner, juxc_ast::Expr::This(_));
+                };
+                match &l.body {
+                    juxc_ast::LambdaBody::Expr(b) => crate::worker::walk_expr(b, &mut probe),
+                    juxc_ast::LambdaBody::Block(b) => {
+                        for stmt in &b.statements {
+                            crate::worker::walk_stmt(stmt, &mut probe);
+                        }
+                    }
+                }
+                found |= uses_this;
+                return;
+            }
             let juxc_ast::Expr::Call(c) = e else { return };
             found |= match &*c.callee {
                 juxc_ast::Expr::Field(f) => matches!(&*f.object, juxc_ast::Expr::This(_)),

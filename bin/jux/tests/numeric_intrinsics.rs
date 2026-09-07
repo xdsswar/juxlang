@@ -45,7 +45,7 @@ fn numeric_intrinsics() {
             // Checked arithmetic.
             "true", "8", "true",
             // Float intrinsics.
-            "1.5", "2", "3", "2", "true", "3.14", "true", "-1",
+            "1.5", "2.0", "3.0", "2.0", "true", "3.14", "true", "-1",
             // Constants.
             "true", "true", "127", "true", "true", "true",
             // Char classifiers.

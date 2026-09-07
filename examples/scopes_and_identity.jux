@@ -1,0 +1,89 @@
+// Scopes, captures, and what `===` means.
+//
+// Four things, each of which the compiler used to get wrong in a way the
+// source gives no hint of:
+//
+//   1. A bare `{ … }` is a statement (grammar A.2.8). It is how you bound a
+//      local's lifetime, and how you shadow a name for a few lines.
+//   2. A lambda stored on a field captures the OBJECT, so it sees later
+//      writes to the field it reads -- not the value at the time it was made.
+//   3. `===` on a value type is `==` (7.14.3). On a class it is identity.
+//   4. Printing a collection prints what it holds, at every level of nesting.
+//
+// Expected output:
+//   2
+//   1
+//   inner
+//   1
+//   1
+//   9
+//   true
+//   true
+//   false
+//   true
+//   [[1, 2]]
+//   [[1, 2, 3]]
+
+public class Holder {
+    public int x = 1;
+
+    public void shadow() {
+        // A local shadows the field; `this.x` still names the field.
+        int x = 2;
+        print(x);
+        print(this.x);
+        // A bare block: `label` exists only inside it.
+        {
+            String label = "inner";
+            print(label);
+        }
+        print(this.x);
+    }
+}
+
+public class Counter {
+    public int n;
+    private () -> int peek;
+
+    public Counter() {
+        this.n = 1;
+        // Captures `this`, not `this.n`. A later write must be visible.
+        this.peek = () -> this.n;
+    }
+
+    public int read() {
+        return this.peek();
+    }
+}
+
+public void main() {
+    new Holder().shadow();
+
+    var c = new Counter();
+    print(c.read());
+    c.n = 9;
+    print(c.read());
+
+    // A String is a value type, so all three comparisons agree.
+    String s = "hi";
+    String t = "h" + "i";
+    print(s == t);
+    print(s === t);
+
+    // A class is a reference type, so identity distinguishes two instances.
+    var h1 = new Holder();
+    var h2 = new Holder();
+    print(h1 === h2);
+    print(h1 === h1);
+
+    // A collection inside a collection prints as its contents, and the inner
+    // one is still the same object after being pushed.
+    var inner = new Vec<int>();
+    inner.push(1);
+    inner.push(2);
+    var outer = new Vec<Vec<int>>();
+    outer.push(inner);
+    print(outer);
+    inner.push(3);
+    print(outer);
+}

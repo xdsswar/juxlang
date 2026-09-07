@@ -312,15 +312,17 @@ fn stress_kitchen_sink() {
             "pair=(7, lucky)",
             "swap=(lucky, 7)",
             "circle area=78.53975",
-            "square area=16",
-            "triangle area=9",
+            // `16.0`, not `16`: these are doubles, and a double keeps its
+            // decimal point so it cannot be read as an int (LANG-V1 3.4).
+            "square area=16.0",
+            "triangle area=9.0",
             "biggest=circle",
             "Shape.allocated=3",
             "<named:hello>",
             "<named:(unnamed)>",
             "Tag.produced=2",
-            "sumOfCubes(5)=100",
-            "sumOf(x+1)(5)=15",
+            "sumOfCubes(5)=100.0",
+            "sumOf(x+1)(5)=15.0",
             "Stats.callCount=5",
         ],
     );

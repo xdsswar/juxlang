@@ -1946,7 +1946,7 @@ pub(crate) fn compute_aliased_classes(
                     walk_block(fin, aliased, mark);
                 }
             }
-            Stmt::Unsafe(b) => walk_block(b, aliased, mark),
+            Stmt::Block(b) | Stmt::Unsafe(b) => walk_block(b, aliased, mark),
             Stmt::Break(..) | Stmt::Continue(..) => {}
             Stmt::Labeled { stmt, .. } => walk_stmt(stmt, aliased, mark),
         }
@@ -2110,7 +2110,7 @@ pub(crate) fn compute_aliased_classes(
                         mark_lambda_captures_block(fin, aliased, mark);
                     }
                 }
-                Stmt::Unsafe(b) => mark_lambda_captures_block(b, aliased, mark),
+                Stmt::Block(b) | Stmt::Unsafe(b) => mark_lambda_captures_block(b, aliased, mark),
                 Stmt::Break(..) | Stmt::Continue(..) => {}
                 Stmt::Labeled { stmt, .. } => mark_lambda_captures_block(
                     &juxc_ast::Block {
@@ -2791,7 +2791,7 @@ pub(crate) fn compute_mutated_classes(
                     walk_block(fin, et, um, out);
                 }
             }
-            Stmt::Unsafe(b) => walk_block(b, et, um, out),
+            Stmt::Block(b) | Stmt::Unsafe(b) => walk_block(b, et, um, out),
             Stmt::Break(..) | Stmt::Continue(..) => {}
             Stmt::Labeled { stmt, .. } => walk_stmt(stmt, et, um, out),
         }
@@ -3466,7 +3466,7 @@ fn cast_targets_stmt(s: &juxc_ast::Stmt, out: &mut HashSet<String>) {
                 cast_targets_block(f, out);
             }
         }
-        Stmt::Unsafe(b) => cast_targets_block(b, out),
+        Stmt::Block(b) | Stmt::Unsafe(b) => cast_targets_block(b, out),
     }
 }
 
@@ -3871,22 +3871,65 @@ impl RustEmitter {
         // cell. Naming the shape keeps the emitted Rust readable: a two-
         // dimensional `int[][]` is `JuxArr<Vec<JuxArr<Vec<isize>>>>` rather
         // than the same thing spelled out, which nests to four lines.
-        w.push_str(
-            "/// A Jux array: a shared, interior-mutable sequence.
-",
-        );
-        w.push_str(
-            "pub type JuxArr<T> = std::rc::Rc<std::cell::RefCell<T>>;
-",
-        );
-        w.push_str(
-            "/// Build a [`JuxArr`] - the constructor an alias cannot provide.
-",
-        );
-        w.push_str(
-            "pub fn jux_arr<T>(v: T) -> JuxArr<T> { std::rc::Rc::new(std::cell::RefCell::new(v)) }
-",
-        );
+        w.push_str("/// Render a floating-point value the way Jux prints one (LANG-V1 3.4).\n");
+        w.push_str("///\n");
+        w.push_str("/// Rust's `Display` for a float drops the decimal point on a whole\n");
+        w.push_str("/// number, so a `double` holding 1 prints as `1` and reads as an `int`.\n");
+        w.push_str("/// `Debug` keeps it, and is identical everywhere else -- including the\n");
+        w.push_str("/// shortest-roundtrip digits and the `inf` / `NaN` spellings.\n");
+        w.push_str("pub fn jux_float<T: std::fmt::Debug>(v: T) -> String {\n");
+        w.push_str("    format!(\"{:?}\", v)\n");
+        w.push_str("}\n");
+        w.push_str("/// The cell inside a Jux array or collection handle.\n");
+        w.push_str("///\n");
+        w.push_str("/// A plain `RefCell` would hold the value just as well, but its `Debug`\n");
+        w.push_str("/// prints the machinery: a program that says `print(v)` on a list of lists\n");
+        w.push_str("/// would see `RefCell { value: [1, 2] }` for every inner one. Printing a\n");
+        w.push_str("/// handle means printing what it holds, so `Debug` delegates -- and because\n");
+        w.push_str("/// it delegates, a NESTED handle formats correctly too, which no amount of\n");
+        w.push_str("/// borrowing at the print site can achieve.\n");
+        w.push_str("pub struct JuxCell<T: ?Sized>(pub std::cell::RefCell<T>);\n");
+        w.push_str("impl<T: ?Sized> std::ops::Deref for JuxCell<T> {\n");
+        w.push_str("    type Target = std::cell::RefCell<T>;\n");
+        w.push_str("    fn deref(&self) -> &Self::Target {\n");
+        w.push_str("        &self.0\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for JuxCell<T> {\n");
+        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
+        w.push_str("        // `try_borrow` rather than `borrow`: a structure that reaches\n");
+        w.push_str("        // itself, or one printed from inside a mutation, must not turn a\n");
+        w.push_str("        // print into a panic.\n");
+        w.push_str("        match self.0.try_borrow() {\n");
+        w.push_str("            Ok(v) => std::fmt::Debug::fmt(&*v, f),\n");
+        w.push_str("            Err(_) => f.write_str(\"<in use>\"),\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("impl<T: ?Sized + std::fmt::Display> std::fmt::Display for JuxCell<T> {\n");
+        w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
+        w.push_str("        match self.0.try_borrow() {\n");
+        w.push_str("            Ok(v) => std::fmt::Display::fmt(&*v, f),\n");
+        w.push_str("            Err(_) => f.write_str(\"<in use>\"),\n");
+        w.push_str("        }\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("impl<T: Default> Default for JuxCell<T> {\n");
+        w.push_str("    fn default() -> Self {\n");
+        w.push_str("        JuxCell(std::cell::RefCell::new(T::default()))\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("impl<T: ?Sized + PartialEq> PartialEq for JuxCell<T> {\n");
+        w.push_str("    fn eq(&self, other: &Self) -> bool {\n");
+        w.push_str("        *self.0.borrow() == *other.0.borrow()\n");
+        w.push_str("    }\n");
+        w.push_str("}\n");
+        w.push_str("/// A Jux array: a shared, interior-mutable sequence.\n");
+        w.push_str("pub type JuxArr<T> = std::rc::Rc<JuxCell<T>>;\n");
+        w.push_str("/// Build a [`JuxArr`] - the constructor an alias cannot provide.\n");
+        w.push_str("pub fn jux_arr<T>(v: T) -> JuxArr<T> {\n");
+        w.push_str("    std::rc::Rc::new(JuxCell(std::cell::RefCell::new(v)))\n");
+        w.push_str("}\n");
         w.push_str(
             "
 ",

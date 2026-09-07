@@ -39,7 +39,9 @@ fn generic_method_bounds() {
     let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
     assert_eq!(
         lines.as_slice(),
-        ["6.28318", "18", "4"],
+        // `18.0` / `4.0`, not `18` / `4`: doubles keep their decimal point
+        // so one cannot be read as an int (LANG-V1 3.4).
+        ["6.28318", "18.0", "4.0"],
         "unexpected output:\n{stdout}",
     );
 }

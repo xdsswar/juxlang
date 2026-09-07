@@ -41,7 +41,7 @@ fn shape_interface_with_circle_and_square_implementations() {
     let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
     assert_eq!(
         lines.as_slice(),
-        ["Circle area = 12.56636", "Square area = 9"],
+        ["Circle area = 12.56636", "Square area = 9.0"],
         "unexpected output:\n{stdout}",
     );
 }

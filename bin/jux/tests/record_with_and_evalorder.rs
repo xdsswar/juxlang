@@ -50,10 +50,10 @@ fn record_with_wither() {
     assert_eq!(
         lines,
         [
-            "v2: 5,2,3",
-            "v3: 5,2,7",
+            "v2: 5.0,2.0,3.0",
+            "v3: 5.0,2.0,7.0",
             "v4 eq v: true",
-            "v unchanged: 1",
+            "v unchanged: 1.0",
             "u2: Alice Lyon/FR",
             "u unchanged: Paris",
             "done",

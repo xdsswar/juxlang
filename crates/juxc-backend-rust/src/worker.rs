@@ -287,7 +287,7 @@ pub(crate) fn walk_stmt(s: &Stmt, sink: &mut dyn FnMut(&Expr)) {
                 walk_block(f, sink);
             }
         }
-        Stmt::Unsafe(b) => walk_block(b, sink),
+        Stmt::Block(b) | Stmt::Unsafe(b) => walk_block(b, sink),
         Stmt::Labeled { stmt, .. } => walk_stmt(stmt, sink),
         Stmt::SuperCall(args, _) => {
             for a in args {

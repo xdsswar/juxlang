@@ -369,6 +369,19 @@ impl RustEmitter {
                     .push_str(if is_eq { ".is_none()" } else { ".is_some()" });
                 return;
             }
+            // **`===` on a VALUE type is `==` (§7.14.3).** "For value types
+            // (struct, record, primitive) it is identical to `==`" -- a
+            // `String` or an `int` has no address to compare, and emitting
+            // `Rc::ptr_eq` on one reached rustc as a type error the Jux source
+            // could not explain. Only positively-identified value types take
+            // this path, so anything the backend is unsure about keeps the
+            // identity shape it had.
+            if self.refeq_operand_is_value(&b.left) || self.refeq_operand_is_value(&b.right) {
+                self.emit_expr(&b.left);
+                self.w.push_str(if is_eq { " == " } else { " != " });
+                self.emit_expr(&b.right);
+                return;
+            }
             if !is_eq {
                 self.w.push('!');
             }

@@ -1671,7 +1671,7 @@ impl<'a> Checker<'a> {
                     self.walk_block_final_reassign(fin, finals);
                 }
             }
-            Stmt::Unsafe(b) => self.walk_block_final_reassign(b, finals),
+            Stmt::Block(b) | Stmt::Unsafe(b) => self.walk_block_final_reassign(b, finals),
             Stmt::Labeled { stmt, .. } => self.walk_stmt_final_reassign(stmt, finals),
             // A statement-position `switch`: walk its block arms (an arm's own
             // pattern binders shadow within the arm, but that is rare enough that
@@ -3260,6 +3260,13 @@ impl<'a> Checker<'a> {
                 }
             }
 
+            // A bare `{ … }` is a scope and nothing more: check what is
+            // inside, with no change to what is permitted there.
+            Stmt::Block(b) => {
+                self.env.push_scope();
+                self.check_block(b);
+                self.env.pop_scope();
+            }
             Stmt::Unsafe(b) => {
                 // Inside an `unsafe { … }` block, unsafe operations (calls to
                 // `unsafe` fns, raw-pointer ops) are permitted. Set the flag

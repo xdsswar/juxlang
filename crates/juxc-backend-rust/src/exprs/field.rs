@@ -1012,6 +1012,43 @@ impl RustEmitter {
             .unwrap_or(false)
     }
 
+    /// True when `e` is positively known to be a VALUE type, for which
+    /// `===` means `==` (§7.14.3: "for value types -- struct, record,
+    /// primitive -- it is identical to `==`").
+    ///
+    /// Deliberately one-sided: `false` means "not sure", and the caller keeps
+    /// the reference-identity lowering it would have used anyway. Only a
+    /// primitive, a `String`, or a user type that is a record / struct / enum
+    /// answers `true`.
+    pub(crate) fn refeq_operand_is_value(&self, e: &Expr) -> bool {
+        use juxc_tycheck::Ty;
+        let ty = self
+            .expr_types
+            .get(&crate::exprs::expr_span_of(e))
+            .cloned()
+            .or_else(|| match e {
+                Expr::Path(qn) if qn.segments.len() == 1 => {
+                    let n = qn.segments[0].text.clone();
+                    self.local_types.iter().rev().find_map(|s| s.get(&n)).cloned()
+                }
+                _ => None,
+            });
+        let same = |k: &String, name: &str, bare: &str| {
+            k == name || k.rsplit('.').next().unwrap_or(k.as_str()) == bare
+        };
+        match ty {
+            Some(Ty::Primitive(_)) | Some(Ty::String) => true,
+            Some(Ty::User { ref name, .. }) => {
+                let bare = name.rsplit('.').next().unwrap_or(name);
+                // A record or an enum is a value. A class is a reference and
+                // an interface is a `dyn` handle -- both keep pointer identity.
+                self.symbols.records.keys().any(|k| same(k, name, bare))
+                    || self.symbols.enums.keys().any(|k| same(k, name, bare))
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn receiver_is_box_class(&self, recv: &Expr) -> bool {
         if matches!(recv, Expr::This(_)) {
             return self.emitting_wrapper_class

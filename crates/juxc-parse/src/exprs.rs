@@ -12,7 +12,10 @@ use juxc_diagnostics::{code, Diagnostic};
 use juxc_lex::{Keyword, TokenKind};
 use juxc_source::Span;
 
-use crate::literals::{parse_float_literal_text, parse_int_literal_text, process_string_escapes};
+use crate::literals::{
+    parse_float_literal_text, parse_int_literal_signed, parse_int_literal_text,
+    process_string_escapes,
+};
 use crate::Parser;
 
 impl<'a> Parser<'a> {
@@ -443,6 +446,42 @@ impl<'a> Parser<'a> {
         };
         if let Some(op) = op {
             self.advance();
+            // **A minus sign directly on an integer literal folds into it.**
+            // `-9223372036854775808` is `i64::MIN`, but the magnitude alone is
+            // one past `i64::MAX` -- parsing the digits and negating afterwards
+            // cannot express it, and used to yield `0` in silence. Java carves
+            // out the same case in §3.10.1. Only a literal that IMMEDIATELY
+            // follows the sign folds; `- (1)` and `-x` are ordinary negations.
+            // Only the literal that NEEDS folding is folded: if the digits
+            // parse on their own, the ordinary `Unary(Neg, literal)` shape is
+            // kept, so nothing downstream sees a different tree for `-7`.
+            if op == UnaryOp::Neg
+                && matches!(self.peek(), TokenKind::Int(t) if parse_int_literal_signed(t, false).is_none())
+            {
+                if let TokenKind::Int(text) = self.peek().clone() {
+                    let lit_span = self.peek_span();
+                    self.advance();
+                    let span = start_span.join(lit_span);
+                    let lit = match parse_int_literal_signed(&text, true) {
+                        Some(lit) => lit,
+                        None => {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    code::Code::E0202_NumericLiteralOutOfRange,
+                                    format!(
+                                        "the literal `-{text}` is out of range -- the smallest a 64-bit signed integer literal can be is -9223372036854775808",
+                                    ),
+                                )
+                                .with_span(span),
+                            );
+                            let mut lit = parse_int_literal_text(&text);
+                            lit.value = 0;
+                            lit
+                        }
+                    };
+                    return Some(Expr::Literal(Literal::Int(lit)));
+                }
+            }
             // Right-associative: operand is itself parsed at unary precedence,
             // so a stack of prefix operators chains right-to-left.
             let operand = self.parse_unary()?;
@@ -1116,7 +1155,23 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Int(text) => {
                 self.advance();
-                let lit = parse_int_literal_text(&text);
+                let lit = match parse_int_literal_signed(&text, false) {
+                    Some(lit) => lit,
+                    None => {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0202_NumericLiteralOutOfRange,
+                                format!(
+                                    "the literal `{text}` is out of range -- the largest a 64-bit signed integer literal can be is 9223372036854775807",
+                                ),
+                            )
+                            .with_span(span),
+                        );
+                        let mut lit = parse_int_literal_text(&text);
+                        lit.value = 0;
+                        lit
+                    }
+                };
                 Some(Expr::Literal(Literal::Int(lit)))
             }
             TokenKind::Float(text) => {

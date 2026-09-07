@@ -1109,10 +1109,13 @@ fn ulong_literal_emits_u64_suffix() {
 }
 
 /// `3.14` lowers verbatim — Rust's default float is f64.
+///
+/// The print goes through `jux_float`, which keeps the decimal point a bare
+/// `{}` would drop (LANG-V1 3.4); the LITERAL itself is what is pinned here.
 #[test]
 fn default_float_literal_has_no_suffix() {
     let rust = emit("public void main() { print(3.14); }");
-    assert!(rust.contains("println!(\"{}\", 3.14)"), "got: {rust}");
+    assert!(rust.contains("crate::jux_float(3.14)"), "got: {rust}");
     assert!(!rust.contains("3.14f32"), "got: {rust}");
 }
 
@@ -1120,7 +1123,7 @@ fn default_float_literal_has_no_suffix() {
 #[test]
 fn float_suffix_emits_f32() {
     let rust = emit("public void main() { print(1.5f); }");
-    assert!(rust.contains("println!(\"{}\", 1.5f32)"), "got: {rust}");
+    assert!(rust.contains("crate::jux_float(1.5f32)"), "got: {rust}");
 }
 
 /// `int x = 5;` lowers to `let x: isize = 5;` — platform-sized int.
@@ -4086,8 +4089,19 @@ fn record_eq_delete_drops_partial_eq_from_derive() {
     );
     // Should NOT see Display impl for Unequal either way (PartialEq
     // doesn't affect Display) — but pin the derive shape exactly.
-    assert!(!rust.contains("PartialEq"), "PartialEq should be gone: {rust}");
-    assert!(!rust.contains(", Eq"), "Eq should be gone: {rust}");
+    //
+    // Scoped to DERIVE lines: the runtime prelude has its own `PartialEq`
+    // impl (the collection handle's cell forwards equality to its contents),
+    // so scanning the whole emitted crate would always find the word.
+    let derives: Vec<&str> = rust.lines().filter(|l| l.contains("#[derive(")).collect();
+    assert!(
+        !derives.iter().any(|l| l.contains("PartialEq")),
+        "PartialEq should be gone from every derive: {derives:?}",
+    );
+    assert!(
+        !derives.iter().any(|l| l.contains(", Eq")),
+        "Eq should be gone from every derive: {derives:?}",
+    );
 }
 
 /// `operator hash() = delete;` drops `Hash` from the derive line —

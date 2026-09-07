@@ -2337,6 +2337,10 @@ impl RustEmitter {
                     return;
                 }
             }
+            // A `ref` binding (§M.13) is its own shape -- an `Rc<RefCell<T>>`
+            // spelled out, NOT the collection handle. They look alike, but the
+            // declared parameter type here is the plain one, so building it
+            // with the collection constructor would not typecheck.
             self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
             let prev = std::mem::take(&mut self.emitting_format_arg);
             self.emit_expr(arg);
@@ -3719,9 +3723,9 @@ impl RustEmitter {
             // element that is itself a reference is still shared afterwards.
             if method == "clone" && call.args.is_empty() && self.collection_name_is_handle(name) {
                 if let Expr::Field(f) = &*call.callee {
-                    self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                    self.w.push_str("crate::jux_arr(");
                     self.emit_stdlib_receiver(&f.object);
-                    self.w.push_str(".clone()))");
+                    self.w.push_str(".clone())");
                     return true;
                 }
             }

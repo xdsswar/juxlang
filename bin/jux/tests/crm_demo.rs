@@ -44,7 +44,9 @@ fn crm_demo_compiles_and_runs() {
             "! Write docs [active]",
             "!! Ship v1 [done]",
             "!!! Email leads [pending]",
-            "--- 2/4 complete (50%) ---",
+            // `50.0%`, not `50%`: `pct` is a `double`, and a double keeps its
+            // decimal point so it cannot be mistaken for an int (LANG-V1 3.4).
+            "--- 2/4 complete (50.0%) ---",
         ],
         "unexpected output:\n{stdout}",
     );

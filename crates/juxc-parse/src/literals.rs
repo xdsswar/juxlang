@@ -25,9 +25,42 @@ use juxc_ast::{FloatKind, FloatLit, IntKind, IntLit, IntRadix};
 /// 3. Classify the suffix into an [`IntKind`].
 /// 4. Drop underscores and parse the remainder as `i64`.
 ///
-/// Overflow and out-of-range checks belong in a later phase — this just
-/// returns the best-effort value (0 on parse failure).
+/// Out-of-range literals report `None` -- see
+/// [`parse_int_literal_signed`], which this delegates to. This wrapper keeps
+/// the best-effort value (`0`) for callers with no diagnostic sink.
 pub(crate) fn parse_int_literal_text(text: &str) -> IntLit {
+    parse_int_literal_signed(text, false).unwrap_or_else(|| {
+        let mut lit = parse_int_literal_parts(text).0;
+        lit.value = 0;
+        lit
+    })
+}
+
+/// Parse an integer literal, folding a leading unary minus into the value.
+///
+/// Folding matters at exactly one point, and it is the point Java's §3.10.1
+/// carves out too: `9223372036854775808` is one past `i64::MAX` and has no
+/// representation on its own, but `-9223372036854775808` is `i64::MIN` and is
+/// perfectly ordinary. Parsing the digits alone and negating afterwards
+/// cannot express that, and used to silently yield `0`.
+///
+/// Returns `None` when the value does not fit `i64`, so the caller can report
+/// [`code::Code::E0202_NumericLiteralOutOfRange`] instead of inventing one.
+pub(crate) fn parse_int_literal_signed(text: &str, negate: bool) -> Option<IntLit> {
+    let (mut lit, magnitude) = parse_int_literal_parts(text);
+    let magnitude = magnitude?;
+    let signed: i128 = if negate {
+        -(magnitude as i128)
+    } else {
+        magnitude as i128
+    };
+    lit.value = i64::try_from(signed).ok()?;
+    Some(lit)
+}
+
+/// The shared body: split radix / digits / suffix, and parse the digits as an
+/// unsigned magnitude. `None` for a magnitude too large even for `u128`.
+fn parse_int_literal_parts(text: &str) -> (IntLit, Option<u128>) {
     let (radix_u32, radix_enum, body): (u32, IntRadix, &str) =
         if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
             (16, IntRadix::Hex, rest)
@@ -50,13 +83,14 @@ pub(crate) fn parse_int_literal_text(text: &str) -> IntLit {
     let (digit_str, suffix_str) = body.split_at(digit_byte_end);
 
     let stripped: String = digit_str.chars().filter(|c| *c != '_').collect();
-    let value = i64::from_str_radix(&stripped, radix_u32).unwrap_or(0);
+    let magnitude = u128::from_str_radix(&stripped, radix_u32).ok();
     let kind = parse_int_suffix(suffix_str);
     // digit_width is the count of significant digit characters after
     // underscores are stripped. Used by the backend to preserve leading
     // zeros (`0x0F` stays `0x0F`).
     let digit_width = stripped.chars().count() as u32;
-    IntLit { value, kind, radix: radix_enum, digit_width }
+    let value = magnitude.and_then(|m| i64::try_from(m).ok()).unwrap_or(0);
+    (IntLit { value, kind, radix: radix_enum, digit_width }, magnitude)
 }
 
 /// Classify an integer suffix string into an [`IntKind`]. Returns `None`

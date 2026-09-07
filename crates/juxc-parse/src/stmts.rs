@@ -244,6 +244,14 @@ impl<'a> Parser<'a> {
         if self.at_kw(Keyword::Try) {
             return Some(Stmt::Try(self.parse_try_stmt()?));
         }
+        // A bare `{ … }` in statement position: a nested scope, per grammar
+        // A.2.8 (`statement = block`). It has to come before the
+        // expression-statement fallback, which would otherwise try to read the
+        // brace as the start of an expression and report "expected expression"
+        // at a place the program is perfectly well formed.
+        if matches!(self.peek(), TokenKind::LBrace) {
+            return Some(Stmt::Block(self.parse_block()));
+        }
         if self.at_kw(Keyword::Unsafe) {
             // `unsafe { … }` per §A.2.8 (`unsafe-stmt = 'unsafe' block`).
             // A bare `unsafe` block with no trailing `;`; the body is an

@@ -29,6 +29,16 @@ pub enum Code {
     /// the limit, so hitting this means either generated source or a mistake --
     /// either way a reported error beats a crash.
     E0201_NestingTooDeep,
+    /// E0202 — **A numeric literal too large for the type it is written
+    /// as.** Integer literals are stored as `i64`, so a decimal literal
+    /// above `9223372036854775807` (or below `-9223372036854775808`) has no
+    /// value to carry. It used to silently become `0`, which compiled and
+    /// ran and printed the wrong number.
+    ///
+    /// `-9223372036854775808` is legal: the sign is folded into the literal
+    /// the way Java's §3.10.1 does it, so the magnitude `9223372036854775808`
+    /// is in range exactly when it is negated.
+    E0202_NumericLiteralOutOfRange,
     /// E0210 — `super(...)` or `this(...)` not first statement.
     E0210_ConstructorCallNotFirst,
     /// E0211 — Constructor missing required `super(...)` call.
@@ -731,6 +741,7 @@ impl Code {
             Code::E0102_BadDigitSeparator        => "E0102",
             Code::E0200_UnexpectedToken          => "E0200",
             Code::E0201_NestingTooDeep           => "E0201",
+            Code::E0202_NumericLiteralOutOfRange => "E0202",
             Code::E0210_ConstructorCallNotFirst  => "E0210",
             Code::E0211_MissingSuperCall         => "E0211",
             Code::E0301_NameNotFound             => "E0301",

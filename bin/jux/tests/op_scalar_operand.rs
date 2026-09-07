@@ -44,11 +44,11 @@ fn operators_take_their_declared_operand_type() {
         lines.as_slice(),
         [
             // same-type operands, which the trait's default already covers
-            "(4, 6)",
-            "(3, 4)",
+            "(4.0, 6.0)",
+            "(3.0, 4.0)",
             // a scalar operand — the case that did not compile
-            "(2, 4)",
-            "(1.5, 2)",
+            "(2.0, 4.0)",
+            "(1.5, 2.0)",
             // equality and hashing still pair correctly alongside them
             "true",
             // a second, differently-typed scalar operand in the same program

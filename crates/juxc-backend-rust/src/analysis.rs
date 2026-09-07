@@ -418,7 +418,7 @@ fn collect_local_decl_names(block: &Block, out: &mut HashSet<String>) {
                     collect_local_decl_names(fin, out);
                 }
             }
-            Stmt::Unsafe(b) => collect_local_decl_names(b, out),
+            Stmt::Block(b) | Stmt::Unsafe(b) => collect_local_decl_names(b, out),
             Stmt::Labeled { stmt, .. } => {
                 let synth = Block {
                     statements: vec![(**stmt).clone()],
@@ -557,7 +557,7 @@ fn collect_whole_name_reassigned(block: &Block, out: &mut HashSet<String>) {
                         blk(fin, out);
                     }
                 }
-                Stmt::Unsafe(b) => blk(b, out),
+                Stmt::Block(b) | Stmt::Unsafe(b) => blk(b, out),
                 Stmt::Labeled { stmt, .. } => {
                     let synth = Block {
                         statements: vec![(**stmt).clone()],
@@ -614,7 +614,7 @@ fn collect_mutated_names_real(
                 collect_mutating_calls(&f.iter, out, user_mut);
                 collect_mutated_names(&f.body, out, user_mut);
             }
-            Stmt::Unsafe(b) => collect_mutated_names(b, out, user_mut),
+            Stmt::Block(b) | Stmt::Unsafe(b) => collect_mutated_names(b, out, user_mut),
             Stmt::Try(t) => {
                 // Assignments and mutating calls inside a try/catch/finally
                 // promote their locals to `let mut` just like any other block.
@@ -896,7 +896,7 @@ fn stmt_contains_await(stmt: &Stmt) -> bool {
                 || t.finally.as_ref().is_some_and(block_contains_await)
         }
         Stmt::SuperCall(args, _) => args.iter().any(expr_contains_await),
-        Stmt::Unsafe(b) => block_contains_await(b),
+        Stmt::Block(b) | Stmt::Unsafe(b) => block_contains_await(b),
         Stmt::Break(..) | Stmt::Continue(..) => false,
         Stmt::Labeled { stmt, .. } => stmt_contains_await(stmt),
     }
@@ -1234,8 +1234,39 @@ fn expr_reads_instance_state(
                 || expr_reads_instance_state(&t.else_branch, instance_names)
         }
         Expr::Await(inner, _) => expr_reads_instance_state(inner, instance_names),
+        // **A lambda body counts.** `this.peek = () -> this.n;` reads instance
+        // state the moment the closure runs, and unlike a plain read there is
+        // nothing to fold: the closure CAPTURES the object. Without this arm
+        // the constructor took the struct-literal fast path, whose builder is
+        // an associated fn with no `self` at all, and the capture reached
+        // rustc as "expected value, found module `self`".
+        Expr::Lambda(l) => match &l.body {
+            juxc_ast::LambdaBody::Expr(b) => expr_reads_instance_state(b, instance_names),
+            juxc_ast::LambdaBody::Block(b) => b
+                .statements
+                .iter()
+                .any(|s| stmt_reads_instance_state(s, instance_names)),
+        },
         _ => false,
     }
+}
+
+/// [`expr_reads_instance_state`] over a statement -- reached only through a
+/// block-bodied lambda, which is the one place a statement appears inside an
+/// expression the simple-constructor extractor is inspecting.
+fn stmt_reads_instance_state(
+    s: &juxc_ast::Stmt,
+    instance_names: &std::collections::HashSet<String>,
+) -> bool {
+    let mut found = false;
+    crate::worker::walk_stmt(s, &mut |e| {
+        // `walk_stmt` already descends, so only the node itself is tested --
+        // recursing again here would be quadratic and would double-count.
+        found |= matches!(e, Expr::This(_) | Expr::Super(_))
+            || matches!(e, Expr::Path(qn)
+                if qn.segments.len() == 1 && instance_names.contains(&qn.segments[0].text));
+    });
+    found
 }
 
 pub(crate) fn extract_simple_ctor_inits(
@@ -1527,7 +1558,7 @@ fn stmt_calls_mut_method_on_this(stmt: &Stmt, mut_methods: &HashSet<String>) -> 
             }
             false
         }
-        Stmt::Unsafe(b) => body_calls_mut_method_on_this(b, mut_methods),
+        Stmt::Block(b) | Stmt::Unsafe(b) => body_calls_mut_method_on_this(b, mut_methods),
         Stmt::Break(..) | Stmt::Continue(..) => false,
         Stmt::Labeled { stmt, .. } => stmt_calls_mut_method_on_this(stmt, mut_methods),
     }
@@ -3485,6 +3516,13 @@ impl crate::RustEmitter {
             self.w.push_str("crate::__jux_show!(&*");
             self.emit_expr(arg);
             self.w.push_str(".borrow())");
+        } else if self.format_arg_is_float(arg) {
+            // A float keeps its decimal point (LANG-V1 3.4). `{}` would drop
+            // it on a whole number, which is the one case where a reader
+            // cannot tell a `double` from an `int`.
+            self.w.push_str("crate::jux_float(");
+            self.emit_expr(arg);
+            self.w.push(')');
         } else if self.format_arg_is_obviously_display(arg) {
             // Clean fast path: a primitive scalar / `String` always implements
             // `Display`, so it drops straight into the `{}` slot — keeping the
@@ -3499,6 +3537,19 @@ impl crate::RustEmitter {
             self.emit_expr(arg);
             self.w.push(')');
         }
+    }
+
+    /// True when `arg` is a `float` / `double`, whose rendering differs from
+    /// every other primitive's: it must keep a trailing `.0`.
+    fn format_arg_is_float(&self, arg: &juxc_ast::Expr) -> bool {
+        use juxc_tycheck::Primitive as P;
+        if let juxc_ast::Expr::Literal(juxc_ast::Literal::Float(_)) = arg {
+            return true;
+        }
+        matches!(
+            self.operand_primitive(arg),
+            Some(P::Float) | Some(P::Double) | Some(P::F32) | Some(P::F64),
+        )
     }
 
     /// True when `arg`'s rendered value is GUARANTEED to implement Rust's

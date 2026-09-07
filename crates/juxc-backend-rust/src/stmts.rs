@@ -110,7 +110,7 @@ fn stmt_moves_path(stmt: &Stmt, name: &str) -> bool {
             }
             false
         }
-        Stmt::Unsafe(b) => body_moves_path(b, name),
+        Stmt::Block(b) | Stmt::Unsafe(b) => body_moves_path(b, name),
         Stmt::Break(..) | Stmt::Continue(..) => false,
     }
 }
@@ -470,7 +470,7 @@ fn stmt_has_loop_escape(s: &Stmt) -> bool {
                     .map(block_has_loop_escape)
                     .unwrap_or(false)
         }
-        Stmt::Unsafe(b) => block_has_loop_escape(b),
+        Stmt::Block(b) | Stmt::Unsafe(b) => block_has_loop_escape(b),
         Stmt::Expr(juxc_ast::Expr::Switch(sw)) => sw.arms.iter().any(|arm| match &arm.body {
             juxc_ast::SwitchBody::Block(b) => block_has_loop_escape(b),
             juxc_ast::SwitchBody::Expr(_) => false,
@@ -841,6 +841,17 @@ impl RustEmitter {
                 self.w.push_str(");\n");
             }
             Stmt::Try(t) => self.emit_try(t),
+            // A bare `{ … }` lowers to a bare Rust block: a scope, whose
+            // locals end with it. The same shape as `unsafe`, without the
+            // keyword and without changing what is permitted inside.
+            Stmt::Block(block) => {
+                self.w.push_str("{\n");
+                self.w.indent_inc();
+                self.emit_block_contents(block);
+                self.w.indent_dec();
+                self.w.emit_indent();
+                self.w.push_str("}\n");
+            }
             Stmt::Unsafe(block) => {
                 // `unsafe { … }` lowers verbatim to a Rust `unsafe { … }`
                 // block — the body's statements (which may call `unsafe`
@@ -4028,7 +4039,7 @@ pub(crate) fn stmt_span(stmt: &Stmt) -> Span {
         Stmt::SuperCall(_, s) => *s,
         Stmt::Throw(_, s) => *s,
         Stmt::Try(t) => t.span,
-        Stmt::Unsafe(b) => b.span,
+        Stmt::Block(b) | Stmt::Unsafe(b) => b.span,
     }
 }
 

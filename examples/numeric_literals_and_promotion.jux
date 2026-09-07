@@ -1,0 +1,64 @@
+// Numbers must read back the way they were written.
+//
+// Three separate things go wrong quietly if they are not handled, and all
+// three compile and run either way -- which is why they are gathered here
+// rather than left to be noticed in someone's output.
+//
+//   1. `-9223372036854775808` is `long`'s smallest value. Its MAGNITUDE is
+//      one past `long`'s largest, so parsing the digits and negating
+//      afterwards cannot represent it. It used to become `0`.
+//   2. A ternary promotes its two arms to a common numeric type (JLS 15.25),
+//      so `cond ? 1 : 2.0` is a `double`.
+//   3. A `float` or `double` keeps its decimal point, so a whole one does
+//      not read as an `int`.
+//
+// Expected output:
+//   2147483647
+//   -2147483648
+//   9223372036854775807
+//   -9223372036854775808
+//   1.0
+//   2.5
+//   3
+//   1.0
+//   1.5
+//   0.30000000000000004
+//   -0.5
+//   100.0
+//   7
+
+public void main() {
+    // 1. The four boundary literals, each written as a user would.
+    int hi = 2147483647;
+    int lo = -2147483648;
+    long lhi = 9223372036854775807;
+    long llo = -9223372036854775808;
+    print(hi);
+    print(lo);
+    print(lhi);
+    print(llo);
+
+    // 2. Mixed arms promote to the wider type. The first is the case that
+    // matters: the chosen arm is the int one, and it still prints as a
+    // double, because the TYPE of the expression is what promotes.
+    double a = true ? 1 : 2.0;
+    print(a);
+    double b = false ? 1 : 2.5;
+    print(b);
+    // Two int arms stay an int -- promotion is not a widening of everything.
+    int c = true ? 3 : 4;
+    print(c);
+
+    // 3. A whole double keeps its point, and a fractional one is unchanged.
+    print(1.0);
+    print(3.0 / 2.0);
+    print(0.1 + 0.2);
+    print(-0.5);
+    // Through a computation, and inside interpolation, which are separate
+    // code paths in the compiler.
+    double pct = 1.0 / 2.0 * 200.0;
+    print($"${pct}");
+
+    // Integer arithmetic is untouched by any of this.
+    print(3 + 4);
+}

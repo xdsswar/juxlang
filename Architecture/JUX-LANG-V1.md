@@ -211,6 +211,18 @@ Inside `${...}` any expression is permitted, including method calls. The result 
 
 Raw strings can also be interpolated with `$"""..."""` and disable escape processing while still permitting `${...}`.
 
+**Floating-point values keep their decimal point.** A `float` or `double` whose value happens to be
+whole renders as `1.0`, never as `1` -- printed on its own, interpolated, or nested inside a
+collection, all three agree. A `double` that printed as `1` would be indistinguishable from an `int`
+in program output, which is exactly when it matters. Every other value renders through its
+`toString()` as described above.
+
+```java
+print(1.0);            // 1.0
+print(3.0 / 2.0);      // 1.5
+print(true ? 1 : 2.0); // 1.0  -- the arms promote (JLS 15.25), so this is a double
+```
+
 ### 3.5. Comments and Documentation
 
 ```java

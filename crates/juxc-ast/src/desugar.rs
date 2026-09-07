@@ -493,7 +493,9 @@ fn rewrite_block_implicit_this(
                     rewrite_block_implicit_this(f, members, &mut locals.clone());
                 }
             }
-            Stmt::Unsafe(b) => {
+            // A bare block is a scope and nothing else, so it desugars
+            // exactly as an `unsafe` one does: walk what is inside.
+            Stmt::Block(b) | Stmt::Unsafe(b) => {
                 rewrite_block_implicit_this(b, members, &mut locals.clone());
             }
             Stmt::ForC(f) => {
@@ -715,7 +717,7 @@ fn rewrite_stmt_property_writes(
                 rewrite_block_property_writes(f, auto_props);
             }
         }
-        Stmt::Unsafe(b) => rewrite_block_property_writes(b, auto_props),
+        Stmt::Block(b) | Stmt::Unsafe(b) => rewrite_block_property_writes(b, auto_props),
         Stmt::ForC(f) => {
             if let Some(init) = f.init.as_deref_mut() {
                 rewrite_stmt_property_writes(init, auto_props);

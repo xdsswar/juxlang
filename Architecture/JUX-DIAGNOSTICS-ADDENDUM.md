@@ -258,6 +258,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 |----------|-----------------------------------------------------|-------------------------------|
 | `E0200`  | Unexpected token                                     | Generic parse error            |
 | `E0201`  | Expression or type nesting exceeds the depth limit    | Grammar §A.2                   |
+| `E0202`  | Numeric literal out of range for its storage         | Grammar §A.1.4                 |
 | `E0210`  | `super(...)` or `this(...)` not first statement      | Grammar §A.2.4                 |
 | `E0211`  | Constructor missing required `super(...)` call      | Grammar §A.2.4                 |
 | `E0212`  | Varargs (`T...`) parameter is not the last parameter | Entry Points §E (varargs) |

@@ -347,3 +347,53 @@ fn const_string_use() {
         ],
     );
 }
+
+#[test]
+fn numeric_literals_and_promotion() {
+    // Three silent-wrong-answer bugs in one example: `long`'s smallest
+    // literal became 0, a ternary did not promote its arms, and a whole
+    // `double` printed without its decimal point.
+    common::expect_output(
+        "numeric_literals_and_promotion",
+        "numeric-literals-promotion",
+        &[
+            "2147483647",
+            "-2147483648",
+            "9223372036854775807",
+            "-9223372036854775808",
+            "1.0",
+            "2.5",
+            "3",
+            "1.0",
+            "1.5",
+            "0.30000000000000004",
+            "-0.5",
+            "100.0",
+            "7",
+        ],
+    );
+}
+
+#[test]
+fn scopes_and_identity() {
+    // A bare block statement, a lambda capturing `this`, `===` on a value
+    // type, and printing a collection of collections.
+    common::expect_output(
+        "scopes_and_identity",
+        "scopes-and-identity",
+        &[
+            "2",
+            "1",
+            "inner",
+            "1",
+            "1",
+            "9",
+            "true",
+            "true",
+            "false",
+            "true",
+            "[[1, 2]]",
+            "[[1, 2, 3]]",
+        ],
+    );
+}

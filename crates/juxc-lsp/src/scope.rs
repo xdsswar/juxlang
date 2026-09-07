@@ -327,7 +327,7 @@ impl<'a> Walker<'a> {
                     self.walk_block(fin);
                 }
             }
-            Stmt::Unsafe(b) => self.walk_block(b),
+            Stmt::Block(b) | Stmt::Unsafe(b) => self.walk_block(b),
             // No bindings and no blocks to descend into (lambda bodies and
             // switch-expression arms are a later refinement).
             Stmt::Expr(_)

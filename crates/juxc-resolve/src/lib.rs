@@ -1060,9 +1060,10 @@ impl Resolver {
                     self.pop_scope();
                 }
             }
-            Stmt::Unsafe(b) => {
-                // `unsafe { … }` opens a fresh scope like any block; name
-                // resolution inside is identical to a plain block.
+            Stmt::Block(b) | Stmt::Unsafe(b) => {
+                // Both open a fresh scope; name resolution inside is
+                // identical to any other block. (`unsafe` differs only in
+                // what tycheck permits, not in what names mean.)
                 self.push_scope();
                 self.visit_block(b);
                 self.pop_scope();

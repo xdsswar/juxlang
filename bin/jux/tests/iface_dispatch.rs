@@ -48,11 +48,11 @@ fn polymorphic_dispatch_through_interface_references() {
         [
             "Circle area=3.14",
             "Circle area=12.56",
-            "Square area=9",
+            "Square area=9.0",
             "scene starts with Square",
             "Circle area=12.56",
-            "Square area=16",
-            "Square area=25",
+            "Square area=16.0",
+            "Square area=25.0",
         ],
         "unexpected output:\n{stdout}",
     );

@@ -1132,11 +1132,7 @@ impl RustEmitter {
                 let array = self.call_yields_bare_array(c);
                 let wrap = self.call_returns_foreign_collection(c) || array;
                 if wrap {
-                    self.w.push_str(if array {
-                        "crate::jux_arr("
-                    } else {
-                        "std::rc::Rc::new(std::cell::RefCell::new("
-                    });
+                    self.w.push_str("crate::jux_arr(");
                 }
                 // A call to a foreign (`.jux.d`) function/method whose `throws E`
                 // maps a Rust `Result<T, E>` (§G.5.4): unwrap the `Result` so the
@@ -1151,7 +1147,7 @@ impl RustEmitter {
                     self.emit_call(c);
                 }
                 if wrap {
-                    self.w.push_str(if array { ")" } else { "))" });
+                    self.w.push(')');
                 }
             }
             Expr::Binary(b) => self.emit_binary(b),
@@ -1194,11 +1190,11 @@ impl RustEmitter {
                 // produces the shared handle, not a bare container.
                 let handle = self.collection_is_handle(&n.class_name);
                 if handle {
-                    self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
+                    self.w.push_str("crate::jux_arr(");
                 }
                 self.emit_new_object(n);
                 if handle {
-                    self.w.push_str("))");
+                    self.w.push(')');
                 }
             }
             Expr::Lambda(l) => self.emit_lambda(l),
@@ -1292,24 +1288,52 @@ impl RustEmitter {
         let wrap_each_arm = self.emitting_nullable_target;
         let prev = self.emitting_nullable_target;
         self.emitting_nullable_target = false;
+        // **Binary numeric promotion across the arms (Java JLS 15.25).**
+        // `cond ? 1 : 2.0` is a `double` in Java and prints `1.0`. Rust has no
+        // implicit numeric coercion and both arms of an `if` expression must
+        // agree, so a mixed pair reached rustc as a type error -- on a line the
+        // Jux source gives no reason to suspect. The same widening the binary
+        // operators use applies here, with the same helper.
+        let promote = self.numeric_promote_target(&t.then_branch, &t.else_branch, true);
+        let cast = |emitter: &Self, arm: &Expr| {
+            promote.filter(|p| emitter.operand_primitive(arm) != Some(*p))
+        };
         self.w.push_str("if ");
         self.emit_expr(&t.condition);
         self.w.push_str(" { ");
-        self.emit_ternary_arm(&t.then_branch, wrap_each_arm);
+        let then_cast = cast(self, &t.then_branch);
+        self.emit_ternary_arm(&t.then_branch, wrap_each_arm, then_cast);
         self.w.push_str(" } else { ");
-        self.emit_ternary_arm(&t.else_branch, wrap_each_arm);
+        let else_cast = cast(self, &t.else_branch);
+        self.emit_ternary_arm(&t.else_branch, wrap_each_arm, else_cast);
         self.w.push_str(" }");
         self.emitting_nullable_target = prev;
     }
 
-    fn emit_ternary_arm(&mut self, arm: &Expr, wrap_each_arm: bool) {
+    /// One arm of a ternary. `widen_to` is the promoted numeric type when this
+    /// arm is the narrower of the two, and `None` when it already matches or
+    /// the arms are not numeric.
+    fn emit_ternary_arm(
+        &mut self,
+        arm: &Expr,
+        wrap_each_arm: bool,
+        widen_to: Option<juxc_tycheck::Primitive>,
+    ) {
         let wrap = wrap_each_arm
             && !matches!(arm, Expr::Literal(juxc_ast::Literal::Null))
             && !self.expression_is_already_nullable(arm);
         if wrap {
             self.w.push_str("Some(");
         }
+        if widen_to.is_some() {
+            self.w.push('(');
+        }
         self.emit_expr(arm);
+        if let Some(p) = widen_to {
+            self.w.push_str(" as ");
+            self.w.push_str(crate::exprs::rust_primitive_name(p));
+            self.w.push(')');
+        }
         if wrap {
             self.w.push(')');
         }
@@ -2801,7 +2825,7 @@ pub(crate) fn collect_bare_names_block(b: &juxc_ast::Block, sink: &mut dyn FnMut
                     collect_bare_names_block(fin, sink);
                 }
             }
-            Stmt::Unsafe(b) => collect_bare_names_block(b, sink),
+            Stmt::Block(b) | Stmt::Unsafe(b) => collect_bare_names_block(b, sink),
             Stmt::Break(..) | Stmt::Continue(..) => {}
             Stmt::Labeled { stmt, .. } => {
                 collect_bare_names_block(
@@ -2960,7 +2984,7 @@ pub(crate) fn collect_lambda_referenced_names(
                         lam_block(fin, f);
                     }
                 }
-                Stmt::Unsafe(b) => lam_block(b, f),
+                Stmt::Block(b) | Stmt::Unsafe(b) => lam_block(b, f),
                 Stmt::Labeled { stmt, .. } => lam_block(
                     &juxc_ast::Block {
                         statements: vec![(**stmt).clone()],
