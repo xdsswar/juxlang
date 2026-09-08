@@ -98,6 +98,37 @@ src/foo.jux:14:5: error[E0450]: ambiguous overload of `log`
 
 ---
 
+### Near-Name Suggestions (`E0413`, `E0412`)
+
+"No method `sort` on type `rust.std.Vec`" is accurate and useless: the type has
+`sort_unstable`, which is what the program wanted. An unresolved member
+diagnostic therefore carries the near misses from the receiver's OWN surface:
+
+```
+error[E0413]: no method `sort` on type `rust.std.Vec` -- did you mean
+              `sort_floats`, `sort_unstable`, `sort_unstable_by`?
+```
+
+Rules:
+
+- **Candidates come from the receiver's discovered surface**, never a curated
+  list. For a foreign type that is what the rustdoc scan found, so the
+  suggestion stays correct as the scanned library changes; for a Jux type it is
+  its own declared members.
+- **At most three**, best first, shortest first within a tie, sorted so the
+  output does not depend on hash iteration order. Several candidates often
+  score identically, and naming one would be a guess presented as an answer.
+- **A name that is a prefix of the other scores high** whatever the lengths.
+  That is the shape of the misses that actually happen: a Rust name the user
+  shortened (`sort` for `sort_unstable`), or a Java habit whose Jux spelling
+  differs.
+- **Where there is a real replacement, say it.** `String` has no `equals` or
+  `compareTo` (§K.7); the diagnostic names `==` and `<=>` rather than only
+  refusing.
+
+This operationalizes "Actionable" from the philosophy section above for
+name resolution, which it asked for and nothing implemented.
+
 ## §D.2 — JSON Schema
 
 `--diagnostic-format=json` emits one JSON object per line (NDJSON), one object per top-level diagnostic.
@@ -300,7 +331,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0410`  | Type mismatch — assignments, returns, call arguments; also mixed-type arithmetic without explicit `as` and nullable-primitive types | Semantics §S.2.6 / ERRATA E5 |
 | `E0411`  | Wrong number of positional call arguments           | —                              |
 | `E0412`  | `obj.field` doesn't exist on the receiver (inheritance chain walked) | —             |
-| `E0413`  | `obj.method(...)` / `new T(...)` target doesn't resolve | —                          |
+| `E0413`  | `obj.method(...)` / `new T(...)` target doesn't resolve — carries near-name suggestions, see below | Core lib §K.7 (String) |
 | `E0414`  | Access to a `private` member from outside the declaring class | —                    |
 | `E0415`  | Access to a `protected` member from outside the extends-chain | ERRATA E4            |
 | `E0416`  | Access to a package-private / `internal` member, **or use of a package-private TYPE**, from outside its package | §4.4 |

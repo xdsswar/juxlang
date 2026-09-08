@@ -365,6 +365,157 @@ validation, default-ordering check).
 
 ---
 
+## E11 — `!!` on null: panic or `NullPointerException`?
+
+**Conflict.** E1's catalogue (`ERRATA.md` above) lists "Null deref via `!!`
+(force-unwrap)" as a **Panic**, not catchable, and
+`JUX-SEMANTICS-ADDENDUM.md` §S.5 agrees ("null deref of `T`" is in the panic
+list, and panics "are not catchable from Jux source").
+`JUX-GRAMMAR-ADDENDUM.md` §A.5's conversion table says the opposite: both
+`T? -> T` via `as` and `T? -> T` via `!!` "throw `NullPointerException`",
+which is an `Exception` and therefore catchable. `JUX-LANG-V1.md` §7.10 adds
+a third voice: "This eliminates NullPointerException as a runtime failure
+mode."
+
+**Today.** The compiler panics. The `!!` lowering unwraps, and an unwrap on
+`None` aborts; nothing constructs a `NullPointerException`.
+
+**Resolution.** DEFERRED, deliberately. Both readings are defensible -- the
+panic keeps `!!` an assertion about something the program claims cannot
+happen, while the exception makes it recoverable the way Java's is -- and
+the choice is observable, so it wants its own examples and a decision rather
+than a quiet alignment. Recorded here so the next reader finds the conflict
+instead of one of its three answers.
+
+**Spec status:** Unresolved. E1 and §S.5 agree with each other and with the
+implementation; §A.5's table row and §7.10's sentence do not.
+
+---
+
+## E12 — `(char)` from an out-of-range integer
+
+**Conflict.** Three answers. `JUX-GRAMMAR-ADDENDUM.md` §A.5 says `int` ->
+`char` is "bit-equivalent" with no runtime check, and §S.2.4's blanket
+promise is that all numeric `as` conversions are "infallible at runtime --
+they always produce a value of the target type, never throw, never panic".
+`JUX-SEMANTICS-ADDENDUM.md` §S.3.4 says constructing a `char` from an
+out-of-range integer "panics in debug, wraps to a valid scalar via masking in
+release".
+
+**Today.** Neither: the compiler substitutes U+FFFD (the replacement
+character) for a value outside the Unicode scalar range.
+
+**Resolution.** DEFERRED. The implementation's answer is the most forgiving
+of the three and the only one that keeps §S.2.4's infallibility promise, but
+it is not what either document says, and picking one is an observable change.
+
+**Spec status:** Unresolved. §A.5, §S.2.4 and §S.3.4 disagree; the
+implementation matches none of them exactly.
+
+---
+
+## E13 — `String`'s method surface
+
+**Conflict.** `JUX-CORE-LIB-ADDENDUM.md` §K.7 gives `String` a closed
+declaration -- `byteLength`, `charLength`, `bytes`, `chars`, `concat`,
+`repeat`, `substring`, `substringBytes`, plus operators -- and states that
+`equals` and `compareTo` do not exist because `==` and `<=>` already say it.
+But `JUX-LANG-V1.md` §7.10's example calls `?.toUpperCase()` and `?.length()`,
+neither of which §K.7 declares, and `ERRATA.md` E5 marks that example
+**normative**. `JUX-SEMANTICS-ADDENDUM.md` §S.3.3 specifies
+`s.compareTo(t)` as byte-wise lexicographic order -- the method §K.7 says
+does not exist. `JUX-GAPS-ROADMAP.md` lists `toUpperCase` and friends as not
+yet specified, under a future `std.string`.
+
+**Today.** The surface is §K.7's, plus a compiler-known set (`length`,
+`toUpperCase`, `toLowerCase`, `trim`, `split`, `replace`, `indexOf`,
+`charAt`, `contains`, `startsWith`, `endsWith`, `isEmpty`), plus whatever the
+rustdoc scan found on Rust's `String` (`push_str` and the rest). Anything
+else is `E0413`, and `equals` / `compareTo` get a hint naming `==` and `<=>`.
+So §7.10's normative example compiles and §S.3.3's `compareTo` does not.
+
+**Resolution.** DEFERRED, but this is the one most worth resolving: the
+implementation made the surface CLOSED, which turns a documentation
+inconsistency into a compile error. §K.7's declaration needs to grow the
+methods the language actually offers, or §S.3.3's sentence needs to go.
+
+**Spec status:** Unresolved. §K.7, §7.10 + E5, §S.3.3 and the gaps roadmap
+give four different answers.
+
+---
+
+## E14 — `Rc` or `Arc` for a base-typed handle
+
+**Conflict.** `JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.2 and §CR.5.2 say a
+dyn-dispatched slot forces **`Arc`** ("trait objects in Jux are
+reference-counted at the spec level"). `JUX-INHERITANCE-BORROW-ADDENDUM.md`
+§6.9.6 and `JUX-V0.1-READINESS.md` both spell the same handle
+`Rc<dyn ContainerKind<T>>`.
+
+**Today.** `Rc`, upgraded to `Arc` only when the class crosses a worker
+boundary (§18.2), which is the rule the representation ladder actually
+implements.
+
+**Resolution.** DEFERRED. The implementation's behaviour is the useful one --
+paying for atomics on every polymorphic value would be a real cost for a
+guarantee single-threaded code does not need -- so the likely resolution is
+that §CR.2's "forces Arc" is the sentence to correct.
+
+**Spec status:** Unresolved. Two documents say `Rc`, one says `Arc`.
+
+---
+
+## E15 — Narrowing a literal, and an unsuffixed literal's type
+
+**Conflict, part one.** `(byte) 300`. §S.2.4 says a larger-to-smaller
+conversion truncates to the low N bits, which makes it `44`. §S.2.5 says an
+untyped integer literal adapts to the type the context demands "when the
+value fits", which makes `300` in a `byte` context a range error
+(`E0105` / `E0202`). Both readings are supportable.
+
+**Conflict, part two.** `JUX-LANG-V1.md` §5.1 says an unsuffixed integer
+literal defaults to `i32`; `JUX-GRAMMAR-ADDENDUM.md` §A.1.4 says `int`, which
+§5.1 itself makes platform-sized.
+
+**Today.** `(byte) 300` truncates to `44`, matching Java and §S.2.4, and the
+literal carries its own type into the cast so rustc does not reject it as out
+of range for the target. An unsuffixed literal is `int` (`isize`).
+
+**Resolution.** DEFERRED. The implementation follows the cast table and the
+grammar; §S.2.5's "when the value fits" is about implicit ADAPTATION to a
+slot, not about an explicit cast, so the two are probably compatible and the
+text should say so.
+
+**Spec status:** Unresolved wording. No behaviour is in doubt.
+
+---
+
+## E16 — An auto-added bound that a type argument cannot satisfy
+
+**Conflict.** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.2.1 has the compiler add
+bounds a program never wrote (`Display` for a formatted parameter, `Eq + Hash`
+for a map key, `Ord`, `Default`). It never says what happens when the type
+argument cannot meet one. The diagnostics catalogue has `E0446` for violating
+a WRITTEN `extends` bound and `E0941` for a `where T has operator` clause, and
+nothing for an inferred one.
+
+**Today.** It reaches rustc. That is how `Loud<Store<int>>` failed before
+`2afb41f`: a polymorphic class had no string form, could not satisfy the
+`Display` bound §T.2.1 added, and the user saw a Rust trait-bound error about
+a bound their program never mentions.
+
+**Resolution.** PARTLY ADDRESSED, and the rest deferred. §T.2.1 now states
+that every Jux type can satisfy every bound the compiler adds on its own --
+`Clone` and `Debug` are universal and every type has a string form -- which
+removes the failure mode for the bounds that exist today. `Eq + Hash` and
+`Ord` on a user type that defines no `operator==` / `<=>` remain reachable,
+and want a diagnostic of their own.
+
+**Spec status:** §T.2.1 states the satisfiability guarantee. No code is
+allocated for the residual case.
+
+---
+
 ## How to use this file
 
 When you edit any addendum that touches one of the items above,

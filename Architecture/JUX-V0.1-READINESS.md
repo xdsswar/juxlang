@@ -73,7 +73,18 @@ follow-up series (P1–P7). The O-series is fully closed and
 the borrow machinery survived a 15-probe adversarial wave with every finding
 fixed (2026-06-12) — the **inferred borrow checker is release-grade for the
 common feature set**: no known rustc borrow-error leaks, RefCell panics, or
-silent-wrong lowerings on valid input. Jux libraries are consumable straight
+silent-wrong lowerings on valid input.
+
+> **Correction (2026-09-08).** That claim had counterexamples, found by
+> differential testing against Java rather than by the probe waves. The
+> sharpest was a RefCell panic on `a[j] = a[j + 1]` -- an in-place swap, the
+> most ordinary thing an array is used for. Alongside it: three silent-wrong
+> lowerings (a whole `double` printing as an `int`, a `String` inside a
+> generic printing with quotes, `s?.length()` rendering `Some(4)`), and a
+> handful of rustc leaks on ordinary programs. All are fixed and gated; the
+> lesson kept is about the METHOD, not the count -- an expectation somebody
+> wrote down cannot catch a bug that somebody wrote down wrong, which is why
+> `tools/java-differential/` uses a second language as the oracle. Jux libraries are consumable straight
 from GitHub (`"com.x.lib" = "https://github.com/u/repo"`), and `jux build
 --target <triple>` cross-compiles to any installed rustc target. Value
 semantics (equality/ordering/hashing/formatting) and the `Iterable` contract
