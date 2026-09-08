@@ -8,8 +8,8 @@ void notAsync() {
 }
 
 async void wrongIterable() {
-    var xs = new ArrayList<int>();
-    xs.add(1);
+    var xs = new Vec<int>();
+    xs.push(1);
     for await (var x : xs) {
         print(x);
     }

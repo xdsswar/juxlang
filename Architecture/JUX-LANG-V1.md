@@ -130,7 +130,7 @@ This applies uniformly:
 
 - Unused functions are stripped, including from imported modules.
 - Unused constants and static data are stripped.
-- Generic instantiations are emitted only for the type parameters actually used. `List<int>` and `List<String>` are independent; if your program never uses `List<float>`, no code for it is generated.
+- Generic instantiations are emitted only for the type parameters actually used. `Vec<int>` and `Vec<String>` are independent; if your program never uses `Vec<float>`, no code for it is generated.
 - Unused class methods are stripped per method, not per class.
 - Virtual methods reachable through interface dispatch are kept conservatively unless link-time optimization can prove they are unreachable.
 
@@ -516,9 +516,9 @@ message never depends on which spelling the author used.
 | `T[][]` / `T[3][4]` | Multi-dimensional array (any rank, dims may mix dynamic/fixed) | all profiles |
 | `RingBuffer<T, N>`  | Fixed-capacity circular buffer                  | all profiles |
 | `StackString<N>`    | Inline string with bounded capacity, no heap    | all profiles |
-| `List<T>`           | Growable list (uses heap)                       | full, embedded |
-| `Map<K, V>`         | Hash map (uses heap)                            | full, embedded |
-| `Set<T>`            | Hash set (uses heap)                            | full, embedded |
+| `Vec<T>`            | Growable list (uses heap)                       | full, embedded |
+| `HashMap<K, V>`     | Hash map (uses heap)                            | full, embedded |
+| `HashSet<T>`        | Hash set (uses heap)                            | full, embedded |
 | `(A, B) -> R`       | Function type                                   | all profiles |
 | `observer<T>`       | Weak observer callback for an observable property (see `JUX-OBSERVABLE-PROPERTIES-ADDENDUM.md`) | full, embedded |
 | `() async -> R`     | Async function type (may suspend)               | full, embedded |
@@ -607,14 +607,14 @@ Variable declarations are **Java-style** — type comes before the identifier, o
 // With explicit type — Java-style: Type identifier = expr;
 int count = 42;
 String name = "Alice";
-List<User> users = new List<User>();
+Vec<User> users = new Vec<User>();
 fn(int) -> int doubler = x -> x * 2;
 StackString<32> sensorId = "sensor_01";
 
 // With type inference — `var` keyword
 var count = 42;                  // inferred as int
 var name = "Alice";              // inferred as String
-var users = new List<User>();    // inferred as List<User>
+var users = new Vec<User>();     // inferred as Vec<User>
 ```
 
 **There is no colon-annotation form.** Kotlin/TypeScript/Swift's `var name: Type = expr` syntax is **not** accepted; use the Java type-first form instead. The compiler rejects `var x: int = 5` with `E0144` and suggests `int x = 5` or `var x = 5`.
@@ -653,7 +653,7 @@ Type inference is local — it never crosses function boundaries. Public functio
 ```java
 public type UserId = long;
 public type Callback<T> = (T) -> void;
-public type StringMap = Map<String, String>;
+public type StringMap = HashMap<String, String>;
 ```
 
 Type aliases are transparent — a `UserId` is interchangeable with a `long`. For nominal types that share an underlying representation but should not be interchangeable, use a wrapper struct or record.
@@ -725,7 +725,7 @@ If the convention doesn't fit your code (a lowercase-named type, or an uppercase
 | Operand shape                                    | Status                                   |
 |--------------------------------------------------|------------------------------------------|
 | Primitive (`byte`, `int`, `f64`, …)              | OK                                       |
-| Fully-applied generic (`List<int>`)              | OK                                       |
+| Fully-applied generic (`Vec<int>`)              | OK                                       |
 | User type (PascalCase)                           | OK                                       |
 | Local variable (camelCase)                       | OK                                       |
 | Compound expression (`arr[3]`, `x + y`)          | OK                                       |
@@ -764,8 +764,8 @@ var x = 3.5;
 print(typeof(x));            // "double"
 print(typeof("hi"));         // "String"
 print(typeof(new Point(1, 2))); // "Point"
-List<int> xs = ...;
-print(typeof(xs));           // "List<int>"
+Vec<int> xs = ...;
+print(typeof(xs));           // "Vec<int>"
 ```
 
 `typeof(expr)` evaluates — **at compile time** — to the Jux spelling of the
@@ -773,7 +773,7 @@ expression's STATIC type, as a `String`. The operand is type-checked but
 **never evaluated** (no side effects, like `sizeof`'s value form):
 
 - The result is the declared/inferred Jux type name (`int`, `String`,
-  `Point`, `List<int>`, `int?`, `(int) -> void`), not the lowered Rust
+  `Point`, `Vec<int>`, `int?`, `(int) -> void`), not the lowered Rust
   spelling.
 - Because the type is static, `typeof` on a base-typed reference yields the
   BASE type name (`Base b = new Child(); typeof(b)` is `"Base"`). Runtime
@@ -887,7 +887,7 @@ public final class AnimatedRect extends Shape {
     }
 }
 
-public void redrawAll(List<Shape> shapes) {
+public void redrawAll(Vec<Shape> shapes) {
     for (var s : shapes) {
         s.render();                 // virtual call — target chosen at runtime
                                     // mutation summary is OR over reachable overrides:
@@ -896,7 +896,7 @@ public void redrawAll(List<Shape> shapes) {
 }
 ```
 
-If `redrawAll` is called with a `List<Shape>` that the borrow checker knows contains only `Circle`s (e.g., the static element type is `Circle` after a smart-cast), the call simplifies to a non-mutating exact dispatch. Otherwise it's treated as mutating.
+If `redrawAll` is called with a `Vec<Shape>` that the borrow checker knows contains only `Circle`s (e.g., the static element type is `Circle` after a smart-cast), the call simplifies to a non-mutating exact dispatch. Otherwise it's treated as mutating.
 
 #### Worked Example — Virtual Dispatch Through an Interface
 
@@ -929,7 +929,7 @@ public final class TextLabel implements Drawable {
     }
 }
 
-public void renderEach(List<Drawable> items) {
+public void renderEach(Vec<Drawable> items) {
     for (var d : items) {
         d.render();                   // virtual call through Drawable
                                       // dispatches to Sprite::render OR TextLabel::render
@@ -975,7 +975,7 @@ Ownership transfers in three situations:
 ```java
 public void main() {
     var alice = new User("Alice", 30);
-    var users = new List<User>();
+    var users = new Vec<User>();
     users.add(alice);            // alice is moved into the list
     alice.greet();               // ERROR: alice was moved
 }
@@ -994,7 +994,7 @@ In `jux-full`, class instances are reference-counted. This is invisible to users
 
 ```java
 public class Parent {
-    private List<Child> children;
+    private Vec<Child> children;
 }
 
 public class Child {
@@ -1208,7 +1208,7 @@ public class Animal {
 }
 
 public final class Dog extends Animal {
-    private List<String> tricks;
+    private Vec<String> tricks;
 }
 
 public void example(Dog d) {
@@ -1343,11 +1343,11 @@ public final class Dog extends Animal {
 
 Generic types are invariant in their type parameters (§7.8). Variance is expressed at use sites via wildcards:
 
-- `List<Dog>` is **not** assignable to `List<Animal>`. (The list could be mutated.)
-- `List<? extends Animal>` accepts `List<Dog>`. (Read-only with respect to `T`.)
-- `List<? super Dog>` accepts `List<Animal>`. (Write-only with respect to `T`.)
+- `Vec<Dog>` is **not** assignable to `Vec<Animal>`. (The list could be mutated.)
+- `Vec<? extends Animal>` accepts `Vec<Dog>`. (Read-only with respect to `T`.)
+- `Vec<? super Dog>` accepts `Vec<Animal>`. (Write-only with respect to `T`.)
 
-The borrow checker treats wildcards as opaque: a `List<? extends Animal>` exposes only the read API, so its inferred mutation summary is the union of read-only methods. This composes with §6.9.3 cleanly because variance and mutability are decided independently.
+The borrow checker treats wildcards as opaque: a `Vec<? extends Animal>` exposes only the read API, so its inferred mutation summary is the union of read-only methods. This composes with §6.9.3 cleanly because variance and mutability are decided independently.
 
 #### 6.9.7. Sealed Hierarchies Give Exact Analysis
 
@@ -1394,8 +1394,8 @@ A class hierarchy used in `jux-core` typically wants:
 | Call a virtual method              | Mutating iff any reachable override mutates | §6.9.3 |
 | Call `super.method`                | Exact summary of named method | §6.9.4 |
 | Mutate a `protected` superclass field from a subclass | Treated as mutating `this` | §6.9.5 |
-| Pass `List<Dog>` where `List<Animal>` expected | Rejected (invariance) | §7.8 |
-| Pass `List<Dog>` where `List<? extends Animal>` expected | Accepted, read-only API | §7.8 |
+| Pass `Vec<Dog>` where `Vec<Animal>` expected | Rejected (invariance) | §7.8 |
+| Pass `Vec<Dog>` where `Vec<? extends Animal>` expected | Accepted, read-only API | §7.8 |
 | Pattern match on a sealed type     | Exact narrowing, exhaustive | §7.5 |
 
 ---
@@ -1560,11 +1560,11 @@ public class User {
 
 ```java
 public class Dog extends Animal {
-    private List<String> tricks;
+    private Vec<String> tricks;
 
     public Dog(String name) {
         super(name);                          // calls Animal(String)
-        this.tricks = new List<>();
+        this.tricks = new Vec<>();
     }
 }
 ```
@@ -1668,7 +1668,7 @@ public class HttpServer {
 
     public final class Request {              // another nested type
         public String path;
-        public Map<String, String> headers;
+        public HashMap<String, String> headers;
     }
 
     private Config config;
@@ -1707,7 +1707,7 @@ public interface Trainable {
     void learn(String command);
 
     // Default method
-    default void learnAll(List<String> commands) {
+    default void learnAll(Vec<String> commands) {
         for (var cmd : commands) {
             learn(cmd);
         }
@@ -1715,11 +1715,11 @@ public interface Trainable {
 }
 
 public class Dog extends Animal implements Trainable {
-    private List<String> tricks;
+    private Vec<String> tricks;
 
     public Dog(String name, int age = 0) {
         super(name, age);
-        this.tricks = new List<String>();
+        this.tricks = new Vec<String>();
     }
 
     @Override
@@ -1914,7 +1914,7 @@ A minimal implementer writes only the four abstract methods:
 
 ```java
 public final class UserRepo implements Repository<User> {
-    private Map<int, User> storage = new Map<>();
+    private HashMap<int, User> storage = new HashMap<>();
 
     @Override public User? findById(int id) {
         return storage.contains(id) ? storage.get(id) : null;
@@ -1957,7 +1957,7 @@ An implementer with a smarter approach overrides any default it wants:
 
 ```java
 public final class CachedUserRepo implements Repository<User> {
-    private Map<int, User> storage = new Map<>();
+    private HashMap<int, User> storage = new HashMap<>();
     private int cachedCount = 0;
 
     @Override public User? findById(int id) { ... }
@@ -2290,10 +2290,10 @@ Every enum gets these auto-generated methods, available on instances and statica
 |-------------------------------------|--------------------------|-----------------------------------------------|
 | `value.name()`                      | any enum instance        | `String` — the variant's declared name        |
 | `value.ordinal()`                   | any enum instance        | `int` — zero-based declaration index          |
-| `Self.values()`                     | no-payload enums only    | `List<Self>` — every variant in declaration order |
+| `Self.values()`                     | no-payload enums only    | `Self[]` — every variant in declaration order |
 | `Self.fromName(String)`             | no-payload enums only    | `Self?` — null on miss; case-insensitive       |
 | `Self.fromOrdinal(int)`             | no-payload enums only    | `Self?` — null if out-of-range                 |
-| `Self.cases()`                      | any enum                 | `List<EnumCase<Self>>` — variant descriptors  |
+| `Self.cases()`                      | any enum                 | `Vec<EnumCase<Self>>` — variant descriptors  |
 
 `Self.values()` is restricted to no-payload enums because variants with payloads can't be enumerated without invented payload data. For payload-carrying enums, `Self.cases()` returns descriptors (variant name, ordinal, payload type signature) — useful for reflection.
 
@@ -2396,7 +2396,7 @@ var tree = Expr.Mul(Expr.Add(Expr.Num(2), Expr.Num(3)), Expr.Num(4));
 print(eval(tree));
 ```
 
-Generic recursive enums (`enum Tree<T> { Leaf(T), Branch(Tree<T>, Tree<T>) }`) work the same way. A self-referential slot is automatically heap-indirected so the value has a finite, known size; the recursion is invisible at the source level. You construct with `Expr.Add(a, b)` and destructure with `case Expr.Add(var a, var b)` exactly as for any other variant. (A slot that reaches the enum through a collection, such as `Expr[]` or a `List<Expr>` field, is already heap-backed, so it carries no extra cost.)
+Generic recursive enums (`enum Tree<T> { Leaf(T), Branch(Tree<T>, Tree<T>) }`) work the same way. A self-referential slot is automatically heap-indirected so the value has a finite, known size; the recursion is invisible at the source level. You construct with `Expr.Add(a, b)` and destructure with `case Expr.Add(var a, var b)` exactly as for any other variant. (A slot that reaches the enum through a collection, such as `Expr[]` or a `Vec<Expr>` field, is already heap-backed, so it carries no extra cost.)
 
 #### 7.7.6. Sealed by Default
 
@@ -2459,7 +2459,7 @@ public <T> T max(T a, T b) where T has operator<=>(T) -> int {
 }
 
 // Multiple constraints
-public <T> void sortAndSave(List<T> items)
+public <T> void sortAndSave(Vec<T> items)
     where T has operator<=>(T) -> int,
           T has serialize() -> bytes[] {
     // ...
@@ -2467,8 +2467,8 @@ public <T> void sortAndSave(List<T> items)
 
 // Generic method on a non-generic class
 public class Utils {
-    public static <T> List<T> repeat(T value, int times) {
-        var result = new List<T>();
+    public static <T> Vec<T> repeat(T value, int times) {
+        var result = new Vec<T>();
         for (var i = 0; i < times; i++) {
             result.add(value);
         }
@@ -2477,14 +2477,14 @@ public class Utils {
 }
 
 // Wildcards (Java-style)
-public void copyAll(List<? extends Animal> source, List<? super Animal> dest) {
+public void copyAll(Vec<? extends Animal> source, Vec<? super Animal> dest) {
     for (var item : source) {
         dest.add(item);
     }
 }
 
 // Diamond operator
-List<String> names = new List<>();        // type inferred
+Vec<String> names = new Vec<>();        // type inferred
 ```
 
 #### Bounded type parameters (`extends`)
@@ -2516,7 +2516,7 @@ in the same list. Inference works structurally through nested generics, so `E`
 is inferred from a `MyList<? extends E>` argument. The complete bound, inference,
 and lowering rules are in `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 to §T.4.8.
 
-Generics are monomorphized: `List<int>` produces a packed array of ints with no boxing. This is invisible at the source level but provides Rust-level performance for generic code.
+Generics are monomorphized: `Vec<int>` produces a packed array of ints with no boxing. This is invisible at the source level but provides Rust-level performance for generic code.
 
 ### 7.9. Lambdas and Function Types
 
@@ -2541,8 +2541,8 @@ public (int, int) -> int makeAdder(int base) {
 public () async -> String taskFactory();
 
 // Higher-order methods on collections
-var users = new List<User>();
-var names = users.map(u -> u.name);                     // List<String>
+var users = new Vec<User>();
+var names = users.map(u -> u.name);                     // Vec<String>
 var adults = users.filter(u -> u.age >= 18);
 var totalAge = users.reduce(0, (acc, u) -> acc + u.age);
 
@@ -2774,10 +2774,10 @@ This eliminates a major source of subtle bugs in Java codebases.
 
 ```java
 public class Config {
-    private static final Map<String, String> defaults;
+    private static final HashMap<String, String> defaults;
 
     static {
-        defaults = new Map<>();
+        defaults = new HashMap<>();
         defaults.put("host", "localhost");
         defaults.put("port", "8080");
     }
@@ -3000,7 +3000,7 @@ public class Money implements Addable<Money> {
     }
 }
 
-public <T extends Addable<T>> T sum(List<T> items, T zero) {
+public <T extends Addable<T>> T sum(Vec<T> items, T zero) {
     var total = zero;
     for (var item : items) total = total + item;     // uses operator+ via the bound
     return total;
@@ -3228,7 +3228,7 @@ public Color blend(Color a, Color b, double t) {
 // OOP: stateful object with identity
 public class Renderer {
     private GpuContext ctx;
-    private List<Surface> surfaces = new List<>();
+    private Vec<Surface> surfaces = new Vec<>();
 
     public Renderer(GpuContext ctx) { this.ctx = ctx; }
 
@@ -3335,9 +3335,9 @@ Type translation table:
 | Rust type                | Jux type                              |
 |--------------------------|---------------------------------------|
 | `String`, `&str`         | `String`                              |
-| `Vec<T>`                 | `List<T>`                             |
-| `HashMap<K, V>`          | `Map<K, V>`                           |
-| `HashSet<T>`             | `Set<T>`                              |
+| `Vec<T>`                 | `Vec<T>`                             |
+| `HashMap<K, V>`          | `HashMap<K, V>`                           |
+| `HashSet<T>`             | `HashSet<T>`                              |
 | `Option<T>`              | `T?`                                  |
 | `Result<T, E>`           | function returning `T throws E`       |
 | `Box<T>`, `Rc<T>`, `Arc<T>` | `T` (refcount-managed by Jux)      |
@@ -3491,7 +3491,7 @@ A `jux-core` build that imports `std.io` is rejected at compile time with: `"std
 ### 9.3. Design Principles
 
 - **Small core.** Anything beyond fundamental primitives goes in higher tiers or separate packages.
-- **One way to do common things.** One canonical `List`, one canonical `Map`. No `ArrayList` vs `LinkedList` proliferation.
+- **One way to do common things.** One canonical `Vec`, one canonical `HashMap` — Rust's own, under their own names. No competing `ArrayList` / `LinkedList` pair to choose between.
 - **No legacy.** No deprecated APIs, no compatibility shims.
 - **Borrow-friendly.** Methods returning references make the borrow obvious; methods returning owned values don't entangle the caller.
 - **Iterator protocol.** Every collection implements a uniform iteration interface for `for (var x : coll)` and chainable operations.
@@ -3559,7 +3559,7 @@ public async String fetchUser(int id) {
     return await response.text();
 }
 
-public async List<Post> getUserPosts(int id) {
+public async Vec<Post> getUserPosts(int id) {
     return await db.query("posts where user = ?", id);
 }
 
@@ -3653,7 +3653,7 @@ import std.async.{spawn, Task};
 
 public async UserPage loadPageFast(int id) {
     var userTask  = spawn(() -> fetchUser(id));       // Task<String>
-    var postsTask = spawn(() -> getUserPosts(id));    // Task<List<Post>>
+    var postsTask = spawn(() -> getUserPosts(id));    // Task<Vec<Post>>
     return new UserPage(
         await userTask,
         await postsTask
@@ -3688,10 +3688,10 @@ public static <T> Task<T>          Task.completed(T value);
 public static <T> Task<T>          Task.failed(Exception error);
 public static    Task<void>        Task.delay(Duration d);
 
-public static <T> Task<List<T>>                          Task.all(List<Task<T>> tasks);
-public static <T> Task<T>                                Task.race(List<Task<T>> tasks);
-public static <T> Task<T>                                Task.any(List<Task<T>> tasks);
-public static <T> Task<List<Result<T, Exception>>>       Task.allSettled(List<Task<T>> tasks);
+public static <T> Task<Vec<T>>                          Task.all(Vec<Task<T>> tasks);
+public static <T> Task<T>                                Task.race(Vec<Task<T>> tasks);
+public static <T> Task<T>                                Task.any(Vec<Task<T>> tasks);
+public static <T> Task<Vec<Result<T, Exception>>>       Task.allSettled(Vec<Task<T>> tasks);
 ```
 
 `Task.all(tasks)` resolves when every task resolves; rejects on the first failure. `Task.race` resolves with the first to settle. `Task.any` resolves with the first success and rejects only if all fail. Same semantics as the matching `Promise.*` calls in JavaScript.
@@ -3701,7 +3701,7 @@ A common pattern — fan out, await all — gets a built-in shorthand:
 ```java
 import std.async.parallel;
 
-public async List<UserPage> loadAll(List<int> ids) {
+public async Vec<UserPage> loadAll(Vec<int> ids) {
     return await parallel(ids, id -> loadPage(id));
 }
 ```
@@ -3714,14 +3714,14 @@ Async methods are ordinary methods that may suspend. They participate in dispatc
 
 ```java
 public interface DataSource {
-    async List<Record> fetch(Query q);
+    async Vec<Record> fetch(Query q);
 }
 
 public final class HttpDataSource implements DataSource {
     private HttpClient client;
 
     @Override
-    public async List<Record> fetch(Query q) {
+    public async Vec<Record> fetch(Query q) {
         var response = await client.get(q.toUrl());
         return parseRecords(await response.text());
     }
@@ -3924,7 +3924,7 @@ Transferable types are:
 - All primitive types and tuples of transferable types
 - `struct` and `record` types whose fields are all transferable
 - `class` types whose refcount can be made atomic; the compiler synthesizes atomic refcount operations only for class types that actually cross a worker boundary
-- `String`, `List<T>`, `Map<K, V>` (their internal sharing is thread-safe by construction)
+- `String`, `Vec<T>`, `HashMap<K, V>` (their internal sharing is thread-safe by construction)
 
 When the compiler rejects a capture, the diagnostic names the offending value and points to the alternative (e.g., "wrap in `AtomicShared<T>`" or "send by value"). The terms `Send` and `Sync` never appear in error messages or in the user-visible type system.
 
@@ -4045,7 +4045,7 @@ public class UserService {
         );
     }
 
-    public async List<UserSummary> fetchAll(List<int> userIds) {
+    public async Vec<UserSummary> fetchAll(Vec<int> userIds) {
         return await parallel(userIds, id -> fetchSummary(id));
     }
 }
@@ -4175,7 +4175,7 @@ public class Config {
     public String name;
 
     @cfg(profile = "full")
-    public List<String> history;
+    public Vec<String> history;
 
     @cfg(profile = "embedded")
     public RingBuffer<String, 32> history;
@@ -4479,7 +4479,7 @@ The following are unresolved and require further design work. (Items resolved by
 
 5. **Macros.** Compile-time code generation is powerful but complex. Likely deferred indefinitely; user-defined macros are the slipperiest slope in language design.
 
-6. **Specialization within generics.** Whether `List<int>` can have a different (faster) implementation than `List<T>` in general. Rust has experimental specialization; full design is unsolved.
+6. **Specialization within generics.** Whether `Vec<int>` can have a different (faster) implementation than `Vec<T>` in general. Rust has experimental specialization; full design is unsolved.
 
 ---
 
@@ -4513,7 +4513,7 @@ public sealed abstract class Animal permits Dog, Cat, Bird {
 public interface Trainable {
     void learn(String command);
 
-    default void learnAll(List<String> commands) {
+    default void learnAll(Vec<String> commands) {
         for (var cmd : commands) {
             learn(cmd);
         }
@@ -4521,11 +4521,11 @@ public interface Trainable {
 }
 
 public final class Dog extends Animal implements Trainable {
-    private List<String> tricks;
+    private Vec<String> tricks;
 
     public Dog(String name, int age = 0) {
         super(name, age);
-        this.tricks = new List<String>();
+        this.tricks = new Vec<String>();
     }
 
     @Override
@@ -4562,7 +4562,7 @@ public final class Bird extends Animal {
 }
 
 // Top-level entry: this file is named main.jux, so these statements run at start.
-var zoo = new List<Animal>();
+var zoo = new Vec<Animal>();
 zoo.add(new Dog("Rex", age: 3));
 zoo.add(new Cat("Whiskers"));
 zoo.add(new Bird("Tweety", age: 1));
@@ -4581,7 +4581,7 @@ for (var animal : zoo) {
 print("Zoo has " + zoo.size() + " animals");
 ```
 
-This program exercises: top-level statements, sealed inheritance hierarchies (with the new exact mutation analysis from §6.9.7), interfaces with default methods, abstract classes, record-style constructors with default arguments, polymorphism through a `List<Animal>`, type-test pattern matching with `=>`, and the borrow checker quietly enforcing safety throughout.
+This program exercises: top-level statements, sealed inheritance hierarchies (with the new exact mutation analysis from §6.9.7), interfaces with default methods, abstract classes, record-style constructors with default arguments, polymorphism through a `Vec<Animal>`, type-test pattern matching with `=>`, and the borrow checker quietly enforcing safety throughout.
 
 ---
 
@@ -4612,13 +4612,13 @@ var samples = new int[64];
 
 // Static memory pool (lives in .bss, no heap manager)
 var pool = new StaticAllocator<2048>();
-var queue = new List<Event>(pool);
+var queue = new Vec<Event>(pool);
 
 // Global heap (only available if linked)
-var dynamic = new List<Event>(GlobalHeap);
+var dynamic = new Vec<Event>(GlobalHeap);
 ```
 
-In `jux-full`, the global heap is the default — `new List<Event>()` works without an allocator argument. The same code compiled for `jux-core` would fail to link unless an allocator is passed.
+In `jux-full`, the global heap is the default — `new Vec<Event>()` works without an allocator argument. The same code compiled for `jux-core` would fail to link unless an allocator is passed.
 
 ### 16.3. Hardware Access
 
@@ -4827,7 +4827,7 @@ These pieces are referenced throughout the spec but never defined. Code in §15,
 
 **Exception hierarchy.** Every `throws` clause references undefined types. Needed: `Exception` base class, standard subtypes (`RuntimeException`, `IOException`, `IllegalArgumentException`, `IllegalStateException`, `NullPointerException`, `IndexOutOfBoundsException`, `ArithmeticException`, `CancellationException`, `TimeoutException`, `ExecutionException`), stack-trace policy per profile, the lowering rules to `Result<T, E>`.
 
-**Collections.** `List<T>`, `Map<K, V>`, `Set<T>`, `Deque<T>`, `Queue<T>`, `RingBuffer<T, N>` are used throughout. Need full public APIs, iterator integration, mutability story (single mutable type with `.toImmutable()` is the recommendation), and Phase 1 implementation strategy (likely thin wrappers over Rust counterparts).
+**Collections.** `Vec<T>`, `HashMap<K, V>`, `HashSet<T>`, `Deque<T>`, `Queue<T>`, `RingBuffer<T, N>` are used throughout. Need full public APIs, iterator integration, mutability story (single mutable type with `.toImmutable()` is the recommendation), and Phase 1 implementation strategy (likely thin wrappers over Rust counterparts).
 
 **Strings, I/O, time.** `std.string` (operations beyond `toString`, `StringBuilder`, `Regex`, `%`-format strings), `std.io` (`File`, `Path`, streams, stdin/out/err), `std.time` (`Instant`, `Duration` constructors used in §10, `Clock`, calendar types).
 

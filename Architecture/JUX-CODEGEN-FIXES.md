@@ -539,7 +539,8 @@ public void main() {
 **Model (what Jux guarantees, matching Java).** Collections are the Rust std
 collections used as-is — `Vec`/`HashMap`/… imported from `rust.std`, Rust
 method names (`push`/`insert`/`len`/`containsKey`), lowering to genuine
-`std::vec::Vec`. There is **no** Jux `List`/`ArrayList`. Of Java's three
+`std::vec::Vec`. There is **no** Jux `List`/`Vec`; `Vec` IS the name a
+Jux program writes, with Rust's own methods. Of Java's three
 behaviors, two already held: class **objects** added to a collection are
 SHARED (Jux instances are `Rc` handles) and **primitives** are COPIED (Rust
 value). The only gap was container-passing, fixed here.

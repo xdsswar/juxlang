@@ -3739,7 +3739,7 @@ impl RustEmitter {
             // of what was asked, so reach through the cell, copy the sequence,
             // and put the copy behind a handle of its own.
             //
-            // The copy is shallow, exactly like Java's `new ArrayList<>(xs)`: an
+            // The copy is shallow, exactly like Java's `new Vec<>(xs)`: an
             // element that is itself a reference is still shared afterwards.
             if method == "clone" && call.args.is_empty() && self.collection_name_is_handle(name) {
                 if let Expr::Field(f) = &*call.callee {
@@ -4963,7 +4963,7 @@ impl RustEmitter {
             }
         }
         // **Nullable element slot** — storing into a container whose element
-        // type-arg is `T?` (`ArrayList<int?>` → `Vec<Option<isize>>`): a
+        // type-arg is `T?` (`Vec<int?>` → `Vec<Option<isize>>`): a
         // non-null value lifts into `Some(...)`; a `null` literal / an
         // already-`Option` value passes through.
         let wrap_some =
@@ -4989,7 +4989,7 @@ impl RustEmitter {
 
     /// True when argument `i` of a **builtin container call** lands in
     /// an element slot whose generic type-arg is nullable — `xs.add(v)`
-    /// on an `ArrayList<int?>`, `m.put(k, v)` on a `HashMap<String,
+    /// on an `Vec<int?>`, `m.put(k, v)` on a `HashMap<String,
     /// int?>`, etc. Maps the arg index to the receiver's generic-arg
     /// position per method: list `add`/`set@1`/`insert@1`, set `add`,
     /// map `put@1` (values; keys stay non-null). Non-container shapes
@@ -5027,7 +5027,7 @@ impl RustEmitter {
         // Both the legacy facade names (`add`/`set`/`put`) and the rust.std
         // verbatim names (`push`/`insert`/`push_back`/…) are recognized.
         let generic_idx = match &recv_ty {
-            // `ArrayList<T>` lowers to `Ty::Array { element }`; the element IS
+            // `Vec<T>` lowers to `Ty::Array { element }`; the element IS
             // generic-arg 0 (checked specially below).
             Some(juxc_tycheck::Ty::Array { .. }) => match (method, arg_idx) {
                 ("add", 0) | ("push", 0) => 0,
@@ -5065,7 +5065,7 @@ impl RustEmitter {
     }
 
     /// True when the element slot this argument stores into is **nullable**
-    /// (`ArrayList<int?>` → `Vec<Option<isize>>`), so the value needs a
+    /// (`Vec<int?>` → `Vec<Option<isize>>`), so the value needs a
     /// `Some(...)` lift.
     fn builtin_arg_elem_nullable(&self, call: &CallExpr, arg_idx: usize) -> bool {
         matches!(

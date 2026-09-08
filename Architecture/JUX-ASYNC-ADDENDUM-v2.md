@@ -66,7 +66,7 @@ public async String fetchUser(int id) {
     return await response.text();
 }
 
-public async List<Post> getUserPosts(int id) {
+public async Vec<Post> getUserPosts(int id) {
     return await db.query("posts where user = ?", id);
 }
 
@@ -160,7 +160,7 @@ import std.async.{spawn, Task};
 
 public async UserPage loadPageFast(int id) {
     var userTask  = spawn(() -> fetchUser(id));       // Task<String>
-    var postsTask = spawn(() -> getUserPosts(id));    // Task<List<Post>>
+    var postsTask = spawn(() -> getUserPosts(id));    // Task<Vec<Post>>
     return new UserPage(
         await userTask,
         await postsTask
@@ -198,10 +198,10 @@ public static <T> Task<T>          Task.completed(T value);
 public static <T> Task<T>          Task.failed(Exception error);
 public static    Task<void>        Task.delay(Duration d);
 
-public static <T> Task<List<T>>                          Task.all(List<Task<T>> tasks);
-public static <T> Task<T>                                Task.race(List<Task<T>> tasks);
-public static <T> Task<T>                                Task.any(List<Task<T>> tasks);
-public static <T> Task<List<Result<T, Exception>>>       Task.allSettled(List<Task<T>> tasks);
+public static <T> Task<Vec<T>>                          Task.all(Vec<Task<T>> tasks);
+public static <T> Task<T>                                Task.race(Vec<Task<T>> tasks);
+public static <T> Task<T>                                Task.any(Vec<Task<T>> tasks);
+public static <T> Task<Vec<Result<T, Exception>>>       Task.allSettled(Vec<Task<T>> tasks);
 ```
 
 `Task.all(tasks)` resolves when every task resolves; rejects on the first failure. `Task.race` resolves with the first to settle. `Task.any` resolves with the first success and rejects only if all fail. Same semantics as the matching `Promise.*` calls in JavaScript.
@@ -211,7 +211,7 @@ A common pattern — fan out, await all — gets a built-in shorthand:
 ```jux
 import std.async.parallel;
 
-public async List<UserPage> loadAll(List<int> ids) {
+public async Vec<UserPage> loadAll(Vec<int> ids) {
     return await parallel(ids, id -> loadPage(id));
 }
 ```
@@ -224,14 +224,14 @@ Async methods are ordinary methods that may suspend. They participate in dispatc
 
 ```jux
 public interface DataSource {
-    async List<Record> fetch(Query q);
+    async Vec<Record> fetch(Query q);
 }
 
 public final class HttpDataSource implements DataSource {
     private HttpClient client;
 
     @Override
-    public async List<Record> fetch(Query q) {
+    public async Vec<Record> fetch(Query q) {
         var response = await client.get(q.toUrl());
         return parseRecords(await response.text());
     }
@@ -445,7 +445,7 @@ Transferable types are:
 - All primitive types and tuples of transferable types
 - `struct` and `record` types whose fields are all transferable
 - `class` types whose refcount can be made atomic; the compiler upgrades the refcount automatically when an instance crosses a worker boundary
-- `String`, `List<T>`, `Map<K, V>` (their internal sharing is thread-safe by construction)
+- `String`, `Vec<T>`, `Map<K, V>` (their internal sharing is thread-safe by construction)
 
 **How the class upgrade works.** A class whose instances cross a worker boundary lowers to an atomic handle (`Arc<Mutex<…>>`) instead of the default single-threaded one (`Rc<RefCell<…>>`). The upgrade follows the object graph: a class reached through a shared class's field is upgraded with it, since the payload of a shareable handle must itself be shareable. Whole `extends` components move together, because a subclass and its base share one storage layout. Classes that never cross a boundary keep the cheaper handle, so a program pays for atomicity only where it actually shares.
 
@@ -544,7 +544,7 @@ public class UserService {
         );
     }
 
-    public async List<UserSummary> fetchAll(List<int> userIds) {
+    public async Vec<UserSummary> fetchAll(Vec<int> userIds) {
         return await parallel(userIds, id -> fetchSummary(id));
     }
 }
@@ -659,7 +659,7 @@ static Stream<T> generate(async T? f());  // pull-driven producer
 ```
 
 - `Stream.of(1, 2, 3)` — the listed elements, then exhaustion.
-- `Stream.from(xs)` — the elements of an array / `ArrayList` (snapshot taken
+- `Stream.from(xs)` — the elements of an array / `Vec` (snapshot taken
   at construction; later mutation of `xs` is not observed).
 - `Stream.generate(f)` — the general escape hatch: `f` is an async lambda
   called once **per pull**; each call produces the next element, and

@@ -1361,7 +1361,7 @@ restriction; nullability is uniform across the type system.
 
 ```java
 int? maybe = null;            // valid; lowered to Option<isize>
-var list = new ArrayList<int?>();   // collection of nullable primitives
+var list = new Vec<int?>();        // collection of nullable primitives
 list.add(1); list.add(null);
 var first = list.get(0) ?: -1;      // Elvis default
 ```

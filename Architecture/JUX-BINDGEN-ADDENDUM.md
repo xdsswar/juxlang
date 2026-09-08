@@ -119,7 +119,7 @@ Every body is `;`. The file is valid Jux. The resolver loads it; `juxc-tycheck` 
 | `bool`                        | `bool`                             |                                                    |
 | `char`                        | `char`                             | Unicode scalar, 32-bit (§5.1)                      |
 | `String`, `&str`              | `String`                           | §8.2                                               |
-| `Vec<T>`                      | `List<T>`                          | §8.2                                               |
+| `Vec<T>`                      | `Vec<T>` — the same name, kept     | §8.2                                               |
 | `HashMap<K, V>`, `BTreeMap<K,V>` | `Map<K, V>`                     | §8.2 (both map to the one canonical `Map`)         |
 | `HashSet<T>`, `BTreeSet<T>`   | `Set<T>`                           | §8.2                                               |
 | `Option<T>`                   | `T?`                               | §8.2; nullable type                                |
@@ -139,7 +139,7 @@ Every body is `;`. The file is valid Jux. The resolver loads it; `juxc-tycheck` 
 
 ### G.3.2. Nullability and `Option`
 
-A Rust `Option<T>` in a **return position** maps to `T?` (the canonical Jux nullable, §7.10). A Rust `Option<T>` appearing **nested** inside another generic (e.g. `Vec<Option<T>>`) maps to `List<T?>`. The two Jux spellings `T?` and `Option<T>` are distinct types (§K.3.1); `bindgen` always emits `T?` for clarity and never the `Option<T>` spelling.
+A Rust `Option<T>` in a **return position** maps to `T?` (the canonical Jux nullable, §7.10). A Rust `Option<T>` appearing **nested** inside another generic (e.g. `Vec<Option<T>>`) maps to `Vec<T?>`. The two Jux spellings `T?` and `Option<T>` are distinct types (§K.3.1); `bindgen` always emits `T?` for clarity and never the `Option<T>` spelling.
 
 ### G.3.3. Errors and `Result`
 
@@ -352,7 +352,7 @@ A Rust `trait` becomes a Jux `interface`; its required methods become abstract m
 //                    fn read_to_end(&mut self, ...) -> Result<usize> { default } }
 public interface Read {
     int read(byte[] buf) throws IoError;
-    default int readToEnd(List<byte> buf) throws IoError;
+    default int readToEnd(Vec<byte> buf) throws IoError;
 }
 ```
 

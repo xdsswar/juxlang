@@ -66,7 +66,7 @@ public class Animal {
 }
 
 public final class Dog extends Animal {
-    private List<String> tricks;
+    private Vec<String> tricks;
 }
 
 public void example(Dog d) {
@@ -187,11 +187,11 @@ The fix is to copy the value out (it is an `int`, so this is a primitive copy wi
 
 Generic types are invariant in their type parameters (§7.8). Variance is expressed at use sites via wildcards:
 
-- `List<Dog>` is **not** assignable to `List<Animal>`. (The list could be mutated.)
-- `List<? extends Animal>` accepts `List<Dog>`. (Read-only with respect to `T`.)
-- `List<? super Dog>` accepts `List<Animal>`. (Write-only with respect to `T`.)
+- `Vec<Dog>` is **not** assignable to `Vec<Animal>`. (The list could be mutated.)
+- `Vec<? extends Animal>` accepts `Vec<Dog>`. (Read-only with respect to `T`.)
+- `Vec<? super Dog>` accepts `Vec<Animal>`. (Write-only with respect to `T`.)
 
-The borrow checker treats wildcards as opaque: a `List<? extends Animal>` exposes only the read API, so its inferred mutation summary is the union of read-only methods. This composes with §6.9.3 cleanly because variance and mutability are decided independently.
+The borrow checker treats wildcards as opaque: a `Vec<? extends Animal>` exposes only the read API, so its inferred mutation summary is the union of read-only methods. This composes with §6.9.3 cleanly because variance and mutability are decided independently.
 
 > **A *generic class* may be a polymorphic base.** `Container<int> b = new
 > Box<int>(…)` (with `class Box<T> extends Container<T>`) dispatches virtually
@@ -289,8 +289,8 @@ A class hierarchy used in `jux-core` typically wants:
 | Call a virtual method              | Mutating iff any reachable override mutates | §6.9.3 |
 | Call `super.method`                | Exact summary of named method | §6.9.4 |
 | Mutate a `protected` superclass field from a subclass | Treated as mutating `this` | §6.9.5 |
-| Pass `List<Dog>` where `List<Animal>` expected | Rejected (invariance) | §7.8 |
-| Pass `List<Dog>` where `List<? extends Animal>` expected | Accepted, read-only API | §7.8 |
+| Pass `Vec<Dog>` where `Vec<Animal>` expected | Rejected (invariance) | §7.8 |
+| Pass `Vec<Dog>` where `Vec<? extends Animal>` expected | Accepted, read-only API | §7.8 |
 | Pattern match on a sealed type     | Exact narrowing, exhaustive | §7.5 |
 
 ---

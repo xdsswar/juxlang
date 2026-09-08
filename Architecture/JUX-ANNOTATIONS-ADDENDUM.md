@@ -205,7 +205,7 @@ public annotation Tag {
 public User getProfile(int id) { ... }
 ```
 
-Reflection returns repeatable annotations as `List<Tag>` rather than `Tag?`.
+Reflection returns repeatable annotations as `Vec<Tag>` rather than `Tag?`.
 
 Applying a non-`@Repeatable` annotation more than once is `E0473` (`annotation not repeatable`).
 
@@ -377,7 +377,7 @@ public class User {
     private String email;
 
     @OneToMany(mappedBy = "user")
-    private List<Post> posts;
+    private Vec<Post> posts;
 }
 ```
 

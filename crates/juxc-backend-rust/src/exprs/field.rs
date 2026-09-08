@@ -1249,7 +1249,7 @@ impl RustEmitter {
                     .collect();
                 let ty = crate::exprs::ty_kind_from_ref_with_params(&field.ty, &params);
                 // A generic-INSTANTIATED TypeRef (`Vec<int>`, `HashMap<K,V>`,
-                // `ArrayList<int>`, a user `Box<T>`, …) converts to
+                // `Vec<int>`, a user `Box<T>`, …) converts to
                 // `Ty::Unknown` (see `ty_kind_from_ref_with_params`: any name
                 // carrying `generic_args` short-circuits to Unknown). A bare
                 // NESTED-type name (`HttpServer.Config`) also lands here. Every
@@ -1922,7 +1922,7 @@ impl RustEmitter {
                     .map(|p| p.name.text.as_str())
                     .collect();
                 let ty = ty_kind_from_ref_with_params(&field.ty, &params);
-                // A generic-instantiated TypeRef (`ArrayList<int>`)
+                // A generic-instantiated TypeRef (`Vec<int>`)
                 // converts to `Ty::Unknown` — recover the base name
                 // when it resolves to a known class so downstream
                 // decisions (notably the value-position auto-clone,

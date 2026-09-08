@@ -90,7 +90,7 @@ pub const BUILTIN_NAMES: &[&str] = &[
     "print", "assert", "spawn", "Channel", "AsyncMutex",
     "Stream", "Task", "withTimeout", "parallel", "block_on",
     "yield_now", "Worker", "now_ms", "File", "Iterable",
-    "Iterator", "Collection", "List", "Map", "Set",
+    "Iterator",
     "HashMap", "HashSet", "Vec", "VecDeque", "BTreeMap",
     "BTreeSet", "Rc", "Arc", "Throwable", "Exception",
     "Error", "RuntimeException", "NullPointerException", "IndexOutOfBoundsException", "IllegalArgumentException",

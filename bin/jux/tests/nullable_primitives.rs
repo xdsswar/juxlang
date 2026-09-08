@@ -5,7 +5,7 @@
 //! Runs `examples/nullable_primitives.jux`. A null primitive is an
 //! unallocated `Option::None` (stack tag — no Java-style boxing).
 //! Covers locals, smart-cast, elvis, `!!`, params/returns, fields,
-//! `Box<int?>` ctor `Some`-lifting, and `ArrayList<int?>` /
+//! `Box<int?>` ctor `Some`-lifting, and `Vec<int?>` /
 //! `HashMap<String, int?>` element lifting.
 
 use std::path::PathBuf;

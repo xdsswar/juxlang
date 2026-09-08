@@ -12,7 +12,7 @@
 //   - nullable-primitive locals, params, returns, fields,
 //   - null smart-cast (`if (b != null) { b + 1 }`),
 //   - elvis defaults (`a ?: -1`) and `!!` assertion,
-//   - `<int?>` as a generic argument (`Box<int?>`, `ArrayList<int?>`,
+//   - `<int?>` as a generic argument (`Box<int?>`, `Vec<int?>`,
 //     `HashMap<String, int?>`) — non-null stores lift into `Some`,
 //     `null` stores stay allocation-free `None`.
 

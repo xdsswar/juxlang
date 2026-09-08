@@ -883,7 +883,7 @@ struct RustEmitter {
     /// `use` statements already emitted in the current `pub mod`
     /// block. Two units that live in the same package can carry
     /// the same `import` clause without realizing it (e.g. both
-    /// `jux.std.collections.ArrayList` and `jux.std.collections.
+    /// `rust.std.Vec` and `jux.std.collections.
     /// HashMap` import `UnsupportedOperationException`); the
     /// `emit_imports` skip-on-duplicate-line path keys off this
     /// set. Reset when entering / leaving a `pub mod`.
@@ -1661,7 +1661,7 @@ pub(crate) fn compute_aliased_classes(
 
     // Bare class name of an expression's tycheck type, if it is a user
     // class. `Ty::User.name` may be a bare name OR an FQN
-    // (`jux.std.collections.ArrayList`); we take the last `.`-segment so
+    // (`rust.std.Vec`); we take the last `.`-segment so
     // the key matches `compute_wrapper_classes`'s bare-name scheme.
     // Nullable / array wrappers around a user type also count — a
     // `C?` or `C[]` element binding still aliases the underlying `C`.
@@ -5805,7 +5805,7 @@ impl RustEmitter {
                 continue;
             }
             // **Intrinsic-class import suppression.** `import
-            // jux.std.collections.ArrayList;` names a class whose
+            // rust.std.Vec;` names a class whose
             // struct emission is suppressed (it lowers to Rust's `Vec`
             // via the builtin dispatch tables), so the `use` would
             // reference a symbol that doesn't exist (rustc E0432).

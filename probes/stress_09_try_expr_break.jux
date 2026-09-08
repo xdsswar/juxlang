@@ -4,19 +4,19 @@
 package stress09;
 
 public class S9 {
-    public ArrayList<int> items = new ArrayList<int>();
+    public Vec<int> items = new Vec<int>();
 }
 
 void main() {
     var s = new S9();
-    s.items.add(10);
-    s.items.add(20);
+    s.items.push(10);
+    s.items.push(20);
     var pop = () -> {
         try {
-            if (s.items.isEmpty()) {
+            if (s.items.is_empty()) {
                 throw new RuntimeException("empty");
             }
-            var v = s.items.get(0);
+            var v = s.items[0];
             s.items.remove(0);
             return v;
         } catch (RuntimeException e) {

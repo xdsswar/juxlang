@@ -42,7 +42,7 @@ gaps) into a single status view. Status reflects the `polymorphism` branch.
 | Item | Status | Reference |
 |------|--------|-----------|
 | String API, numerics, wrapping ops, Deque, I/O+Time, Atomics | ✅ | `project_wave5_progress` |
-| Collections (List/Map/Set/Deque) backed by Vec/HashMap/HashSet/VecDeque | ◐ | spec surface incomplete |
+| Collections — Rust's `Vec`/`HashMap`/`HashSet`/`VecDeque` under their own names | ✅ | the Java-shaped `List`/`Map`/`Set`/`Collection` facade was removed 2026-09-08; `Iterable`/`Iterator` stay as the for-each protocol |
 | Value semantics — equality / ordering / hashing / formatting | ✅ | **operator** overrides (`==`/`hash`/`string`/ordering), C++-style, not interfaces; consistency enforced (E0930/E0931). See `JUX-CORE-LIB-ADDENDUM` §72 |
 | `Iterable<T>` / `Iterator<T>` (only nominal foundational interfaces) + `for-each` desugaring | ✅ | `JUX-CORE-LIB-ADDENDUM` §K.5; `user_iterable.jux` |
 | Exception hierarchy + Result lowering | ✅ | `JUX-EXCEPTIONS-ADDENDUM` |

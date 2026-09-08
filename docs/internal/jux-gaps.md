@@ -54,7 +54,7 @@ hoists and never upgrades to `borrow_mut()`. For a wrapped (aliased+mutated) cla
 
 ```jux
 public class Bag {
-    public ArrayList<int> items;
+    public Vec<int> items;
     public int counter;
     public int next() { this.counter = this.counter + 1; return this.counter; }
     public void fill() { this.items.add(this.next()); }
@@ -232,7 +232,7 @@ Classification: (A) rustc-leaked compile error · (B) runtime RefCell panic ·
 | ID | Probe | Class | Finding | Status |
 |----|-------|-------|---------|--------|
 | S1 | `stress_01` | C | Observer that sets its OWN observed property: nested set applies but does NOT re-fire the observer list (prints 2, JavaFX chaining expects 5). Spec was silent — §P needed a re-entrant-set ruling first. | ✅ fixed — §P.3.6 specced (JavaFX transition chaining); setter quiescence loop fires each transition once |
-| S3 | `stress_03` | A | Collection-typed auto-property: `s.Items.add(3)` → getter-call receiver skips the stdlib method mapping → E0599 `no method add on Vec`; reference semantics of the returned collection also unspecified in lowering. | ✅ fixed — auto-property collection receivers rewrite to the live backing field (`__prop_X`); declared-type fallback + `ArrayList` normalization in the stdlib dispatch |
+| S3 | `stress_03` | A | Collection-typed auto-property: `s.Items.add(3)` → getter-call receiver skips the stdlib method mapping → E0599 `no method add on Vec`; reference semantics of the returned collection also unspecified in lowering. | ✅ fixed — auto-property collection receivers rewrite to the live backing field (`__prop_X`); declared-type fallback + `Vec` normalization in the stdlib dispatch |
 | S4 | `stress_04` | A | Compound assign to a property (`m.Count += 1`) bypasses the setter and writes a nonexistent raw field → E0609 (`available: __prop_Count`); observer never fires either. | ✅ fixed — compound property assigns desugar to get-op-set (read via getter, write via setter, observers fire) |
 | S5 | `stress_05` | B | `items.forEach(x -> …)` where the lambda mutates the SAME object: borrow held across the higher-order call → runtime `RefCell already borrowed`. | ✅ fixed — forEach/map/filter snapshot wrapper-borrowed receivers (H6 extended to higher-order stdlib calls) |
 | S7 | `stress_07` | C | Arg-hoist detector misses FIELD-PATH receivers: `h.item.set(h.item.bump() + h.item.bump())` silently loses every mutation (prints 0; clones mutated then dropped). | ✅ fixed — receiver-place reads skip the auto-clone (`emitting_method_receiver`), mutation analysis promotes field-path receiver roots, arg-hoist generalizes to dotted place paths |

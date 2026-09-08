@@ -161,7 +161,7 @@ impl SymbolTable {
     /// the symbol table, returning the first FQN whose last
     /// segment matches. Drives the "implicit `jux.std.*` import"
     /// rule — user code can spell `Map<K, V>` and have it resolve
-    /// to `jux.std.collections.Map`. Returns `None` when no FQN
+    /// to `rust.std.HashMap`. Returns `None` when no FQN
     /// matches.
     ///
     /// Precedence (when multiple FQNs share a last segment):

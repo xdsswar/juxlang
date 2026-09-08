@@ -4,7 +4,7 @@
 //!
 //! Runs `examples/async_streams.jux`:
 //! - `Stream.of` + `for await` summation;
-//! - `Stream.from` over an `ArrayList<String>`;
+//! - `Stream.from` over a `Vec<String>`;
 //! - `Stream.generate` with captured `AtomicInt` state, exhaustion via
 //!   `return null`, and idempotent-null after exhaustion (`fuse`);
 //! - `continue`/`break` in the loop body; labeled `break outer`;

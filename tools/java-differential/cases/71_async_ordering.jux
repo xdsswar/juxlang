@@ -1,0 +1,32 @@
+public async int slow(int n) {
+    print("enter " + n);
+    return n * 2;
+}
+
+public async int chained(int n) {
+    var a = await slow(n);
+    print("mid " + a);
+    var b = await slow(a);
+    return b;
+}
+
+public async String label(String tag) {
+    return "[" + tag + "]";
+}
+
+public async void main() {
+    print("start");
+    var r = await chained(3);
+    print("chained " + r);
+
+    var x = await slow(1);
+    var y = await slow(x);
+    print("seq " + x + " " + y);
+
+    print(await label("a") + await label("b"));
+
+    // An await inside an expression still evaluates left to right.
+    var sum = await slow(2) + await slow(5);
+    print("sum " + sum);
+    print("done");
+}

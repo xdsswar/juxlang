@@ -159,7 +159,7 @@ punct             = '(' | ')' | '[' | ']' | '{' | '}'
                   | '...'                              -- variadic only
 ```
 
-The token `>>` is produced as a single token by the lexer. The parser may split it into two `>` tokens when closing nested generic-arg lists (`List<List<T>>` ends with two `>` glyphs lexed as one `>>`). Splitting is permitted only at generic-list closing positions and is the only context-sensitive lex behavior in the grammar.
+The token `>>` is produced as a single token by the lexer. The parser may split it into two `>` tokens when closing nested generic-arg lists (`Vec<Vec<T>>` ends with two `>` glyphs lexed as one `>>`). Splitting is permitted only at generic-list closing positions and is the only context-sensitive lex behavior in the grammar.
 
 The token `...` appears solely as the variadic-parameter marker (§A.2.4). It is **not** the spread or rest operator at expression level — Jux has no spread expression in v1.
 
@@ -437,7 +437,7 @@ An `array-type` may carry **one or more** dimension suffixes (`array-dim+`), so 
 
 The unit tuple `()` is reserved syntax; v1 reserves it but grants it no current type meaning, to allow a future addition without a grammar break.
 
-The wildcard `?` in generic position (`List<? extends Animal>`) is *not* `nullable-type`; the parser disambiguates by whether `?` appears as the entire generic argument or after a `simple-type`:
+The wildcard `?` in generic position (`Vec<? extends Animal>`) is *not* `nullable-type`; the parser disambiguates by whether `?` appears as the entire generic argument or after a `simple-type`:
 
 ```
 generic-arg       = ... | wildcard

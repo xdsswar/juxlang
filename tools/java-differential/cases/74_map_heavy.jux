@@ -1,0 +1,62 @@
+import rust.std.HashMap;
+
+public class Tally {
+    private HashMap<String, int> counts;
+    public Tally() { this.counts = new HashMap<String, int>(); }
+
+    public void add(String key) {
+        var seen = this.counts.get(key);
+        if (seen == null) {
+            this.counts.insert(key, 1);
+        } else {
+            this.counts.insert(key, seen!! + 1);
+        }
+    }
+
+    public int countOf(String key) {
+        var v = this.counts.get(key);
+        if (v == null) {
+            return 0;
+        }
+        return v!!;
+    }
+
+    public int size() { return this.counts.len(); }
+    public bool has(String key) { return this.counts.contains_key(key); }
+}
+
+public void main() {
+    var t = new Tally();
+    t.add("pear");
+    t.add("apple");
+    t.add("pear");
+    t.add("fig");
+    t.add("pear");
+    t.add("apple");
+
+    // Printed by explicit key, never by iteration: hash order legitimately
+    // differs between the two languages.
+    print(t.countOf("apple"));
+    print(t.countOf("pear"));
+    print(t.countOf("fig"));
+    print(t.countOf("absent"));
+    print(t.size());
+    print(t.has("fig"));
+    print(t.has("plum"));
+
+    var m = new HashMap<String, String>();
+    m.insert("a", "alpha");
+    m.insert("b", "beta");
+    m.insert("a", "again");
+    print(m.len());
+    print(m["a"]);
+    print(m["b"]);
+
+    var nested = new HashMap<String, Vec<int>>();
+    var xs = new Vec<int>();
+    xs.push(1);
+    xs.push(2);
+    nested.insert("nums", xs);
+    print(nested["nums"].len());
+    print(nested["nums"][1]);
+}

@@ -7,7 +7,7 @@
 //! - nested mutating call (`a.addTwice(a.bump())`) → was E0499,
 //! - lambda capture + mutation (`() -> { c.inc(); }`) → was E0596/E0382,
 //! - static field holding an object → was E0277 (`Rc` is `!Send`),
-//! - one object in two `ArrayList`s → was E0382 (move into `push`),
+//! - one object in two `Vec`s → was E0382 (move into `push`),
 //! - cyclic `Node` + `!!` assertion chains → was E0072 / parse error.
 
 use std::path::PathBuf;

@@ -1,0 +1,27 @@
+public int square(int n) {
+    return n * n;
+}
+
+public void main() {
+    // Each task's result is collected in a fixed order, so the output is
+    // deterministic even though the work is not ordered.
+    var a = spawn(() -> square(3));
+    var b = spawn(() -> square(4));
+    var c = spawn(() -> square(5));
+    print(a.blockingGet());
+    print(b.blockingGet());
+    print(c.blockingGet());
+
+    var total = spawn(() -> {
+        var sum = 0;
+        for (var i : 1..=10) {
+            sum = sum + i;
+        }
+        return sum;
+    });
+    print(total.blockingGet());
+
+    // A task whose value feeds another computation.
+    var doubled = spawn(() -> square(6));
+    print(doubled.blockingGet() + 1);
+}

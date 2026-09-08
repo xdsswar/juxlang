@@ -89,7 +89,11 @@ mod tests {
     #[test]
     fn stdlib_scan_finds_the_declared_types() {
         let names = embedded_stdlib_type_names();
-        for expected in ["Option", "Result", "Instant", "AtomicInt", "Collection"] {
+        // `Iterable` stands in for the collections package now that the Java
+        // facade (`Collection`/`List`/`Map`/`Set`) is gone -- Jux uses Rust's
+        // std, and `Iterable`/`Iterator` are the for-each protocol, not a
+        // facade.
+        for expected in ["Option", "Result", "Instant", "AtomicInt", "Iterable"] {
             assert!(
                 names.iter().any(|n| n == expected),
                 "embedded stdlib scan missed `{expected}`: {names:?}",

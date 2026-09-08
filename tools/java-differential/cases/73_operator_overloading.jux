@@ -1,0 +1,67 @@
+public class Money {
+    private int cents;
+    public Money(int cents) { this.cents = cents; }
+    public int cents() { return this.cents; }
+
+    public Money operator+(Money other) {
+        return new Money(this.cents + other.cents());
+    }
+    public Money operator-(Money other) {
+        return new Money(this.cents - other.cents());
+    }
+    public Money operator*(int factor) {
+        return new Money(this.cents * factor);
+    }
+    public bool operator==(Money other) {
+        return this.cents == other.cents();
+    }
+    public int operator hash() {
+        return this.cents;
+    }
+    public int operator<=>(Money other) {
+        return this.cents - other.cents();
+    }
+    public String operator string() {
+        return "$" + this.cents;
+    }
+}
+
+public class Row {
+    private Vec<int> slots;
+    public Row() {
+        this.slots = new Vec<int>();
+        this.slots.push(0);
+        this.slots.push(0);
+        this.slots.push(0);
+    }
+    public int operator [](int i) { return this.slots[i]; }
+    public void operator []=(int i, int v) { this.slots[i] = v; }
+}
+
+public void main() {
+    var a = new Money(150);
+    var b = new Money(275);
+
+    print(a + b);
+    print(b - a);
+    print(a * 3);
+    print(a == b);
+    print(a == new Money(150));
+    print(a < b);
+    print(b > a);
+    print(a <= new Money(150));
+
+    // Compound assignment goes through the same binary operator.
+    var acc = new Money(100);
+    acc = acc + new Money(50);
+    print(acc);
+
+    var r = new Row();
+    r[0] = 7;
+    r[2] = 9;
+    print(r[0]);
+    print(r[1]);
+    print(r[2]);
+    r[0] = r[0] + r[2];
+    print(r[0]);
+}

@@ -3,7 +3,7 @@
 //! The `jux.std` package tree (collections, exceptions, async, io,
 //! …) ships as Jux source files next to the compiler binary. Every
 //! compilation prepends those files to the user's workspace so
-//! types like `Map<K, V>`, `Throwable`, and `ArrayList<T>` are
+//! types like `Throwable` and the exception hierarchy are
 //! always in scope — same shape as Java's implicit `java.lang.*`
 //! visibility.
 //!

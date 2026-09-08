@@ -168,7 +168,7 @@ public sealed enum Option<T> permits Some, None {
 In source code, `T?` is the canonical syntax for nullability. `Option<T>` exists for cases where:
 
 - A function wants to return a *typed* error indicator (when null doesn't carry enough information, prefer `Result<T, E>` instead).
-- A generic context needs an explicit type (`List<Option<T>>` is more readable than `List<T?>` in some signatures).
+- A generic context needs an explicit type (`Vec<Option<T>>` is more readable than `Vec<T?>` in some signatures).
 - Interop with code that uses `Option<T>` directly.
 
 The compiler treats `T?` and `Option<T>` as **distinct types** — they are not implicitly interconvertible. The methods `Option.ofNullable(...)` and `someOption.toNullable()` provide the conversion explicitly.
@@ -488,10 +488,12 @@ public final class Task<T> {
     public static Task<T> failed<T>(Exception error);
     public static Task<void> delay(Duration d);
 
-    public static Task<List<T>> all<T>(List<Task<T>> tasks);
-    public static Task<T> race<T>(List<Task<T>> tasks);
-    public static Task<T> any<T>(List<Task<T>> tasks);
-    public static Task<List<Result<T, Exception>>> allSettled<T>(List<Task<T>> tasks);
+    // Variadic, which is the shape the compiler implements and the shape a
+    // call site reads best: `Task.all(a, b, c)`.
+    public static Task<T[]> all<T>(Task<T>... tasks);
+    public static Task<T> race<T>(Task<T>... tasks);
+    public static Task<T> any<T>(Task<T>... tasks);                  -- not implemented
+    public static Task<Result<T, Exception>[]> allSettled<T>(Task<T>... tasks);  -- not implemented
 }
 
 public interface Stream<T> {
@@ -626,7 +628,7 @@ The full set is too large to specify here exhaustively; the canonical list is in
 
 Explicitly out of scope:
 
-- **`List<T>`, `Map<K, V>`, `Set<T>`, `Deque<T>`** — Tier 1 (`std.collections`); requires allocator.
+- **`Vec<T>`, `HashMap<K, V>`, `HashSet<T>`, `VecDeque<T>`** — Rust's own, under their own names and with their own methods; requires allocator. There is no Java-shaped facade over them: a `Vec` has `push` and `len`, not `add` and `size`, and that is the whole surface. `Iterable<T>` / `Iterator<T>` remain as the `for-each` protocol a user type implements, which is a contract, not a container.
 - **`String.format`, `Regex`, `StringBuilder`** — Tier 1 (`std.string`).
 - **`File`, `Path`, `Reader`, `Writer`** — Tier 2 (`std.io`); requires OS.
 - **`Instant`, `Duration`, `LocalDateTime`** — Tier 1/2 (`std.time`).

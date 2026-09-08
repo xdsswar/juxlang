@@ -512,7 +512,7 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
     //        unit; etc.). Resolve to itself.
     //    (c) Implicit auto-import — the bare name matches the
     //        last segment of some registered FQN (`Map` matches
-    //        `jux.std.collections.Map`). Resolve to the matching
+    //        `rust.std.HashMap`). Resolve to the matching
     //        FQN. This is the "java.lang.* is auto-imported"
     //        rule applied to every stdlib package.
     if t.name.segments.len() == 1 {
