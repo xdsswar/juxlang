@@ -176,6 +176,17 @@ impl Span {
     /// last children (e.g. a function decl spans from its `public`/return
     /// type to its closing brace).
     pub fn join(self, other: Span) -> Span {
+        // **A `DUMMY` operand still drags `start` to 0, deliberately.** It is
+        // tempting to ignore it -- several AST nodes carry no span of their
+        // own (a literal above all), so `a ?? "x"` gets a span starting at
+        // byte 0 and any diagnostic on it points at the top of the file.
+        // But `expr_types` is keyed BY SPAN, and dropping the dummy makes a
+        // composite node's span identical to its only spanned child's: the
+        // two then collide in that map and the parent reads back as its
+        // child's type. Fixing it properly means giving every composite node
+        // a span that includes its own operator or delimiters, which is a
+        // pass over the parser rather than a change here.
+        //
         // Keeps a real file over a synthesized one: the parser always joins
         // spans from the file it is parsing, and a `DUMMY` operand (file 0)
         // must not drag the result back to file 0.

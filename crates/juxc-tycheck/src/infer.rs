@@ -248,7 +248,24 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         // Elvis: result type is the fallback's type. Both sides are
         // expected to share an inner type (Phase 1 doesn't enforce
         // it yet — that's a future tycheck refinement).
-        Expr::Elvis(e) => infer_expr(&e.fallback, env, symbols),
+        // `a ?? b` removes the null from `a`, so it is typed from `a` (§7.10).
+        // Taking the FALLBACK's type instead looks equivalent and is not: it
+        // makes `n ?? "zero"` on an `int?` type as `String`, and the mismatch
+        // then surfaces from rustc rather than from Jux.
+        Expr::Elvis(e) => {
+            let value = infer_expr(&e.value, env, symbols);
+            let Ty::Nullable(inner) = value else {
+                // Not nullable: the operator is redundant and the fallback is
+                // unreachable, so the result is what `a` already was.
+                return value;
+            };
+            // A nullable FALLBACK keeps the result nullable -- one of the two
+            // outcomes can still be null.
+            match infer_expr(&e.fallback, env, symbols) {
+                Ty::Nullable(_) => Ty::Nullable(inner),
+                _ => *inner,
+            }
+        }
         // Method reference: a function-typed value. Phase 1
         // doesn't track function types as a concrete `Ty`
         // variant beyond what `Ty::Unknown` allows for
@@ -437,6 +454,15 @@ fn weak_field_target_ty(inner: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable)
 /// costing an extra unwrap. (Nullability does nest for GENERIC instantiation,
 /// where the two layers mean different things -- `JUX-MISSING-DEFS-ADDENDUM.md`
 /// §M.15.2 -- but that rule is about type arguments, not `?.` chains.)
+/// The type member resolution should use for a `?.` receiver: the inner type,
+/// since the operator reaches through the null.
+fn peel_safe_receiver(safe: bool, ty: Ty) -> Ty {
+    match ty {
+        Ty::Nullable(inner) if safe => *inner,
+        other => other,
+    }
+}
+
 fn receiver_is_nullable(obj: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> bool {
     matches!(infer_expr(obj, env, symbols), Ty::Nullable(_))
 }
@@ -522,7 +548,11 @@ fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             }
         }
     }
-    let object_ty = infer_expr(&f.object, env, symbols);
+    // A `?.` reaches THROUGH the null, so member resolution runs against the
+    // receiver's inner type. Without peeling it, `s?.length()` on a `String?`
+    // resolved no method at all and the whole chain typed as `Unknown` --
+    // which then silently satisfied every later check.
+    let object_ty = peel_safe_receiver(f.safe, infer_expr(&f.object, env, symbols));
     let field_name = f.field.text.as_str();
 
     // AsyncMutex guard (§18.3): `guard.value` is the protected T.
@@ -808,7 +838,8 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     }
                 }
             }
-            let receiver_ty = infer_expr(&field.object, env, symbols);
+            let receiver_ty =
+                peel_safe_receiver(field.safe, infer_expr(&field.object, env, symbols));
             // Channel<T> (§18.3) — async-runtime builtin: `receive()`
             // yields `T?` (null when closed+drained); send/close are
             // void. Typed here so nullable machinery (Some-lifting,

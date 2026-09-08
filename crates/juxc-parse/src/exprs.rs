@@ -126,11 +126,17 @@ impl<'a> Parser<'a> {
             self.peek(),
             TokenKind::QuestionColon | TokenKind::QuestionQuestion,
         ) {
+            let op_span = self.peek_span();
             self.advance(); // '?:' or '??'
             // Right-associative: recurse into `parse_elvis` for the
             // fallback so chains stack the right way.
             let fallback = self.parse_elvis()?;
-            let span = expr_span(&left).join(expr_span(&fallback));
+            // The OPERATOR's span is part of it. Several expression kinds --
+            // a literal above all -- carry no span, so joining only the two
+            // operands gave `name ?? "x"` the same span as `name` alone, and
+            // the two then collided in the span-keyed type map: the elvis read
+            // back as its own nullable operand.
+            let span = expr_span(&left).join(op_span).join(expr_span(&fallback));
             return Some(Expr::Elvis(juxc_ast::ElvisExpr {
                 value: Box::new(left),
                 fallback: Box::new(fallback),

@@ -1,0 +1,82 @@
+// `a ?? b` is typed from `a`, and `b` has to fit.
+//
+// The operator's whole purpose is to remove the null, so the type it produces
+// is `a`'s without it (7.10). Typing it from the FALLBACK instead looks
+// equivalent and is not: it accepts `n ?? "zero"` on an `int?`, and the
+// mismatch then arrives from the Rust compiler rather than from Jux.
+//
+// Three cases the compiler got wrong, all of them silent until the build
+// failed with someone else's error message:
+//
+//   1. The fallback was never checked against the value at all.
+//   2. A NULLABLE fallback keeps the null -- either outcome may be one -- so
+//      the result is `T?` and the lowering has to keep the Option.
+//   3. `??` on a value that cannot be null is just the value. It used to ask
+//      a plain `String` for an `unwrap_or` it does not have.
+//
+// Expected output:
+//   unknown
+//   Ada
+//   0
+//   7
+//   true
+//   false
+//   4
+//   -1
+//   plain
+//   plain
+//   deep
+
+public class Leaf {
+    public String? tag;
+
+    public Leaf() {}
+}
+
+public void main() {
+    // The ordinary case: a nullable value, a plain fallback, a plain result.
+    String? missing = null;
+    String? present = "Ada";
+    print(missing ?? "unknown");
+    print(present ?? "unknown");
+
+    // The same over a nullable primitive.
+    int? none = null;
+    int? seven = 7;
+    print(none ?? 0);
+    print(seven ?? 0);
+
+    // A NULLABLE fallback keeps the result nullable: either side may be null.
+    String? bothNull = missing ?? none_of_them();
+    print(bothNull == null);
+    String? oneReal = missing ?? present;
+    print(oneReal == null);
+
+    // A `?.` chain as the value. The chain is `int?`, so the fallback is an
+    // int -- and the whole expression is an int.
+    String? word = "abcd";
+    print(word?.length() ?? -1);
+    String? gone = null;
+    print(gone?.length() ?? -1);
+
+    // `??` on a value that CANNOT be null: the value, and the fallback is
+    // never evaluated.
+    var plain = "plain";
+    print(plain ?? "never");
+    print(plain ?? sideEffect());
+
+    // Through a field.
+    var leaf = new Leaf();
+    leaf.tag = "deep";
+    print(leaf.tag ?? "no tag");
+}
+
+public String? none_of_them() {
+    return null;
+}
+
+/// If the fallback of a redundant `??` were evaluated, this would print.
+public String sideEffect() {
+    print("fallback-was-evaluated");
+    return "x";
+}

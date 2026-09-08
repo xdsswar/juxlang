@@ -535,3 +535,28 @@ fn generic_declarations_print() {
         ],
     );
 }
+
+#[test]
+fn elvis_typing() {
+    // `a ?? b` is typed from `a`, the fallback is checked against it, a
+    // nullable fallback keeps the null, and `??` on a non-nullable value is
+    // the value. `sideEffect()` printing nothing is the assertion that a
+    // redundant fallback is never evaluated.
+    common::expect_output(
+        "elvis_typing",
+        "elvis-typing",
+        &[
+            "unknown",
+            "Ada",
+            "0",
+            "7",
+            "true",
+            "false",
+            "4",
+            "-1",
+            "plain",
+            "plain",
+            "deep",
+        ],
+    );
+}

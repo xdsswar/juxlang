@@ -3775,13 +3775,57 @@ impl<'a> Checker<'a> {
                 self.env.pop_scope();
             }
             Expr::Elvis(e) => {
-                // Walk both sides; Phase 1 doesn't yet enforce
-                // "value must be nullable" or "fallback type
-                // matches inner". The backend lowers to
-                // `value.unwrap_or(fallback)` and rustc surfaces
-                // any type mismatch.
                 self.check_expr(&e.value);
                 self.check_expr(&e.fallback);
+                // **The fallback has to fit the value's inner type (§7.10).**
+                // `n ?? "zero"` on an `int?` used to lower to
+                // `n.unwrap_or("zero".to_string())` and reach the user as a
+                // Rust error about `isize` and `String` -- a type error in
+                // their program, reported by a compiler they did not run.
+                let value_ty = infer_expr(&e.value, &self.env, self.symbols);
+                let Ty::Nullable(inner) = value_ty else {
+                    // Not nullable: redundant operator, nothing to check.
+                    return;
+                };
+                let fallback_ty = infer_expr(&e.fallback, &self.env, self.symbols);
+                // A nullable fallback is compared on its inner type; either
+                // side being null is exactly what the operator is for.
+                let fallback_inner = match &fallback_ty {
+                    Ty::Nullable(f) => (**f).clone(),
+                    other => other.clone(),
+                };
+                if matches!(fallback_inner, Ty::Void) {
+                    // `x ?? f()` where `f` returns nothing: the void is the
+                    // complaint, and E0512 already covers it at its own site.
+                    return;
+                }
+                if !compatible(&inner, &fallback_inner, self.symbols) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::Code::E0410_TypeMismatch,
+                            format!(
+                                "the fallback of `??` has type `{}`, which does not fit the \
+                                 value's type `{}` -- `a ?? b` yields `a` without its null, so \
+                                 `b` must be assignable to that (§7.10)",
+                                fallback_ty.display(),
+                                inner.display(),
+                            ),
+                        )
+                        // A literal fallback carries a dummy span, so fall
+                        // back to the operator's own -- pointing at the whole
+                        // `a ?? b` beats pointing at the top of the file.
+                        // A literal fallback carries an empty span, so fall
+                        // back to the operator's own and then to the value's --
+                        // pointing at the whole `a ?? b`, or at what produced
+                        // the type, beats pointing at the top of the file.
+                        .with_span(
+                            [expr_span(&e.fallback), expr_span(&e.value), e.span]
+                                .into_iter()
+                                .find(|sp| sp.end > sp.start)
+                                .unwrap_or(e.span),
+                        ),
+                    );
+                }
             }
             Expr::MethodRef(_) => {
                 // No sub-expressions to walk; method existence

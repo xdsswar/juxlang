@@ -2564,6 +2564,31 @@ public void main() {
 
 Nullability is tracked in the type system. Non-nullable references cannot hold null. This eliminates NullPointerException as a runtime failure mode.
 
+**`a ?? b` is typed from `a`, and `b` has to fit.** Where `a` is `T?`, the
+result is `T` -- the operator's whole purpose is to remove the null, so the
+type it produces is the one without it. The fallback must be assignable to
+`T`; a fallback of an unrelated type is `E0410` at the `??`, naming both
+sides. When the fallback is ITSELF nullable the result is `T?`, because one
+of the two outcomes can still be null.
+
+```java
+String? name = findName(42);
+String  a = name ?? "unknown";     // String
+int?    n = findLength(42);
+int     b = n ?? 0;                // int
+String? c = name ?? otherNullable; // String? -- either side may be null
+int     d = n ?? "zero";           // E0410: `String` is not an `int`
+```
+
+Taking the type from the FALLBACK instead looks equivalent and is not: it
+accepts `d` above, and the mismatch then surfaces from the Rust compiler
+rather than from Jux.
+
+If `a` is not nullable the operator is redundant -- `b` can never be
+evaluated -- and the result is `a`'s own type. This is permitted for the same
+reason a redundant `?.` is: it is visible in the source, and there is nothing
+to say about it that the reader cannot see.
+
 **A `?.` chain adds exactly one layer of null, and only when the receiver can
 be null.** Two consequences, both of which the compiler once got wrong in
 opposite directions:

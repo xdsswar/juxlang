@@ -1575,6 +1575,15 @@ impl RustEmitter {
     /// `unwrap_or_else` would defer it; for now eager matches the
     /// spec text "else `b`".
     pub(crate) fn emit_elvis(&mut self, e: &juxc_ast::ElvisExpr) {
+        // **`??` on a value that cannot be null is the value.** The fallback
+        // can never be reached, and there is no `Option` to unwrap -- emitting
+        // one asked `String` for an `unwrap_or` it does not have. Permitted
+        // rather than rejected, on the same terms as a redundant `?.` (§7.10):
+        // it is visible in the source and says nothing the reader cannot see.
+        if !self.expression_is_already_nullable(&e.value) {
+            self.emit_expr(&e.value);
+            return;
+        }
         let value_needs_parens = !matches!(
             *e.value,
             Expr::Path(_)
@@ -1631,7 +1640,17 @@ impl RustEmitter {
         //
         // A literal keeps the plain `unwrap_or`, because there is nothing to
         // defer and the emitted Rust reads better for the common `x ?? 0`.
-        if matches!(*e.fallback, Expr::Literal(_)) {
+        //
+        // **A NULLABLE fallback keeps the Option.** `a ?? b` where `b` is
+        // itself `T?` has type `T?` (§7.10) -- either outcome may be null --
+        // so the combinator is `or_else`, which returns the fallback Option
+        // rather than unwrapping into it. `unwrap_or_else` here asked for a
+        // `T` and got an `Option<T>`.
+        if self.expression_is_already_nullable(&e.fallback) {
+            self.w.push_str(".or_else(|| ");
+            self.emit_expr(&e.fallback);
+            self.w.push(')');
+        } else if matches!(*e.fallback, Expr::Literal(_)) {
             self.w.push_str(".unwrap_or(");
             self.emit_expr(&e.fallback);
             self.w.push(')');
