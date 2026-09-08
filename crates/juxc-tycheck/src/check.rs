@@ -2059,6 +2059,42 @@ impl<'a> Checker<'a> {
         self.env.clear_class();
     }
 
+    /// The name of the enclosing class's parent when that parent cannot be
+    /// constructed with no arguments, and `None` otherwise -- no parent, or a
+    /// parent that has a usable `super()`.
+    ///
+    /// A parent that declares NO constructor has the implicit no-argument one,
+    /// and a declared constructor counts when its acceptable-argument range
+    /// starts at zero, which is what makes an all-defaults constructor
+    /// (`Base(int n = 1)`) satisfy the rule too.
+    fn enclosing_parent_needing_args(&self) -> Option<String> {
+        let class_fqn = self.env.current_class.as_deref()?;
+        let class = self.symbols.classes.get(class_fqn)?;
+        let parent_key = class.extends_fqn.clone().or_else(|| {
+            class
+                .extends
+                .as_ref()
+                .and_then(|t| t.name.segments.last().map(|s| s.text.clone()))
+        })?;
+        let parent = self
+            .symbols
+            .classes
+            .get(&parent_key)
+            .or_else(|| self.symbols.find_fqn_by_bare(&parent_key)
+                .and_then(|f| self.symbols.classes.get(&f)))?;
+        if parent.constructors.is_empty() {
+            return None;
+        }
+        let has_nullary = parent.constructors.iter().any(|c| {
+            crate::symbol_table::ctor_arity_range(&c.params).0 == 0
+        });
+        if has_nullary {
+            None
+        } else {
+            Some(parent_key.rsplit('.').next().unwrap_or(&parent_key).to_string())
+        }
+    }
+
     /// Walk a constructor body. Like [`check_function`] but with no
     /// expected return type (constructors don't return values) and with
     /// `this` pre-declared.
@@ -2094,6 +2130,30 @@ impl<'a> Checker<'a> {
                         .with_span(*sspan),
                     );
                 }
+            }
+        }
+        // **E0211 -- the implicit `super()` has to exist.** A constructor
+        // that neither delegates with `this(...)` nor calls `super(...)`
+        // begins with an implicit `super()`, and that is only available when
+        // the parent can be built with no arguments. Without this check the
+        // program reached rustc, which reported a missing argument to a
+        // generated function the source never mentions.
+        let delegates = ctor.body.statements.iter().any(|st| match st {
+            Stmt::SuperCall(..) => true,
+            Stmt::Expr(Expr::Call(call)) => matches!(call.callee.as_ref(), Expr::This(_)),
+            _ => false,
+        });
+        if !delegates {
+            if let Some(parent) = self.enclosing_parent_needing_args() {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0211_MissingSuperCall,
+                        format!(
+                            "this constructor must call `super(...)`: every constructor of `{parent}` takes arguments, so there is no implicit `super()` to run",
+                        ),
+                    )
+                    .with_span(ctor.span),
+                );
             }
         }
         let saved_ctor = self.current_ctor.replace(ctor_idx);
@@ -2900,7 +2960,26 @@ impl<'a> Checker<'a> {
                     );
                 }
                 let target_ty = infer_expr(&a.target, &self.env, self.symbols);
-                let value_ty = infer_expr(&a.value, &self.env, self.symbols);
+                // What actually gets STORED. For a plain `=` that is the
+                // value; for a compound assignment it is the result of
+                // `target op value`, which is a different type whenever the
+                // operator is. `s += 1` on a String stores a String -- the
+                // operand's own type was never the question, and asking it
+                // rejected the compound form of an expression whose spelled-out
+                // twin (`s = s + 1`) is accepted.
+                let value_ty = match a.op {
+                    Some(op) => infer_expr(
+                        &Expr::Binary(juxc_ast::BinaryExpr {
+                            op,
+                            left: Box::new(a.target.clone()),
+                            right: Box::new(a.value.clone()),
+                            span: a.span,
+                        }),
+                        &self.env,
+                        self.symbols,
+                    ),
+                    None => infer_expr(&a.value, &self.env, self.symbols),
+                };
                 let effective_target = if weak_target {
                     Ty::nullable(target_ty.clone())
                 } else {

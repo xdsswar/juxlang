@@ -1,0 +1,1 @@
+typetest_binder_misplaced.jux:9:24: [E0441] error: the type-test binder `d` is only valid in an `if` condition (`if (x => T d)`); use the bare test `x => T` here

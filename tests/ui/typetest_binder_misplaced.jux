@@ -1,0 +1,11 @@
+// `x => T name` binds a name for a branch. Outside a condition there is no
+// branch for it to bind in.
+
+public class Animal { public String name() { return "animal"; } }
+public class Dog extends Animal { public String name() { return "dog"; } }
+
+public void main() {
+    Animal a = new Dog();
+    bool ok = a => Dog d;
+    print(ok);
+}

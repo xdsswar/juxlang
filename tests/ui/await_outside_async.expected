@@ -1,0 +1,1 @@
+await_outside_async.jux:8:12: [E0700] error: `await` is only allowed inside an async function, method, or lambda -- mark the enclosing function `async` (e.g. `async T f()`)

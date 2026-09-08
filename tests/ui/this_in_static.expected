@@ -1,0 +1,1 @@
+this_in_static.jux:9:16: [E0425] error: `this` cannot be used inside a `static` method (no receiver)

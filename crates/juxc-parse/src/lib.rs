@@ -364,6 +364,50 @@ impl<'a> Parser<'a> {
     /// the human description ("`)` to close argument list"). Returns
     /// whether the token was actually consumed — callers may want to know
     /// so they can adjust recovery.
+    /// Report a keyword the language reserves and the spec documents but this
+    /// phase does not implement, naming both the construct and where it is
+    /// written down.
+    ///
+    /// Every caller pairs this with a recovery that consumes the construct, so
+    /// the user gets ONE error about the real problem instead of a run of
+    /// errors about whatever the parser tripped over next.
+    pub(crate) fn reserved_not_implemented(
+        &mut self,
+        span: juxc_source::Span,
+        what: &str,
+        specified_in: &str,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0203_ReservedNotImplemented,
+                format!("{what} is not implemented yet ({specified_in}) -- rewrite without it"),
+            )
+            .with_span(span),
+        );
+    }
+
+    /// Skip a `{ .. }` body, brace-balanced, from wherever the cursor is up to
+    /// and including the matching close. Pairs with a construct reported as
+    /// unimplemented, so nothing inside it raises anything.
+    pub(crate) fn skip_braced_body(&mut self) {
+        while !self.at_eof() && !self.at(&TokenKind::LBrace) {
+            self.advance();
+        }
+        let mut depth = 0usize;
+        while !self.at_eof() {
+            if self.at(&TokenKind::LBrace) {
+                depth += 1;
+            } else if self.at(&TokenKind::RBrace) {
+                depth -= 1;
+                if depth == 0 {
+                    self.advance();
+                    return;
+                }
+            }
+            self.advance();
+        }
+    }
+
     pub(crate) fn expect(&mut self, kind: &TokenKind, expected: &str) -> bool {
         if self.eat(kind) {
             true

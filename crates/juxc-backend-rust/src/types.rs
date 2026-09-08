@@ -591,12 +591,47 @@ impl RustEmitter {
             {
                 mangled
             } else {
-                ty.name
+                // A package-qualified name of a type the PROGRAM declares is
+                // a module path in the emitted crate, and a module path from
+                // anywhere but the root needs `crate::` in front of it. The
+                // single-segment branch above already reasons this way; this
+                // one used to join the segments and hope. Same package: the
+                // sibling item resolves by its bare name, exactly as above.
+                let dotted = ty
+                    .name
                     .segments
                     .iter()
                     .map(|s| s.text.as_str())
                     .collect::<Vec<_>>()
-                    .join("::")
+                    .join(".");
+                let declared_here = self.symbols.classes.contains_key(&dotted)
+                    || self.symbols.interfaces.contains_key(&dotted)
+                    || self.symbols.records.contains_key(&dotted)
+                    || self.symbols.enums.contains_key(&dotted);
+                let joined = ty
+                    .name
+                    .segments
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                if !declared_here {
+                    joined
+                } else {
+                    let fqn_pkg = dotted
+                        .rsplit_once('.')
+                        .map(|(p, _)| p.to_string())
+                        .unwrap_or_default();
+                    if fqn_pkg == self.symbols.package.join(".") {
+                        ty.name
+                            .segments
+                            .last()
+                            .map(|s| s.text.clone())
+                            .unwrap_or(joined)
+                    } else {
+                        format!("crate::{joined}")
+                    }
+                }
             }
         };
         // **Interface in a value position → `Rc<dyn Trait>`.** When this

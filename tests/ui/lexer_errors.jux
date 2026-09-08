@@ -1,0 +1,8 @@
+// What the lexer refuses. Kept to one construct per line so the recovery has
+// somewhere to resume, and so the spans stay readable.
+
+public void main() {
+    String open = "no closing quote
+    int bad = 1__000;
+    print(open);
+}

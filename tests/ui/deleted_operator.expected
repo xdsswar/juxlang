@@ -1,0 +1,1 @@
+deleted_operator.jux:10:11: [E0935] error: operator `==` is deleted on type `Token`

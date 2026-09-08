@@ -1,0 +1,21 @@
+// A switch over a sealed set that leaves a case out, and a cast between types
+// with no relationship.
+
+public enum Tier { Bronze, Silver, Gold }
+
+public class Cat { public int lives() { return 9; } }
+public class Rock { public int mass() { return 3; } }
+
+public String describe(Tier t) {
+    return switch (t) {
+        case Tier.Bronze -> "low";
+        case Tier.Silver -> "mid";
+    };
+}
+
+public void main() {
+    print(describe(Tier.Gold));
+    Cat c = new Cat();
+    Rock r = (Rock) c;
+    print(r.mass());
+}

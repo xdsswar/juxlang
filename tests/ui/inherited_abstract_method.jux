@@ -1,0 +1,23 @@
+// A class owes the methods of every interface in the chain, not only the one
+// it names. `Greeter extends Named`, so implementing `Greeter` obliges
+// `name()` too -- and the error must say so where the class is declared,
+// rather than surfacing from the Rust compiler against a trait this source
+// never mentions.
+
+package app;
+
+interface Named {
+    String name();
+}
+
+interface Greeter extends Named {
+    String greeting();
+}
+
+class Person implements Greeter {
+    public String greeting() { return "hello"; }
+}
+
+public void main() {
+    print(new Person().greeting());
+}

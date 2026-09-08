@@ -118,9 +118,9 @@ impl RustEmitter {
                     self.emit_expr(&c.value);
                     self.w.push_str(".__jux_as_");
                     self.w.push_str(&t);
-                    self.w.push_str("().unwrap_or_else(|| panic!(\"ClassCastException: value is not a ");
+                    self.w.push_str(crate::CLASS_CAST_RAISE_OPEN);
                     self.w.push_str(&t);
-                    self.w.push_str("\")))");
+                    self.w.push_str(crate::CLASS_CAST_RAISE_CLOSE);
                     return;
                 }
                 // Concrete source that's neither identity nor an upcast — a

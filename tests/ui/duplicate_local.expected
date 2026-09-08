@@ -1,0 +1,1 @@
+duplicate_local.jux:5:12: [E0304] error: `total` is already declared in this scope; rename the local or move it into a nested block

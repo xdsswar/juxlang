@@ -417,6 +417,19 @@ fn in_source_order(
             d.code.as_str(),
         )
     });
+    // The same error twice is a bug in the report, not information. Error
+    // recovery can revisit a construct -- the top-level loop rewinds a failed
+    // declaration and retries it as a statement, and a recovery anchor can
+    // land the cursor back where it started -- and the user should not have
+    // to work out that two identical lines are one problem. Sorted first, so
+    // duplicates are adjacent.
+    out.dedup_by(|a, b| {
+        a.code == b.code
+            && a.file == b.file
+            && a.primary_span.map(|s| (s.start, s.end))
+                == b.primary_span.map(|s| (s.start, s.end))
+            && a.message == b.message
+    });
     out
 }
 

@@ -1,0 +1,3 @@
+reserved_not_implemented.jux:6:8: [E0203] error: a user-defined annotation (`annotation Name { .. }`) is not implemented yet (specified in JUX-ANNOTATIONS-ADDENDUM) -- rewrite without it
+reserved_not_implemented.jux:11:12: [E0203] error: the `volatile` field modifier is not implemented yet (specified in JUX-CORE-LIB-ADDENDUM as `core.volatile`) -- rewrite without it
+reserved_not_implemented.jux:21:10: [E0203] error: the `move` operator is not implemented yet (specified in JUX-LANG-V1 §6.4, deferred per JUX-MISSING-DEFS-ADDENDUM) -- rewrite without it

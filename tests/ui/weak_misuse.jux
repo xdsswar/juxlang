@@ -1,0 +1,18 @@
+// `weak` applies to a plain class field, is read through `.get()`, and takes no
+// initializer.
+
+public class Node {
+    public int id;
+    public Node(int id) { this.id = id; }
+}
+
+public class Holder {
+    public weak int count;
+    public weak Node peer;
+    public Holder() { }
+    public int peerId() { return this.peer.id; }
+}
+
+public void main() {
+    print(new Holder().peerId());
+}

@@ -1,0 +1,2 @@
+entry_point_shape.jux:6:1: [E0400] error: `main` is declared more than once at the top level
+entry_point_shape.jux:6:8: [E0323] error: main's signature does not match an accepted form

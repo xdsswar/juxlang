@@ -1,0 +1,20 @@
+// `final` means assign-once, in all three places it can appear.
+
+public class Settings {
+    public final int retries;
+    public Settings() { this.retries = 3; }
+    public void bump() { this.retries = 4; }
+}
+
+public void takes(final int n) {
+    n = 5;
+    print(n);
+}
+
+public void main() {
+    final int limit = 10;
+    limit = 11;
+    print(limit);
+    takes(1);
+    new Settings().bump();
+}

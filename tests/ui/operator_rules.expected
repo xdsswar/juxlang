@@ -1,0 +1,4 @@
+operator_rules.jux:8:13: [E0931] error: class `Money` defines `operator==` but no `operator hash`; structural equality requires consistent hashing
+operator_rules.jux:8:13: [E0932] error: operator `==` on class `Money` has `private`; an operator must be `public`
+operator_rules.jux:16:12: [E0930] error: class `Money` defines both `operator<=>` and `operator<` -- pick one form, not both
+operator_rules.jux:16:12: [E0930] error: class `Money` declares some individual ordering operators but not all four -- missing `operator<=`, `operator>`, `operator>=`

@@ -1,0 +1,1 @@
+missing_super_call.jux:12:12: [E0211] error: this constructor must call `super(...)`: every constructor of `Base` takes arguments, so there is no implicit `super()` to run

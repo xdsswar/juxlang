@@ -1,0 +1,22 @@
+// Four keywords the language reserves and the spec documents, none of which
+// Phase 1 implements. Each must produce ONE error that names the construct and
+// says where it is written down -- not a cascade about whatever the parser
+// tripped over next.
+
+public annotation Cacheable {
+    int ttl = 60;
+}
+
+public class Reg {
+    public volatile int status;
+    public Reg() { this.status = 0; }
+}
+
+public void take(int n) {
+    print(n);
+}
+
+public void main() {
+    var a = 1;
+    take(move a);
+}

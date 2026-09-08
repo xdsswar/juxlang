@@ -98,6 +98,48 @@ src/foo.jux:14:5: error[E0450]: ambiguous overload of `log`
 
 ---
 
+### Reserved But Not Implemented (`E0203`)
+
+A word the lexer reserves is a word the program cannot use as an identifier.
+When the parser has no production for it either, the user gets the worst of
+both: the name is taken, and the error blames whatever the parser tripped over
+next. Four keywords were in that state, two of them with worked examples in
+the spec:
+
+```
+p_annotation.jux:1:8: expected return type ('void', 'async T', or a type name)
+p_volatile.jux:5:28:  no field `status` on type `Reg`
+p_volatile.jux:5:32:  cannot find `Reg` in this scope
+```
+
+Three errors, none of them about the thing that is wrong.
+
+`E0203` says the true thing once. It names the construct, says where the
+construct IS specified, and says it is not implemented here. Each site then
+consumes the construct so nothing cascades behind it: an `annotation`
+declaration skips its brace-balanced body, `volatile` is dropped from the
+modifier list and the field parses as a field, `move` reports and then parses
+its operand, and `yield` parses in the `return` shape.
+
+```
+error[E0203]: the `move` operator is not implemented yet
+              (specified in JUX-LANG-V1 §6.4, deferred per
+              JUX-MISSING-DEFS-ADDENDUM) -- rewrite without it
+```
+
+**The rule for adding a keyword.** A keyword enters the lexer's inventory only
+with either a production or an `E0203` site. Reserving one with neither is
+what produced the output above.
+
+**A second consequence.** Recovery can revisit a construct -- the top-level
+loop rewinds a failed declaration and retries it as a statement, and a
+recovery anchor can land the cursor back where it started -- which reported
+the same error twice. Identical diagnostics (same code, file, span and text)
+are now collapsed before printing: the same error twice is a defect in the
+report, not information.
+
+---
+
 ### Near-Name Suggestions (`E0413`, `E0412`)
 
 "No method `sort` on type `rust.std.Vec`" is accurate and useless: the type has
@@ -290,6 +332,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0200`  | Unexpected token                                     | Generic parse error            |
 | `E0201`  | Expression or type nesting exceeds the depth limit    | Grammar §A.2                   |
 | `E0202`  | Numeric literal out of range for its storage         | Grammar §A.1.4                 |
+| `E0203`  | Reserved keyword that this phase does not implement (`annotation`, `move`, `volatile`, `yield`) | see below |
 | `E0210`  | `super(...)` or `this(...)` not first statement      | Grammar §A.2.4                 |
 | `E0211`  | Constructor missing required `super(...)` call      | Grammar §A.2.4                 |
 | `E0212`  | Varargs (`T...`) parameter is not the last parameter | Entry Points §E (varargs) |

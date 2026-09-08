@@ -412,6 +412,21 @@ impl<'a> Parser<'a> {
         // tycheck pass is responsible for enforcing that `await`
         // appears only inside an `async` function body; the parser
         // accepts it anywhere and lets later phases flag misuse.
+        // `move expr` -- the explicit-transfer operator of JUX-LANG-V1 §6.4
+        // (`users.add(move alice);`), which JUX-MISSING-DEFS-ADDENDUM records
+        // as deferred. Report it once and parse the operand anyway, so the
+        // rest of the expression still checks and the user sees one error
+        // rather than a run of "expected expression".
+        if matches!(self.peek(), TokenKind::Kw(Keyword::Move)) {
+            let span = self.peek_span();
+            self.reserved_not_implemented(
+                span,
+                "the `move` operator",
+                "specified in JUX-LANG-V1 §6.4, deferred per JUX-MISSING-DEFS-ADDENDUM",
+            );
+            self.advance(); // `move`
+            return self.parse_unary();
+        }
         if matches!(self.peek(), TokenKind::Kw(Keyword::Await)) {
             let start_span = self.peek_span();
             self.advance(); // 'await'

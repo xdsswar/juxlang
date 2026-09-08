@@ -1,0 +1,8 @@
+// A file with top-level statements is itself the entry point, so it cannot
+// also declare one, and an entry point's signature has a fixed set of shapes.
+
+print("top level");
+
+public int main(int notArgs) {
+    return notArgs;
+}

@@ -959,6 +959,19 @@ impl<'a> Parser<'a> {
                 // `ref` field (§M.13): the field holds a SHARED
                 // reference to a value-typed object.
                 is_ref = true;
+            } else if self.at_kw(Keyword::Volatile) {
+                // The `volatile` field modifier (JUX-LANG-V1 MMIO section, and
+                // `core.volatile.Volatile<T>`, which the core-lib addendum
+                // marks "Spec'd"). Consume it so the field still parses as a
+                // field -- the alternative was three errors, none about
+                // `volatile`.
+                let span = self.peek_span();
+                self.reserved_not_implemented(
+                    span,
+                    "the `volatile` field modifier",
+                    "specified in JUX-CORE-LIB-ADDENDUM as `core.volatile`",
+                );
+                self.advance();
             } else {
                 break;
             }

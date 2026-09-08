@@ -1,0 +1,23 @@
+// An operator is part of a type's public surface, and the two ordering styles
+// cannot be mixed.
+
+public class Money {
+    private int cents;
+    public Money(int cents) { this.cents = cents; }
+
+    private bool operator==(Money other) {
+        return this.cents == other.cents;
+    }
+
+    public int operator<=>(Money other) {
+        return this.cents - other.cents;
+    }
+
+    public bool operator<(Money other) {
+        return this.cents < other.cents;
+    }
+}
+
+public void main() {
+    print(new Money(1) < new Money(2));
+}

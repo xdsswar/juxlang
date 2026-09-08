@@ -1,0 +1,2 @@
+cyclic_extends.jux:4:8: [E0434] error: `A` is its own ancestor -- following its `extends` chain returns to `A`. A class cannot inherit from itself, directly or through any number of steps.
+cyclic_extends.jux:8:8: [E0434] error: `B` is its own ancestor -- following its `extends` chain returns to `B`. A class cannot inherit from itself, directly or through any number of steps.

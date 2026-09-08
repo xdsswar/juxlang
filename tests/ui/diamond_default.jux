@@ -1,0 +1,18 @@
+// Two interfaces, one method name, both with bodies. The class has to say
+// which it means -- neither the compiler nor the reader can guess.
+
+public interface Left {
+    default String tag() { return "left"; }
+}
+
+public interface Right {
+    default String tag() { return "right"; }
+}
+
+public class Both implements Left, Right {
+    public int id() { return 1; }
+}
+
+public void main() {
+    print(new Both().tag());
+}

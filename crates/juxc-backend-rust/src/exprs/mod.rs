@@ -1268,10 +1268,7 @@ impl RustEmitter {
                     if self.not_null_operand_shares(inner) {
                         self.w.push_str(".clone()");
                     }
-                    self.w.push_str(
-                        ".unwrap_or_else(|| panic!(\"NullPointerException: \
-                         `!!` asserted on a null value\"))",
-                    );
+                    self.w.push_str(crate::NOT_NULL_ASSERT_RAISE);
                 } else {
                     self.emit_expr(inner);
                 }

@@ -1,0 +1,2 @@
+switch_not_exhaustive.jux:10:12: [E0440] error: non-exhaustive `switch` on enum `Tier`: no arm covers Gold; add explicit `case` arms for each, or a `case _` wildcard at the end
+switch_not_exhaustive.jux:19:14: [E0442] error: cannot cast `Cat` to `Rock`: the types are unrelated (neither is a subtype of the other), so the cast can never succeed

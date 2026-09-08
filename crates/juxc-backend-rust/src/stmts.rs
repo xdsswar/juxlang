@@ -3207,16 +3207,35 @@ impl RustEmitter {
                 Some(Ty::String),
             )
         {
+            // A non-text right operand renders the way `s + x` renders it.
+            // `s += 1` is the same operation as `s = s + 1` (§7.14), and
+            // `push_str(&1)` is not: it does not compile. `__jux_show!`
+            // resolves to `Display` where there is one and `Debug` otherwise,
+            // which is exactly what the concat path already uses.
+            let rhs_is_text = matches!(
+                self.expr_types.get(&expr_span_of(&a.value)),
+                Some(Ty::String),
+            ) || matches!(&a.value, Expr::Literal(juxc_ast::Literal::String(..)));
             self.emitting_lvalue = true;
             self.emit_expr(&a.target);
             self.emitting_lvalue = false;
-            self.w.push_str(".push_str(&");
+            // A string LITERAL is already the borrowed form, so it goes in as
+            // itself: `s.push_str("b")`, not `s.push_str(&"b")`, which is what
+            // a person would write and what the deref was quietly undoing.
+            let literal_rhs = matches!(&a.value, Expr::Literal(juxc_ast::Literal::String(..)));
+            self.w.push_str(if literal_rhs { ".push_str(" } else { ".push_str(&" });
+            if !rhs_is_text {
+                self.w.push_str("crate::__jux_show!(");
+            }
             // Borrow context so a literal RHS stays `&str` (no
             // wasted `.to_string()`).
             let prev = self.emitting_format_arg;
             self.emitting_format_arg = true;
             self.emit_assign_rhs(&a.value);
             self.emitting_format_arg = prev;
+            if !rhs_is_text {
+                self.w.push(')');
+            }
             self.w.push_str(");\n");
             return;
         }

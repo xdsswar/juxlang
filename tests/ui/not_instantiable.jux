@@ -1,0 +1,13 @@
+// `new` on something with no constructor to run.
+
+public interface Shape {
+    int area();
+}
+
+public enum Color { Red, Green }
+
+public void main() {
+    var s = new Shape();
+    var c = new Color();
+    print(1);
+}

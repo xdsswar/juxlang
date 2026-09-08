@@ -1,0 +1,13 @@
+// `await` suspends, and only an async body has anywhere to suspend to.
+
+public async int slow() {
+    return 7;
+}
+
+public int caller() {
+    return await slow();
+}
+
+public void main() {
+    print(caller());
+}

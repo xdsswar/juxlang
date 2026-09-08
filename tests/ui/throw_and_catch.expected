@@ -1,0 +1,2 @@
+throw_and_catch.jux:9:11: [E0710] error: `throw` requires an `Exception` (or subclass), found NotAnError
+throw_and_catch.jux:17:7: [E0720] error: unreachable `catch (jux.std.exceptions.IllegalStateException)`: an earlier clause already catches it

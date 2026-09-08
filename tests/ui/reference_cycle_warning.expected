@@ -1,0 +1,2 @@
+reference_cycle_warning.jux:6:12: [W0457] warning: field `kid` forms a reference cycle on class `Parent` -- classes are `Rc`-refcounted and `Rc` does not collect cycles, so this leaks; mark a back-edge field `weak` to break it (§6.5)
+reference_cycle_warning.jux:11:12: [W0457] warning: field `owner` forms a reference cycle on class `Child` -- classes are `Rc`-refcounted and `Rc` does not collect cycles, so this leaks; mark a back-edge field `weak` to break it (§6.5)

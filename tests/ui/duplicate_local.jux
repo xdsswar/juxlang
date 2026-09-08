@@ -1,0 +1,7 @@
+// One name, two declarations, one scope.
+
+public void main() {
+    int total = 1;
+    String total = "again";
+    print(total);
+}

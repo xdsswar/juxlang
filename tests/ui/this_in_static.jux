@@ -1,0 +1,19 @@
+// `this` has no meaning without an instance, and a class member shaped like an
+// entry point has to be static to be one.
+
+public class Counter {
+    private int n;
+    public Counter() { this.n = 0; }
+
+    public static int broken() {
+        return this.n;
+    }
+
+    public void main() {
+        print("not an entry point");
+    }
+}
+
+public void main() {
+    print(Counter.broken());
+}

@@ -1,0 +1,2 @@
+weak_misuse.jux:10:17: [E0455] error: `weak` field `count` must have a non-generic class type -- `weak` breaks a refcount cycle and applies only to class references (§6.5)
+weak_misuse.jux:13:34: [E0456] error: `weak` field `peer` can only be read via `.get()` (which returns the target type, nullable) -- a bare read would expose the raw weak handle

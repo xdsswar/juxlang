@@ -1,0 +1,10 @@
+// A parameter with a default cannot precede one without: no call could supply
+// the second without the first.
+
+public int scaled(int factor = 2, int value) {
+    return factor * value;
+}
+
+public void main() {
+    print(scaled(3, 4));
+}

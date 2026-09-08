@@ -1,0 +1,11 @@
+// An operator a type explicitly removes is not one a caller may reach for.
+
+public class Token {
+    private int id;
+    public Token(int id) { this.id = id; }
+    public bool operator==(Token other) = delete;
+}
+
+public void main() {
+    print(new Token(1) == new Token(1));
+}

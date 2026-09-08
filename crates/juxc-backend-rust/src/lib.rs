@@ -585,6 +585,19 @@ pub(crate) struct PendingSetterObserver {
     pub(crate) parent_depth: usize,
 }
 
+/// How `!!` raises on a null value.
+///
+/// `panic_any` carries the exception VALUE, which is what lets
+/// `catch (NullPointerException e)` downcast it and run. The earlier
+/// `panic!` carried a `&str`, so a handler written to stop the abort
+/// compiled and then did not stop it.
+pub(crate) const NOT_NULL_ASSERT_RAISE: &str = ".unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::NullPointerException::new(String::from(\"NullPointerException: `!!` asserted on a null value\"))))";
+
+/// How a failing downcast raises, either side of the target type name.
+/// Same reasoning as [`NOT_NULL_ASSERT_RAISE`]: the value, not a string.
+pub(crate) const CLASS_CAST_RAISE_OPEN: &str = "().unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::ClassCastException::new(String::from(\"ClassCastException: value is not a ";
+pub(crate) const CLASS_CAST_RAISE_CLOSE: &str = "\")))))";
+
 /// Internal emitter state. Accumulates source text into a [`Writer`]
 /// (auto-indent + buffer) and produces a [`RustCrate`] when
 /// [`RustEmitter::finish`] is called.

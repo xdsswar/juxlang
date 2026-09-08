@@ -1,0 +1,84 @@
+// An interface that extends another, and a class implementing it.
+//
+// Java's rule is that implementing `Greeter` obliges you to `Named` too, and
+// that a `Greeter` IS-A `Named` everywhere a `Named` is wanted. Two things
+// were wrong with that here:
+//
+//   - The completeness check looked only at the interfaces a class WROTE, so
+//     a method inherited from a super-interface could be skipped. The program
+//     then failed at rustc, against a trait its source never mentions.
+//   - The generated `impl Named for Person` named the ancestor by its bare
+//     name, which resolves only if something imported it -- and nothing has a
+//     reason to import an interface it never mentions.
+//
+// Both now hold, so the whole chain is usable: the obligations are checked
+// where the class is declared, and a value flows into every level of it.
+
+package app;
+
+interface Named {
+    String name();
+
+    default String shout() {
+        return this.name() + "!";
+    }
+}
+
+interface Greeter extends Named {
+    String greeting();
+
+    default String greet() {
+        return this.greeting() + ", " + this.name();
+    }
+}
+
+interface Aged {
+    int age();
+}
+
+// Two chains at once: `Greeter` (which brings `Named`) and `Aged`.
+class Person implements Greeter, Aged {
+    private String who;
+    private int years;
+
+    Person(String who, int years) {
+        this.who = who;
+        this.years = years;
+    }
+
+    public String name() { return this.who; }
+    public String greeting() { return "hello"; }
+    public int age() { return this.years; }
+}
+
+// A parameter typed as the SUPER-interface accepts the implementor, which is
+// the part that needs the generated `impl Named for Person` to exist.
+public String describe(Named n) {
+    return n.shout();
+}
+
+public String meet(Greeter g) {
+    return g.greet();
+}
+
+public int yearsOf(Aged a) {
+    return a.age();
+}
+
+public void main() {
+    var p = new Person("ada", 36);
+    print(p.name());
+    print(p.shout());
+    print(p.greet());
+    print(describe(p));
+    print(meet(p));
+    print(yearsOf(p));
+
+    // Through a collection of the super-interface, too.
+    var people = new Vec<Named>();
+    people.push(new Person("grace", 45));
+    people.push(p);
+    for (var n : people) {
+        print(describe(n));
+    }
+}

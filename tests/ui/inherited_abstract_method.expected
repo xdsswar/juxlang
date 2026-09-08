@@ -1,0 +1,1 @@
+inherited_abstract_method.jux:17:1: [E0429] error: class `app.Person` doesn't implement abstract method(s): `Named.name`

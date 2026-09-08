@@ -1,0 +1,14 @@
+// `yield` is reserved for generator semantics and has no Phase-1 form. The
+// second error is honest rather than noise: the recovery rewrites the arm as a
+// `return`, so the switch expression really does produce nothing.
+
+public int pick(int n) {
+    return switch (n) {
+        case 1 -> { yield 10; }
+        default -> 0;
+    };
+}
+
+public void main() {
+    print(pick(1));
+}

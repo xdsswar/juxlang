@@ -1,0 +1,2 @@
+lexer_errors.jux:5:19: [E0101] error: newline in non-raw string literal
+lexer_errors.jux:6:5: [E0200] error: expected ';' after typed local declaration

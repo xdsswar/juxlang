@@ -1,0 +1,3 @@
+duplicate_members.jux:7:13: [E0401] error: field `retries` is declared more than once in class `Config`
+duplicate_members.jux:7:13: [E0600] error: field `retries` of class `Config` is not definitely assigned -- give it an initializer (`= …`) or assign it in every constructor before the constructor returns (§S.4.5)
+duplicate_members.jux:13:5: [E0403] error: variant `Bronze` is declared more than once in enum `Tier`

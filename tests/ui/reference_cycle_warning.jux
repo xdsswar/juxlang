@@ -1,0 +1,21 @@
+// A strong field pointing back at the owning class leaks, because reference
+// counting does not collect cycles. This is a warning: the program is well
+// formed, and the fix (`weak` on the back edge) is the author's call.
+
+public class Parent {
+    public Child? kid;
+    public Parent() { this.kid = null; }
+}
+
+public class Child {
+    public Parent? owner;
+    public Child() { this.owner = null; }
+}
+
+public void main() {
+    var p = new Parent();
+    var c = new Child();
+    p.kid = c;
+    c.owner = p;
+    print("linked");
+}

@@ -90,6 +90,22 @@ impl<'a> Parser<'a> {
         if self.at_kw(Keyword::Return) {
             return Some(self.parse_return_stmt());
         }
+        // `yield expr;` -- reserved for generator semantics (JUX-LANG-V1 lists
+        // it beside `await` and `move` as language-defined), with no generator
+        // form in Phase 1. Parse it in the `return` shape so the block still
+        // has statements and any errors after it are the program's own.
+        if self.at_kw(Keyword::Yield) {
+            let span = self.peek_span();
+            self.reserved_not_implemented(
+                span,
+                "`yield`",
+                "reserved in JUX-LANG-V1 for generator semantics",
+            );
+            self.advance(); // `yield`
+            let value = self.parse_expr();
+            self.expect(&TokenKind::Semicolon, "';' after `yield`");
+            return Some(Stmt::Return(value, span.join(self.last_consumed_span())));
+        }
         // Leading `final` or `const` modifier on a local declaration
         // (per `JUX-LANG-V1.md` §549–565). Both forms are accepted in
         // statement position; we consume the modifier here, set the

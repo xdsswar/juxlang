@@ -1,0 +1,2 @@
+property_rules.jux:9:16: [W0974] warning: property `lower_case_name` should be PascalCase (`Lower_case_name`) -- the preferred visual signal that a member is a property, not a plain field (§P.1.1)
+property_rules.jux:14:5: [E0970] error: cannot assign to read-only property `Balance` of `Account` -- it has no `set` accessor (settable only in the constructor)

@@ -4154,6 +4154,14 @@ impl RustEmitter {
                 for anc in ancestors {
                     let Some(seg) = anc.name.segments.first() else { continue };
                     if seen.insert(seg.text.clone()) {
+                        // The impl below names the ancestor by its bare name,
+                        // which resolves only if something imported it -- and
+                        // the program has no reason to import an interface it
+                        // never mentions. `Collection extends Iterable` made
+                        // every implementor fail on a trait it had not heard
+                        // of. Bring each packaged ancestor into scope here,
+                        // where the need arises.
+                        self.emit_ancestor_trait_use(&class_decl.name.text, &seg.text);
                         implements.push(anc);
                     }
                 }
@@ -4569,6 +4577,45 @@ impl RustEmitter {
     /// Used by [`Self::emit_class_trait_impls`] to satisfy Java's "an Entity
     /// IS-A Id" rule: a class implementing `Entity<User>` must also produce
     /// `impl Id for User`, etc., so a `User: Id` bound resolves.
+    /// `use crate::<pkg>::<Iface>;` for an interface a generated impl names
+    /// but the source never did.
+    ///
+    /// Keyed on the interface's own FQN from the symbol table, so nothing is
+    /// guessed; a package-less interface (declared in the same file) needs
+    /// nothing and gets nothing. `crate::` rather than a relative path because
+    /// the impl may be emitted inside a package module or at the root, and the
+    /// absolute form reads the same from both.
+    fn emit_ancestor_trait_use(&mut self, class_bare: &str, iface_bare: &str) {
+        let Some((fqn, _)) = self.lookup_interface_by_bare_or_fqn(iface_bare) else {
+            return;
+        };
+        let fqn = fqn.to_string();
+        let iface_pkg = package_of(&fqn);
+        // An interface in the class's OWN package is a sibling item in the
+        // same module -- already in scope, and importing it is E0255.
+        if iface_pkg.is_empty() || iface_pkg == self.class_package(class_bare) {
+            return;
+        }
+        let line = format!("use crate::{};", fqn.replace('.', "::"));
+        if self.emitted_uses_in_module.insert(line.clone()) {
+            self.w.line(&line);
+        }
+    }
+
+    /// The package a class was declared in, from its symbol-table key, or the
+    /// empty string when it has none.
+    fn class_package(&self, class_bare: &str) -> String {
+        if let Some((k, _)) = self.symbols.classes.get_key_value(class_bare) {
+            return package_of(k);
+        }
+        let suffix = format!(".{class_bare}");
+        let mut hits = self.symbols.classes.keys().filter(|k| k.ends_with(&suffix));
+        match (hits.next(), hits.next()) {
+            (Some(k), None) => package_of(k),
+            _ => String::new(),
+        }
+    }
+
     fn transitive_interface_supers(
         &self,
         iface_ty: &juxc_ast::TypeRef,
@@ -6045,4 +6092,13 @@ fn sealed_enum_rule(
     has_static_init: bool,
 ) -> bool {
     is_sealed && has_permits && !has_fields && !has_static_init
+}
+
+/// The package part of a fully-qualified name -- everything before the last
+/// dot, or the empty string for a bare name.
+fn package_of(fqn: &str) -> String {
+    match fqn.rfind('.') {
+        Some(i) => fqn[..i].to_string(),
+        None => String::new(),
+    }
 }

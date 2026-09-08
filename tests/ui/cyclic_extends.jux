@@ -1,0 +1,14 @@
+// A class that is its own ancestor. The walk has to stop and say so rather
+// than run out of stack.
+
+public class A extends B {
+    public int v() { return 1; }
+}
+
+public class B extends A {
+    public int w() { return 2; }
+}
+
+public void main() {
+    print(1);
+}

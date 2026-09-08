@@ -1,0 +1,70 @@
+public class Acc {
+    public int total;
+    public Acc(int total) { this.total = total; }
+}
+
+public void main() {
+    int a = 29;
+    a += 3;
+    print(a);
+    a -= 2;
+    print(a);
+    a *= 4;
+    print(a);
+    a /= 5;
+    print(a);
+    a %= 7;
+    print(a);
+
+
+    int bits = 12;
+    bits &= 10;
+    print(bits);
+    bits |= 5;
+    print(bits);
+    bits ^= 3;
+    print(bits);
+    bits <<= 4;
+    print(bits);
+    bits >>= 2;
+    print(bits);
+
+    int neg = -64;
+    neg >>= 3;
+    print(neg);
+
+    long big = 1;
+    big <<= 40;
+    print(big);
+    big >>= 10;
+    print(big);
+
+    double d = 10.0;
+    d /= 4.0;
+    print(d);
+    d *= 3.0;
+    print(d);
+
+    String s = "a";
+    s += "b";
+    s += 1;
+    print(s);
+
+    // Compound assignment through a field and through an element.
+    var acc = new Acc(10);
+    acc.total += 5;
+    acc.total *= 2;
+    print(acc.total);
+
+    int[] xs = new int[3];
+    xs[0] = 4;
+    xs[0] += 6;
+    xs[0] <<= 1;
+    xs[0] %= 7;
+    print(xs[0]);
+
+    var v = new Vec<int>();
+    v.push(3);
+    v[0] += 9;
+    print(v[0]);
+}

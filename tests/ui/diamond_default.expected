@@ -1,0 +1,1 @@
+diamond_default.jux:12:8: [E0430] error: class `Both` inherits conflicting default implementations of `tag` from interfaces `Left`, `Right`; override `tag` on `Both` to disambiguate

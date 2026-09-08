@@ -1,0 +1,13 @@
+// Nothing in the expression says what `T` is, and a type argument cannot be
+// invented.
+
+public class Box<T> {
+    private T? item;
+    public Box() { this.item = null; }
+    public T? get() { return this.item; }
+}
+
+public void main() {
+    var b = new Box();
+    print(b.get());
+}

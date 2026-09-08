@@ -56,7 +56,8 @@ The catalogue of conditions that panic vs. throw:
 | Arithmetic overflow (`jux-full` release) | Wrap     | N/A        |
 | Array bounds violation                 | Panic      | No         |
 | Division by zero (integer)             | Exception (`ArithmeticException`) | Yes |
-| Null deref via `!!` (force-unwrap)     | Panic      | No         |
+| Null deref via `!!` (force-unwrap)     | Exception (`NullPointerException`) | Yes |
+| Failing downcast (`(Dog) animal`)      | Exception (`ClassCastException`) | Yes |
 | `T?` null deref via the type system    | Type error at compile time | N/A |
 | File not found, parse error, etc.      | Exception  | Yes        |
 | User `throw new MyException(...)`      | Exception  | Yes        |
@@ -377,18 +378,29 @@ which is an `Exception` and therefore catchable. `JUX-LANG-V1.md` §7.10 adds
 a third voice: "This eliminates NullPointerException as a runtime failure
 mode."
 
-**Today.** The compiler panics. The `!!` lowering unwraps, and an unwrap on
-`None` aborts; nothing constructs a `NullPointerException`.
+**Today (2026-09-08).** `!!` throws a catchable `NullPointerException`, and
+a failing downcast throws a catchable `ClassCastException`. §A.5's table row
+was right.
 
-**Resolution.** DEFERRED, deliberately. Both readings are defensible -- the
-panic keeps `!!` an assertion about something the program claims cannot
-happen, while the exception makes it recoverable the way Java's is -- and
-the choice is observable, so it wants its own examples and a decision rather
-than a quiet alignment. Recorded here so the next reader finds the conflict
-instead of one of its three answers.
+**Resolution.** DECIDED for the exception, and what decided it was not the
+argument. `NullPointerException` and `ClassCastException` are declared classes
+in the embedded stdlib extending `RuntimeException`, so
+`catch (NullPointerException e)` type-checked and compiled -- and then never
+ran, because the raise was `panic!("...")` whose `&str` payload no catch arm
+can downcast. The program aborted THROUGH a handler written to stop it.
 
-**Spec status:** Unresolved. E1 and §S.5 agree with each other and with the
-implementation; §A.5's table row and §7.10's sentence do not.
+That is not one of the two defensible readings. It is a fourth behaviour --
+a handler that compiles and does nothing -- and it is the only one that is
+indefensible. Integer division by zero had already picked the mechanism that
+works, `panic::panic_any(<the exception value>)`; both sites now use it.
+
+Both exceptions catch as themselves, as `RuntimeException`, and as
+`Throwable`, per `examples/runtime_exceptions.jux`.
+
+**Spec status:** RESOLVED toward §A.5. The E1 catalogue rows above are
+updated. `JUX-SEMANTICS-ADDENDUM.md` §S.5 still lists "null deref" among the
+panics and wants the same correction; the array-bounds row is unchanged and
+still panics.
 
 ---
 
@@ -513,6 +525,60 @@ and want a diagnostic of their own.
 
 **Spec status:** §T.2.1 states the satisfiability guarantee. No code is
 allocated for the residual case.
+
+---
+
+## E17. `move` is documented as usable and recorded as deferred
+
+**Conflict.** `JUX-LANG-V1.md` §6.4 presents `move` as working syntax, with a
+worked example and a rationale ("use `move` to make the transfer intent
+unambiguous"):
+
+```java
+users.add(move alice);           // explicit move
+```
+
+`JUX-MISSING-DEFS-ADDENDUM.md`:404 says the opposite: "**Deferred.** `out
+null` (§M.4.4) and the `move` call-site operator are follow-ups".
+
+**Today.** Deferred is what the compiler does, and as of 2026-09-08 it says
+so: `move` in expression position reports `E0203` naming both the section
+that documents it and the addendum that defers it, then parses its operand so
+nothing cascades.
+
+**Resolution.** DOCUMENTED, not decided. Phase 1 lowers every class to a
+shared handle, so a transfer has nothing to transfer -- `move` would be a
+no-op with a different meaning later, which is the worst kind of syntax to
+accept quietly. §6.4 keeps the syntax as the intended design; the compiler
+refuses it with a diagnostic that says where the design lives.
+
+**Spec status:** Both sections stand. The reader is warned by the compiler
+rather than by the spec, which is the wrong way round and wants a "not in
+Phase 1" note in §6.4 when someone next edits it.
+
+---
+
+## E18. Three more reserved words the spec documents and Phase 1 lacks
+
+**Conflict.** Same shape as E17, three more times.
+`annotation Name { … }` has an entire addendum
+(`JUX-ANNOTATIONS-ADDENDUM.md`, "a real type kind, not a comment
+convention"). The `volatile` field modifier appears in the memory-mapped I/O
+section of `JUX-LANG-V1.md` and as `core.volatile.Volatile<T>` in
+`JUX-CORE-LIB-ADDENDUM.md`, where the status column says "Spec'd". `yield` is
+in the reserved-word list and named beside `await` and `move` as
+"language-defined", with no generator form anywhere.
+
+**Today.** All three report `E0203` and recover cleanly. Before that they
+produced cascades that never mentioned the construct at fault -- a `volatile`
+field cost three errors, the last two about a class that parsed fine.
+
+**Resolution.** DOCUMENTED. Each is a real design that Phase 1 does not
+carry. The rule going forward: a keyword enters the lexer's inventory only
+with a production or an `E0203` site, never with neither.
+
+**Spec status:** The addenda stand as designs. `E0203` is documented in
+`JUX-DIAGNOSTICS-ADDENDUM.md`.
 
 ---
 

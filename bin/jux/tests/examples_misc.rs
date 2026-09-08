@@ -376,8 +376,9 @@ fn numeric_literals_and_promotion() {
 
 #[test]
 fn scopes_and_identity() {
-    // A bare block statement, a lambda capturing `this`, `===` on a value
-    // type, and printing a collection of collections.
+    // A bare block statement, a lambda capturing `this`, `===` and `!==` on
+    // both a value type and a class, and printing a collection of
+    // collections.
     common::expect_output(
         "scopes_and_identity",
         "scopes-and-identity",
@@ -392,6 +393,11 @@ fn scopes_and_identity() {
             "true",
             "false",
             "true",
+            // `!==` is the negation of `===`: two equal Holders are still
+            // two objects, and a String is a value so it never differs.
+            "true",
+            "false",
+            "false",
             "[[1, 2]]",
             "[[1, 2, 3]]",
         ],
@@ -674,6 +680,48 @@ fn null_narrowing() {
             "(empty)",
             "1",
             "2",
+        ],
+    );
+}
+
+
+#[test]
+fn runtime_exceptions() {
+    // The exceptions the RUNTIME raises (ERRATA E11). Each catches as
+    // itself, as `RuntimeException`, and as `Throwable`; a handler naming a
+    // different type does not swallow it.
+    common::expect_output(
+        "runtime_exceptions",
+        "runtime-exceptions",
+        &[
+            "NPE caught",
+            "CCE caught",
+            "AE caught: / by zero",
+            "caught as RuntimeException",
+            "caught as Throwable",
+            "outer NPE",
+        ],
+    );
+}
+
+
+#[test]
+fn interface_hierarchy() {
+    // An interface extending another: the obligations are checked where the
+    // class is declared, a default method on the super-interface resolves,
+    // and a value flows into every level of the chain.
+    common::expect_output(
+        "interface_hierarchy",
+        "interface-hierarchy",
+        &[
+            "ada",
+            "ada!",
+            "hello, ada",
+            "ada!",
+            "hello, ada",
+            "36",
+            "grace!",
+            "ada!",
         ],
     );
 }

@@ -1,0 +1,10 @@
+// An explicit type-argument list has to match the declaration it is applied
+// to, in count.
+
+public <T> T identity(T value) {
+    return value;
+}
+
+public void main() {
+    print(identity<int, String>(5));
+}

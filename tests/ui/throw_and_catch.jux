@@ -1,0 +1,25 @@
+// What may be thrown, and a catch clause that can never run because a broader
+// one above it already caught everything.
+
+public class NotAnError {
+    public int code() { return 1; }
+}
+
+public void raises() {
+    throw new NotAnError();
+}
+
+public void handler() {
+    try {
+        print(1);
+    } catch (Exception e) {
+        print("broad");
+    } catch (IllegalStateException e) {
+        print("never reached");
+    }
+}
+
+public void main() {
+    handler();
+    raises();
+}

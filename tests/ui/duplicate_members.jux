@@ -1,0 +1,18 @@
+// Two declarations of one name inside a body. A duplicate METHOD is not here:
+// two methods of a name are an overload group (T.3.1) unless their parameter
+// shapes match, which the free-function case covers.
+
+public class Config {
+    private int retries;
+    private String retries;
+}
+
+public enum Tier {
+    Bronze,
+    Silver,
+    Bronze
+}
+
+public void main() {
+    print(1);
+}

@@ -1,0 +1,86 @@
+// The exceptions the RUNTIME raises, and catching them (ERRATA E11).
+//
+// `NullPointerException` and `ClassCastException` are declared classes in the
+// standard library extending `RuntimeException`, so a catch clause naming
+// either has always compiled. It just never ran: `!!` and a failing downcast
+// raised with a string payload, which no catch arm can downcast, so a program
+// aborted THROUGH a handler written to stop it.
+//
+// They now raise the exception VALUE, the way integer division by zero already
+// did. Each catches as itself, as `RuntimeException`, and as `Throwable` --
+// the ordinary subtype rules, applied to exceptions the program never threw
+// by hand.
+
+public class Animal { public String name() { return "animal"; } }
+public class Dog extends Animal { public String name() { return "dog"; } }
+public class Cat extends Animal { public String name() { return "cat"; } }
+
+public String forcedUnwrap() {
+    String? missing = null;
+    try {
+        return missing!!;
+    } catch (NullPointerException e) {
+        return "NPE caught";
+    }
+}
+
+public String badCast() {
+    Animal a = new Cat();
+    try {
+        Dog d = (Dog) a;
+        return d.name();
+    } catch (ClassCastException e) {
+        return "CCE caught";
+    }
+}
+
+public String divideByZero(int n) {
+    try {
+        return "" + (n / 0);
+    } catch (ArithmeticException e) {
+        return "AE caught: " + e.getMessage();
+    }
+}
+
+public String asSupertype() {
+    String? missing = null;
+    try {
+        return missing!!;
+    } catch (RuntimeException e) {
+        return "caught as RuntimeException";
+    }
+}
+
+public String asThrowable() {
+    Animal a = new Dog();
+    try {
+        Cat c = (Cat) a;
+        return c.name();
+    } catch (Throwable t) {
+        return "caught as Throwable";
+    }
+}
+
+// A handler must not swallow what it was not written for: the inner `catch`
+// names a type the raise is not, so it travels out to the outer one.
+public String narrowerHandlerDoesNotCatch() {
+    String? missing = null;
+    try {
+        try {
+            return missing!!;
+        } catch (ArithmeticException e) {
+            return "wrong handler";
+        }
+    } catch (NullPointerException e) {
+        return "outer NPE";
+    }
+}
+
+public void main() {
+    print(forcedUnwrap());
+    print(badCast());
+    print(divideByZero(7));
+    print(asSupertype());
+    print(asThrowable());
+    print(narrowerHandlerDoesNotCatch());
+}

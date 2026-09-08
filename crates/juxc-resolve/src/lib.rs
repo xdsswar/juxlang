@@ -812,8 +812,16 @@ impl Resolver {
         // Walks the `extends` chain so inherited static fields and
         // methods are also reachable bare from the subclass body.
         let mut member_names: HashSet<String> = HashSet::new();
+        // The visited set is not an optimization. `class A extends A` -- or any
+        // longer cycle -- made this walk run forever, and it runs before the
+        // symbol table exists, so the diagnostic that would have named the
+        // cycle never got the chance. The compiler simply never returned.
+        let mut walked: HashSet<&str> = HashSet::new();
         let mut cursor: Option<&str> = Some(class_decl.name.text.as_str());
         while let Some(n) = cursor {
+            if !walked.insert(n) {
+                break;
+            }
             if let Some(set) = self.class_members.get(n) {
                 for m in set {
                     member_names.insert(m.clone());

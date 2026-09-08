@@ -1,0 +1,16 @@
+// A get-only property has no setter to call, and the naming convention is a
+// hint rather than a rule.
+
+public class Account {
+    private int balanceCents = 100;
+
+    public int Balance { get; }
+
+    public int lower_case_name { get; set; }
+}
+
+public void main() {
+    var a = new Account();
+    a.Balance = 5;
+    print(a.Balance);
+}

@@ -76,6 +76,12 @@ public void main() {
     print(h1 === h2);
     print(h1 === h1);
 
+    // `!==` is the negation of `===`, never of `==`: two Holders that compare
+    // equal are still two objects.
+    print(h1 !== h2);
+    print(h1 !== h1);
+    print(s !== t);
+
     // A collection inside a collection prints as its contents, and the inner
     // one is still the same object after being pushed.
     var inner = new Vec<int>();

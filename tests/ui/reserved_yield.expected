@@ -1,0 +1,2 @@
+reserved_yield.jux:6:12: [E0410] error: return type mismatch: expected int, found void
+reserved_yield.jux:7:21: [E0203] error: `yield` is not implemented yet (reserved in JUX-LANG-V1 for generator semantics) -- rewrite without it

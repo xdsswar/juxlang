@@ -3990,11 +3990,11 @@ impl RustEmitter {
         // none at all, which falls out of the same loop.
         self.emit_foreign_call_args(get_call, &name, &mut_getter);
         self.w.push(')');
-        // The same panic text the generic `!!` lowering uses, so a missing key
-        // reports identically however it was reached.
-        self.w.push_str(
-            ".unwrap_or_else(|| panic!(\"NullPointerException: `!!` asserted on a null value\"))",
-        );
+        // The same raise the generic `!!` lowering uses, so a missing key
+        // reports identically however it was reached -- and is catchable the
+        // same way (`panic_any` carries the exception VALUE, which a `catch`
+        // arm can downcast; a `panic!` string payload cannot be).
+        self.w.push_str(crate::NOT_NULL_ASSERT_RAISE);
         self.w.push('.');
         self.w.push_str(method);
         self.w.push('(');

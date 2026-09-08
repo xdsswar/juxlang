@@ -40,6 +40,16 @@ pub enum Code {
     /// is in range exactly when it is negated.
     E0202_NumericLiteralOutOfRange,
     /// E0210 — `super(...)` or `this(...)` not first statement.
+    /// A keyword the language reserves, and the spec documents, that Phase 1
+    /// does not implement: `annotation` declarations, the `move` call-site
+    /// operator, the `volatile` field modifier, `yield`.
+    ///
+    /// Reserving a word without recognizing it is the worst of both: the
+    /// program cannot use the name as an identifier AND the error blames
+    /// whatever the parser tripped over next. This code says the true thing
+    /// once, and the parser then skips the construct so nothing cascades.
+    E0203_ReservedNotImplemented,
+
     E0210_ConstructorCallNotFirst,
     /// E0211 — Constructor missing required `super(...)` call.
     E0211_MissingSuperCall,
@@ -742,6 +752,7 @@ impl Code {
             Code::E0200_UnexpectedToken          => "E0200",
             Code::E0201_NestingTooDeep           => "E0201",
             Code::E0202_NumericLiteralOutOfRange => "E0202",
+            Code::E0203_ReservedNotImplemented   => "E0203",
             Code::E0210_ConstructorCallNotFirst  => "E0210",
             Code::E0211_MissingSuperCall         => "E0211",
             Code::E0301_NameNotFound             => "E0301",

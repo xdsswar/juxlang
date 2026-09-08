@@ -110,7 +110,7 @@ For each profile:
 | `jux-embedded`  | Panic on overflow         | Wrap                  |
 | `jux-core`      | Wrap                      | Wrap                  |
 
-Panic means: abort via the panic handler (see §S.7) after reporting the condition and source location. Per `ERRATA.md` E1, panics are **not catchable from Jux source** — they are not exceptions. Code that wants a recoverable overflow uses the checked methods below, which return a `Result`. Wrap means: produce the bit-equivalent result modulo `2^N`.
+Panic means: abort via the panic handler (see §S.7) after reporting the condition and source location. Per `ERRATA.md` E1, panics are **not catchable from Jux source** — they are not exceptions. Two conditions that once panicked no longer do: `!!` on null raises a catchable `NullPointerException` and a failing downcast raises a catchable `ClassCastException` (`ERRATA.md` E11), joining integer division by zero. What settled that was not the argument but the evidence: both types are declared classes here, so a `catch` clause naming one compiled, and then the abort went straight through it. Code that wants a recoverable overflow uses the checked methods below, which return a `Result`. Wrap means: produce the bit-equivalent result modulo `2^N`.
 
 This matches Rust's overflow story almost exactly. Programmers who *want* wrapping behavior unconditionally use the explicit wrapping operators:
 

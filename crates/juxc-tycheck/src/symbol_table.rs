@@ -566,6 +566,48 @@ impl SymbolTable {
         })
     }
 
+    /// Append the interfaces `bare` extends, transitively, to `out`.
+    ///
+    /// Breadth-first with a visited set and a step cap, so a cyclic or deeply
+    /// nested `extends` chain terminates. Names are pushed as the interfaces
+    /// themselves spell them, which is what the Pass-2 lookup resolves.
+    fn push_interface_supers<'a>(&'a self, bare: &str, out: &mut Vec<&'a str>) {
+        let mut queue: std::collections::VecDeque<&'a str> = std::collections::VecDeque::new();
+        let mut seen: std::collections::HashSet<&'a str> = std::collections::HashSet::new();
+        let seed = |me: &'a Self, name: &str| -> Option<&'a InterfaceSig> {
+            me.interfaces.get(name).or_else(|| {
+                me.interfaces.iter().find_map(|(k, v)| {
+                    (k.rsplit('.').next().unwrap_or(k.as_str()) == name).then_some(v)
+                })
+            })
+        };
+        if let Some(iface) = seed(self, bare) {
+            for parent in &iface.extends {
+                if let Some(seg) = parent.name.segments.last() {
+                    if seen.insert(seg.text.as_str()) {
+                        queue.push_back(seg.text.as_str());
+                    }
+                }
+            }
+        }
+        let mut steps = 0usize;
+        while let Some(name) = queue.pop_front() {
+            steps += 1;
+            if steps > 256 {
+                return;
+            }
+            out.push(name);
+            let Some(iface) = seed(self, name) else { continue };
+            for parent in &iface.extends {
+                if let Some(seg) = parent.name.segments.last() {
+                    if seen.insert(seg.text.as_str()) {
+                        queue.push_back(seg.text.as_str());
+                    }
+                }
+            }
+        }
+    }
+
     pub fn lookup_method<'a>(
         &'a self,
         class_name: &str,
@@ -588,10 +630,15 @@ impl SymbolTable {
                 return Some((m, class_key.as_str()));
             }
             // Collect this class's implemented interfaces for the
-            // Pass-2 default-method walk below.
+            // Pass-2 default-method walk below -- and the interfaces THOSE
+            // extend, because a default method on a super-interface is one
+            // the class provides just as much as one declared directly. The
+            // chain used to stop at the written names, so
+            // `class Person implements Greeter` could not find `Named.shout`.
             for iface_ty in &class.implements {
                 if let Some(seg) = iface_ty.name.segments.last() {
                     implements_chain.push(seg.text.as_str());
+                    self.push_interface_supers(seg.text.as_str(), &mut implements_chain);
                 }
             }
             // Hop to the resolved parent FQN (set during the
@@ -1352,6 +1399,10 @@ pub fn build_workspace(
     // walks key directly into the FQN-indexed `classes` table
     // without re-resolving on every hop.
     resolve_class_chain_fqns(&mut table, &class_unit);
+    // A cycle has to be found BEFORE anything walks a chain, and the walk has
+    // to be made finite rather than merely reported -- every later pass would
+    // otherwise meet the same loop.
+    break_inheritance_cycles(&mut table, diagnostics);
     // Cross-class rule passes that need every class registered first:
     // final/sealed extends, final-method override checks, and
     // `@Override`-annotation verification.
@@ -2512,6 +2563,69 @@ fn check_final_method_overrides(table: &SymbolTable, diagnostics: &mut Vec<Diagn
 /// abstract methods unimplemented for a concrete subclass to
 /// satisfy. The same is true for interfaces themselves; this
 /// pass only looks at classes.
+/// **E0434** -- a class that is its own ancestor.
+///
+/// `class A extends B` with `class B extends A` is not a subtle error, and it
+/// used to hang the compiler: the chain walks hop from class to class and a
+/// cycle has no end. The depth caps scattered through those walks turn the
+/// hang into a wrong answer where they exist, which is not much better.
+///
+/// Each class walks its own chain with a visited set. On a cycle the class
+/// whose parent closes the loop is reported and its `extends` link is CUT, so
+/// every pass after this one sees a finite hierarchy -- reporting alone would
+/// leave them all to meet the same loop.
+fn break_inheritance_cycles(table: &mut SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
+    let parent_of = |t: &SymbolTable, name: &str| -> Option<String> {
+        let c = t.classes.get(name)?;
+        c.extends_fqn.clone().or_else(|| {
+            c.extends
+                .as_ref()
+                .and_then(|x| x.name.segments.last().map(|s| s.text.clone()))
+        })
+    };
+    let names: Vec<String> = table.classes.keys().cloned().collect();
+    let mut cut: Vec<(String, String)> = Vec::new();
+    for start in &names {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        seen.insert(start.clone());
+        let mut cursor = parent_of(table, start);
+        while let Some(name) = cursor {
+            if !table.classes.contains_key(&name) {
+                break;
+            }
+            if !seen.insert(name.clone()) {
+                // `name` is already on the path, so the class we just stepped
+                // FROM closes the loop. Cut there: it is the declaration whose
+                // `extends` the author has to change.
+                cut.push((start.clone(), name));
+                break;
+            }
+            cursor = parent_of(table, &name);
+        }
+    }
+    for (class_name, _closed_by) in cut {
+        let Some(class) = table.classes.get_mut(&class_name) else {
+            continue;
+        };
+        // Report once per class, on the first pass that reaches it.
+        if class.extends.is_none() && class.extends_fqn.is_none() {
+            continue;
+        }
+        let span = class.span;
+        class.extends = None;
+        class.extends_fqn = None;
+        diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0434_CyclicInheritance,
+                format!(
+                    "`{class_name}` is its own ancestor -- following its `extends` chain returns to `{class_name}`. A class cannot inherit from itself, directly or through any number of steps.",
+                ),
+            )
+            .with_span(span),
+        );
+    }
+}
+
 fn check_abstract_methods_implemented(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     for (class_name, class) in &table.classes {
         if class.is_abstract {
@@ -2521,11 +2635,14 @@ fn check_abstract_methods_implemented(table: &SymbolTable, diagnostics: &mut Vec
             continue;
         }
         let mut missing: Vec<(String, String)> = Vec::new();
-        // Source 1: abstract methods on each implemented interface.
-        for iface_ty in &class.implements {
-            let Some(iface_name) = iface_ty.name.segments.last().map(|s| s.text.as_str()) else {
-                continue;
-            };
+        // Source 1: abstract methods on each implemented interface AND on
+        // every interface those extend. Java's rule is that implementing
+        // `Collection` owes `Iterable`'s methods too; checking only the
+        // directly-written list let the inherited ones through to rustc,
+        // which reported them against a trait the source never names.
+        let iface_closure = interface_closure(table, &class.implements);
+        for iface_name in &iface_closure {
+            let iface_name = iface_name.as_str();
             let Some(iface) = resolve_interface(table, iface_name) else {
                 continue;
             };
@@ -2537,9 +2654,10 @@ fn check_abstract_methods_implemented(table: &SymbolTable, diagnostics: &mut Vec
                 if class_provides_method(table, class_name, m_name) {
                     continue;
                 }
-                // Reachable through another implemented interface
-                // as a default method?
-                if implements_provides_default(table, &class.implements, m_name) {
+                // Reachable as a default method on any interface in the
+                // closure -- a default declared on a SUPER-interface satisfies
+                // the requirement exactly as one on a direct interface does.
+                if closure_provides_default(table, &iface_closure, m_name) {
                     continue;
                 }
                 missing.push((iface_name.to_string(), m_name.clone()));
@@ -2607,6 +2725,55 @@ fn check_abstract_methods_implemented(table: &SymbolTable, diagnostics: &mut Vec
 /// the same fallback [`SymbolTable::lookup_method`] uses. Without this, the
 /// completeness checks silently skip cross-package interfaces and the error
 /// leaks to rustc as `E0046`.
+/// Every interface a class transitively implements, by the name each was
+/// WRITTEN with (bare or qualified, whichever the source used -- both resolve
+/// through [`resolve_interface`]).
+///
+/// Breadth-first over each interface's own `extends` clause, guarded against
+/// cycles and re-visits, and depth-capped like the class-chain walks. The
+/// directly-implemented interfaces come first, so a diagnostic naming the
+/// first offender names the one the reader wrote.
+fn interface_closure(table: &SymbolTable, implements: &[TypeRef]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut queue: std::collections::VecDeque<String> = implements
+        .iter()
+        .filter_map(|t| t.name.segments.last().map(|s| s.text.clone()))
+        .collect();
+    for n in &queue {
+        seen.insert(n.clone());
+    }
+    let mut steps = 0usize;
+    while let Some(name) = queue.pop_front() {
+        steps += 1;
+        if steps > 256 {
+            break;
+        }
+        out.push(name.clone());
+        let Some(iface) = resolve_interface(table, &name) else {
+            continue;
+        };
+        for parent in iface.extends.clone() {
+            let Some(seg) = parent.name.segments.last() else { continue };
+            if seen.insert(seg.text.clone()) {
+                queue.push_back(seg.text.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Whether any interface in the closure carries a DEFAULT method of this
+/// name, which satisfies the obligation for every interface that declares it
+/// abstract.
+fn closure_provides_default(table: &SymbolTable, closure: &[String], method: &str) -> bool {
+    closure.iter().any(|n| {
+        resolve_interface(table, n)
+            .and_then(|i| i.methods.get(method))
+            .is_some_and(|m| !m.is_abstract && !m.is_static)
+    })
+}
+
 pub(crate) fn resolve_interface<'a>(
     table: &'a SymbolTable,
     written_name: &str,
@@ -2701,31 +2868,6 @@ fn class_provides_method(table: &SymbolTable, class_name: &str, method_name: &st
                 .and_then(|t| t.name.segments.last().map(|s| s.text.as_str()))
         });
         depth += 1;
-    }
-    false
-}
-
-/// True if any interface in `implements` provides a non-abstract
-/// (default) method named `method_name`. Used by the
-/// abstract-implementation check to recognize that a sibling
-/// interface's default covers the gap.
-fn implements_provides_default(
-    table: &SymbolTable,
-    implements: &[TypeRef],
-    method_name: &str,
-) -> bool {
-    for iface_ty in implements {
-        let Some(iface_name) = iface_ty.name.segments.last().map(|s| s.text.as_str()) else {
-            continue;
-        };
-        let Some(iface) = resolve_interface(table, iface_name) else {
-            continue;
-        };
-        if let Some(m) = iface.methods.get(method_name) {
-            if !m.is_abstract && !m.is_static {
-                return true;
-            }
-        }
     }
     false
 }

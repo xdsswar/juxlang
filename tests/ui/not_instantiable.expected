@@ -1,0 +1,2 @@
+not_instantiable.jux:10:13: [E0428] error: cannot instantiate `Shape`: it's an interface, not a class. Implement interface `Shape` on a class and instantiate that instead.
+not_instantiable.jux:11:13: [E0428] error: cannot instantiate `Color`: it's an enum, not a class. Implement enum `Color` on a class and instantiate that instead.
