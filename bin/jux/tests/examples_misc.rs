@@ -482,3 +482,27 @@ fn indexed_writes() {
         ],
     );
 }
+
+#[test]
+fn safe_navigation() {
+    // `?.` produces a nullable value even when the member is not (7.10, and
+    // ERRATA E5 marks the example normative) -- and produces an ORDINARY one
+    // when the receiver cannot be null, which used to fail to compile.
+    common::expect_output(
+        "safe_navigation",
+        "safe-navigation",
+        &[
+            "4",
+            "false",
+            "null",
+            "true",
+            "-1",
+            "x",
+            "x",
+            "1",
+            "none",
+            "deep",
+            "true",
+        ],
+    );
+}

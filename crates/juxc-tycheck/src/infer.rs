@@ -198,9 +198,22 @@ pub fn infer_expr(expr: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
         Expr::Super(_) => infer_super(env, symbols),
         // `x => T` is a runtime type test — always boolean.
         Expr::TypeTest(_) => Ty::Primitive(Primitive::Bool),
-        Expr::Field(f) => infer_field(f, env, symbols),
+        // Safe navigation makes the RESULT nullable, whatever the member's own
+        // type says (§7.10; `ERRATA.md` E5 marks the `findName(42)?.length()`
+        // example -- an `int?` from a method returning a non-nullable `int` --
+        // normative). Without this a `var n = s?.length();` bound an `int`
+        // that could hold null, which is the one thing the type was there to
+        // rule out.
+        Expr::Field(f) => {
+            let safe = f.safe && receiver_is_nullable(&f.object, env, symbols);
+            nullable_if_safe(safe, infer_field(f, env, symbols))
+        }
         Expr::Index(i) => infer_index(i, env, symbols),
-        Expr::Call(c) => infer_call(c, env, symbols),
+        Expr::Call(c) => {
+            let safe = matches!(&*c.callee, Expr::Field(f)
+                if f.safe && receiver_is_nullable(&f.object, env, symbols));
+            nullable_if_safe(safe, infer_call(c, env, symbols))
+        }
         Expr::NewObject(n) => infer_new_object(n, env, symbols),
         Expr::NewArray(n) => infer_new_array(n, env, symbols),
         Expr::NewArrayLit(n) => infer_new_array_lit(n, env, symbols),
@@ -414,6 +427,29 @@ fn weak_field_target_ty(inner: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable)
         }
     }
     None
+}
+
+/// Wrap `ty` for a safe-navigated (`?.`) read.
+///
+/// FLATTENS: `a?.f()` where `f()` itself returns `T?` is `T?`, not `T??`.
+/// `?.` introduces null for exactly one reason -- the receiver was null -- and
+/// at the use site a second layer is indistinguishable from the first while
+/// costing an extra unwrap. (Nullability does nest for GENERIC instantiation,
+/// where the two layers mean different things -- `JUX-MISSING-DEFS-ADDENDUM.md`
+/// §M.15.2 -- but that rule is about type arguments, not `?.` chains.)
+fn receiver_is_nullable(obj: &Expr, env: &TypeEnv, symbols: &SymbolTable) -> bool {
+    matches!(infer_expr(obj, env, symbols), Ty::Nullable(_))
+}
+
+fn nullable_if_safe(safe: bool, ty: Ty) -> Ty {
+    if !safe {
+        return ty;
+    }
+    match ty {
+        // Already nullable, or nothing useful to wrap.
+        Ty::Nullable(_) | Ty::Void | Ty::Unknown => ty,
+        other => Ty::Nullable(Box::new(other)),
+    }
 }
 
 fn infer_field(f: &FieldExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {

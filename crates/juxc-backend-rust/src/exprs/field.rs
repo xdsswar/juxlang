@@ -1557,6 +1557,21 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_safe_field(&mut self, f: &FieldExpr) {
+        // **`?.` on a receiver that cannot be null is an ordinary access.**
+        // The Option machinery below needs an `Option` to work on; applied to
+        // a plain value it emitted `.as_ref()` on a type that has none. Kotlin
+        // permits the redundant `?.` too, and there is nothing to warn about
+        // that the reader cannot already see.
+        if !self.expression_is_already_nullable(&f.object) {
+            let plain = FieldExpr {
+                object: f.object.clone(),
+                field: f.field.clone(),
+                safe: false,
+                span: f.span,
+            };
+            self.emit_field(&plain);
+            return;
+        }
         let needs_parens = receiver_needs_parens(&f.object);
         if needs_parens {
             self.w.push('(');

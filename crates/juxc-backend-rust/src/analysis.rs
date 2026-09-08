@@ -1884,11 +1884,17 @@ impl crate::RustEmitter {
         // was wrong here -- `print(s?.length())` rendered the Option itself
         // and put `Some(4)` on the user's terminal.
         match expr {
-            juxc_ast::Expr::Field(f) if f.safe => return true,
+            juxc_ast::Expr::Field(f) if f.safe => {
+                // Only when the RECEIVER can be null. `?.` on a value that
+                // cannot be is an ordinary access producing an ordinary value,
+                // and treating it as an `Option` put a `match` around a plain
+                // `String`.
+                return self.expression_is_already_nullable(&f.object);
+            }
             juxc_ast::Expr::Call(c) => {
                 if let juxc_ast::Expr::Field(f) = &*c.callee {
                     if f.safe {
-                        return true;
+                        return self.expression_is_already_nullable(&f.object);
                     }
                 }
             }

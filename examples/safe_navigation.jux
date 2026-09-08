@@ -1,0 +1,85 @@
+// What `?.` produces, and what its type is.
+//
+// LANG-V1 7.10 is explicit: `findName(42)?.length()` has type `int?`, even
+// though `length()` returns a non-nullable `int`. The chain can produce null
+// for its own reason -- the receiver was null -- so the result carries that
+// possibility whatever the member's own type says. `ERRATA.md` E5 marks the
+// example normative.
+//
+// The compiler agreed in what it PRINTED and disagreed in what it TYPED: a
+// `var n = s?.length();` bound a plain `int` that could hold null, which is
+// the one thing the type existed to rule out.
+//
+// The mirror of the rule matters too: `?.` on a receiver that CANNOT be null
+// produces an ordinary value, and used to fail to compile at all.
+//
+// Expected output:
+//   4
+//   false
+//   null
+//   true
+//   -1
+//   x
+//   x
+//   1
+//   none
+//   deep
+//   true
+
+public class Leaf {
+    public String label = "x";
+    public String? tag;
+
+    public Leaf() {}
+}
+
+public class Tree {
+    public Leaf? leaf;
+
+    public Tree() {}
+}
+
+/// Takes a nullable, so a `?.` result must be assignable to it.
+public String orElse(String? s) {
+    return s ?? "none";
+}
+
+public void main() {
+    // A chain over a nullable receiver, ending in a non-nullable member.
+    // The result is `int?`.
+    String? s = "abcd";
+    var n = s?.length();
+    print(n);
+    print(n == null);
+
+    // The same chain when the receiver IS null: no member call happens.
+    String? gone = null;
+    var m = gone?.length();
+    print(m);
+    print(m == null);
+    print(gone?.length() ?? -1);
+
+    // `?.` on a receiver that cannot be null. An ordinary read of an
+    // ordinary value -- and it has to compile.
+    var leaf = new Leaf();
+    print(leaf?.label);
+    var direct = leaf?.label;
+    print(direct);
+    print(direct.length());
+
+    // A nullable field reached through a nullable receiver: still one layer
+    // of null, not two. `?.` introduces null for exactly one reason, and a
+    // second layer would be indistinguishable at the use site.
+    Leaf? maybe = new Leaf();
+    print(orElse(maybe?.tag));
+
+    // Two hops.
+    var tree = new Tree();
+    tree.leaf = new Leaf();
+    tree.leaf!!.tag = "deep";
+    print(orElse(tree.leaf?.tag));
+
+    // And the null path through two hops.
+    var empty = new Tree();
+    print(empty.leaf?.label == null);
+}

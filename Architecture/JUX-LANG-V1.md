@@ -2564,6 +2564,20 @@ public void main() {
 
 Nullability is tracked in the type system. Non-nullable references cannot hold null. This eliminates NullPointerException as a runtime failure mode.
 
+**A `?.` chain adds exactly one layer of null, and only when the receiver can
+be null.** Two consequences, both of which the compiler once got wrong in
+opposite directions:
+
+- If the member itself returns `T?`, the chain is `T?`, not `T??`. Safe
+  navigation introduces null for one reason -- the receiver was null -- and a
+  second layer would be indistinguishable from the first at the use site while
+  costing an extra unwrap. (Nullability does NEST for generic instantiation,
+  where the layers mean different things; see `JUX-MISSING-DEFS-ADDENDUM.md`
+  §M.15.2. That rule is about type arguments, not chains.)
+- If the RECEIVER cannot be null, `?.` is an ordinary access producing an
+  ordinary value. Writing it is permitted and says nothing the reader cannot
+  see; it is not an error, and the result is not nullable.
+
 **Primitives can be nullable.** Per `ERRATA.md` E5, `T?` is well-formed for any type `T`, reference or primitive. A nullable primitive (`int?`, `bool?`, `char?`, `float?`, and the width-explicit numerics) lowers to a stack `Option` with no boxing: `None` is a discriminant, so a null primitive costs no heap allocation (no Java-style `Integer` boxing). The two spellings `T?` and `Option<T>` denote the same shape (§K.3.1). Nullability is uniform across the type system; there is no reference-only restriction. A `?.` chain whose last segment produces a primitive therefore has type `int?` (or the matching nullable primitive), and a null test / smart-cast remains available when a plain non-null result is wanted.
 
 ### 7.11. Error Handling
