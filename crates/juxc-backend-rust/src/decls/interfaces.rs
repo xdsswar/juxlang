@@ -36,7 +36,11 @@ impl RustEmitter {
             .collect();
         let hooks = self.interface_hook_targets(&iface_bare);
         self.w.emit_indent();
-        self.w.push_str("impl<__JuxH: ?core::marker::Sized + ");
+        // `::core`, not `core`: the emitted crate has a module per Jux
+        // package, so a program with a `demo.core` package shadows Rust's
+        // own `core` for every path inside `mod demo`. The absolute form
+        // cannot be shadowed by anything the user names.
+        self.w.push_str("impl<__JuxH: ?::core::marker::Sized + ");
         self.w.push_str(&to_rust_ident(&iface_bare));
         // A GENERIC interface forwards too: it is the supertrait a generic
         // class's `Kind` trait lists, so the handle has to satisfy it.
@@ -256,14 +260,25 @@ impl RustEmitter {
         self.emit_visibility(interface.visibility);
         self.w.push_str("trait ");
         self.w.push_str(&to_rust_ident(&interface.name.text));
-        // Generic params follow without bounds — the trait doesn't imply
-        // `Clone` itself; implementing types pick up bounds as needed on their
-        // own impls. The one exception is `Display`: a DEFAULT method body
-        // lives on the trait, so a `T` value it formats needs the bound HERE,
-        // where the `format!` is emitted. Same rule as a generic class's
-        // inherent impl, and the same scan behind it.
+        // A generic interface's parameter carries the same baseline bounds a
+        // generic CLASS's does. The trait itself needs none, but its
+        // signatures may name a generic class -- `double over(Ring<T> w)` --
+        // and every generic class requires `Clone + Debug + 'static` on its
+        // own parameter, so a `T` that reaches one has to satisfy them here.
+        // Adding them cannot narrow what the interface accepts: §T.2.1
+        // guarantees every Jux type meets the bounds the compiler adds on the
+        // user's behalf, which is the property that makes an inferred bound
+        // safe to add at all.
+        //
+        // `Display` is the same rule one step further: a DEFAULT body lives
+        // on the trait, so a `T` it formats needs that bound where the
+        // `format!` is emitted.
         let displayed = self.interface_displayed_generic_params(interface);
-        self.emit_generic_params_with_display(&interface.generic_params, &displayed);
+        self.emit_generic_params_with_clone_bound_plus_display(
+            &interface.generic_params,
+            &displayed,
+            &std::collections::HashSet::new(),
+        );
         // `: std::fmt::Debug` supertrait — interface values lower to
         // `Rc<dyn Trait>`, which is held in `#[derive(Clone, Debug)]`
         // structs (wrapper-class fields, holders). `dyn Trait` is only

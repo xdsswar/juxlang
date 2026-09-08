@@ -568,9 +568,9 @@ impl<'a> Checker<'a> {
                 TopLevelDecl::Class(class) => self.check_class(class),
                 TopLevelDecl::Record(record) => self.check_record(record),
                 TopLevelDecl::Enum(enum_decl) => self.check_enum(enum_decl),
-                // Interfaces carry only signatures (body: None) — no
-                // bodies to walk.
-                TopLevelDecl::Interface(_) => {}
+                // A DEFAULT method has a body, and it went unwalked for as
+                // long as this arm said interfaces carry only signatures.
+                TopLevelDecl::Interface(iface) => self.check_interface(iface),
                 // Type aliases — nothing body-shaped to check; the
                 // target is validated when expanded at use sites.
                 TopLevelDecl::TypeAlias(_) => {}
@@ -2784,6 +2784,40 @@ impl<'a> Checker<'a> {
         self.check_block(body);
         self.current_return = saved;
         self.env.pop_scope();
+    }
+
+    /// Walk an interface's default-method bodies.
+    ///
+    /// Only the methods that HAVE a body: an abstract signature has nothing
+    /// to check. `this` is the interface itself, which is what lets a default
+    /// body call the interface's own members and have the results typed --
+    /// including the abstract ones it is written against.
+    fn check_interface(&mut self, iface: &juxc_ast::InterfaceDecl) {
+        let has_bodies = iface.methods.iter().any(|m| m.body.is_some());
+        if !has_bodies {
+            return;
+        }
+        let name = crate::symbol_table::make_fqn(&self.env.current_package, &iface.name.text);
+        self.env.set_class(&name);
+        for tp in &iface.generic_params {
+            self.env.add_generic_param(&tp.name.text);
+        }
+        self.declare_const_generic_params(&iface.generic_params);
+        let this_ty = Ty::User {
+            name: name.clone(),
+            generic_args: iface
+                .generic_params
+                .iter()
+                .map(|tp| Ty::Param(tp.name.text.clone()))
+                .collect(),
+        };
+        for method in &iface.methods {
+            if method.body.is_some() {
+                self.check_method(method, &this_ty);
+            }
+        }
+        self.env.clear_generic_params();
+        self.env.clear_class();
     }
 
     /// Walk a record's body — operator overrides plus methods. Same
@@ -6520,10 +6554,19 @@ impl<'a> Checker<'a> {
                 }
                 // Interfaces — same lookup (no chain). Substitute the
                 // interface's generic params against the receiver's
-                // args; the interface IS the declaring scope here so
-                // there's no cross-extends complication.
+                // args. The chain DOES matter: an interface extends other
+                // interfaces, and a default body written against an
+                // inherited signature (`Greeter extends Named` calling
+                // `this.name()`) has to find it up there.
                 if let Some(iface) = self.symbols.interfaces.get(&name) {
-                    if let Some(method) = iface.methods.get(method_name) {
+                    let found = iface.methods.get(method_name).cloned().or_else(|| {
+                        crate::infer::inherited_interface_method_sig(
+                            self.symbols,
+                            iface,
+                            method_name,
+                        )
+                    });
+                    if let Some(method) = found.as_ref() {
                         // Same static-via-instance check as the
                         // class path above. Receiver here is a
                         // value typed by an interface, so a static

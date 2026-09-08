@@ -1028,11 +1028,18 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                         );
                     }
                 }
-                // Interface methods. No chain (interfaces don't extend
-                // classes), but substitution still applies for the
-                // interface's own generic params.
+                // Interface methods, walking the interface's own `extends`
+                // chain: an interface does not extend a class, but it very
+                // much extends other interfaces, and a default body written
+                // against an inherited signature (`Greeter extends Named`
+                // calling `this.name()`) has to find it. Before interface
+                // bodies were checked at all this went unnoticed.
                 if let Some(iface) = symbols.interfaces.get(name) {
-                    if let Some(method) = iface.methods.get(method_name) {
+                    if let Some(method) = iface
+                        .methods
+                        .get(method_name)
+                        .or_else(|| inherited_interface_method(symbols, iface, method_name))
+                    {
                         let raw = return_type_in_method(
                             &method.return_type,
                             name,
@@ -1349,6 +1356,57 @@ fn infer_new_object(n: &NewObjectExpr, env: &TypeEnv, symbols: &SymbolTable) -> 
     // constructor arg types.
     let generic_args = infer_ctor_generic_args(&name, &n.args, env, symbols);
     Ty::User { name, generic_args }
+}
+
+/// [`inherited_interface_method`] returning an OWNED signature, for the
+/// checker -- which holds `self` mutably while it walks a body and so cannot
+/// keep a borrow of the symbol table across the call.
+pub(crate) fn inherited_interface_method_sig(
+    symbols: &SymbolTable,
+    iface: &crate::symbol_table::InterfaceSig,
+    method_name: &str,
+) -> Option<crate::symbol_table::MethodSig> {
+    inherited_interface_method(symbols, iface, method_name).cloned()
+}
+
+/// A method declared on an interface that `iface` EXTENDS, transitively.
+///
+/// Breadth-first with a visited set and a step cap, so a cyclic or deeply
+/// nested `extends` chain terminates rather than looping. Returns the first
+/// match, which is the nearest one -- the same order a class's chain walk
+/// uses, and the same answer Java's rules give.
+fn inherited_interface_method<'a>(
+    symbols: &'a SymbolTable,
+    iface: &crate::symbol_table::InterfaceSig,
+    method_name: &str,
+) -> Option<&'a crate::symbol_table::MethodSig> {
+    let mut queue: std::collections::VecDeque<String> = iface
+        .extends
+        .iter()
+        .filter_map(|t| t.name.segments.last().map(|s| s.text.clone()))
+        .collect();
+    let mut seen: std::collections::HashSet<String> = queue.iter().cloned().collect();
+    let mut steps = 0usize;
+    while let Some(name) = queue.pop_front() {
+        steps += 1;
+        if steps > 256 {
+            return None;
+        }
+        let Some(parent) = crate::symbol_table::resolve_interface(symbols, &name) else {
+            continue;
+        };
+        if let Some(m) = parent.methods.get(method_name) {
+            return Some(m);
+        }
+        for grand in &parent.extends {
+            if let Some(seg) = grand.name.segments.last() {
+                if seen.insert(seg.text.clone()) {
+                    queue.push_back(seg.text.clone());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Resolve a `new X(...)` or similar class-name reference to an FQN.

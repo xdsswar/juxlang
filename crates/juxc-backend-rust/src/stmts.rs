@@ -4147,6 +4147,33 @@ impl RustEmitter {
         }
     }
 
+    /// Whether narrowing a nullable local must SHARE its payload rather than
+    /// consume it -- true when the payload is not `Copy`.
+    ///
+    /// The same question `not_null_operand_shares` asks about a `!!` operand,
+    /// keyed on the name instead of an expression, because that is what the
+    /// `if let` has in hand.
+    fn nullable_local_shares(&self, name: &str) -> bool {
+        // Asked the safe way round: share UNLESS the payload is known to be
+        // `Copy`. A `var` binding is not always in `local_types` -- an
+        // inferred one often is not -- and the two answers are not
+        // symmetric. A needless `.clone()` on an `Option<isize>` compiles to
+        // nothing; a missing one does not compile at all.
+        let ty = self
+            .local_types
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name).cloned());
+        !matches!(
+            ty,
+            Some(juxc_tycheck::Ty::Nullable(ref t))
+                if matches!(
+                    **t,
+                    juxc_tycheck::Ty::Primitive(_)
+                )
+        )
+    }
+
     pub(crate) fn emit_if(&mut self, if_stmt: &IfStmt) {
         // Smart-cast bookkeeping: when the condition is `name !=
         // null`, `name` inside the `then` block is the unwrapped
@@ -4188,6 +4215,14 @@ impl RustEmitter {
             self.w.push_str(&to_rust_ident(name));
             self.w.push_str(") = ");
             self.w.push_str(&to_rust_ident(name));
+            // `if let Some(x) = x` CONSUMES the option, so a second
+            // `if (x != null)` on the same binding was a use-after-move on
+            // a program that only ever read it. Share the payload instead --
+            // for a class or a collection that is a refcount bump, the same
+            // answer `!!` gives.
+            if self.nullable_local_shares(name) {
+                self.w.push_str(".clone()");
+            }
             self.w.push_str(" {\n");
         } else {
             self.w.push_str("if ");

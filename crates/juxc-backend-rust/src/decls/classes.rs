@@ -3740,7 +3740,11 @@ impl RustEmitter {
     ) {
         let class_bare = class_decl.name.text.clone();
         self.w.emit_indent();
-        self.w.push_str("impl<__JuxH: ?core::marker::Sized + ");
+        // `::core`, not `core`: the emitted crate has a module per Jux
+        // package, so a program with a `demo.core` package shadows Rust's
+        // own `core` for every path inside `mod demo`. The absolute form
+        // cannot be shadowed by anything the user names.
+        self.w.push_str("impl<__JuxH: ?::core::marker::Sized + ");
         self.w.push_str(&to_rust_ident(&class_bare));
         self.w.push_str("Kind");
         let own_args: Vec<juxc_ast::TypeRef> = class_decl

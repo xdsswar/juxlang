@@ -156,7 +156,9 @@ copyright = "© 2026 XSS"                # Optional. LegalCopyright resource.
 [lib]
 # A library target. Optional; absent for executable-only projects.
 path = "src/lib.jux"                    # Optional. Default: src/lib.jux if exists.
-name = "myapp_core"                     # Optional. Default: package name's last segment.
+name = "myapp_core"                     # Optional. Default: package name's last
+                                        # segment, except for the reserved
+                                        # names in B.2.3.
 crate-type = ["dylib", "staticlib"]     # Optional. What artifacts to produce.
 
 [[bin]]
@@ -250,6 +252,8 @@ url = "https://registry.internal.example.com"
 **`[lib]`**. If present, the package produces a library artifact. `crate-type` (a Cargo-ism Jux retains for familiarity) lists the binary formats produced: `"lib"` (Jux-internal), `"dylib"` (`.so`/`.dylib`/`.dll`), `"staticlib"` (`.a`/`.lib`), `"cdylib"` (C-callable shared library, includes the `.h` header).
 
 **`[[bin]]`**. Multiple binaries per package are permitted. Each must have a unique `name`.
+
+**Reserved target names.** The default target name is the package name's last segment, so `demo.core` defaults to `core`. A handful of names are taken by the host toolchain and cannot be used for an emitted artifact: `core`, `std`, `alloc`, `proc_macro`, `test`. A target that would default to one of these gets a `_pkg` suffix instead (`demo.core` -> `core_pkg`). This is invisible to Jux source, which names packages by their Jux name and never sees the artifact name; it matters only when reading emitted output or a generated `Cargo.toml`. An **explicit** `name` in `[lib]` or `[[bin]]` is the author's choice and is not rewritten -- naming a target `core` by hand is permitted and its consequences are the author's.
 
 **`[dependencies]`**. Dependency names use the reverse-DNS scheme for Jux packages, or a typed prefix (`rust.`, `c.`, `cpp.`) for foreign-language dependencies. The value is either a SemVer version string or a table with options.
 

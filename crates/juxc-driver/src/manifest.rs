@@ -855,8 +855,22 @@ pub fn default_target_name(package_name: &str) -> String {
     if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         out.insert(0, '_');
     }
+    // A crate whose name is one of Rust's own sits in every dependent crate's
+    // extern prelude AHEAD of the real one, so a `demo.core` package -- about
+    // as natural a name as a workspace has -- turned every `core::` path in
+    // the emitted Rust into a path through the user's package. The emitted
+    // name is internal (a program refers to packages by their Jux name and
+    // never sees this one), so the colliding few take a suffix.
+    if RUST_RESERVED_CRATE_NAMES.contains(&out.as_str()) {
+        out.push_str("_pkg");
+    }
     out
 }
+
+/// Crate names Rust puts in the extern prelude itself. An emitted crate may
+/// not take one: it would shadow the real crate for everything that depends
+/// on it.
+const RUST_RESERVED_CRATE_NAMES: &[&str] = &["core", "std", "alloc", "proc_macro", "test"];
 
 impl PackageMetadata {
     /// Project this manifest metadata into the backend's
@@ -1048,6 +1062,15 @@ mod tests {
         assert_eq!(default_target_name("com.example.demo"), "demo");
         assert_eq!(default_target_name("app"), "app");
         assert_eq!(default_target_name("a.b.my-lib"), "my-lib");
+        // A package named for one of Rust's own crates gets a suffix: the
+        // emitted crate would otherwise shadow the real one in every
+        // dependent crate's extern prelude.
+        assert_eq!(default_target_name("demo.core"), "core_pkg");
+        assert_eq!(default_target_name("std"), "std_pkg");
+        assert_eq!(default_target_name("a.b.test"), "test_pkg");
+        // Everything else is untouched, including names that merely contain
+        // one of them.
+        assert_eq!(default_target_name("demo.corelib"), "corelib");
         // Leading digit gets an underscore prefix.
         assert_eq!(default_target_name("x.9foo"), "_9foo");
     }
