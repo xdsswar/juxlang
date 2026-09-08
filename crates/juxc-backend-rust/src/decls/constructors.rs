@@ -2,12 +2,12 @@
 //! the simple-ctor fast path) and the synthetic zero-arg default for
 //! classes that declare no constructor.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use juxc_ast::Expr;
 
 use crate::analysis::{
-    collect_mutated_names, extract_simple_ctor_inits, SimpleCtorInits,
+    collect_mutated_names, extract_ctor_prefix_seeds, extract_simple_ctor_inits, SimpleCtorInits,
 };
 use crate::stmts::stmt_span;
 use crate::RustEmitter;
@@ -18,6 +18,32 @@ use juxc_lex::to_rust_ident;
 /// Rust's struct field shorthand: `Self { x, y }` vs.
 /// `Self { x: x, y: y }`. Anything more complex (a method call, a
 /// `this.foo`, a literal) doesn't qualify.
+/// How many times each single-segment name is referenced across a simple
+/// constructor's field initializers and pre-literal side effects.
+///
+/// A parameter stored into a same-named field appears once -- the store. A
+/// second appearance means the constructor reads it after storing it, and the
+/// store therefore has to SHARE the value rather than move out of it
+/// (§CR.4.1). Counting is the cheapest question that separates the two,
+/// and it errs the safe way: an over-count costs one refcount bump.
+fn name_reference_counts(simple: &SimpleCtorInits) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut bump = |e: &Expr| {
+        if let Expr::Path(qn) = e {
+            if qn.segments.len() == 1 {
+                *counts.entry(qn.segments[0].text.clone()).or_insert(0) += 1;
+            }
+        }
+    };
+    for (_, expr) in &simple.inits {
+        crate::worker::walk_expr(expr, &mut bump);
+    }
+    for stmt in &simple.side_effects {
+        crate::worker::walk_stmt(stmt, &mut bump);
+    }
+    counts
+}
+
 fn init_is_same_named_ident(init_expr: &Expr, field_name: &str) -> bool {
     if let Expr::Path(qn) = init_expr {
         if qn.segments.len() == 1 {
@@ -372,6 +398,31 @@ impl RustEmitter {
         // `Default`-initialized — fine for primitives, breaks for
         // unconstrained generic types. The user has to keep the ctor
         // body simple in that case.
+        // Fields the body assigns up front, lifted to locals so the literal
+        // has a real value for a slot whose type has no `Default` -- a class
+        // field, most of all. The `let`s run in CONSTRUCTOR order; the literal
+        // only moves them, so two initializers with side effects keep theirs.
+        let seeds = extract_ctor_prefix_seeds(ctor, class_decl);
+        let seeded: std::collections::HashMap<String, String> = seeds
+            .iter()
+            .map(|s| (s.field.clone(), format!("__jux_seed_{}", to_rust_ident(&s.field))))
+            .collect();
+        let skip: std::collections::HashSet<usize> =
+            seeds.iter().map(|s| s.stmt_index).collect();
+        for seed in &seeds {
+            let field_ty = class_decl
+                .fields
+                .iter()
+                .find(|f| f.name.text == seed.field)
+                .and_then(|f| f.ty.clone());
+            self.w.emit_indent();
+            self.w.push_str("let ");
+            self.w.push_str(&seeded[&seed.field]);
+            self.w.push_str(" = ");
+            self.emit_ctor_field_init(field_ty.as_ref(), &seed.value);
+            self.w.push_str(";\n");
+        }
+
         self.w.line("let mut __self = Self {");
         self.w.indent_inc();
         // Emit the `__parent` slot first when the class has a non-sealed
@@ -423,7 +474,10 @@ impl RustEmitter {
             if field.is_ref {
                 self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
             }
-            if let Some(default) = &field.default {
+            if let Some(local) = seeded.get(&field.name.text) {
+                // Lifted above: the constructor's own first write to this slot.
+                self.w.push_str(local);
+            } else if let Some(default) = &field.default {
                 // Through `emit_ctor_field_init`, not a bare `emit_expr`: a field
                 // initializer has to know the slot it is filling. `new int[2]` in a
                 // `int[]` field emitted a FIXED Rust array where the field is a
@@ -483,7 +537,18 @@ impl RustEmitter {
         // shape), so they must NOT be rewritten by the implicit-`this` pass.
         self.current_fn_params = ctor.params.iter().map(|p| p.name.text.clone()).collect();
         let owned = ctor_owned_param_names(&ctor.params);
-        self.emit_ctor_body_stmts(&ctor.body.statements, &owned);
+        // The lifted assignments have already run, as the literal's own
+        // fields; emitting them again would just overwrite each slot with
+        // the value it holds.
+        let body: Vec<juxc_ast::Stmt> = ctor
+            .body
+            .statements
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !skip.contains(i))
+            .map(|(_, s)| s.clone())
+            .collect();
+        self.emit_ctor_body_stmts(&body, &owned);
         self.current_fn_params.clear();
         self.this_alias = None;
 
@@ -542,6 +607,21 @@ impl RustEmitter {
         let saved = self.set_array_target_shape(field_ty.and_then(|t| t.array_shape.clone()));
         self.emit_expr(init);
         self.restore_array_target(saved);
+        // **Share-on-store (§CR.4.1), in a constructor too.** A class handle
+        // stored into a field is SHARED with whatever it came from, not moved
+        // out of it -- so a constructor may go on using the parameter it just
+        // stored:
+        //
+        //     this.theme = theme;
+        //     this.light = theme.name() == "paper";   // still readable
+        //
+        // Without the refcount bump the second line is a borrow-after-move,
+        // reported against a struct field the user never wrote. Every other
+        // store site (local init, assignment, argument) has always done this;
+        // the constructor was the one that moved.
+        if self.wrapper_value_needs_clone(init) {
+            self.w.push_str(".clone()");
+        }
     }
 
     /// Emit `__phantom_<name>: std::marker::PhantomData,` init lines for
@@ -600,6 +680,10 @@ impl RustEmitter {
                 self.emit_stmt(stmt);
             }
         }
+
+        // How many times each name is referenced across everything this
+        // literal will emit -- the question the shorthand decision below asks.
+        let reads_of = name_reference_counts(simple);
 
         if bind_to_self {
             self.w.line("let mut __self = Self {");
@@ -699,7 +783,20 @@ impl RustEmitter {
             // (`Self { x: x, … }`), emit `Self { x, … }` instead.
             // Idiomatic Rust; identical semantics.
             if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
-                if init_is_same_named_ident(init_expr, &field.name.text) {
+                let reads = reads_of.get(field.name.text.as_str()).copied().unwrap_or(0);
+                // The shorthand is cosmetic, and it drops the share-on-store
+                // clone §CR.4.1 requires. That only matters when the
+                // constructor READS the parameter again:
+                //
+                //     this.theme = theme;
+                //     this.light = theme.name() == "paper";
+                //
+                // which was a borrow-after-move on a struct field the user
+                // never wrote. One reference is the store itself and keeps
+                // the idiomatic `Self { theme }`; a second spells it out.
+                if init_is_same_named_ident(init_expr, &field.name.text)
+                    && !(reads > 1 && self.wrapper_value_needs_clone(init_expr))
+                {
                     self.w.push_str(&to_rust_ident(&field.name.text));
                     self.w.push_str(",\n");
                     continue;
@@ -1226,6 +1323,32 @@ impl RustEmitter {
             // `super(...)` in the body, the parent ctor is called with
             // no args (works for parameterless parents; a clear Rust
             // error otherwise).
+            // Fields the body assigns before it does anything else, lifted
+            // to locals. Without this the literal below has only
+            // `Default::default()` to offer a slot whose type has none --
+            // which every Jux class is, since a class lowers to this very
+            // `Rc<RefCell<_Inner>>` shape.
+            let seeds = extract_ctor_prefix_seeds(ctor, class_decl);
+            let seeded: std::collections::HashMap<String, String> = seeds
+                .iter()
+                .map(|s| (s.field.clone(), format!("__jux_seed_{}", to_rust_ident(&s.field))))
+                .collect();
+            let skip: std::collections::HashSet<usize> =
+                seeds.iter().map(|s| s.stmt_index).collect();
+            for seed in &seeds {
+                let field_ty = class_decl
+                    .fields
+                    .iter()
+                    .find(|f| f.name.text == seed.field)
+                    .and_then(|f| f.ty.clone());
+                self.w.emit_indent();
+                self.w.push_str("let ");
+                self.w.push_str(&seeded[&seed.field]);
+                self.w.push_str(" = ");
+                self.emit_ctor_field_init(field_ty.as_ref(), &seed.value);
+                self.w.push_str(";\n");
+            }
+
             self.w.emit_indent();
             self.w.push_str("let mut __self = ");
             self.w.push_str(&inner);
@@ -1276,7 +1399,10 @@ impl RustEmitter {
                 if field.is_ref {
                     self.w.push_str("std::rc::Rc::new(std::cell::RefCell::new(");
                 }
-                if let Some(default) = &field.default {
+                if let Some(local) = seeded.get(&field.name.text) {
+                    // Lifted above: the constructor's own first write here.
+                    self.w.push_str(local);
+                } else if let Some(default) = &field.default {
                     self.emit_ctor_field_init(field.ty.as_ref(), default);
                 } else {
                     self.emit_field_storage_default(field);
@@ -1320,8 +1446,17 @@ impl RustEmitter {
                 for init in &class_decl.init_blocks {
                     self.pending_ctor_tail.extend(init.statements.iter().cloned());
                 }
-                self.pending_ctor_tail
-                    .extend(ctor.body.statements.iter().cloned());
+                // Minus the lifted prefix: those statements are the
+                // literal's own fields now, and running them again would
+                // overwrite each slot with the value it already holds.
+                self.pending_ctor_tail.extend(
+                    ctor.body
+                        .statements
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| !skip.contains(i))
+                        .map(|(_, st)| st.clone()),
+                );
             } else {
                 for init in &class_decl.init_blocks {
                     for stmt in &init.statements {
@@ -1333,7 +1468,15 @@ impl RustEmitter {
                 // §S.4.4 step 5: the constructor body. `this` → __self.
                 self.current_fn_params = ctor.params.iter().map(|p| p.name.text.clone()).collect();
                 let owned = ctor_owned_param_names(&ctor.params);
-                self.emit_ctor_body_stmts(&ctor.body.statements, &owned);
+                let body: Vec<juxc_ast::Stmt> = ctor
+                    .body
+                    .statements
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !skip.contains(i))
+                    .map(|(_, st)| st.clone())
+                    .collect();
+                self.emit_ctor_body_stmts(&body, &owned);
                 self.current_fn_params.clear();
             }
             self.this_alias = None;
@@ -1365,6 +1508,9 @@ impl RustEmitter {
         for (name, expr) in &simple.inits {
             chosen.insert(name.as_str(), expr);
         }
+        // How many times each name is referenced -- the question the field
+        // shorthand below asks before dropping a share-on-store clone.
+        let reads_of = name_reference_counts(simple);
         // Side-effect statements (e.g. a static-counter bump) run
         // before the literal — same ordering as the legacy
         // `emit_simple_ctor_body`. They're wrapped in a block that
@@ -1445,7 +1591,20 @@ impl RustEmitter {
                 continue;
             }
             if let Some(init_expr) = chosen.get(field.name.text.as_str()) {
-                if init_is_same_named_ident(init_expr, &field.name.text) {
+                let reads = reads_of.get(field.name.text.as_str()).copied().unwrap_or(0);
+                // The shorthand is cosmetic, and it drops the share-on-store
+                // clone §CR.4.1 requires. That only matters when the
+                // constructor READS the parameter again:
+                //
+                //     this.theme = theme;
+                //     this.light = theme.name() == "paper";
+                //
+                // which was a borrow-after-move on a struct field the user
+                // never wrote. One reference is the store itself and keeps
+                // the idiomatic `Self { theme }`; a second spells it out.
+                if init_is_same_named_ident(init_expr, &field.name.text)
+                    && !(reads > 1 && self.wrapper_value_needs_clone(init_expr))
+                {
                     self.w.push_str(&to_rust_ident(&field.name.text));
                     continue;
                 }

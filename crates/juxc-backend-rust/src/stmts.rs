@@ -1975,7 +1975,11 @@ impl RustEmitter {
         // a return value, or a super-call arg. Reads through `.`
         // / `[]` / comparisons / format don't move it.
         let element_is_copy = match self.expr_types.get(&expr_span_of(&f.iter)) {
-            Some(Ty::Array { element, .. }) => matches!(element.as_ref(), Ty::Primitive(_)),
+            Some(Ty::Array { element, .. }) => match element.as_ref() {
+                Ty::Primitive(_) => true,
+                Ty::User { name, .. } => self.enum_is_copy(name),
+                _ => false,
+            },
             // A `rust.std` sequence collection (`Vec<int>`, `VecDeque<int>`,
             // `HashSet<int>`, `BTreeSet<int>`) whose element is a Copy primitive
             // takes the same pattern-deref fast-path as an array: `for &x in &xs`
@@ -1989,7 +1993,11 @@ impl RustEmitter {
                         "Vec" | "VecDeque" | "HashSet" | "BTreeSet",
                     ) =>
             {
-                matches!(generic_args.first(), Some(Ty::Primitive(_)))
+                match generic_args.first() {
+                    Some(Ty::Primitive(_)) => true,
+                    Some(Ty::User { name, .. }) => self.enum_is_copy(name),
+                    _ => false,
+                }
             }
             _ => false,
         };
@@ -2355,10 +2363,23 @@ impl RustEmitter {
             // when we're NOT routing through that helper. An init that is
             // *already* `Option`-shaped (`Animal? r = maybeAnimal()`) flows
             // through unwrapped — wrapping it would yield `Some(Some(...))`.
+            // **A multi-armed value carries the wrap into its ARMS.**
+            // `String? s = cond ? "x" : null;` has one arm that is already
+            // `Option`-shaped and one that is not, so a single `Some(...)`
+            // around the whole conditional is wrong on whichever side it does
+            // not fit. The ternary and switch emitters wrap per arm and skip
+            // an arm that is nullable already, so hand them the target
+            // instead. `return` has done this since it was written; a local
+            // declaration had not, so the same expression compiled in one and
+            // failed in the other.
+            let arm_wrap = declared_nullable
+                && iface_target.is_none()
+                && matches!(init, Expr::Ternary(_) | Expr::Switch(_));
             let wrap_some = declared_nullable
                 && !is_null_literal(init)
                 && !self.expression_is_already_nullable(init)
-                && iface_target.is_none();
+                && iface_target.is_none()
+                && !arm_wrap;
             if wrap_some {
                 self.w.push_str("Some(");
             }
@@ -2394,7 +2415,12 @@ impl RustEmitter {
                         self.w.push('(');
                     }
                 }
+                let prev_nullable_target = self.emitting_nullable_target;
+                if arm_wrap {
+                    self.emitting_nullable_target = true;
+                }
                 self.emit_expr(init);
+                self.emitting_nullable_target = prev_nullable_target;
                 self.restore_array_target(saved_array_target);
                 // **Wrapper-class share-on-assignment (§CR.4.1).** When the
                 // init re-reads an existing wrapper-class binding
@@ -4172,6 +4198,29 @@ impl RustEmitter {
                     juxc_tycheck::Ty::Primitive(_)
                 )
         )
+    }
+
+    /// Whether `name` is an enum the backend derives `Copy` for.
+    ///
+    /// Mirrors the derive's own rule (`decls/enums.rs`): `Copy` is added when
+    /// every payload slot across every variant supports it, which a
+    /// unit-variant enum satisfies vacuously. Kept as a question about the
+    /// declaration rather than a list of known enums, so the two answers
+    /// cannot drift apart.
+    pub(crate) fn enum_is_copy(&self, name: &str) -> bool {
+        let bare = name.rsplit('.').next().unwrap_or(name);
+        let sig = self.symbols.enums.get(name).or_else(|| {
+            self.symbols
+                .enums
+                .iter()
+                .find(|(k, _)| k.rsplit('.').next() == Some(bare))
+                .map(|(_, v)| v)
+        });
+        let Some(sig) = sig else { return false };
+        sig.variants
+            .values()
+            .flat_map(|v| v.payload.iter())
+            .all(crate::analysis::field_supports_copy)
     }
 
     pub(crate) fn emit_if(&mut self, if_stmt: &IfStmt) {

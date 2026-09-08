@@ -1269,6 +1269,99 @@ fn stmt_reads_instance_state(
     found
 }
 
+/// A field the `__self` builder can seed from the constructor body rather
+/// than from `Default::default()`, and the statement that supplied it.
+pub(crate) struct CtorPrefixSeed {
+    /// The field's declared name.
+    pub(crate) field: String,
+    /// The value the constructor assigns it.
+    pub(crate) value: Expr,
+    /// Index of the assignment in the constructor body, so the emitter can
+    /// skip a statement it has already accounted for.
+    pub(crate) stmt_index: usize,
+}
+
+/// Fields a constructor assigns before it does anything else.
+///
+/// The `__self` builder needs a value for every field to write its struct
+/// literal, and falls back to `Default::default()`. A Jux class has no
+/// `Default` -- it lowers to an `Rc<RefCell<Inner>>` newtype -- so a class
+/// holding another class could not use that path at all, even when the
+/// constructor assigns the field on its very first line.
+///
+/// This finds those assignments: the LEADING run of `this.f = expr` where
+/// `expr` reads no instance state, stopping at the first statement that is
+/// anything else. A prefix is the only safe place to look. Past the first
+/// method call the field may already have been read, and hoisting the
+/// assignment above that read would change what the program does.
+///
+/// Restricted to fields whose type has no `Default`, which is exactly the
+/// set that fails to compile without this. Widening it would rewrite the
+/// output of constructors that are correct today for no gain.
+pub(crate) fn extract_ctor_prefix_seeds(
+    ctor: &juxc_ast::ConstructorDecl,
+    class_decl: &juxc_ast::ClassDecl,
+) -> Vec<CtorPrefixSeed> {
+    // Same shadowing rule the simple-ctor extractor uses: a parameter named
+    // like a field hides it, so `this.seed = seed` reads the PARAM and is
+    // instance-state-independent.
+    let param_names: std::collections::HashSet<&str> =
+        ctor.params.iter().map(|p| p.name.text.as_str()).collect();
+    let instance_names: std::collections::HashSet<String> = class_decl
+        .fields
+        .iter()
+        .filter(|f| !f.is_static)
+        .map(|f| f.name.text.clone())
+        .chain(class_decl.properties.iter().map(|p| p.name.text.clone()))
+        .filter(|n| !param_names.contains(n.as_str()))
+        .collect();
+
+    let mut seeds: Vec<CtorPrefixSeed> = Vec::new();
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (i, stmt) in ctor.body.statements.iter().enumerate() {
+        let Stmt::Assign(a) = stmt else { break };
+        if a.op.is_some() {
+            // A compound assignment reads the slot it writes.
+            break;
+        }
+        let Expr::Field(f) = &a.target else { break };
+        if !matches!(&*f.object, Expr::This(_)) {
+            break;
+        }
+        if expr_reads_instance_state(&a.value, &instance_names) {
+            break;
+        }
+        let name = f.field.text.clone();
+        if !taken.insert(name.clone()) {
+            // Assigned twice in the prefix: the second write has to stay in
+            // the body, and letting it run after the first was lifted would
+            // reorder them. Stop instead.
+            break;
+        }
+        // Only the fields that actually need it, and only where the
+        // declaration has no initializer of its own to conflict with.
+        let Some(field) = class_decl
+            .fields
+            .iter()
+            .find(|fd| !fd.is_static && fd.name.text == name)
+        else {
+            break;
+        };
+        // No declared type means nothing to test; leave the slot alone.
+        let Some(field_ty) = &field.ty else { continue };
+        if field.default.is_some() || field_supports_default(field_ty) {
+            continue;
+        }
+        seeds.push(CtorPrefixSeed {
+            field: name,
+            value: a.value.clone(),
+            stmt_index: i,
+        });
+    }
+    seeds
+}
+
 pub(crate) fn extract_simple_ctor_inits(
     ctor: &juxc_ast::ConstructorDecl,
     class_decl: &juxc_ast::ClassDecl,
@@ -3533,6 +3626,24 @@ impl crate::RustEmitter {
         arg: &juxc_ast::Expr,
         target_is_nullable: bool,
     ) {
+        // **A multi-armed value carries the wrap into its ARMS.**
+        // `obj.name = cond ? found.label() : null;` has one arm that is
+        // already `Option`-shaped and one that is not, so a single `Some`
+        // around the whole conditional is wrong on whichever side it does not
+        // fit -- it produced `Some(if c { String } else { None })`, which
+        // reports as a type error on an `if` the user never wrote. The
+        // ternary and switch emitters wrap per arm and skip an arm that is
+        // nullable already; hand them the target instead. `return` has always
+        // done this, so the same expression compiled there and failed here.
+        if target_is_nullable
+            && matches!(arg, juxc_ast::Expr::Ternary(_) | juxc_ast::Expr::Switch(_))
+        {
+            let prev = self.emitting_nullable_target;
+            self.emitting_nullable_target = true;
+            self.emit_expr(arg);
+            self.emitting_nullable_target = prev;
+            return;
+        }
         let already_nullable = self.expression_is_already_nullable(arg);
         let wrap = target_is_nullable && !already_nullable;
         if wrap {

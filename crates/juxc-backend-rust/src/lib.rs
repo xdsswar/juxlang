@@ -1415,6 +1415,17 @@ pub(crate) fn compute_wrapper_classes(
         let pkg_str = pkg.join(".");
         for item in &unit.items {
             if let juxc_ast::TopLevelDecl::Class(cd) = item {
+                // An intrinsic with no instances is not a declaration for
+                // wrap-eligibility purposes. `jux.std.io.Console` -- one
+                // static method, no constructor, no field -- is in every
+                // program via the prelude, and vetoing on it made the bare
+                // name `Console` unwrappable for the USER's class of that
+                // name, which then lost reference semantics. A value of the
+                // intrinsic type cannot exist, so it can never reach the
+                // bare-name gate this veto protects.
+                if is_valueless_intrinsic(&pkg_str, cd) {
+                    continue;
+                }
                 by_name
                     .entry(cd.name.text.clone())
                     .or_default()
@@ -3763,6 +3774,22 @@ pub(crate) fn collect_extended_class_names(
 /// wrapper classes — they never emit a `C_Inner` newtype, so routing
 /// a field access through `.0.borrow()` would dangle. Mirrors the
 /// early-return guards at the top of `emit_class_decl`.
+/// An intrinsic class that can never be instantiated: no constructor, no
+/// instance field, no property. `jux.std.io.Console` and `jux.std.io.File`
+/// are the shape -- a namespace for static methods, spelled as a class
+/// because Jux has no free-standing module.
+///
+/// Such a declaration is excluded from the bare-name wrap-eligibility vote
+/// in [`compute_wrapper_classes`]: it contributes no values, so it cannot be
+/// mis-lowered by a decision made for a same-named user class. An intrinsic
+/// that IS a value (`Worker`, `Instant`) is not covered and still votes.
+pub(crate) fn is_valueless_intrinsic(pkg: &str, cd: &juxc_ast::ClassDecl) -> bool {
+    is_intrinsic_class(pkg, &cd.name.text)
+        && cd.constructors.is_empty()
+        && cd.properties.is_empty()
+        && cd.fields.iter().all(|f| f.is_static)
+}
+
 pub(crate) fn is_intrinsic_class(pkg: &str, name: &str) -> bool {
     matches!(
         (pkg, name),

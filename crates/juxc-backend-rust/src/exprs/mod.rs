@@ -1366,26 +1366,48 @@ impl RustEmitter {
         let cast = |emitter: &Self, arm: &Expr| {
             promote.filter(|p| emitter.operand_primitive(arm) != Some(*p))
         };
+        // **The same agreement, for strings.** A string literal lowers to an
+        // owned `String` everywhere except a `format!` argument, where a
+        // `&str` is cheaper and just as good -- and a concatenation IS a
+        // format argument. So `"a" + (c ? f() : "b")` put a `String` in one
+        // arm and a `&str` in the other, which is a type error on an `if` the
+        // user did not write. When exactly one arm is a literal and the other
+        // is a `String`, the literal owns.
+        let is_str_literal =
+            |e: &Expr| matches!(e, Expr::Literal(juxc_ast::Literal::String(_)));
+        let is_string_ty = |emitter: &Self, e: &Expr| {
+            matches!(
+                emitter.expr_types.get(&expr_span_of(e)),
+                Some(juxc_tycheck::Ty::String)
+            )
+        };
+        let own_literal_arm = is_str_literal(&t.then_branch) != is_str_literal(&t.else_branch)
+            && (is_string_ty(self, &t.then_branch) || is_string_ty(self, &t.else_branch));
         self.w.push_str("if ");
         self.emit_expr(&t.condition);
         self.w.push_str(" { ");
         let then_cast = cast(self, &t.then_branch);
-        self.emit_ternary_arm(&t.then_branch, wrap_each_arm, then_cast);
+        let then_own = own_literal_arm && is_str_literal(&t.then_branch);
+        self.emit_ternary_arm(&t.then_branch, wrap_each_arm, then_cast, then_own);
         self.w.push_str(" } else { ");
         let else_cast = cast(self, &t.else_branch);
-        self.emit_ternary_arm(&t.else_branch, wrap_each_arm, else_cast);
+        let else_own = own_literal_arm && is_str_literal(&t.else_branch);
+        self.emit_ternary_arm(&t.else_branch, wrap_each_arm, else_cast, else_own);
         self.w.push_str(" }");
         self.emitting_nullable_target = prev;
     }
 
     /// One arm of a ternary. `widen_to` is the promoted numeric type when this
     /// arm is the narrower of the two, and `None` when it already matches or
-    /// the arms are not numeric.
+    /// the arms are not numeric. `own_string` forces a string literal to its
+    /// owned form when the other arm is a `String` -- the same agreement
+    /// `widen_to` enforces for numbers.
     fn emit_ternary_arm(
         &mut self,
         arm: &Expr,
         wrap_each_arm: bool,
         widen_to: Option<juxc_tycheck::Primitive>,
+        own_string: bool,
     ) {
         let wrap = wrap_each_arm
             && !matches!(arm, Expr::Literal(juxc_ast::Literal::Null))
@@ -1396,7 +1418,22 @@ impl RustEmitter {
         if widen_to.is_some() {
             self.w.push('(');
         }
+        // Clearing the format-arg flag is what makes the literal own itself:
+        // that flag is the only reason it would not.
+        let prev_format_arg = self.emitting_format_arg;
+        if own_string {
+            self.emitting_format_arg = false;
+        }
         self.emit_expr(arm);
+        self.emitting_format_arg = prev_format_arg;
+        // A class handle read out of a place SHARES it (§CR.4.1); it does not
+        // move out of it. Without this, `midnight ? dark : light` moved both
+        // arms, so a ternary picking between two objects compiled once and
+        // failed on the second turn of the enclosing loop -- E0382, on a line
+        // whose Jux source only reads two variables.
+        if self.wrapper_value_needs_clone(arm) {
+            self.w.push_str(".clone()");
+        }
         if let Some(p) = widen_to {
             self.w.push_str(" as ");
             self.w.push_str(crate::exprs::rust_primitive_name(p));
