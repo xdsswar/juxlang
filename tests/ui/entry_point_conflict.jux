@@ -1,0 +1,15 @@
+// A file with top-level statements IS the entry point, so it cannot also
+// declare one, and a class member shaped like an entry point has to be static
+// to be one.
+
+print("this file is already the entry point");
+
+public class Runner {
+    public void main() {
+        print("not an entry point, and not static either");
+    }
+}
+
+public void main() {
+    print("a second entry point");
+}

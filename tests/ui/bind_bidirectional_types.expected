@@ -1,0 +1,1 @@
+bind_bidirectional_types.jux:16:5: [E0974] error: cannot bindBidirectional `Reading.Celsius` (int?) to `Reading.Label` (String?) -- bound properties must have the same type (§P.4.3)

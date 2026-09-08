@@ -1,0 +1,15 @@
+// An exception travels as a panic payload with a fixed shape. Making one also
+// carry an interface is a combination this phase does not lower.
+
+public interface Reportable {
+    String report();
+}
+
+public class DiskError extends Exception implements Reportable {
+    public DiskError(String m) { super(m); }
+    public String report() { return "disk"; }
+}
+
+public void main() {
+    print(new DiskError("x").report());
+}

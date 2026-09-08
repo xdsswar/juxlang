@@ -3683,9 +3683,13 @@ impl<'a> Checker<'a> {
                 // array *type* (`int[N] field;`) needs a const size; that's
                 // guarded separately by `check_fixed_array_size_in_type`.
                 // Const-fold panics / limit overruns still fire (see helper).
-                self.check_const_size_expr(&n.size, true);
+                // A size built only from literals has no span of its own --
+                // `Expr::Literal` carries none, so `expr_span` is DUMMY and
+                // the message prints at line 1. The enclosing `new` is the
+                // nearest thing that does have one.
+                self.check_const_size_expr_at(&n.size, true, n.span);
                 for inner in &n.inner_sizes {
-                    self.check_const_size_expr(inner, true);
+                    self.check_const_size_expr_at(inner, true, n.span);
                 }
             }
 
@@ -5280,6 +5284,21 @@ impl<'a> Checker<'a> {
     /// Const-fold *panics* (overflow / divide-by-zero) and resource-limit
     /// overruns are reported regardless, since they're real errors either way.
     fn check_const_size_expr(&mut self, size: &Expr, heapable: bool) {
+        self.check_const_size_expr_at(size, heapable, juxc_source::Span::DUMMY)
+    }
+
+    /// As [`Self::check_const_size_expr`], with a span to fall back on when
+    /// the size expression has none of its own.
+    fn check_const_size_expr_at(
+        &mut self,
+        size: &Expr,
+        heapable: bool,
+        fallback: juxc_source::Span,
+    ) {
+        let at = |e: &Expr| {
+            let s = expr_span(e);
+            if s == juxc_source::Span::DUMMY { fallback } else { s }
+        };
         let ctx = crate::const_eval::ConstCtx {
             symbols: self.symbols,
             generic_param_names: &self.const_param_names,
@@ -5303,7 +5322,7 @@ impl<'a> Checker<'a> {
                              supported in this phase -- use the bare parameter (`[N]`) or a \
                              literal size",
                         )
-                        .with_span(expr_span(size)),
+                        .with_span(at(size)),
                     );
                 }
             }
@@ -5311,7 +5330,7 @@ impl<'a> Checker<'a> {
             Err(crate::const_eval::ConstEvalError::Panic(msg)) => {
                 self.diagnostics.push(
                     Diagnostic::error(code::Code::E0842_ConstEvalPanic, msg)
-                        .with_span(expr_span(size)),
+                        .with_span(at(size)),
                 );
             }
             Err(crate::const_eval::ConstEvalError::LimitExceeded) => {
@@ -5320,7 +5339,7 @@ impl<'a> Checker<'a> {
                         code::Code::E0840_ConstEvalLimitExceeded,
                         "const evaluation of this array size exceeded its resource limits",
                     )
-                    .with_span(expr_span(size)),
+                    .with_span(at(size)),
                 );
             }
             // Not const-evaluable. Preserve the prior leniency for a bare
@@ -5337,7 +5356,7 @@ impl<'a> Checker<'a> {
                             code::Code::E0841_NonConstInConstContext,
                             format!("array size must be a compile-time constant -- {msg}"),
                         )
-                        .with_span(expr_span(size)),
+                        .with_span(at(size)),
                     );
                 }
             }

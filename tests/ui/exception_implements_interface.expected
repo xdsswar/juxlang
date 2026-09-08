@@ -1,0 +1,1 @@
+exception_implements_interface.jux:8:8: [E0436] error: class `DiskError` extends the exception hierarchy and implements an interface -- interface dynamic dispatch isn't supported for exception classes yet (they can't use the interior-mutable representation that `Rc<dyn Trait>` requires)

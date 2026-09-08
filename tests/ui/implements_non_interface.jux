@@ -1,0 +1,20 @@
+// `implements` names an interface; `extends` names a class. Naming the other
+// kind is not a near miss, it is a different relationship.
+
+public class Base {
+    public int size() { return 1; }
+}
+
+public record Point(int x, int y);
+
+public class Wrong implements Base {
+    public int size() { return 2; }
+}
+
+public class AlsoWrong implements Point {
+    public int x() { return 0; }
+}
+
+public void main() {
+    print(new Wrong().size());
+}

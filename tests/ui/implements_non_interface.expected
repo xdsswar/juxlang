@@ -1,0 +1,3 @@
+implements_non_interface.jux:8:34: [E0200] error: expected return type ('void', 'async T', or a type name)
+implements_non_interface.jux:10:31: [E0424] error: class `Wrong` cannot implement `Base` because it is a class (only interfaces appear in `implements`)
+implements_non_interface.jux:14:35: [E0424] error: class `AlsoWrong` cannot implement `Point` because it is a record (only interfaces appear in `implements`)

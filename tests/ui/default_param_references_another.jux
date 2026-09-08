@@ -1,0 +1,10 @@
+// A default value is evaluated where the parameter is declared, so it cannot
+// name a parameter beside it -- that one may not have a value yet.
+
+public int scaled(int base, int factor = base * 2) {
+    return base * factor;
+}
+
+public void main() {
+    print(scaled(3));
+}

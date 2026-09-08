@@ -1,0 +1,13 @@
+// An array's size is evaluated at compile time. That is a place with no
+// allocator and no way to report a runtime failure, so a division by zero has
+// to be refused there rather than deferred, and a call to an ordinary
+// function has nothing to evaluate.
+
+public int notConst() { return 4; }
+
+public void main() {
+    int[] byZero = new int[10 / 0];
+    int[] byCall = new int[notConst()];
+    print(byZero.length + byCall.length);
+}
+

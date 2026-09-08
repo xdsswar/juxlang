@@ -1,0 +1,3 @@
+method_modifier_combination.jux:5:12: [E0431] error: method `Shape.area` declares both `abstract` and `final` -- an abstract method must be overridable
+method_modifier_combination.jux:6:12: [E0431] error: method `Shape.sides` declares both `abstract` and `static` -- these modifiers cannot coexist
+method_modifier_combination.jux:7:13: [E0431] error: method `Shape.hidden` is `private` and `abstract` -- a private method can't be overridden, so it can't be abstract

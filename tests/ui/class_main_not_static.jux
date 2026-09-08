@@ -1,0 +1,10 @@
+// A class member shaped like an entry point has to be static: an instance
+// method needs a receiver, and there is nobody to construct one. Reported
+// only when there IS no other entry point -- otherwise it is an ordinary
+// method that happens to be called `main`.
+
+public class Runner {
+    public void main() {
+        print("looks like an entry point");
+    }
+}

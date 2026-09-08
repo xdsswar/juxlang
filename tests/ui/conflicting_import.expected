@@ -1,0 +1,1 @@
+F:\DEV\juxlang\tests\ui\conflicting_import\app.jux:6:1: [E0303] error: conflicting imports: the name `Widget` is imported from both `alpha.Widget` and `beta.Widget` -- give one an `as` alias (`import beta.Widget as Widget2;`) or use a fully-qualified name

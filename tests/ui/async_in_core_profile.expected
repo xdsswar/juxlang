@@ -1,0 +1,1 @@
+F:\DEV\juxlang\tests\ui\async_in_core_profile\app.jux:5:8: [E0701] error: `async` is unavailable in the `jux-core` profile: `slow` cannot be async

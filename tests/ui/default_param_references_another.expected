@@ -1,0 +1,1 @@
+default_param_references_another.jux:4:42: [E0449] error: default value of `factor` references parameter `base` -- a default is evaluated at the call site (Phase 1), where parameters aren't in scope; compute it inside the body instead

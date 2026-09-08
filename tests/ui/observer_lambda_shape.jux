@@ -1,0 +1,17 @@
+// An `observer<T>` accepts a fixed set of lambda shapes (§P.2.2): no
+// parameters, `(old, now)`, or `(ref prop, old, now)`. Four is not one of
+// them, and the property would have nothing to pass.
+
+public class Sensor {
+    public int Reading { get; set; }
+
+    public observer<int> onChange = (a, b, c, d) -> {
+        print("too many parameters");
+    };
+
+    public Sensor() { this.Reading = 0; }
+}
+
+public void main() {
+    print(new Sensor().Reading);
+}

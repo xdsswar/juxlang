@@ -1,0 +1,1 @@
+uninferable_generic.jux:10:5: [E0453] error: cannot infer the type argument of `b`: it is never used to pin it -- write the type explicitly, e.g. `new Vec<String>()`

@@ -1,0 +1,2 @@
+enum_discriminant_without_c_layout.jux:5:5: [E0510] error: variant `Ok` of enum `Status` has an explicit discriminant `= …`, but `Status` is not a C enum -- add `@layout(c, repr = "i32")` to make it a C-compatible integer enum, or remove the `= …`
+enum_discriminant_without_c_layout.jux:6:5: [E0510] error: variant `Failed` of enum `Status` has an explicit discriminant `= …`, but `Status` is not a C enum -- add `@layout(c, repr = "i32")` to make it a C-compatible integer enum, or remove the `= …`

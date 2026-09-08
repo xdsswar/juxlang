@@ -1,0 +1,1 @@
+duplicate_operator.jux:11:12: [E0402] error: operator `+` is declared more than once in class `Money`

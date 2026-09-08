@@ -1,0 +1,1 @@
+lexer_rejects.jux:5:18: [E0102] error: digit separator `_` cannot trail a digit run

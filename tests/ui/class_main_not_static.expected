@@ -1,0 +1,1 @@
+class_main_not_static.jux:7:12: [E0326] error: class member `main` must be `static` to be an entry point (in class `Runner`)

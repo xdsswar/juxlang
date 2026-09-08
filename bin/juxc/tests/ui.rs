@@ -59,6 +59,13 @@ fn normalize(raw: &str, case: &str) -> String {
     out
 }
 
+/// Run one case and return its normalized output.
+///
+/// A case is either a single `<name>.jux` or a DIRECTORY `<name>/` holding
+/// several. `juxc` already expands a directory into every `.jux` inside it,
+/// which is how the diagnostics that need more than one file -- a conflicting
+/// import, a package cycle, a profile rule from `jux.toml` -- get a case at
+/// all. They were the reason those codes had no test.
 fn run_case(jux: &Path) -> String {
     let case = jux.file_stem().and_then(|s| s.to_str()).expect("case name");
     let output = Command::new(env!("CARGO_BIN_EXE_juxc"))
@@ -85,7 +92,10 @@ fn every_ui_case_matches_its_expected_output() {
         .expect("reading tests/ui")
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jux"))
+        .filter(|p| {
+            p.extension().and_then(|e| e.to_str()) == Some("jux")
+                || (p.is_dir() && p.join("jux.toml").is_file())
+        })
         .collect();
     cases.sort();
     assert!(!cases.is_empty(), "tests/ui has no cases");
@@ -93,6 +103,7 @@ fn every_ui_case_matches_its_expected_output() {
     let mut failures: Vec<String> = Vec::new();
     for jux in &cases {
         let name = jux.file_stem().unwrap().to_string_lossy().to_string();
+        // A directory case keeps its `.expected` beside it, not inside it.
         let got = run_case(jux);
         let expected_path = jux.with_extension("expected");
 
@@ -138,7 +149,9 @@ fn no_orphan_expected_files() {
         if p.extension().and_then(|e| e.to_str()) != Some("expected") {
             continue;
         }
-        if !p.with_extension("jux").exists() {
+        // A case is a `<name>.jux` OR a `<name>/` directory of them.
+        let stem = p.with_extension("");
+        if !p.with_extension("jux").exists() && !stem.is_dir() {
             orphans.push(p.file_name().unwrap().to_string_lossy().to_string());
         }
     }

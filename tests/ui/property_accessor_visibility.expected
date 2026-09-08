@@ -1,0 +1,1 @@
+property_accessor_visibility.jux:16:5: [E0972] error: cannot write property `Balance` of `Account` from top-level code -- its setter is `private`

@@ -1,0 +1,1 @@
+observer_lambda_shape.jux:8:26: [E0975] error: observer `onChange` takes 4 parameters -- an observer lambda is `() -> …` (invalidation), `(old, now) -> …`, or `(prop, old, now) -> …` (§P.2.2)

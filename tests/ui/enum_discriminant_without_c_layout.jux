@@ -1,0 +1,11 @@
+// An explicit discriminant pins the enum's numeric representation, which only
+// means something when the layout is the C one.
+
+public enum Status {
+    Ok = 0,
+    Failed = 1
+}
+
+public void main() {
+    print(Status.Ok);
+}

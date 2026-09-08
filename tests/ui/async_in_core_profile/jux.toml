@@ -1,0 +1,6 @@
+[package]
+name = "core.profile"
+version = "0.1.0"
+
+[build]
+profile = "core"

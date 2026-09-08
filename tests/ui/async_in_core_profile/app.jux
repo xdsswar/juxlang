@@ -1,0 +1,11 @@
+// `jux-core` has no runtime to suspend into, so `async` has nothing to mean
+// there. The profile is a property of the project, not of the file.
+package app;
+
+public async int slow(int n) {
+    return n * 2;
+}
+
+public void main() {
+    print(1);
+}

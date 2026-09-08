@@ -1,0 +1,7 @@
+// A byte the lexer has no production for. It is not a typo it can guess at,
+// so it says what it found and moves on rather than cascading.
+
+public void main() {
+    int total = 1 ¤ 2;
+    print(total);
+}

@@ -1,0 +1,12 @@
+// Nothing in the program says what `T` is: the value is created and never
+// used in a way that would pin it. A type argument cannot be invented.
+
+public class Box<T> {
+    private T? item;
+    public Box() { this.item = null; }
+}
+
+public void main() {
+    var b = new Box();
+    print("made one");
+}

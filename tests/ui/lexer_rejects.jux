@@ -1,0 +1,7 @@
+// What the lexer refuses, one construct per line so the spans stay readable.
+
+public void main() {
+    int bad = 1__000;
+    int weird = 1_;
+    print(bad + weird);
+}

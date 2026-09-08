@@ -1,0 +1,10 @@
+// Two imports binding the same simple name to different packages' types.
+// Neither is wrong on its own, and `Widget` cannot mean both.
+package app;
+
+import alpha.Widget;
+import beta.Widget;
+
+public void main() {
+    print(new Widget().size());
+}

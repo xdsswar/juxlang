@@ -1,0 +1,18 @@
+// `bindBidirectional` keeps two properties equal, which only means something
+// when they hold the same kind of value.
+
+public class Reading {
+    public int Celsius { get; set; }
+    public String Label { get; set; }
+    public Reading() {
+        this.Celsius = 0;
+        this.Label = "";
+    }
+}
+
+public void main() {
+    var a = new Reading();
+    var b = new Reading();
+    a.Celsius.bindBidirectional(b.Label);
+    print(a.Celsius);
+}

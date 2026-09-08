@@ -1,0 +1,2 @@
+invalid_character.jux:5:19: [E0100] error: invalid character in source
+invalid_character.jux:5:22: [E0200] error: expected ';' after typed local declaration
