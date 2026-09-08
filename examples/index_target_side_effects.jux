@@ -1,0 +1,36 @@
+// A side effect inside an assignment TARGET.
+//
+// `arr[k++] = k;` stores into `k` from within the index. The pass that decides
+// which locals need a mutable binding mined the target for its base name only
+// and never walked the target's sub-expressions, so `k` stayed immutable and
+// the emitted `k += 1` did not compile.
+//
+// Evaluation order is the one S.1 gives: receiver, then index, then value.
+// So the index is `0`, `k` is `1` by the time the value is read, and the
+// element stored is `1`.
+
+public void main() {
+    int[] arr = new int[3];
+    int k = 0;
+    arr[k++] = k;
+    print(arr[0]);
+    print(k);
+
+    int[] counters = new int[4];
+    int i = 0;
+    while (i < 4) {
+        counters[i++] = i * 10;
+    }
+    print(counters[0]);
+    print(counters[3]);
+    print(i);
+
+    var xs = new Vec<int>();
+    xs.push(5);
+    xs.push(9);
+    int j = 0;
+    xs[j++] = xs[j];
+    print(xs[0]);
+    print(xs[1]);
+    print(j);
+}

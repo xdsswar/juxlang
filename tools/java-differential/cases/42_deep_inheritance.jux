@@ -1,0 +1,43 @@
+public class A {
+    protected String tag = "A";
+    public A() {}
+    public String who() { return "A"; }
+    public String chain() { return this.who(); }
+}
+public class B extends A {
+    public B() {}
+    public String who() { return "B<" + super.who() + ">"; }
+}
+public class C extends B {
+    public C() {}
+    public String who() { return "C<" + super.who() + ">"; }
+    public String tagOf() { return this.tag; }
+}
+public class D extends C {
+    public D() {}
+    public String who() { return "D<" + super.who() + ">"; }
+}
+public void main() {
+    print(new A().who());
+    print(new B().who());
+    print(new C().who());
+    print(new D().who());
+
+    // Through the base's own method, which calls the virtual one.
+    A asA = new D();
+    print(asA.chain());
+    print(asA.who());
+
+    // A field declared four levels up.
+    print(new D().tagOf());
+
+    // A collection of the base type holding every level.
+    var all = new Vec<A>();
+    all.push(new A());
+    all.push(new B());
+    all.push(new C());
+    all.push(new D());
+    for (var x : all) {
+        print(x.chain());
+    }
+}

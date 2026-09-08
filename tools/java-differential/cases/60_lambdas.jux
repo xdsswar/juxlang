@@ -1,0 +1,37 @@
+public int applyTo(int x, (int) -> int f) {
+    return f(x);
+}
+
+public String twice(String s, (String) -> String f) {
+    return f(f(s));
+}
+
+public int sumWith(Vec<int> xs, (int) -> int f) {
+    int total = 0;
+    for (var x : xs) {
+        total = total + f(x);
+    }
+    return total;
+}
+
+public void main() {
+    print(applyTo(5, n -> n * 2));
+    print(applyTo(5, n -> n + 100));
+    print(twice("a", s -> s + "!"));
+
+    int offset = 10;
+    print(applyTo(1, n -> n + offset));
+
+    var xs = new Vec<int>();
+    xs.push(1);
+    xs.push(2);
+    xs.push(3);
+    print(sumWith(xs, n -> n * n));
+    print(sumWith(xs, n -> 1));
+
+    int running = 0;
+    for (var x : xs) {
+        running = running + x;
+    }
+    print(running);
+}

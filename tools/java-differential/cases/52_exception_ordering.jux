@@ -1,0 +1,54 @@
+class AppError extends Exception {
+    AppError(String m) { super(m); }
+}
+class DiskError extends AppError {
+    DiskError(String m) { super(m); }
+}
+public String classify(int code) {
+    try {
+        if (code == 1) {
+            throw new DiskError("disk");
+        }
+        if (code == 2) {
+            throw new AppError("app");
+        }
+        return "ok";
+    } catch (DiskError e) {
+        return "disk:" + e.getMessage();
+    } catch (AppError e) {
+        return "app:" + e.getMessage();
+    } finally {
+        print("finally " + code);
+    }
+}
+public int counted(int code) {
+    int n = 0;
+    try {
+        n = n + 1;
+        if (code > 0) {
+            throw new AppError("boom");
+        }
+        n = n + 10;
+    } catch (AppError e) {
+        n = n + 100;
+    } finally {
+        n = n + 1000;
+    }
+    return n;
+}
+public void main() {
+    print(classify(0));
+    print(classify(1));
+    print(classify(2));
+    print(counted(0));
+    print(counted(1));
+    try {
+        try {
+            throw new DiskError("inner");
+        } finally {
+            print("inner finally");
+        }
+    } catch (AppError e) {
+        print("outer caught " + e.getMessage());
+    }
+}

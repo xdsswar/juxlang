@@ -2118,6 +2118,22 @@ public void handle(HttpStatus s) {
 
 This matches Java 14+ arrow-switch syntax exactly. The legacy C/Java `case X:` colon form with implicit fallthrough is **not** supported — `case` always uses `->`.
 
+**An arm body without braces may be an assignment.** Java allows any
+expression statement there, and Jux's assignment is a statement rather than an
+expression, so the two forms below are the same arm:
+
+```java
+switch (score) {
+    case 3 -> grade = "high";        // assignment arm body
+    case 2 -> { grade = "mid"; }     // the block it is shorthand for
+    default -> grade = "low";
+}
+```
+
+Compound assignment (`total += n`) reads the same way. A `switch` used as an
+EXPRESSION still needs each arm to produce a value, so an assignment arm only
+makes sense in the statement form.
+
 ### 7.6. Structs and Records
 
 ```java

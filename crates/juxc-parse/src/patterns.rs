@@ -89,9 +89,32 @@ impl<'a> Parser<'a> {
         let body = if self.at(&TokenKind::LBrace) {
             SwitchBody::Block(self.parse_block())
         } else {
+            let body_start = self.peek_span();
             let expr = self.parse_expr()?;
-            self.expect(&TokenKind::Semicolon, "';' after switch arm body");
-            SwitchBody::Expr(Box::new(expr))
+            // JUX-LANG-V1 7.5 says the arrow form "matches Java 14+
+            // arrow-switch syntax exactly", and there an arm body may be any
+            // expression STATEMENT -- an assignment among them. Jux's
+            // assignment is a statement rather than an expression, so
+            // `case 3 -> r = "high";` used to parse the expression `r` and
+            // then reject the `=`. Fold it into the one-statement block the
+            // user would otherwise have to write by hand.
+            let assign = if self.at(&TokenKind::Eq) {
+                Some(self.parse_assignment_tail(expr.clone(), None)?)
+            } else if let Some(op) = crate::stmts::compound_assign_op(self.peek()) {
+                Some(self.parse_assignment_tail(expr.clone(), Some(op))?)
+            } else {
+                None
+            };
+            match assign {
+                Some(stmt) => SwitchBody::Block(juxc_ast::Block {
+                    statements: vec![stmt],
+                    span: body_start.join(self.last_consumed_span()),
+                }),
+                None => {
+                    self.expect(&TokenKind::Semicolon, "';' after switch arm body");
+                    SwitchBody::Expr(Box::new(expr))
+                }
+            }
         };
         let end = self.last_consumed_span();
         Some(SwitchArm { pattern, guard, body, span: start.join(end) })

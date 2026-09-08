@@ -1,0 +1,49 @@
+public class Counter {
+    public int n;
+    public Counter(int n) { this.n = n; }
+    public void bump() { this.n = this.n + 1; }
+}
+
+public void bumpTwice(Counter c) {
+    c.bump();
+    c.bump();
+}
+
+public void addAll(Vec<int> target, int howMany) {
+    for (int i = 0; i < howMany; i++) {
+        target.push(i);
+    }
+}
+
+public void replaceFirst(Vec<String> names, String with) {
+    names[0] = with;
+}
+
+public void main() {
+    var a = new Counter(0);
+    var b = a;
+    a.bump();
+    print(a.n);
+    print(b.n);
+    bumpTwice(b);
+    print(a.n);
+
+    var xs = new Vec<int>();
+    addAll(xs, 3);
+    print(xs.len());
+    print(xs[2]);
+
+    var names = new Vec<String>();
+    names.push("one");
+    names.push("two");
+    var alias = names;
+    replaceFirst(alias, "ONE");
+    print(names[0]);
+    print(alias[1]);
+
+    int[] arr = new int[2];
+    arr[0] = 5;
+    int[] arrAlias = arr;
+    arrAlias[0] = 6;
+    print(arr[0]);
+}

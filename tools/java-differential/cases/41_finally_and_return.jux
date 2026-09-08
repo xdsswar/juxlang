@@ -1,0 +1,57 @@
+public class Err extends Exception {
+    public Err(String m) { super(m); }
+}
+
+/// finally runs, and the try's return value is what comes back.
+public int plainReturn() {
+    try {
+        return 1;
+    } finally {
+        print("f1");
+    }
+}
+
+/// The catch returns; finally still runs first.
+public int catchReturns() {
+    try {
+        throw new Err("x");
+    } catch (Err e) {
+        return 2;
+    } finally {
+        print("f2");
+    }
+}
+
+/// A finally on the way out of a loop.
+public int breakThroughFinally() {
+    int total = 0;
+    for (int i = 0; i < 4; i++) {
+        try {
+            if (i == 2) { break; }
+            total = total + i;
+        } finally {
+            total = total + 10;
+        }
+    }
+    return total;
+}
+
+/// Nested: the inner finally runs before the outer catch sees the exception.
+public String nested() {
+    try {
+        try {
+            throw new Err("inner");
+        } finally {
+            print("inner-finally");
+        }
+    } catch (Err e) {
+        return "caught " + e.getMessage();
+    }
+}
+
+public void main() {
+    print(plainReturn());
+    print(catchReturns());
+    print(breakThroughFinally());
+    print(nested());
+}

@@ -1,0 +1,29 @@
+public class Base {
+    protected String note = mark("base-field");
+    public Base() {
+        mark("base-ctor");
+    }
+}
+public class Derived extends Base {
+    private String own = mark("derived-field");
+    public Derived() {
+        super();
+        mark("derived-ctor");
+    }
+    public String describe() { return this.note + "/" + this.own; }
+}
+public class Log {
+    public static Vec<String> events = new Vec<String>();
+}
+public String mark(String what) {
+    Log.events.push(what);
+    return what;
+}
+public void main() {
+    var d = new Derived();
+    for (var e : Log.events) {
+        print(e);
+    }
+    print(d.describe());
+    print(Log.events.len());
+}

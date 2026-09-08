@@ -205,6 +205,30 @@ impl RustEmitter {
 
     /// The interface AST for a bare name, matched exactly or by FQN suffix —
     /// the [`Self::interface_asts`] counterpart of `class_ast_by_bare`.
+    /// The declared type of a constant named `bare` in the interface being
+    /// emitted, or `None` when there is no such constant or a parameter or
+    /// local shadows the name.
+    ///
+    /// Interface constants lower to `<Iface>_<NAME>`, and the emitter asks
+    /// about their type in two unrelated places: to choose the spelling (a
+    /// `const String` is stored as `&'static str`, and reading one yields an
+    /// owned `String`) and to let `+` recognize a concatenation whose operand
+    /// is one. Keeping a single answer stops those two from disagreeing --
+    /// which they did, emitting the invalid Rust `String + String`.
+    pub(crate) fn enclosing_interface_const_type(&self, bare: &str) -> Option<juxc_ast::TypeRef> {
+        let iface = self.enclosing_interface.clone()?;
+        if self.current_fn_params.contains(bare)
+            || self.local_types.iter().any(|s| s.contains_key(bare))
+        {
+            return None;
+        }
+        self.interface_ast_by_bare(&iface)?
+            .fields
+            .iter()
+            .find(|fd| fd.name.text == bare)
+            .map(juxc_tycheck::resolved_field_type)
+    }
+
     pub(crate) fn interface_ast_by_bare(&self, bare: &str) -> Option<&juxc_ast::InterfaceDecl> {
         if let Some(d) = self.interface_asts.get(bare) {
             return Some(d);

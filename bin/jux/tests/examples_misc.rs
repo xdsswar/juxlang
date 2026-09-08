@@ -560,3 +560,71 @@ fn elvis_typing() {
         ],
     );
 }
+
+
+#[test]
+fn interface_constant_scope() {
+    // A bare interface constant read from the interface's own `default`
+    // method, and the same constant as a concat operand.
+    common::expect_output(
+        "interface_constant_scope",
+        "interface-constant-scope",
+        &[
+            ">> ada",
+            ">> ada (3)",
+            ">>",
+            ">> qualified",
+            "3",
+        ],
+    );
+}
+
+#[test]
+fn static_collection() {
+    // A mutable `static` whose payload is a collection handle, and the
+    // Java field-initializer order around it.
+    common::expect_output(
+        "static_collection",
+        "static-collection",
+        &[
+            "base-field",
+            "base-ctor",
+            "derived-field",
+            "derived-ctor",
+            "base-field/derived-field",
+            "4",
+        ],
+    );
+}
+
+#[test]
+fn switch_assign_arm() {
+    // An assignment (plain and compound) as an arrow-switch arm body.
+    common::expect_output(
+        "switch_assign_arm",
+        "switch-assign-arm",
+        &["high", "mid", "low", "150", "50", "0"],
+    );
+}
+
+#[test]
+fn generic_free_functions() {
+    // A free function's own `<T>`: an element read out of a `Vec<T>` has to
+    // clone rather than move.
+    common::expect_output(
+        "generic_free_functions",
+        "generic-free-functions",
+        &["one", "2", "7", "value=one", "value=42"],
+    );
+}
+
+#[test]
+fn index_target_side_effects() {
+    // A store into a local from inside an assignment TARGET, and the S.1
+    // evaluation order it exposes.
+    common::expect_output(
+        "index_target_side_effects",
+        "index-target-side-effects",
+        &["1", "1", "10", "40", "4", "9", "9", "1"],
+    );
+}

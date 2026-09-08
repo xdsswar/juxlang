@@ -1,0 +1,43 @@
+public enum Level {
+    Low,
+    Mid,
+    High;
+
+    public int weight() {
+        return switch (this) {
+            case Level.Low -> 1;
+            case Level.Mid -> 5;
+            case Level.High -> 10;
+        };
+    }
+
+    public String label() {
+        return switch (this) {
+            case Level.Low -> "low";
+            case Level.Mid -> "mid";
+            case Level.High -> "high";
+        };
+    }
+}
+
+public int totalOf(Level a, Level b) {
+    return a.weight() + b.weight();
+}
+
+public void main() {
+    print(Level.Low.weight());
+    print(Level.High.weight());
+    print(Level.Mid.label());
+    print(totalOf(Level.Low, Level.High));
+    var l = Level.Mid;
+    if (l == Level.Mid) {
+        print("is mid");
+    }
+    if (l != Level.High) {
+        print("not high");
+    }
+    switch (l) {
+        case Level.Mid -> print("switched mid");
+        default -> print("switched other");
+    }
+}

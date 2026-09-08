@@ -464,6 +464,16 @@ const-emission `T` in field-position type-mapping (`String` →
 `&'static str`) doesn't apply here — the inner storage owns its data
 just like a regular instance field, so `String` stays `String`.
 
+**A `!Send` payload takes a thread-local instead.** `Mutex<T>` is only
+`Sync` when `T` is `Send`, and the reference types are not: a class, an
+interface-typed or polymorphic-base slot, an array and a collection all carry
+an `Rc`-based handle. A mutable static whose declared type is one of those --
+or a container holding one -- lowers to a `thread_local!` with a `RefCell`
+rather than the `LazyLock<Mutex<..>>` shape. That is sound under the
+single-threaded execution model, and it is what keeps a plain
+`public static Vec<String> events;` compiling; the alternative is a rustc
+`Send` error on a program that never mentions a thread.
+
 **Type mapping.** Field-position type rules apply inside the
 `Mutex<T>` slot (`String` → `String`, `int` → `isize`, etc.) so reads
 return owned values that match instance-field semantics.

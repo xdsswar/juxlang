@@ -1,0 +1,43 @@
+public int bump(String tag) {
+    print("eval " + tag);
+    return 1;
+}
+public bool yes(String tag) {
+    print("test " + tag);
+    return true;
+}
+public bool no(String tag) {
+    print("test " + tag);
+    return false;
+}
+public void main() {
+    int i = 0;
+    print(i++);
+    print(i);
+    print(++i);
+    print(i--);
+    print(--i);
+    int a = bump("a") + bump("b") * bump("c");
+    print(a);
+    if (no("x") && yes("y")) {
+        print("both");
+    } else {
+        print("short");
+    }
+    if (yes("p") || no("q")) {
+        print("or-true");
+    }
+    int t = no("t") ? bump("then") : bump("else");
+    print(t);
+    int[] arr = new int[3];
+    int k = 0;
+    arr[k++] = k;
+    print(arr[0]);
+    print(k);
+    int[] two = new int[2];
+    two[0] = 5;
+    two[1] = 9;
+    two[0] = two[1];
+    print(two[0]);
+    print(two[1]);
+}

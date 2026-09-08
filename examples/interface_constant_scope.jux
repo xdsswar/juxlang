@@ -1,0 +1,45 @@
+// An interface constant read BARE from the interface's own `default` method.
+//
+// Interface fields are implicitly `public static final` and lower to a free
+// `pub const <Iface>_<NAME>`, so only the QUALIFIED spelling used to resolve:
+// the constant was reachable from every class in the program except the
+// interface that declares it, which is where it reads most naturally.
+//
+// The `+` matters as much as the read. A `const String` is stored as a
+// `&'static str`, and whether a use site wants the borrowed or the owned form
+// depends on the position -- a concat operand wants the borrow, a returned
+// value wants the `String`.
+
+public interface Greeter {
+    String PREFIX = ">> ";
+    int WIDTH = 3;
+
+    String name();
+
+    default String greet() {
+        return PREFIX + this.name();
+    }
+
+    default String padded() {
+        return PREFIX + this.name() + " (" + WIDTH + ")";
+    }
+
+    default String plain() {
+        return PREFIX;
+    }
+}
+
+public class Person implements Greeter {
+    private String who;
+    public Person(String who) { this.who = who; }
+    public String name() { return this.who; }
+}
+
+public void main() {
+    var p = new Person("ada");
+    print(p.greet());
+    print(p.padded());
+    print(p.plain());
+    print(Greeter.PREFIX + "qualified");
+    print(Greeter.WIDTH);
+}

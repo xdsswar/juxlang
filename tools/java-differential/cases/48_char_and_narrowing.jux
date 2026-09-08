@@ -1,0 +1,26 @@
+public void main() {
+    char c = 'A';
+    int ci = (int) c;
+    print(ci);
+    char n = (char) (ci + 2);
+    print(n);
+    print((int) 'z' - (int) 'a');
+    int x = 7;
+    int y = -3;
+    print(x / y);
+    print(x % y);
+    print(-7 / 2);
+    print(-7 % 2);
+    print(7 / 2);
+    double d = 7.0 / 2.0;
+    print(d);
+    print((int) 3.99);
+    print((int) -3.99);
+    long l = 5;
+    print(l / 2);
+    print(l * 1000000);
+    double half = 1.0 / 4.0;
+    print(half);
+    print(2.0 * 3.0);
+    print(10.0 / 4.0);
+}

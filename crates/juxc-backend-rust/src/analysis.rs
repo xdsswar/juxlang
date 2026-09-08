@@ -582,19 +582,13 @@ fn collect_mutated_names_real(
 ) {
     for stmt in &block.statements {
         match stmt {
-            Stmt::Assign(a) => {
-                // Walk down the lvalue to find the underlying name. For
-                // `arr[i] = v` the base is `arr`; for `x = v` it's `x`.
-                if let Some(name) = lvalue_base_name(&a.target) {
-                    out.insert(name);
-                }
-                collect_mutating_calls(&a.value, out, user_mut);
-            }
-            Stmt::Expr(e) => collect_mutating_calls(e, out, user_mut),
-            Stmt::VarDecl(v) => {
-                if let Some(init) = &v.init {
-                    collect_mutating_calls(init, out, user_mut);
-                }
+            // An assignment, an expression statement and a local declaration
+            // are handled identically here and in the single-statement walker
+            // below, so there is one definition rather than two. They used to
+            // be separate copies, and they drifted: only one of them walked an
+            // assignment's TARGET, so `arr[k++] = k;` never marked `k`.
+            Stmt::Assign(_) | Stmt::Expr(_) | Stmt::VarDecl(_) => {
+                collect_mutated_names_in_stmt(stmt, out, user_mut)
             }
             Stmt::Return(Some(e), _) => collect_mutating_calls(e, out, user_mut),
             Stmt::If(if_stmt) => {
@@ -670,6 +664,12 @@ pub(crate) fn collect_mutated_names_in_stmt(
             if let Some(name) = lvalue_base_name(&a.target) {
                 out.insert(name);
             }
+            // The TARGET is not only a place -- it has sub-expressions that
+            // are evaluated, and they can mutate too. `arr[k++] = k;` stores
+            // into `k` inside the index, and mining the target for its base
+            // name alone missed it: `k` stayed immutable and rustc rejected
+            // the emitted `k += 1`.
+            collect_mutating_calls(&a.target, out, user_mut);
             collect_mutating_calls(&a.value, out, user_mut);
         }
         Stmt::VarDecl(v) => {

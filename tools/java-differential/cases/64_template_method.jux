@@ -1,0 +1,54 @@
+public interface Report {
+    String title();
+    int rows();
+
+    default String header() {
+        return "== " + this.title() + " ==";
+    }
+
+    default String render() {
+        return this.header() + " (" + this.rows() + " rows)";
+    }
+}
+
+public class Sales implements Report {
+    public String title() { return "sales"; }
+    public int rows() { return 12; }
+}
+
+public class Empty implements Report {
+    public String title() { return "empty"; }
+    public int rows() { return 0; }
+    public String render() { return "no data for " + this.title(); }
+}
+
+public class Base {
+    public String step() { return "base-step"; }
+    public String run() { return "run:" + this.step(); }
+}
+
+public class Mid extends Base {
+    public String step() { return "mid-step"; }
+}
+
+public class Leaf extends Mid {
+    public String step() { return "leaf-step(" + super.step() + ")"; }
+}
+
+public void printAll(Vec<Report> rs) {
+    for (var r : rs) {
+        print(r.render());
+    }
+}
+
+public void main() {
+    var rs = new Vec<Report>();
+    rs.push(new Sales());
+    rs.push(new Empty());
+    printAll(rs);
+
+    print(new Sales().header());
+    print(new Leaf().run());
+    print(new Mid().run());
+    print(new Base().run());
+}

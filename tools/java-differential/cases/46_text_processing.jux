@@ -1,0 +1,36 @@
+public void main() {
+    String csv = "alpha,beta,gamma,delta";
+    var parts = csv.split(",");
+    print(parts.length);
+    print(parts[0]);
+    print(parts[3]);
+
+    String joined = "";
+    for (int i = 0; i < parts.length; i++) {
+        if (i > 0) { joined = joined + "|"; }
+        joined = joined + parts[i].toUpperCase();
+    }
+    print(joined);
+
+    // Scanning characters into a number.
+    String digits = "  90210  ";
+    String t = digits.trim();
+    print(t.length());
+    int value = 0;
+    for (var c : t.chars()) {
+        value = value * 10 + ((int) c - (int) '0');
+    }
+    print(value);
+
+    // Search and replace.
+    print(csv.indexOf("beta"));
+    print(csv.replace(",", " / "));
+    print(csv.contains("gamma"));
+    print(csv.startsWith("alpha"));
+    print(csv.substring(6, 10));
+
+    // Numbers into text.
+    print("n=" + 42 + " d=" + 1.5 + " b=" + true);
+    print("" + 1 + 2 + 3);
+    print(1 + 2 + "3");
+}

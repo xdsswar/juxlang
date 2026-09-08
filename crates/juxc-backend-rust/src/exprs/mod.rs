@@ -1052,6 +1052,36 @@ impl RustEmitter {
                         return;
                     }
                 }
+                // A bare name inside an INTERFACE body that names one of its
+                // own constants. They lower to `<Iface>_<NAME>`, so only the
+                // qualified `Greeter.PREFIX` used to resolve -- the constant
+                // was reachable everywhere except the interface declaring it,
+                // which is where it reads most naturally.
+                if qn.segments.len() == 1 && !self.emitting_call_callee {
+                    let name = qn.segments[0].text.clone();
+                    if let (Some(iface), Some(ty)) = (
+                        self.enclosing_interface.clone(),
+                        self.enclosing_interface_const_type(&name),
+                    ) {
+                        // A `const String` is stored as `&'static str`, and
+                        // READING one yields an owned `String` -- the same
+                        // rule the class form follows, so the two spellings
+                        // of one constant behave alike. A format argument and
+                        // a concat operand both want the borrowed form.
+                        let owns = !self.emitting_const_context
+                            && !self.emitting_format_arg
+                            && !self.emitting_method_receiver
+                            && ty.array_shape.is_none()
+                            && ty.name.segments.last().is_some_and(|x| x.text == "String");
+                        self.w.push_str(&to_rust_ident(&iface));
+                        self.w.push('_');
+                        self.w.push_str(&to_rust_ident(&name));
+                        if owns {
+                            self.w.push_str(".to_string()");
+                        }
+                        return;
+                    }
+                }
                 if qn.segments.len() == 1 && !self.emitting_call_callee {
                     if let Some(class_name) = self.enclosing_class.clone() {
                         let name = qn.segments[0].text.clone();

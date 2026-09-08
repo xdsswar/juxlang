@@ -1,0 +1,24 @@
+public void main() {
+    String s = "Hello, World";
+    print(s.length());
+    print(s.substring(7));
+    print(s.substring(0, 5));
+    print(s.toUpperCase());
+    print(s.toLowerCase());
+    print(s.indexOf("World"));
+    print(s.contains("lo,"));
+    print(s.startsWith("Hell"));
+    print(s.endsWith("ld"));
+    print(s.replace("World", "Jux"));
+    print(s.isEmpty());
+    print("  padded  ".trim());
+    print("ab".repeat(3));
+    print("".isEmpty());
+    String joined = "";
+    for (int i = 0; i < 3; i++) {
+        joined = joined + i;
+    }
+    print(joined);
+    print(s.charAt(0));
+    print(s.indexOf("zzz"));
+}

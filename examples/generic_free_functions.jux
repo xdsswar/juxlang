@@ -1,0 +1,34 @@
+// A free function's own type parameters.
+//
+// A class's `<T>` and a method's `<T>` were registered with the type checker;
+// a FREE function's were not. So `Vec<T>` inside one typed its element as a
+// user type literally named "T", which resolves to no class -- and the rule
+// that an element of a non-`Copy` type clones out of its container never
+// fired, moving out of a borrow.
+
+public <T> T firstOf(Vec<T> xs) {
+    return xs[0];
+}
+
+public <T> String describe(T value) {
+    return "value=" + value;
+}
+
+public <T> int countOf(Vec<T> xs) {
+    return xs.len();
+}
+
+public void main() {
+    var names = new Vec<String>();
+    names.push("one");
+    names.push("two");
+    print(firstOf(names));
+    print(countOf(names));
+
+    var numbers = new Vec<int>();
+    numbers.push(7);
+    numbers.push(8);
+    print(firstOf(numbers));
+    print(describe(firstOf(names)));
+    print(describe(42));
+}

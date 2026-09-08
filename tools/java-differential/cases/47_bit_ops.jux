@@ -1,0 +1,29 @@
+public int mask(int v, int m) {
+    return v & m;
+}
+public void main() {
+    int a = 11;
+    int b = 6;
+    print(a & b);
+    print(a | b);
+    print(a ^ b);
+    print(~a);
+    print(a << 3);
+    print(a >> 1);
+    int neg = -32;
+    print(neg >> 2);
+    print(neg << 1);
+    print(mask(255, 15));
+    print(mask(-1, 7));
+    int flags = 0;
+    flags = flags | 4;
+    flags = flags | 1;
+    print(flags);
+    flags = flags & ~4;
+    print(flags);
+    long big = 1;
+    print(big << 40);
+    print((big << 40) >> 8);
+    print(7 ^ 7);
+    print(0 | 9);
+}

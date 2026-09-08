@@ -1,0 +1,34 @@
+public class Outer {
+    private int seed;
+    public Outer(int seed) { this.seed = seed; }
+
+    public static class Counter {
+        private int n;
+        public Counter(int n) { this.n = n; }
+        public int next() {
+            this.n = this.n + 1;
+            return this.n;
+        }
+        public int value() { return this.n; }
+    }
+
+    public Outer.Counter counterFrom() {
+        return new Outer.Counter(this.seed);
+    }
+
+    public int seedTimes(int k) { return this.seed * k; }
+}
+
+public void main() {
+    var o = new Outer(10);
+    var c = o.counterFrom();
+    print(c.next());
+    print(c.next());
+    print(c.value());
+    print(o.seedTimes(3));
+
+    var direct = new Outer.Counter(100);
+    print(direct.next());
+    print(direct.value());
+    print(c.value());
+}

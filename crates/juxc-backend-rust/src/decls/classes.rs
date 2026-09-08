@@ -4716,6 +4716,53 @@ impl RustEmitter {
         }
     }
 
+    /// True when this declared type lowers to the SINGLE-THREADED handle
+    /// `crate::JuxArr<..>`, an `Rc` around the storage.
+    ///
+    /// Every collection and array takes that handle unless its element type
+    /// forces the atomic flavour (see [`Self::array_handle_is_sync`]) or the
+    /// slot is a `const`, where there is no identity to share and the storage
+    /// is emitted bare. The distinction matters here because `JuxSync` IS
+    /// `Send` and so needs none of the `thread_local!` treatment.
+    fn type_ref_lowers_to_local_handle(&self, ty: &juxc_ast::TypeRef) -> bool {
+        let bare = ty
+            .name
+            .segments
+            .last()
+            .map(|s| s.text.as_str())
+            .unwrap_or_default();
+        // An array's element is the type itself minus its shape; a
+        // collection's is its first type argument.
+        let element = if ty.array_shape.is_some() {
+            if !self.arrays_are_handles_here() {
+                return false;
+            }
+            bare
+        } else {
+            // `String` answers yes to `collection_name_is_handle` -- it is an
+            // external `Clone` type with `@MutSelf` methods -- but it lowers
+            // to a plain `String`, not a handle. Every other caller asks
+            // through a checked `Ty::User`, which a string never is; asking
+            // through a declared type has to rule it out here instead.
+            if crate::analysis::is_jux_string_type(ty)
+                || crate::types::jux_primitive_to_rust(ty).is_some()
+                || !self.collection_name_is_handle(bare)
+            {
+                return false;
+            }
+            match ty.generic_args.first() {
+                Some(juxc_ast::GenericArg::Type(t)) => t
+                    .name
+                    .segments
+                    .last()
+                    .map(|s| s.text.as_str())
+                    .unwrap_or_default(),
+                _ => "",
+            }
+        };
+        !self.array_handle_is_sync(element)
+    }
+
     /// True when a static slot of this declared type can't live in the
     /// default `LazyLock<Mutex<T>>` shape because the lowered Rust type
     /// is **`!Send`** — a wrapper class (`Rc<RefCell<…>>`), an interface
@@ -4725,6 +4772,14 @@ impl RustEmitter {
     /// single-threaded execution model; a `Mutex` over an `Rc` would be
     /// a rustc E0277 leak).
     pub(crate) fn static_type_needs_thread_local(&self, ty: &juxc_ast::TypeRef) -> bool {
+        // A collection or an array is a reference type on the same terms as a
+        // class (JUX-LANG-V1 6.5.1 / 6.5.2), so it carries the same handle and
+        // is `!Send` for the same reason. Missing this meant a plain
+        // `public static Vec<String> events;` -- a log every program writes --
+        // reached the `Mutex` shape and failed to compile.
+        if self.type_ref_lowers_to_local_handle(ty) {
+            return true;
+        }
         if let Some(seg) = ty.name.segments.last() {
             let bare = seg.text.as_str();
             if self.wrapper_classes.contains(bare)

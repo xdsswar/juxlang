@@ -1,0 +1,40 @@
+public interface Greeter {
+    static const String PREFIX = ">> ";
+    String name();
+    default String greet() { return PREFIX + this.name(); }
+    default String shout() { return this.greet() + "!"; }
+}
+public interface Aged {
+    default int age() { return 0; }
+    default String label() { return "aged " + this.age(); }
+}
+public class Person implements Greeter, Aged {
+    private String n;
+    public Person(String n) { this.n = n; }
+    public String name() { return this.n; }
+    public int age() { return 41; }
+}
+public class Anon implements Greeter, Aged {
+    public Anon() {}
+    public String name() { return "anon"; }
+}
+public void main() {
+    var p = new Person("Ada");
+    print(p.name());
+    print(p.greet());
+    print(p.shout());
+    print(p.age());
+    print(p.label());
+
+    var a = new Anon();
+    print(a.shout());
+    print(a.label());
+
+    print(Greeter.PREFIX + "direct");
+
+    // Through each interface separately.
+    Greeter g = p;
+    Aged ag = p;
+    print(g.shout());
+    print(ag.label());
+}

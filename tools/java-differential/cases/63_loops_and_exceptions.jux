@@ -1,0 +1,56 @@
+public int scan(int limit) {
+    int seen = 0;
+    int i = 0;
+    do {
+        i = i + 1;
+        if (i % 2 == 0) {
+            continue;
+        }
+        seen = seen + i;
+    } while (i < limit);
+    return seen;
+}
+
+public String risky(int i) {
+    if (i == 2) {
+        throw new RuntimeException("two");
+    }
+    return "v" + i;
+}
+
+public int guarded(int n) {
+    int ok = 0;
+    for (int i = 0; i < n; i++) {
+        try {
+            print(risky(i));
+            ok = ok + 1;
+        } catch (RuntimeException e) {
+            print("caught " + e.getMessage());
+            continue;
+        } finally {
+            print("step " + i);
+        }
+    }
+    return ok;
+}
+
+public int breaker(int n) {
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        try {
+            if (i == 3) {
+                break;
+            }
+            total = total + i;
+        } finally {
+            print("fin " + i);
+        }
+    }
+    return total;
+}
+
+public void main() {
+    print(scan(5));
+    print(guarded(4));
+    print(breaker(5));
+}

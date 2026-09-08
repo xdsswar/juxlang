@@ -1481,6 +1481,16 @@ impl<'a> Checker<'a> {
         let Some(body) = &fn_decl.body else { return };
         self.check_param_defaults(&fn_decl.params);
         self.env.push_scope();
+        // Register the function's own `<T>` so declared types naming it lower
+        // to `Ty::Param("T")`, the way a class's and a method's already do.
+        // Without it `Vec<T>` typed its element as a USER type called "T",
+        // which resolves to no class -- so the backend's "an element of a
+        // non-Copy type clones out of the container" rule never fired and
+        // `xs[0]` moved out of a borrow (rustc E0507).
+        let saved_generics = std::mem::take(&mut self.env.generic_params);
+        for tp in &fn_decl.generic_params {
+            self.env.add_generic_param(&tp.name.text);
+        }
         // Declare each parameter into the new scope so name lookups
         // inside the body resolve.
         self.env.weak_names.clear();
@@ -1530,6 +1540,7 @@ impl<'a> Checker<'a> {
         self.in_unsafe = saved_unsafe;
         self.in_async = saved_async;
         self.current_return = saved;
+        self.env.generic_params = saved_generics;
         self.env.weak_names.clear();
         self.env.pop_scope();
     }

@@ -1,0 +1,29 @@
+public record Point(int x, int y) {
+    public int sum() { return this.x + this.y; }
+}
+public record Line(Point from, Point to) {
+    public int span() { return this.to.x - this.from.x; }
+}
+public void main() {
+    var p = new Point(1, 2);
+    print(p.x);
+    print(p.y);
+    print(p.sum());
+
+    var q = new Point(1, 2);
+    var r = new Point(9, 9);
+    print(p == q);
+    print(p == r);
+
+    var line = new Line(new Point(0, 0), new Point(10, 4));
+    print(line.span());
+    print(line.from.x);
+    print(line.to.y);
+
+    // A record inside a collection, found by value.
+    var pts = new Vec<Point>();
+    pts.push(new Point(3, 4));
+    pts.push(new Point(5, 6));
+    print(pts.len());
+    print(pts[1].sum());
+}

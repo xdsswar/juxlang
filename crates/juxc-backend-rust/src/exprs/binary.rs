@@ -176,6 +176,18 @@ impl RustEmitter {
                 }
             }
         }
+        // A bare interface constant read from a `default` method body. It
+        // carries no `expr_types` entry, so `PREFIX + this.name()` used to
+        // miss the concat trigger and fall to the numeric `+`, emitting the
+        // invalid Rust `String + String`.
+        if let Expr::Path(qn) = e {
+            if qn.segments.len() == 1 {
+                let named = self.enclosing_interface_const_type(&qn.segments[0].text);
+                if named.as_ref().is_some_and(type_ref_is_string) {
+                    return true;
+                }
+            }
+        }
         let recorded = self.expr_types.get(&crate::exprs::expr_span_of(e));
         let unwrapped = self.unwrap_for_smart_cast(e, recorded);
         matches!(unwrapped, Some(juxc_tycheck::Ty::String))

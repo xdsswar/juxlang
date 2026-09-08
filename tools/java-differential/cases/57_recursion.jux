@@ -1,0 +1,52 @@
+public int fib(int n) {
+    if (n < 2) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+public int gcd(int a, int b) {
+    if (b == 0) {
+        return a;
+    }
+    return gcd(b, a % b);
+}
+
+public int sumTo(int n) {
+    if (n <= 0) {
+        return 0;
+    }
+    return n + sumTo(n - 1);
+}
+
+public String reverse(String s) {
+    if (s.length() <= 1) {
+        return s;
+    }
+    return reverse(s.substring(1)) + s.substring(0, 1);
+}
+
+public bool isEven(int n) {
+    if (n == 0) {
+        return true;
+    }
+    return isOdd(n - 1);
+}
+
+public bool isOdd(int n) {
+    if (n == 0) {
+        return false;
+    }
+    return isEven(n - 1);
+}
+
+public void main() {
+    print(fib(10));
+    print(fib(20));
+    print(gcd(48, 18));
+    print(gcd(17, 5));
+    print(sumTo(100));
+    print(reverse("stressed"));
+    print(isEven(10));
+    print(isOdd(7));
+}

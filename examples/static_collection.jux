@@ -1,0 +1,44 @@
+// A mutable `static` holding a collection.
+//
+// Since collections became reference types a `Vec<T>` slot lowers to an
+// `Rc<JuxCell<Vec<T>>>`, which is `!Send` -- so it cannot live in the default
+// `LazyLock<Mutex<..>>` static shape. Statics whose payload is `!Send` take a
+// `thread_local!` instead, which is the rule that already covered class,
+// interface and polymorphic-base payloads; a collection is one too.
+//
+// Field initializers also run in the order Java gives them: a base's fields
+// before its constructor, then the derived class's.
+
+public class Log {
+    public static Vec<String> events = new Vec<String>();
+}
+
+public String mark(String what) {
+    Log.events.push(what);
+    return what;
+}
+
+public class Base {
+    protected String note = mark("base-field");
+    public Base() {
+        mark("base-ctor");
+    }
+}
+
+public class Derived extends Base {
+    private String own = mark("derived-field");
+    public Derived() {
+        super();
+        mark("derived-ctor");
+    }
+    public String describe() { return this.note + "/" + this.own; }
+}
+
+public void main() {
+    var d = new Derived();
+    for (var e : Log.events) {
+        print(e);
+    }
+    print(d.describe());
+    print(Log.events.len());
+}

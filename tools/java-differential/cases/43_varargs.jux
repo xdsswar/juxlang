@@ -1,0 +1,25 @@
+public int total(int... xs) {
+    int t = 0;
+    for (int x : xs) {
+        t = t + x;
+    }
+    return t;
+}
+public String join(String sep, String... parts) {
+    String out = "";
+    for (int i = 0; i < parts.length; i++) {
+        if (i > 0) { out = out + sep; }
+        out = out + parts[i];
+    }
+    return out;
+}
+public void main() {
+    print(total());
+    print(total(1));
+    print(total(1, 2, 3));
+    print(total(1, 2, 3, 4, 5));
+    print(join("-"));
+    print(join("-", "a"));
+    print(join("-", "a", "b", "c"));
+    print(join(", ", "x", "y"));
+}

@@ -1,0 +1,32 @@
+public class Box<T> {
+    private T item;
+    public Box(T item) { this.item = item; }
+    public T get() { return this.item; }
+    public String show() { return "Box(" + this.item + ")"; }
+    public <U> String pair(U other) { return this.item + "|" + other; }
+}
+public <T> String describe(T value) {
+    return "value=" + value;
+}
+public <T> T firstOf(Vec<T> xs) {
+    return xs[0];
+}
+public void main() {
+    var b = new Box<String>("hi");
+    print(b.get());
+    print(b.show());
+    var n = new Box<int>(5);
+    print(n.show());
+    print(n.get() + 1);
+    print(describe("text"));
+    print(describe(42));
+    print(b.pair(7));
+    print(n.pair("tail"));
+    var xs = new Vec<String>();
+    xs.push("one");
+    xs.push("two");
+    print(firstOf(xs));
+    var nested = new Box<Box<int>>(new Box<int>(9));
+    print(nested.get().show());
+    print(nested.get().get());
+}

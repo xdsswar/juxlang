@@ -1,0 +1,43 @@
+public class Shape {
+    public String name() { return "shape"; }
+    public int area() { return 0; }
+    public String describe() { return this.name() + "=" + this.area(); }
+}
+
+public class Square extends Shape {
+    private int side;
+    public Square(int side) { this.side = side; }
+    public String name() { return "square"; }
+    public int area() { return this.side * this.side; }
+}
+
+public class Rect extends Shape {
+    private int w;
+    private int h;
+    public Rect(int w, int h) { this.w = w; this.h = h; }
+    public String name() { return "rect"; }
+    public int area() { return this.w * this.h; }
+}
+
+public int totalArea(Vec<Shape> shapes) {
+    int t = 0;
+    for (var s : shapes) {
+        t = t + s.area();
+    }
+    return t;
+}
+
+public void main() {
+    var shapes = new Vec<Shape>();
+    shapes.push(new Square(3));
+    shapes.push(new Rect(2, 5));
+    shapes.push(new Shape());
+    for (var s : shapes) {
+        print(s.describe());
+    }
+    print(totalArea(shapes));
+
+    Shape one = new Square(4);
+    print(one.describe());
+    print(one.area());
+}

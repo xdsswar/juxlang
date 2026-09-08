@@ -1,0 +1,36 @@
+// An assignment as an arrow-switch arm body (7.5).
+//
+// The spec says the arrow form matches Java's exactly, and there an arm body
+// may be any expression statement. Jux's assignment is a statement rather than
+// an expression, so `case 3 -> grade = "high";` used to parse the expression
+// `grade` and then reject the `=`. It is shorthand for the one-statement block
+// `{ grade = "high"; }`, and compound assignment reads the same way.
+
+public String grade(int score) {
+    String r = "none";
+    switch (score) {
+        case 3 -> r = "high";
+        case 2 -> r = "mid";
+        default -> r = "low";
+    }
+    return r;
+}
+
+public int weigh(String kind) {
+    int total = 100;
+    switch (kind) {
+        case "heavy" -> total += 50;
+        case "light" -> total -= 50;
+        default -> { total = 0; }
+    }
+    return total;
+}
+
+public void main() {
+    print(grade(3));
+    print(grade(2));
+    print(grade(1));
+    print(weigh("heavy"));
+    print(weigh("light"));
+    print(weigh("other"));
+}

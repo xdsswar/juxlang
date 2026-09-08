@@ -1,0 +1,46 @@
+public String grade(int score) {
+    String r = "none";
+    switch (score) {
+        case 3 -> r = "high";
+        case 2 -> r = "mid";
+        default -> r = "low";
+    }
+    return r;
+}
+public String kind(String s) {
+    String r = "none";
+    switch (s) {
+        case "a" -> r = "first";
+        case "b" -> r = "second";
+        default -> r = "other";
+    }
+    return r;
+}
+public void main() {
+    print(grade(3));
+    print(grade(2));
+    print(grade(1));
+    print(kind("a"));
+    print(kind("b"));
+    print(kind("z"));
+    outer:
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            if (j == 2) {
+                continue outer;
+            }
+            if (i == 3) {
+                break outer;
+            }
+            print(i * 10 + j);
+        }
+    }
+    int n = 0;
+    while (true) {
+        n = n + 1;
+        if (n > 3) {
+            break;
+        }
+    }
+    print(n);
+}
