@@ -175,13 +175,6 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
         return Ok(None);
     };
 
-    // If neither --build nor --run was passed, we stop after emitting
-    // source. Useful for inspecting lowering without invoking cargo.
-    if !cli.build && !cli.run {
-        eprintln!("juxc: 0 diagnostics, lowering complete (use --build to compile)");
-        return Ok(None);
-    }
-
     // Decide where to write the emitted crate. Default:
     // `target/.rust-build/` next to the FIRST input file's
     // containing directory. (Multi-file workspaces still share a
@@ -210,6 +203,23 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
                 .map(|b| b.name.clone())
         })
         .unwrap_or_else(|| default_crate_name(&cli.inputs, &files[0]));
+
+    // Neither `--build` nor `--run`: write the crate and stop. This is the
+    // documented way to read the lowering without invoking cargo, and it used
+    // to return before writing anything at all.
+    if !cli.build && !cli.run {
+        juxc_driver::write_crate_with_manifest(
+            &crate_,
+            &emit_dir,
+            &crate_name,
+            manifest.as_ref(),
+        )?;
+        eprintln!(
+            "juxc: 0 diagnostics, lowered to {} (use --build to compile)",
+            emit_dir.display(),
+        );
+        return Ok(None);
+    }
 
     let artifact = juxc_driver::build_with_manifest(
         &crate_,

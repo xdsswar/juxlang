@@ -575,6 +575,25 @@ pub fn build_with_manifest(
     release: bool,
     manifest: Option<&Manifest>,
 ) -> Result<BuildArtifact> {
+    let written_rs = write_crate_with_manifest(crate_, crate_dir, crate_name, manifest)?;
+    cargo_build(crate_dir, crate_name, release, &written_rs)
+}
+
+/// Write the emitted crate to disk -- sources, `Cargo.toml`, any build script
+/// and resources -- and format it, WITHOUT invoking cargo.
+///
+/// Split out of [`build_with_manifest`] so `juxc <file>` with neither
+/// `--build` nor `--run` can do what it always claimed to: put the lowered
+/// Rust somewhere you can read it. That path used to return before writing
+/// anything, which also made `--emit-dir` silently ineffective on its own.
+/// Returns every `.rs` file written, which the build path needs to map rustc
+/// diagnostics back to `.jux` locations.
+pub fn write_crate_with_manifest(
+    crate_: &RustCrate,
+    crate_dir: &Path,
+    crate_name: &str,
+    manifest: Option<&Manifest>,
+) -> Result<Vec<std::path::PathBuf>> {
     // Ensure the destination directory and any intermediate `src/`
     // subdirectories exist before writing.
     fs::create_dir_all(crate_dir.join("src"))
@@ -664,7 +683,18 @@ pub fn build_with_manifest(
     // purely a readability upgrade. We swallow the error and continue
     // so users without rustfmt on `PATH` aren't blocked.
     run_rustfmt(&written_rs);
+    Ok(written_rs)
+}
 
+/// Run `cargo build` in an already-written crate directory and locate the
+/// produced binary. `written_rs` is what the writer produced, used to map a
+/// rustc error back to the `.jux` line it came from.
+fn cargo_build(
+    crate_dir: &Path,
+    crate_name: &str,
+    release: bool,
+    written_rs: &[std::path::PathBuf],
+) -> Result<BuildArtifact> {
     // Run cargo build inside the emitted crate. `--quiet` suppresses
     // cargo's "compiling/finished" lines; we surface anything that
     // actually went wrong via the captured stderr. When `release` is
@@ -690,7 +720,7 @@ pub fn build_with_manifest(
         // rustc saw and multi-file/multi-package leaks map correctly. When
         // markers are absent (a `lower_with_types` build) stderr passes
         // through unchanged.
-        let map = source_map::SourceMap::from_disk(crate_dir, &written_rs);
+        let map = source_map::SourceMap::from_disk(crate_dir, written_rs);
         let rewritten = source_map::rewrite_rustc_output(&stderr, &map);
         anyhow::bail!(
             "`cargo build` failed for the emitted Rust crate (this is a juxc bug):\n{rewritten}",
