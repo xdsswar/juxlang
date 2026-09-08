@@ -350,7 +350,7 @@ fn cmd_new(name: &str) -> Result<ExitCode> {
 /// copy with a warning (see `juxc_driver::git_deps`).
 fn cmd_update(root: Option<PathBuf>) -> Result<ExitCode> {
     let Some(root) = root else {
-        eprintln!("jux: no jux.toml found — run `jux update` from a project root (or pass --manifest-path)");
+        eprintln!("jux: no jux.toml found -- run `jux update` from a project root (or pass --manifest-path)");
         return Ok(ExitCode::from(1));
     };
     let Some(manifest) = juxc_driver::Manifest::load(&root) else {
@@ -429,7 +429,7 @@ fn cmd_metadata(root: Option<PathBuf>, format: &str) -> Result<ExitCode> {
     }
     let Some(root) = root else {
         eprintln!(
-            "jux: no jux.toml found — run from a project root (or pass --manifest-path)",
+            "jux: no jux.toml found -- run from a project root (or pass --manifest-path)",
         );
         return Ok(ExitCode::from(1));
     };
@@ -676,7 +676,7 @@ fn run_project(
 ) -> Result<ExitCode> {
     let Some(root_dir) = root else {
         eprintln!(
-            "jux: no jux.toml found — pass a file, run `jux new <name>` first, or use --manifest-path",
+            "jux: no jux.toml found -- pass a file, run `jux new <name>` first, or use --manifest-path",
         );
         return Ok(ExitCode::from(1));
     };
@@ -947,7 +947,7 @@ fn cmd_test(
 ) -> Result<ExitCode> {
     let Some(root_dir) = root else {
         eprintln!(
-            "jux: no jux.toml found — run `jux test` from a project root (or pass --manifest-path)",
+            "jux: no jux.toml found -- run `jux test` from a project root (or pass --manifest-path)",
         );
         return Ok(ExitCode::from(1));
     };

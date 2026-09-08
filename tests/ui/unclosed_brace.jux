@@ -1,0 +1,2 @@
+public void main() {
+    print(1);

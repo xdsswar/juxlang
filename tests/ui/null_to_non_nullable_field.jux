@@ -1,0 +1,7 @@
+public class Holder {
+    public String name = null;
+    public Holder() {}
+}
+public void main() {
+    print(new Holder().name);
+}

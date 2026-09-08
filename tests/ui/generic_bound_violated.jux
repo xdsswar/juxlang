@@ -1,0 +1,10 @@
+public class Animal { public Animal() {} }
+public class Rock { public Rock() {} }
+public class Pen<T extends Animal> {
+    private T held;
+    public Pen(T held) { this.held = held; }
+}
+public void main() {
+    var p = new Pen<Rock>(new Rock());
+    print(1);
+}

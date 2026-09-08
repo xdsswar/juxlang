@@ -1,0 +1,7 @@
+public class Box {
+    public int size() { return 1; }
+    public Box() {}
+}
+public void main() {
+    print(new Box().sise());
+}

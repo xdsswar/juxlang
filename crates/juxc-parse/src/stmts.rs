@@ -284,7 +284,7 @@ impl<'a> Parser<'a> {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0200_UnexpectedToken,
-                        "named arguments aren't supported in `super(...)` — pass the parent-constructor arguments positionally",
+                        "named arguments aren't supported in `super(...)` -- pass the parent-constructor arguments positionally",
                     )
                     .with_span(named.span),
                 );
@@ -766,7 +766,7 @@ impl<'a> Parser<'a> {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0200_UnexpectedToken,
-                        "nested tuple patterns aren't supported yet (Phase 1) — destructure the outer tuple first, then the element",
+                        "nested tuple patterns aren't supported yet (Phase 1) -- destructure the outer tuple first, then the element",
                     )
                     .with_span(here),
                 );
@@ -783,7 +783,7 @@ impl<'a> Parser<'a> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0200_UnexpectedToken,
-                    "a tuple pattern needs at least two binders — use a plain `var name = …;` otherwise",
+                    "a tuple pattern needs at least two binders -- use a plain `var name = …;` otherwise",
                 )
                 .with_span(start.join(self.last_consumed_span())),
             );

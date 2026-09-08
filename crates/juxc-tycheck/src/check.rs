@@ -421,7 +421,7 @@ impl<'a> Checker<'a> {
                         code::Code::E0453_GenericInferenceNoSolution,
                         format!(
                             "cannot infer the type argument of `{name}`: it is never used to \
-                             pin it — write the type explicitly, e.g. `new Vec<String>()`",
+                             pin it -- write the type explicitly, e.g. `new Vec<String>()`",
                         ),
                     )
                     .with_span(span),
@@ -612,7 +612,7 @@ impl<'a> Checker<'a> {
                         code::Code::E0508_FfiTypeNotAllowed,
                         format!(
                             "foreign function `{}` is variadic (`...`) but has no fixed parameter \
-                             before it — a C variadic function needs at least one named parameter \
+                             before it -- a C variadic function needs at least one named parameter \
                              (e.g. the `printf` format string)",
                             f.name.text,
                         ),
@@ -625,7 +625,7 @@ impl<'a> Checker<'a> {
                     Diagnostic::error(
                         code::Code::E0508_FfiTypeNotAllowed,
                         format!(
-                            "foreign function `{}` cannot declare `throws` — C has no \
+                            "foreign function `{}` cannot declare `throws` -- C has no \
                              exceptions; return an error code or `out` parameter instead",
                             f.name.text,
                         ),
@@ -640,7 +640,7 @@ impl<'a> Checker<'a> {
                             code::Code::E0508_FfiTypeNotAllowed,
                             format!(
                                 "parameter `{}` of foreign function `{}` has type `{}`, which is \
-                                 not allowed at the C boundary — use a primitive, a raw pointer \
+                                 not allowed at the C boundary -- use a primitive, a raw pointer \
                                  (`T*`), or `String`",
                                 p.name.text,
                                 f.name.text,
@@ -659,7 +659,7 @@ impl<'a> Checker<'a> {
                             code::Code::E0508_FfiTypeNotAllowed,
                             format!(
                                 "return type `{}` of foreign function `{}` is not allowed at the \
-                                 C boundary — use a primitive, a raw pointer (`T*`), `String`, or \
+                                 C boundary -- use a primitive, a raw pointer (`T*`), `String`, or \
                                  `void`",
                                 type_ref_display(t),
                                 f.name.text,
@@ -759,7 +759,7 @@ impl<'a> Checker<'a> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0508_FfiTypeNotAllowed,
-                    format!("`@export` function `{name}` may not be generic — a C entry point has one concrete signature"),
+                    format!("`@export` function `{name}` may not be generic -- a C entry point has one concrete signature"),
                 )
                 .with_span(fn_decl.span),
             );
@@ -790,7 +790,7 @@ impl<'a> Checker<'a> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0508_FfiTypeNotAllowed,
-                    format!("`@export` function `{name}` may not declare `throws` — C has no exceptions"),
+                    format!("`@export` function `{name}` may not declare `throws` -- C has no exceptions"),
                 )
                 .with_span(fn_decl.span),
             );
@@ -802,7 +802,7 @@ impl<'a> Checker<'a> {
                         code::Code::E0508_FfiTypeNotAllowed,
                         format!(
                             "parameter `{}` of `@export` function `{name}` has type `{}`, which is \
-                             not C-compatible — use a primitive, a raw pointer (`T*`), a \
+                             not C-compatible -- use a primitive, a raw pointer (`T*`), a \
                              `@layout(c)` struct, or `String`",
                             p.name.text,
                             type_ref_display(&p.ty),
@@ -818,7 +818,7 @@ impl<'a> Checker<'a> {
                     Diagnostic::error(
                         code::Code::E0508_FfiTypeNotAllowed,
                         format!(
-                            "return type `{}` of `@export` function `{name}` is not C-compatible — \
+                            "return type `{}` of `@export` function `{name}` is not C-compatible -- \
                              use a primitive, a raw pointer (`T*`), a `@layout(c)` struct, \
                              `String`, or `void`",
                             type_ref_display(t),
@@ -849,7 +849,7 @@ impl<'a> Checker<'a> {
                     Diagnostic::error(
                         code::Code::E0509_LayoutCOnNonAggregate,
                         format!(
-                            "`@layout(c) enum {}` may not be generic — a C enum is a plain integer \
+                            "`@layout(c) enum {}` may not be generic -- a C enum is a plain integer \
                              with one concrete representation; remove the type parameters",
                             enum_decl.name.text,
                         ),
@@ -873,7 +873,7 @@ impl<'a> Checker<'a> {
                             code::Code::E0509_LayoutCOnNonAggregate,
                             format!(
                                 "variant `{}` of `@layout(c) enum {}` carries a payload, which is \
-                                 not C-compatible — a C enum is a plain integer with no associated \
+                                 not C-compatible -- a C enum is a plain integer with no associated \
                                  data; drop the payload or remove `@layout(c)`",
                                 variant.name.text, enum_decl.name.text,
                             ),
@@ -888,7 +888,7 @@ impl<'a> Checker<'a> {
                                 code::Code::E0509_LayoutCOnNonAggregate,
                                 format!(
                                     "discriminant of variant `{}` in `@layout(c) enum {}` must be a \
-                                     constant integer — a C enum's values are fixed at compile time",
+                                     constant integer -- a C enum's values are fixed at compile time",
                                     variant.name.text,
                                     enum_decl.name.text,
                                 ),
@@ -910,7 +910,7 @@ impl<'a> Checker<'a> {
                             code::Code::E0510_DiscriminantOutsideCEnum,
                             format!(
                                 "variant `{}` of enum `{}` has an explicit discriminant `= …`, but \
-                                 `{}` is not a C enum — add `@layout(c, repr = \"i32\")` to make it \
+                                 `{}` is not a C enum -- add `@layout(c, repr = \"i32\")` to make it \
                                  a C-compatible integer enum, or remove the `= …`",
                                 variant.name.text,
                                 enum_decl.name.text,
@@ -1095,7 +1095,7 @@ impl<'a> Checker<'a> {
                     Diagnostic::error(
                         code::Code::E0711_UncaughtChecked,
                         format!(
-                            "`{fn_name}` may throw the checked exception `{bare}` — catch it, or declare `throws {bare}` on the signature",
+                            "`{fn_name}` may throw the checked exception `{bare}` -- catch it, or declare `throws {bare}` on the signature",
                         ),
                     )
                     .with_span(span)
@@ -1295,7 +1295,7 @@ impl<'a> Checker<'a> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0730_QuestionIncompatibleReturn,
-                    "`?` inside a `try` block isn't supported yet (Phase 1) — its early return would bypass the try machinery; restructure with a plain match or move the `?` call out of the try",
+                    "`?` inside a `try` block isn't supported yet (Phase 1) -- its early return would bypass the try machinery; restructure with a plain match or move the `?` call out of the try",
                 )
                 .with_span(span),
             );
@@ -1319,7 +1319,7 @@ impl<'a> Checker<'a> {
                             Diagnostic::error(
                                 code::Code::E0731_QuestionNeedsConversion,
                                 format!(
-                                    "`?` propagates error type {err}, but the function returns a Result with error type {ret_err} — convert explicitly before propagating",
+                                    "`?` propagates error type {err}, but the function returns a Result with error type {ret_err} -- convert explicitly before propagating",
                                 ),
                             )
                             .with_span(span),
@@ -1331,7 +1331,7 @@ impl<'a> Checker<'a> {
                         Diagnostic::error(
                             code::Code::E0730_QuestionIncompatibleReturn,
                             format!(
-                                "`?` on a Result needs the enclosing function to return a Result — it returns {ret}",
+                                "`?` on a Result needs the enclosing function to return a Result -- it returns {ret}",
                             ),
                         )
                         .with_span(span),
@@ -1344,7 +1344,7 @@ impl<'a> Checker<'a> {
                         Diagnostic::error(
                             code::Code::E0730_QuestionIncompatibleReturn,
                             format!(
-                                "`?` on a nullable needs the enclosing function to return a nullable — it returns {ret}",
+                                "`?` on a nullable needs the enclosing function to return a nullable -- it returns {ret}",
                             ),
                         )
                         .with_span(span),
@@ -1419,7 +1419,7 @@ impl<'a> Checker<'a> {
                         code::Code::E0467_DefaultParamOrdering,
                         format!(
                             "parameter `{}` has no default value but follows a defaulted \
-                             parameter — move all defaulted parameters to the end of the \
+                             parameter -- move all defaulted parameters to the end of the \
                              list (§M.14.4)",
                             param.name.text,
                         ),
@@ -1444,7 +1444,7 @@ impl<'a> Checker<'a> {
                         Diagnostic::error(
                             code::Code::E0449_DefaultArgParamRef,
                             format!(
-                                "default value of `{}` references parameter `{}` — \
+                                "default value of `{}` references parameter `{}` -- \
                                  a default is evaluated at the call site (Phase 1), \
                                  where parameters aren't in scope; compute it inside \
                                  the body instead",
@@ -1569,7 +1569,7 @@ impl<'a> Checker<'a> {
                     code::Code::E0940_OutParamNotDefinitelyAssigned,
                     format!(
                         "`out` parameter `{name}` is not assigned on every path through `{fn_name}` \
-                         — assign it before each `return` and before the body ends (§M.4)",
+                         -- assign it before each `return` and before the body ends (§M.4)",
                     ),
                 )
                 .with_span(span),
@@ -1745,7 +1745,7 @@ impl<'a> Checker<'a> {
                 Diagnostic::error(
                     code::Code::E0460_MissingReturn,
                     format!(
-                        "`{fn_name}` can finish without returning a value — every path must \
+                        "`{fn_name}` can finish without returning a value -- every path must \
                          `return` (or `throw`); add a return for the missing path",
                     ),
                 )
@@ -1769,7 +1769,7 @@ impl<'a> Checker<'a> {
                     Diagnostic::error(
                         code::Code::E0509_LayoutCOnNonAggregate,
                         format!(
-                            "`@layout(c)` is not allowed on class `{}` — only a `struct` can have \
+                            "`@layout(c)` is not allowed on class `{}` -- only a `struct` can have \
                              a C-compatible layout (a class is a reference type with no portable C \
                              representation)",
                             class.name.text,
@@ -1786,7 +1786,7 @@ impl<'a> Checker<'a> {
                         Diagnostic::error(
                             code::Code::E0509_LayoutCOnNonAggregate,
                             format!(
-                                "`@layout(c) struct {}` may not be generic — a C-compatible type \
+                                "`@layout(c) struct {}` may not be generic -- a C-compatible type \
                                  has one concrete layout; remove the type parameters",
                                 class.name.text,
                             ),
@@ -1805,7 +1805,7 @@ impl<'a> Checker<'a> {
                                     code::Code::E0509_LayoutCOnNonAggregate,
                                     format!(
                                         "field `{}` of `@layout(c) struct {}` has type `{}`, which \
-                                         is not C-compatible — use a primitive, a raw pointer \
+                                         is not C-compatible -- use a primitive, a raw pointer \
                                          (`T*`), or another `@layout(c)` struct",
                                         field.name.text,
                                         class.name.text,
@@ -1893,7 +1893,7 @@ impl<'a> Checker<'a> {
                                 code::Code::E0410_TypeMismatch,
                                 format!(
                                     "cannot assign `null` to the non-nullable field `{disp_name}` of \
-                                     type `{tname}` — declare it nullable (`{tname}?`)",
+                                     type `{tname}` -- declare it nullable (`{tname}?`)",
                                 ),
                             )
                             .with_span(disp_span),
@@ -1918,7 +1918,7 @@ impl<'a> Checker<'a> {
                     Diagnostic::warning(
                         code::Code::W0974_PropertyNamePascalCase,
                         format!(
-                            "property `{}` should be PascalCase (`{}`) — the preferred visual \
+                            "property `{}` should be PascalCase (`{}`) -- the preferred visual \
                              signal that a member is a property, not a plain field (§P.1.1)",
                             prop.name.text,
                             uppercase_first(&prop.name.text),
@@ -1948,7 +1948,7 @@ impl<'a> Checker<'a> {
                             Diagnostic::error(
                                 code::Code::E0975_ObserverShapeMismatch,
                                 format!(
-                                    "observer `{}` takes {} parameter{} — an observer lambda is \
+                                    "observer `{}` takes {} parameter{} -- an observer lambda is \
                                      `() -> …` (invalidation), `(old, now) -> …`, or \
                                      `(prop, old, now) -> …` (§P.2.2)",
                                     field.name.text,
@@ -1975,7 +1975,7 @@ impl<'a> Checker<'a> {
                 Diagnostic::error(
                     code::Code::E0600_FieldNotDefinitelyAssigned,
                     format!(
-                        "field `{}` of class `{}` is not definitely assigned — give it an \
+                        "field `{}` of class `{}` is not definitely assigned -- give it an \
                          initializer (`= …`) or assign it in every constructor before the \
                          constructor returns (§S.4.5)",
                         v.display, class.name.text,
@@ -2014,7 +2014,7 @@ impl<'a> Checker<'a> {
                 Diagnostic::error(
                     code::Code::E0400_DuplicateDeclaration,
                     format!(
-                        "class `{}` declares {} `drop` blocks — a class may have at most one destructor",
+                        "class `{}` declares {} `drop` blocks -- a class may have at most one destructor",
                         class.name.text,
                         class.drop_blocks.len(),
                     ),
@@ -2066,7 +2066,7 @@ impl<'a> Checker<'a> {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0210_ConstructorCallNotFirst,
-                            "a constructor that delegates with `this(...)` can't also call `super(...)` — the delegated-to constructor owns parent initialization",
+                            "a constructor that delegates with `this(...)` can't also call `super(...)` -- the delegated-to constructor owns parent initialization",
                         )
                         .with_span(*sspan),
                     );
@@ -2112,7 +2112,7 @@ impl<'a> Checker<'a> {
                 Diagnostic::error(
                     code::Code::E0508_FfiTypeNotAllowed,
                     format!(
-                        "`@export` is not supported on method `{}` in this phase — `@export` gives \
+                        "`@export` is not supported on method `{}` in this phase -- `@export` gives \
                          C linkage to a FREE function; move it out of the class (an instance method \
                          has a receiver C cannot express, and static-method export is deferred)",
                         method.name.text,
@@ -2252,7 +2252,7 @@ impl<'a> Checker<'a> {
             Diagnostic::error(
                 code::Code::E0416_PackagePrivateAccess,
                 format!(
-                    "cannot use package-private type `{fqn}` from {here} — it is declared in \
+                    "cannot use package-private type `{fqn}` from {here} -- it is declared in \
                      {declaring} without `public`, so it is visible only inside that \
                      package (§4.4). Mark the declaration `public` to export it",
                 ),
@@ -2303,7 +2303,7 @@ impl<'a> Checker<'a> {
                 Diagnostic::error(
                     code::Code::E0417_UnknownType,
                     format!(
-                        "unknown type `{bare}` — no primitive, in-scope generic parameter, or \
+                        "unknown type `{bare}` -- no primitive, in-scope generic parameter, or \
                          class/record/enum/interface of that name is visible here. If this \
                          overrides a member of a generic supertype, name the concrete type \
                          argument it was bound to (e.g. `Object` under `implements \
@@ -2410,7 +2410,7 @@ impl<'a> Checker<'a> {
                     Diagnostic::error(
                         code::Code::E0435_InterfaceNotDynDispatchable,
                         format!(
-                            "interface `{bare}` can't be used as a dynamic value type — its \
+                            "interface `{bare}` can't be used as a dynamic value type -- its \
                              method `{m}` has generic type parameters, which makes the trait \
                              not object-safe; call it through a concrete implementer instead",
                         ),
@@ -2426,7 +2426,7 @@ impl<'a> Checker<'a> {
                         code::Code::E0435_InterfaceNotDynDispatchable,
                         format!(
                             "generic interface `{bare}` used as a value type needs its type \
-                             argument(s) (e.g. `{bare}<int>`) — a raw `{bare}` value slot can't \
+                             argument(s) (e.g. `{bare}<int>`) -- a raw `{bare}` value slot can't \
                              be lowered to a trait object",
                         ),
                     )
@@ -2484,7 +2484,7 @@ impl<'a> Checker<'a> {
                 code::Code::E0444_WildcardStorageUnsupported,
                 format!(
                     "a bounded wildcard on the user type `{bare}` can't be used as a \
-                     storage slot (field, local, or return) in this phase — the container \
+                     storage slot (field, local, or return) in this phase -- the container \
                      erases to a trait object that a concrete `{bare}<…>` can't populate; \
                      use a concrete type argument, or take the value as a parameter (where \
                      wildcards lift to a function generic)",
@@ -3014,7 +3014,7 @@ impl<'a> Checker<'a> {
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0703_ForAwaitRequiresAsyncContext,
-                                "`for await` is only permitted inside an async function, method, or lambda — it awaits the stream's `next()` for every element (§18.6.3)",
+                                "`for await` is only permitted inside an async function, method, or lambda -- it awaits the stream's `next()` for every element (§18.6.3)",
                             )
                             .with_span(f.span),
                         );
@@ -3024,7 +3024,7 @@ impl<'a> Checker<'a> {
                             Diagnostic::error(
                                 code::Code::E0704_ForAwaitRequiresStream,
                                 format!(
-                                    "`for await` iterates a `Stream<T>`, found {iter_ty} — use a plain `for` for synchronous iterables (§18.6.3)",
+                                    "`for await` iterates a `Stream<T>`, found {iter_ty} -- use a plain `for` for synchronous iterables (§18.6.3)",
                                 ),
                             )
                             .with_span(expr_span(&f.iter)),
@@ -3034,7 +3034,7 @@ impl<'a> Checker<'a> {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0704_ForAwaitRequiresStream,
-                            "a `Stream<T>` has no synchronous iteration protocol — use `for await (var x : …)` (§18.6.3)",
+                            "a `Stream<T>` has no synchronous iteration protocol -- use `for await (var x : …)` (§18.6.3)",
                         )
                         .with_span(expr_span(&f.iter)),
                     );
@@ -3173,7 +3173,7 @@ impl<'a> Checker<'a> {
                                 Diagnostic::error(
                                     code::Code::E0706_AsyncTryMutatesOuterLocal,
                                     format!(
-                                        "assignment to outer local `{name}` inside an async `try` updates a captured COPY (the async block captures by value) — accumulate through a shared handle (`AtomicInt`/`AtomicLong`, a class field) or return the value out of the try",
+                                        "assignment to outer local `{name}` inside an async `try` updates a captured COPY (the async block captures by value) -- accumulate through a shared handle (`AtomicInt`/`AtomicLong`, a class field) or return the value out of the try",
                                     ),
                                 )
                                 .with_span(span),
@@ -3219,7 +3219,7 @@ impl<'a> Checker<'a> {
                                         code::Code::E0721_MultiCatchRelated,
                                         format!(
                                             "multi-catch types must be unrelated: `{}` and \
-                                             `{}` are in a subtype relationship — keep only \
+                                             `{}` are in a subtype relationship -- keep only \
                                              the broader type",
                                             tys[i], tys[j],
                                         ),
@@ -3384,7 +3384,7 @@ impl<'a> Checker<'a> {
                         code::Code::E0456_WeakReadNeedsGet,
                         format!(
                             "`weak` parameter `{}` can only be read via `.get()` (which returns \
-                             the target type, nullable) — a bare read would expose the raw weak \
+                             the target type, nullable) -- a bare read would expose the raw weak \
                              handle (§M.14.3)",
                             qn.segments[0].text,
                         ),
@@ -3551,7 +3551,7 @@ impl<'a> Checker<'a> {
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0410_TypeMismatch,
-                                "`step` ranges are only supported as for-each iterables in Phase 1 — `for (var i : a..b step s)`",
+                                "`step` ranges are only supported as for-each iterables in Phase 1 -- `for (var i : a..b step s)`",
                             )
                             .with_span(r.span),
                         );
@@ -3909,7 +3909,7 @@ impl<'a> Checker<'a> {
                         Diagnostic::error(
                             code::Code::E0700_AwaitRequiresAsyncContext,
                             "`await` is only allowed inside an async function, method, or \
-                             lambda — mark the enclosing function `async` (e.g. `async T f()`)",
+                             lambda -- mark the enclosing function `async` (e.g. `async T f()`)",
                         )
                         .with_span(*span),
                     );
@@ -3999,7 +3999,7 @@ impl<'a> Checker<'a> {
                 Diagnostic::error(
                     code::Code::E0970_PropertyNotWritable,
                     format!(
-                        "cannot assign to read-only property `{prop_name}` of `{class_fqn}` — it has no `set` accessor (settable only in the constructor)",
+                        "cannot assign to read-only property `{prop_name}` of `{class_fqn}` -- it has no `set` accessor (settable only in the constructor)",
                     ),
                 )
                 .with_span(f.span),
@@ -4011,7 +4011,7 @@ impl<'a> Checker<'a> {
                 Diagnostic::error(
                     code::Code::E0970_PropertyNotWritable,
                     format!(
-                        "cannot assign to init-only property `{prop_name}` of `{class_fqn}` after construction — `init` accessors are settable only during construction",
+                        "cannot assign to init-only property `{prop_name}` of `{class_fqn}` after construction -- `init` accessors are settable only during construction",
                     ),
                 )
                 .with_span(f.span),
@@ -4037,7 +4037,7 @@ impl<'a> Checker<'a> {
                     Diagnostic::error(
                         code::Code::E0972_PropertyAccessorVisibility,
                         format!(
-                            "cannot write property `{prop_name}` of `{class_fqn}` {ctx} — its setter is `{word}`",
+                            "cannot write property `{prop_name}` of `{class_fqn}` {ctx} -- its setter is `{word}`",
                         ),
                     )
                     .with_span(f.span),
@@ -4124,7 +4124,7 @@ impl<'a> Checker<'a> {
                 Diagnostic::error(
                     code::Code::E0456_WeakReadNeedsGet,
                     format!(
-                        "`weak` field `{}` may not have an initializer — weak fields \
+                        "`weak` field `{}` may not have an initializer -- weak fields \
                          default to null and are assigned later (§6.5)",
                         field.name.text,
                     ),
@@ -4141,7 +4141,7 @@ impl<'a> Checker<'a> {
                 Diagnostic::error(
                     code::Code::E0455_WeakOnNonClass,
                     format!(
-                        "`weak` field `{}` must have a non-generic class type — `weak` \
+                        "`weak` field `{}` must have a non-generic class type -- `weak` \
                          breaks a refcount cycle and applies only to class references (§6.5)",
                         field.name.text,
                     ),
@@ -4160,7 +4160,7 @@ impl<'a> Checker<'a> {
                 Diagnostic::error(
                     code::Code::E0455_WeakOnNonClass,
                     format!(
-                        "`weak` parameter `{}` must have a non-generic class type — `weak` is a \
+                        "`weak` parameter `{}` must have a non-generic class type -- `weak` is a \
                          reference to a class object, reached via `.get()` (§M.14.3)",
                         param.name.text,
                     ),
@@ -4488,7 +4488,7 @@ impl<'a> Checker<'a> {
                 code::Code::E0415_ProtectedAccess,
                 format!(
                     "protected {member_kind} `{member_name}` of `{declaring_class}` cannot be \
-                     reached through a `{qualifier}` — `{accessor_bare}` is in a different \
+                     reached through a `{qualifier}` -- `{accessor_bare}` is in a different \
                      package, so it may only use a qualifier typed `{accessor_bare}` or a \
                      subclass of it (JLS 6.6.2.1)",
                 ),
@@ -4794,7 +4794,7 @@ impl<'a> Checker<'a> {
                         code::Code::E0456_WeakReadNeedsGet,
                         format!(
                             "`weak` field `{field_name}` can only be read via `.get()` \
-                             (which returns the target type, nullable) — a bare read would \
+                             (which returns the target type, nullable) -- a bare read would \
                              expose the raw weak handle",
                         ),
                     )
@@ -4823,7 +4823,7 @@ impl<'a> Checker<'a> {
                             Diagnostic::error(
                                 code::Code::E0412_UnresolvedField,
                                 format!(
-                                    "no element `{field_name}` on tuple `{receiver_ty}` — valid indices are 0..{}",
+                                    "no element `{field_name}` on tuple `{receiver_ty}` -- valid indices are 0..{}",
                                     generic_args.len(),
                                 ),
                             )
@@ -4901,7 +4901,7 @@ impl<'a> Checker<'a> {
                                 code::Code::E0437_FieldThroughPolymorphicBase,
                                 format!(
                                     "private field `{field_name}` can't be accessed through a \
-                                     `{recv_bare}` reference — `{recv_bare}` is a polymorphic base \
+                                     `{recv_bare}` reference -- `{recv_bare}` is a polymorphic base \
                                      (a dynamic-dispatch trait object), and a private field has no \
                                      accessor; make it public/protected, add a method, or hold the \
                                      value at its concrete type",
@@ -4993,7 +4993,7 @@ impl<'a> Checker<'a> {
                             Diagnostic::error(
                                 code::Code::E0412_UnresolvedField,
                                 format!(
-                                    "`.observers` is a member of an observable PROPERTY, not of `{name}` itself — write `<value>.{}.observers` (§P.3)",
+                                    "`.observers` is a member of an observable PROPERTY, not of `{name}` itself -- write `<value>.{}.observers` (§P.3)",
                                     observable[0],
                                 ),
                             )
@@ -5122,7 +5122,7 @@ impl<'a> Checker<'a> {
                         Diagnostic::error(
                             code::Code::E0445_ConstGenericUnsupported,
                             "const-generic arithmetic in array sizes (e.g. `N + 1`) is not \
-                             supported in this phase — use the bare parameter (`[N]`) or a \
+                             supported in this phase -- use the bare parameter (`[N]`) or a \
                              literal size",
                         )
                         .with_span(expr_span(size)),
@@ -5157,7 +5157,7 @@ impl<'a> Checker<'a> {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0841_NonConstInConstContext,
-                            format!("array size must be a compile-time constant — {msg}"),
+                            format!("array size must be a compile-time constant -- {msg}"),
                         )
                         .with_span(expr_span(size)),
                     );
@@ -5262,7 +5262,7 @@ impl<'a> Checker<'a> {
                             Diagnostic::error(
                                 code::Code::E0445_ConstGenericUnsupported,
                                 format!(
-                                    "`{}` is a const-generic parameter — its argument must be a \
+                                    "`{}` is a const-generic parameter -- its argument must be a \
                                      compile-time constant (`4`, `true`, or a `const` value), not \
                                      a type or a runtime value",
                                     param.name.text,
@@ -5453,7 +5453,7 @@ impl<'a> Checker<'a> {
                 Diagnostic::error(
                     code::Code::E0705_AsyncCallNotAwaited,
                     format!(
-                        "`{callee_desc}` is async — calling it produces an unstarted future and the body never runs; `await` the call (§18.1.2), or pass it to `spawn(...)` to run it as a task",
+                        "`{callee_desc}` is async -- calling it produces an unstarted future and the body never runs; `await` the call (§18.1.2), or pass it to `spawn(...)` to run it as a task",
                     ),
                 )
                 .with_span(span),
@@ -5477,7 +5477,7 @@ impl<'a> Checker<'a> {
                                 Diagnostic::error(
                                     code::Code::E0974_BindTypeMismatch,
                                     format!(
-                                        "cannot {} `{t_label}` ({t_ty}) to `{s_label}` ({s_ty}) — bound properties must have the same type (§P.4.3)",
+                                        "cannot {} `{t_label}` ({t_ty}) to `{s_label}` ({s_ty}) -- bound properties must have the same type (§P.4.3)",
                                         opf.field.text,
                                     ),
                                 )
@@ -5502,7 +5502,7 @@ impl<'a> Checker<'a> {
                                     Diagnostic::error(
                                         code::Code::E0975_ObserverShapeMismatch,
                                         format!(
-                                            "this observer lambda takes {} parameter{} — an \
+                                            "this observer lambda takes {} parameter{} -- an \
                                              observer is `() -> …` (invalidation), \
                                              `(old, now) -> …`, or `(prop, old, now) -> …` \
                                              (§P.2.2)",
@@ -5552,7 +5552,7 @@ impl<'a> Checker<'a> {
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0413_UnresolvedMethod,
-                                "`this(...)` resolves to the declaring constructor itself — a constructor can't delegate to itself",
+                                "`this(...)` resolves to the declaring constructor itself -- a constructor can't delegate to itself",
                             )
                             .with_span(c.span),
                         );
@@ -5910,7 +5910,7 @@ impl<'a> Checker<'a> {
                                 self.diagnostics.push(
                                     Diagnostic::error(
                                         code::Code::E0410_TypeMismatch,
-                                        "`Stream.generate` takes exactly one zero-parameter async lambda — `Stream.generate(async () -> …)` (§18.6.4)",
+                                        "`Stream.generate` takes exactly one zero-parameter async lambda -- `Stream.generate(async () -> …)` (§18.6.4)",
                                     )
                                     .with_span(c.span),
                                 );
@@ -6379,7 +6379,7 @@ impl<'a> Checker<'a> {
                                     Diagnostic::error(
                                         code::Code::E0448_BadNamedArgument,
                                         format!(
-                                            "`with(...)` takes NAMED arguments only — write `{name}.with(field: value)` (§M.5)"
+                                            "`with(...)` takes NAMED arguments only -- write `{name}.with(field: value)` (§M.5)"
                                         ),
                                     )
                                     .with_span(c.span),
@@ -6391,7 +6391,7 @@ impl<'a> Checker<'a> {
                                     Diagnostic::error(
                                         code::Code::E0448_BadNamedArgument,
                                         format!(
-                                            "`{}` is not a component of record `{name}` — `with(...)` accepts: {}",
+                                            "`{}` is not a component of record `{name}` -- `with(...)` accepts: {}",
                                             arg_name.text,
                                             components
                                                 .iter()
@@ -6555,7 +6555,7 @@ impl<'a> Checker<'a> {
                     Diagnostic::error(
                         code::Code::E0445_ConstGenericUnsupported,
                         format!(
-                            "`{class_name}` declares const-generic parameters — write them \
+                            "`{class_name}` declares const-generic parameters -- write them \
                              explicitly (`new {class_name}<…>(…)`); const values can't be \
                              inferred from constructor arguments",
                         ),
@@ -7143,7 +7143,7 @@ impl<'a> Checker<'a> {
                     Diagnostic::error(
                         code::Code::E0448_BadNamedArgument,
                         format!(
-                            "named arguments can't be combined with a variadic call to `{callee_name}` (Phase 1) — pass everything positionally",
+                            "named arguments can't be combined with a variadic call to `{callee_name}` (Phase 1) -- pass everything positionally",
                         ),
                     )
                     .with_span(call_span),
@@ -7184,7 +7184,7 @@ impl<'a> Checker<'a> {
                             Diagnostic::error(
                                 code::Code::E0448_BadNamedArgument,
                                 format!(
-                                    "positional argument after a named one in call to `{callee_name}` — \
+                                    "positional argument after a named one in call to `{callee_name}` -- \
                                      once a label appears, every later argument must be labeled",
                                 ),
                             )
@@ -7325,7 +7325,7 @@ impl<'a> Checker<'a> {
                             )
                         } else {
                             format!(
-                                "parameter `{}` of `{callee_name}` is `out` — the argument must \
+                                "parameter `{}` of `{callee_name}` is `out` -- the argument must \
                                  be passed as `out <place>`",
                                 param.name,
                             )
@@ -7339,7 +7339,7 @@ impl<'a> Checker<'a> {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0942_OutArgNotPlace,
-                            "an `out` argument must be an assignable place — a variable, a field, \
+                            "an `out` argument must be an assignable place -- a variable, a field, \
                              or an array element (§M.4.2)",
                         )
                         .with_span(expr_span(arg)),

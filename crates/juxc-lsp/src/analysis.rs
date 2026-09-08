@@ -429,7 +429,7 @@ version = \"0.1.0\"
                     "`Arc` should resolve into a `.jux.d` stub, got {path:?}"
                 );
             }
-            None => eprintln!("rust-docs-json not installed — skipping std goto test"),
+            None => eprintln!("rust-docs-json not installed -- skipping std goto test"),
         }
         let _ = fs::remove_dir_all(&root);
     }
@@ -728,7 +728,7 @@ version = \"0.1.0\"
 
         // Gate: no `HashMap` ⇒ `rust-docs-json` isn't installed ⇒ skip.
         let Some(pkgs) = index.type_packages.get("HashMap") else {
-            eprintln!("rust-docs-json not installed — skipping generated-std LSP test");
+            eprintln!("rust-docs-json not installed -- skipping generated-std LSP test");
             let _ = fs::remove_dir_all(&root);
             return;
         };

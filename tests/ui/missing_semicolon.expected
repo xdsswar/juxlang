@@ -1,0 +1,1 @@
+missing_semicolon.jux:3:5: [E0200] error: expected ';' after typed local declaration

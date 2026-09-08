@@ -881,7 +881,7 @@ mod catalog_tests {
                 emitted.push(code.to_string());
             }
         }
-        assert!(emitted.len() > 50, "the arm scan found almost nothing — did the format change?");
+        assert!(emitted.len() > 50, "the arm scan found almost nothing -- did the format change?");
 
         let missing: Vec<&String> = emitted
             .iter()

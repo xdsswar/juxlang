@@ -1,0 +1,9 @@
+public class AppError extends Exception {
+    public AppError(String m) { super(m); }
+}
+public void risky() throws AppError {
+    throw new AppError("no");
+}
+public void main() {
+    risky();
+}

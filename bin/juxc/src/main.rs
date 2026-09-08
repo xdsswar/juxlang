@@ -389,11 +389,32 @@ fn find_project_root(start: &Path) -> Option<PathBuf> {
 /// jump straight to the offending file — important in multi-file workspaces
 /// where the same message could come from any unit. Diagnostics without file
 /// identity or a span fall back to the bare `[Code] severity: message` form.
+/// Diagnostics in the order a reader meets them: by file, then by byte
+/// offset, then by code so two at one position stay stable.
+///
+/// The phases produce them in whatever order they run -- resolve before
+/// tycheck, and each walking its own way -- which put line 6 ahead of line 3.
+/// Sorting is what makes the list scannable against the source, and what lets
+/// an expected-output test pin the result at all.
+fn in_source_order(
+    diagnostics: &[juxc_diagnostics::Diagnostic],
+) -> Vec<&juxc_diagnostics::Diagnostic> {
+    let mut out: Vec<&juxc_diagnostics::Diagnostic> = diagnostics.iter().collect();
+    out.sort_by_key(|d| {
+        (
+            d.file.unwrap_or(usize::MAX),
+            d.primary_span.map(|s| s.start).unwrap_or(u32::MAX),
+            d.code.as_str(),
+        )
+    });
+    out
+}
+
 fn print_diagnostics(
     diagnostics: &[juxc_diagnostics::Diagnostic],
     sources: &[juxc_source::SourceFile],
 ) {
-    for d in diagnostics {
+    for d in in_source_order(diagnostics) {
         match (d.file, d.primary_span) {
             (Some(i), Some(span)) if i < sources.len() => {
                 let src = &sources[i];
@@ -439,7 +460,7 @@ fn print_diagnostics_json(
 ) {
     let mut errors = 0u32;
     let mut warnings = 0u32;
-    for d in diagnostics {
+    for d in in_source_order(diagnostics) {
         match d.severity {
             juxc_diagnostics::Severity::Error => errors += 1,
             juxc_diagnostics::Severity::Warning => warnings += 1,

@@ -1,0 +1,1 @@
+uncaught_checked_exception.jux:8:5: [E0711] error: `main` may throw the checked exception `AppError` -- catch it, or declare `throws AppError` on the signature

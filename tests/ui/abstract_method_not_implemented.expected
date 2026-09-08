@@ -1,0 +1,1 @@
+abstract_method_not_implemented.jux:4:8: [E0429] error: class `Blob` doesn't implement abstract method(s): `Shape.area`

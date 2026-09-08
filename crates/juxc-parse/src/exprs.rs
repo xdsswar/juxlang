@@ -1241,7 +1241,7 @@ impl<'a> Parser<'a> {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0260_IfExprMissingElse,
-                            "if-expression needs an `else` branch — the value form must produce a value on every path",
+                            "if-expression needs an `else` branch -- the value form must produce a value on every path",
                         )
                         .with_span(span.join(self.last_consumed_span())),
                     );
@@ -1300,7 +1300,7 @@ impl<'a> Parser<'a> {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0200_UnexpectedToken,
-                            "a try-expression can't have `finally` — there's no value it could produce; use the statement form",
+                            "a try-expression can't have `finally` -- there's no value it could produce; use the statement form",
                         )
                         .with_span(self.peek_span()),
                     );

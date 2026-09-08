@@ -1,0 +1,4 @@
+public void main() {
+    var xs = new Vec<int>();
+    xs.sort();
+}

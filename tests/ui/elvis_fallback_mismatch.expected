@@ -1,0 +1,1 @@
+elvis_fallback_mismatch.jux:3:15: [E0410] error: the fallback of `??` has type `String`, which does not fit the value's type `int` -- `a ?? b` yields `a` without its null, so `b` must be assignable to that (§7.10)

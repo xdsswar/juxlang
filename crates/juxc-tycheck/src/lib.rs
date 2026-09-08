@@ -137,7 +137,7 @@ fn flag_async_decl(f: &FnDecl, file_idx: usize, out: &mut Vec<Diagnostic>) {
             .with_span(f.span)
             .with_file(file_idx)
             .with_help(
-                "the core profile has no async runtime — rewrite with `Result<T, E>` and an \
+                "the core profile has no async runtime -- rewrite with `Result<T, E>` and an \
                  explicit state machine (§16.7), or build under the `full`/`embedded` profile",
             ),
         );
@@ -424,7 +424,7 @@ impl TypeChecker {
                 Diagnostic::error(
                     code::Code::E0320_AmbiguousEntryPoint,
                     format!(
-                        "multiple entry points in one file ({names}) — a program may have only \
+                        "multiple entry points in one file ({names}) -- a program may have only \
                          one `main`; keep one and remove or rename the others",
                     ),
                 )

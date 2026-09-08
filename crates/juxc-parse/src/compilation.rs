@@ -462,7 +462,7 @@ impl<'a> Parser<'a> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0200_UnexpectedToken,
-                    "`abstract` and `final` cannot be combined — abstract classes need subclasses",
+                    "`abstract` and `final` cannot be combined -- abstract classes need subclasses",
                 )
                 .with_span(self.peek_span()),
             );

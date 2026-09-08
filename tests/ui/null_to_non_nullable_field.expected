@@ -1,0 +1,1 @@
+null_to_non_nullable_field.jux:2:12: [E0410] error: cannot assign `null` to the non-nullable field `name` of type `String` -- declare it nullable (`String?`)

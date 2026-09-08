@@ -1,0 +1,5 @@
+public void twice() {}
+public void twice() {}
+public void main() {
+    twice();
+}

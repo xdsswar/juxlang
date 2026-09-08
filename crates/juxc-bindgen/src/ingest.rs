@@ -97,7 +97,7 @@ pub fn generate_merged_with_pool(
     Ok(StubFile {
         package: package.to_string(),
         header: vec![format!(
-            "bindgen — generated from {} rustdoc JSON crate(s) (format_version {})",
+            "bindgen -- generated from {} rustdoc JSON crate(s) (format_version {})",
             jsons.len(),
             format_version
         )],
@@ -118,7 +118,7 @@ pub fn generate(krate: &Crate, package: &str) -> StubFile {
     StubFile {
         package: package.to_string(),
         header: vec![format!(
-            "bindgen — generated from rustdoc JSON (format_version {})",
+            "bindgen -- generated from rustdoc JSON (format_version {})",
             krate.format_version
         )],
         items: collected.into_iter().map(|(_, it)| it).collect(),

@@ -1,0 +1,7 @@
+public class Secret {
+    private int hidden = 1;
+    public Secret() {}
+}
+public void main() {
+    print(new Secret().hidden);
+}

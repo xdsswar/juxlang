@@ -299,7 +299,7 @@ mod tests {
                 "AfterAll", "AfterEach", "BeforeAll", "BeforeEach", "Override",
                 "Test", "export", "extern", "layout",
             ],
-            "the honored-annotation set changed — update the editor's list too",
+            "the honored-annotation set changed -- update the editor's list too",
         );
     }
 
@@ -311,7 +311,7 @@ mod tests {
         for kw in Keyword::ALL {
             assert_eq!(Keyword::lookup(kw.as_str()), Some(*kw));
         }
-        assert_eq!(Keyword::ALL.len(), 58, "keyword count changed — update grammar spec consumers");
+        assert_eq!(Keyword::ALL.len(), 58, "keyword count changed -- update grammar spec consumers");
     }
 
 }

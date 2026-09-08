@@ -517,7 +517,7 @@ pub fn resolve_crate_stub(
     if kind != "rust" {
         anyhow::bail!(
             "no cached stub for `{kind}.{crate_name}` at {} (C/C++ stub generation \
-             is not wired in this phase — vendor a `.jux.d` into `.jux-stubs/{kind}/`)",
+             is not wired in this phase -- vendor a `.jux.d` into `.jux-stubs/{kind}/`)",
             cache.display()
         );
     }

@@ -790,7 +790,7 @@ impl<'a> Parser<'a> {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0200_UnexpectedToken,
-                            "interface fields cannot be `private` or `protected` — they are implicitly public",
+                            "interface fields cannot be `private` or `protected` -- they are implicitly public",
                         )
                         .with_span(self.peek_span()),
                     );
@@ -808,7 +808,7 @@ impl<'a> Parser<'a> {
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0200_UnexpectedToken,
-                                "interface field must be initialized — every interface field is implicitly `public static final`",
+                                "interface field must be initialized -- every interface field is implicitly `public static final`",
                             )
                             .with_span(field.span),
                         );
@@ -992,7 +992,7 @@ impl<'a> Parser<'a> {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0200_UnexpectedToken,
-                        "the accessor block must come before `=` — write \
+                        "the accessor block must come before `=` -- write \
                          `Name { get; set; } = init;`, not `Name = { get; set; }`",
                     )
                     .with_span(here),
@@ -1119,7 +1119,7 @@ impl<'a> Parser<'a> {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0200_UnexpectedToken,
-                            "the `init` accessor was removed (§P) — use `{ get; }` for a \
+                            "the `init` accessor was removed (§P) -- use `{ get; }` for a \
                              read-only property settable in the constructor, or `{ get; set; }`",
                         )
                         .with_span(here),
@@ -1509,7 +1509,7 @@ impl<'a> Parser<'a> {
                                 self.diagnostics.push(
                                     Diagnostic::error(
                                         code::Code::E0200_UnexpectedToken,
-                                        "records cannot have instance fields — the header \
+                                        "records cannot have instance fields -- the header \
                                          components are the only instance state; mark this \
                                          field `static` or move it to a class",
                                     )
@@ -1800,7 +1800,7 @@ impl<'a> Parser<'a> {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::Code::E0200_UnexpectedToken,
-                            "expected `has` in where-constraint — `where T has operator OP(..) -> R`",
+                            "expected `has` in where-constraint -- `where T has operator OP(..) -> R`",
                         )
                         .with_span(self.peek_span()),
                     );
@@ -1903,7 +1903,7 @@ impl<'a> Parser<'a> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0200_UnexpectedToken,
-                    "`@extern` on a `native` block needs a library name — `@extern(lib = \"name\")`",
+                    "`@extern` on a `native` block needs a library name -- `@extern(lib = \"name\")`",
                 )
                 .with_span(start),
             );
@@ -1915,7 +1915,7 @@ impl<'a> Parser<'a> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0200_UnexpectedToken,
-                    "a `native` foreign-function block must be `unsafe` — `unsafe native { … }`",
+                    "a `native` foreign-function block must be `unsafe` -- `unsafe native { … }`",
                 )
                 .with_span(self.peek_span()),
             );
@@ -2510,7 +2510,7 @@ impl<'a> Parser<'a> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::Code::E0200_UnexpectedToken,
-                    "`final` is not allowed on a constructor parameter — a constructor \
+                    "`final` is not allowed on a constructor parameter -- a constructor \
                      parameter is forwarded into a field, whose binding mode applies instead",
                 )
                 .with_span(final_span),
@@ -2588,7 +2588,7 @@ impl<'a> Parser<'a> {
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0200_UnexpectedToken,
-                        "`...` can't follow an array type — a variadic parameter is already an array of its element type",
+                        "`...` can't follow an array type -- a variadic parameter is already an array of its element type",
                     )
                     .with_span(self.last_consumed_span()),
                 );

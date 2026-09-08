@@ -117,7 +117,7 @@ mod tests {
         assert_eq!(
             actual.replace("\r\n", "\n"),
             expected,
-            "{} is stale — regenerate with `JUX_BLESS=1 cargo test -p juxc-driver grammar_export`",
+            "{} is stale -- regenerate with `JUX_BLESS=1 cargo test -p juxc-driver grammar_export`",
             path.display(),
         );
     }

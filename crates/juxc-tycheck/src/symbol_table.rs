@@ -1420,7 +1420,7 @@ fn check_unannotated_cycles(table: &SymbolTable, diagnostics: &mut Vec<Diagnosti
                     Diagnostic::warning(
                         code::Code::W0457_UnannotatedRefCycle,
                         format!(
-                            "field `{fname}` forms a reference cycle on class `{bare}` — \
+                            "field `{fname}` forms a reference cycle on class `{bare}` -- \
                              classes are `Rc`-refcounted and `Rc` does not collect cycles, \
                              so this leaks; mark a back-edge field `weak` to break it (§6.5)",
                         ),
@@ -1531,7 +1531,7 @@ fn check_imports_resolve(
                             code::Code::E0303_ConflictingImport,
                             format!(
                                 "conflicting imports: the name `{bind}` is imported from \
-                                     both `{prev}` and `{fqn}` — give one an `as` alias \
+                                     both `{prev}` and `{fqn}` -- give one an `as` alias \
                                      (`import {fqn} as {bind}2;`) or use a fully-qualified name",
                             ),
                         )
@@ -1589,7 +1589,7 @@ fn check_imports_resolve(
                                 Diagnostic::error(
                                     code::Code::E0302_SamePackageImport,
                                     format!(
-                                        "`{fqn}` is in this file's own package `{unit_pkg}` — \
+                                        "`{fqn}` is in this file's own package `{unit_pkg}` -- \
                                          same-package types are already visible without an import; \
                                          remove this line and refer to `{leaf}` directly",
                                     ),
@@ -2765,7 +2765,7 @@ fn check_polymorphic_base_generic_methods(table: &SymbolTable, diagnostics: &mut
                     code::Code::E0438_GenericVirtualMethod,
                     format!(
                         "class `{bare}` is a polymorphic base (it's extended), so its virtual \
-                         method `{name}` would dispatch through a `dyn` trait object — but `{name}` \
+                         method `{name}` would dispatch through a `dyn` trait object -- but `{name}` \
                          has generic type parameters, which isn't object-safe; make it non-generic, \
                          mark it `final`, or seal the hierarchy",
                     ),
@@ -2803,7 +2803,7 @@ fn check_interface_on_exception_class(table: &SymbolTable, diagnostics: &mut Vec
                 code::Code::E0436_InterfaceOnExceptionClass,
                 format!(
                     "class `{class_name}` extends the exception hierarchy and implements an \
-                     interface — interface dynamic dispatch isn't supported for exception \
+                     interface -- interface dynamic dispatch isn't supported for exception \
                      classes yet (they can't use the interior-mutable representation that \
                      `Rc<dyn Trait>` requires)",
                 ),
@@ -2978,7 +2978,7 @@ fn check_method_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>
                                 code::Code::E0450_AmbiguousOverload,
                                 format!(
                                     "ambiguous overload of `{class_name}.{name}`: two \
-                                     declarations have the same parameter types — \
+                                     declarations have the same parameter types -- \
                                      overloads must differ in argument count or in at \
                                      least one parameter type (§T.3)",
                                 ),
@@ -3031,7 +3031,7 @@ fn check_constructor_overloads(table: &SymbolTable, diagnostics: &mut Vec<Diagno
                             code::Code::E0450_AmbiguousOverload,
                             format!(
                                 "ambiguous constructor overload on `{class_name}`: two \
-                                 constructors have the same parameter types — overloads \
+                                 constructors have the same parameter types -- overloads \
                                  must differ in argument count or in at least one \
                                  parameter type (§T.3)",
                             ),
@@ -3164,7 +3164,7 @@ fn check_method_modifier_combinations(table: &SymbolTable, diagnostics: &mut Vec
                     Diagnostic::error(
                         code::Code::E0431_InvalidMethodModifiers,
                         format!(
-                            "method `{class_name}.{method_name}` is declared `abstract` but `{class_name}` is not — `abstract` methods are only allowed in `abstract` classes",
+                            "method `{class_name}.{method_name}` is declared `abstract` but `{class_name}` is not -- `abstract` methods are only allowed in `abstract` classes",
                         ),
                     )
                     .with_span(method.span),
@@ -3175,7 +3175,7 @@ fn check_method_modifier_combinations(table: &SymbolTable, diagnostics: &mut Vec
                     Diagnostic::error(
                         code::Code::E0431_InvalidMethodModifiers,
                         format!(
-                            "method `{class_name}.{method_name}` declares both `abstract` and `static` — these modifiers cannot coexist",
+                            "method `{class_name}.{method_name}` declares both `abstract` and `static` -- these modifiers cannot coexist",
                         ),
                     )
                     .with_span(method.span),
@@ -3186,7 +3186,7 @@ fn check_method_modifier_combinations(table: &SymbolTable, diagnostics: &mut Vec
                     Diagnostic::error(
                         code::Code::E0431_InvalidMethodModifiers,
                         format!(
-                            "method `{class_name}.{method_name}` declares both `abstract` and `final` — an abstract method must be overridable",
+                            "method `{class_name}.{method_name}` declares both `abstract` and `final` -- an abstract method must be overridable",
                         ),
                     )
                     .with_span(method.span),
@@ -3197,7 +3197,7 @@ fn check_method_modifier_combinations(table: &SymbolTable, diagnostics: &mut Vec
                     Diagnostic::error(
                         code::Code::E0431_InvalidMethodModifiers,
                         format!(
-                            "method `{class_name}.{method_name}` is `private` and `abstract` — a private method can't be overridden, so it can't be abstract",
+                            "method `{class_name}.{method_name}` is `private` and `abstract` -- a private method can't be overridden, so it can't be abstract",
                         ),
                     )
                     .with_span(method.span),
@@ -3231,7 +3231,7 @@ fn check_top_level_visibility(table: &SymbolTable, diagnostics: &mut Vec<Diagnos
                     Diagnostic::error(
                         code::Code::E0432_InvalidTopLevelVisibility,
                         format!(
-                            "top-level class `{name}` cannot be `{}` — use `public` or omit the modifier",
+                            "top-level class `{name}` cannot be `{}` -- use `public` or omit the modifier",
                             visibility_label(class.visibility),
                         ),
                     )
@@ -3251,7 +3251,7 @@ fn check_top_level_visibility(table: &SymbolTable, diagnostics: &mut Vec<Diagnos
                     Diagnostic::error(
                         code::Code::E0432_InvalidTopLevelVisibility,
                         format!(
-                            "top-level interface `{name}` cannot be `{}` — use `public` or omit the modifier",
+                            "top-level interface `{name}` cannot be `{}` -- use `public` or omit the modifier",
                             visibility_label(iface.visibility),
                         ),
                     )
@@ -3323,7 +3323,7 @@ fn check_override_does_not_narrow_access(table: &SymbolTable, diagnostics: &mut 
                             Diagnostic::error(
                                 code::Code::E0433_OverrideNarrowsAccess,
                                 format!(
-                                    "override `{child_name}.{method_name}` is `{}` but the inherited method `{ancestor_name}.{method_name}` is `{}` — an override cannot narrow visibility",
+                                    "override `{child_name}.{method_name}` is `{}` but the inherited method `{ancestor_name}.{method_name}` is `{}` -- an override cannot narrow visibility",
                                     visibility_label(child_method.visibility),
                                     visibility_label(ancestor_method.visibility),
                                 ),
@@ -4226,7 +4226,7 @@ fn check_individual_ordering_completeness(
             code::Code::E0930_OperatorConflict,
             format!(
                 "{kind_label} `{decl_name}` declares some individual ordering operators \
-                 but not all four — missing {missing_list}",
+                 but not all four -- missing {missing_list}",
             ),
         )
         .with_span(anchor_span)
@@ -4271,7 +4271,7 @@ fn check_cmp_individual_conflict(
                 code::Code::E0930_OperatorConflict,
                 format!(
                     "{kind_label} `{decl_name}` defines both `operator<=>` and \
-                     `operator{}` — pick one form, not both",
+                     `operator{}` -- pick one form, not both",
                     operator_kind_display(op.kind),
                 ),
             )

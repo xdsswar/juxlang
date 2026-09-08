@@ -69,7 +69,7 @@ impl<'a> Parser<'a> {
                                     juxc_diagnostics::code::Code::E0445_ConstGenericUnsupported,
                                     format!(
                                         "const-generic parameters of type `{first}` are not \
-                                         supported in this phase — only `int` and `bool` are",
+                                         supported in this phase -- only `int` and `bool` are",
                                     ),
                                 )
                                 .with_span(start),

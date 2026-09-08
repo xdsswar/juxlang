@@ -1797,7 +1797,7 @@ fn build_completions(doc: &Document, ws: &Workspace, uri: &Url, offset: usize) -
         if seen.insert(name.clone()) {
             let import = auto_import_for(name, ws, cur_pkg.as_deref(), &doc.rope);
             let detail = match &import {
-                Some(_) => Some(format!("project type — auto-imports {name}")),
+                Some(_) => Some(format!("project type -- auto-imports {name}")),
                 None => Some("project type".to_string()),
             };
             items.push(CompletionItem {
@@ -1928,7 +1928,7 @@ impl Backend {
                 .show_message(
                     MessageType::WARNING,
                     format!(
-                        "jux: {} crate stub(s) couldn't be generated — those crates \
+                        "jux: {} crate stub(s) couldn't be generated -- those crates \
                          won't autocomplete. See the output log for details \
                          (a nightly toolchain with the `rust-docs-json` component \
                          and network access is required).",

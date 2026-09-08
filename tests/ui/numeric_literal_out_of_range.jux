@@ -1,0 +1,4 @@
+public void main() {
+    long big = 99999999999999999999;
+    print(big);
+}

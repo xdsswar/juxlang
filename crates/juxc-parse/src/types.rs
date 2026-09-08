@@ -81,9 +81,9 @@ impl<'a> Parser<'a> {
                     Diagnostic::error(
                         code::Code::E0200_UnexpectedToken,
                         if elems.is_empty() {
-                            "the unit tuple type `()` is reserved and has no meaning yet — use `void` for no-value returns"
+                            "the unit tuple type `()` is reserved and has no meaning yet -- use `void` for no-value returns"
                         } else {
-                            "a tuple type needs at least two elements — parenthesizing a single type has no effect"
+                            "a tuple type needs at least two elements -- parenthesizing a single type has no effect"
                         },
                     )
                     .with_span(start.join(self.last_consumed_span())),

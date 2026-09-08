@@ -1,0 +1,1 @@
+string_has_no_compareto.jux:3:13: [E0413] error: no method `compareTo` on `String` -- use `<=>`, or the `<` / `>` operators it derives

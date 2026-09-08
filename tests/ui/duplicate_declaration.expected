@@ -1,0 +1,1 @@
+duplicate_declaration.jux:2:8: [E0400] error: `twice` is declared more than once at the top level

@@ -1,0 +1,1 @@
+generic_bound_violated.jux:8:13: [E0446] error: type `Rock` does not satisfy the bound `T extends Animal` declared by class `Pen`

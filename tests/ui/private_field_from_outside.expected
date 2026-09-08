@@ -1,0 +1,1 @@
+private_field_from_outside.jux:6:11: [E0414] error: cannot access private field `hidden` of `Secret` from top-level code

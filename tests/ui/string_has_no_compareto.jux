@@ -1,0 +1,4 @@
+public void main() {
+    String a = "x";
+    print(a.compareTo("y"));
+}

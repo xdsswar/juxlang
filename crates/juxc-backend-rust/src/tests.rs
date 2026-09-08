@@ -1311,7 +1311,7 @@ fn indexed_assignment_promotes_array_to_let_mut() {
     let rust = emit(
         "public void main() { int[3] xs = new int[3]; xs[0] = 1; }",
     );
-    assert!(rust.contains("let mut xs:"), "expected `let mut xs:` — got: {rust}");
+    assert!(rust.contains("let mut xs:"), "expected `let mut xs:` -- got: {rust}");
 }
 
 /// `arr.length` lowers to `arr.len() as isize` — Java-int-typed
@@ -1420,7 +1420,7 @@ fn bare_init_on_fixed_lhs_emits_rust_array_literal() {
     );
     assert!(
         !rust.contains("vec!"),
-        "fixed-LHS bare init must not emit vec! — got: {rust}",
+        "fixed-LHS bare init must not emit vec! -- got: {rust}",
     );
 }
 

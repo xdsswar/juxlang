@@ -171,7 +171,7 @@ fn clone_into_temp(dep: &Dependency, url: &str, dir: &Path) -> Result<()> {
 fn validated(dep: &Dependency, dir: &Path) -> Result<PathBuf> {
     if !dir.join("jux.toml").is_file() {
         bail!(
-            "git dependency `{}` ({}) has no jux.toml at its root — not a Jux package",
+            "git dependency `{}` ({}) has no jux.toml at its root -- not a Jux package",
             dep.name,
             dep.git.as_deref().unwrap_or("?"),
         );
@@ -188,7 +188,7 @@ fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<()> {
     }
     let out = cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow!("`git` is not installed or not on PATH — git dependencies need the git CLI")
+            anyhow!("`git` is not installed or not on PATH -- git dependencies need the git CLI")
         } else {
             anyhow!("failed to spawn git: {e}")
         }

@@ -432,7 +432,7 @@ impl Resolver {
             Diagnostic::error(
                 code::Code::E0305_RustKeywordIdentifier,
                 format!(
-                    "`{name}` can't be used as a Jux name: it is one of the four Rust reserved words with no escaped form, and Jux lowers to Rust. Every other reserved word is fine — rename this one",
+                    "`{name}` can't be used as a Jux name: it is one of the four Rust reserved words with no escaped form, and Jux lowers to Rust. Every other reserved word is fine -- rename this one",
                 ),
             )
             .with_span(span),

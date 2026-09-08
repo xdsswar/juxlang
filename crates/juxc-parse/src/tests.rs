@@ -1464,7 +1464,7 @@ fn bit_and_is_looser_than_equality() {
     let Expr::Binary(and) = &call.args[0] else { panic!() };
     assert_eq!(and.op, BinaryOp::BitAnd);
     let Expr::Binary(eq) = &*and.right else {
-        panic!("rhs of `&` should be a `==` subexpr — & is looser than ==");
+        panic!("rhs of `&` should be a `==` subexpr -- & is looser than ==");
     };
     assert_eq!(eq.op, BinaryOp::Eq);
 }
