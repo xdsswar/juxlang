@@ -5426,3 +5426,59 @@ fn ident_words_finds_identifiers_and_skips_digit_led_runs() {
     assert!(!words.contains("xff"), "digit-led run leaked a tail: {words:?}");
     assert!(!words.contains("rd"), "digit-led run leaked a tail: {words:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Statement-scoped indexed writes (§CR.4.1 NORMATIVE)
+// ---------------------------------------------------------------------------
+
+/// The discipline costs nothing when nothing could conflict. A literal value
+/// and a plain local index stay inline — this is the guard on "emitted Rust
+/// must look hand-written", and the reason the lowering asks "is this operand
+/// provably borrow-free?" rather than hoisting everything.
+#[test]
+fn indexed_assign_stays_inline_when_nothing_can_borrow() {
+    let rust = emit("public void main() { int[3] xs = new int[3]; var i = 0; xs[i] = 7; }");
+    assert!(rust.contains("xs.borrow_mut()[(i) as usize] = 7;"), "got: {rust}");
+    assert!(!rust.contains("__jux_v"), "no temp should appear: {rust}");
+    assert!(!rust.contains("__jux_c"), "no temp should appear: {rust}");
+}
+
+/// `a[j] = a[j + 1]` — the swap at the heart of every sort. The read is bound
+/// first so the store's `borrow_mut()` is the only live guard; emitting both
+/// inline aborted at run time with "RefCell already borrowed".
+#[test]
+fn indexed_assign_hoists_a_read_of_the_same_array() {
+    let rust = emit(
+        "public void main() { int[3] a = new int[3]; var j = 0; a[j] = a[j + 1]; }",
+    );
+    assert!(rust.contains("let __jux_v = a.borrow()[(j + 1) as usize]"), "got: {rust}");
+    assert!(rust.contains("a.borrow_mut()[(j) as usize] = __jux_v"), "got: {rust}");
+}
+
+/// The target's OWN index may read the array being written.
+#[test]
+fn indexed_assign_hoists_a_self_referential_index() {
+    let rust = emit("public void main() { int[3] a = new int[3]; a[a[0]] = 5; }");
+    assert!(rust.contains("let __jux_i = a.borrow()[0]"), "got: {rust}");
+    assert!(rust.contains("a.borrow_mut()[(__jux_i) as usize] = 5"), "got: {rust}");
+}
+
+/// A hoisted value keeps every coercion the slot demands. The previous hoist
+/// rewrote the value to a synthetic path and re-entered the store, where the
+/// upcast consulted that path's type and found nothing — silently dropping the
+/// `Rc<dyn …>` wrap.
+#[test]
+fn indexed_assign_keeps_the_interface_upcast_through_a_hoist() {
+    let rust = emit(
+        "public interface Shape { String kind(); } \
+         public class Circle implements Shape { public String kind() { return \"c\"; } } \
+         public void main() { \
+           var shapes = new Vec<Shape>(); \
+           var i = 0; \
+           shapes[i] = new Circle(); }",
+    );
+    assert!(
+        rust.contains("std::rc::Rc::new(Circle") || rust.contains("as std::rc::Rc<dyn"),
+        "the upcast must survive: {rust}",
+    );
+}

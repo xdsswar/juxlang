@@ -42,11 +42,15 @@ fn ffi_strings() {
 #[cfg(windows)]
 #[test]
 fn ffi_struct() {
-    common::expect_output(
+    // `GetCursorPos` fills the struct with the LIVE mouse position, so the
+    // coordinates are whatever the pointer happens to be doing. Only the
+    // parts a run can repeat are pinned: that the call succeeded, and that
+    // the struct round-tripped through C and back.
+    common::expect_contains(
         "ffi_struct",
         "ffi-struct",
         &[
-            "ok=1 cursor=(281, 717)",
+            "ok=1 cursor=(",
             "a.x=99 b.x=1",
         ],
     );

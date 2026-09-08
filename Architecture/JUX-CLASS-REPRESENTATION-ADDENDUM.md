@@ -324,9 +324,26 @@ held across a method call or across statements**.
 
 - Read `a.f.g()` → borrow `a` to pull `f` (clone if non-`Copy`), drop the guard,
   *then* call `.g()`. Never `a.borrow().f.g()` (guard alive during `g`).
-- Write `a.f = expr` → evaluate `expr` first, then take a one-statement
-  `borrow_mut()` to store it (same scoped-temp shape already used for mutable
-  statics in §CR.5.7's deadlock-avoidance rule).
+- Write `PLACE = expr` → evaluate everything the place and the value need
+  first, then take a one-statement `borrow_mut()` to store it (same scoped-temp
+  shape already used for mutable statics in §CR.5.7's deadlock-avoidance
+  rule). This covers every place, not just a field:
+  - `a.f = expr` — bind `expr`, then borrow `a`.
+  - `a[i] = expr` — bind the receiver, then `i`, then `expr`, then borrow.
+    The order is the one `JUX-SEMANTICS-ADDENDUM.md` §S.1 already requires,
+    and binding the RECEIVER is what makes a nested place work: reading
+    `rows[0]` out of the outer cell releases the outer guard, so the row's
+    borrow is the only one live at the store.
+  - An operand that provably takes no borrow — a literal, a local, a
+    parameter, or an operator over those — needs no temporary, so an
+    ordinary `a[i] = 0` lowers to exactly that and nothing more.
+
+  The condition is deliberately NOT "hoist when the value aliases the place".
+  Whether two expressions reach one object is a question about runtime
+  identity, and a compiler that guesses at it is wrong for `int[] b = a;
+  a[i] = b[0];`. Asking instead whether an operand can borrow at all is a
+  question the compiler can answer, and being wrong about it costs a redundant
+  binding rather than a panic.
 - A method body borrows `self` per field-access, not once for the whole method,
   so calling another method on `this` mid-body can't double-borrow.
 

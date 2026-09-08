@@ -55,20 +55,19 @@ impl RustEmitter {
             self.w.push(')');
             return;
         }
-        let emitting_lvalue = self.emitting_lvalue;
+        // TAKE the flag, do not copy it. Only the OUTERMOST index is the place
+        // being written; `i.array` and `i.index` are rvalues. Leaving it set
+        // made a nested write take the exclusive borrow at every level --
+        // `outer.borrow_mut()[0].borrow_mut()[1]` -- which is two guards on
+        // one cell and a runtime panic (§CR.4.1).
+        let emitting_lvalue = std::mem::take(&mut self.emitting_lvalue);
         // MAP indexing (`scores["alice"]`): a container whose real
         // Rust `Index` impl takes a BORROWED key (`Index<&K>`) gets
         // `map[&key]`, not the sequence cast. DISCOVERED from the
         // stub's `@RustIndexRef` marker (bindgen reads the type's
         // actual trait impls); the name fallback only covers stub
         // caches generated before the marker existed.
-        let map_index = match self.expr_types.get(&crate::exprs::expr_span_of(&i.array)) {
-            Some(juxc_tycheck::Ty::User { name, .. }) => {
-                let bare = name.rsplit('.').next().unwrap_or(name);
-                self.class_indexes_by_ref(bare)
-            }
-            _ => false,
-        };
+        let map_index = self.index_takes_ref_key(&i.array);
         // The indexed array is a borrowed PLACE — `xs[i]` never owns
         // `xs`. Mark it like a method receiver so a collection-typed
         // field read (`this.items[0]`) doesn't take the value-position
@@ -82,28 +81,13 @@ impl RustEmitter {
         // exclusive borrow - `Ref` derefs to `&Vec<T>`, which cannot be written
         // through (rustc E0596).
         if self.expr_is_collection_handle(&i.array) {
-            self.w.push_str(if self.emitting_lvalue {
+            self.w.push_str(if emitting_lvalue {
                 ".borrow_mut()"
             } else {
                 ".borrow()"
             });
         }
-        self.w.push('[');
-        if map_index {
-            self.w.push_str("&(");
-            let prev = self.emitting_format_arg;
-            self.emitting_format_arg = false;
-            self.emit_expr(&i.index);
-            self.emitting_format_arg = prev;
-            self.w.push(')');
-        } else if matches!(&*i.index, Expr::Literal(Literal::Int(_))) {
-            self.emit_expr(&i.index);
-        } else {
-            self.w.push('(');
-            self.emit_expr(&i.index);
-            self.w.push_str(") as usize");
-        }
-        self.w.push(']');
+        self.emit_index_key(map_index, &i.index);
         // Rvalue index reads of non-Copy elements (String, value
         // classes, nested arrays) clone out — `xs[0]` would otherwise
         // move out of the Vec (rustc E0507). Lvalue positions
@@ -137,6 +121,49 @@ impl RustEmitter {
                     self.w.push_str(".clone()");
                 }
             }
+        }
+    }
+
+    /// Emit `[key]` in whichever of the three shapes the container wants.
+    ///
+    /// - A container whose real Rust `Index` impl takes a BORROWED key
+    ///   (`map_index`, DISCOVERED from the stub's `@RustIndexRef` marker) gets
+    ///   `[&(key)]`.
+    /// - A bare integer literal indexes directly; Rust infers `usize`.
+    /// - Anything else is a Jux `int` (`isize`) and needs the cast.
+    ///
+    /// Shared with the assignment path so an indexed WRITE shapes its key the
+    /// same way an indexed read does -- the store used to hard-code the
+    /// `as usize` form, which turned a map-typed field write into
+    /// `("a".to_string()) as usize`.
+    pub(crate) fn emit_index_key(&mut self, map_index: bool, key: &Expr) {
+        self.w.push('[');
+        if map_index {
+            self.w.push_str("&(");
+            let prev = self.emitting_format_arg;
+            self.emitting_format_arg = false;
+            self.emit_expr(key);
+            self.emitting_format_arg = prev;
+            self.w.push(')');
+        } else if matches!(key, Expr::Literal(Literal::Int(_))) {
+            self.emit_expr(key);
+        } else {
+            self.w.push('(');
+            self.emit_expr(key);
+            self.w.push_str(") as usize");
+        }
+        self.w.push(']');
+    }
+
+    /// True when indexing `array` uses a BORROWED key (`map[&k]`) rather than
+    /// the sequence cast. Discovered from the container's `@RustIndexRef`.
+    pub(crate) fn index_takes_ref_key(&self, array: &Expr) -> bool {
+        match self.expr_types.get(&crate::exprs::expr_span_of(array)) {
+            Some(juxc_tycheck::Ty::User { name, .. }) => {
+                let bare = name.rsplit('.').next().unwrap_or(name);
+                self.class_indexes_by_ref(bare)
+            }
+            _ => false,
         }
     }
 

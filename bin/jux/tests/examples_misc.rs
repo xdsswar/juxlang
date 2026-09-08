@@ -455,3 +455,30 @@ fn swap_casts_and_safe_nav() {
         ],
     );
 }
+
+#[test]
+fn indexed_writes() {
+    // Every shape of indexed write that can alias the cell being written:
+    // the swap at the heart of a sort, a self-referential index, a value that
+    // is a call borrowing the same array, a nested collection row, and map
+    // writes through a field. Each of these aborted at run time, or failed to
+    // compile, before the statement-scoped lowering (§CR.4.1).
+    common::expect_output(
+        "indexed_writes",
+        "indexed-writes",
+        &[
+            "1,2,3,5,6,7,8,9,",
+            "3",
+            "-1",
+            "77",
+            "2",
+            "[[10, 10]]",
+            "[[10, 10], [1, 2]]",
+            "2",
+            "1",
+            "2",
+            "9",
+            "ok",
+        ],
+    );
+}

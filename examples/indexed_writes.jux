@@ -1,0 +1,133 @@
+// Writing through an index, in every shape that can alias.
+//
+// A collection and an array are reference types (6.5.1, 6.5.2), so both lower
+// to a shared cell. A write takes that cell exclusively. If anything else in
+// the same statement also reaches the cell -- the value, the index, or an
+// inner row -- there are two live borrows and the program ABORTS, at run time,
+// on code with nothing wrong with it.
+//
+// `JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.4.1 says what to do about it, and
+// says it normatively: evaluate the value first, then take the borrow. This
+// example is every case of that rule.
+//
+// Expected output:
+//   1,2,3,5,6,7,8,9,
+//   3
+//   -1
+//   77
+//   2
+//   [[10, 10]]
+//   [[10, 10], [1, 2]]
+//   2
+//   1
+//   2
+//   9
+//   ok
+
+public void bubble(int[] a) {
+    for (int i = 0; i < a.length; i++) {
+        for (int j = 0; j < a.length - 1 - i; j++) {
+            if (a[j] > a[j + 1]) {
+                // The swap: the value reads the very array being written.
+                int t = a[j];
+                a[j] = a[j + 1];
+                a[j + 1] = t;
+            }
+        }
+    }
+}
+
+public int bsearch(int[] a, int target) {
+    int lo = 0;
+    int hi = a.length - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (a[mid] == target) {
+            return mid;
+        }
+        if (a[mid] < target) {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return -1;
+}
+
+/// Takes the array and reads it. The caller writes the result back INTO that
+/// same array, so whatever this borrows must be released first.
+public int firstPlusOne(int[] xs) {
+    return xs[0] + 1;
+}
+
+public class Board {
+    public HashMap<String, int> scores;
+    public Vec<Vec<int>> rows;
+
+    public Board() {
+        this.scores = new HashMap<String, int>();
+        this.rows = new Vec<Vec<int>>();
+    }
+
+    /// An indexed write to a MAP field. Rust's `HashMap` has no `IndexMut` --
+    /// indexing a missing key would have to invent a value -- so this is an
+    /// insert, not an indexed store.
+    public void put(String k, int v) {
+        this.scores[k] = v;
+    }
+}
+
+public void main() {
+    int[] a = new int[8];
+    a[0] = 5; a[1] = 3; a[2] = 9; a[3] = 1;
+    a[4] = 7; a[5] = 2; a[6] = 8; a[7] = 6;
+    bubble(a);
+    String out = "";
+    for (int v : a) {
+        out = out + v + ",";
+    }
+    print(out);
+    print(bsearch(a, 5));
+    print(bsearch(a, 100));
+
+    // The target's own INDEX reads the array being written.
+    a[a[0]] = 77;
+    print(a[1]);
+
+    // The value is a CALL that borrows the same array.
+    a[2] = firstPlusOne(a);
+    print(a[2]);
+
+    // A NESTED collection: the row is one cell, the outer another, and both
+    // sides of this statement reach the row.
+    var outer = new Vec<Vec<int>>();
+    var r0 = new Vec<int>();
+    r0.push(10);
+    r0.push(20);
+    outer.push(r0);
+    outer[0][1] = outer[0][0];
+    print(outer);
+
+    // Replacing a whole row, through a field.
+    var b = new Board();
+    b.rows.push(r0);
+    var r1 = new Vec<int>();
+    r1.push(1);
+    r1.push(2);
+    b.rows.push(r1);
+    print(b.rows);
+    print(b.rows.len());
+
+    // Map writes, through a method and directly on the field.
+    b.put("a", 1);
+    b.scores["b"] = 2;
+    print(b.scores.get("a"));
+    print(b.scores.get("b"));
+
+    // And the ordinary case, which must stay ordinary: nothing here can take
+    // a second borrow, so nothing is hoisted.
+    int i = 3;
+    a[i] = 9;
+    print(a[i]);
+    print("ok");
+}

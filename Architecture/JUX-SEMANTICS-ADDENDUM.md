@@ -36,7 +36,7 @@ Every sub-expression is evaluated **left-to-right**. There is no implementation-
 
 - In `f(g(), h(), i())`, `g()` runs before `h()`, which runs before `i()`, which runs before `f`'s body.
 - In `a.b.c`, `a` is evaluated, then `.b` is read, then `.c` is read. (For class instances this matters because each `.` may take a borrow.)
-- In `arr[index] = value`, the receiver `arr` is evaluated, then `index`, then `value`, then the assignment is performed via `operator[]=`.
+- In `arr[index] = value`, the receiver `arr` is evaluated, then `index`, then `value`, then the assignment is performed via `operator[]=`. Each of the first three is *complete* before the next begins, and all three are complete before the write starts — so any access `index` or `value` makes to `arr` itself has finished by the time the write takes it. `a[j] = a[j + 1]` therefore means what it reads as.
 - In `a + b * c`, `a` is read, then `b`, then `c`, then `b * c` is computed, then the result is added to `a`.
 - In compound assignment `a += b`, the LHS is evaluated **once**: `a += b` is `a = (a) + (b)` where `a` is read once, not twice. (C++ users: this matches `a += b` as a single operator call, not the desugaring trap.)
 - Arguments to a constructor (`new Foo(a, b)`) are evaluated left-to-right before `Foo`'s constructor body runs.

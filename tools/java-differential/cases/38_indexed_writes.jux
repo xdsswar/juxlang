@@ -1,0 +1,45 @@
+// Writing through an index where the value, the index, or an inner row
+// reaches the very collection being written. Java does all of this without
+// comment; Jux has to release each read before taking the write, because a
+// collection is one shared cell (6.5.1) and a write takes it exclusively.
+public int firstPlusOne(int[] xs) {
+    return xs[0] + 1;
+}
+public void main() {
+    int[] a = new int[5];
+    a[0] = 4; a[1] = 3; a[2] = 2; a[3] = 1; a[4] = 0;
+
+    // The swap.
+    int t = a[0];
+    a[0] = a[1];
+    a[1] = t;
+    print(a[0]);
+    print(a[1]);
+
+    // The index reads the array being written.
+    a[a[4]] = 77;
+    print(a[0]);
+
+    // The value is a call that reads it.
+    a[2] = firstPlusOne(a);
+    print(a[2]);
+
+    // Compound, both sides on the same array.
+    a[3] += a[2];
+    print(a[3]);
+
+    // A nested collection: the row is reached from both sides.
+    var rows = new Vec<Vec<int>>();
+    var r0 = new Vec<int>();
+    r0.push(10);
+    r0.push(20);
+    rows.push(r0);
+    rows[0][1] = rows[0][0];
+    print(rows[0][0]);
+    print(rows[0][1]);
+
+    // And the plain case.
+    int i = 4;
+    a[i] = 9;
+    print(a[4]);
+}

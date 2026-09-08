@@ -2653,71 +2653,7 @@ impl RustEmitter {
         fsig.ty.array_shape.clone()
     }
 
-    /// The handle a write goes THROUGH, when the target is an index into one.
-    ///
-    /// `a[i] = v` takes `a.borrow_mut()` for the whole statement, so anything
-    /// else in the same statement that borrows `a` is a second live guard.
-    fn assign_target_handle_key(&self, target: &Expr) -> Option<String> {
-        let Expr::Index(i) = target else { return None };
-        if !self.expr_is_collection_handle(&i.array) {
-            return None;
-        }
-        Self::receiver_place_key(&i.array)
-    }
-
-    /// True when `value` reads the same handle the target writes through.
-    fn expr_reads_handle(&self, value: &Expr, key: &str) -> bool {
-        let mut hit = false;
-        crate::worker::walk_expr(value, &mut |e| {
-            let place = match e {
-                Expr::Index(i) => Self::receiver_place_key(&i.array),
-                Expr::Call(c) => match &*c.callee {
-                    Expr::Field(f) => Self::receiver_place_key(&f.object),
-                    _ => None,
-                },
-                Expr::Field(f) => Self::receiver_place_key(&f.object),
-                _ => None,
-            };
-            hit |= place.as_deref() == Some(key);
-        });
-        hit
-    }
-
     pub(crate) fn emit_assign(&mut self, a: &AssignStmt) {
-        // **One handle, one borrow per statement.** When the value reads the
-        // very handle the target writes through -- `a[j] = a[j + 1]`, the
-        // swap at the heart of every sort -- the read is hoisted into a
-        // temporary so the two guards never overlap. Rust would let both
-        // exist syntactically; `RefCell` catches it at run time, which is the
-        // worst place to find out.
-        if let Some(key) = self.assign_target_handle_key(&a.target) {
-            if self.expr_reads_handle(&a.value, &key) {
-                self.w.emit_indent();
-                self.w.push_str("{\n");
-                self.w.indent_inc();
-                self.w.emit_indent();
-                self.w.push_str("let __jux_av = ");
-                self.emit_assign_rhs(&a.value);
-                self.w.push_str(";\n");
-                let hoisted = AssignStmt {
-                    target: a.target.clone(),
-                    op: a.op,
-                    value: Expr::Path(juxc_ast::QualifiedName {
-                        segments: vec![juxc_ast::Ident {
-                            text: "__jux_av".to_string(),
-                            span: a.span,
-                        }],
-                        span: a.span,
-                    }),
-                    span: a.span,
-                };
-                self.emit_assign_impl(&hoisted);
-                self.w.indent_dec();
-                self.w.emit_indent();
-                self.w.push_str("}\n");
-                return;
-            }
-        }
         // §5.6: `target = new T[…]` into a DYNAMIC array slot (`T[] field`)
         // must heap the allocation (`vec![…]`) to match the slot's `Vec<T>`
         // lowering — even for a const size (otherwise a fixed `[T; N]` value
@@ -3462,14 +3398,21 @@ impl RustEmitter {
                 return;
             }
         }
-        // Wrapper-field INDEXED write: `this.slots[i] = v` where the
-        // indexed array/collection is a FIELD of a wrapper-shape class.
-        // The store needs `borrow_mut()` on the owner, and the value
-        // and index are hoisted into statement temps first — either may
-        // read the same object, and an inline read's borrow guard would
-        // overlap the store's `borrow_mut()` (RefCell panic).
+        // Wrapper-field INDEXED write into a FIXED array field —
+        // `this.slots[i] = v` where `slots` is a `[T; N]`, which has no cell
+        // of its own and so must be written through the owner's.
+        //
+        // A collection or dynamic-array field is a handle (§6.5.1) and does
+        // NOT come here: it goes to `emit_handle_index_assign`, which hoists
+        // the field read so the owner's guard dies before the store, and
+        // which shapes the key correctly for a map. This branch used to take
+        // both and hard-coded `(index) as usize`, so a map-typed field write
+        // emitted `("a".to_string()) as usize`.
         if let Expr::Index(ix) = &a.target {
             if let Expr::Field(af) = &*ix.array {
+                if self.expr_is_collection_handle(&ix.array) {
+                    // Fall through to the statement-scoped handle path.
+                } else {
                 let depth = if self.receiver_is_wrapper_class(&af.object) {
                     self.wrapper_field_parent_depth(&af.object, &af.field.text)
                 } else {
@@ -3517,7 +3460,15 @@ impl RustEmitter {
                     self.emitting_format_arg = prev;
                     return;
                 }
+                }
             }
+        }
+        // **An indexed write through a §6.5 handle is statement-scoped.**
+        // Handled before the generic path below, which would leave the store's
+        // exclusive borrow live while the index and value are still being
+        // evaluated.
+        if self.emit_handle_index_assign(a) {
+            return;
         }
         // LHS: emit with the lvalue flag set so `emit_field` skips its
         // String-read `.clone()` insertion.
@@ -3538,12 +3489,220 @@ impl RustEmitter {
         } else {
             self.w.push_str(" = ");
         }
+        self.emit_assign_stored_value(&a.target, &a.value, is_compound);
+        self.w.push_str(";\n");
+    }
+
+    /// True when emitting `e` provably takes NO cell borrow and has no side
+    /// effects, so it may stay inline inside a place that already holds one.
+    ///
+    /// Deliberately the INVERSE of asking "does this alias the handle being
+    /// written?" -- that is a question about runtime object identity, and no
+    /// syntactic answer to it is right:
+    ///
+    /// ```jux
+    /// int[] b = a;   a[i] = b[0];   // different names, one cell
+    /// a[i] = this.rows[0];          // rows[0] IS a
+    /// a[i] = compute();             // compute() reaches a
+    /// ```
+    ///
+    /// So the question asked here is closed and conservative: anything not
+    /// listed answers `false` and gets bound to a temporary first. Being wrong
+    /// costs one redundant `let`; being wrong the other way was a runtime
+    /// abort in the user's program.
+    fn expr_takes_no_borrow(&self, e: &Expr) -> bool {
+        match e {
+            Expr::Literal(_) => true,
+            // A bare LOCAL or PARAM emits as its own binding name and takes
+            // no borrow. A bare FIELD does: implicit `this` makes it
+            // `self.0.borrow()...`. Asked the negative way round, because
+            // `local_types` is not populated for every binding shape at every
+            // emission point, and a local missing from it would be hoisted
+            // needlessly -- a `var i = 0;` used as an index is the common case.
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let n = qn.segments[0].text.as_str();
+                !self.bare_name_is_instance_member(n)
+            }
+            Expr::Unary(u) => self.expr_takes_no_borrow(&u.operand),
+            Expr::Cast(c) => self.expr_takes_no_borrow(&c.value),
+            Expr::Binary(b) => {
+                self.expr_takes_no_borrow(&b.left) && self.expr_takes_no_borrow(&b.right)
+            }
+            // Field, Index, Call, This, interpolation, `new`, lambdas, switch:
+            // every one of them can borrow, allocate, or run user code.
+            _ => false,
+        }
+    }
+
+    /// True when a bare single-segment name is an implicit-`this` member of
+    /// the enclosing class -- a field or a property -- rather than a local,
+    /// parameter or one of this lowering's own temporaries.
+    ///
+    /// A member read borrows the owner; a binding read does not.
+    fn bare_name_is_instance_member(&self, name: &str) -> bool {
+        if name.starts_with("__jux_")
+            || self.current_fn_params.contains(name)
+            || self.local_types.iter().any(|scope| scope.contains_key(name))
+            || self.nullable_locals.contains(name)
+            || self.ref_locals.contains(name)
+        {
+            return false;
+        }
+        let Some(cls) = self.enclosing_class.clone() else { return false };
+        let Some(decl) = self.lookup_class_ast_by_bare_or_fqn(&cls) else { return false };
+        decl.fields.iter().any(|fd| fd.name.text == name && !fd.is_static)
+            || decl.properties.iter().any(|p| p.name.text == name)
+    }
+
+    /// A synthetic single-segment path, for referring to a temporary this
+    /// lowering just bound.
+    fn temp_path(name: &str, span: juxc_source::Span) -> Expr {
+        Expr::Path(juxc_ast::QualifiedName {
+            segments: vec![juxc_ast::Ident { text: name.to_string(), span }],
+            span,
+        })
+    }
+
+    /// Lower an indexed write THROUGH a collection or array handle with
+    /// statement-scoped borrows, per `JUX-CLASS-REPRESENTATION-ADDENDUM.md`
+    /// §CR.4.1 (NORMATIVE): "evaluate `expr` first, then take a one-statement
+    /// `borrow_mut()` to store it".
+    ///
+    /// The receiver, index and value are each bound to a temporary -- in that
+    /// order, which is the order `JUX-SEMANTICS-ADDENDUM.md` §S.1 already
+    /// mandates for `arr[index] = value` -- unless they provably take no
+    /// borrow. The store's `borrow_mut()` is then the only live guard on the
+    /// cell, so `a[j] = a[j + 1]` and `outer[0][1] = outer[0][0]` mean what
+    /// they say instead of aborting.
+    ///
+    /// Hoisting the RECEIVER is what makes the nested case work: reading
+    /// `outer[0]` out of the outer cell clones the row handle, so the outer
+    /// guard dies at the temporary's semicolon and only the row's borrow
+    /// survives into the store.
+    ///
+    /// Returns true when it emitted the statement.
+    fn emit_handle_index_assign(&mut self, a: &AssignStmt) -> bool {
+        let Expr::Index(ix) = &a.target else { return false };
+        // A fixed `[T; N]` local or a const context has no cell to borrow.
+        if !self.expr_is_collection_handle(&ix.array) {
+            return false;
+        }
+        let map_target = self.index_takes_ref_key(&ix.array);
+        // A COMPOUND write to a map (`m[k] += 1`) is a read-modify-write that
+        // `.insert` alone does not express. Left on the general path rather
+        // than lowered to something that looks right and is not.
+        if map_target && a.op.is_some() {
+            return false;
+        }
+        let hoist_recv = !self.expr_takes_no_borrow(&ix.array);
+        let hoist_idx = !self.expr_takes_no_borrow(&ix.index);
+        let hoist_val = !self.expr_takes_no_borrow(&a.value);
+        let block = hoist_recv || hoist_idx || hoist_val;
+        let map_index = map_target;
+        let is_compound = a.op.is_some();
+
+        self.w.emit_indent();
+        if block {
+            self.w.push_str("{ ");
+        }
+        if hoist_recv {
+            self.w.push_str("let __jux_c = ");
+            self.emit_expr(&ix.array);
+            // A bare local or parameter emits as its own binding name, so
+            // binding it to a temporary would MOVE the handle and leave the
+            // original unusable. Sharing it is an `Rc` refcount bump -- the
+            // same thing every other handle read does. A field or element read
+            // already clones on its way out of the owner's guard.
+            if matches!(&*ix.array, Expr::Path(_)) {
+                self.w.push_str(".clone()");
+            }
+            self.w.push_str("; ");
+        }
+        if hoist_idx {
+            self.w.push_str("let __jux_i = ");
+            let prev = std::mem::take(&mut self.emitting_format_arg);
+            self.emit_expr(&ix.index);
+            self.emitting_format_arg = prev;
+            self.w.push_str("; ");
+        }
+        if hoist_val {
+            self.w.push_str("let __jux_v = ");
+            self.emit_assign_stored_value(&a.target, &a.value, is_compound);
+            self.w.push_str("; ");
+        }
+        // The store. Exactly one borrow, taken last.
+        if hoist_recv {
+            self.w.push_str("__jux_c");
+        } else {
+            self.emitting_method_receiver = true;
+            self.emit_expr(&ix.array);
+            self.emitting_method_receiver = false;
+        }
+        self.w.push_str(".borrow_mut()");
+        let key = if hoist_idx {
+            Self::temp_path("__jux_i", a.span)
+        } else {
+            ix.index.as_ref().clone()
+        };
+        // **A map write is an insert.** Rust's `HashMap` implements `Index`
+        // but deliberately not `IndexMut` -- indexing a missing key would have
+        // to invent a value -- so `m[k] = v` cannot lower to an indexed store
+        // at all. `.insert(k, v)` is what the program means.
+        if map_index {
+            self.w.push_str(".insert(");
+            let prev = std::mem::take(&mut self.emitting_format_arg);
+            self.emit_expr(&key);
+            self.emitting_format_arg = prev;
+            self.w.push_str(", ");
+            if hoist_val {
+                self.w.push_str("__jux_v");
+            } else {
+                self.emit_assign_stored_value(&a.target, &a.value, is_compound);
+            }
+            self.w.push_str(if block { "); }\n" } else { ");\n" });
+            return true;
+        }
+        self.emit_index_key(map_index, &key);
+        if let Some(op) = a.op {
+            self.w.push(' ');
+            self.w.push_str(op.as_rust_str());
+            self.w.push_str("= ");
+        } else {
+            self.w.push_str(" = ");
+        }
+        if hoist_val {
+            self.w.push_str("__jux_v");
+        } else {
+            self.emit_assign_stored_value(&a.target, &a.value, is_compound);
+        }
+        self.w.push_str(if block { "; }\n" } else { ";\n" });
+        true
+    }
+
+    /// Emit an assignment's stored VALUE with every coercion the target slot
+    /// demands: nullable `Some(..)` lift, interface / base upcast, numeric
+    /// widening, and the wrapper-class share-clone.
+    ///
+    /// Shared by the inline store and by the hoisting path, so a value bound
+    /// to a temporary gets exactly what an inline one would. The previous
+    /// hoist rewrote the value to a synthetic `__jux_av` path and re-entered
+    /// the store, where every one of these consults the VALUE's type and finds
+    /// nothing for a name the program never wrote -- silently dropping the
+    /// coercion.
+    pub(crate) fn emit_assign_stored_value(
+        &mut self,
+        target: &Expr,
+        value: &Expr,
+        is_compound: bool,
+    ) {
+        let a_target = target;
+        let a_value = value;
         // Nullable-field assign coercion: when the LHS is a field
         // whose declared type is `T?` and the RHS isn't already
         // nullable-shaped, wrap RHS in `Some(...)`. Skipped for
         // compound forms (`obj.x += y`) because `Option<T> +=` has
         // no sensible meaning and rustc will surface the misuse.
-        let assign_nullable = !is_compound && self.assign_target_is_nullable(&a.target);
+        let assign_nullable = !is_compound && self.assign_target_is_nullable(a_target);
         // Interface-typed LHS (`s = new Square(...)` where `s: Shape`):
         // coerce the RHS into the `Rc<dyn Trait>` representation instead of
         // the plain value + wrapper-clone path. The target's interface name
@@ -3552,17 +3711,17 @@ impl RustEmitter {
         let iface_tref = if is_compound {
             None
         } else {
-            self.assign_iface_coercion_tref(&a.target, &a.value)
+            self.assign_iface_coercion_tref(a_target, a_value)
         };
         if !is_compound
-            && matches!(a.value, Expr::Literal(juxc_ast::Literal::Null))
-            && self.assign_target_is_raw_pointer(&a.target)
+            && matches!(a_value, Expr::Literal(juxc_ast::Literal::Null))
+            && self.assign_target_is_raw_pointer(a_target)
         {
             // A `null` assigned to a raw-pointer field is a null pointer, not
             // `None` (§L.6.1). No wrapper-clone / nullable-wrap applies.
             self.w.push_str("std::ptr::null_mut()");
         } else if let Some(tref) = iface_tref {
-            self.emit_expr_coerced_to_iface(&tref, &a.value);
+            self.emit_expr_coerced_to_iface(&tref, a_value);
         } else {
             // Numeric coercion into a typed target: `m = v.len();` (uint -> int)
             // or `longVar = intExpr;` (int -> long widening). Cast the RHS to the
@@ -3571,18 +3730,18 @@ impl RustEmitter {
             let num_widen = if is_compound || assign_nullable {
                 None
             } else {
-                self.operand_primitive(&a.target)
-                    .and_then(|target| self.numeric_widen_to(&a.value, target))
+                self.operand_primitive(a_target)
+                    .and_then(|t| self.numeric_widen_to(a_value, t))
             };
             let widen_inner =
-                num_widen.is_some() && crate::exprs::cast_needs_inner_parens(&a.value);
+                num_widen.is_some() && crate::exprs::cast_needs_inner_parens(a_value);
             if num_widen.is_some() {
                 self.w.push('(');
                 if widen_inner {
                     self.w.push('(');
                 }
             }
-            self.emit_arg_with_nullable_wrap(&a.value, assign_nullable);
+            self.emit_arg_with_nullable_wrap(a_value, assign_nullable);
             // Wrapper-class share-on-assign (§CR.4.1): when the RHS is a
             // wrapped place (`Path`/`this` local or `xs[i]` index read), the
             // assignment must SHARE the same instance — append the cheap `Rc`
@@ -3590,12 +3749,12 @@ impl RustEmitter {
             // for compound forms (`x += y` has no wrapped-place meaning) and
             // when the value was lifted into `Some(...)` (a nullable field
             // never takes a bare wrapped place; the helper returns false too).
-            if !is_compound && !assign_nullable && self.wrapper_value_needs_clone(&a.value) {
+            if !is_compound && !assign_nullable && self.wrapper_value_needs_clone(a_value) {
                 self.w.push_str(".clone()");
             } else if !is_compound && !assign_nullable {
                 // Owned ctor param still read by a later statement —
                 // clone instead of moving (see `emit_assign_rhs`).
-                if let Expr::Path(qn) = &a.value {
+                if let Expr::Path(qn) = a_value {
                     if qn.segments.len() == 1 && self.ctor_live_after.contains(&qn.segments[0].text)
                     {
                         self.w.push_str(".clone()");
@@ -3611,7 +3770,6 @@ impl RustEmitter {
                 self.w.push(')');
             }
         }
-        self.w.push_str(";\n");
     }
 
     /// The interface / base-class upcast target for an assignment store, or

@@ -1060,6 +1060,21 @@ the same orders the original holds. That is Java's `new ArrayList<>(xs)`, and
 it falls out of §6.5 rather than being a separate rule: an element that is
 itself a reference stays one.
 
+**Reading and writing one collection in a single statement is well defined.**
+`a[j] = a[j + 1];` -- the swap at the heart of every sort -- reads first and
+writes second, and so does every shape of it: an index that reads the same
+collection (`a[a[0]] = v`), a value that calls something which reads it
+(`a[i] = f(a)`), a row of a nested collection reached from both sides
+(`rows[0][1] = rows[0][0]`). The read is complete before the write begins.
+
+This is not a small guarantee to make. A collection is a shared object, and a
+write to one has to exclude every other access for as long as it lasts; the
+implementation therefore evaluates the value into a temporary and takes the
+write last (`JUX-CLASS-REPRESENTATION-ADDENDUM.md` §CR.4.1). Without it the
+program would fail at run time, on a line that looks like every other line --
+and, as with the iteration rule below, the alternative is a runtime failure
+whose cause is invisible in the source.
+
 **A `for`-each walks a snapshot.** The loop captures the sequence it is about
 to iterate, so a body that adds to or removes from the same collection is well
 defined: the loop visits the elements that were there when it started, and the
