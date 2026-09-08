@@ -612,6 +612,13 @@
          Settings | Tools | Jux Toolchain. Every feature (LSP, Run, tool window)
          resolves through it. -->
     <applicationService serviceImplementation="dev.jux.intellij.settings.JuxSettings"/>
+
+    <!-- New -> Java Class and its siblings, hidden inside a Jux module. Each
+         is WRAPPED, never unregistered, so a Java or Kotlin project in the
+         same IDE keeps them, and so does a directory here that is not under a
+         `jux.toml`. -->
+    <actionConfigurationCustomizer
+        implementation="dev.jux.intellij.actions.JuxHidesJvmNewActions"/>
     <applicationConfigurable parentId="tools"
                              id="dev.jux.intellij.settings.JuxConfigurable"
                              instance="dev.jux.intellij.settings.JuxConfigurable"
@@ -648,6 +655,14 @@
             text="Jux Package"
             description="Create a new Jux package (nested directories)">
       <add-to-group group-id="NewGroup" anchor="after" relative-to-action="Jux.NewFile"/>
+    </action>
+    <!-- New → Jux Module (a directory with a jux.toml and a src/). A
+         multi-package project is several of these. -->
+    <action id="Jux.NewModule"
+            class="dev.jux.intellij.actions.NewJuxModuleAction"
+            text="Jux Module"
+            description="Create a Jux module (a directory with jux.toml)">
+      <add-to-group group-id="NewGroup" anchor="after" relative-to-action="Jux.NewPackage"/>
     </action>
 
     <!-- Alt+Insert "Generate" menu inside a Jux class: constructor + accessors
