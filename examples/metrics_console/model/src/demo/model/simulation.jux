@@ -1,0 +1,104 @@
+// A fleet that moves.
+//
+// Both binaries need a fleet with plausible readings in it: the headless one
+// wants a fixed sequence so a snapshot is reproducible, and the windowed one
+// wants a new reading every few frames. Those are the same thing at different
+// speeds, so they are one class here rather than two copies of a loop.
+//
+// The numbers come from a small linear congruential generator seeded by the
+// caller. That makes the whole thing deterministic: the same seed draws the
+// same dashboard, which is what lets a test assert on a frame at all.
+
+package demo.model;
+
+import demo.core.Mean;
+
+public class Simulation {
+    private Fleet fleet;
+    private Vec<Host> hosts;
+
+    // Current reading per host, random-walked rather than redrawn, so a
+    // series looks like a measurement instead of noise.
+    private Vec<int> cpu;
+    private Vec<int> mem;
+    private Vec<int> latency;
+
+    private long seed;
+    private int steps;
+
+    public Simulation(long seed) {
+        this.fleet = new Fleet();
+        this.hosts = new Vec<Host>();
+        this.cpu = new Vec<int>();
+        this.mem = new Vec<int>();
+        this.latency = new Vec<int>();
+        this.seed = seed;
+        this.steps = 0;
+
+        this.enlist("web-01", "eu-west", 38, 47, 120);
+        this.enlist("web-02", "eu-west", 55, 61, 140);
+        this.enlist("web-03", "eu-west", 47, 52, 128);
+        this.enlist("db-01", "eu-west", 74, 81, 260);
+        this.enlist("cache-01", "us-east", 12, 24, 44);
+        this.enlist("cache-02", "us-east", 15, 29, 51);
+        this.enlist("edge-01", "ap-south", 26, 37, 88);
+    }
+
+    public Fleet fleet() { return this.fleet; }
+    public int steps() { return this.steps; }
+
+    /// Advance every host by one reading.
+    public void tick() {
+        for (int i = 0; i < this.hosts.len(); i++) {
+            this.cpu[i] = this.walk(this.cpu[i], 7, 2, 99);
+            this.mem[i] = this.walk(this.mem[i], 4, 8, 99);
+            this.latency[i] = this.walk(this.latency[i], 22, 18, 400);
+            this.hosts[i].observe(this.cpu[i], this.mem[i], this.latency[i]);
+        }
+        this.steps = this.steps + 1;
+    }
+
+    /// Run `n` steps, so a window is full before the first frame is drawn.
+    /// A dashboard whose charts fill in over the first two seconds looks
+    /// broken; one that opens with history looks live.
+    public void warmUp(int n) {
+        for (int i = 0; i < n; i++) {
+            this.tick();
+        }
+    }
+
+    /// Add a host with its starting readings.
+    private void enlist(String name, String region, int cpu0, int mem0, int lat0) {
+        var host = new Host(name, region, new Mean());
+        this.fleet.add(host);
+        this.hosts.push(host);
+        this.cpu.push(cpu0);
+        this.mem.push(mem0);
+        this.latency.push(lat0);
+    }
+
+    /// One step of a bounded random walk: move by up to `spread` either way
+    /// and stay inside [lo, hi].
+    private int walk(int value, int spread, int lo, int hi) {
+        int step = this.next(spread * 2 + 1) - spread;
+        int moved = value + step;
+        if (moved < lo) {
+            return lo;
+        }
+        if (moved > hi) {
+            return hi;
+        }
+        return moved;
+    }
+
+    /// The next pseudo-random value in [0, bound).
+    ///
+    /// A textbook LCG with the constants chosen so the product stays well
+    /// inside a `long`: no wrapping, no overflow, the same sequence on every
+    /// platform. The high bits are the ones taken, because an LCG's low bits
+    /// have a short period.
+    private int next(int bound) {
+        this.seed = (this.seed * 1103515245 + 12345) % 2147483648;
+        return (int) ((this.seed / 65536) % (long) bound);
+    }
+}

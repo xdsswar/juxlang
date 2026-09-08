@@ -94,10 +94,23 @@ public class Sparkline implements Widget {
 }
 
 /// One host per row: name, a severity badge, and a proportional bar.
+///
+/// Every row is clickable. The widget registers the rectangle it drew under
+/// the action `host:<name>` and draws the selected and hovered rows
+/// differently; it does not know, and must not know, what selecting a host
+/// goes on to do.
 public class FleetTable implements Widget {
     private Fleet fleet;
+    private HitMap hits;
+    private String? selected;
+    private String? hovered;
 
-    public FleetTable(Fleet fleet) { this.fleet = fleet; }
+    public FleetTable(Fleet fleet, HitMap hits, String? selected, String? hovered) {
+        this.fleet = fleet;
+        this.hits = hits;
+        this.selected = selected;
+        this.hovered = hovered;
+    }
 
     public String title() { return "fleet"; }
 
@@ -109,9 +122,20 @@ public class FleetTable implements Widget {
             if (ry + rowHeight > y + h) {
                 return;
             }
+            var action = "host:" + host.name();
+            bool isSelected = this.selected != null && this.selected!! == host.name();
+            bool isWarm = this.hovered != null && this.hovered!! == action;
+
+            // The row band is drawn first so everything else sits on it.
+            if (isSelected || isWarm) {
+                c.rect(x - 4, ry - 2, w + 8, rowHeight,
+                       isSelected ? t.grid() : t.panel());
+            }
+
             var level = host.severity();
             c.rect(x, ry, 3, 8, level.colour());
-            text.draw(c, host.name().toUpperCase(), x + 8, ry, t.ink());
+            text.draw(c, host.name().toUpperCase(), x + 8, ry,
+                      isSelected ? t.accent() : t.ink());
             text.draw(c, level.badge(), x + 78, ry, level.colour());
 
             // The bar is the host's current cpu reading against the row's
@@ -124,21 +148,132 @@ public class FleetTable implements Widget {
                 c.rect(barX, ry + 1, barW, 6, t.grid());
                 c.rect(barX, ry + 1, filled, 6, level.colour());
             }
+
+            this.hits.add(x - 4, ry - 2, w + 8, rowHeight, action);
             row = row + 1;
         }
     }
 }
 
-/// A single number, large, with its aggregate's own caption under it.
+/// Every host with all three readings side by side.
+///
+/// The Hosts view exists to compare, so this trades the overview's compact
+/// row for three labelled bars and the numbers beside them. Rows are
+/// clickable on the same terms as `FleetTable`'s.
+public class HostTable implements Widget {
+    private Fleet fleet;
+    private HitMap hits;
+    private String? selected;
+    private String? hovered;
+
+    public HostTable(Fleet fleet, HitMap hits, String? selected, String? hovered) {
+        this.fleet = fleet;
+        this.hits = hits;
+        this.selected = selected;
+        this.hovered = hovered;
+    }
+
+    /// A row's height, and the panel chrome around the rows. Public so the
+    /// console can size the panel to the table instead of guessing.
+    public static int ROW_HEIGHT = 26;
+    public static int CHROME = 38;
+
+    /// The panel height this table wants for `rows` hosts.
+    public static int heightFor(int rows) {
+        return HostTable.CHROME + rows * HostTable.ROW_HEIGHT;
+    }
+
+    public String title() { return "hosts"; }
+
+    public void paint(Canvas c, Theme t, Text text, int x, int y, int w, int h) {
+        int rowHeight = HostTable.ROW_HEIGHT;
+        int nameW = 96;
+        int regionW = 84;
+        int numberW = 44;
+
+        // Column captions, so the three bars are readable without a legend.
+        text.draw(c, "HOST", x, y, t.inkDim());
+        text.draw(c, "REGION", x + nameW, y, t.inkDim());
+        int barsX = x + nameW + regionW;
+        int barsW = w - nameW - regionW;
+        int laneW = barsW / 3;
+        text.draw(c, "CPU %", barsX, y, t.inkDim());
+        text.draw(c, "MEM %", barsX + laneW, y, t.inkDim());
+        text.draw(c, "P99 MS", barsX + laneW * 2, y, t.inkDim());
+
+        int row = 0;
+        for (var host : this.fleet.all()) {
+            int ry = y + 16 + row * rowHeight;
+            if (ry + rowHeight > y + h) {
+                return;
+            }
+            var action = "host:" + host.name();
+            bool isSelected = this.selected != null && this.selected!! == host.name();
+            bool isWarm = this.hovered != null && this.hovered!! == action;
+            if (isSelected || isWarm) {
+                c.rect(x - 4, ry - 4, w + 8, rowHeight - 2,
+                       isSelected ? t.grid() : t.panel());
+            }
+
+            var level = host.severity();
+            c.rect(x, ry + 1, 3, 9, level.colour());
+            text.draw(c, host.name().toUpperCase(), x + 8, ry + 2,
+                      isSelected ? t.accent() : t.ink());
+            text.draw(c, host.region().toUpperCase(), x + nameW, ry + 2, t.inkDim());
+
+            this.lane(c, t, text, barsX, ry, laneW - 8, numberW,
+                      host.cpu().window().last(), 100, level.colour());
+            this.lane(c, t, text, barsX + laneW, ry, laneW - 8, numberW,
+                      host.memory().window().last(), 100, level.colour());
+            this.lane(c, t, text, barsX + laneW * 2, ry, laneW - 8, numberW,
+                      host.latency().window().last(), 400, t.accent());
+
+            this.hits.add(x - 4, ry - 4, w + 8, rowHeight - 2, action);
+            row = row + 1;
+        }
+    }
+
+    /// One reading: a bar scaled to its own ceiling, and the value.
+    private void lane(Canvas c, Theme t, Text text, int x, int y, int w,
+                      int numberW, int value, int ceiling, int colour) {
+        int barW = w - numberW;
+        if (barW < 4) {
+            return;
+        }
+        int filled = barW * value / ceiling;
+        if (filled > barW) {
+            filled = barW;
+        }
+        c.rect(x, y + 2, barW, 7, t.grid());
+        c.rect(x, y + 2, filled, 7, colour);
+        text.draw(c, "" + value, x + barW + 6, y + 2, t.ink());
+    }
+}
+
+/// A single number, large, over a bar and the window it came from.
+///
+/// The ceiling is the readout's own, not an assumed 100: a latency in
+/// milliseconds graded as a percentage is CRITICAL from 92ms up, which is
+/// how `155.0` came to be painted in alarm red.
 public class Readout implements Widget {
     private String label;
     private Ring<int> window;
     private Aggregate<int> summary;
+    private int ceiling;
 
     public Readout(String label, Ring<int> window, Aggregate<int> summary) {
         this.label = label;
         this.window = window;
         this.summary = summary;
+        this.ceiling = 100;
+    }
+
+    /// A readout whose numbers are not percentages.
+    public Readout(String label, Ring<int> window, Aggregate<int> summary, int ceiling) {
+        this.label = label;
+        this.window = window;
+        this.summary = summary;
+        this.ceiling = ceiling;
     }
 
     public String title() { return this.label; }
@@ -152,10 +287,59 @@ public class Readout implements Widget {
         // otherwise all three readouts show the same figure and the
         // `Aggregate` contract does no work.
         double value = this.summary.over(this.window);
-        var level = Severity.forPercent((int) value);
+        int scaled = (int) (value * 100.0 / (double) this.ceiling);
+        var level = Severity.forPercent(scaled);
+
         text.drawScaled(c, Num.fixed1(value), x, y, level.colour(), 3);
         text.draw(c, this.summary.render(this.window).toUpperCase(),
                   x, y + 26, t.inkDim());
+
+        // A bar against the ceiling, so the number has a scale to be read
+        // against rather than standing alone.
+        int barY = y + 38;
+        if (barY + 6 > y + h) {
+            return;
+        }
+        int filled = w * scaled / 100;
+        if (filled > w) {
+            filled = w;
+        }
+        if (filled < 1) {
+            filled = 1;
+        }
+        c.rect(x, barY, w, 5, t.grid());
+        c.rect(x, barY, filled, 5, level.colour());
+
+        // Whatever height is left goes to the window itself, drawn faintly:
+        // the figure above is one number out of these.
+        int trendY = barY + 12;
+        int trendH = y + h - trendY;
+        if (trendH < 12) {
+            return;
+        }
+        var samples = this.window.snapshot();
+        int count = samples.len();
+        if (count == 0) {
+            return;
+        }
+        int slot = w / count;
+        if (slot < 1) {
+            slot = 1;
+        }
+        int baseline = trendY + trendH - 1;
+        c.hline(x, baseline, w, t.grid());
+        for (int i = 0; i < count; i++) {
+            int v = samples[i] * 100 / this.ceiling;
+            int height = v * (trendH - 2) / 100;
+            if (height > trendH - 2) {
+                height = trendH - 2;
+            }
+            if (height < 1) {
+                height = 1;
+            }
+            c.column(x + i * slot, baseline - 1, height, slot - 1 < 1 ? 1 : slot - 1,
+                     t.grid());
+        }
     }
 }
 

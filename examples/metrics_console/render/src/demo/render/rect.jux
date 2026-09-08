@@ -1,0 +1,90 @@
+// Rectangles, and the regions a click can land in.
+//
+// A widget draws into a rectangle and, where it is interactive, records the
+// rectangles it drew and what each one means. The console collects those
+// during a render and consults them on a click, which is why input handling
+// lives entirely in this package and the window front end only forwards
+// coordinates.
+//
+// The action is a string rather than an enum on purpose: a region's meaning
+// is data ("host:web-01"), not a fixed set, so a new interactive widget adds
+// no case to anything here.
+
+package demo.render;
+
+public class Rect {
+    private int x;
+    private int y;
+    private int w;
+    private int h;
+
+    public Rect(int x, int y, int w, int h) {
+        this.x = x;
+        this.y = y;
+        this.w = w;
+        this.h = h;
+    }
+
+    public int x() { return this.x; }
+    public int y() { return this.y; }
+    public int width() { return this.w; }
+    public int height() { return this.h; }
+
+    public bool contains(int px, int py) {
+        return px >= this.x && px < this.x + this.w
+            && py >= this.y && py < this.y + this.h;
+    }
+}
+
+/// A rectangle with a meaning attached.
+public class HitRegion {
+    private Rect bounds;
+    private String action;
+
+    public HitRegion(Rect bounds, String action) {
+        this.bounds = bounds;
+        this.action = action;
+    }
+
+    public Rect bounds() { return this.bounds; }
+    public String action() { return this.action; }
+    public bool contains(int x, int y) { return this.bounds.contains(x, y); }
+}
+
+/// Every region the last render produced, newest first on lookup.
+///
+/// Rebuilt from scratch each frame. That sounds wasteful and is the only
+/// honest way to do it: a region is only valid for the layout that drew it,
+/// and a dashboard that resizes or switches views would otherwise dispatch a
+/// click to whatever used to be under the cursor.
+public class HitMap {
+    private Vec<HitRegion> regions;
+
+    public HitMap() {
+        this.regions = new Vec<HitRegion>();
+    }
+
+    public void clear() {
+        while (this.regions.len() > 0) {
+            this.regions.remove(0);
+        }
+    }
+
+    public void add(int x, int y, int w, int h, String action) {
+        this.regions.push(new HitRegion(new Rect(x, y, w, h), action));
+    }
+
+    public int len() { return this.regions.len(); }
+
+    /// The action at a point, or null. Later regions win: a widget drawn on
+    /// top of another was drawn later, so it is found first.
+    public String? at(int x, int y) {
+        for (int i = this.regions.len() - 1; i >= 0; i--) {
+            var region = this.regions[i];
+            if (region.contains(x, y)) {
+                return region.action();
+            }
+        }
+        return null;
+    }
+}

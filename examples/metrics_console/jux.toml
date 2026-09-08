@@ -8,4 +8,7 @@
 # Each member is its own module with its own manifest; the dependency edges
 # between them are path deps, so the whole thing builds from this root.
 [workspace]
-members = ["core", "model", "render", "app"]
+# `app` stays last: `jux run` with no `-p` picks the last member's first
+# binary, and the headless one is the right default -- a bare `jux run` should
+# print a frame, not open a window. `jux run -p desktop` opens the window.
+members = ["core", "model", "render", "desktop", "app"]

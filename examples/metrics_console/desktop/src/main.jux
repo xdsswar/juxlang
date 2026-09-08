@@ -1,0 +1,120 @@
+// The metrics console in a desktop window.
+//
+// Everything drawn here is drawn by `demo.render`, exactly as the headless
+// binary draws it. This file adds a window to put the pixels in, a clock to
+// advance the simulation, and input:
+//
+//   click  a tab switches view, a host row selects it and opens Detail
+//   1 2 3  the same three views from the keyboard
+//   T      switch between the midnight and paper themes
+//   Space  pause and resume the feed
+//   Esc    close
+//
+// None of which this file interprets. A click becomes two integers handed to
+// `Console.click`, and the console decides what that means -- the same path
+// the headless binary drives with `--click X Y`. That is what makes the
+// interaction testable without a mouse.
+//
+// The split is the point. `demo.render` has never heard of minifb, so the
+// same frame that appears here is the frame the tests assert on, and a
+// second front end costs one file.
+
+import demo.model.Simulation;
+import demo.render.Canvas;
+import demo.render.Console;
+import demo.render.Theme;
+
+import demo.render.View;
+
+import rust.minifb.Window;
+import rust.minifb.WindowOptions;
+import rust.minifb.Key;
+import rust.minifb.KeyRepeat;
+import rust.minifb.MouseButton;
+import rust.minifb.MouseMode;
+
+public void main() {
+    int w = 1000;
+    int h = 620;
+
+    var sim = new Simulation(20260908);
+    sim.warmUp(40);
+
+    var canvas = new Canvas(w, h);
+
+    // ONE console, whose theme is swapped. Two consoles would be two sets of
+    // view and selection state, and the theme key would appear to undo every
+    // click made since the last press.
+    var console = new Console(sim.fleet(), Theme.midnight());
+
+    // minifb takes a `u32[]`; the canvas is a `Vec<int>` because nothing
+    // below this file knows what a window wants. One buffer, reused, rather
+    // than a fresh allocation every frame.
+    var frame = new u32[w * h];
+
+    var opts = new WindowOptions();
+    var window = new Window("Jux Metrics Console", (uint) w, (uint) h, opts);
+    window.set_target_fps(60);
+
+    bool running = true;
+    bool wasDown = false;
+    int tick = 0;
+
+    print("window open -- click a tab or a host, 1/2/3 views, T theme, Space pause, Esc close");
+
+    while (window.is_open() && !window.is_key_down(Key.Escape)) {
+        tick = tick + 1;
+
+        if (window.is_key_pressed(Key.T, KeyRepeat.No)) {
+            console.toggleTheme();
+        }
+        if (window.is_key_pressed(Key.Space, KeyRepeat.No)) {
+            running = !running;
+            print(running ? "resumed" : "paused");
+        }
+
+        // The number keys reach the same views the tabs do.
+        if (window.is_key_pressed(Key.Key1, KeyRepeat.No)) {
+            console.setView(View.Overview);
+        }
+        if (window.is_key_pressed(Key.Key2, KeyRepeat.No)) {
+            console.setView(View.Hosts);
+        }
+        if (window.is_key_pressed(Key.Key3, KeyRepeat.No)) {
+            console.setView(View.Detail);
+        }
+
+        // Hover every frame; click on the DOWN edge only, so holding the
+        // button does not re-fire the action sixty times a second.
+        var mouse = window.get_mouse_pos(MouseMode.Clamp);
+        bool down = window.get_mouse_down(MouseButton.Left);
+        if (mouse != null) {
+            var (fx, fy) = mouse!!;
+            int mx = (int) fx;
+            int my = (int) fy;
+            console.hover(mx, my);
+            if (down && !wasDown && console.click(mx, my)) {
+                print("view " + console.view().label()
+                      + "  host " + (console.selected() == null
+                                     ? "none" : console.selected()!!));
+            }
+        }
+        wasDown = down;
+
+        // Six frames per sample: fast enough that the chart visibly moves,
+        // slow enough that a reading stays on screen long enough to read.
+        if (running && tick % 6 == 0) {
+            sim.tick();
+        }
+
+        console.render(canvas);
+
+        var pixels = canvas.buffer();
+        for (int i = 0; i < w * h; i++) {
+            frame[i] = (u32) pixels[i];
+        }
+        window.update_with_buffer(frame, (uint) w, (uint) h);
+    }
+
+    print("closed after " + sim.steps() + " samples");
+}

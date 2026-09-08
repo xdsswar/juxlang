@@ -88,6 +88,106 @@ happens to be the first one that started in Jux.
 
 ---
 
+## What that grew into: a real application
+
+![The Jux Metrics Console running as a native window](screenshots/metrics-console-window.png)
+
+That empty window was 2024's milestone. This is a **fleet dashboard**, written
+entirely in Jux, running as a native binary: three views, a clickable host
+table, hover highlighting, a switchable palette, and a live feed updating ten
+times a second. It lives in the repo at
+[`examples/metrics_console`](examples/metrics_console) and you can run it now:
+
+```bash
+cd examples/metrics_console
+jux run --release -p desktop
+```
+
+Nothing here is a widget toolkit. There is no UI framework, no layout engine,
+and no image library. The console owns a `Vec<int>` of `0xRRGGBB` pixels and
+draws into it, one rectangle at a time, with a 5x7 bitmap font written out as
+pictures in the source. `rust.minifb` from crates.io puts the buffer on screen
+and reports the mouse; everything above that line is Jux.
+
+### Three views, and a click that means something
+
+**Overview** is the fleet at a glance. Click any row and it selects that host.
+
+![Overview](screenshots/metrics-console-overview.png)
+
+**Hosts** compares them: every host, all three readings side by side.
+
+![Hosts](screenshots/metrics-console-hosts.png)
+
+**Detail** is one host in full, each chart graded against its own ceiling.
+
+![Detail](screenshots/metrics-console-detail.png)
+
+And the palette is a chip in the tab bar, because a dashboard should not need
+a config file to be readable in daylight:
+
+![The light palette](screenshots/metrics-console-paper.png)
+
+### Why it is built the way it is
+
+Input handling is the part worth looking at. A widget that can be clicked
+records the rectangles it drew into a shared hit map, tagged with what they
+mean, and knows nothing else:
+
+```java
+this.hits.add(x - 4, ry - 2, w + 8, rowHeight, "host:" + host.name());
+```
+
+The console asks the map what is under a point and turns the answer into
+state. So the window front end forwards two integers and no more:
+
+```java
+var mouse = window.get_mouse_pos(MouseMode.Clamp);
+if (mouse != null) {
+    var (fx, fy) = mouse!!;
+    console.hover((int) fx, (int) fy);
+    if (down && !wasDown && console.click((int) fx, (int) fy)) { ... }
+}
+```
+
+Because nothing under the renderer knows a window exists, the *same* console
+also runs headless, writing frames to a file. Which means the interaction is
+testable with no display and no mouse attached:
+
+```bash
+jux run -- --view hosts --snapshot frame.ppm
+jux run -- --click 258 28
+```
+
+Ten tests drive it that way on every build: every view, every click target,
+both palettes, and the windowed binary compiled.
+
+### Five packages, one build
+
+```
+demo.core     containers and contracts, generic in the sample type
+demo.model    a fleet, how bad a reading is, and a fleet that moves
+demo.render   pixels, glyphs, widgets, hit regions, layout
+demo.app      arguments, and where the frame goes
+demo.desktop  the same frame, in a window
+```
+
+Each is its own package with its own `jux.toml`. The dependency edges run one
+way, and `jux build` walks them in order. `Aggregate<T>` is a generic
+interface with a default method; `Ring<T>`, `Series<T>` and `Table<K, V>` are
+generic classes used across package boundaries; `Severity` and `View` are
+enums with methods and a `switch` over themselves.
+
+**And it earned its place a second way.** Writing it found **nine compiler
+bugs** that no single-file test could reach: a package named `demo.core`
+shadowing Rust's own `core` crate, interface default-method bodies that were
+never type-checked, a ternary over two objects that moved both arms, a
+constructor that could not hold a class. Every one is fixed. That is the real
+argument for building something big in a young language: the program tells you
+what is broken far better than a test suite you wrote from imagination.
+
+---
+
 ## A taste of Jux
 
 If you've written Java or C#, none of this needs a tutorial:
@@ -595,8 +695,8 @@ var p = new PathBuf();   // lowers to std::path::PathBuf::new()
 p.reserve(16);           // camelCase method maps to the real snake_case one
 ```
 
-The types Rust's own prelude puts in scope everywhere — `Vec`, `String`,
-`HashMap`, `Option` — need no import in Jux either. Anything else is one
+The types Rust's own prelude puts in scope everywhere (`Vec`, `String`,
+`HashMap`, `Option`) need no import in Jux either. Anything else is one
 `import rust.std.<Name>;` away, or a group:
 
 ```java
@@ -608,7 +708,7 @@ generated **on demand** from the installed toolchain's rustdoc JSON
 (`juxc-bindgen`): nothing is hand-curated, so it tracks whatever Rust version you
 actually have. Collections are Rust's collections under their real names: `Vec`,
 `HashMap`, `HashSet`, `VecDeque`. There is no parallel Jux collection library and
-no Java-style facade over Rust's — `push`, `len` and `insert` are the method names,
+no Java-style facade over Rust's: `push`, `len` and `insert` are the method names,
 because they are Rust's.
 
 ### Dependencies: crates *and* Jux libraries
