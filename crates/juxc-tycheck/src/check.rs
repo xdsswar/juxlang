@@ -1538,6 +1538,7 @@ impl<'a> Checker<'a> {
         self.in_unsafe = fn_decl.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
         self.check_out_params_assigned(&fn_decl.params, body, &fn_decl.name.text);
+        self.check_locals_definitely_assigned(body);
         self.check_final_not_reassigned(&fn_decl.params, body);
         self.check_missing_return(
             &fn_decl.return_type,
@@ -1567,6 +1568,27 @@ impl<'a> Checker<'a> {
     /// **E0940 (§M.4.2)** — every `out` parameter must be assigned on every path
     /// that returns from / completes the body. Reuses the field
     /// definite-assignment flow engine.
+    /// **E0601 (§S.4.6)** -- a local read before it is definitely assigned.
+    ///
+    /// The local counterpart of the field rule `E0600` enforces, and the same
+    /// flow analysis. Before this existed `int x; print(x);` compiled and
+    /// printed `0`: the program read a value nobody wrote, with no diagnostic
+    /// anywhere.
+    fn check_locals_definitely_assigned(&mut self, body: &juxc_ast::Block) {
+        for read in crate::definite_assign::locals_read_before_assignment(body) {
+            let name = read.name;
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0601_LocalNotDefinitelyAssigned,
+                    format!(
+                        "`{name}` is read before it is assigned -- give it a value on every path that reaches here, or declare it with an initializer (§S.4.6)",
+                    ),
+                )
+                .with_span(read.span),
+            );
+        }
+    }
+
     fn check_out_params_assigned(
         &mut self,
         params: &[juxc_ast::Param],
@@ -2254,6 +2276,7 @@ impl<'a> Checker<'a> {
         self.in_unsafe = method.modifiers.contains(&juxc_ast::FnModifier::Unsafe);
         self.check_block(body);
         self.check_out_params_assigned(&method.params, body, &method.name.text);
+        self.check_locals_definitely_assigned(body);
         self.check_final_not_reassigned(&method.params, body);
         self.check_missing_return(
             &method.return_type,

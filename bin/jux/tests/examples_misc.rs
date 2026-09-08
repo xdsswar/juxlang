@@ -725,3 +725,39 @@ fn interface_hierarchy() {
         ],
     );
 }
+
+
+#[test]
+fn definite_assignment() {
+    // The shapes that satisfy §S.4.6: both arms of an if/else, a guard that
+    // leaves, a `do`/`while` body, a `finally`, an `out` argument, and a
+    // nullable local that needs no initializer at all.
+    common::expect_output(
+        "definite_assignment",
+        "definite-assignment",
+        &["1", "5", "1", "2", "null ok", "3", "6", "2", "3"],
+    );
+}
+
+
+#[test]
+fn enum_auto_helpers() {
+    // §7.7.3: `name()` and `ordinal()` on any enum value, `values()` as a
+    // static on a payload-free one, and a user declaration replacing one.
+    common::expect_output(
+        "enum_auto_helpers",
+        "enum-auto-helpers",
+        &[
+            "Bronze",
+            "2",
+            "Silver@1",
+            "Bronze=0",
+            "Silver=1",
+            "Gold=2",
+            "Circle",
+            "1",
+            "shouted",
+            "1",
+        ],
+    );
+}

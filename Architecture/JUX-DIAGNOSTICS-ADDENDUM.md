@@ -461,6 +461,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | Code     | Description                                                | Source                         |
 |----------|------------------------------------------------------------|--------------------------------|
 | `E0600`  | Field not definitely assigned                               | Semantics §S.4.5               |
+| `E0601`  | Local read before it is definitely assigned                 | Semantics §S.4.6               |
 | `E0610`  | `drop` block in `jux-core` may not throw                    | Semantics §S.5.3               |
 | `E0611`  | Use of moved-from binding                                   | Lowering §C.6.1                |
 | `E0612`  | Conditional move requires re-initialization on join          | Lowering §C.6.1                |

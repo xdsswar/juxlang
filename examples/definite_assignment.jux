@@ -1,0 +1,69 @@
+// Local definite assignment (§S.4.6) -- the shapes that are LEGAL.
+//
+// A local declared without an initializer must be assigned before it is read.
+// The rules follow the control flow, and the interesting part is which shapes
+// satisfy them: both arms of an if/else, a guard clause that leaves, a
+// `do`/`while` body that runs at least once, a `finally` that always runs, and
+// an `out` argument, which E0940 guarantees the callee assigns.
+//
+// A nullable local starts as null and needs nothing. The error cases live in
+// tests/ui/local_not_assigned.jux.
+
+public int both(bool c) {
+    int a;
+    if (c) { a = 1; } else { a = 2; }
+    return a;
+}
+public int guarded(bool c) {
+    int a;
+    if (!c) { return 0; }
+    a = 5;
+    return a;
+}
+public int elseReturns(bool c) {
+    int a;
+    if (c) { a = 1; } else { return -1; }
+    return a;
+}
+public int doWhileAssigns() {
+    int a;
+    int i = 0;
+    do { a = i; i = i + 1; } while (i < 3);
+    return a;
+}
+public String nullableStarts() {
+    String? s;
+    if (s == null) { return "null ok"; }
+    return s;
+}
+public int compoundAfterInit() {
+    int n = 1;
+    n += 2;
+    return n;
+}
+public int loopAccumulator(int limit) {
+    int total = 0;
+    for (int i = 0; i < limit; i++) { total = total + i; }
+    return total;
+}
+public int assignedInTry() {
+    int a;
+    try { a = 1; } finally { a = 2; }
+    return a;
+}
+public int shadowedInner(bool c) {
+    int outer = 1;
+    { int inner; inner = 2; outer = outer + inner; }
+    return outer;
+}
+public void main() {
+    print(both(true));
+    print(guarded(true));
+    print(elseReturns(true));
+    print(doWhileAssigns());
+    print(nullableStarts());
+    print(compoundAfterInit());
+    print(loopAccumulator(4));
+    print(assignedInTry());
+    print(shadowedInner(true));
+}

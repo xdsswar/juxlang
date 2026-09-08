@@ -826,6 +826,28 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                     }
                 }
             }
+            // `EnumName.staticMethod(args)` — the same shape one level over:
+            // an enum's statics live on `EnumSig`, not `ClassSig`, so the
+            // class path above walks past them. `values()` is the one that
+            // matters (§7.7.3), and leaving it untyped meant a `for-each` over
+            // it did not know it had an array in its hands.
+            if let Expr::Path(qn) = field.object.as_ref() {
+                if qn.segments.len() == 1 {
+                    let bare = qn.segments[0].text.as_str();
+                    if let Some((enum_fqn, enum_sig)) = symbols.lookup_enum(bare) {
+                        if let Some(method) = enum_sig.methods.get(method_name) {
+                            if method.is_static {
+                                return return_type_in_method(
+                                    &method.return_type,
+                                    enum_fqn,
+                                    &method.generic_params,
+                                    symbols,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             // `Stream.<ctor>` statics (§18.6.4) — `Stream` is a builtin,
             // not a class, so the class-static path above can't type it.
             // The element type comes from an explicit type arg

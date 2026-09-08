@@ -327,6 +327,49 @@ A field with a textual initializer (`private String name = "";`) is trivially de
 
 `weak` fields default to null (per JUX-LANG-V1 §6.5). Nullable fields default to null. Other fields require explicit assignment or an initializer.
 
+### S.4.6. Local Definite-Assignment
+
+A local declared without an initializer must be **definitely assigned before
+it is read**. The compiler verifies this by the same flow analysis §S.4.5 uses
+for fields, and reports **`E0601`** at the offending read.
+
+```java
+int x;
+print(x);              // E0601 -- `x` is read before it is assigned
+
+int y;
+if (cond) { y = 1; }
+print(y);              // E0601 -- assigned on one path, not the other
+
+int z;
+if (cond) { z = 1; } else { z = 2; }
+print(z);              // fine -- assigned on every path that reaches here
+```
+
+**A local is definitely assigned at a point when every path reaching that
+point assigns it.** The rules follow the shape of the control flow:
+
+- Both arms of an `if`/`else` must assign it; an `if` without an `else` does
+  not, since the other path assigns nothing.
+- A loop body does not count: `while`, `for` and for-each may run zero times.
+  A `do`/`while` body runs at least once, so its assignments do count.
+- A path that cannot complete normally -- one ending in `return` or `throw` --
+  imposes no obligation, because nothing after it is reachable from that path.
+- A `try` body may abort partway through, so only assignments in a `finally`
+  block survive to the statements after it.
+
+**A nullable local needs no initializer.** `String? s;` starts as null, the
+same rule §S.4.5 gives nullable fields, and reading it is well defined. It is
+the non-nullable declaration that has nothing sensible to start as.
+
+Writing THROUGH a binding is not assigning it: `x.field = v` requires `x` to
+be assigned already, and is not itself an assignment to `x`.
+
+This is the local counterpart of §S.4.5, and the reason both exist is the
+same: a value the program never wrote is not a value the program can be
+reasoned about with. The difference is only where the analysis runs -- over a
+constructor for fields, over any body for locals.
+
 ---
 
 ## §S.5 — Destruction Order

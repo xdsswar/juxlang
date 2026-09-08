@@ -300,7 +300,11 @@ impl RustEmitter {
         // for plain enums).
         let has_inherent_ops = enum_decl.operators.iter().any(|o| !o.is_deleted);
         let has_members = !enum_decl.methods.is_empty() || !enum_decl.constants.is_empty();
-        if has_inherent_ops || has_members {
+        // Every enum with variants also carries the §7.7.3 helpers, so the
+        // block opens for those as well -- otherwise `Tier.Bronze.name()`
+        // would type-check against a signature with nothing behind it.
+        let has_auto_helpers = !enum_decl.variants.is_empty();
+        if has_inherent_ops || has_members || has_auto_helpers {
             self.w.emit_indent();
             self.w.push_str("impl");
             // The Clone bound mirrors classes: enum `&self` method
@@ -351,6 +355,7 @@ impl RustEmitter {
             for method in &enum_decl.methods {
                 self.emit_enum_method(method);
             }
+            self.emit_enum_auto_helpers(enum_decl);
             self.w.line("}");
             self.w.newline();
         }
@@ -454,6 +459,83 @@ impl RustEmitter {
             self.kind_type_subst = saved;
         }
     }
+    /// The auto-derived helpers of JUX-LANG-V1 §7.7.3: `name()`, `ordinal()`
+    /// and, for a payload-free enum, the static `values()`.
+    ///
+    /// Emitted from the variant list, which is the same list the symbol table
+    /// synthesized the signatures from -- an enum that grows a variant grows
+    /// all three. A user declaration of one of these names wins: the symbol
+    /// table keeps theirs, and this skips any name already declared.
+    fn emit_enum_auto_helpers(&mut self, enum_decl: &juxc_ast::EnumDecl) {
+        if enum_decl.variants.is_empty() {
+            return;
+        }
+        let declared: HashSet<&str> =
+            enum_decl.methods.iter().map(|m| m.name.text.as_str()).collect();
+        let bare = to_rust_ident(&enum_decl.name.text);
+
+        // A variant's pattern needs its payload elided: `Shape::Rect(..)`.
+        let pattern = |v: &juxc_ast::EnumVariant| -> String {
+            let name = to_rust_ident(&v.name.text);
+            if v.payload.is_empty() {
+                format!("{bare}::{name}")
+            } else {
+                format!("{bare}::{name}(..)")
+            }
+        };
+
+        if !declared.contains("name") {
+            self.w.line("pub fn name(&self) -> String {");
+            self.w.indent_inc();
+            self.w.line("match self {");
+            self.w.indent_inc();
+            for v in &enum_decl.variants {
+                self.w
+                    .line(&format!("{} => \"{}\".to_string(),", pattern(v), v.name.text));
+            }
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+
+        if !declared.contains("ordinal") {
+            self.w.line("pub fn ordinal(&self) -> isize {");
+            self.w.indent_inc();
+            self.w.line("match self {");
+            self.w.indent_inc();
+            for (i, v) in enum_decl.variants.iter().enumerate() {
+                self.w.line(&format!("{} => {i},", pattern(v)));
+            }
+            self.w.indent_dec();
+            self.w.line("}");
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+
+        // §7.7.3 restricts `values()` to payload-free enums: a variant with a
+        // payload cannot be enumerated without inventing one.
+        let payload_free = enum_decl.variants.iter().all(|v| v.payload.is_empty());
+        if payload_free && !declared.contains("values") {
+            // A plain `Vec`, not a handle: the call site wraps an array-typed
+            // result itself, and returning a handle here made it wrap twice --
+            // `crate::jux_arr(Tier::values())` around something that already
+            // was one, which no `for-each` could iterate.
+            self.w
+                .line(&format!("pub fn values() -> std::vec::Vec<{bare}> {{"));
+            self.w.indent_inc();
+            let items = enum_decl
+                .variants
+                .iter()
+                .map(|v| format!("{bare}::{}", to_rust_ident(&v.name.text)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.w.line(&format!("std::vec![{items}]"));
+            self.w.indent_dec();
+            self.w.line("}");
+        }
+    }
+
 
     /// Emit the auto-derived `Display` impl for an enum. Each variant's
     /// payload (if any) is destructured into positional bindings

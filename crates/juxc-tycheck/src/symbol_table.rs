@@ -3882,11 +3882,15 @@ fn insert_enum(
             implements: enum_decl.implements.clone(),
             variants,
             operators,
-            methods: enum_decl
-                .methods
-                .iter()
-                .map(|m| (m.name.text.clone(), method_sig(m, false)))
-                .collect(),
+            methods: {
+                let mut m: HashMap<String, MethodSig> = enum_decl
+                    .methods
+                    .iter()
+                    .map(|m| (m.name.text.clone(), method_sig(m, false)))
+                    .collect();
+                add_enum_auto_helpers(&mut m, enum_decl);
+                m
+            },
             is_layout_c: is_layout_c_annotation(&enum_decl.annotations),
             is_external,
             rust_path: rust_path_annotation(&enum_decl.annotations),
@@ -4115,6 +4119,51 @@ fn ty_to_type_ref(ty: &crate::ty::Ty, span: Span) -> Option<TypeRef> {
 
 /// Build a single-segment named [`TypeRef`] (no generics, not nullable, not an
 /// array) — used to materialize an inferred primitive/`String` type.
+/// The auto-derived helpers every enum carries (JUX-LANG-V1 §7.7.3):
+/// `name()`, `ordinal()`, and -- for a payload-free enum -- `values()`.
+///
+/// Added to the signature map rather than to the AST, because they have no
+/// source to point at; the backend synthesizes their bodies from the same
+/// variant list. A user declaration of the same name wins: it is already in
+/// the map, and these only fill what is absent.
+///
+/// `values()` is restricted to payload-free enums for the reason §7.7.3
+/// gives: a variant with a payload cannot be enumerated without inventing
+/// one. The other three helpers in that table (`fromName`, `fromOrdinal`,
+/// `cases`) are not implemented -- `cases()` needs an `EnumCase<T>` type that
+/// does not exist yet.
+fn add_enum_auto_helpers(methods: &mut HashMap<String, MethodSig>, enum_decl: &EnumDecl) {
+    let span = enum_decl.span;
+    let helper = |ret: ReturnType, is_static: bool| MethodSig {
+        visibility: Visibility::Public,
+        throws: Vec::new(),
+        annotations: Vec::new(),
+        is_abstract: false,
+        is_final: false,
+        is_static,
+        is_property: false,
+        is_unsafe: false,
+        is_foreign_result: false,
+        generic_params: Vec::new(),
+        params: Vec::new(),
+        return_type: ret,
+        span,
+    };
+    methods
+        .entry("name".to_string())
+        .or_insert_with(|| helper(ReturnType::Type(synth_type_ref("String", span)), false));
+    methods
+        .entry("ordinal".to_string())
+        .or_insert_with(|| helper(ReturnType::Type(synth_type_ref("int", span)), false));
+    if enum_decl.variants.iter().all(|v| v.payload.is_empty()) {
+        let mut elem = synth_type_ref(&enum_decl.name.text, span);
+        elem.array_shape = Some(juxc_ast::ArrayShape::single(juxc_ast::ArrayDim::Dynamic));
+        methods
+            .entry("values".to_string())
+            .or_insert_with(|| helper(ReturnType::Type(elem), true));
+    }
+}
+
 fn synth_type_ref(name: &str, span: Span) -> TypeRef {
     TypeRef {
         name: juxc_ast::QualifiedName {

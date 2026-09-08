@@ -311,3 +311,309 @@ impl Da<'_> {
 fn call_is_this_method(c: &CallExpr) -> bool {
     matches!(c.callee.as_ref(), Expr::Field(fe) if matches!(fe.object.as_ref(), Expr::This(_)))
 }
+
+// ============================================================================
+// Local definite-assignment (§S.4.6, E0601)
+// ============================================================================
+
+/// One read of a local that reached it before any assignment did.
+pub(crate) struct LocalRead {
+    pub name: String,
+    pub span: Span,
+}
+
+/// Every local in `body` that is READ on a path where it has not been
+/// assigned, in source order, at most once per local.
+///
+/// A local declared with an initializer, or declared nullable (which starts as
+/// null per §S.4.6), never enters the analysis. What remains is the
+/// declaration with nothing to start as, and the question is whether every
+/// path reaching a given read has assigned it.
+pub(crate) fn locals_read_before_assignment(body: &Block) -> Vec<LocalRead> {
+    let mut la = La { pending: HashSet::new(), reported: HashSet::new(), out: Vec::new() };
+    la.block(body, HashSet::new());
+    la.out
+}
+
+struct La {
+    /// Declared without an initializer and not nullable: the locals this
+    /// analysis is about. A name leaves the set when its scope ends.
+    pending: HashSet<String>,
+    /// Reported already -- one diagnostic per local, at its first bad read.
+    reported: HashSet<String>,
+    out: Vec<LocalRead>,
+}
+
+impl La {
+    /// Walk a block. `st` is the set of pending locals ASSIGNED on every path
+    /// reaching this point; the returned flow carries it forward.
+    fn block(&mut self, b: &Block, mut st: HashSet<String>) -> Flow {
+        let declared_before: HashSet<String> = self.pending.clone();
+        let mut reachable = true;
+        for stmt in &b.statements {
+            if !reachable {
+                break;
+            }
+            let flow = self.stmt(stmt, st);
+            st = flow.assigned;
+            reachable = flow.reachable;
+        }
+        // Locals declared inside this block leave scope with it, so a later
+        // sibling block declaring the same name starts clean.
+        let declared_here: Vec<String> =
+            self.pending.difference(&declared_before).cloned().collect();
+        for n in declared_here {
+            self.pending.remove(&n);
+            st.remove(&n);
+        }
+        Flow { assigned: st, reachable }
+    }
+
+    fn stmt(&mut self, s: &Stmt, st: HashSet<String>) -> Flow {
+        let mut st = st;
+        match s {
+            Stmt::VarDecl(v) => {
+                match &v.init {
+                    Some(init) => {
+                        // The initializer is evaluated before the binding
+                        // exists, so a self-reference reads the OUTER name if
+                        // there is one -- either way this is an ordinary read.
+                        self.reads(init, &mut st);
+                        st.insert(v.name.text.clone());
+                    }
+                    None => {
+                        // A nullable local starts as null (§S.4.6); only a
+                        // non-nullable one has nothing to start as.
+                        let nullable = v.ty.as_ref().is_some_and(|t| t.nullable);
+                        if !nullable {
+                            self.pending.insert(v.name.text.clone());
+                        }
+                    }
+                }
+                Flow { assigned: st, reachable: true }
+            }
+            Stmt::Assign(a) => {
+                // The VALUE is read before the store, and so is anything in
+                // the target that is not the binding itself (`a[i] = v` reads
+                // `i`, and reads `a` too -- writing through a binding needs it
+                // assigned already).
+                self.reads(&a.value, &mut st);
+                match &a.target {
+                    Expr::Path(qn) if qn.segments.len() == 1 => {
+                        // A compound assignment READS the target first.
+                        if a.op.is_some() {
+                            self.reads(&a.target, &mut st);
+                        }
+                        st.insert(qn.segments[0].text.clone());
+                    }
+                    other => self.reads(other, &mut st),
+                }
+                Flow { assigned: st, reachable: true }
+            }
+            Stmt::Expr(e) => {
+                self.reads(e, &mut st);
+                Flow { assigned: st, reachable: true }
+            }
+            Stmt::Return(v, _) => {
+                if let Some(e) = v {
+                    self.reads(e, &mut st);
+                }
+                Flow { assigned: st, reachable: false }
+            }
+            Stmt::Throw(e, _) => {
+                self.reads(e, &mut st);
+                Flow { assigned: st, reachable: false }
+            }
+            Stmt::Break(..) | Stmt::Continue(..) => Flow { assigned: st, reachable: false },
+            Stmt::If(i) => {
+                self.reads(&i.condition, &mut st);
+                let then_flow = self.block(&i.then_block, st.clone());
+                let else_flow = match i.else_branch.as_deref() {
+                    Some(ElseBranch::Block(b)) => Some(self.block(b, st.clone())),
+                    Some(ElseBranch::If(inner)) => {
+                        Some(self.stmt(&Stmt::If(inner.clone()), st.clone()))
+                    }
+                    None => None,
+                };
+                match else_flow {
+                    // Only what BOTH arms assign survives the join, and an arm
+                    // that cannot fall through contributes no constraint --
+                    // nothing after the `if` is reachable from it.
+                    Some(ef) => match (then_flow.reachable, ef.reachable) {
+                        (true, true) => Flow {
+                            assigned: then_flow
+                                .assigned
+                                .intersection(&ef.assigned)
+                                .cloned()
+                                .collect(),
+                            reachable: true,
+                        },
+                        (true, false) => Flow { assigned: then_flow.assigned, reachable: true },
+                        (false, true) => Flow { assigned: ef.assigned, reachable: true },
+                        (false, false) => Flow { assigned: st, reachable: false },
+                    },
+                    // No `else`: the other path assigns nothing.
+                    None => Flow { assigned: st, reachable: true },
+                }
+            }
+            // A loop body may run zero times, so its assignments do not escape.
+            // It is still walked, for reads inside it.
+            Stmt::While(w) => {
+                self.reads(&w.condition, &mut st);
+                self.block(&w.body, st.clone());
+                Flow { assigned: st, reachable: true }
+            }
+            Stmt::ForEach(fe) => {
+                self.reads(&fe.iter, &mut st);
+                let mut inner = st.clone();
+                inner.insert(fe.var_name.text.clone());
+                self.block(&fe.body, inner);
+                Flow { assigned: st, reachable: true }
+            }
+            Stmt::ForC(fc) => {
+                let mut inner = st.clone();
+                if let Some(init) = fc.init.as_deref() {
+                    inner = self.stmt(init, inner).assigned;
+                }
+                if let Some(c) = &fc.cond {
+                    self.reads(c, &mut inner);
+                }
+                let body = self.block(&fc.body, inner.clone());
+                if let Some(u) = fc.update.as_deref() {
+                    self.stmt(u, body.assigned);
+                }
+                Flow { assigned: st, reachable: true }
+            }
+            // A `do … while` body runs at least once, so its assignments DO
+            // escape -- the same carve-out the field pass makes.
+            Stmt::DoWhile(d) => {
+                let flow = self.block(&d.body, st.clone());
+                let mut assigned = flow.assigned;
+                self.reads(&d.condition, &mut assigned);
+                Flow { assigned, reachable: true }
+            }
+            Stmt::Labeled { stmt, .. } => self.stmt(stmt, st),
+            Stmt::Block(b) | Stmt::Unsafe(b) => self.block(b, st),
+            Stmt::Try(t) => {
+                // The body can abort partway, and a catch arm runs from an
+                // unknown point inside it, so neither one's assignments are
+                // guaranteed past the statement. Only `finally` runs to
+                // completion on every path that leaves.
+                self.block(&t.body, st.clone());
+                for c in &t.catches {
+                    self.block(&c.body, st.clone());
+                }
+                match &t.finally {
+                    Some(fin) => self.block(fin, st),
+                    None => Flow { assigned: st, reachable: true },
+                }
+            }
+            // Anything else (a `super(...)` call, a declaration) assigns
+            // nothing and reads nothing this analysis tracks.
+            _ => Flow { assigned: st, reachable: true },
+        }
+    }
+
+    /// Record a read of every pending local named in `e` that `st` has not
+    /// assigned -- and ADD the ones `e` assigns through `out`.
+    ///
+    /// `out place` is an assignment: §M.4 requires the callee to set it on
+    /// every path and `E0940` enforces that, so by the time the call's result
+    /// is used the binding holds a value. Treating it as a read reported the
+    /// canonical `int n; if (p.tryParse(s, out n))` as an error.
+    fn reads(&mut self, e: &Expr, st: &mut HashSet<String>) {
+        match e {
+            Expr::Path(qn) if qn.segments.len() == 1 => {
+                let name = &qn.segments[0].text;
+                if self.pending.contains(name)
+                    && !st.contains(name)
+                    && self.reported.insert(name.clone())
+                {
+                    self.out.push(LocalRead { name: name.clone(), span: qn.span });
+                }
+            }
+            Expr::Path(_) | Expr::Literal(_) | Expr::This(_) | Expr::Super(_) => {}
+            // A lambda body runs at some other time, against bindings that may
+            // well be assigned by then. Not this analysis's question.
+            Expr::Lambda(_) | Expr::MethodRef(_) => {}
+            Expr::Out(inner, _) => {
+                if let Expr::Path(qn) = inner.as_ref() {
+                    if qn.segments.len() == 1 {
+                        st.insert(qn.segments[0].text.clone());
+                        return;
+                    }
+                }
+                self.reads(inner, st);
+            }
+            Expr::TypeOf(inner, _) => self.reads(inner, st),
+            Expr::Await(inner, _) => self.reads(inner, st),
+            Expr::NotNullAssert(inner, _) => self.reads(inner, st),
+            Expr::ErrorProp(inner, _) => self.reads(inner, st),
+            Expr::Unary(u) => self.reads(&u.operand, st),
+            Expr::Cast(c) => self.reads(&c.value, st),
+            Expr::SizeOf(so) => self.reads(&so.operand, st),
+            Expr::TypeTest(t) => self.reads(&t.value, st),
+            Expr::Field(fe) => self.reads(&fe.object, st),
+            Expr::Binary(b) => {
+                self.reads(&b.left, st);
+                self.reads(&b.right, st);
+            }
+            Expr::Range(r) => {
+                self.reads(&r.start, st);
+                self.reads(&r.end, st);
+            }
+            Expr::Index(i) => {
+                self.reads(&i.array, st);
+                self.reads(&i.index, st);
+            }
+            Expr::Elvis(el) => {
+                self.reads(&el.value, st);
+                self.reads(&el.fallback, st);
+            }
+            Expr::Ternary(t) => {
+                self.reads(&t.condition, st);
+                self.reads(&t.then_branch, st);
+                self.reads(&t.else_branch, st);
+            }
+            Expr::IncDec(i) => self.reads(&i.target, st),
+            Expr::Call(c) => {
+                self.reads(&c.callee, st);
+                for a in &c.args {
+                    self.reads(a, st);
+                }
+            }
+            Expr::NewObject(n) => {
+                for a in &n.args {
+                    self.reads(a, st);
+                }
+            }
+            Expr::NewArray(n) => {
+                self.reads(&n.size, st);
+                for i in &n.inner_sizes {
+                    self.reads(i, st);
+                }
+            }
+            Expr::NewArrayLit(n) => {
+                for el in &n.elements {
+                    self.reads(el, st);
+                }
+            }
+            Expr::TupleLit(els, _) => {
+                for el in els {
+                    self.reads(el, st);
+                }
+            }
+            Expr::InterpString(is) => {
+                for seg in &is.segments {
+                    if let juxc_ast::InterpSegment::Expr(inner) = seg {
+                        self.reads(inner, st);
+                    }
+                }
+            }
+            Expr::TryExpr(_) | Expr::Switch(_) => {
+                // Both carry blocks whose flow this walker does not model.
+                // Silence beats a false positive here.
+            }
+        }
+    }
+}

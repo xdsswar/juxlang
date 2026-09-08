@@ -540,6 +540,12 @@ pub enum Code {
     /// nullable fields default to null and are exempt.
     E0600_FieldNotDefinitelyAssigned,
 
+    /// E0601 -- a local is read before it is definitely assigned (§S.4.6).
+    /// The local counterpart of `E0600`. Without it, reading an unassigned
+    /// local silently produced the type's default value: `int x; print(x);`
+    /// compiled and printed `0`.
+    E0601_LocalNotDefinitelyAssigned,
+
     // ---- Const evaluation (E0800–E0899) ----
     /// E0840 — A **const evaluation exceeded its resource limits** (§T.11.4) —
     /// too many operations or too deep a recursion while folding a const
@@ -827,6 +833,7 @@ impl Code {
             Code::E0467_DefaultParamOrdering     => "E0467",
             Code::W0457_UnannotatedRefCycle      => "W0457",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",
+            Code::E0601_LocalNotDefinitelyAssigned => "E0601",
             Code::E0840_ConstEvalLimitExceeded   => "E0840",
             Code::E0841_NonConstInConstContext   => "E0841",
             Code::E0842_ConstEvalPanic           => "E0842",

@@ -2297,6 +2297,12 @@ Every enum gets these auto-generated methods, available on instances and statica
 
 `Self.values()` is restricted to no-payload enums because variants with payloads can't be enumerated without invented payload data. For payload-carrying enums, `Self.cases()` returns descriptors (variant name, ordinal, payload type signature) — useful for reflection.
 
+**Phase 1 implements `name()`, `ordinal()` and `values()`.** The other three
+rows of the table are not available yet: `fromName` / `fromOrdinal` want a
+decision about the case-insensitive default before they are worth having, and
+`cases()` needs the `EnumCase<T>` descriptor type, which does not exist. A
+call to any of them is an ordinary unresolved-member error.
+
 `fromName` is **case-insensitive** by default (matches `"North"`, `"north"`, `"NORTH"`). For strict matching, use `fromNameStrict(String)`.
 
 ```java

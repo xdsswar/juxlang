@@ -1,0 +1,4 @@
+local_not_assigned.jux:6:12: [E0601] error: `x` is read before it is assigned -- give it a value on every path that reaches here, or declare it with an initializer (§S.4.6)
+local_not_assigned.jux:14:12: [E0601] error: `y` is read before it is assigned -- give it a value on every path that reaches here, or declare it with an initializer (§S.4.6)
+local_not_assigned.jux:22:12: [E0601] error: `z` is read before it is assigned -- give it a value on every path that reaches here, or declare it with an initializer (§S.4.6)
+local_not_assigned.jux:27:12: [E0601] error: `s` is read before it is assigned -- give it a value on every path that reaches here, or declare it with an initializer (§S.4.6)

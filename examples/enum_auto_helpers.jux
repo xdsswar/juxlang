@@ -1,0 +1,45 @@
+// The auto-derived enum helpers (§7.7.3).
+//
+// `name()` and `ordinal()` are available on any enum value; `values()` is a
+// static, and only on a payload-free enum -- a variant with a payload cannot
+// be enumerated without inventing one, which is the restriction the spec gives.
+//
+// All three are synthesized from the variant list, so an enum that grows a
+// variant grows all three. A user declaration of one of these names wins.
+// (`fromName`, `fromOrdinal` and `cases()` from the same table are not in
+// Phase 1; `cases()` needs an `EnumCase<T>` type that does not exist yet.)
+
+public enum Tier { Bronze, Silver, Gold }
+
+public enum Shape {
+    Circle(double radius),
+    Point;
+}
+
+public enum Loud {
+    Alpha, Beta;
+
+    // A user declaration of an auto-derived name replaces it.
+    public String name() { return "shouted"; }
+}
+
+public String describe(Tier t) {
+    return t.name() + "@" + t.ordinal();
+}
+
+public void main() {
+    print(Tier.Bronze.name());
+    print(Tier.Gold.ordinal());
+    print(describe(Tier.Silver));
+
+    for (var t : Tier.values()) {
+        print(t.name() + "=" + t.ordinal());
+    }
+
+    // A payload-carrying enum still has name() and ordinal().
+    print(Shape.Circle(1.0).name());
+    print(Shape.Point.ordinal());
+
+    print(Loud.Alpha.name());
+    print(Loud.Beta.ordinal());
+}
